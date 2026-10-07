@@ -41,6 +41,8 @@ import {
   fvRerunSeed,
   headerDigest,
   lowRiskSeed,
+  openFactoryFinishPort,
+  finishIntegrationRevision,
   openFactoryPort,
   openHandoffStore,
   pauseHandoff,
@@ -372,15 +374,14 @@ test("C2b N1 probe G: a snapshot that breaks the chain is refused before any mut
   // archive on read, so FV events land after create through the harness
   // store (as in G2-prod); the factory store never re-reads once its
   // runtime is built.
-  const preSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
-    v2FinishSeed(runId, baseline).filter((event) => !event.type.startsWith("final_verification."));
   const fvSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
     v2FinishSeed(runId, baseline).filter((event) => event.type.startsWith("final_verification."));
-  const fixture = await openFactoryPort("probeg", RUN, preSeed, "finish");
-  appendHandoffEvents(fixture, RUN, fvSeed(RUN, fixture.baselineRevision));
+  const fixture = await openFactoryFinishPort("probeg", RUN);
+  const rev = finishIntegrationRevision(fixture, RUN);
+  appendHandoffEvents(fixture, RUN, fvSeed(RUN, rev));
   // The factory's risk_based verifier policy is already in the shared log
   // (factory.create): qualify the green FV generation before completion.
-  appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, fixture.baselineRevision));
+  appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, rev));
   // The integration branch runs one commit ahead of the canonical revision,
   // so the kernel snapshot's parent continues neither the canonical
   // revision nor the document tip.
@@ -417,18 +418,17 @@ test("C2b N1 probe G: a snapshot that breaks the chain is refused before any mut
 
 test("C2b repair B1 probe G2: a withdrawn stop's landed commit is reconciled, the chain continues", async () => {
   const RUN = "run-c2b-g2";
-  // The canonical revision is the real baseline, so the stop-1 kernel commit
+  // The canonical revision is the post-worker integration revision, so the stop-1 kernel commit
   // continues the documents once it is recorded as history. FV events land
   // after create through the harness store (as in G2-prod).
-  const preSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
-    v2FinishSeed(runId, baseline).filter((event) => !event.type.startsWith("final_verification."));
   const fvSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
     v2FinishSeed(runId, baseline).filter((event) => event.type.startsWith("final_verification."));
-  const fixture = await openFactoryPort("g2", RUN, preSeed, "finish");
-  appendHandoffEvents(fixture, RUN, fvSeed(RUN, fixture.baselineRevision));
+  const fixture = await openFactoryFinishPort("g2", RUN);
+  const rev = finishIntegrationRevision(fixture, RUN);
+  appendHandoffEvents(fixture, RUN, fvSeed(RUN, rev));
   // The factory's risk_based verifier policy is already in the shared log
   // (factory.create): qualify the green FV generation before completion.
-  appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, fixture.baselineRevision));
+  appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, rev));
   // The stop-1 commit lands, then the read-back fails: a transient failure
   // after the commit (or a crash before the append).
   failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
@@ -445,7 +445,7 @@ test("C2b repair B1 probe G2: a withdrawn stop's landed commit is reconciled, th
     assert.equal(driven.projection.pauseReason?.reason, "handoff_snapshot_failed");
     assert.equal(driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
     assert.equal(existsSync(join(fixture.project, "docs", "project", "STATE.md")), false, "the project is untouched");
-    const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${rev}..HEAD`] });
     assert.equal(landed.stdout.trim(), "1", "the stop-1 kernel commit landed");
     const stop1 = driven.events.find((event) => event.type === "project.handoff_requested")!.sequence;
     // The owner submits guidance instead of resuming: the handoff is
@@ -501,13 +501,13 @@ test("C2b repair B1 probe G2: a withdrawn stop's landed commit is reconciled, th
     // through the real kernel derivation (driveOpts) before the Architect's
     // real second complete_run re-requests (stop 2): no seeded risk event,
     // no seeded re-request.
-    appendHandoffEvents(fixture, RUN, fvRerunSeed(RUN, fixture.baselineRevision));
+    appendHandoffEvents(fixture, RUN, fvRerunSeed(RUN, rev));
     driven = await driveHandoff(fixture, RUN, driveOpts);
     const risks = driven.events.filter((event) => event.type === "build.risk_assessed");
     assert.equal(risks.length, 2, "the runtime re-assesses after the invalidation");
     assert.equal(
       risks[1]!.idempotencyKey,
-      `build-risk:${fixture.baselineRevision}:generation-c2a-finish-rerun`,
+      `build-risk:${rev}:generation-c2a-finish-rerun`,
       "the re-assessment is keyed by the re-run generation",
     );
     assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
@@ -653,11 +653,10 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
   // Probe G3 with the factory's port: the stop-1 commit lands and the read
   // fails; guidance withdraws; FV re-runs green and the Architect
   // re-requests; then the withdrawn-stop lookup throws ONCE (transient).
-  const preSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
-    v2FinishSeed(runId, baseline).filter((event) => !event.type.startsWith("final_verification."));
   const fvSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
     v2FinishSeed(runId, baseline).filter((event) => event.type.startsWith("final_verification."));
-  const fixture = await openFactoryPort("g3", RUN, preSeed, "finish");
+  const fixture = await openFactoryFinishPort("g3", RUN);
+  const rev = finishIntegrationRevision(fixture, RUN);
   failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
   const architect = silentArchitect("The build is complete and verified.");
   // FX-1: the harness runtime re-assesses through the real kernel
@@ -666,10 +665,10 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
   const verifier = productionRiskVerifier(fixture, RUN, verifierCalls);
   const driveOpts = { runPolicy: "finish" as const, architect, independentVerifier: verifier };
   try {
-    appendHandoffEvents(fixture, RUN, fvSeed(RUN, fixture.baselineRevision));
+    appendHandoffEvents(fixture, RUN, fvSeed(RUN, rev));
     // The factory's risk_based verifier policy is already in the shared log
     // (factory.create); qualify the green FV generation before completion.
-    appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, fixture.baselineRevision));
+    appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, rev));
     // C2e repair cycle 2 (load-only hardening): under heavy machine load
     // a transient process-launch failure can pause the stop-1 commit
     // itself before anything lands (pause with no snapshot event and no
@@ -680,7 +679,7 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
     let driven = await driveHandoff(fixture, RUN, driveOpts);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const commits = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length;
-      const landedNow = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+      const landedNow = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${rev}..HEAD`] });
       if (commits !== 0 || landedNow.stdout.trim() !== "0") break;
       assert.equal(driven.projection.pauseReason?.reason, "handoff_snapshot_failed");
       await resumeHandoff(fixture, RUN, `resume:c2b-g3-setup-${attempt}`, driveOpts);
@@ -688,7 +687,7 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
     }
     assert.equal(driven.projection.pauseReason?.reason, "handoff_snapshot_failed");
     assert.equal(driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
-    const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${rev}..HEAD`] });
     assert.equal(landed.stdout.trim(), "1", "the stop-1 kernel commit landed");
     const e = (
       type: string,
@@ -732,7 +731,7 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
           evidenceIds: [acknowledgementEvidence.id],
         },
       }),
-      ...fvRerunSeed(RUN, fixture.baselineRevision),
+      ...fvRerunSeed(RUN, rev),
     ]);
     assert.equal(readHandoffLog(fixture, RUN).projection.projectHandoff, undefined, "guidance withdrew the handoff");
     // The transient: the withdrawn-stop lookup throws once at stop 2. It is
@@ -750,14 +749,14 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
     assert.equal(paused.pauseReason?.reason, "handoff_snapshot_failed");
     assert.match(String(paused.pauseReason?.detail ?? ""), /withdrawn-stop reconciliation failed/, "the pause names the reconciliation failure");
     assert.equal(driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0, "no stop commits while a withdrawn stop is unclassifiable");
-    const stuck = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    const stuck = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${rev}..HEAD`] });
     assert.equal(stuck.stdout.trim(), "1", "only the stop-1 commit exists");
     assert.equal(existsSync(join(fixture.project, "docs", "project", "STATE.md")), false, "the project is still untouched while paused before any commit");
     const risks = driven.events.filter((event) => event.type === "build.risk_assessed");
     assert.equal(risks.length, 2, "production re-assesses after the invalidation");
     assert.equal(
       risks[1]!.idempotencyKey,
-      `build-risk:${fixture.baselineRevision}:generation-c2a-finish-rerun`,
+      `build-risk:${rev}:generation-c2a-finish-rerun`,
       "the re-assessment is keyed by the re-run generation",
     );
     assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
@@ -1139,13 +1138,12 @@ test("C2e/m-8 W-A4 second stop: a withdrawn docs-link stop records its empty sec
   // real second complete_run re-requests (stop 2). The layout is the exact
   // `docs` link (W-A4), so stop 2 commits empty: the entry files already
   // hold their sections.
-  const preSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
-    v2FinishSeed(runId, baseline).filter((event) => !event.type.startsWith("final_verification."));
   const fvSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
     v2FinishSeed(runId, baseline).filter((event) => event.type.startsWith("final_verification."));
-  const fixture = await openFactoryPort("c2em8wa4", RUN, preSeed, "finish");
-  appendHandoffEvents(fixture, RUN, fvSeed(RUN, fixture.baselineRevision));
-  appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, fixture.baselineRevision));
+  const fixture = await openFactoryFinishPort("c2em8wa4", RUN);
+  const rev = finishIntegrationRevision(fixture, RUN);
+  appendHandoffEvents(fixture, RUN, fvSeed(RUN, rev));
+  appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, rev));
   const outside = mkdtempSync(join(tmpdir(), "aiboard-c2e-outside-m8-"));
   writeFileSync(join(outside, "own.txt"), "outside\n");
   const worktree = fixture.integration.path;
@@ -1164,7 +1162,7 @@ test("C2e/m-8 W-A4 second stop: a withdrawn docs-link stop records its empty sec
     let driven = await driveHandoff(fixture, RUN, { runPolicy: "finish", architect });
     assert.equal(driven.projection.pauseReason?.reason, "handoff_snapshot_failed");
     assert.equal(driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
-    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${rev}..HEAD`] });
     assert.equal(landed.stdout.trim(), "2", "the link setup plus the stop-1 kernel commit landed");
     const stop1 = driven.events.find((event) => event.type === "project.handoff_requested")!.sequence;
     // The owner submits guidance instead of resuming: the handoff is

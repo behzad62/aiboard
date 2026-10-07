@@ -41,6 +41,8 @@ import {
   failNextSnapshotReadOnce,
   fvRerunSeed,
   lowRiskSeed,
+  openFactoryFinishPort,
+  finishIntegrationRevision,
   managedHandle,
   managerSpec,
   openFactoryPort,
@@ -121,11 +123,10 @@ test("C2b repair B1-R/G2-prod: the G2 flow through the production manager with t
   // archive on read, so FV events land after create through the harness
   // store (which accepts the fixture profile); the factory store never
   // re-reads once its runtime is built.
-  const preSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
-    v2FinishSeed(runId, baseline).filter((event) => !event.type.startsWith("final_verification."));
   const fvSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
     v2FinishSeed(runId, baseline).filter((event) => event.type.startsWith("final_verification."));
-  const fixture = await openFactoryPort("g2prod", RUN, preSeed, "finish");
+  const fixture = await openFactoryFinishPort("g2prod", RUN);
+  const rev = finishIntegrationRevision(fixture, RUN);
   // The stop-1 commit lands, then the read-back fails: a transient failure
   // after the commit (or a crash before the append).
   failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
@@ -142,12 +143,14 @@ test("C2b repair B1-R/G2-prod: the G2 flow through the production manager with t
       createRuntime: async () => {
         store = new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(RUN), "scheduler.sqlite"), {
           evidenceStore: fixture.evidence,
+          artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
           validateExecutionProfile: acceptFinalVerificationProfile,
           validateCleanupReceipt: () => undefined,
         });
         const runtime = buildRuntimeForHandoff({
           runId: RUN, store, projectDocs: fixture.port,
           architect, clock: advancingClock(), runPolicy: "finish", evidenceStore: fixture.evidence,
+          artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
           independentVerifier: productionRiskVerifier(RUN, () => store!, verifierCalls),
         });
         return managedHandle(runtime, async () => {
@@ -160,17 +163,17 @@ test("C2b repair B1-R/G2-prod: the G2 flow through the production manager with t
     });
     await manager.create(managerSpec(RUN, "finish"));
     assert.ok(store);
-    for (const input of fvSeed(RUN, fixture.baselineRevision)) store.append(input);
+    for (const input of fvSeed(RUN, rev)) store.append(input);
     // The factory's risk_based verifier policy is already in the shared log
     // (factory.create); qualify the green FV generation before completion.
-    for (const input of lowRiskSeed(RUN, fixture.baselineRevision)) store.append(input);
+    for (const input of lowRiskSeed(RUN, rev)) store.append(input);
     manager.activate(RUN);
     await manager.awaitIdle(RUN);
     assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
     assert.equal(manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
     assert.deepEqual(order, [], "no project mutation precedes the kernel record");
     assert.equal(existsSync(join(fixture.project, "docs", "project", "STATE.md")), false, "the project is untouched");
-    const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${rev}..HEAD`] });
     assert.equal(landed.stdout.trim(), "1", "the stop-1 kernel commit landed");
     const stop1 = manager.events(RUN).find((event) => event.type === "project.handoff_requested")!.sequence;
     // The owner submits guidance instead of resuming: the handoff is
@@ -221,7 +224,7 @@ test("C2b repair B1-R/G2-prod: the G2 flow through the production manager with t
     assert.equal(withdrawn.projectHandoff, undefined, "guidance withdrew the handoff");
     assert.equal((withdrawn.projectHandoffHistory ?? []).length, 1);
     // Final verification re-runs green on the unchanged canonical revision.
-    for (const input of fvRerunSeed(RUN, fixture.baselineRevision)) store.append(input);
+    for (const input of fvRerunSeed(RUN, rev)) store.append(input);
     // FX-1: guidance invalidated the stop-1 assessment; the runtime
     // re-assesses through the real derivation before the Architect
     // re-requests (stop 2).
@@ -230,7 +233,7 @@ test("C2b repair B1-R/G2-prod: the G2 flow through the production manager with t
     assert.equal(risks.length, 2, "production re-assesses after the invalidation");
     assert.equal(
       risks[1]!.idempotencyKey,
-      `build-risk:${fixture.baselineRevision}:generation-c2a-finish-rerun`,
+      `build-risk:${rev}:generation-c2a-finish-rerun`,
       "the re-assessment is keyed by the re-run generation",
     );
     assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
@@ -677,15 +680,14 @@ async function driveWithdrawnDocsLinkScenario(
   outside: string[];
   outsideOwnText: string;
 }> {
-  const preSeed = (seedRunId: string, baseline: string): NewSchedulerEvent[] =>
-    v2FinishSeed(seedRunId, baseline).filter((event) => !event.type.startsWith("final_verification."));
   const fvSeed = (seedRunId: string, baseline: string): NewSchedulerEvent[] =>
     v2FinishSeed(seedRunId, baseline).filter((event) => event.type.startsWith("final_verification."));
-  const fixture = await openFactoryPort(label, runId, preSeed, "finish");
-  appendHandoffEvents(fixture, runId, fvSeed(runId, fixture.baselineRevision));
+  const fixture = await openFactoryFinishPort(label, runId);
+  const rev = finishIntegrationRevision(fixture, runId);
+  appendHandoffEvents(fixture, runId, fvSeed(runId, rev));
   // The factory's risk_based verifier policy is already in the shared log
   // (factory.create): qualify the green FV generation before completion.
-  appendHandoffEvents(fixture, runId, lowRiskSeed(runId, fixture.baselineRevision));
+  appendHandoffEvents(fixture, runId, lowRiskSeed(runId, rev));
   const outside = mkdtempSync(join(tmpdir(), `aiboard-c2c-outside-${label}-`));
   writeFileSync(join(outside, "own.txt"), "outside\n");
   // The checkout holds a committed `Docs` link to an outside directory. The
@@ -716,7 +718,7 @@ async function driveWithdrawnDocsLinkScenario(
     // Untouched-so-far fact only: the harness never auto-applies, so this
     // cannot prove manager ordering (proved by C2a B1+M6, not here).
     assert.equal(existsSync(join(fixture.project, "docs", "project", "STATE.md")), false, "the project is still untouched (the harness never auto-applies)");
-    const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${rev}..HEAD`] });
     assert.equal(landed.stdout.trim(), "2", "the link commit plus the stop-1 kernel commit landed");
     const stop1 = driven.events.find((event) => event.type === "project.handoff_requested")!.sequence;
     // The owner submits guidance instead of resuming: the handoff is

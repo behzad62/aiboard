@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AgentModel } from "../../src/agent-contracts.js";
+import type { AgentModel, AgentModelRequest } from "../../src/agent-contracts.js";
 import { ArtifactStore } from "../../src/artifact-store.js";
 import { BuildRuntime, type ArchitectRuntimeDriver, type ProjectDocsPort, type StopNotesDriver } from "../../src/build-runtime.js";
 import type { NativeBuildSpec } from "../../src/build-spec.js";
@@ -12,6 +12,7 @@ import type { RunnerProviderConfig } from "../../src/provider-config-store.js";
 import { createExecutionHost } from "../../src/execution-host.js";
 import {
   assertProjectHandoffSelectionAccepted,
+  currentExplicitStartIdentity,
   handoffSnapshotAtCurrentStop,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
@@ -42,6 +43,7 @@ import {
   emptyFinalVerificationProfile,
 } from "./final-verification-profile.js";
 import type { EvidenceStore } from "../../src/evidence-store.js";
+import type { ValidationScope } from "../../src/validation-scope.js";
 import type { IndependentVerifierDriver } from "../../src/build-runtime.js";
 
 /**
@@ -779,12 +781,143 @@ export interface FactoryPortFixture extends HandoffFixture {
  * injection patches the factory's own integration manager instance (the
  * port keeps delegating to it); the port object itself is the factory's.
  */
+/**
+ * P6.6 T8 Layer-4: factory-port finish acceptance. Build-finish handoff
+ * tests run through NativeBuildFactory with docs v2, so the seed must
+ * carry the exact new-policy provisioning prefix with planning v1 (the
+ * legacy-planning v2FinishSeed is intentionally unrecoverable via the
+ * factory). Planning v1 finish completion requires durable delivery
+ * acceptance, which cannot be faked: the helper below drives the real
+ * factory pump with scripted worker/reviewer/architect models (copied
+ * from the delivery factory scenario) until T1 is integrated and the
+ * P1 phase is accepted. Callers then append FV + risk and drive handoff
+ * exactly as before; complete_run succeeds because acceptance exists.
+ */
+const FINISH_VALUE_TEST = "import test from 'node:test'; import assert from 'node:assert/strict'; import { value } from '../src/value.mjs'; test('value', () => assert.equal(value, 2));\n";
+const FINISH_LOW_CONTENT = "export const value = 2;\n";
+const FINISH_VALIDATION_SCOPE: ValidationScope = {
+  changed: ["src/value.mjs"],
+  verified: ["src/value.mjs exports value = 2"],
+  testsRun: [{ command: "node --test", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }],
+  notRun: [],
+};
+
+function finishCall(name: string, args: unknown, id: string): ModelTurn {
+  return {
+    blocks: [{ type: "tool_call", callId: id, name, arguments: args }],
+    stopReason: "tool_calls",
+    usage: { inputTokens: 8, outputTokens: 4 },
+  };
+}
+
+function finishLastToolValue(request: AgentModelRequest): Record<string, unknown> | undefined {
+  const message = [...request.messages].reverse().find((candidate) => candidate.role === "tool");
+  const content = (message?.content as { content?: Array<{ type: string; value?: unknown }> } | undefined)?.content;
+  return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
+}
+
+class FinishWorkerModel implements AgentModel {
+  async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    const toolCount = request.messages.filter((message) => message.role === "tool").length;
+    if (toolCount === 0) return finishCall("fs.write", { path: "src/value.mjs", content: FINISH_LOW_CONTENT, createDirectories: true }, "write-1");
+    if (toolCount === 1) return finishCall("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
+    const record = finishLastToolValue(request)!;
+    const fact = record.fact as { stdoutArtifactHash: string };
+    return finishCall("submit_task", {
+      summary: "Added src/value.mjs exporting value = 2; node --test passes.",
+      readiness: "ready_for_architect_review",
+      unresolvedConcerns: [],
+      criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: FINISH_VALIDATION_SCOPE,
+    }, "submit-1");
+  }
+}
+
+class FinishReviewerModel implements AgentModel {
+  async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    const system = request.messages.find((message) => message.role === "system");
+    const pass = system?.id ?? "";
+    const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
+    const tools = request.messages.filter((message) => message.role === "tool").length;
+    if (pass === "delivery-obligations-system") {
+      return finishCall("record_deliverable_obligations", { obligations: [{ id: "o1", description: "value must be 2." }] }, `obl-${tools}`);
+    }
+    if (pass === "delivery-findings-system") {
+      if (tools === 0) return finishCall("fs.read", { path: "src/value.mjs" }, "read-1");
+      return finishCall("record_deliverable_findings", { findings: [] }, `findings-${tools}`);
+    }
+    if (tools === 0) return finishCall("fs.read", { path: "src/value.mjs" }, "verdict-read-1");
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    return finishCall("submit_deliverable_verdict", {
+      summary: "The module exports 2 and the cited test run passed.",
+      satisfied: true,
+      survivorDispositions: [],
+      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout.", citations: [{ path: "src/value.mjs", line: 1 }] })),
+    }, `verdict-${tools}`);
+  }
+}
+
+class FinishArchitectModel implements AgentModel {
+  constructor(private readonly projection: () => SchedulerProjection) {}
+  async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    const projection = this.projection();
+    const tools = request.messages.filter((message) => message.role === "tool").length;
+    const task = projection.tasks.T1!;
+    if (task.status === "submitted" || task.status === "architect_review") {
+      const links = task.criterionEvidenceLinks ?? [];
+      return finishCall("review_task", {
+        taskId: "T1",
+        decision: "approved",
+        summary: "The deliverable review is satisfied and the evidence passes.",
+        evidenceArtifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))],
+        criterionVerdicts: [{ criterionId: "c1", verdict: "satisfied", rationale: "Tests pass.", evidenceIds: links.map((link) => link.evidenceId), artifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))] }],
+      }, `review-${request.messages.length}-${tools}`);
+    }
+    if (task.status === "approved") return finishCall("request_integration", { taskId: "T1" }, `integrate-${request.messages.length}-${tools}`);
+    throw new Error(`Unexpected Architect turn with T1 ${task.status}.`);
+  }
+}
+
+/**
+ * Current-policy factory finish pre-seed: the exact T7a provisioning
+ * prefix (docs2/run.initialized/planning1) with FACTORY_PORT_OBJECTIVE,
+ * the finish run policy, the shared scenario planned through ready, and
+ * the explicit owner start for the current ready identity. No scheduler
+ * tasks are faked: T1 materializes from the ready plan and is driven to
+ * integrated + accepted by openFactoryFinishPort's real pump. FV, risk
+ * and handoff are appended by the caller exactly as before.
+ */
+export function v2FactoryFinishPreSeed(runId: string, objective = FACTORY_PORT_OBJECTIVE): NewSchedulerEvent[] {
+  const base = v2PlanOnlySeed(runId, objective).map((event) =>
+    event.type === "run.policy_configured"
+      ? { ...event, payload: { ...event.payload, runPolicy: "finish" } }
+      : event);
+  const synthesized = base.map((event, index) => ({ ...event, sequence: index + 1, eventId: `finish-pre-${index}` }));
+  const projection = rebuildSchedulerProjection(synthesized as unknown as Parameters<typeof rebuildSchedulerProjection>[0]);
+  const startIdentity = currentExplicitStartIdentity(projection);
+  assert.ok(startIdentity, "the factory finish pre-seed is ready with a complete start identity");
+  return [
+    ...base,
+    seedEvent(runId, "planning.execution_authorized", "owner-start", "user", "local-user", {
+      authorization: { ...startIdentity, version: 1, ownerChoice: "execute" },
+    }),
+  ];
+}
+
+export interface FactoryPortHooks {
+  /** Runs against the factory-built runtime before the fixture is returned. */
+  onBuilt?: (built: { runtime: BuildRuntime }) => Promise<void>;
+  /** Prepares the project directory before the git baseline is captured. */
+  prepareProject?: (project: string) => void;
+}
+
 export async function openFactoryPort(
   label: string,
   runId: string,
   seed: (runId: string, baselineRevision: string) => NewSchedulerEvent[],
   runPolicy: "finish" | "plan_only",
   specOptions: { specCopy?: boolean; handoffFiles?: "commit" | "export_only"; modelsFor?: (config: RunnerProviderConfig) => AgentModel } = {},
+  hooks: FactoryPortHooks = {},
 ): Promise<FactoryPortFixture> {
   const root = mkdtempSync(join(tmpdir(), `aiboard-c2b-factory-${label}-`));
   const project = join(root, "project");
@@ -793,6 +926,7 @@ export async function openFactoryPort(
   mkdirSync(state, { recursive: true });
   writeFileSync(join(project, "shared.txt"), "baseline\n");
   writeFileSync(join(project, "package.json"), JSON.stringify({ name: `c2b-${label}-fixture`, version: "1.0.0", type: "module" }, null, 2));
+  hooks.prepareProject?.(project);
   const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
   const runRoot = join(state, "builds", safeSegment(runId));
   mkdirSync(runRoot, { recursive: true });
@@ -902,6 +1036,7 @@ export async function openFactoryPort(
     ProductionIntegrationManager.prototype.initialize = origInitialize;
   }
   assert.equal(seen.length, 1, "the factory builds exactly one integration manager");
+  if (hooks.onBuilt) await hooks.onBuilt(built);
   const integration = seen[0]!;
   const port = (built.runtime as unknown as { projectDocs: ProjectDocsPort }).projectDocs;
   assert.ok(port, "the factory builds a docs port");
@@ -939,6 +1074,83 @@ export async function openFactoryPort(
  * factory tests keep using openFactoryPort; only genuinely factory-
  * unrecoverable legacy shapes use this path.
  */
+/**
+ * Factory-port finish fixture with real delivery acceptance. Opens the
+ * factory on v2FactoryFinishPreSeed, then steps the factory-built runtime
+ * with scripted worker/reviewer/architect models until T1 is integrated
+ * and P1 accepted (stopping before FV starts). The caller appends fvSeed
+ * + lowRiskSeed and drives handoff exactly as before.
+ */
+export async function openFactoryFinishPort(
+  label: string,
+  runId: string,
+  specOptions: { specCopy?: boolean; handoffFiles?: "commit" | "export_only" } = {},
+): Promise<FactoryPortFixture> {
+  let runtimeRef: BuildRuntime | undefined;
+  const worker = new FinishWorkerModel();
+  const reviewer = new FinishReviewerModel();
+  const modelsFor = (config: RunnerProviderConfig): AgentModel => {
+    if (config.runtimeId === "arch:architect") return new FinishArchitectModel(() => runtimeRef!.projection());
+    if (config.runtimeId === "work:worker") return worker;
+    return reviewer;
+  };
+  const fixture = await openFactoryPort(
+    label,
+    runId,
+    (seedRunId) => v2FactoryFinishPreSeed(seedRunId),
+    "finish",
+    { ...specOptions, modelsFor },
+    {
+      // The scripted finish worker runs `node --test` and expects the value
+      // fixture: scoped to finish fixtures only via the preparation hook, so
+      // generic factory and direct fixtures keep their committed contents.
+      prepareProject: (project) => {
+        const packagePath = join(project, "package.json");
+        const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as Record<string, unknown>;
+        writeFileSync(packagePath, JSON.stringify({ ...pkg, scripts: { test: "node --test" } }, null, 2));
+        mkdirSync(join(project, "test"), { recursive: true });
+        writeFileSync(join(project, "test", "value.test.mjs"), FINISH_VALUE_TEST);
+      },
+      onBuilt: async (built) => {
+        runtimeRef = built.runtime;
+        for (let step = 0; step < 40; step += 1) {
+          const projection = built.runtime.projection();
+          if (Object.keys(projection.delivery?.phaseAcceptances ?? {}).length > 0) break;
+          const result = await built.runtime.step();
+          if (result.status === "paused" || result.status === "failed") break;
+        }
+        const final = built.runtime.projection();
+        assert.ok(Object.keys(final.delivery?.phaseAcceptances ?? {}).length > 0, "the finish drive reaches phase acceptance");
+        assert.ok(final.delivery?.taskAcceptances.T1, "T1 is accepted before handoff");
+        assert.ok(final.integrationRevision, "integration revision exists before FV");
+      },
+    },
+  );
+  // The worker drive recorded evidence in the factory's own evidence store
+  // (runRoot), not the fixture's pre-create store. Point the fixture at the
+  // factory file so later harness opens replay with the worker evidence.
+  const factoryEvidence = new SqliteEvidenceStore(join(fixture.state, "builds", safeSegment(runId), "evidence.sqlite"));
+  const origClose = fixture.close;
+  fixture.evidence = factoryEvidence;
+  fixture.close = async () => {
+    factoryEvidence.close();
+    await origClose();
+  };
+  return fixture;
+}
+
+/**
+ * The scheduler integration revision after openFactoryFinishPort's worker
+ * drive. Handoff tests seed FV + risk against this revision (not the git
+ * baseline: worker integration advanced it) and scope rev-list assertions
+ * from it so worker commits do not pollute handoff commit counts.
+ */
+export function finishIntegrationRevision(fixture: FactoryPortFixture, runId: string): string {
+  const { projection } = readHandoffLog(fixture, runId);
+  assert.ok(projection.integrationRevision, "the finish drive leaves an integration revision");
+  return projection.integrationRevision;
+}
+
 export async function openDirectPort(
   label: string,
   runId: string,
@@ -1048,6 +1260,7 @@ export function headerDigest(body: string): string {
 export function openHandoffStore(fixture: HandoffFixture, runId: string): SqliteSchedulerStore {
   return new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(runId), "scheduler.sqlite"), {
     evidenceStore: fixture.evidence,
+    artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
     validateExecutionProfile: acceptFinalVerificationProfile,
     validateCleanupReceipt: () => undefined,
   });
@@ -1132,6 +1345,7 @@ export async function driveHandoff(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "plan_only",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       ...(options.specCopy !== undefined ? { specCopy: options.specCopy } : {}),
       ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
       ...(options.artifacts ? { artifacts: options.artifacts } : {}),
@@ -1172,6 +1386,7 @@ export async function pauseHandoff(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "plan_only",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       ...(options.specCopy !== undefined ? { specCopy: options.specCopy } : {}),
       ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
       ...(options.stopNotes ? { stopNotes: options.stopNotes } : {}),
@@ -1200,6 +1415,7 @@ export async function resumeHandoff(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "plan_only",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       ...(options.specCopy !== undefined ? { specCopy: options.specCopy } : {}),
       ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
     });
@@ -1239,6 +1455,7 @@ export async function selectHandoffOwner(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "plan_only",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       ...(options.specCopy !== undefined ? { specCopy: options.specCopy } : {}),
       ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
     });
@@ -1276,6 +1493,7 @@ export async function applyAutomaticHandoff(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "finish",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
     });
     const projection = runtime.projection();
     assertProjectHandoffSelectionAccepted(
