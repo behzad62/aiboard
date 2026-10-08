@@ -2,6 +2,8 @@
 
 Original completed qualification: `1052d5b9`, exit1; 148 failures. Exact error/stack/raw records: `D:/tmp/t8-failures.json`, extracted from original UTF-16LE `D:/tmp/t8-final-1052d5b9.log`. Grouping below is provisional causal assignment; targeted diagnoses refine it in [remediation report](t8-failure-remediation.md). Focused GREEN is not T8 acceptance.
 
+Current completed qualification `27824407`: 147 original cases PASS, original44 FAIL at missing trusted baseline. Original75 maps to the renamed current-manifest read-coverage case and PASS; companion original76 SQLite checkpoint refusal also PASS. Earlier original44 GREEN loaded before the factory repair and is not final-source qualification. All historical receipts remain preserved; see [current17-failure inventory](t8-full-27824407-failure-inventory.md).
+
 | ID | Source | Test | Investigation group | Focused verification |
 |---:|---|---|---|---|
 | 1 | `runner-v2/test/docs-policy-v2-handoff-parity.test.ts:91:1` | parity: a normal handoff agrees between the full manager and the harness | handoff spec-copy/case-collision | GREEN: handoff bounded 15/15; review ACCEPT c65dfac3 |

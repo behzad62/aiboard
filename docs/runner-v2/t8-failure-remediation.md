@@ -2,6 +2,17 @@
 
 Status: DIAGNOSIS / REPAIR IN PROGRESS. T8 NOT ACCEPTED. REL-1 NOT STARTED.
 
+## Completed fresh qualification — 2026-10-09 continuation
+
+Completed fresh local qualification at **27824407dc7d9c5fb3d8656623a347b860c1c8bc**: exact `npm run test:runner-v2`, Node v24.18.0, true exit **1**, **4653 tests / 4630 pass / 17 fail / 6 skip / 0 cancelled / 0 todo**, 26856260.0395 ms. It ran 2026-10-08T12:28:17Z–19:55:54Z with no checkout edits or overlapping gates. All 57 source/test and two shipping-archive hashes match; candidate was clean before/after. Raw evidence `D:/tmp/t8-sol-full-27824407.{log,exit,started.json,meta.json}`; log SHA256 `cf1d2989d640c4808174aeda116ad4b0a34c53ab5defc63554a14b873ae9d898`. The original TAP-only capture has empty counts; preserved supplemental `.result-meta.json` mechanically parses the actual SPEC summary and `.failures.json` retains all 17 exact raw blocks. The 12 chained scripts did not execute because the root stage failed.
+
+Original inventory reconciles to **147 PASS / original44 IV-2 FAIL**. Original75 is the faithfully renamed current-manifest coverage case; its original endpoints and companion SQLite checkpoint refusal pass. The earlier IV-2 focused GREEN started before the concurrent factory edit and does not qualify the final bootstrap guard. Prior claims of all148 qualifying final-source GREEN are superseded by this exact-candidate result. The 16 additional failures were previously passing fixtures, not new production acceptance: 15 missing-baseline construction fixtures plus one obsolete plan-only refusal assertion.
+
+Root causes: **16 cases** preseed later planning/readiness/start history before fresh factory initialization, so the correct recovery-preserving guard refuses missing trusted test-integrity baseline authority; **one A3 case** expects owner-start wording while the correct semantic refusal is `Plan-only runs never admit workers.`. Narrow Muse-only scope: delivery-factory helper, finish-specific handoff helper, C3c and IV-2 construction fixtures, and A3's exact refusal assertion. Preserve production recovery immutability, original assertions, full endpoints and caps. Complete inventory: [fresh17 failures](t8-full-27824407-failure-inventory.md). Captured A1 spine, Phase-C, V1/V2/V3 and the other147 original cases pass; pytest live coverage remains honestly host-skipped because pytest is absent.
+
+**Fresh full-suite readiness: NO until these fixture repairs, affected complete journeys, static checks and independent review pass. T8 NOT ACCEPTED; REL-1 NOT STARTED.** No full suite is active. Main remains unchanged; retained supervisor witnesses do not authorize numeric-PID cleanup or universal release claims.
+
+
 Baseline: clean `codex/p66-t8`, HEAD `1052d5b98c03ac577ff284869cb35f4b3a525611`, parent `be51655a8d3852998c8f762e457925d676c71829`. Main remains untouched. Node v24.18.0. No active original suite or Muse writer found. Two surviving managed supervisors from original NativeBuildFactory fixtures were observed; PID identity alone is not cleanup authority.
 
 Completed original suite: `npm run test:runner-v2`, exit **1**, 4616 tests, 4462 passed, 148 failed, 6 skipped, 0 cancelled. Original log `D:/tmp/t8-final-1052d5b9.log` is UTF-16LE; original exit file `D:/tmp/t8-final-1052d5b9.exit`. The chained client scripts did not run because the first command failed. Do not restart this completed run.
