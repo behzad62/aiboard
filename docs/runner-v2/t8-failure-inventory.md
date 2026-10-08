@@ -32,15 +32,15 @@ Original completed qualification: `1052d5b9`, exit1; 148 failures. Exact error/s
 | 26 | `runner-v2/test/e2-product-submission-guard.test.ts:294:5` | E2 product: real factory submission guard scope_blocked | scripted model/tool protocol | GREEN: E2 whole file 4/4; scope review correction pending |
 | 27 | `runner-v2/test/e2-product-submission-guard.test.ts:294:5` | E2 product: real factory submission guard scope_reconciled | scripted model/tool protocol | GREEN: E2 whole file 4/4; scope review correction pending |
 | 28 | `runner-v2/test/e2-product-submission-guard.test.ts:294:5` | E2 product: real factory submission guard secret | scripted model/tool protocol | GREEN: E2 whole file 4/4; scope review correction pending |
-| 29 | `runner-v2/test/e3-product-review-integrity.test.ts:296:5` | E3 product: real factory review integrity clean | scripted model/tool protocol | GREEN: selected factory 1/1; caller source review provisional |
-| 30 | `runner-v2/test/e3-product-review-integrity.test.ts:296:5` | E3 product: real factory review integrity unreferenced | scripted model/tool protocol | Pending |
-| 31 | `runner-v2/test/e3-product-review-integrity.test.ts:296:5` | E3 product: real factory review integrity test_only | scripted model/tool protocol | Pending |
-| 32 | `runner-v2/test/e3-product-review-integrity.test.ts:296:5` | E3 product: real factory review integrity failover | scripted model/tool protocol | GREEN: selected factory failover 1/1; caller source review provisional |
+| 29 | `runner-v2/test/e3-product-review-integrity.test.ts:296:5` | E3 product: real factory review integrity clean | scripted model/tool protocol | GREEN: E3 whole file 4/4; source and scope review pending |
+| 30 | `runner-v2/test/e3-product-review-integrity.test.ts:296:5` | E3 product: real factory review integrity unreferenced | scripted model/tool protocol | GREEN: E3 whole file 4/4; source and scope review pending |
+| 31 | `runner-v2/test/e3-product-review-integrity.test.ts:296:5` | E3 product: real factory review integrity test_only | scripted model/tool protocol | GREEN: E3 whole file 4/4; source and scope review pending |
+| 32 | `runner-v2/test/e3-product-review-integrity.test.ts:296:5` | E3 product: real factory review integrity failover | scripted model/tool protocol | GREEN: E3 whole file 4/4; source and scope review pending |
 | 33 | `runner-v2/test/e4-product-encoding-safety.test.ts:295:5` | E4 product: real factory encoding safety clean | scripted model/tool protocol | Pending |
 | 34 | `runner-v2/test/e4-product-encoding-safety.test.ts:295:5` | E4 product: real factory encoding safety mojibake | scripted model/tool protocol | Pending |
 | 35 | `runner-v2/test/e4-product-encoding-safety.test.ts:295:5` | E4 product: real factory encoding safety lineflip | scripted model/tool protocol | Pending |
 | 36 | `runner-v2/test/e4-product-encoding-safety.test.ts:295:5` | E4 product: real factory encoding safety invalid | scripted model/tool protocol | Pending |
-| 37 | `runner-v2/test/e5-product-review-evidence.test.ts:300:5` | E5 product: real factory review evidence cited | scripted model/tool protocol | Pending |
+| 37 | `runner-v2/test/e5-product-review-evidence.test.ts:300:5` | E5 product: real factory review evidence cited | scripted model/tool protocol | GREEN: E5 whole file 1/1; source review provisional |
 | 38 | `runner-v2/test/filesystem-mutation-routing.test.ts:27:1` | native filesystem mutation-capable imports have a closed reviewed ownership boundary | filesystem inventory/Windows cleanup/PATH | Pending |
 | 39 | `runner-v2/test/handoff-rerequest.test.ts:970:1` | FX-2 CR-1 docs-v2 finish: the re-request carries a new snapshot for the new stop | factory provisioning/recovery | GREEN: Factory docs-v2 re-request selected |
 | 40 | `runner-v2/test/handoff-rerequest.test.ts:1347:1` | FX-2 B1 (N1 probe F): the owner's re-answer with the same product key records a new selection and the run completes | runtime selection offer identity | GREEN: Selection selected; related files/review pending |
