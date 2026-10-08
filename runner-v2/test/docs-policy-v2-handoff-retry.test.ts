@@ -159,7 +159,11 @@ test("C2a B4: commit lands, the read fails, retry reuses the commit and records 
     // The event digest is the committed file's own digest.
     const committed = await runGit({ cwd: fixture.integration.path, args: ["show", `${String(payload.commit)}:docs/project/STATE.md`] });
     assert.equal(headerDigest(committed.stdout), payload.bodyDigest);
-    assert.deepEqual(payload.paths, ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(payload.paths, ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
+    assert.equal(payload.specPath, "docs/project/specs/source_value.md", "CD-5: the permitted copy is recorded");
+    assert.equal(payload.specCopied, true);
+    const copy = await runGit({ cwd: fixture.integration.path, args: ["show", `${String(payload.commit)}:docs/project/specs/source_value.md`] });
+    assert.equal(copy.stdout, SOURCE_TEXT, "the copy holds the approved verbatim bytes");
   } finally {
     await fixture.close();
   }
@@ -883,9 +887,13 @@ test("C2c repair cycle 2/probe B2: a reused AGENTS.md-into-CLAUDE.md commit comp
     assert.equal(payload.claudeLineCommitted, true, "the merged section satisfies both entry lines");
     assert.match(String(payload.claudeLineViaLink), /CLAUDE\.md pointer omitted: AGENTS\.md resolves to CLAUDE\.md/, "the self-import omission is re-described from the commit tree");
     assert.ok(!("stateSkippedReason" in payload), "a committed STATE.md never carries a skip reason");
+    assert.equal(payload.specPath, "docs/project/specs/source_value.md", "CD-5: the permitted copy is recorded");
+    assert.equal(payload.specCopied, true);
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
+    const copy = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/specs/source_value.md`] });
+    assert.equal(copy.stdout, SOURCE_TEXT, "the copy holds the approved verbatim bytes");
     const reused = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
     assert.equal(reused.stdout.trim(), landed.stdout.trim(), "no second commit: the landed commit is reused");
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2c-r2-b2");
@@ -960,9 +968,13 @@ test("C2c repair cycle 2/probe S1-reuse: a reused STATE.md-link commit completes
     const payload = snapshots[0]!.payload as Record<string, unknown>;
     assert.match(String(payload.stateSkippedReason), /docs\/project\/STATE\.md is not written: docs\/project\/STATE\.md is a symbolic link or junction/, "the STATE.md skip is re-described from the commit tree");
     assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    assert.equal(payload.specPath, "docs/project/specs/source_value.md", "CD-5: the sibling spec copy is still permitted");
+    assert.equal(payload.specCopied, true);
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/specs/source_value.md"]);
+    const copy = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/specs/source_value.md`] });
+    assert.equal(copy.stdout, SOURCE_TEXT, "the copy holds the approved verbatim bytes");
     assert.equal(readFileSync(join(worktree, "shared.txt"), "utf8"), "shared\n", "nothing is written outside the repository");
     const reused = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
     assert.equal(reused.stdout.trim(), landed.stdout.trim(), "no second commit: the landed commit is reused");

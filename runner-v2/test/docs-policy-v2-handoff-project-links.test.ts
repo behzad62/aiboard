@@ -466,9 +466,13 @@ test("C2c repair M-1/probe D1: a junction above a redirect target refuses the re
     assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to sub\/notes\.md/, "the redirect refusal is recorded");
     assert.match(String(payload.agentsSectionViaLink), /sub is a symbolic link or junction/, "the reason names the junction above the target");
     assert.equal(payload.claudeLineCommitted, true);
+    assert.equal(payload.specPath, "docs/project/specs/source_value.md", "CD-5: the permitted approved-source copy is recorded");
+    assert.equal(payload.specCopied, true);
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
+    const copy = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/specs/source_value.md`] });
+    assert.equal(copy.stdout, SOURCE_TEXT, "the copy holds the approved verbatim bytes");
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2c-repair-d1");
     assert.equal(selected.status, "completed");
   } finally {
@@ -895,16 +899,20 @@ test("C2d/probe DOCS-dir: a regular capital Docs directory hands off through the
     assert.ok(!("stateSkippedReason" in payload), "STATE.md is committed, not skipped");
     assert.deepEqual(
       payload.paths,
-      ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"],
+      ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"],
       "the event reports the canonical handoff spellings",
     );
+    assert.equal(payload.specPath, "docs/project/specs/source_value.md", "CD-5: the permitted copy is recorded under the canonical spelling");
+    assert.equal(payload.specCopied, true);
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
     assert.deepEqual(
       files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
-      ["AGENTS.md", "CLAUDE.md", "Docs/project/STATE.md"],
+      ["AGENTS.md", "CLAUDE.md", "Docs/project/STATE.md", "Docs/project/specs/source_value.md"],
       "the commit holds the index's own spelling",
     );
+    const copy = await runGit({ cwd: worktree, args: ["show", `${commit}:Docs/project/specs/source_value.md`] });
+    assert.equal(copy.stdout, SOURCE_TEXT, "the copy holds the approved verbatim bytes");
     const state = await runGit({ cwd: worktree, args: ["show", `${commit}:Docs/project/STATE.md`] });
     assert.equal(verifyHandoffSnapshotDigest(state.stdout), true, "the committed STATE.md verifies");
     assert.equal(
@@ -946,14 +954,18 @@ test("C2d/probe D-walk-projdir: a regular docs/Project directory hands off throu
     assert.equal(snapshots.length, 1, "the run hands off instead of wedging on the pathspec");
     const payload = snapshots[0]!.payload as Record<string, unknown>;
     assert.ok(!("stateSkippedReason" in payload), "STATE.md is committed, not skipped");
-    assert.deepEqual(payload.paths, ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(payload.paths, ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
+    assert.equal(payload.specPath, "docs/project/specs/source_value.md", "CD-5: the permitted copy is recorded under the canonical spelling");
+    assert.equal(payload.specCopied, true);
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
     assert.deepEqual(
       files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
-      ["AGENTS.md", "CLAUDE.md", "docs/Project/STATE.md"],
+      ["AGENTS.md", "CLAUDE.md", "docs/Project/STATE.md", "docs/Project/specs/source_value.md"],
       "the commit holds the index's own spelling",
     );
+    const copy = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/Project/specs/source_value.md`] });
+    assert.equal(copy.stdout, SOURCE_TEXT, "the copy holds the approved verbatim bytes");
     const state = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/Project/STATE.md`] });
     assert.equal(verifyHandoffSnapshotDigest(state.stdout), true, "the committed STATE.md verifies");
     const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
@@ -1134,13 +1146,17 @@ test("C2e/probe F-state-dir: a tracked directory at docs/project/STATE.md skips 
     const payload = snapshots[0]!.payload as Record<string, unknown>;
     assert.equal(payload.stateSkippedReason, handoffStateBlockerSkipReason("docs/project/STATE.md", "directory"), "the skip reason names the directory blocker accurately");
     assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    assert.equal(payload.specPath, "docs/project/specs/source_value.md", "CD-5: the sibling spec copy is still permitted");
+    assert.equal(payload.specCopied, true);
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
     assert.deepEqual(
       files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
-      ["AGENTS.md", "CLAUDE.md"],
-      "only the entry files commit; nothing is written under the directory",
+      ["AGENTS.md", "CLAUDE.md", "docs/project/specs/source_value.md"],
+      "the entry files plus the sibling spec copy commit; nothing is written under the directory",
     );
+    const copy = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/specs/source_value.md`] });
+    assert.equal(copy.stdout, SOURCE_TEXT, "the copy holds the approved verbatim bytes");
     assert.equal(readFileSync(join(worktree, "docs", "project", "STATE.md", "keep.md"), "utf8"), "user keep\n", "the user's file is untouched");
     const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
     assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
@@ -1244,13 +1260,17 @@ test("C2e repair cycle 1/probe F7: a submodule entry at docs/project/STATE.md sk
       "the skip reason names the submodule entry accurately",
     );
     assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    assert.equal(payload.specPath, "docs/project/specs/source_value.md", "CD-5: the sibling spec copy is still permitted");
+    assert.equal(payload.specCopied, true);
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
     assert.deepEqual(
       files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
-      ["AGENTS.md", "CLAUDE.md"],
-      "only the entry files commit; nothing is written under the submodule entry",
+      ["AGENTS.md", "CLAUDE.md", "docs/project/specs/source_value.md"],
+      "the entry files plus the sibling spec copy commit; nothing is written under the submodule entry",
     );
+    const copy = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/specs/source_value.md`] });
+    assert.equal(copy.stdout, SOURCE_TEXT, "the copy holds the approved verbatim bytes");
     const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
     assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2e-r1-f7");
@@ -1437,6 +1457,9 @@ test("C2d repair cycle 1/escalation C-1: colliding docs/ and Docs/ directories s
     assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
     assert.equal(payload.agentsSectionCommitted, true);
     assert.equal(payload.claudeLineCommitted, true);
+    assert.equal(payload.specCopySkipped, "write_failed", "the optional copy under the colliding ancestor is skipped, never wedging");
+    assert.ok(!("specCopied" in payload), "no copy is claimed");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
     assert.deepEqual(
@@ -1446,6 +1469,8 @@ test("C2d repair cycle 1/escalation C-1: colliding docs/ and Docs/ directories s
     );
     assert.equal(existsSync(join(worktree, "Docs", "project", "STATE.md")), false, "the skipped write landed nowhere");
     assert.equal(existsSync(join(worktree, "docs", "project", "STATE.md")), false, "the skipped write landed nowhere under either spelling");
+    assert.equal(existsSync(join(worktree, "docs", "project", "specs", "source_value.md")), false, "no spec copy lands under the ambiguous ancestor");
+    assert.equal(existsSync(join(worktree, "Docs", "project", "specs", "source_value.md")), false, "no spec copy lands under either spelling");
     assert.equal(readFileSync(join(outside, "own.txt"), "utf8"), "outside\n", "nothing is written outside the repository");
     assert.equal(existsSync(join(fixture.project, "docs")), false, "the project is still untouched");
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2d-collidedirs");
