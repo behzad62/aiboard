@@ -11,7 +11,8 @@ const mutationNames = new Set(["writeFile", "appendFile", "write", "writev", "re
 // modules own Runner-private state/SQLite/artifacts/protocol files or existing
 // run-owned verification/Git-worktree lifecycle, never native fs.* tool targets.
 const privateOwners = new Set([
-  "artifact-store.ts", "bounded-output-spool.ts", "browser-tools.ts", "cli.ts", "durable-process-store.ts",
+  "artifact-store.ts", "bounded-output-spool.ts", "browser-tools.ts", "cli.ts", "command-evidence-identity.ts", // private GIT_INDEX_FILE snapshots under attested run root outside cwd; separate index per capture, cleans only created tmp.
+  "durable-process-store.ts",
   "encrypted-provider-config-store.ts", "execution-host.ts", "execution-isolation-provider.ts",
   "final-verification-cleanup.ts", "final-verification-port-authority.ts", "final-verification-profile.ts",
   "git-baseline.ts", "git-bootstrap.ts", "git-preflight.ts", "integration-manager.ts", "managed-process-record.ts",
@@ -23,7 +24,36 @@ const privateOwners = new Set([
   "sqlite-evidence-store.ts", "sqlite-project-memory.ts", "sqlite-scheduler-store.ts", "sqlite-tool-ledger.ts",
   "streaming-session-store.ts", "verification-workspace.ts", "windows-job-process-host.ts", "windows-process-semantic-probes.ts", "workspace-manager.ts",
 ]);
-const readHandleOwners = new Set(["artifact-reachability.ts", "mcp-executable-digest.ts", "repository-intelligence.ts"]);
+// Read-handle-only owners: exact reviewed mutation-capable import per module.
+// Async open owners keep ["open"]; the sync report reader keeps ["openSync"].
+// test-report-readers.ts reads confined verification reports through one
+// openSync(canonicalFile, "r") descriptor with canonical parent/leaf checks
+// before open and descriptor-bound bounded revalidation after; the checkout
+// root is already the read boundary, never a mutation target. No generic
+// privateOwner entry: any other import or write/mkdir/rm/rename API fails.
+const readHandleOwners = new Map<string, readonly string[]>([
+  ["artifact-reachability.ts", ["open"]],
+  ["mcp-executable-digest.ts", ["open"]],
+  ["repository-intelligence.ts", ["open"]],
+  ["test-report-readers.ts", ["openSync"]],
+]);
+function assertReadOnlyOpenSync(ast: ts.SourceFile, name: string): void {
+  const openCalls: ts.CallExpression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const callee = node.expression.text;
+      if (mutationNames.has(callee.replace(/Sync$/, ""))) {
+        assert.equal(callee, "openSync", `${name} must not invoke mutation API ${callee}`);
+        openCalls.push(node);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  assert.equal(openCalls.length, 1, `${name} must invoke openSync exactly once`);
+  const flag = openCalls[0]!.arguments[1];
+  assert.ok(flag !== undefined && ts.isStringLiteral(flag) && flag.text === "r", `${name} must open with literal "r"`);
+}
 test("native filesystem mutation-capable imports have a closed reviewed ownership boundary", () => {
   const found: string[] = [];
   for (const name of fs.readdirSync(source).filter((name) => /\.(ts|mjs|js)$/.test(name))) {
@@ -40,7 +70,10 @@ test("native filesystem mutation-capable imports have a closed reviewed ownershi
       }
       if (imports.length === 0) continue;
       found.push(name);
-      if (readHandleOwners.has(name)) assert.deepEqual(imports, ["open"], `${name} is inspected only for read handles`);
+      if (readHandleOwners.has(name)) {
+        assert.deepEqual(imports, [...readHandleOwners.get(name)!], `${name} is inspected only for read handles`);
+        if (name === "test-report-readers.ts") assertReadOnlyOpenSync(ast, name);
+      }
       else assert.ok(name === "filesystem-mutation-fence.ts" || privateOwners.has(name), `Unreviewed native filesystem owner: ${name} (${imports})`);
     }
   }
