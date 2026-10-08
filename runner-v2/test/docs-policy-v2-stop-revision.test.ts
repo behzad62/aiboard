@@ -22,6 +22,7 @@ import type { FinalVerificationPlan } from "../src/final-verification-contracts.
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import {
   buildCompletionReadiness,
+  currentExplicitStartIdentity,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
   type SchedulerActorRole,
@@ -495,7 +496,7 @@ test("C3c: pause/snapshot/resume/task integration/final verification/handoff tar
   const runRoot = join(state, "builds", safeSegment(RUN));
   mkdirSync(runRoot, { recursive: true });
   const seeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
-  for (const input of planningEvents()) seeder.append(input);
+  for (const input of planningEvents().slice(0, 3)) seeder.append(input);
   seeder.close();
   const reviewer = new ReviewerModel();
   const worker = new WorkerModel();
@@ -552,6 +553,27 @@ test("C3c: pause/snapshot/resume/task integration/final verification/handoff tar
       createdAt: CLOCK,
       idempotencyKey: "c3c-stop-revision",
     }));
+    // T8 fresh bootstrap: the factory saw only the bare 3-event prefix, so it
+    // stamped genuine evidence activation + test-integrity initialRevision from
+    // the actual Git baseline. Append the original source/read/ledger/coverage/
+    // ready tail (excluding the factory-owned run-policy stamp and the
+    // synthetic authorization), then authorize the actual durable ready
+    // identity via the public API (no baseline is fabricated).
+    const tailStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
+    let c3cStartIdentity: ReturnType<typeof currentExplicitStartIdentity>;
+    try {
+      for (const input of planningEvents().slice(4, -1)) tailStore.append(input);
+      c3cStartIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(tailStore.readRun(RUN)));
+    } finally {
+      tailStore.close();
+    }
+    assert.ok(c3cStartIdentity, "the fixture plan is ready with a complete start identity");
+    await manager!.authorizeExplicitPlanStart(RUN, {
+      ...c3cStartIdentity,
+      version: 1,
+      ownerChoice: "execute",
+      idempotencyKey: "owner-start",
+    });
     const stepUntil = async (label: string, done: (projection: SchedulerProjection) => boolean, cap: number): Promise<SchedulerProjection> => {
       for (let step = 0; step < cap; step += 1) {
         const projection = runtime!.projection();

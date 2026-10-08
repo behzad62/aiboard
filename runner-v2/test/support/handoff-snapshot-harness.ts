@@ -1097,7 +1097,7 @@ export async function openFactoryFinishPort(
   const fixture = await openFactoryPort(
     label,
     runId,
-    (seedRunId) => v2FactoryFinishPreSeed(seedRunId),
+    (seedRunId) => v2PlanOnlySeed(seedRunId).slice(0, 3),
     "finish",
     { ...specOptions, modelsFor },
     {
@@ -1113,29 +1113,64 @@ export async function openFactoryFinishPort(
       },
       onBuilt: async (built) => {
         runtimeRef = built.runtime;
-        for (let step = 0; step < 40; step += 1) {
-          const projection = built.runtime.projection();
-          if (Object.keys(projection.delivery?.phaseAcceptances ?? {}).length > 0) break;
-          const result = await built.runtime.step();
-          if (result.status === "paused" || result.status === "failed") break;
-        }
-        const final = built.runtime.projection();
-        assert.ok(Object.keys(final.delivery?.phaseAcceptances ?? {}).length > 0, "the finish drive reaches phase acceptance");
-        assert.ok(final.delivery?.taskAcceptances.T1, "T1 is accepted before handoff");
-        assert.ok(final.integrationRevision, "integration revision exists before FV");
       },
     },
   );
-  // The worker drive recorded evidence in the factory's own evidence store
-  // (runRoot), not the fixture's pre-create store. Point the fixture at the
-  // factory file so later harness opens replay with the worker evidence.
-  const factoryEvidence = new SqliteEvidenceStore(join(fixture.state, "builds", safeSegment(runId), "evidence.sqlite"));
-  const origClose = fixture.close;
-  fixture.evidence = factoryEvidence;
-  fixture.close = async () => {
-    factoryEvidence.close();
-    await origClose();
-  };
+  try {
+    // T8 fresh bootstrap: the factory saw only the bare 3-event prefix, so it
+    // stamped genuine evidence activation + test-integrity initialRevision from
+    // the actual Git baseline. Preserve the exact source bytes in the actual
+    // artifact store, append the original source->ready tail, authorize the
+    // actual durable ready identity via the public API, then drive the real
+    // worker/reviewer/integration pump (no baseline is fabricated).
+    const { manifest } = scenario();
+    const sourceArtifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+    const stored = await sourceArtifacts.put(Buffer.from(SOURCE_TEXT, "utf-8"), "text/plain", "approved source");
+    assert.equal(stored.hash, manifest.artifactDigest, "the stored source bytes are the manifest authority");
+    const tail = v2FactoryFinishPreSeed(runId).slice(4, -1);
+    const tailStore = openHandoffStore(fixture, runId);
+    try {
+      for (const input of tail) tailStore.append(input);
+    } finally {
+      tailStore.close();
+    }
+    const { projection: readyProjection } = readHandoffLog(fixture, runId);
+    const startIdentity = currentExplicitStartIdentity(readyProjection);
+    assert.ok(startIdentity, "the factory finish pre-seed is ready with a complete start identity");
+    await runtimeRef!.authorizeExplicitPlanStart({
+      ...startIdentity,
+      version: 1,
+      ownerChoice: "execute",
+      idempotencyKey: "owner-start",
+    });
+    for (let step = 0; step < 40; step += 1) {
+      const projection = runtimeRef!.projection();
+      if (Object.keys(projection.delivery?.phaseAcceptances ?? {}).length > 0) break;
+      const result = await runtimeRef!.step();
+      if (result.status === "paused" || result.status === "failed") break;
+    }
+    const final = runtimeRef!.projection();
+    assert.ok(Object.keys(final.delivery?.phaseAcceptances ?? {}).length > 0, "the finish drive reaches phase acceptance");
+    assert.ok(final.delivery?.taskAcceptances.T1, "T1 is accepted before handoff");
+    assert.ok(final.integrationRevision, "integration revision exists before FV");
+    // The worker drive recorded evidence in the factory's own evidence store
+    // (runRoot), not the fixture's pre-create store. Point the fixture at the
+    // factory file so later harness opens replay with the worker evidence.
+    const factoryEvidence = new SqliteEvidenceStore(join(fixture.state, "builds", safeSegment(runId), "evidence.sqlite"));
+    const origClose = fixture.close;
+    fixture.evidence = factoryEvidence;
+    fixture.close = async () => {
+      factoryEvidence.close();
+      await origClose();
+    };
+  } catch (error) {
+    try {
+      await fixture.close();
+    } catch (closeError) {
+      throw new AggregateError([error, closeError], "openFactoryFinishPort prep/drive failed and cleanup also failed");
+    }
+    throw error;
+  }
   return fixture;
 }
 

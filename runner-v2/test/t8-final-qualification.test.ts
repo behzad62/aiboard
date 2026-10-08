@@ -2038,7 +2038,7 @@ test("T8-A3 plan-only run refuses execution and snapshots the plan", async () =>
           idempotencyKey: "t8-attempted-execution",
           payload: { taskId: "T1", status: "assigned", attempt: 1 },
         }),
-        /Worker admission requires an explicit owner start authorization/,
+        /Plan-only runs never admit workers\./,
       );
     } finally {
       attempt.close();

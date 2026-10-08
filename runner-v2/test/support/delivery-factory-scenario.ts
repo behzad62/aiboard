@@ -316,20 +316,7 @@ export async function runDeliveryFactoryScenario(
   const runRoot = join(state, "builds", safeSegment(RUN_ID));
   mkdirSync(runRoot, { recursive: true });
   const seed = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
-  for (const input of planningEvents()) seed.append(input);
-  // T7b: the ready plan waits for its explicit owner start. The fixture
-  // acts as owner through the genuine authorization event, covering the
-  // kernel's own current ready identity (no authority is invented).
-  const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(seed.readRun(RUN_ID)));
-  assert.ok(startIdentity, "the fixture plan is ready with a complete start identity");
-  seed.append({
-    runId: RUN_ID,
-    type: "planning.execution_authorized",
-    occurredAt: CLOCK,
-    actor: { role: "user", id: "local-user" },
-    idempotencyKey: "owner-start",
-    payload: { authorization: { ...startIdentity, version: 1, ownerChoice: "execute" } },
-  });
+  for (const input of planningEvents().slice(0, 3)) seed.append(input);
   seed.close();
   const reviewer = new ReviewerModel(options.observe);
   const pauseDetail = () => JSON.stringify((handle!.runtime as unknown as { store: SqliteSchedulerStore }).store.readRun(RUN_ID).filter((item) => item.type === "run.paused").at(-1)?.payload);
@@ -383,6 +370,26 @@ export async function runDeliveryFactoryScenario(
       createdAt: CLOCK,
       idempotencyKey: "delivery-factory",
     }));
+    // T8 fresh bootstrap: the factory saw only the bare 3-event prefix, so it
+    // stamped genuine evidence activation + test-integrity initialRevision from
+    // the actual Git baseline. Append the original source/read/ledger/coverage/
+    // ready tail, then authorize the actual durable ready identity via the
+    // public API (no baseline is fabricated and no guard is relaxed).
+    const tailStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
+    let startIdentity: ReturnType<typeof currentExplicitStartIdentity>;
+    try {
+      for (const input of planningEvents().slice(3)) tailStore.append(input);
+      startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(tailStore.readRun(RUN_ID)));
+    } finally {
+      tailStore.close();
+    }
+    assert.ok(startIdentity, "the fixture plan is ready with a complete start identity");
+    await handle.runtime.authorizeExplicitPlanStart({
+      ...startIdentity,
+      version: 1,
+      ownerChoice: "execute",
+      idempotencyKey: "owner-start",
+    });
     const actions: string[] = [];
     for (let step = 0; step < 40; step += 1) {
       const projection = handle.runtime.projection();
