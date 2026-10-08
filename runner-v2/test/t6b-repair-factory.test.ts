@@ -13,10 +13,10 @@ import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-facto
 import { T1A_SEEDED_HOST_PLANNING_CAPABILITIES } from "../src/planning-contracts.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { NewSchedulerEvent, SchedulerActorRole } from "../src/scheduler-store.js";
-import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
+import { currentExplicitStartIdentity, rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { repairIssueIdentity, repairRootCauseForCheck } from "../src/repair-budget-contracts.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
-import { buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
+import { FIXTURE_AMENDED_TEXT, buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
 import { captureGitBaseline, NativeBuildFactory } from "./support/git-fixture.js";
 
 /**
@@ -148,9 +148,11 @@ function seedEvents(revision: string): NewSchedulerEvent[] {
   };
   const e = (type: string, key: string, role: SchedulerActorRole, id: string, payload: Record<string, unknown>): NewSchedulerEvent =>
     ({ runId: RUN_ID, type: type as NewSchedulerEvent["type"], occurredAt: CLOCK, actor: { role, id }, idempotencyKey: key, payload });
-  return [
-    e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
+  const baseEvents: NewSchedulerEvent[] = [
+    e("project_docs.policy_configured", "project-docs-policy", "runner", "build-runtime", { version: 2 }),
+    e("run.initialized", "run-initialized", "runner", "build-runtime", { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: "Verify the fixture; the tests fail." }),
     e("planning.policy_configured", "planning-policy", "runner", "build-runtime", { version: 1 }),
+    e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
     e("planning.source_registered", "source", "user", "owner", { manifest: base.priorManifest }),
     e("planning.source_amended", "source-amendment", "user", "owner", { manifest }),
     e("request.triaged", "triage", "architect", "architect", { decision: "build", rationale: "Build the fixture." }),
@@ -168,6 +170,15 @@ function seedEvents(revision: string): NewSchedulerEvent[] {
     ...["T1", "T2", "T3", "T4", "T5", "T-INV"].map((taskId) =>
       e("task.transitioned", `cancel:${taskId}`, "architect", "architect", { taskId, status: "cancelled" })),
     e("integration.revision_advanced", "integration:revision", "runner", "integration-manager", { integrationRevision: revision }),
+  ];
+  const synthesized = baseEvents.map((event, index) => ({ ...event, sequence: index + 1, eventId: `t6b-pre-${index}` }));
+  const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(synthesized as unknown as Parameters<typeof rebuildSchedulerProjection>[0]));
+  assert.ok(startIdentity, "the t6b plan is ready with a complete start identity");
+  return [
+    ...baseEvents,
+    e("planning.execution_authorized", "owner-start", "user", "local-user", {
+      authorization: { ...startIdentity, version: 1, ownerChoice: "execute" },
+    }),
   ];
 }
 
@@ -227,6 +238,7 @@ async function runFactoryScenario(kind: "fail-again" | "really-flaky"): Promise<
       baselineFor: () => baseline.revision,
       providerModelFactory: (config) => config.runtimeId === "arch:architect" ? architect : new NeverCalledModel(config.runtimeId),
     });
+    await executionHost.artifacts.put(Buffer.from(FIXTURE_AMENDED_TEXT, "utf-8"), "text/plain", "approved source");
     handle = await factory.create(await factory.prepareSpec({
       version: 2,
       runId: RUN_ID,
@@ -240,6 +252,7 @@ async function runFactoryScenario(kind: "fail-again" | "really-flaky"): Promise<
       permissionProfile: "full",
       runPolicy: "finish",
       planCritique: "off",
+      planningPolicy: { version: 1 },
       budgetLimits: {},
       createdAt: CLOCK,
       idempotencyKey: "t6b-repair-factory",
