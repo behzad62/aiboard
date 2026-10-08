@@ -20,7 +20,7 @@ import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { buildExecutionPlanRevision, type ExecutionPlanPhase, type ExecutionTaskContract, type SourceRequirement, type CoverageReview } from "../src/planning-contracts.js";
 import { NativeBuildFactory as FixtureNativeBuildFactory, captureGitBaseline, runGit } from "./support/git-fixture.js";
 import { buildApprovedSourceManifest, validateApprovedSourceInput, type ApprovedSourceInputV1 } from "../src/native-planning-provisioner.js";
-import { rebuildSchedulerProjection, reduceSchedulerEvent, currentExplicitStartIdentity, explicitStartBlocked, type SchedulerProjection } from "../src/scheduler-store.js";
+import { rebuildSchedulerProjection, reduceSchedulerEvent, currentExplicitStartIdentity, explicitStartBlocked, newPolicyTaskAdmissionBlocked, type SchedulerProjection } from "../src/scheduler-store.js";
 import { computeArtifactDigest, type ApprovedSourceManifest } from "../src/source-manifest.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -696,6 +696,74 @@ test("T7b current source drift refuses explicit start and direct live worker adm
     assert.throws(() => f.append("task.transitioned", "direct-worker", { taskId: "T1", status: "assigned" }, "runner", "task-scheduler"));
     assert.deepEqual(f.evidence(), before);
   } finally { f.cleanup(); }
+});
+
+test("T7b post-start source drift refuses assigned and running via unchanged artifact recheck", async () => {
+  // Coverage reinforcement (not original failure repair): the SqliteSchedulerStore
+  // assigned/running source-artifact recheck is unchanged, so no production
+  // mutation prove-red is required. The pre-start test stops at plan_start_required;
+  // this post-start case authorizes first, then proves the recheck after authorization.
+  for (const variant of ["corrupt", "missing"] as const) {
+    const f = controlFixture(`post-start-source-${variant}`);
+    try {
+      const scenario = await f.seedReady();
+      const start = f.start();
+      await f.runtime.authorizeExplicitPlanStart(start);
+      const authorized = f.runtime.projection();
+      assert.equal(authorized.planning?.readiness, "ready");
+      assert.equal(explicitStartBlocked(authorized), undefined);
+      assert.equal(f.runtime.planningReadiness().status, "ready_authorized");
+      assert.equal(newPolicyTaskAdmissionBlocked(authorized, "T1"), undefined);
+      assert.equal(authorized.tasks["T1"]?.status, "planned");
+      const hash = start.sourceArtifactDigest;
+      assert.equal(hash, scenario.manifest.artifactDigest);
+      const record = f.artifacts.verifySync(hash);
+      assert.ok(record.path.startsWith(f.root), "drift uses the dedicated temp fixture only");
+      assert.ok(f.root.startsWith(tmpdir()), "drift fixture is a safely verified temp directory only");
+      const originalBytes = readFileSync(record.path);
+      assert.deepEqual(Buffer.from(originalBytes).toString("utf8"), T7B_SOURCE);
+      if (variant === "corrupt") {
+        writeFileSync(record.path, "drifted post-start bytes");
+        const drifted = readFileSync(record.path);
+        assert.notDeepEqual(drifted, originalBytes);
+        assert.notEqual(createHash("sha256").update(drifted).digest("hex"), hash);
+        assert.throws(() => f.artifacts.verifySync(hash), new RegExp(`Artifact ${hash} hash mismatch`));
+      } else {
+        rmSync(record.path, { force: true });
+        assert.throws(() => readFileSync(record.path), /ENOENT/);
+        assert.throws(() => f.artifacts.verifySync(hash), new RegExp(`Artifact ${hash} was not found`));
+      }
+      const before = f.evidence();
+      for (const status of ["assigned", "running"] as const) {
+        try {
+          f.append("task.transitioned", `direct-worker-post-start-${variant}-${status}`, { taskId: "T1", status }, "runner", "task-scheduler");
+          assert.fail(`${status} admission must refuse on post-start source drift (${variant})`);
+        } catch (error) {
+          const message = (error as Error).message;
+          assert.ok(message.includes(hash), `refusal names the offending artifact ${hash}: ${message}`);
+          if (variant === "corrupt") assert.match(message, /hash mismatch/);
+          else assert.match(message, /was not found/);
+          assert.doesNotMatch(message, /explicit owner start|not bound|requires a ready plan/);
+        }
+        assert.deepEqual(f.evidence(), before, `no event/worker/allocation effect on ${status} refusal (${variant})`);
+        assert.equal(f.evidence().events.length, before.events.length);
+        assert.equal(f.evidence().workers, before.workers);
+        assert.equal(f.evidence().allocations, before.allocations);
+      }
+      writeFileSync(record.path, originalBytes);
+      const restored = f.artifacts.verifySync(hash);
+      assert.equal(restored.byteLength, scenario.manifest.byteLength);
+      assert.equal(explicitStartBlocked(f.runtime.projection()), undefined);
+      assert.equal(newPolicyTaskAdmissionBlocked(f.runtime.projection(), "T1"), undefined);
+      f.append("task.transitioned", `direct-worker-post-start-${variant}-assigned-ok`, { taskId: "T1", status: "assigned", patch: { attempt: 1, assignedWorkerId: "worker_T1_1" } }, "runner", "task-scheduler");
+      assert.equal(f.runtime.projection().tasks["T1"]?.status, "assigned");
+      f.append("task.transitioned", `direct-worker-post-start-${variant}-running-ok`, { taskId: "T1", status: "running" }, "runner", "task-scheduler");
+      assert.equal(f.runtime.projection().tasks["T1"]?.status, "running");
+      assert.equal(f.evidence().events.length, before.events.length + 2);
+      assert.equal(f.evidence().workers, before.workers);
+      assert.equal(f.evidence().allocations, before.allocations);
+    } finally { f.cleanup(); }
+  }
 });
 
 test("T7b source amendment invalidates readiness and refuses the previously approved start", async () => {
