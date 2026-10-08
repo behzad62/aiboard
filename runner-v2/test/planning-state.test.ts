@@ -1406,8 +1406,14 @@ test("T2 interrupt after one covered section resumes the exact next section with
   try {
     const fixture = fixtureWithScopedAmendment();
     store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
-    // T3b: ledger (index 5 after the T9 seed triage) plus 8 durable reads plus the checkpoint.
-    appendAll(store, planningInputs(fixture).slice(0, 6 + fixture.manifest.sections.length + 1));
+    // C4: reads are authority. Ledger (index 5 after the T9 seed triage) plus
+    // the single s1 durable read (index 6) plus the matching old checkpoint
+    // replay (index 6 + section count). No other reads are seeded.
+    const all = planningInputs(fixture);
+    const checkpointIndex = 6 + fixture.manifest.sections.length;
+    assert.equal(all[6]!.idempotencyKey, "read:s1");
+    assert.equal(all[checkpointIndex]!.idempotencyKey, "checkpoint:1");
+    appendAll(store, [...all.slice(0, 7), all[checkpointIndex]!]);
     store.close();
     store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
     const resumed = rebuildSchedulerProjection(store.readRun(RUN_ID)).planning!;
@@ -1429,6 +1435,24 @@ test("T2 interrupt after one covered section resumes the exact next section with
     assert.deepEqual(unrelatedResume.resume.coveredSourceSectionIds, ["s1"]);
     assert.equal(unrelatedResume.resume.nextSourceSectionId, "s2");
     assert.deepEqual(unrelatedResume.resume.completedPlanningContractIds, ["requirement-ledger"]);
+    // C4 negative: a stored checkpoint advertising s2 cannot count it without a
+    // current-manifest durable full read of s2.
+    assert.throws(
+      () => store!.append(event("planning.checkpoint_recorded", "checkpoint:fake-s2", { role: "architect", id: "architect" }, {
+        checkpoint: {
+          id: "checkpoint-fake-s2",
+          coveredSourceSectionIds: ["s1", "s2"],
+          completedPlanningContractIds: ["requirement-ledger"],
+          remainingWork: ["Cover source section s3."],
+          nextAction: "Cover source section s3.",
+          recordedAt: "2026-09-24T00:03:00.000Z",
+        },
+      })),
+      /without a durable full read/,
+    );
+    const afterFake = rebuildSchedulerProjection(store!.readRun(RUN_ID)).planning!;
+    assert.deepEqual(afterFake.resume.coveredSourceSectionIds, ["s1"]);
+    assert.equal(afterFake.resume.nextSourceSectionId, "s2");
   } finally {
     store?.close();
     rmSync(root, { recursive: true, force: true });
