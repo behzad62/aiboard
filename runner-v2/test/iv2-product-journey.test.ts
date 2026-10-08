@@ -226,7 +226,7 @@ class ReviewerModel implements AgentModel {
       if (tools === 0) return call("fs.read", { path: A_SRC }, "read-1");
       return call("record_deliverable_findings", { findings: [] }, `findings-${tools}`);
     }
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
     return call("submit_deliverable_verdict", {
       summary: "The module exports 1 and the cited test run passed.",
       satisfied: true,

@@ -243,7 +243,7 @@ class W3JourneyReviewer implements AgentModel {
       const text = w3RequestText(request);
       // The mechanical floor is model-visible in the real verdict context.
       assert.ok(text.includes('"mechanical"'), "the verdict context carries mechanical claim labels");
-      const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+      const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
       for (const expected of ["claim:c1", "claim:c2", "claim:summary"]) {
         assert.ok(claimIds.includes(expected), `the verdict context names ${expected}`);
       }
@@ -284,6 +284,12 @@ class W3JourneyWorker implements AgentModel {
         { criterionId: "c1", evidenceId: record.id, artifactHashes: [record.fact.stdoutArtifactHash] },
         { criterionId: "c2", evidenceId: record.id, artifactHashes: [record.fact.stdoutArtifactHash] },
       ],
+      validationScope: {
+        changed: ["src/value.mjs", "src/extra.mjs"],
+        verified: ["value exports 2", "guard caps at 9"],
+        testsRun: [{ command: "node --test test/value.test.mjs", counts: { selected: 2, passed: 2, failed: 0, skipped: 0 } }],
+        notRun: [{ what: "full suite", why: "narrow change with no shared contract touched" }],
+      },
     }, "submit-1");
   }
 }
