@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, symlinkSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, delimiter, dirname, relative } from "node:path";
+import { join, delimiter, dirname, relative, resolve, sep, isAbsolute } from "node:path";
 import { createChildEnvironmentFactory } from "../src/child-environment.js";
 import { createChangeSet } from "../src/change-set.js";
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -135,18 +135,28 @@ test("V1 actual native project child cannot resolve runner-only tsx while system
   const {createRunnerCapabilityContract}=await import("../src/runner-capability-contract.js");
   const {outputFor}=await import("../src/one-shot-command-executor.js");
   const root=mkdtempSync(join(tmpdir(),"v1-native-env-"));const project=join(root,"project");const state=join(root,"state");mkdirSync(project);mkdirSync(state);
-  const install=join(process.cwd(),"node_modules",".bin");
-  assert.ok(readFileSync(join(install,process.platform==="win32"?"tsx.cmd":"tsx")).length,"runner-only binary exists before scrub");
+  const {spawnSync:baselineSpawn}=await import("node:child_process");const {randomUUID:probeUuid}=await import("node:crypto");const {fileURLToPath:probeUrl}=await import("node:url");const {realpathSync:probeRealpath}=await import("node:fs");
+  let hostDefaultRoot=resolve(dirname(probeUrl(import.meta.url)),"../src");while(dirname(hostDefaultRoot)!==hostDefaultRoot){if(existsSync(resolve(hostDefaultRoot,"node_modules")))break;hostDefaultRoot=dirname(hostDefaultRoot);}if(!existsSync(resolve(hostDefaultRoot,"node_modules")))hostDefaultRoot=resolve(dirname(probeUrl(import.meta.url)),"../..");
+  const install=join(hostDefaultRoot,"node_modules",".bin");assert.ok(existsSync(install),"host default runner bin exists");
+  const probeBase=`t8v1probe-${process.pid}-${probeUuid().slice(0,8)}`;const probeFile=process.platform==="win32"?`${probeBase}.cmd`:probeBase;const probePath=join(install,probeFile);
+  assert.ok(!existsSync(probePath),"hermetic probe name is unique before creation");
   const ambient=snapshotNativeBuildAmbientEnvironment();
   const pathName=Object.keys(ambient).find((name)=>name.toUpperCase()==="PATH")??"PATH";
-  const environment={...ambient,[pathName]:[install,ambient[pathName]??""].join(delimiter),npm_config_cache:"private-v1",INIT_CWD:process.cwd()};
+  const baselinePath=[install,ambient[pathName]??""].join(delimiter);
+  const environment={...ambient,[pathName]:baselinePath,npm_config_cache:"private-v1",INIT_CWD:process.cwd()};
   const host=createExecutionHost({projectRoot:project,stateDirectory:state,artifacts:new ArtifactStore(join(state,"artifacts")),ambientEnvironment:environment});
   try {
+    if(process.platform==="win32")writeFileSync(probePath,"@echo off\r\nexit /b 0\r\n",{flag:"wx"});else{writeFileSync(probePath,"#!/bin/sh\nexit 0\n",{flag:"wx"});chmodSync(probePath,0o755);}
+    assert.ok(readFileSync(probePath).length,"hermetic runner-only probe exists before scrub");
+    assert.equal(baselineSpawn(probeBase,[],{shell:true,encoding:"utf8",env:{...process.env,[pathName]:baselinePath}}).status,0,"baseline probe resolves before scrub");
+    assert.equal(existsSync(join(project,probeFile)),false,"probe absent from project");assert.equal(existsSync(join(project,probeBase)),false,"probe base absent from project");assert.equal(existsSync(join(project,"node_modules",".bin",probeFile)),false,"probe absent from project bin");
+    const hostCanonical=probeRealpath(hostDefaultRoot);
+    for(const entry of (ambient[pathName]??"").split(delimiter)){const trimmed=entry.trim().replace(/^"(.*)"$/,"$1");if(!trimmed)continue;const absolute=isAbsolute(trimmed)?trimmed:resolve(project,trimmed);let canonical:string;try{canonical=probeRealpath(absolute);}catch{canonical=absolute;}const fold=(value:string)=>process.platform==="win32"?value.toLowerCase():value;const rel=relative(fold(hostCanonical),fold(canonical));const inside=rel===""||(rel!==".."&&!rel.startsWith(`..${sep}`)&&!isAbsolute(rel));if(!inside){assert.equal(existsSync(join(absolute,probeFile)),false,`probe absent from retained PATH ${absolute}`);assert.equal(existsSync(join(absolute,probeBase)),false,`probe base absent from retained PATH ${absolute}`);}}
     const config=emptyRunnerCapabilitiesConfig();const capabilityContract=await createRunnerCapabilityContract(config);
     const binding=await host.bindRun({runId:"env-r",permissionProfile:"full",capabilityContract,capabilitiesConfig:config});
     const request={executable:process.execPath,workingDirectory:project,timeoutMs:30000,context:{runId:"env-r",sessionId:"env-s",actor:{role:"worker" as const,id:"w"},callId:"runner-only",toolName:"run_evidence_command",runnerInternal:true as const}};
-    const probe=await binding.commandExecution.execute({...request,arguments:["-e","const cp=require('node:child_process'); const r=cp.spawnSync('tsx',['--version'],{shell:true,encoding:'utf8'}); process.exit(r.status===0?0:17);"]});
-    assert.equal(probe.process.exitCode,17,"actual project child script fails because tsx exists only in runner PATH");
+    const probe=await binding.commandExecution.execute({...request,arguments:["-e","const cp=require('node:child_process'); const r=cp.spawnSync('"+probeBase+"',[],{shell:true,encoding:'utf8'}); process.exit(r.status===0?0:17);"]});
+    assert.equal(probe.process.exitCode,17,"actual project child script fails because probe exists only in runner PATH");
     assert.ok(probe.childEnvironmentAudit?.decisions.some((entry)=>entry.kind==="removed_runner_path"));
     assert.ok(probe.childEnvironmentAudit?.removedNames.includes("npm_config_cache"));
     assert.ok(probe.childEnvironmentAudit?.removedNames.includes("INIT_CWD"));
@@ -168,7 +178,7 @@ test("V1 actual native project child cannot resolve runner-only tsx while system
         assert.doesNotMatch(JSON.stringify(record.environmentAudit),/private-v1/);
       }
     } finally {reopened.store.close();}
-  } finally {await host.close();rmSync(root,{recursive:true,force:true});}
+  } finally {await host.close();rmSync(probePath,{force:true});rmSync(root,{recursive:true,force:true});}
 });
 
 test("V1 reserved npm credentials cannot bypass scrub but legitimate credentials remain single-use",()=> {
