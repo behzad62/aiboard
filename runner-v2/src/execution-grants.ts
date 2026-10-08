@@ -127,6 +127,12 @@ const CONSUMED_CLAIMS = new WeakMap<object, GrantRecord>();
 const AUTHORITIES = new WeakMap<ExecutionGrantAuthority, Readonly<{ identity: object; owned: Set<object> }>>();
 const FILESYSTEM_RESERVATIONS = new WeakSet<GrantRecord>();
 
+/** Reserved trusted native V4A adapter. Only this exact name may reserve a
+ * filesystem effect without being one of the four native fs tool names.
+ * No generic alias: any other non-fs name still fails closed.
+ */
+export const RESERVED_TRUSTED_NATIVE_PATCH_TOOL = "openrouter.apply_patch";
+
 /** One filesystem effect inside the original Broker call. This is NOT a new
  * grant or an isolation acquisition. Post-mutation diagnostics still consume
  * the original grant; filesystem effects cannot run after that consumption.
@@ -148,7 +154,7 @@ export function reserveExecutionGrantForFilesystemMutation(
     if (record.state !== "issued") throw grantError("grant_consumed");
   };
   assertCurrent();
-  if (!sameBinding(record.claims, binding) || !["fs.write", "fs.patch", "fs.move", "fs.delete"].includes(binding.toolName)) throw grantError("grant_mismatch");
+  if (!sameBinding(record.claims, binding) || !["fs.write", "fs.patch", "fs.move", "fs.delete", RESERVED_TRUSTED_NATIVE_PATCH_TOOL].includes(binding.toolName)) throw grantError("grant_mismatch");
   if (FILESYSTEM_RESERVATIONS.has(record)) throw grantError("grant_consumed");
   FILESYSTEM_RESERVATIONS.add(record);
   return Object.freeze({ workspacePath: record.claims.workspacePath, access: record.claims.access,

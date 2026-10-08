@@ -537,6 +537,196 @@ test("benchmark filesystem policy hides oracle files and protects verifier asset
   }
 });
 
+test("filesystem tools respect host protected-path equality for patch", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-protected-case-patch-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(workspace, "protected.txt"), "keep\n");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, artifacts });
+  for (const tool of createFilesystemTools({ artifacts, repository: new RepositoryIntelligence(), protectedPaths: ["protected.txt"] })) broker.register(tool);
+  try {
+    const result = await invoke(broker, "patch_case_1", "fs.patch", { path: "PROTECTED.txt", expectedSha256: sha256(Buffer.from("keep\n")), search: "keep", replace: "changed" });
+    if (process.platform === "win32") {
+      assert.equal(result.isError, true);
+      assert.equal(result.error?.code, "benchmark_protected_path");
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+    } else {
+      assert.equal(result.isError, true);
+      assert.notEqual(result.error?.code, "benchmark_protected_path");
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+      writeFileSync(join(workspace, "PROTECTED.txt"), "upper\n");
+      const upper = await invoke(broker, "patch_case_2", "fs.patch", { path: "PROTECTED.txt", expectedSha256: sha256(Buffer.from("upper\n")), search: "upper", replace: "changed" });
+      assert.equal(upper.isError, false);
+      assert.equal(readFileSync(join(workspace, "PROTECTED.txt"), "utf8"), "changed\n");
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("filesystem tools respect host protected-path equality for write", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-protected-case-write-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(workspace, "protected.txt"), "keep\n");
+  writeFileSync(join(workspace, "visible.txt"), "public\n");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, artifacts });
+  for (const tool of createFilesystemTools({ artifacts, repository: new RepositoryIntelligence(), protectedPaths: ["protected.txt"] })) broker.register(tool);
+  try {
+    const attempt = await invoke(broker, "write_case_1", "fs.write", { path: "PROTECTED.txt", content: "evil\n", expectedSha256: sha256(Buffer.from("keep\n")) });
+    if (process.platform === "win32") {
+      assert.equal(attempt.isError, true);
+      assert.equal(attempt.error?.code, "benchmark_protected_path");
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+    } else {
+      assert.equal(attempt.isError, true);
+      assert.notEqual(attempt.error?.code, "benchmark_protected_path");
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+    }
+    const positive = await invoke(broker, "write_positive", "fs.write", { path: "visible.txt", content: "changed\n", expectedSha256: sha256(Buffer.from("public\n")) });
+    assert.equal(positive.isError, false);
+    assert.equal(readFileSync(join(workspace, "visible.txt"), "utf8"), "changed\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("filesystem tools respect host protected-path equality for delete", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-protected-case-delete-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(workspace, "protected.txt"), "keep\n");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, artifacts });
+  for (const tool of createFilesystemTools({ artifacts, repository: new RepositoryIntelligence(), protectedPaths: ["protected.txt"] })) broker.register(tool);
+  try {
+    const attempt = await invoke(broker, "delete_case_1", "fs.delete", { path: "PROTECTED.txt" });
+    if (process.platform === "win32") {
+      assert.equal(attempt.isError, true);
+      assert.equal(attempt.error?.code, "benchmark_protected_path");
+      assert.equal(existsSync(join(workspace, "protected.txt")), true);
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+    } else {
+      assert.equal(attempt.isError, true);
+      assert.notEqual(attempt.error?.code, "benchmark_protected_path");
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+    }
+    const created = await invoke(broker, "delete_positive_create", "fs.write", { path: "temp.txt", content: "temp\n" });
+    assert.equal(created.isError, false);
+    const removed = await invoke(broker, "delete_positive", "fs.delete", { path: "temp.txt" });
+    assert.equal(removed.isError, false);
+    assert.equal(existsSync(join(workspace, "temp.txt")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("filesystem tools respect host protected-path equality for move", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-protected-case-move-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(workspace, "protected.txt"), "keep\n");
+  writeFileSync(join(workspace, "visible.txt"), "public\n");
+  writeFileSync(join(workspace, "visible2.txt"), "public2\n");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, artifacts });
+  for (const tool of createFilesystemTools({ artifacts, repository: new RepositoryIntelligence(), protectedPaths: ["protected.txt", "protected-dest.txt"] })) broker.register(tool);
+  try {
+    const srcAttempt = await invoke(broker, "move_src_1", "fs.move", { source: "PROTECTED.txt", destination: "moved.txt" });
+    if (process.platform === "win32") {
+      assert.equal(srcAttempt.isError, true);
+      assert.equal(srcAttempt.error?.code, "benchmark_protected_path");
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+      assert.equal(existsSync(join(workspace, "moved.txt")), false);
+    } else {
+      assert.equal(srcAttempt.isError, true);
+      assert.notEqual(srcAttempt.error?.code, "benchmark_protected_path");
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+    }
+    const destExact = await invoke(broker, "move_dest_exact", "fs.move", { source: "visible.txt", destination: "protected-dest.txt" });
+    assert.equal(destExact.isError, true);
+    assert.equal(destExact.error?.code, "benchmark_protected_path");
+    assert.equal(readFileSync(join(workspace, "visible.txt"), "utf8"), "public\n");
+    assert.equal(existsSync(join(workspace, "protected-dest.txt")), false);
+    const destAttempt = await invoke(broker, "move_dest_1", "fs.move", { source: "visible2.txt", destination: "PROTECTED-DEST.txt" });
+    if (process.platform === "win32") {
+      assert.equal(destAttempt.isError, true);
+      assert.equal(destAttempt.error?.code, "benchmark_protected_path");
+      assert.equal(readFileSync(join(workspace, "visible2.txt"), "utf8"), "public2\n");
+      assert.equal(existsSync(join(workspace, "PROTECTED-DEST.txt")), false);
+    } else {
+      assert.equal(destAttempt.isError, false);
+      assert.equal(existsSync(join(workspace, "visible2.txt")), false);
+      assert.equal(readFileSync(join(workspace, "PROTECTED-DEST.txt"), "utf8"), "public2\n");
+      assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("filesystem tools preserve nested basename hidden scope under host equality", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fs-protected-scope-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(join(workspace, "nested"), { recursive: true });
+  writeFileSync(join(workspace, "protected.txt"), "keep\n");
+  writeFileSync(join(workspace, "nested", "protected.txt"), "nested-keep\n");
+  writeFileSync(join(workspace, "nested", "inner.txt"), "inner-keep\n");
+  writeFileSync(join(workspace, "secret.txt"), "hidden-content\n");
+  writeFileSync(join(workspace, "visible.txt"), "public\n");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, artifacts });
+  for (const tool of createFilesystemTools({ artifacts, repository: new RepositoryIntelligence(), protectedPaths: ["protected.txt", "nested/inner.txt"], hiddenPaths: ["secret.txt"] })) broker.register(tool);
+  try {
+    const exactBase = await invoke(broker, "scope_exact_base", "fs.patch", { path: "protected.txt", expectedSha256: sha256(Buffer.from("keep\n")), search: "keep", replace: "changed" });
+    assert.equal(exactBase.isError, true);
+    assert.equal(exactBase.error?.code, "benchmark_protected_path");
+    const exactBasename = await invoke(broker, "scope_exact_basename", "fs.patch", { path: "nested/protected.txt", expectedSha256: sha256(Buffer.from("nested-keep\n")), search: "nested-keep", replace: "changed" });
+    assert.equal(exactBasename.isError, true);
+    assert.equal(exactBasename.error?.code, "benchmark_protected_path");
+    const exactNested = await invoke(broker, "scope_exact_nested", "fs.patch", { path: "nested/inner.txt", expectedSha256: sha256(Buffer.from("inner-keep\n")), search: "inner-keep", replace: "changed" });
+    assert.equal(exactNested.isError, true);
+    assert.equal(exactNested.error?.code, "benchmark_protected_path");
+    const hiddenExact = await invoke(broker, "scope_hidden_exact", "fs.read", { path: "secret.txt" });
+    assert.equal(hiddenExact.isError, true);
+    assert.equal(hiddenExact.error?.code, "benchmark_hidden_path");
+    if (process.platform === "win32") {
+      const upperBase = await invoke(broker, "scope_upper_base", "fs.patch", { path: "PROTECTED.txt", expectedSha256: sha256(Buffer.from("keep\n")), search: "keep", replace: "changed" });
+      assert.equal(upperBase.isError, true);
+      assert.equal(upperBase.error?.code, "benchmark_protected_path");
+      const upperBasename = await invoke(broker, "scope_upper_basename", "fs.patch", { path: "NESTED/PROTECTED.txt", expectedSha256: sha256(Buffer.from("nested-keep\n")), search: "nested-keep", replace: "changed" });
+      assert.equal(upperBasename.isError, true);
+      assert.equal(upperBasename.error?.code, "benchmark_protected_path");
+      const upperNested = await invoke(broker, "scope_upper_nested", "fs.patch", { path: "NESTED/INNER.txt", expectedSha256: sha256(Buffer.from("inner-keep\n")), search: "inner-keep", replace: "changed" });
+      assert.equal(upperNested.isError, true);
+      assert.equal(upperNested.error?.code, "benchmark_protected_path");
+      const hiddenUpper = await invoke(broker, "scope_hidden_upper", "fs.read", { path: "SECRET.txt" });
+      assert.equal(hiddenUpper.isError, true);
+      assert.equal(hiddenUpper.error?.code, "benchmark_hidden_path");
+    } else {
+      const upperBase = await invoke(broker, "scope_upper_base", "fs.patch", { path: "PROTECTED.txt", expectedSha256: sha256(Buffer.from("keep\n")), search: "keep", replace: "changed" });
+      assert.equal(upperBase.isError, true);
+      assert.notEqual(upperBase.error?.code, "benchmark_protected_path");
+      const hiddenUpper = await invoke(broker, "scope_hidden_upper", "fs.read", { path: "SECRET.txt" });
+      assert.equal(hiddenUpper.isError, true);
+      assert.notEqual(hiddenUpper.error?.code, "benchmark_hidden_path");
+    }
+    assert.equal(readFileSync(join(workspace, "protected.txt"), "utf8"), "keep\n");
+    assert.equal(readFileSync(join(workspace, "nested", "protected.txt"), "utf8"), "nested-keep\n");
+    assert.equal(readFileSync(join(workspace, "nested", "inner.txt"), "utf8"), "inner-keep\n");
+    const writeNew = await invoke(broker, "scope_positive_write", "fs.write", { path: "new.txt", content: "hello\n" });
+    assert.equal(writeNew.isError, false);
+    const patchVisible = await invoke(broker, "scope_positive_patch", "fs.patch", { path: "visible.txt", expectedSha256: sha256(Buffer.from("public\n")), search: "public", replace: "changed" });
+    assert.equal(patchVisible.isError, false);
+    assert.equal(readFileSync(join(workspace, "visible.txt"), "utf8"), "changed\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function brokerWithFilesystem(
   workspace: string,
   artifacts: ArtifactStore,
