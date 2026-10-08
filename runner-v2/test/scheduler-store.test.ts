@@ -1326,8 +1326,8 @@ test("corrupt scheduler payload identifies the event", () => {
 test("runtime assignments, provider cooldown, and Architect handoff recover durably", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-runtime-"));
   const database = join(root, "scheduler.sqlite");
+  let store = new SqliteSchedulerStore(database);
   try {
-    let store = new SqliteSchedulerStore(database);
     store.append(event("run_1", "plan.created", "plan:1", {
       revision: 1,
       tasks: [{
@@ -1392,6 +1392,8 @@ test("runtime assignments, provider cooldown, and Architect handoff recover dura
       },
     });
     assert.equal(rebuildSchedulerProjection(store.readRun("run_1")).status, "paused");
+    const handoffRequired = store.readRun("run_1").findLast((event) => event.type === "architect.handoff_required");
+    assert.ok(handoffRequired);
     store.close();
 
     store = new SqliteSchedulerStore(database);
@@ -1401,7 +1403,7 @@ test("runtime assignments, provider cooldown, and Architect handoff recover dura
       occurredAt: "2026-07-12T00:00:03.000Z",
       actor: { role: "user", id: "local-user" },
       idempotencyKey: "architect-handoff:selected:1",
-      payload: { runtimeId: "anthropic:code" },
+      payload: { runtimeId: "anthropic:code", requiredSequence: handoffRequired.sequence },
     });
     const recovered = rebuildSchedulerProjection(store.readRun("run_1"));
     assert.equal(recovered.status, "running");
@@ -1409,8 +1411,8 @@ test("runtime assignments, provider cooldown, and Architect handoff recover dura
     assert.equal(recovered.runtime.providerHealth.openai.status, "cooldown");
     assert.equal(recovered.runtime.architect.runtimeId, "anthropic:code");
     assert.equal(recovered.runtime.architect.handoff, undefined);
-    store.close();
   } finally {
+    store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
