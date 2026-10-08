@@ -443,7 +443,21 @@ export class NativeDeliverableReviewRuntime {
       ...(trackRecord ? { trackRecord } : {}),
     };
     const risk = assessDeliveryRisk(riskInput);
-    const authors = Object.keys(this.projection(request.runId).delivery?.authorModelIdentities ?? {});
+    // The current submission's authors are recorded only on the later
+    // delivery.review_started event, so the durable author map cannot
+    // exclude them yet. Pass them explicitly together with the recorded
+    // previous authors: the current author plus every already validated
+    // current-attempt coauthor. Without them the router can return the
+    // current worker as distinct_model and the kernel correctly refuses
+    // it at delivery.review_requested, pausing the run.
+    const currentAttemptCoauthors = projection.reviewIntegrityPolicyVersion === 1
+      ? (projection.runtime.workerAssignmentHistory?.[`${task.id}:${task.attempt}`] ?? []).map((assignment) => assignment.runtimeId)
+      : [];
+    const authors = [...new Set([
+      ...Object.keys(this.projection(request.runId).delivery?.authorModelIdentities ?? {}),
+      ...currentAttemptCoauthors,
+      inputs.authorRuntimeId,
+    ])];
     const selection = this.options.router.selectVerifier({
       requiredCapabilities: ["code"],
       candidateRuntimeIds: [...this.options.reviewerRuntimeIds],
