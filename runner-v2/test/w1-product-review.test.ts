@@ -398,12 +398,12 @@ class W1JourneyReviewer implements AgentModel {
         return w1Call("fs.read", { path: "test/value.test.mjs" }, "verdict-test-read");
       }
       const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-      const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+      const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
       const ownSection = text.split("Your durably recorded findings:")[1]?.split("The worker's report")[0] ?? "";
-      const ownBlocking = /"severity": "blocking"/.test(ownSection);
+      const ownBlocking = /"severity"\s*:\s*"blocking"/.test(ownSection);
       const priorSection = text.split("Prior review")[1] ?? "";
       const hasPrior = priorSection.length > 0;
-      const priorIds = [...new Set([...priorSection.matchAll(/"id": "((?!claim:)[^"]+)"/g)].map((match) => match[1]!))];
+      const priorIds = [...new Set([...priorSection.matchAll(/"id"\s*:\s*"((?!claim:)[^"]+)"/g)].map((match) => match[1]!))];
       // Resolution is read from the actual verdict-session checkout, not
       // from a global flag: the coverage gap resolves only when the
       // pinning test is present, and a carried oscillation resolves only
@@ -462,11 +462,23 @@ class W1JourneyWorker implements AgentModel {
       if (tools === 4) return w1Call("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test", "test/value.test.mjs"] }, "evidence-3");
     }
     const record = w1LastToolValue(request) as unknown as { id: string; fact: { stdoutArtifactHash: string } };
+    const scope = attempt === 1 ? {
+      changed: ["src/value.mjs"],
+      verified: ["value exports 2"],
+      testsRun: [{ command: "node --test test/value.test.mjs", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }],
+      notRun: [{ what: "full suite", why: "narrow change with no shared contract touched" }],
+    } : {
+      changed: ["src/value.mjs", "test/value.test.mjs"],
+      verified: ["value exports 2", "value boundary pinned"],
+      testsRun: [{ command: "node --test test/value.test.mjs", counts: { selected: 2, passed: 2, failed: 0, skipped: 0 } }],
+      notRun: [{ what: "full suite", why: "narrow change with no shared contract touched" }],
+    };
     return w1Call("submit_task", {
       summary: "Product value and real tests pass.",
       readiness: "ready_for_architect_review",
       unresolvedConcerns: [],
       criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [record.fact.stdoutArtifactHash] }],
+      validationScope: scope,
     }, `submit-${attempt}`);
   }
 }
@@ -525,7 +537,7 @@ class W1JourneyArchitect implements AgentModel {
         decision: attempt === 1 ? "rejected" : "approved",
         summary: attempt === 1 ? "The edge case is still unverified." : "The repair is complete.",
         evidenceArtifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))],
-        criterionVerdicts: [{ criterionId: "c1", verdict: attempt === 1 ? "unsatisfied" : "satisfied", rationale: "Judged.", evidenceIds: links.map((link) => link.evidenceId), artifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))] }],
+        criterionVerdicts: [{ criterionId: "c1", verdict: attempt === 1 ? "unsatisfied" : "satisfied", rationale: "Judged.", evidenceIds: links.map((link) => link.evidenceId), artifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))], ...(attempt === 1 ? { overrideReason: "The delivery review left its blocking coverage finding open; the verified value claim alone does not satisfy the criterion." } : {}) }],
       });
     }
     if (task.status === "approved") return this.next("request_integration", { taskId: "T1" });
