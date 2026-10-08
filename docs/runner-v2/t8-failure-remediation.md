@@ -1,6 +1,16 @@
 # T8 full-suite remediation — 2026-10-08
 
-Status: DIAGNOSIS / REPAIR IN PROGRESS. T8 NOT ACCEPTED. REL-1 NOT STARTED.
+Status: FOCUSED REMEDIATION VERIFIED / FRESH LOCAL FULL SUITE READY. T8 NOT ACCEPTED. REL-1 NOT STARTED.
+
+## Current completion — 2026-10-09
+
+Reviewed Muse-only five-fixture repair committed **`bcfb2703ad679d1805a84c03aa8c1d0eb335d140`**. The four construction paths now let the real factory initialize baseline authority before appending original source/ready history and public owner authorization. A3 pins the correct semantic plan-only refusal. No production, package, workflow, UI or archive changes; recovery immutability, all 462 original assertions (one legitimate message correction), test names/caps and non-owned bodies are preserved.
+
+All 17 failures from completed27824407 have current passing complete journeys. Progressive gates: five representatives5/5; remaining delivery6/6; remaining finish6/6; complete C3c owning file13/13, all actual Node exits0, zero fail/skip/cancel/todo. This is **29 distinct cases from30 executions**, because Node's parent include-pattern repeated C3c. Its wrapper expected12 and returned1 after preserving actual13/13 Node0; original evidence is unchanged and a separate capture review verifies it. Audit `D:/tmp/t8-sol-post-full-qualification-audit.json` SHA256 `524158cd49f82baa8b76b730430b7a0a98e2f6c2afae5290f136b462eee97ba9`; complete inventory/results [fresh17](t8-full-27824407-failure-inventory.md).
+
+Runner/app TypeScript, changed-file ESLint and diff checks0. Primary independent complete-delta/source-obligation review ACCEPT, no focused blocker, `D:/tmp/t8-sol-post-full-final-review.md` SHA256 `8f5697abd94786cf2943978152e7f9d2c2ed4494ce9c236794960515a6662fbe`. Additional review agents were usage-limited and are not credited. Frozen61 source/test plus two archive bytes match `D:/tmp/t8-sol-post-full-freeze.json` SHA256 `c0b0c45b24995ae525a3aed2e5c9d32eea00212639e7a594d224f10d92f9798b`; receipts retain their real uncommitted-source identity and are bound to this commit by identical bytes.
+
+Original147 unchanged cases passed the completed full; original44 IV-2 now genuinely passes on the final factory guard. Original148 focused remediation is qualified without reviving the confounded old IV-2 receipt. No focused failure remains. **Fresh local full-suite readiness YES after the clean documentation checkpoint; T8 NOT ACCEPTED.** Required acceptance remains the exact stock npm suite plus all12 chains and final source/A1/token/host/platform/OCI/benchmark/package/resource evidence. No suite/writer is active; main untouched; no REL-1. Earlier diagnosis and launch history follows.
 
 ## Completed fresh qualification — 2026-10-09 continuation
 

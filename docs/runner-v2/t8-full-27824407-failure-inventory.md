@@ -1,5 +1,22 @@
 # T8 fresh qualification 27824407 — complete failure inventory
 
+## Current remediation result — 2026-10-09
+
+**All17 listed failures now have passing completed tests** on reviewed source commit `bcfb2703ad679d1805a84c03aa8c1d0eb335d140`. Four fixture construction paths let the actual factory capture its real baseline before original planning history/public owner start; A3 requires the correct plan-only semantic refusal. Production and shipping bytes are unchanged. Independent primary review ACCEPT; all original assertions/caps/endpoints preserved, no source recovery guard relaxed.
+
+| Completed gate | Actual Node result | Duration ms | Raw log SHA256 |
+|---|---|---:|---|
+| Five full representatives (fresh IDs1,2,9,10,17) | 5/5, exit0 | 1636375.2597 | bd2cb103488547e977a55ac2c57f0f8fca135ece4f42c6a697a62b625036af91 |
+| Complete three remaining delivery files (IDs11-16) | 6/6, exit0 | 1787613.5183 | 85cd581e848c198c625607bdd62cb0c1b6b92f3b1706757dc6d1b0660acd3c7c |
+| Six remaining finish callers (IDs3-8) | 6/6, exit0 | 2282619.5504 | 0f52917c6b32de1a6f3cfaf33bb1d5f810f7842018aaaae9d091dd0228ad7faa |
+| Complete C3c owning file (ID9 plus12 controls) | 13/13, exit0 | 639684.4095 | 958d81a22a7822b448da5dd960e0b79f0bf8d7b30380ff699618271f00f64755 |
+
+All gates zero fail/skip/cancel/todo. Evidence stems `D:/tmp/t8-sol-post-full-{selected-r2,delivery-r1,finish-r1,c3-controls-r1}` include exact argv, real exit files, raw logs, metadata and source/status checks. C3c's include-pattern matched the parent file and repeated ID9; count **29 distinct cases from30 executions**. Original wrapper expected12 and returned1 after actual Node13/13 exit0; untouched originals plus `.verified-meta.json` prove the capture-count error (SHA256 `b8544d3e90d11279b7e90413772c78d1a3f20da8aa13e8724908154f87349512`). No repeat inflates coverage.
+
+Final audit `D:/tmp/t8-sol-post-full-qualification-audit.json` SHA256 `524158cd49f82baa8b76b730430b7a0a98e2f6c2afae5290f136b462eee97ba9` maps every fresh ID to current PASS and verifies all exits/counts/log hashes/frozen61 inputs plus two archives. Final review `D:/tmp/t8-sol-post-full-final-review.md` SHA256 `8f5697abd94786cf2943978152e7f9d2c2ed4494ce9c236794960515a6662fbe`; Runner/app types and changed-file lint/diff all0. Source receipt identity remains the frozen uncommitted delta on16b1474f, subsequently committed without changing any tested bytes.
+
+**Fresh local full-suite readiness YES after the clean documentation checkpoint. T8 NOT ACCEPTED; REL-1 NOT STARTED.** Completed full27824407 below remains exit1 and its twelve chains did not run; no historical result is relabelled. Full/platform/final evidence acceptance work remains; no active suite/writer, main unchanged. The original failure table and diagnostic history below remain immutable descriptions of that completed run.
+
 Completed fresh local qualification at **27824407dc7d9c5fb3d8656623a347b860c1c8bc**: exact `npm run test:runner-v2`, Node v24.18.0, true exit **1**, **4653 tests / 4630 pass / 17 fail / 6 skip / 0 cancelled / 0 todo**, 26856260.0395 ms. It ran 2026-10-08T12:28:17Z–19:55:54Z with no checkout edits or overlapping gates. All 57 source/test and two shipping-archive hashes match; candidate was clean before/after. Raw evidence `D:/tmp/t8-sol-full-27824407.{log,exit,started.json,meta.json}`; log SHA256 `cf1d2989d640c4808174aeda116ad4b0a34c53ab5defc63554a14b873ae9d898`. The original TAP-only capture has empty counts; preserved supplemental `.result-meta.json` mechanically parses the actual SPEC summary and `.failures.json` retains all 17 exact raw blocks. The 12 chained scripts did not execute because the root stage failed.
 
 Original inventory reconciles to **147 PASS / original44 IV-2 FAIL**. Original75 is the faithfully renamed current-manifest coverage case; its original endpoints and companion SQLite checkpoint refusal pass. The earlier IV-2 focused GREEN started before the concurrent factory edit and does not qualify the final bootstrap guard. Prior claims of all148 qualifying final-source GREEN are superseded by this exact-candidate result. The 16 additional failures were previously passing fixtures, not new production acceptance: 15 missing-baseline construction fixtures plus one obsolete plan-only refusal assertion.
@@ -31,4 +48,4 @@ All names, source locations, error strings and stacks below refer to the complet
 | 16 | `runner-v2\test\native-delivery-report-parity.test.ts:52:1` | parity: failing-build scenario agrees between the factory pump and the harness | Fresh bootstrap: delivery helper |
 | 17 | `runner-v2\test\t8-final-qualification.test.ts:1927:1` | T8-A3 plan-only run refuses execution and snapshots the plan | A3 exact refusal assertion |
 
-Targeted confirmation and repair results will be appended after they actually finish. No broad retry is scheduled before repair qualification.
+Current completed repair results are above. The original raw failure blocks remain preserved; a fresh acceptance run must use the reviewed clean candidate and current frozen input hashes.
