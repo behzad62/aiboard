@@ -7,6 +7,12 @@ Status: **FROZEN FOR LAYER 4 - T8 is not accepted until the exact frozen candida
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
 
+## Final acceptance continuation — 2026-10-09
+
+The owner requested **finish T8**. Current reviewed fixture source remains `bcfb2703`, all61+2 frozen raw inputs unchanged. A separate Node24 three-host portable coverage job now includes all seven affected grant/filesystem/patch/Broker files and actual OpenRouter factory; Muse implemented only that workflow addition, primary independent review ACCEPT, existing workflow contracts4/4 trueexit0. Evidence `D:/tmp/t8-sol-final-ci-{muse,contract}.{log,exit}` and `D:/tmp/t8-sol-final-ci-review.md`. Hosted executions are pending and are not inferred from modeled or local behavior.
+
+One complete stock npm qualification with all12 chains is authorized after this clean checkpoint. External capture `D:/tmp/t8-sol-final-full.cjs` preserves true exit and SPEC root counts, freezes the checkout, and observes A1 SQLite/Git read-only to retain per-pass manifests, original source/evidence artifacts and actual snapshot trees. Exact actual candidate/start/log/result will be `D:/tmp/t8-sol-full-<HEAD8>.{started.json,log,exit,meta.json}`. Platform, package reproducibility, OCI, certified benchmark, scoped resource disposition and final invariant mapping/review remain required. **T8 NOT ACCEPTED; REL-1 NOT STARTED.** No release/merge/deployment.
+
 ## Current fixture qualification / fresh local full-suite readiness — 2026-10-09
 
 Reviewed five-fixture source commit `bcfb2703ad679d1805a84c03aa8c1d0eb335d140` preserves production recovery immutability, every original assertion/cap/endpoint and all non-owned bodies. Four genuine fresh baseline constructions now precede planning history/public owner start; A3 requires the correct plan-only semantic refusal. No production/package/workflow/UI/archive change. Primary Codex is the independent reviewer of Muse Spark1.3 Contributor/max output; additional usage-limited agents did not complete this delta and are not credited.

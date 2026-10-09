@@ -4,6 +4,12 @@
 
 Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
+## 2026-10-09 T8 final acceptance continuation (current)
+
+Owner instruction **finish T8** expands the completed failure-remediation objective through final acceptance. The reviewed fixture source `bcfb2703` and its61-source/test plus2-archive freeze remain unchanged. Muse Spark1.3 Contributor/max added only a separate three-host Node24 workflow job covering the seven omitted repaired grant/filesystem/patch/Broker files, including the actual OpenRouter factory. Primary independent review ACCEPT; existing workflow-contract suite trueexit0,4/4 pass, no fail/skip/cancel; `D:/tmp/t8-sol-final-ci-{muse,contract}.{log,exit}` and `D:/tmp/t8-sol-final-ci-review.md`. Existing jobs, triggers, caps and safety semantics are unchanged.
+
+Next is one exact stock `npm run test:runner-v2` on the next clean commit, with all12 chained scripts, while the checkout stays frozen. External driver `D:/tmp/t8-sol-final-full.cjs` binds the current readiness proof, actual commit, all61+2 raw hashes, prior scoped prerequisites and actual exits; full evidence will be `D:/tmp/t8-sol-full-<HEAD8>.{started.json,log,exit,meta.json}`. Read-only SQLite/Git observation retains A1 individual manifests, source/evidence artifacts and snapshot trees externally before normal fixture cleanup. No test/body/cap/reporter/package-command alteration. Hosted portable/package/benchmark/native/readiness/recovery/Windows-channel/OCI qualification must run on that same source candidate and retain actual logs/artifacts. **T8 NOT ACCEPTED; REL-1 NOT STARTED.** Main, merge and deployment remain untouched. A running suite is never a completed result.
+
 ## 2026-10-09 P6.6 T8 post-full fixture qualification (current continuation)
 
 Muse Spark 1.3 Contributor / max completed the narrow five-fixture repair, true exit 0; no production or shipping-archive changes. Primary Codex independently reviewed the complete delta against all 17 exact full-run failures and the original acceptance requirements: no static blocker, runtime verification pending. Separate review agents hit account usage limits and their unfinished reviews are not counted as ACCEPT. Controller review is `D:/tmp/t8-sol-post-full-review.md`.
