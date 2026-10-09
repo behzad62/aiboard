@@ -1,7 +1,24 @@
 name: Runner V2 hosted qualification
 
+# UNAPPLIED diagnostic-reproduction candidate (no acceptance/REL1).
+# Default/scheduled/labeled runs retain exact existing 11-job coverage.
+# workflow_dispatch with qualification-scope=windows-portable-channel runs only
+# windows-portable-channel for focused RED classification; all other jobs are suppressed.
+# workflow_dispatch with qualification-scope=windows-portable-reproduction runs only
+# windows-portable-channel with 3 fixed serial stock trials; all other jobs are suppressed.
+# Probe/reproduction modes cannot qualify skipped jobs or T8 acceptance.
 on:
   workflow_dispatch:
+    inputs:
+      qualification-scope:
+        description: 'Diagnostic probe only. full retains all jobs; windows-portable-channel runs only the Windows channel once; windows-portable-reproduction runs only the Windows channel 3 fixed serial stock trials. Probe modes cannot qualify skipped jobs or T8 acceptance.'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - windows-portable-channel
+          - windows-portable-reproduction
   schedule:
     - cron: '17 2 * * *'
   pull_request:
@@ -16,7 +33,7 @@ env:
 jobs:
   native-lifecycle:
     name: Native lifecycle qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 'windows-portable-channel' && inputs['qualification-scope'] != 'windows-portable-reproduction'))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -52,7 +69,7 @@ jobs:
 
   cli-readiness:
     name: CLI readiness qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 'windows-portable-channel' && inputs['qualification-scope'] != 'windows-portable-reproduction'))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -88,7 +105,7 @@ jobs:
 
   recovery:
     name: Recovery qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 'windows-portable-channel' && inputs['qualification-scope'] != 'windows-portable-reproduction'))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -145,9 +162,51 @@ jobs:
         shell: bash
         run: mkdir -p "$RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT/windows-portable"
       - name: Run focused Windows portable channel qualification
+        if: github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'windows-portable-reproduction'
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/qualification/windows-portable-channel.test.ts
+      - name: Run fixed 3-trial Windows portable reproduction
+        if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 'windows-portable-reproduction'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $baseRoot = $env:RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT
+          if ([string]::IsNullOrWhiteSpace($baseRoot)) { throw 'RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT is not set.' }
+          $stockArgs = @('node_modules/tsx/dist/cli.mjs', '--test', '--test-concurrency=1', 'runner-v2/test/qualification/windows-portable-channel.test.ts')
+          $trialExit = 0
+          try {
+            foreach ($trial in 1..3) {
+              $trialExit = 1
+              $trialRoot = Join-Path $baseRoot "windows-portable-reproduction-trial-$trial"
+              New-Item -ItemType Directory -Force -Path $trialRoot | Out-Null
+              $env:RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT = $trialRoot
+              $startedAt = (Get-Date).ToUniversalTime().ToString('o')
+              Write-Host "reproduction trial $trial/3 started at $startedAt argv: node $($stockArgs -join ' ') evidenceRoot: $trialRoot"
+              & node $stockArgs
+              $trialExit = $LASTEXITCODE
+              $endedAt = (Get-Date).ToUniversalTime().ToString('o')
+              $record = [ordered]@{
+                trial = $trial
+                argv = @('node') + $stockArgs
+                evidenceRoot = $trialRoot
+                startedAt = $startedAt
+                endedAt = $endedAt
+                exitCode = $trialExit
+                head = $env:GITHUB_SHA
+                runId = $env:GITHUB_RUN_ID
+              }
+              $record | ConvertTo-Json -Compress | Tee-Object -FilePath (Join-Path $trialRoot 'trial-record.json') | Write-Host
+              Write-Host "reproduction trial $trial/3 ended at $endedAt exitCode: $trialExit"
+              if ($trialExit -ne 0) {
+                Write-Host "reproduction stops after first nonzero trial $trial; later trials not started (possible poisoned host)."
+                break
+              }
+            }
+          } finally {
+            $env:RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT = $baseRoot
+          }
+          if ($trialExit -ne 0) { exit $trialExit }
       - name: Upload Windows portable diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -159,7 +218,7 @@ jobs:
 
   docker-oci-integration:
     name: Docker OCI qualification (Linux, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 'windows-portable-channel' && inputs['qualification-scope'] != 'windows-portable-reproduction'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
