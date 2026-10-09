@@ -30,6 +30,47 @@ const JOB_HOST_COMPILE_WRAPPER = [
   "Add-Type -TypeDefinition $source -OutputAssembly $args[0] -OutputType Library",
   "",
 ].join("\r\n");
+/** Fixed trusted default-probe command: stdin-driven helper load plus one real
+ * native CreateJobObject/CloseHandle via the precompiled helper. The config
+ * (path+SHA) arrives as one base64 JSON line on stdin, never argv; no Add-Type.
+ * PowerShell reads the file bytes ONCE, hashes THOSE bytes, refuses on digest
+ * mismatch, loads THOSE bytes, resolves the exact ManagedProcessJobHost type
+ * FROM that loaded assembly, requires the exact declared public static
+ * non-generic zero-argument Boolean ProbeCreateClose, invokes only that
+ * method, requires actual Boolean true without coercion, and exits nonzero
+ * on any failure. */
+export const ACTIVE_JOB_PROBE_HELPER_COMMAND = [
+  "$ErrorActionPreference='Stop'",
+  "$encoded=[Console]::In.ReadLine()",
+  "if([string]::IsNullOrWhiteSpace($encoded)){exit 1}",
+  "$cfg=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))|ConvertFrom-Json",
+  "$p=[string]$cfg.path",
+  "$s=[string]$cfg.sha256",
+  "if([string]::IsNullOrWhiteSpace($p)-or[string]::IsNullOrWhiteSpace($s)){exit 1}",
+  "$b=[IO.File]::ReadAllBytes($p)",
+  "$h=[Security.Cryptography.SHA256]::Create()",
+  "try{$a=([BitConverter]::ToString($h.ComputeHash($b))).Replace('-','').ToLowerInvariant()}finally{$h.Dispose()}",
+  "if($a -cne $s.ToLowerInvariant()){exit 1}",
+  "$asm=[Reflection.Assembly]::Load($b)",
+  "if($null -eq $asm){exit 1}",
+  "$t=$asm.GetType('ManagedProcessJobHost',$false,$false)",
+  "if($null -eq $t){exit 1}",
+  "$m=@($t.GetMethods()|Where-Object{$_.Name -ceq 'ProbeCreateClose'})",
+  "if($m.Count -ne 1){exit 1}",
+  "$m=$m[0]",
+  "if(-not $m.IsPublic){exit 1}",
+  "if(-not $m.IsStatic){exit 1}",
+  "if($m.DeclaringType -ne $t){exit 1}",
+  "if($m.IsGenericMethod -or $m.ContainsGenericParameters){exit 1}",
+  "if($m.ReturnType -ne [System.Boolean]){exit 1}",
+  "if($m.GetParameters().Count -ne 0){exit 1}",
+  "$r=$m.Invoke($null,$null)",
+  "if($r -isnot [System.Boolean]){exit 1}",
+  "if($r -ne $true){exit 1}",
+].join(";");
+const ACTIVE_JOB_PROBE_HELPER_ARGS = [
+  "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", ACTIVE_JOB_PROBE_HELPER_COMMAND,
+] as const;
 
 export interface WindowsJobOwnershipKey { readonly runId: string; readonly sessionId: string }
 export interface WindowsJobWriterFence { readonly ownerId: string; readonly fencingToken: number }
@@ -997,18 +1038,43 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (this.platform !== "win32" || process.platform !== "win32") return false;
     const jobHost = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
     if (!existsSync(this.supervisorScriptPath) || !existsSync(jobHost)) return false;
-    const command = "$ErrorActionPreference='Stop';$s='using System;using System.Runtime.InteropServices;public static class P{[DllImport(\"kernel32.dll\",CharSet=CharSet.Unicode,SetLastError=true)]public static extern IntPtr CreateJobObject(IntPtr a,string n);[DllImport(\"kernel32.dll\",SetLastError=true)]public static extern bool CloseHandle(IntPtr h);}';Add-Type -TypeDefinition $s;$h=[P]::CreateJobObject([IntPtr]::Zero,$null);if($h -eq [IntPtr]::Zero){exit 1};if(-not [P]::CloseHandle($h)){exit 1}";
-    const executable = this.activeJobProbe?.executable ?? "powershell.exe";
-    const args = this.activeJobProbe?.arguments ?? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command];
-    const deadlineMs = this.activeJobProbe?.deadlineMs ?? DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS;
-    if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1) return false;
-    const result = spawnSync(executable, [...args], {
-      windowsHide: true,
-      stdio: "ignore",
-      timeout: deadlineMs,
-      killSignal: "SIGKILL",
-    });
-    return result.status === 0 && !result.error;
+    // Test seam only: an explicit override keeps the exact historical behavior
+    // (custom executable/arguments/deadline, no helper preparation). The product
+    // default path below never uses it.
+    if (this.activeJobProbe) {
+      const executable = this.activeJobProbe.executable;
+      const args = this.activeJobProbe.arguments;
+      const deadlineMs = this.activeJobProbe.deadlineMs ?? DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS;
+      if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1) return false;
+      const result = spawnSync(executable, [...args], {
+        windowsHide: true,
+        stdio: "ignore",
+        timeout: deadlineMs,
+        killSignal: "SIGKILL",
+      });
+      return result.status === 0 && !result.error;
+    }
+    // Default product probe: mandatory backend preparation first. The helper is
+    // already required before any real Job launch (same per-runner private
+    // compile, in-memory digest pin, cached failure, no recompile). Its 120s
+    // compile cap is unchanged and NOT part of the 2s native-call bound below:
+    // total readiness may exceed 2s when the first compile runs.
+    const helper = await ensureJobHostHelperAssembly().catch(() => null);
+    if (!helper || typeof helper.path !== "string" || helper.path.length === 0
+      || typeof helper.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(helper.sha256)) return false;
+    const payload = Buffer.from(JSON.stringify({ path: helper.path, sha256: helper.sha256 }), "utf8").toString("base64") + "\n";
+    try {
+      const result = spawnSync("powershell.exe", [...ACTIVE_JOB_PROBE_HELPER_ARGS], {
+        windowsHide: true,
+        input: payload,
+        stdio: ["pipe", "ignore", "ignore"],
+        timeout: DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS,
+        killSignal: "SIGKILL",
+      });
+      return result.status === 0 && !result.error;
+    } catch {
+      return false;
+    }
   }
 
   async attachOwnedChannel(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState> {

@@ -781,7 +781,7 @@ function inferFactoryProbePurpose(command: unknown, argsValue: unknown, state: F
       }
     }
     for (const text of candidates) {
-      if (text.includes("CreateJobObject")) return "job-create-close";
+      if (text.includes("CreateJobObject") || text.includes("ProbeCreateClose")) return "job-create-close";
     }
     for (const text of candidates) {
       if (text.includes("COMPLETE:")) return "global-inventory";

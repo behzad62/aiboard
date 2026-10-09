@@ -180,6 +180,18 @@ public static class ManagedProcessJobHost
         uint flags,
         IntPtr template);
 
+    // Active Job probe: one real native create-and-close of a new unnamed Job
+    // Object, no child, exactly one close. False when creation or close fails.
+    // Used only by the default probe with the precompiled helper; Run and
+    // RunInteractive are unchanged.
+    public static bool ProbeCreateClose()
+    {
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero) return false;
+        if (!CloseHandle(job)) return false;
+        return true;
+    }
+
     public static int Run(
         string command,
         string[] arguments,
