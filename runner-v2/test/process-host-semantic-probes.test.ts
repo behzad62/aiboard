@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { ownFiniteFixtureChild } from "./support/finite-fixture-child.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +13,7 @@ import {
   selectWindowsProcessBackendKinds,
   type ProcessHostSemanticProbeSource,
 } from "../src/process-host-semantic-probes.js";
-import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
+import { ACTIVE_JOB_PROBE_HELPER_COMMAND, createWindowsJobProcessHost, ensureJobHostHelperAssembly, resetJobHostHelperAssemblyForTests } from "../src/windows-job-process-host.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import {
   createWindowsProcessSemanticProbeSource,
@@ -849,5 +849,465 @@ test("concrete Windows Job host rejects launch before spawning off Windows", asy
     );
   } finally {
     rmSync(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test("default active Job probe verifies via the prepared helper within its native-call bound", async (t) => {
+  if (process.platform !== "win32") { t.skip("The prepared-helper probe fixture requires Windows."); return; }
+  const helper = await ensureJobHostHelperAssembly();
+  assert.ok(helper, "healthy Windows host must prepare the precompiled Job-host helper");
+  assert.match(helper.sha256, /^[a-f0-9]{64}$/i);
+  assert.equal(existsSync(helper.path), true);
+  assert.ok(statSync(helper.path).size > 0);
+  const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-prepared-"));
+  try {
+    const host = createWindowsJobProcessHost({ stateDirectory });
+    const startedAt = Date.now();
+    const verified = await host.probeActiveJobCreateClose();
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(verified, true, "prepared helper plus real native create/close must verify");
+    assert.ok(elapsedMs < 10_000, `cached-helper probe must settle within its native-call bound plus host overhead, observed ${elapsedMs}ms`);
+  } finally {
+    rmSync(stateDirectory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("tampered or missing helper bytes fail the default probe closed without recompile or fallback", { timeout: 30_000 }, async (t) => {
+  if (process.platform !== "win32") { t.skip("The helper-tamper probe fixture requires Windows."); return; }
+  const helper = await ensureJobHostHelperAssembly();
+  assert.ok(helper, "healthy Windows host must prepare the precompiled Job-host helper");
+  const originalBytes = readFileSync(helper.path);
+  assert.ok(originalBytes.byteLength > 0);
+  const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-tamper-"));
+  let bodyError: unknown = undefined;
+  let hasBodyError = false;
+  let restoreError: unknown = undefined;
+  let hasRestoreError = false;
+  let restoreVerified = false;
+  let cleanupError: unknown = undefined;
+  let hasCleanupError = false;
+  try {
+    const host = createWindowsJobProcessHost({ stateDirectory });
+    const tampered = Buffer.from(originalBytes);
+    tampered[Math.floor(tampered.byteLength / 2)] ^= 0xFF;
+    writeFileSync(helper.path, tampered);
+    const tamperStart = Date.now();
+    const tamperedResult = await host.probeActiveJobCreateClose();
+    const tamperElapsed = Date.now() - tamperStart;
+    assert.equal(tamperedResult, false, "digest-mismatched helper bytes must never verify");
+    assert.ok(tamperElapsed < 10_000, `tampered probe must fail closed within its bound, observed ${tamperElapsed}ms`);
+    writeFileSync(helper.path, originalBytes);
+    assert.deepEqual(readFileSync(helper.path), originalBytes, "tampered helper restoration must restore exact original bytes");
+    rmSync(helper.path, { force: true });
+    const missingStart = Date.now();
+    const missingResult = await host.probeActiveJobCreateClose();
+    const missingElapsed = Date.now() - missingStart;
+    assert.equal(missingResult, false, "missing helper file must never verify");
+    assert.ok(missingElapsed < 10_000, `missing-file probe must fail closed within its bound, observed ${missingElapsed}ms`);
+    writeFileSync(helper.path, originalBytes);
+    assert.deepEqual(readFileSync(helper.path), originalBytes, "missing helper restoration must restore exact original bytes");
+    const pinned = await ensureJobHostHelperAssembly();
+    assert.deepEqual(pinned, helper, "failing probes must not recompile or re-pin the helper");
+    assert.equal(await host.probeActiveJobCreateClose(), true, "restored helper must verify again");
+  } catch (error) {
+    bodyError = error;
+    hasBodyError = true;
+  }
+  try {
+    let current: Buffer | null = null;
+    let missing = false;
+    try {
+      current = readFileSync(helper.path);
+    } catch {
+      missing = true;
+    }
+    if (!missing && current !== null && Buffer.compare(current, originalBytes) === 0) {
+      restoreVerified = true;
+    } else {
+      writeFileSync(helper.path, originalBytes);
+      assert.deepEqual(readFileSync(helper.path), originalBytes, "final helper restoration must restore exact original bytes");
+      restoreVerified = true;
+    }
+  } catch (error) {
+    restoreError = error;
+    hasRestoreError = true;
+    restoreVerified = false;
+  }
+  if (restoreVerified) {
+    try {
+      rmSync(stateDirectory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    } catch (error) {
+      cleanupError = error;
+      hasCleanupError = true;
+    }
+  }
+  if (hasBodyError || hasRestoreError || hasCleanupError) {
+    const errors: unknown[] = [];
+    if (hasBodyError) errors.push(bodyError);
+    if (hasRestoreError) errors.push(restoreError);
+    if (hasCleanupError) errors.push(cleanupError);
+    if (errors.length === 1) throw errors[0];
+    throw new AggregateError(errors, hasBodyError && hasRestoreError
+      ? `Tamper probe body failed and helper restoration also failed; primary error preserved. Retained owned root for diagnosis: ${stateDirectory}`
+      : hasRestoreError
+        ? `Tamper probe helper restoration failed; owned root retained for diagnosis: ${stateDirectory}`
+        : `Tamper probe body failed and owned cleanup also failed; primary error preserved.`);
+  }
+  if (!restoreVerified) {
+    throw new Error(`Tamper probe helper restoration unverified; retained owned root for diagnosis: ${stateDirectory}`);
+  }
+});
+
+function escapeCSharpVerbatimPath(path: string): string {
+  return path.replace(/"/g, "\"\"");
+}
+
+function compileOwnedLoaderFixtureDll(ownedRoot: string, label: string, csSource: string): { dllPath: string; sha256: string; compileElapsedMs: number } {
+  const dllPath = join(ownedRoot, `helper-${label}.dll`);
+  const wrapperPath = join(ownedRoot, `compile-${label}.ps1`);
+  const wrapper = [
+    "$encoded = [Console]::In.ReadLine()",
+    "$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))",
+    "Add-Type -TypeDefinition $source -OutputAssembly $args[0] -OutputType Library",
+    "",
+  ].join("\r\n");
+  writeFileSync(wrapperPath, wrapper, "utf8");
+  rmSync(dllPath, { force: true });
+  const compileStart = Date.now();
+  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapperPath, dllPath], {
+    windowsHide: true,
+    input: `${Buffer.from(csSource, "utf8").toString("base64")}\n`,
+    stdio: ["pipe", "ignore", "ignore"],
+    timeout: 120_000,
+    killSignal: "SIGKILL",
+  });
+  const compileElapsedMs = Date.now() - compileStart;
+  assert.equal(result.error, undefined, `fixture ${label} compile must not error: ${String(result.error)}`);
+  assert.equal(result.status, 0, `fixture ${label} compile must exit 0, observed status ${String(result.status)}`);
+  assert.equal(existsSync(dllPath), true, `fixture ${label} DLL must exist`);
+  const bytes = readFileSync(dllPath);
+  assert.ok(bytes.byteLength > 0, `fixture ${label} DLL must be non-empty`);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  assert.match(sha256, /^[a-f0-9]{64}$/i);
+  assert.ok(compileElapsedMs < 120_000, `fixture ${label} compile must settle within its 120s bound, observed ${compileElapsedMs}ms`);
+  return { dllPath, sha256, compileElapsedMs };
+}
+
+function runExactLoaderOnce(dllPath: string, sha256: string): { status: number | null; error: unknown; elapsedMs: number } {
+  const payload = Buffer.from(JSON.stringify({ path: dllPath, sha256 }), "utf8").toString("base64") + "\n";
+  const start = Date.now();
+  const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", ACTIVE_JOB_PROBE_HELPER_COMMAND], {
+    windowsHide: true,
+    input: payload,
+    stdio: ["pipe", "ignore", "ignore"],
+    timeout: 2_000,
+    killSignal: "SIGKILL",
+  });
+  return { status: result.status, error: result.error, elapsedMs: Date.now() - start };
+}
+
+test("exact loader refuses loadable wrong-helper metadata without execution", { timeout: 120_000 }, async (t) => {
+  if (process.platform !== "win32") { t.skip("The exact-loader negative fixtures require Windows."); return; }
+  const ownedRoot = mkdtempSync(join(tmpdir(), "aiboard-windows-job-loader-negative-"));
+  let bodyError: unknown = undefined;
+  let hasBodyError = false;
+  let cleanupError: unknown = undefined;
+  let hasCleanupError = false;
+  try {
+    // Deterministic P2 boundary: the wrongreturn int1 fixture creates its owned marker when executed.
+    // Against the R1 bridge (global type + [bool] coercion) the old loader returns 0 and the marker exists (intended RED).
+    // Against the corrected R2 loader the exact ReturnType check refuses before invoke and the marker stays absent (GREEN).
+    const cases: Array<{ label: string; csSource: (markerPath: string) => string }> = [
+      {
+        label: "wrongtype",
+        csSource: (marker) => [
+          "using System;",
+          "using System.IO;",
+          "public static class WrongType {",
+          "  public static bool ProbeCreateClose() {",
+          `    File.WriteAllText(@"${escapeCSharpVerbatimPath(marker)}", "executed");`,
+          "    return true;",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        label: "missingmethod",
+        csSource: (marker) => [
+          "using System;",
+          "using System.IO;",
+          "public static class ManagedProcessJobHost {",
+          "  public static bool DifferentMethod() {",
+          `    File.WriteAllText(@"${escapeCSharpVerbatimPath(marker)}", "executed");`,
+          "    return true;",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        label: "wrongreturn",
+        csSource: (marker) => [
+          "using System;",
+          "using System.IO;",
+          "public static class ManagedProcessJobHost {",
+          "  public static int ProbeCreateClose() {",
+          `    File.WriteAllText(@"${escapeCSharpVerbatimPath(marker)}", "executed");`,
+          "    return 1;",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        label: "nonstatic",
+        csSource: (marker) => [
+          "using System;",
+          "using System.IO;",
+          "public class ManagedProcessJobHost {",
+          "  public bool ProbeCreateClose() {",
+          `    File.WriteAllText(@"${escapeCSharpVerbatimPath(marker)}", "executed");`,
+          "    return true;",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        label: "params",
+        csSource: (marker) => [
+          "using System;",
+          "using System.IO;",
+          "public static class ManagedProcessJobHost {",
+          "  public static bool ProbeCreateClose(int x) {",
+          `    File.WriteAllText(@"${escapeCSharpVerbatimPath(marker)}", "executed");`,
+          "    return true;",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        label: "generic",
+        csSource: (marker) => [
+          "using System;",
+          "using System.IO;",
+          "public static class ManagedProcessJobHost {",
+          "  public static bool ProbeCreateClose<T>() {",
+          `    File.WriteAllText(@"${escapeCSharpVerbatimPath(marker)}", "executed");`,
+          "    return true;",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+    ];
+    for (const fixture of cases) {
+      const markerPath = join(ownedRoot, `marker-${fixture.label}.txt`);
+      rmSync(markerPath, { force: true });
+      const csSource = fixture.csSource(markerPath);
+      const compiled = compileOwnedLoaderFixtureDll(ownedRoot, fixture.label, csSource);
+      assert.ok(compiled.compileElapsedMs < 120_000, `fixture ${fixture.label} compile recorded separately, observed ${compiled.compileElapsedMs}ms`);
+      const loader = runExactLoaderOnce(compiled.dllPath, compiled.sha256);
+      const markerExists = existsSync(markerPath);
+      let markerContent: string | null = null;
+      if (markerExists) {
+        try {
+          const rawMarker = readFileSync(markerPath, "utf8");
+          markerContent = rawMarker.length > 64 ? rawMarker.slice(0, 64) : rawMarker;
+        } catch {
+          markerContent = "<unreadable>";
+        }
+      }
+      const loaderErrorCode = loader.error === undefined ? "none"
+        : typeof (loader.error as NodeJS.ErrnoException).code === "string" ? String((loader.error as NodeJS.ErrnoException).code)
+        : loader.error instanceof Error ? loader.error.name : typeof loader.error;
+      const loaderDetail = `fixture=${fixture.label} status=${String(loader.status)} errorCode=${loaderErrorCode} elapsedMs=${loader.elapsedMs} markerExists=${markerExists} markerContent=${markerContent === null ? "absent" : JSON.stringify(markerContent)}`;
+      assert.equal(loader.error, undefined, `UNCLASSIFIED infrastructure failure, not semantic refusal: ${loaderDetail}`);
+      assert.equal(loader.status, 1, `fixture ${fixture.label} must refuse with exact exit 1 (R1-bridge RED is status 0 plus owned marker 'executed'): ${loaderDetail}`);
+      assert.ok(loader.elapsedMs < 10_000, `fixture ${fixture.label} loader must settle within its native-call bound plus host overhead, observed ${loader.elapsedMs}ms (${loaderDetail})`);
+      assert.equal(markerExists, false, `fixture ${fixture.label} must not execute when metadata is invalid (${loaderDetail})`);
+    }
+  } catch (error) {
+    bodyError = error;
+    hasBodyError = true;
+  }
+  try {
+    rmSync(ownedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  } catch (error) {
+    cleanupError = error;
+    hasCleanupError = true;
+  }
+  if (hasBodyError || hasCleanupError) {
+    if (hasBodyError && hasCleanupError) throw new AggregateError([bodyError, cleanupError], "Loader negative body failed and owned cleanup also failed; primary error preserved.");
+    if (hasBodyError) throw bodyError;
+    throw cleanupError;
+  }
+});
+
+test("exact loader refuses valid false and throwing helpers without certification", { timeout: 60_000 }, async (t) => {
+  if (process.platform !== "win32") { t.skip("The exact-loader false/throw fixtures require Windows."); return; }
+  const ownedRoot = mkdtempSync(join(tmpdir(), "aiboard-windows-job-loader-falsethrow-"));
+  let bodyError: unknown = undefined;
+  let hasBodyError = false;
+  let cleanupError: unknown = undefined;
+  let hasCleanupError = false;
+  try {
+    const falseMarkerContent = "false-invoked";
+    const throwMarkerContent = "throw-invoked";
+    const falseThrowCases: Array<{ label: "false" | "throw"; expectedMarker: string; csSource: (marker: string) => string }> = [
+      {
+        label: "false",
+        expectedMarker: falseMarkerContent,
+        csSource: (marker) => [
+          "using System;",
+          "using System.IO;",
+          "public static class ManagedProcessJobHost {",
+          "  public static bool ProbeCreateClose() {",
+          `    File.WriteAllText(@"${escapeCSharpVerbatimPath(marker)}", "${falseMarkerContent}");`,
+          "    return false;",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        label: "throw",
+        expectedMarker: throwMarkerContent,
+        csSource: (marker) => [
+          "using System;",
+          "using System.IO;",
+          "public static class ManagedProcessJobHost {",
+          "  public static bool ProbeCreateClose() {",
+          `    File.WriteAllText(@"${escapeCSharpVerbatimPath(marker)}", "${throwMarkerContent}");`,
+          "    throw new System.Exception(\"owned-negative\");",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+    ];
+    for (const fixture of falseThrowCases) {
+      const markerPath = join(ownedRoot, `marker-${fixture.label}.txt`);
+      rmSync(markerPath, { force: true });
+      const csSource = fixture.csSource(markerPath);
+      const compiled = compileOwnedLoaderFixtureDll(ownedRoot, fixture.label, csSource);
+      assert.ok(compiled.compileElapsedMs < 120_000, `fixture ${fixture.label} compile recorded separately, observed ${compiled.compileElapsedMs}ms`);
+      const loader = runExactLoaderOnce(compiled.dllPath, compiled.sha256);
+      const markerExists = existsSync(markerPath);
+      let markerContent: string | null = null;
+      if (markerExists) {
+        try {
+          markerContent = readFileSync(markerPath, "utf8");
+        } catch {
+          markerContent = "<unreadable>";
+        }
+      }
+      const loaderErrorCode = loader.error === undefined ? "none"
+        : typeof (loader.error as NodeJS.ErrnoException).code === "string" ? String((loader.error as NodeJS.ErrnoException).code)
+        : loader.error instanceof Error ? loader.error.name : typeof loader.error;
+      const shownMarker = markerContent === null ? "absent" : JSON.stringify(markerContent.length > 64 ? markerContent.slice(0, 64) : markerContent);
+      const loaderDetail = `fixture=${fixture.label} status=${String(loader.status)} errorCode=${loaderErrorCode} elapsedMs=${loader.elapsedMs} markerExists=${markerExists} markerContent=${shownMarker} expectedMarker=${JSON.stringify(fixture.expectedMarker)}`;
+      assert.equal(loader.error, undefined, `UNCLASSIFIED infrastructure failure, not semantic refusal: ${loaderDetail}`);
+      assert.equal(loader.status, 1, `fixture ${fixture.label} must refuse with exact exit 1 after actual Invoke: ${loaderDetail}`);
+      assert.ok(loader.elapsedMs < 10_000, `fixture ${fixture.label} loader must settle within its native-call bound plus host overhead, observed ${loader.elapsedMs}ms (${loaderDetail})`);
+      assert.equal(markerExists, true, `fixture ${fixture.label} must prove actual Invoke via its owned marker (${loaderDetail})`);
+      assert.equal(markerContent, fixture.expectedMarker, `fixture ${fixture.label} owned marker must hold the exact Invoke proof content (${loaderDetail})`);
+    }
+  } catch (error) {
+    bodyError = error;
+    hasBodyError = true;
+  }
+  try {
+    rmSync(ownedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  } catch (error) {
+    cleanupError = error;
+    hasCleanupError = true;
+  }
+  if (hasBodyError || hasCleanupError) {
+    if (hasBodyError && hasCleanupError) throw new AggregateError([bodyError, cleanupError], "Loader false/throw body failed and owned cleanup also failed; primary error preserved.");
+    if (hasBodyError) throw bodyError;
+    throw cleanupError;
+  }
+});
+
+test("default probe reports unavailable on genuine preparation failure without retry or fallback", { timeout: 180_000 }, async (t) => {
+  if (process.platform !== "win32") { t.skip("The preparation-failure fixture requires Windows."); return; }
+  const ownedRoot = mkdtempSync(join(tmpdir(), "aiboard-windows-job-prep-fault-"));
+  const originalTemp = process.env.TEMP;
+  const originalTmp = process.env.TMP;
+  const healthy = await ensureJobHostHelperAssembly();
+  assert.ok(healthy, "healthy Windows host must prepare the precompiled Job-host helper before the fault fixture");
+  let bodyError: unknown = undefined;
+  let hasBodyError = false;
+  let restoreError: unknown = undefined;
+  let hasRestoreError = false;
+  let restoreVerified = false;
+  let cleanupError: unknown = undefined;
+  let hasCleanupError = false;
+  try {
+    resetJobHostHelperAssemblyForTests();
+    const faultDir = join(ownedRoot, "bracket-[fault]");
+    mkdirSync(faultDir, { recursive: true });
+    process.env.TEMP = faultDir;
+    process.env.TMP = faultDir;
+    const failed = await ensureJobHostHelperAssembly();
+    assert.equal(failed, null, "bracket TEMP must make helper preparation unavailable (honest unavailable classification, not compiler blame)");
+    const failedAgain = await ensureJobHostHelperAssembly();
+    assert.equal(failedAgain, null, "cached preparation failure must not retry into success");
+    const stateDirectory = join(ownedRoot, "state");
+    mkdirSync(stateDirectory, { recursive: true });
+    const host = createWindowsJobProcessHost({ stateDirectory });
+    const probeStart = Date.now();
+    const probeResult = await host.probeActiveJobCreateClose();
+    const probeElapsed = Date.now() - probeStart;
+    assert.equal(probeResult, false, "default probe must report unavailable when preparation fails, without fallback certification");
+    assert.ok(probeElapsed < 10_000, `unavailable probe must fail closed within its bound, observed ${probeElapsed}ms`);
+    assert.equal(await host.probeActiveJobCreateClose(), false, "second unavailable probe must still refuse without retry");
+    // Real Job launch fallback to in-process Add-Type remains for actual launches (covered by existing launch-speed tests); this probe asserts no fallback certification.
+  } catch (error) {
+    bodyError = error;
+    hasBodyError = true;
+  }
+  try {
+    if (originalTemp === undefined) delete process.env.TEMP;
+    else process.env.TEMP = originalTemp;
+    if (originalTmp === undefined) delete process.env.TMP;
+    else process.env.TMP = originalTmp;
+    resetJobHostHelperAssemblyForTests();
+    const restored = await ensureJobHostHelperAssembly();
+    assert.ok(restored, "helper preparation must recover after the fault fixture restores its environment");
+    assert.match(restored.sha256, /^[a-f0-9]{64}$/i);
+    assert.equal(existsSync(restored.path), true);
+    assert.ok(statSync(restored.path).size > 0);
+    restoreVerified = true;
+  } catch (error) {
+    restoreError = error;
+    hasRestoreError = true;
+    restoreVerified = false;
+  }
+  if (restoreVerified) {
+    try {
+      rmSync(ownedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    } catch (error) {
+      cleanupError = error;
+      hasCleanupError = true;
+    }
+  }
+  if (hasBodyError || hasRestoreError || hasCleanupError) {
+    const errors: unknown[] = [];
+    if (hasBodyError) errors.push(bodyError);
+    if (hasRestoreError) errors.push(restoreError);
+    if (hasCleanupError) errors.push(cleanupError);
+    if (errors.length === 1) throw errors[0];
+    throw new AggregateError(errors, hasBodyError && hasRestoreError
+      ? `Preparation-failure body failed and environment/cache restoration also failed; primary error preserved. Retained owned root for diagnosis: ${ownedRoot}`
+      : hasRestoreError
+        ? `Preparation-failure environment/cache restoration failed; owned root retained for diagnosis: ${ownedRoot}`
+        : `Preparation-failure body failed and owned cleanup also failed; primary error preserved.`);
+  }
+  if (!restoreVerified) {
+    throw new Error(`Preparation-failure restoration unverified; retained owned root for diagnosis: ${ownedRoot}`);
   }
 });

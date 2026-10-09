@@ -241,7 +241,7 @@ jobs:
         env:
           RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT: ${{ runner.temp }}/t8-factory-diagnostic-evidence
           RUNNER_V2_FACTORY_PROBE_OBSERVER: '1'
-        run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/openrouter-apply-patch-factory.test.ts
+        run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/process-host-semantic-probes.test.ts runner-v2/test/windows-job-launch-speed.test.ts runner-v2/test/openrouter-apply-patch-factory.test.ts
       - name: Upload Windows factory diagnostics
         if: always()
         uses: actions/upload-artifact@v4
