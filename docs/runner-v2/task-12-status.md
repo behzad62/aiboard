@@ -4,6 +4,14 @@
 
 Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
+## 2026-10-09 20:00 UTC continuation — reviewed direct .NET repairs in owning qualification
+
+The Windows birth query now proposes genuine `Process.GetProcessById`/UTC StartTime with disposal under the unchanged2000ms bound. Identical two-test module-autoload-disabled controls prove old missing-cmdlet RED and corrected2/2 GREEN, including eight conservative refusal cases. The batch bridge proposes shared base64 values decoded by direct .NET operations and a language loop; original launch restrictions, argv behavior and exit codes remain. Identical four-test controls prove old dependency RED and corrected4/4 GREEN. The initial per-argument form was held before construction for command-length expansion; compact1000-argument output is14200 versus old14948, with a specific size regression. No additional query, warmup, retry or cap increase.
+
+Fresh combined types pass649 roots/19 overlays/zero diagnostics,10830ms, actual0. Independent seven-path review `D:/tmp/t8-sol-final-windows-cmdlet-free-r2-review.md`, SHA256 `ed732e4347462454fb4b09e78a3bbebeed0406ec7e074e2f1991c51ad3fe7192`, accepts one complete87-test owning run only. Exact review-hash/disposition binding, full normalized blobs and unchanged local80fbf918/index/63 historical inputs verify. Construction/push/dispatch succeeded. Batch observation restores transparentR2; the earlier phase preload is inactive.
+
+[Run37984005257](https://github.com/behzad62/aiboard/actions/runs/37984005257), source `f9ae9500a2cc4a0b4df82c13186d7eb61aec21cb`/parentf8363d78, sole Windows job114001323884, is IN_PROGRESS. Collect once completed with `D:/tmp/t8-sol-final-windows-cmdlet-free-r2-collect.cjs` and decode with matching `-observe.cjs`, both given the exact run ID. Actual result and independent outcome review precede expanded affected portable qualification. That later scope retains original nine files and adds four owning files for current Linux/macOS coverage; its collectorR7 is prepared only. No full/factory replay is active. Source remains unapplied locally. **Gate C IN_PROGRESS; T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 19:40 UTC continuation — actual timeout captured; direct dependency repairs underway
 
 [Run37981145947](https://github.com/behzad62/aiboard/actions/runs/37981145947), sourcef8363d78/job113991685370, completed FAILURE:81/79 PASS/2 FAIL/zero skips/cancellations,75487.2383ms, actual exit1. All13 inspection regressions pass. Thirteen raw files and nine snapshot payloads verify. Observation `D:/tmp/t8-sol-final-windows-phase-diagnostic-r1-observation-37981145947.json`, SHA256 `43f586239137f156fe394abd74122d01e1738a5f1a8dbd51254ae53f5dff9289`; independent outcome review `D:/tmp/t8-sol-final-windows-phase-diagnostic-r1-outcome-review.md`, SHA256 `12a85ba4097de1f98de5c4868ce274a16010280190c8726dac99f80726ff778e`, accepts failed facts only.

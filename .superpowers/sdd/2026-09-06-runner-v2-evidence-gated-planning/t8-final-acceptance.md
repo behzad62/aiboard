@@ -7,6 +7,12 @@ Status: **GATE C IN PROGRESS — final integration held; T8 is not accepted.**
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
 
+## 2026-10-09 20:00 UTC continuation — direct .NET owning run
+
+Direct genuine birth lookup and compact batch argv decoding remove optional cmdlet dependencies under original bounds. Same-test native RED→GREEN proves2/2 birth and4/4 batch controls;1000-argument compactness regression protects Windows command-line capacity. Fresh types649 roots/19 overlays/zero diagnostics, actual0. Independent exact seven-path ACCEPT `D:/tmp/t8-sol-final-windows-cmdlet-free-r2-review.md`, SHA256 `ed732e4347462454fb4b09e78a3bbebeed0406ec7e074e2f1991c51ad3fe7192`, permits one87-test run only. Earlier oversizedR1 remains HOLD/unconstructed.
+
+[Run37984005257](https://github.com/behzad62/aiboard/actions/runs/37984005257), source `f9ae9500a2cc4a0b4df82c13186d7eb61aec21cb`/parentf8363d78/job114001323884, is IN_PROGRESS. TransparentR2 batch observation is restored; phase injection is inactive. Full normalized source/index/63-input preservation verified at construction. Collect/decode using matching cmdlet-free-r2 tooling and run ID, then independently review the actual outcome before expanded13-file affected portable qualification. Source application, later gates, shipping/final freeze and exact local stock root plus12 chains remain pending. **Gate C IN_PROGRESS; T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 19:40 UTC continuation — actual dependency diagnosis
 
 [Run37981145947](https://github.com/behzad62/aiboard/actions/runs/37981145947), sourcef8363d78/job113991685370, completed81/79 PASS/2 FAIL/zero skips,75487.2383ms, actual1. Independent13-file/nine-payload audit accepts observations only: `D:/tmp/t8-sol-final-windows-phase-diagnostic-r1-outcome-review.md`, SHA256 `12a85ba4097de1f98de5c4868ce274a16010280190c8726dac99f80726ff778e`. First birth is genuine ETIMEDOUT at2011ms/original2000ms/statusnull/SIGTERM. Batch script entry occurs394ms after contract; later phases absent, exclusive cmdlet/module cause unproved. Pre-force running/no-output remains separate from post-force exit.
