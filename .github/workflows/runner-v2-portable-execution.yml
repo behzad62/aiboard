@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       qualification-scope:
-        description: 'Bounded diagnostic scope. t8-portable-coverage runs only the T8 affected portable job plus scoped probe steps; suppressed jobs are UNQUALIFIED (not PASS) and this probe cannot qualify T8. full preserves full 13-job acceptance. windows-factory-diagnostic runs only the Windows factory probe; it cannot qualify T8, Win123, types/chat, shipping, or full.'
+        description: 'Bounded diagnostic scope. t8-portable-coverage runs only the T8 affected portable job plus scoped probe steps; suppressed jobs are UNQUALIFIED (not PASS) and this probe cannot qualify T8. full preserves full 13-job acceptance. windows-factory-diagnostic runs only the Windows factory probe; it cannot qualify T8, Win123, types/chat, shipping, or full. windows-semantic-diagnostic runs only the complete Windows semantic test file with passive evidence; it cannot qualify T8 or full.'
         required: false
         default: full
         type: choice
@@ -15,6 +15,7 @@ on:
           - full
           - t8-portable-coverage
           - windows-factory-diagnostic
+          - windows-semantic-diagnostic
 
 permissions:
   contents: read
@@ -22,7 +23,7 @@ permissions:
 jobs:
   portable-contract:
     name: Portable contract (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic')
+    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-semantic-diagnostic')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -74,7 +75,7 @@ jobs:
 
   native-smoke:
     name: Native adapter probe (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic')
+    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-semantic-diagnostic')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -100,7 +101,7 @@ jobs:
 
   package-gate:
     name: Package parity (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic')
+    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-semantic-diagnostic')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -146,7 +147,7 @@ jobs:
   package-cross-host:
     name: Cross-host package reproducibility (Node ${{ matrix.node-version }})
     needs: package-gate
-    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic')
+    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-semantic-diagnostic')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -174,7 +175,7 @@ jobs:
 
   t8-portable-coverage:
     name: T8 portable coverage (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'windows-factory-diagnostic'
+    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-semantic-diagnostic')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -249,4 +250,41 @@ jobs:
           name: windows-factory-diagnostic-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/t8-factory-diagnostic-evidence
           if-no-files-found: warn
+          retention-days: 14
+
+  windows-semantic-diagnostic:
+    name: Windows semantic diagnostic (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 'windows-semantic-diagnostic'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        node-version: [24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup maintained Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Acquire pinned Recoverable Job Service Runner source
+        shell: bash
+        run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
+      - name: Install dependencies
+        run: npm ci
+      - name: Run complete Windows semantic diagnostic (single run)
+        env:
+          RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT: ${{ runner.temp }}/t8-semantic-diagnostic-evidence
+          RUNNER_V2_SEMANTIC_PROBE_OBSERVER: '1'
+        run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/process-host-semantic-probes.test.ts
+      - name: Upload Windows semantic diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-semantic-diagnostic-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/t8-semantic-diagnostic-evidence
+          if-no-files-found: error
           retention-days: 14

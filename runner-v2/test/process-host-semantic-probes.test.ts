@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { withWindowsSemanticProbeObserver } from "./support/windows-semantic-probe-observer.js";
 
 import {
   probeProcessHostSemantics,
@@ -239,20 +240,22 @@ test("Windows semantic probes exclude unrelated ambient credentials from the enc
 
 test("live Windows portable probes actively attest duplex, argv boundaries, and birth-tagged tree behavior", { timeout: 60_000 }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows semantic fixtures require Windows."); return; }
-  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
-  const portableDuplex = await active.portableDuplex();
-  const windowsBatchArgv = await active.windowsBatchArgv();
-  const exactTreeBirth = await active.exactTreeBirth();
-  const facts = await probeProcessHostSemantics({
-    portableDuplex: async () => portableDuplex,
-    windowsBatchArgv: async () => windowsBatchArgv,
-    exactTreeBirth: async () => exactTreeBirth,
-    activeJobCreateClose: async () => false,
+  await withWindowsSemanticProbeObserver(async () => {
+    const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
+    const portableDuplex = await active.portableDuplex();
+    const windowsBatchArgv = await active.windowsBatchArgv();
+    const exactTreeBirth = await active.exactTreeBirth();
+    const facts = await probeProcessHostSemantics({
+      portableDuplex: async () => portableDuplex,
+      windowsBatchArgv: async () => windowsBatchArgv,
+      exactTreeBirth: async () => exactTreeBirth,
+      activeJobCreateClose: async () => false,
+    });
+    assert.equal(facts.portableDuplex, "verified");
+    assert.equal(facts.windowsBatchArgv, "verified");
+    assert.equal(facts.exactTreeBirth, "partial");
+    assert.equal(facts.jobContainment, "unavailable");
   });
-  assert.equal(facts.portableDuplex, "verified");
-  assert.equal(facts.windowsBatchArgv, "verified");
-  assert.equal(facts.exactTreeBirth, "partial");
-  assert.equal(facts.jobContainment, "unavailable");
 });
 
 test("semantic probe polling stops permanently on timeout or cancellation", async () => {
