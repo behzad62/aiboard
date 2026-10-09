@@ -7,6 +7,12 @@ Status: **GATE C IN PROGRESS — final integration held; T8 is not accepted.**
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
 
+## 2026-10-09 17:53 UTC continuation — actual79/81; remaining readiness and batch failures
+
+[Focused run37968086843](https://github.com/behzad62/aiboard/actions/runs/37968086843), exact03d223ee, failed81/79 PASS/2 FAIL/zero skips,60222.6993ms, true exit1. New13 regressions PASS; original lock35/36 and semantic31/32. All3 Job positives have real status0 at1206/335/333ms, expected tamper/missing refusals status1; no observer fault/restorationloss. Legacy migration fails first self-birth readiness2102ms with native cause unobserved; batch remains running/no output before original force and times out25.344s. Long reconciliation gaps are reduced, without establishing the batch cause. Later exited1 is post-force cleanup.
+
+Eleven files/seven payload hashes verify. Primary observation SHA256 `4a0f1d6af7145853de3428d9fb5a00fda6e20233575e9e1502c45e0eee9de675`; independent actual outcome `D:/tmp/t8-sol-final-windows-native-repair-outcome-review.md`, SHA256 `1a00d36b9da29ae148ce656d69bf9d86fa2095d624e9ff1a71ff0e36cc36c93f`, accepts observations only. Same-journey bridge stage markers and original first-query result capture are under preparation/review, with diagnostic perturbation explicitly disclosed. No broader replay or timeout inflation. **Gate C IN_PROGRESS; T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 17:42 UTC continuation — native repair in focused qualification
 
 Reviewed six-file candidate releases the fence writer transaction during host inspection and freshly revalidates exact identities/schema/deadline before stale election. Final intended RED proves SQLite lock contention;13 new regressions and36 original lock tests PASS. Only contender fixture genuine identity setup precedes its unchanged200ms election window. Passive Job observation preserves all32 roots/144 assertions and adds no native call/cap change;11 mechanical controls PASS. Combined types actual0/645 roots/15 overlays/zero diagnostics. Independent review SHA256 `933645f4650a7b0f7a144f34760ea29006d1e2c865a7cde59caba2ecf17b81a6`, `D:/tmp/t8-sol-final-windows-native-repair-review.md`, accepts exact construction and one runtime check, not owning Gate C or hosted cause.
