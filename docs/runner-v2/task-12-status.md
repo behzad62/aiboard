@@ -4,6 +4,14 @@
 
 Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
+## 2026-10-09 14:00 UTC continuation — regression reproduced; separate Windows timeout remains
+
+Gate C remains IN_PROGRESS. [Rejected-loader regression run37929421746](https://github.com/behzad62/aiboard/actions/runs/37929421746), source `c1a4b9d7979fca3a2cdc2a5e4ebb7956da606ab0`, job113816195270, completed with44 tests:42 PASS,2 FAIL,0 skips/cancellations,1079389.913ms. The intended `wrongreturn` failure is proven: actual exit0, no loader error,250ms, owned marker present with exact `executed` content. This is the deliberately rejected loader, never a final-source candidate.
+
+The second failure is separate and unresolved: the original live Windows portable semantic test timed out waiting for terminal output in `probeWindowsBatchArgv`,27642.8846ms. Its cause is not established; it is not classified as expected RED or host noise. The factory passed in903164.3739ms and all11 helper lifecycle tests passed. Source-pinned collection completed actual0: `D:/tmp/t8-sol-final-windows-job-probe-r3-red-37929421746-files.json` retains three files and no diagnostic artifacts; raw log SHA256 `ff458fccf6035cd01a03d574c1156ed88d91e46c11c885a98f6c72009a3e64b5`. Primary observation: `D:/tmp/t8-sol-final-windows-job-probe-r3-red-observation.json`, SHA256 `14321b76b0d55d155335dbf37772d4c9ac2e347a8456456a36042f8cbe5e2a91`.
+
+Independent actual-outcome review is underway. The already reviewed and pushed corrected candidate `7412fb703ebb49f3ab3908e73caaa64c379a910a` differs from RED only in the loader TS. Its planned complete owning-file GREEN comparison is now [run37941077952](https://github.com/behzad62/aiboard/actions/runs/37941077952), verified exact7412, Windows job113855311634, IN_PROGRESS from14:01UTC. Existing complete static acceptance permits this comparison; dispatch is not gate advancement. A passing comparison cannot erase the separate timeout history. Further failure requires diagnosis in Gate C, not repeated replay, cap inflation or coverage omission. No new full suite or final matrix has started. Later gates, final local stock root plus12chains, evidence reconciliation and independent final acceptance remain pending. **T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 12:23 UTC continuation — reviewed Windows repair in runtime qualification
 
 Gate C remains IN_PROGRESS. Actual Windows first-call diagnostic37912529248/sourceef0 captured the automatic active Job probe timing out at2014ms against its unchanged2000ms bound (ETIMEDOUT/SIGKILL). Both required source files exist. Default backend selection failed before managed Git; cleanup failures are preserved secondary consequences. Independent causal review D:/tmp/t8-sol-final-windows-factory-r4-outcome-review.md SHA25651859cd433e6a4756633ae07afdb9d4add1ee9a22f443a1dc1f379329aa8721b verifies all26 evidence hashes. Compiler-specific blame remains unproven.

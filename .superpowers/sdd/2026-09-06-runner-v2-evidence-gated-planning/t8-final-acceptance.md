@@ -7,6 +7,12 @@ Status: **GATE C IN PROGRESS — final integration held; T8 is not accepted.**
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
 
+## 2026-10-09 14:00 UTC continuation — regression reproduced; Windows remains blocked
+
+Rejected-loader run [37929421746](https://github.com/behzad62/aiboard/actions/runs/37929421746), exact source `c1a4b9d7979fca3a2cdc2a5e4ebb7956da606ab0`, completed44 tests/42 PASS/2 FAIL/0 skipped in1079389.913ms. Intended wrong-return regression is proven by actual exit0/no error/owned `executed` marker. An additional original Windows batch argument semantic probe timed out waiting for terminal output; cause remains unresolved. The complete factory journey and all11 helper lifecycle tests passed. Do not label the whole failed run expected RED or host noise.
+
+Raw evidence: `D:/tmp/t8-sol-final-windows-job-probe-r3-red-37929421746-files.json`; log SHA256 `ff458fccf6035cd01a03d574c1156ed88d91e46c11c885a98f6c72009a3e64b5`. Primary observation `D:/tmp/t8-sol-final-windows-job-probe-r3-red-observation.json` SHA256 `14321b76b0d55d155335dbf37772d4c9ac2e347a8456456a36042f8cbe5e2a91`. Independent actual-outcome review pending. Corrected source7412 differs only in loaderTS; planned complete owning comparison [37941077952](https://github.com/behzad62/aiboard/actions/runs/37941077952), Windows job113855311634, verified7412, is IN_PROGRESS from14:01UTC. Static approval permits comparison, not gate advancement. Gate C remains open. No final matrix/full has started; all later source/package/platform/full/evidence obligations remain. **T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 12:23 UTC continuation — reviewed Windows repair in runtime qualification
 
 Gate C remains IN_PROGRESS. Actual Windows first-call diagnostic37912529248/sourceef0 captured the automatic active Job probe timing out at2014ms against its unchanged2000ms bound (ETIMEDOUT/SIGKILL). Both required source files exist. Default backend selection failed before managed Git; cleanup failures are preserved secondary consequences. Independent causal review D:/tmp/t8-sol-final-windows-factory-r4-outcome-review.md SHA25651859cd433e6a4756633ae07afdb9d4add1ee9a22f443a1dc1f379329aa8721b verifies all26 evidence hashes. Compiler-specific blame remains unproven.
