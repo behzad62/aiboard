@@ -7,6 +7,12 @@ Status: **GATE C IN PROGRESS — final integration held; T8 is not accepted.**
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
 
+## 2026-10-09 14:22 UTC continuation — loader RED→GREEN; recurring batch blocker
+
+[Corrected source7412 run37941077952](https://github.com/behzad62/aiboard/actions/runs/37941077952), Windows job113855311634, completed44 tests/43 PASS/1 FAIL/0 skipped,885437.299ms, actual exit1. Factory, all11 helper tests and exact-loader/preparation/refusal controls pass; intended loader regression is fixed. The original portable batch argument probe again timed out waiting for terminal output. Its cause is unresolved and it directly uses a separate portable backend. **Owning Windows qualification FAILED; Gate C remains open.**
+
+Evidence manifest `D:/tmp/t8-sol-final-windows-job-probe-r3-37941077952-files.json`; raw log SHA256 `82bb9a9622a6356783765dc4f535816dddc568207f09f375f89c54d99f2f581d`. Independent actual review `D:/tmp/t8-sol-final-windows-job-probe-r3-outcome-review.md` SHA256 `2b4d71b5dd88a154b789d247ec8fdcc8cb85d06d6adf713e3e86f63423cd6ecf` verifies3/3 hashes. Nine-file/full runs remain on hold. Muse is preparing only passive test diagnostics and a manual32-root semantic scope; source preservation, static types/review and exact binding must pass before its one diagnostic run. No further whole-factory/44 replay or speculative producer/cap change. A1 retention design is complete but unimplemented and held in its later owning scope. **T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 14:00 UTC continuation — regression reproduced; Windows remains blocked
 
 Rejected-loader run [37929421746](https://github.com/behzad62/aiboard/actions/runs/37929421746), exact source `c1a4b9d7979fca3a2cdc2a5e4ebb7956da606ab0`, completed44 tests/42 PASS/2 FAIL/0 skipped in1079389.913ms. Intended wrong-return regression is proven by actual exit0/no error/owned `executed` marker. An additional original Windows batch argument semantic probe timed out waiting for terminal output; cause remains unresolved. The complete factory journey and all11 helper lifecycle tests passed. Do not label the whole failed run expected RED or host noise.
