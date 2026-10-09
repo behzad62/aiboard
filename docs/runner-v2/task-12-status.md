@@ -4,6 +4,14 @@
 
 Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
+## 2026-10-09 19:40 UTC continuation — actual timeout captured; direct dependency repairs underway
+
+[Run37981145947](https://github.com/behzad62/aiboard/actions/runs/37981145947), sourcef8363d78/job113991685370, completed FAILURE:81/79 PASS/2 FAIL/zero skips/cancellations,75487.2383ms, actual exit1. All13 inspection regressions pass. Thirteen raw files and nine snapshot payloads verify. Observation `D:/tmp/t8-sol-final-windows-phase-diagnostic-r1-observation-37981145947.json`, SHA256 `43f586239137f156fe394abd74122d01e1738a5f1a8dbd51254ae53f5dff9289`; independent outcome review `D:/tmp/t8-sol-final-windows-phase-diagnostic-r1-outcome-review.md`, SHA256 `12a85ba4097de1f98de5c4868ce274a16010280190c8726dac99f80726ff778e`, accepts failed facts only.
+
+The first genuine self-birth query throws ETIMEDOUT after2011ms under its original2000ms watchdog: statusnull/SIGTERM/empty stdout/stderr. The batch reaches script entry394ms after its bootstrap contract, but no later phase is retained. The unobserved interval includes original UTF8/base64 decoding, ConvertFrom-Json and phase publication; exclusive module-autoload blame remains unproved. Pre-force20923ms state remains running/no output; later26067ms exited1 is cleanup. Diagnostic faults are empty, descriptors restored.
+
+Native owners are preparing minimum dependency-removal proposals: direct .NET process birth lookup and direct per-argument UTF8/base64 decoding instead of optional cmdlets. Intended module-autoload-disabled RED/GREEN controls must prove semantics; original caps, exact ownership and refusal behavior remain. Local native controls are serialized. Future owning batch qualification must use the original transparent observer, without phase-script/environment injection. No new CI/full/factory run is active. **Gate C IN_PROGRESS; T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 19:35 UTC continuation — reviewed stage diagnostic dispatched
 
 The two failures from03d223ee remain unresolved. New test-only diagnostics observe stages in the original batch bridge and the original first self-birth query, preserving all81 roots, original assertions, native calls and deadlines. Batch observation deliberately adds inherited preload startup, encoded-script phase writes and bounded I/O; an instrumented pass cannot qualify untouched behavior. Missing pre-force phases remain UNKNOWN. First-query observation preserves synchronous return/throw and records actual error fields; a normal return supplies no raw exit status.
