@@ -224,8 +224,6 @@ jobs:
       matrix:
         os: [windows-latest]
         node-version: [24.x]
-    env:
-      RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT: ${{ runner.temp }}/t8-factory-diagnostic-evidence
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -240,6 +238,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Run Windows factory diagnostic probe (single run)
+        env:
+          RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT: ${{ runner.temp }}/t8-factory-diagnostic-evidence
         run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/openrouter-apply-patch-factory.test.ts
       - name: Upload Windows factory diagnostics
         if: always()
