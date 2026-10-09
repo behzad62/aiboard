@@ -30,6 +30,7 @@ import { buildSourceManifest } from "../src/source-manifest.js";
 import type { ValidationScope } from "../src/validation-scope.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { captureGitBaseline, NativeBuildFactory, runGit } from "./support/git-fixture.js";
+import { qualificationArtifactRoot, writeQualificationDiagnostics } from "./support/qualification-harness.js";
 
 /**
  * T8 G10c native-patch factory proof (CD-7 runtime behavior).
@@ -324,6 +325,336 @@ function safeSegment(value: string): string {
   return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
 }
 
+/**
+ * Windows factory failure observer (diagnostic only, failure path only).
+ *
+ * Narrow bounded capture for an actual construction/cleanup failure. The
+ * successful journey performs no observer I/O. Original error objects are
+ * never mutated; summaries are passive data, never replacement errors. Only
+ * name/message/code/stage/stack/cause/AggregateError.errors are read, with
+ * explicit finite bounds. No live SQLite queries, no process/ownership
+ * control, no env/credential inspection. Passive state copies via the
+ * existing qualification harness are concurrent observations, not coherent
+ * snapshots and not ownership, quiescence, or release proof.
+ */
+const FACTORY_DIAGNOSTIC_SCENARIO = "openrouter-apply-patch-factory";
+const FACTORY_DIAGNOSTIC_ERROR_MAX_DEPTH = 8;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_NODES = 64;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_CHILDREN = 16;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_NAME_CHARS = 200;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_MESSAGE_CHARS = 4000;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_CODE_CHARS = 200;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_STAGE_CHARS = 200;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_STACK_CHARS = 8000;
+const FACTORY_DIAGNOSTIC_ERROR_JSON_BYTE_BUDGET = 131072;
+const FACTORY_DIAGNOSTIC_CAPTURE_NOTE =
+  "Concurrent passive file copies; non-coherent across files; read failures/omissions are diagnostic observations only, not ownership, quiescence, or release proof. State copies only; no live SQLite queries.";
+
+type FactoryDiagnosticTruncation = {
+  kind: "truncated";
+  reason: string;
+  depth: number;
+};
+
+type FactoryDiagnosticErrorNode = {
+  kind: "error" | "non-error";
+  depth: number;
+  name: string;
+  message: string;
+  code?: string;
+  stage?: string;
+  stack?: string;
+  cause?: FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation;
+  errors?: Array<FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation>;
+  truncated: boolean;
+  truncationReasons: string[];
+  readFailures: string[];
+};
+
+type FactoryDiagnosticPayload = {
+  scenario: string;
+  phase: "primary" | "post-close";
+  fixtureRoot: string;
+  boundedPrimary: (FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation) | null;
+  boundedTeardown: Array<FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation>;
+  nodeCount: number;
+  truncated: boolean;
+  truncationReasons: string[];
+  captureNote: string;
+};
+
+function boundFactoryDiagnosticText(value: unknown, maxChars: number): { text: string; truncated: boolean; omitted: boolean } {
+  try {
+    if (typeof value === "string") {
+      if (value.length > maxChars) return { text: value.slice(0, maxChars), truncated: true, omitted: false };
+      return { text: value, truncated: false, omitted: false };
+    }
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      const text = String(value);
+      if (text.length > maxChars) return { text: text.slice(0, maxChars), truncated: true, omitted: false };
+      return { text, truncated: false, omitted: false };
+    }
+    return { text: "", truncated: false, omitted: true };
+  } catch {
+    return { text: "", truncated: false, omitted: true };
+  }
+}
+
+function isFactoryDiagnosticTruncated(node: FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation): boolean {
+  if (node.kind === "truncated") return true;
+  return node.truncated;
+}
+
+function summarizeFactoryDiagnosticError(
+  value: unknown,
+  depth: number,
+  state: { nodes: number; reasons: string[] },
+  seen: Set<object>,
+): FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation {
+  if (depth > FACTORY_DIAGNOSTIC_ERROR_MAX_DEPTH) {
+    state.reasons.push(`depth-budget@${depth}`);
+    return { kind: "truncated", reason: "depth-budget", depth };
+  }
+  if (typeof value === "object" && value !== null) {
+    if (seen.has(value)) {
+      state.reasons.push(`cycle@${depth}`);
+      return { kind: "truncated", reason: "cycle", depth };
+    }
+  }
+  if (state.nodes >= FACTORY_DIAGNOSTIC_ERROR_MAX_NODES) {
+    state.reasons.push(`node-budget@${depth}`);
+    return { kind: "truncated", reason: "node-budget", depth };
+  }
+  state.nodes += 1;
+  if (typeof value === "object" && value !== null) seen.add(value);
+  if (!(value instanceof Error)) {
+    let text = "";
+    let truncated = false;
+    let stringifyFailed = false;
+    try {
+      const raw = String(value);
+      if (raw.length > FACTORY_DIAGNOSTIC_ERROR_MAX_MESSAGE_CHARS) {
+        text = raw.slice(0, FACTORY_DIAGNOSTIC_ERROR_MAX_MESSAGE_CHARS);
+        truncated = true;
+      } else {
+        text = raw;
+      }
+    } catch {
+      stringifyFailed = true;
+    }
+    const truncationReasons: string[] = [];
+    if (truncated) truncationReasons.push("message-budget");
+    if (stringifyFailed) truncationReasons.push("stringify-failed");
+    return {
+      kind: "non-error",
+      depth,
+      name: "non-error",
+      message: text,
+      truncated: truncated || stringifyFailed,
+      truncationReasons,
+      readFailures: stringifyFailed ? ["non-error-stringify-failed"] : [],
+    };
+  }
+  const truncationReasons: string[] = [];
+  const readFailures: string[] = [];
+  const readField = (field: string): { present: boolean; value: unknown; failed: boolean } => {
+    try {
+      const raw = (value as unknown as Record<string, unknown>)[field];
+      if (raw === undefined || raw === null) return { present: false, value: raw, failed: false };
+      return { present: true, value: raw, failed: false };
+    } catch {
+      return { present: false, value: undefined, failed: true };
+    }
+  };
+  const nameField = readField("name");
+  const messageField = readField("message");
+  const codeField = readField("code");
+  const stageField = readField("stage");
+  const stackField = readField("stack");
+  if (nameField.failed) readFailures.push("name-read-failed");
+  if (messageField.failed) readFailures.push("message-read-failed");
+  if (codeField.failed) readFailures.push("code-read-failed");
+  if (stageField.failed) readFailures.push("stage-read-failed");
+  if (stackField.failed) readFailures.push("stack-read-failed");
+  let name = value instanceof AggregateError ? "AggregateError" : "Error";
+  if (nameField.present) {
+    const bound = boundFactoryDiagnosticText(nameField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_NAME_CHARS);
+    if (!bound.omitted) {
+      name = bound.text;
+      if (bound.truncated) truncationReasons.push("name-budget");
+    } else {
+      readFailures.push("name-omitted-non-scalar");
+    }
+  }
+  let message = "";
+  if (messageField.present) {
+    const bound = boundFactoryDiagnosticText(messageField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_MESSAGE_CHARS);
+    if (!bound.omitted) {
+      message = bound.text;
+      if (bound.truncated) truncationReasons.push("message-budget");
+    } else {
+      readFailures.push("message-omitted-non-scalar");
+    }
+  }
+  let code: string | undefined;
+  if (codeField.present) {
+    const bound = boundFactoryDiagnosticText(codeField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_CODE_CHARS);
+    if (!bound.omitted) {
+      code = bound.text;
+      if (bound.truncated) truncationReasons.push("code-budget");
+    } else {
+      readFailures.push("code-omitted-non-scalar");
+    }
+  }
+  let stage: string | undefined;
+  if (stageField.present) {
+    const bound = boundFactoryDiagnosticText(stageField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_STAGE_CHARS);
+    if (!bound.omitted) {
+      stage = bound.text;
+      if (bound.truncated) truncationReasons.push("stage-budget");
+    } else {
+      readFailures.push("stage-omitted-non-scalar");
+    }
+  }
+  let stack: string | undefined;
+  if (stackField.present) {
+    const bound = boundFactoryDiagnosticText(stackField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_STACK_CHARS);
+    if (!bound.omitted) {
+      stack = bound.text;
+      if (bound.truncated) truncationReasons.push("stack-budget");
+    } else {
+      readFailures.push("stack-omitted-non-scalar");
+    }
+  }
+  let cause: (FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation) | undefined;
+  const causeField = readField("cause");
+  if (causeField.failed) {
+    readFailures.push("cause-read-failed");
+  } else if (causeField.present) {
+    cause = summarizeFactoryDiagnosticError(causeField.value, depth + 1, state, seen);
+  }
+  let errors: Array<FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation> | undefined;
+  if (value instanceof AggregateError) {
+    const errorsField = readField("errors");
+    if (errorsField.failed) {
+      readFailures.push("errors-read-failed");
+    } else if (errorsField.present) {
+      const raw = errorsField.value;
+      if (Array.isArray(raw)) {
+        const kept = raw.slice(0, FACTORY_DIAGNOSTIC_ERROR_MAX_CHILDREN);
+        if (raw.length > kept.length) truncationReasons.push(`children-budget:kept=${kept.length}/total=${raw.length}`);
+        errors = kept.map((entry) => summarizeFactoryDiagnosticError(entry, depth + 1, state, seen));
+      } else {
+        readFailures.push("errors-omitted-non-array");
+      }
+    }
+  }
+  const childTruncated = (cause !== undefined && isFactoryDiagnosticTruncated(cause))
+    || (errors !== undefined && errors.some((entry) => isFactoryDiagnosticTruncated(entry)));
+  if (childTruncated) truncationReasons.push("child-truncated");
+  const truncated = truncationReasons.length > 0 || readFailures.length > 0;
+  const node: FactoryDiagnosticErrorNode = {
+    kind: "error",
+    depth,
+    name,
+    message,
+    truncated,
+    truncationReasons,
+    readFailures,
+  };
+  if (code !== undefined) node.code = code;
+  if (stage !== undefined) node.stage = stage;
+  if (stack !== undefined) node.stack = stack;
+  if (cause !== undefined) node.cause = cause;
+  if (errors !== undefined) node.errors = errors;
+  return node;
+}
+
+function buildFactoryDiagnosticPayload(input: {
+  phase: "primary" | "post-close";
+  fixtureRoot: string;
+  primary: unknown;
+  hasPrimary: boolean;
+  teardownErrors: readonly unknown[];
+}): FactoryDiagnosticPayload {
+  const state = { nodes: 0, reasons: [] as string[] };
+  const seen = new Set<object>();
+  let boundedPrimary: (FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation) | null = null;
+  if (input.hasPrimary) {
+    boundedPrimary = summarizeFactoryDiagnosticError(input.primary, 0, state, seen);
+  }
+  const keptTeardown = input.teardownErrors.slice(0, FACTORY_DIAGNOSTIC_ERROR_MAX_CHILDREN);
+  if (input.teardownErrors.length > keptTeardown.length) {
+    state.reasons.push(`teardown-budget:kept=${keptTeardown.length}/total=${input.teardownErrors.length}`);
+  }
+  const boundedTeardown = keptTeardown.map((entry) => summarizeFactoryDiagnosticError(entry, 0, state, seen));
+  const primaryTruncated = boundedPrimary !== null && isFactoryDiagnosticTruncated(boundedPrimary);
+  const teardownTruncated = boundedTeardown.some((entry) => isFactoryDiagnosticTruncated(entry));
+  const truncated = state.reasons.length > 0 || primaryTruncated || teardownTruncated;
+  return {
+    scenario: FACTORY_DIAGNOSTIC_SCENARIO,
+    phase: input.phase,
+    fixtureRoot: input.fixtureRoot,
+    boundedPrimary,
+    boundedTeardown,
+    nodeCount: state.nodes,
+    truncated,
+    truncationReasons: [...state.reasons],
+    captureNote: FACTORY_DIAGNOSTIC_CAPTURE_NOTE,
+  };
+}
+
+function stripFactoryDiagnosticStacks(payload: FactoryDiagnosticPayload): FactoryDiagnosticPayload {
+  const stripNode = (
+    node: FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation,
+  ): FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation => {
+    if (node.kind === "truncated") return node;
+    const copy: FactoryDiagnosticErrorNode = {
+      ...node,
+      truncationReasons: [...node.truncationReasons],
+      readFailures: [...node.readFailures],
+    };
+    if (copy.stack !== undefined) {
+      copy.stack = undefined;
+      copy.truncated = true;
+      if (!copy.truncationReasons.includes("byte-budget-stack-omitted")) copy.truncationReasons.push("byte-budget-stack-omitted");
+    }
+    if (copy.cause !== undefined) copy.cause = stripNode(copy.cause);
+    if (copy.errors !== undefined) copy.errors = copy.errors.map((entry) => stripNode(entry));
+    return copy;
+  };
+  return {
+    ...payload,
+    truncationReasons: [...payload.truncationReasons],
+    boundedPrimary: payload.boundedPrimary === null ? null : stripNode(payload.boundedPrimary),
+    boundedTeardown: payload.boundedTeardown.map((entry) => stripNode(entry)),
+  };
+}
+
+function toBoundedFactoryDiagnosticJson(payload: FactoryDiagnosticPayload): string {
+  const first = JSON.stringify(payload);
+  if (Buffer.byteLength(first, "utf8") <= FACTORY_DIAGNOSTIC_ERROR_JSON_BYTE_BUDGET) return first;
+  const stripped = stripFactoryDiagnosticStacks(payload);
+  stripped.truncated = true;
+  if (!stripped.truncationReasons.includes("byte-budget-stacks-omitted")) {
+    stripped.truncationReasons.push("byte-budget-stacks-omitted");
+  }
+  const second = JSON.stringify(stripped);
+  if (Buffer.byteLength(second, "utf8") <= FACTORY_DIAGNOSTIC_ERROR_JSON_BYTE_BUDGET) return second;
+  const minimal = {
+    scenario: payload.scenario,
+    phase: payload.phase,
+    fixtureRoot: payload.fixtureRoot,
+    nodeCount: payload.nodeCount,
+    truncated: true,
+    truncationReasons: [...payload.truncationReasons, "byte-budget-minimal"],
+    captureNote: payload.captureNote,
+  };
+  const third = JSON.stringify(minimal);
+  if (Buffer.byteLength(third, "utf8") <= FACTORY_DIAGNOSTIC_ERROR_JSON_BYTE_BUDGET) return third;
+  return JSON.stringify({ scenario: payload.scenario, phase: payload.phase, truncated: true });
+}
+
 test("native patch factory applies refused then normal V4A patches through the worker broker", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-factory-")));
   const project = join(root, "project");
@@ -376,6 +707,8 @@ test("native patch factory applies refused then normal V4A patches through the w
   let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
   let primary: unknown;
   let hasPrimary = false;
+  let diagnosticEvidenceRoot: string | undefined;
+  const diagnosticFailures: unknown[] = [];
   try {
     const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: RUN_ID });
     const integritySeeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
@@ -491,6 +824,40 @@ test("native patch factory applies refused then normal V4A patches through the w
   } catch (error) {
     primary = error;
     hasPrimary = true;
+    try {
+      if (diagnosticEvidenceRoot === undefined) {
+        diagnosticEvidenceRoot = qualificationArtifactRoot();
+      }
+      const payload = buildFactoryDiagnosticPayload({
+        phase: "primary",
+        fixtureRoot: root,
+        primary,
+        hasPrimary: true,
+        teardownErrors: [],
+      });
+      process.stderr.write(`${toBoundedFactoryDiagnosticJson(payload)}\n`);
+      writeQualificationDiagnostics({
+        evidenceRoot: diagnosticEvidenceRoot,
+        scenario: FACTORY_DIAGNOSTIC_SCENARIO,
+        fixtureRoots: [root],
+        error,
+        extra: {
+          phase: "primary",
+          boundedPrimary: payload.boundedPrimary,
+          nodeCount: payload.nodeCount,
+          truncated: payload.truncated,
+          truncationReasons: payload.truncationReasons,
+          captureNote: payload.captureNote,
+        },
+      });
+    } catch (captureError) {
+      diagnosticFailures.push(captureError);
+      try {
+        process.stderr.write("[factory-diagnostic] primary capture failed; primary preserved.\n");
+      } catch {
+        // stderr is best-effort; the original primary is still preserved below.
+      }
+    }
     throw error;
   } finally {
     const teardownErrors: unknown[] = [];
@@ -518,19 +885,71 @@ test("native patch factory applies refused then normal V4A patches through the w
       }
     }
     if (teardownErrors.length > 0) {
+      try {
+        if (diagnosticEvidenceRoot === undefined) {
+          diagnosticEvidenceRoot = qualificationArtifactRoot();
+        }
+        const payload = buildFactoryDiagnosticPayload({
+          phase: "post-close",
+          fixtureRoot: root,
+          primary,
+          hasPrimary,
+          teardownErrors,
+        });
+        process.stderr.write(`${toBoundedFactoryDiagnosticJson(payload)}\n`);
+        writeQualificationDiagnostics({
+          evidenceRoot: diagnosticEvidenceRoot,
+          scenario: FACTORY_DIAGNOSTIC_SCENARIO,
+          fixtureRoots: [root],
+          error: hasPrimary ? primary : teardownErrors[0],
+          extra: {
+            phase: "post-close",
+            boundedPrimary: payload.boundedPrimary,
+            boundedTeardown: payload.boundedTeardown,
+            nodeCount: payload.nodeCount,
+            truncated: payload.truncated,
+            truncationReasons: payload.truncationReasons,
+            captureNote: payload.captureNote,
+          },
+        });
+      } catch (captureError) {
+        diagnosticFailures.push(captureError);
+        try {
+          process.stderr.write("[factory-diagnostic] post-close capture failed; primary/closure errors preserved.\n");
+        } catch {
+          // stderr is best-effort; original errors are still preserved below.
+        }
+      }
+    }
+    const diagnosticSuffix = diagnosticFailures.length > 0
+      ? ` Diagnostic capture reported ${diagnosticFailures.length} failure(s); primary/closure errors preserved.`
+      : "";
+    if (teardownErrors.length > 0) {
       if (hasPrimary) {
         throw new AggregateError(
-          [primary, ...teardownErrors],
+          [primary, ...teardownErrors, ...diagnosticFailures],
           resourceClosersSucceeded
-            ? `Native patch factory journey failed and teardown also failed during owned root removal; primary error preserved. owned root removal failed; location may be partially removed: ${root}`
-            : `Native patch factory journey failed and teardown also failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}`,
+            ? `Native patch factory journey failed and teardown also failed during owned root removal; primary error preserved. owned root removal failed; location may be partially removed: ${root}${diagnosticSuffix}`
+            : `Native patch factory journey failed and teardown also failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}${diagnosticSuffix}`,
         );
       }
       throw new AggregateError(
-        teardownErrors,
+        [...teardownErrors, ...diagnosticFailures],
         resourceClosersSucceeded
-          ? `Native patch factory teardown failed during owned root removal. owned root removal failed; location may be partially removed: ${root}`
-          : `Native patch factory teardown failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}`,
+          ? `Native patch factory teardown failed during owned root removal. owned root removal failed; location may be partially removed: ${root}${diagnosticSuffix}`
+          : `Native patch factory teardown failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}${diagnosticSuffix}`,
+      );
+    }
+    if (diagnosticFailures.length > 0 && hasPrimary) {
+      throw new AggregateError(
+        [primary, ...diagnosticFailures],
+        `Native patch factory journey failed; diagnostic capture also failed. Primary error preserved.${diagnosticSuffix} Fixture root: ${root}`,
+      );
+    }
+    if (diagnosticFailures.length > 0) {
+      throw new AggregateError(
+        [...diagnosticFailures],
+        `Native patch factory diagnostic capture failed without a primary/closure failure.${diagnosticSuffix} Fixture root: ${root}`,
       );
     }
   }
