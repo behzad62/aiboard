@@ -3,7 +3,7 @@ import { preserveUtf8Bom } from "./encoding-safety.js";
 import { createHash } from "node:crypto";
 import { fencedWrite, fencedPatch, fencedMove, fencedDelete, filesystemMutationFailure,
   FilesystemMutationError, isFilesystemMutation } from "./filesystem-mutation-fence.js";
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
@@ -105,6 +105,9 @@ export function createFilesystemTools(
       execute: async (input, context) => {
         const path = toolPath(context, input.path as string);
         if (matchesPolicyPath(context, path, options.hiddenPaths)) {
+          return hiddenPathError(context, path);
+        }
+        if (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths)) {
           return hiddenPathError(context, path);
         }
         const bytes = await readFile(path);
@@ -227,6 +230,9 @@ export function createFilesystemTools(
         if (matchesPolicyPath(context, path, options.hiddenPaths)) {
           return hiddenPathError(context, path);
         }
+        if (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths)) {
+          return hiddenPathError(context, path);
+        }
         const details = await lstat(path);
         return {
           content: [
@@ -275,9 +281,9 @@ export function createFilesystemTools(
             return true;
           }, context.signal);
         }
-        const visibleEntries = entries.filter(
-          (entry) => !matchesNormalizedPolicyPath(entry.path, options.hiddenPaths)
-        );
+        const visibleEntries = hasPolicyPaths(options.hiddenPaths)
+          ? await filterHiddenListEntries(context, entries, options.hiddenPaths)
+          : entries;
         visibleEntries.sort((left, right) => left.path.localeCompare(right.path));
         return { content: [json({ entries: visibleEntries, truncated: entries.length >= maxEntries })], isError: false };
       },
@@ -304,9 +310,14 @@ export function createFilesystemTools(
           return error("invalid_pattern", cause instanceof Error ? cause.message : "Invalid pattern.");
         }
         const matches: Array<{ path: string; line: number; column: number; text: string }> = [];
+        let searchWorkspaceCanonical: string | null | undefined;
+        if (hasPolicyPaths(options.hiddenPaths) && context.workspacePath) {
+          searchWorkspaceCanonical = await canonicalOrNull(context.workspacePath);
+        }
         const searchFile = async (path: string): Promise<boolean> => {
           if (matches.length >= limit) return false;
           if (matchesPolicyPath(context, path, options.hiddenPaths)) return true;
+          if (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths, searchWorkspaceCanonical)) return true;
           const bytes = await readFile(path);
           if (!isUtf8Text(bytes)) return true;
           const lines = decodeText(bytes).split(/\r?\n/);
@@ -371,6 +382,9 @@ export function createFilesystemTools(
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, path, options.protectedPaths)) {
+            return protectedPathError(context, path);
+          }
           const bytes = fencedWrite(context, path, (original) => preserveUtf8Bom(original, Buffer.from(input.content as string)),
             input.expectedSha256, input.createDirectories === true);
           return await successRevision(context, path, bytes, options.diagnostics);
@@ -389,6 +403,9 @@ export function createFilesystemTools(
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
+            return protectedPathError(context, path);
+          }
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
           const next = fencedPatch(context, path, input.expectedSha256, (bytes) => {
@@ -443,6 +460,12 @@ export function createFilesystemTools(
           if (matchesPolicyPath(context, destination, options.protectedPaths)) {
             return protectedPathError(context, destination);
           }
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, source, options.protectedPaths)) {
+            return protectedPathError(context, source);
+          }
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, destination, options.protectedPaths)) {
+            return protectedPathError(context, destination);
+          }
           fencedMove(context, source, destination, input.createDirectories === true);
           return {
             content: [json({ source: displayPath(context, source), destination: displayPath(context, destination) })],
@@ -462,6 +485,9 @@ export function createFilesystemTools(
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
+            return protectedPathError(context, path);
+          }
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
           fencedDelete(context, path, input.recursive === true);
@@ -811,6 +837,65 @@ function matchesPolicyPath(
   policyPaths: readonly string[] | undefined,
 ): boolean {
   return matchesNormalizedPolicyPath(displayPath(context, path), policyPaths);
+}
+
+// Canonical target check for existing objects only. Lexical matching stays
+// first; this reuses it on the workspace-canonical display path so exact,
+// basename, and nested scopes are preserved. Missing (ENOENT) returns false
+// to keep missing/new-target behavior; other inspection failures throw.
+async function matchesCanonicalPolicyTarget(
+  context: ToolExecutionContext,
+  absolutePath: string,
+  policyPaths: readonly string[] | undefined,
+  workspaceCanonical?: string | null,
+): Promise<boolean> {
+  if (!hasPolicyPaths(policyPaths)) return false;
+  if (!context.workspacePath) return false;
+  const canonicalRoot = workspaceCanonical !== undefined
+    ? workspaceCanonical
+    : await canonicalOrNull(context.workspacePath);
+  if (canonicalRoot === null) return false;
+  const canonicalTargetPath = await canonicalOrNull(absolutePath);
+  if (canonicalTargetPath === null) return false;
+  if (!isWithin(canonicalRoot, canonicalTargetPath)) return false;
+  const canonicalDisplay = (relative(canonicalRoot, canonicalTargetPath) || ".").split(sep).join("/");
+  return matchesNormalizedPolicyPath(canonicalDisplay, policyPaths);
+}
+
+async function canonicalOrNull(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function hasPolicyPaths(policyPaths: readonly string[] | undefined): boolean {
+  return !!policyPaths && policyPaths.length > 0;
+}
+
+async function filterHiddenListEntries(
+  context: ToolExecutionContext,
+  entries: Array<{ path: string; type: string }>,
+  hiddenPaths: readonly string[] | undefined,
+): Promise<Array<{ path: string; type: string }>> {
+  if (!hasPolicyPaths(hiddenPaths)) return entries;
+  if (!context.workspacePath) {
+    return entries.filter((entry) => !matchesNormalizedPolicyPath(entry.path, hiddenPaths));
+  }
+  const canonicalRoot = await canonicalOrNull(context.workspacePath);
+  if (canonicalRoot === null) {
+    return entries.filter((entry) => !matchesNormalizedPolicyPath(entry.path, hiddenPaths));
+  }
+  const visible: Array<{ path: string; type: string }> = [];
+  for (const entry of entries) {
+    if (matchesNormalizedPolicyPath(entry.path, hiddenPaths)) continue;
+    const absolute = resolve(context.workspacePath, entry.path);
+    if (await matchesCanonicalPolicyTarget(context, absolute, hiddenPaths, canonicalRoot)) continue;
+    visible.push(entry);
+  }
+  return visible;
 }
 
 function hiddenPathError(
