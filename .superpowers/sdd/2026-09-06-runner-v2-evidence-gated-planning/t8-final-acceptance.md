@@ -7,6 +7,12 @@ Status: **GATE C IN PROGRESS — final integration held; T8 is not accepted.**
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
 
+## 2026-10-09 14:43 UTC continuation — native diagnostic dispatched
+
+Human-authorized native sub-agent fallback now owns the unresolved batch blocker. Final passive test-only diagnostic preserves32 roots/144 assertions and original caps; actual overlay types passes643 roots/zero diagnostics. Independent static ACCEPT `D:/tmp/t8-sol-final-windows-batch-repair-r2-review.md` SHA256 `f88994266161195a3e0f2e8e25ac9f2abbe88b3c8f5f5076f16d7fb5706eeccb` permits one diagnostic, not a producer fix or owning qualification. Original loader RED→GREEN remains proved; batch cause remains UNKNOWN.
+
+[Diagnostic37946288131](https://github.com/behzad62/aiboard/actions/runs/37946288131), verified source `82561e7c66051620fb15d5fc4aff44dba6fd7925`/parent7412, sole Windows job113873277524, is IN_PROGRESS. Exact construction/push/dispatch actual0; local1cc851d/index/old63 frozen inputs unchanged. Source-pinned collector `D:/tmp/t8-sol-final-windows-batch-repair-r2-collect.cjs` must retain actual completion and observations for native producer repair and independent outcome review. No broader nine-file/full or factory replay is active. **Gate C IN_PROGRESS; T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 14:22 UTC continuation — loader RED→GREEN; recurring batch blocker
 
 [Corrected source7412 run37941077952](https://github.com/behzad62/aiboard/actions/runs/37941077952), Windows job113855311634, completed44 tests/43 PASS/1 FAIL/0 skipped,885437.299ms, actual exit1. Factory, all11 helper tests and exact-loader/preparation/refusal controls pass; intended loader regression is fixed. The original portable batch argument probe again timed out waiting for terminal output. Its cause is unresolved and it directly uses a separate portable backend. **Owning Windows qualification FAILED; Gate C remains open.**
