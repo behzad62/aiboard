@@ -7,6 +7,12 @@ Status: **GATE C IN PROGRESS — final integration held; T8 is not accepted.**
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
 
+## 2026-10-09 19:35 UTC continuation — bounded stage/query diagnostic
+
+Batch phase mechanics7/7 and synchronous first-birth observer mechanics11/11 pass without real native calls; all81 original roots/assertions/deadlines remain. Combined no-emit passes647 roots/17 overlays/zero diagnostics, actual0. Independent exact four-path review `D:/tmp/t8-sol-final-windows-phase-diagnostic-r1-review.md`, SHA256 `c573d7b3aaf4f3ed9b6e81abf772a3feb6debd08efaae9dddbaae6b9c4bba42f`, accepts one diagnostic only. Batch environment/encoded-script/startup/I/O perturbation is disclosed; missing pre-force phases remain UNKNOWN and an instrumented pass cannot qualify untouched behavior.
+
+[Run37981145947](https://github.com/behzad62/aiboard/actions/runs/37981145947), source `f8363d78bb627c1b5be833912b22c9e0f4df94a0`/parent03d223ee/job113991685370, is IN_PROGRESS. Source-pinned `D:/tmp/t8-sol-final-windows-phase-diagnostic-r1-collect.cjs` and `-observe.cjs` retain the actual result once complete. Construction/push/dispatch succeeded while localcdeab620/index/all63 historical frozen inputs remained unchanged. Two owning failures remain unresolved; broader coverage/full/factory are held. **Gate C IN_PROGRESS; T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 17:53 UTC continuation — actual79/81; remaining readiness and batch failures
 
 [Focused run37968086843](https://github.com/behzad62/aiboard/actions/runs/37968086843), exact03d223ee, failed81/79 PASS/2 FAIL/zero skips,60222.6993ms, true exit1. New13 regressions PASS; original lock35/36 and semantic31/32. All3 Job positives have real status0 at1206/335/333ms, expected tamper/missing refusals status1; no observer fault/restorationloss. Legacy migration fails first self-birth readiness2102ms with native cause unobserved; batch remains running/no output before original force and times out25.344s. Long reconciliation gaps are reduced, without establishing the batch cause. Later exited1 is post-force cleanup.

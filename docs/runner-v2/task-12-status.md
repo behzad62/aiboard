@@ -4,6 +4,14 @@
 
 Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
+## 2026-10-09 19:35 UTC continuation — reviewed stage diagnostic dispatched
+
+The two failures from03d223ee remain unresolved. New test-only diagnostics observe stages in the original batch bridge and the original first self-birth query, preserving all81 roots, original assertions, native calls and deadlines. Batch observation deliberately adds inherited preload startup, encoded-script phase writes and bounded I/O; an instrumented pass cannot qualify untouched behavior. Missing pre-force phases remain UNKNOWN. First-query observation preserves synchronous return/throw and records actual error fields; a normal return supplies no raw exit status.
+
+Source-extracted batch mechanics pass7/7 and birth mechanics11/11 without real native probes. Fresh combined no-emit passes647 roots/17 TS overlays/zero diagnostics in10984ms, actual0. Independent review `D:/tmp/t8-sol-final-windows-phase-diagnostic-r1-review.md`, SHA256 `c573d7b3aaf4f3ed9b6e81abf772a3feb6debd08efaae9dddbaae6b9c4bba42f`, accepts exact four test/support paths and one complete81-test diagnostic only. Final source/tooling/proposal hashes are bound; object-only construction verifies full normalized Git blobs, clean localcdeab620/index and all63 historical frozen inputs unchanged.
+
+[Run37981145947](https://github.com/behzad62/aiboard/actions/runs/37981145947), exact source `f8363d78bb627c1b5be833912b22c9e0f4df94a0`/parent03d223ee, sole Windows job113991685370, is IN_PROGRESS. On completion collect once with `node D:/tmp/t8-sol-final-windows-phase-diagnostic-r1-collect.cjs 37981145947`, then decode with the matching `-observe.cjs` and same run ID. Independent actual-outcome review precedes any producer correction. Local implementation remains unapplied. Nine-file/full/factory replay and later gates remain held. **Gate C IN_PROGRESS; T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 17:53 UTC continuation — contention proof passes; two Windows failures remain
 
 [Run37968086843](https://github.com/behzad62/aiboard/actions/runs/37968086843), exact03d223ee/job113947424438, completed FAILURE:81 tests/79 PASS/2 FAIL/zero skips/cancellations,60222.6993ms, actual exit1. All13 new inspection regressions pass; original lock file35/36, semantic file31/32. Collector retains11 hash-verified files and one artifact; seven captured payloads also verify. Primary observation `D:/tmp/t8-sol-final-windows-native-repair-observation.json`, SHA256 `4a0f1d6af7145853de3428d9fb5a00fda6e20233575e9e1502c45e0eee9de675`. Independent actual review `D:/tmp/t8-sol-final-windows-native-repair-outcome-review.md`, SHA256 `1a00d36b9da29ae148ce656d69bf9d86fa2095d624e9ff1a71ff0e36cc36c93f`, accepts observations only; owning qualification remains FAILED.
