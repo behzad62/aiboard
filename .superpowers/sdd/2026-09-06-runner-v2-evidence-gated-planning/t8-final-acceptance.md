@@ -3,9 +3,23 @@
 Date: 2026-10-07
 Branch: `codex/p66-t8`
 Base: accepted T10 `51bf0da7395148e0c82be8e8c7aab22c7c312a17`
-Status: **FROZEN FOR LAYER 4 - T8 is not accepted until the exact frozen candidate passes the required final gates.**
+Status: **GATE C IN PROGRESS — final integration held; T8 is not accepted.**
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
+
+## 2026-10-09 09:40 UTC continuation — Windows first-probe diagnostic
+
+Gate C remains IN_PROGRESS. Completed Windows diagnostic [37908059607](https://github.com/behzad62/aiboard/actions/runs/37908059607), source ec2f8140, failed before its first managed Git launch: integration_workspace initialization -> backend_unavailable. Three captured invocations require process_group and no extra capabilities; all remain launch_not_proven. Automatic Job certification did not yield a verified backend. Its first underlying probe result was discarded, so timeout, missing source files and host noise remain unproven. Cleanup errors are retained secondary consequences. Independent cause review D:/tmp/t8-sol-final-windows-factory-cause-review.md SHA256 c6598a9044b571c29cde88cbe833dcdf38afe23cc86fb80a76f16725b1034705 verifies all26 evidence files and preserves this limit.
+
+Muse Contributor/max added only a manual, transparent test observer of the first actual spawnSync/execFileSync calls: same receiver/arguments/result/error, 64 bounded scalar records, no raw environment/arguments/output, no extra probe, retry, fake fact or timeout change. R4 places installation inside the original cleanup guard; every original assertion,40-step bound, resource closer and root-retention condition remains. Independent complete static review ACCEPT D:/tmp/t8-sol-final-windows-factory-r4-review.md SHA256 a8a9499131eb8d3be5848b436b435bec92531da4da2e44c227d1e4c1524983b8. Primary AST preservation and actual no-emit candidate overlay typecheck pass; neither is Windows runtime qualification.
+
+External object-only construction, push and dispatch completed with local clean502e43f0, real index and all63 old frozen inputs unchanged. [Current single Windows diagnostic37912529248](https://github.com/behzad62/aiboard/actions/runs/37912529248), source ef0e2fe70f9f1d2adf0b16af6852ce4d94a71610, job113760840514, is IN_PROGRESS. Download actual completion with D:/tmp/t8-sol-final-windows-factory-r4-collect.cjs before classifying its first Job result. This diagnostic cannot replace the complete Windows nine-file gate/types/chat. No production repair is inferred yet; reviewed portability production artifacts remain unapplied locally.
+
+Independent coverage inventory corrects the earlier83 count: current90 root consumers, projected92 after the two new tests; the exact stock local root run includes all92 plus all12 chained scripts, avoiding a duplicate importer bundle. Affected Playwright specs and nested hosted recovery remain separate obligations. Map D:/tmp/t8-sol-final-git-helper-coverage-review.md SHA256 758a06b518a82c14edffd08f052ff724919cdfc7a2d0835a012ca7502c3c3d62. Final counts must be recomputed after actual source reconciliation.
+
+One finite external capture preflight passed:20.0686594seconds, six heartbeats,79 exact UTF8 bytes, genuine child exit/close7 and no capture errors. Independent outcome D:/tmp/t8-sol-capture-preflight-outcome-review.md SHA256 642f38e0d12b9ada5465ee3a3b89e4333abeb2d75ec1381d883481cec58484e7. It proves the tested ordinary launching-shell completion boundary only; usage/app-interruption survival remains unproven. Original rejected launch and unclassified earlier inventory check are preserved. Final capture tooling is being prepared externally; it is unexecuted and requires fresh final-source guards/review before the expensive stock run. The old61 run stays INTERRUPTED/INCOMPLETE, with no actual exit and released edit freeze; never relabel it a pass.
+
+Current gate: C, Windows default backend certification diagnosis. D/E/F final current-candidate obligations remain; G integration is held. Required final shipping archives, three-host matrix/OCI, local full plus12chains, A1/source/context/token/snapshot/resource reconciliation and independent final review remain pending. **T8 NOT ACCEPTED; REL-1 NOT STARTED.** Main/merge/deployment unchanged. Live checkpoint: D:/tmp/t8-sol-live-checkpoint.md.
 
 ## 2026-10-09 08:57 UTC continuation — interrupted full, Windows diagnosis pending
 
