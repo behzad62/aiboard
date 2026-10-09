@@ -7,6 +7,12 @@ Status: **GATE C IN PROGRESS — final integration held; T8 is not accepted.**
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
 
+## 2026-10-09 17:42 UTC continuation — native repair in focused qualification
+
+Reviewed six-file candidate releases the fence writer transaction during host inspection and freshly revalidates exact identities/schema/deadline before stale election. Final intended RED proves SQLite lock contention;13 new regressions and36 original lock tests PASS. Only contender fixture genuine identity setup precedes its unchanged200ms election window. Passive Job observation preserves all32 roots/144 assertions and adds no native call/cap change;11 mechanical controls PASS. Combined types actual0/645 roots/15 overlays/zero diagnostics. Independent review SHA256 `933645f4650a7b0f7a144f34760ea29006d1e2c865a7cde59caba2ecf17b81a6`, `D:/tmp/t8-sol-final-windows-native-repair-review.md`, accepts exact construction and one runtime check, not owning Gate C or hosted cause.
+
+[Run37968086843](https://github.com/behzad62/aiboard/actions/runs/37968086843), exact source `03d223eed8cf60bfe6b6a7dc54f7ab8a7a231e06`/parent82561, sole Windows job113947424438, is IN_PROGRESS. Complete three owning files expect81 roots. Collect once with `D:/tmp/t8-sol-final-windows-native-repair-collect.cjs` and classify actual batch/Job observations independently. Local implementation remains unapplied;63 historical freeze inputs unchanged. Current Linux/macOS affected ownership proof remains required. No nine-file/full/factory replay. **Gate C IN_PROGRESS; T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 14:51 UTC continuation — actual diagnostic failed; native producer repair underway
 
 [Diagnostic37946288131](https://github.com/behzad62/aiboard/actions/runs/37946288131), source82561e7c/job113873277524, completed32/28 PASS/4 FAIL/zero skips,80842.7847ms, actual exit1. Five retained files and seven captured payload hashes verified. Manifest `D:/tmp/t8-sol-final-windows-batch-repair-r2-37946288131-files.json`; primary observation `D:/tmp/t8-sol-final-windows-batch-repair-r2-observation.json`, SHA256 `f7278fccefbe91ccf3fc22f78cbe2a1c7e5f5d1f99d32d5b971dbdda6379555b`.
