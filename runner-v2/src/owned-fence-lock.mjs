@@ -514,6 +514,7 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
 
 function tryClaim(context) {
   const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, inspectHolder } = context;
+  let observedHolder;
   try {
     database.exec("BEGIN IMMEDIATE");
   } catch (error) {
@@ -522,6 +523,7 @@ function tryClaim(context) {
   }
   try {
     assertCoordinationPathIdentity(path, pathIdentity);
+    assertCanonicalProtocolSchema(database, "current");
     assertActiveProtocol(database, authorityId);
     const row = database.prepare(`
       SELECT h.acquisition_id AS acquisitionId, h.holder_pid AS holderPid,
@@ -544,10 +546,56 @@ function tryClaim(context) {
       database.exec("COMMIT");
       return true;
     }
-    const inspection = inspectHolder(Number(row.holderPid), String(row.holderBirth));
-    if (inspection === "same") { database.exec("ROLLBACK"); return false; }
-    if (inspection !== "absent" && inspection !== "birth_mismatch")
-      throw new OwnedFenceLockUnavailableError("Owned fence holder inspection is unavailable or uncertain.");
+    observedHolder = row;
+    // Host birth inspection may launch a slow native tool. Do not retain the
+    // SQLite writer transaction while the exact holder needs it to finalize.
+    database.exec("ROLLBACK");
+  } catch (error) {
+    rollbackQuietly(database);
+    throw error;
+  }
+  const inspection = inspectHolder(Number(observedHolder.holderPid), String(observedHolder.holderBirth));
+  if (inspection === "same") return false;
+  if (inspection !== "absent" && inspection !== "birth_mismatch")
+    throw new OwnedFenceLockUnavailableError("Owned fence holder inspection is unavailable or uncertain.");
+  if (Date.now() >= context.deadline) return false;
+  try {
+    database.exec("BEGIN IMMEDIATE");
+  } catch (error) {
+    if (isBusy(error)) return false;
+    throw error;
+  }
+  try {
+    assertCoordinationPathIdentity(path, pathIdentity);
+    assertCanonicalProtocolSchema(database, "current");
+    assertActiveProtocol(database, authorityId);
+    const proposal = database.prepare("SELECT holder_pid AS holderPid, holder_birth AS holderBirth FROM owned_fence_acquisition WHERE acquisition_id = ?").get(acquisitionId);
+    if (!proposal || Number(proposal.holderPid) !== holderPid || proposal.holderBirth !== holderBirth)
+      throw new OwnedFenceLockUnavailableError("Owned fence contender acquisition identity changed during inspection.");
+    const row = database.prepare(`
+      SELECT h.acquisition_id AS acquisitionId, h.holder_pid AS holderPid,
+             h.holder_birth AS holderBirth, a.holder_pid AS proposalPid,
+             a.holder_birth AS proposalBirth
+      FROM owned_fence_holder h
+      LEFT JOIN owned_fence_acquisition a ON a.acquisition_id = h.acquisition_id
+      WHERE h.lock_key = 'owned'
+    `).get();
+    if (Date.now() >= context.deadline) { database.exec("ROLLBACK"); return false; }
+    if (!row) {
+      insertHolder(database, acquisitionId, holderPid, holderBirth);
+      assertCoordinationPathIdentity(path, pathIdentity);
+      database.exec("COMMIT");
+      return true;
+    }
+    if (!validHolderRow(row))
+      throw new OwnedFenceLockUnavailableError("Owned fence holder metadata is corrupt or incomplete.");
+    if (row.acquisitionId !== observedHolder.acquisitionId ||
+        Number(row.holderPid) !== Number(observedHolder.holderPid) || row.holderBirth !== observedHolder.holderBirth) {
+      database.exec("ROLLBACK");
+      return false;
+    }
+    // Absence/reuse evidence belongs only to the exact acquisition inspected.
+    // A replacement is retried with its own inspection, never the old proof.
     const update = database.prepare(`
       UPDATE owned_fence_holder
       SET acquisition_id = ?, holder_pid = ?, holder_birth = ?
@@ -1054,6 +1102,8 @@ function defaultInspectHolder(pid, birth) {
 function inspectProcessBirth(pid) {
   try {
     if (process.platform === "win32") {
+      try { process.kill(pid, 0); }
+      catch (error) { return error?.code === "ESRCH" ? { state: "absent" } : { state: "unknown" }; }
       const output = execFileSync("powershell.exe", [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
         `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`,

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { withWindowsSemanticProbeObserver } from "./support/windows-semantic-probe-observer.js";
+import { withWindowsJobProbeObserver } from "./support/windows-job-probe-observer.js";
 
 import {
   probeProcessHostSemantics,
@@ -187,13 +188,15 @@ test("a hung optional active Job probe is killed without blocking verified porta
 
 test("the healthy active Job probe still verifies real create-and-close semantics", async (t) => {
   if (process.platform !== "win32") { t.skip("The active Job fixture requires Windows."); return; }
-  const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-healthy-"));
-  try {
-    const host = createWindowsJobProcessHost({ stateDirectory });
-    assert.equal(await host.probeActiveJobCreateClose(), true);
-  } finally {
-    rmSync(stateDirectory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+  await withWindowsJobProbeObserver("healthy-active-job", async () => {
+    const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-healthy-"));
+    try {
+      const host = createWindowsJobProcessHost({ stateDirectory });
+      assert.equal(await host.probeActiveJobCreateClose(), true);
+    } finally {
+      rmSync(stateDirectory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    }
+  });
 });
 
 test("live Windows construction consumes semantic facts and keeps portable fallback after active Job failure", () => {
@@ -857,108 +860,112 @@ test("concrete Windows Job host rejects launch before spawning off Windows", asy
 
 test("default active Job probe verifies via the prepared helper within its native-call bound", async (t) => {
   if (process.platform !== "win32") { t.skip("The prepared-helper probe fixture requires Windows."); return; }
-  const helper = await ensureJobHostHelperAssembly();
-  assert.ok(helper, "healthy Windows host must prepare the precompiled Job-host helper");
-  assert.match(helper.sha256, /^[a-f0-9]{64}$/i);
-  assert.equal(existsSync(helper.path), true);
-  assert.ok(statSync(helper.path).size > 0);
-  const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-prepared-"));
-  try {
-    const host = createWindowsJobProcessHost({ stateDirectory });
-    const startedAt = Date.now();
-    const verified = await host.probeActiveJobCreateClose();
-    const elapsedMs = Date.now() - startedAt;
-    assert.equal(verified, true, "prepared helper plus real native create/close must verify");
-    assert.ok(elapsedMs < 10_000, `cached-helper probe must settle within its native-call bound plus host overhead, observed ${elapsedMs}ms`);
-  } finally {
-    rmSync(stateDirectory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+  await withWindowsJobProbeObserver("prepared-active-job", async () => {
+    const helper = await ensureJobHostHelperAssembly();
+    assert.ok(helper, "healthy Windows host must prepare the precompiled Job-host helper");
+    assert.match(helper.sha256, /^[a-f0-9]{64}$/i);
+    assert.equal(existsSync(helper.path), true);
+    assert.ok(statSync(helper.path).size > 0);
+    const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-prepared-"));
+    try {
+      const host = createWindowsJobProcessHost({ stateDirectory });
+      const startedAt = Date.now();
+      const verified = await host.probeActiveJobCreateClose();
+      const elapsedMs = Date.now() - startedAt;
+      assert.equal(verified, true, "prepared helper plus real native create/close must verify");
+      assert.ok(elapsedMs < 10_000, `cached-helper probe must settle within its native-call bound plus host overhead, observed ${elapsedMs}ms`);
+    } finally {
+      rmSync(stateDirectory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    }
+  });
 });
 
 test("tampered or missing helper bytes fail the default probe closed without recompile or fallback", { timeout: 30_000 }, async (t) => {
   if (process.platform !== "win32") { t.skip("The helper-tamper probe fixture requires Windows."); return; }
-  const helper = await ensureJobHostHelperAssembly();
-  assert.ok(helper, "healthy Windows host must prepare the precompiled Job-host helper");
-  const originalBytes = readFileSync(helper.path);
-  assert.ok(originalBytes.byteLength > 0);
-  const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-tamper-"));
-  let bodyError: unknown = undefined;
-  let hasBodyError = false;
-  let restoreError: unknown = undefined;
-  let hasRestoreError = false;
-  let restoreVerified = false;
-  let cleanupError: unknown = undefined;
-  let hasCleanupError = false;
-  try {
-    const host = createWindowsJobProcessHost({ stateDirectory });
-    const tampered = Buffer.from(originalBytes);
-    tampered[Math.floor(tampered.byteLength / 2)] ^= 0xFF;
-    writeFileSync(helper.path, tampered);
-    const tamperStart = Date.now();
-    const tamperedResult = await host.probeActiveJobCreateClose();
-    const tamperElapsed = Date.now() - tamperStart;
-    assert.equal(tamperedResult, false, "digest-mismatched helper bytes must never verify");
-    assert.ok(tamperElapsed < 10_000, `tampered probe must fail closed within its bound, observed ${tamperElapsed}ms`);
-    writeFileSync(helper.path, originalBytes);
-    assert.deepEqual(readFileSync(helper.path), originalBytes, "tampered helper restoration must restore exact original bytes");
-    rmSync(helper.path, { force: true });
-    const missingStart = Date.now();
-    const missingResult = await host.probeActiveJobCreateClose();
-    const missingElapsed = Date.now() - missingStart;
-    assert.equal(missingResult, false, "missing helper file must never verify");
-    assert.ok(missingElapsed < 10_000, `missing-file probe must fail closed within its bound, observed ${missingElapsed}ms`);
-    writeFileSync(helper.path, originalBytes);
-    assert.deepEqual(readFileSync(helper.path), originalBytes, "missing helper restoration must restore exact original bytes");
-    const pinned = await ensureJobHostHelperAssembly();
-    assert.deepEqual(pinned, helper, "failing probes must not recompile or re-pin the helper");
-    assert.equal(await host.probeActiveJobCreateClose(), true, "restored helper must verify again");
-  } catch (error) {
-    bodyError = error;
-    hasBodyError = true;
-  }
-  try {
-    let current: Buffer | null = null;
-    let missing = false;
+  await withWindowsJobProbeObserver("restored-active-job", async () => {
+    const helper = await ensureJobHostHelperAssembly();
+    assert.ok(helper, "healthy Windows host must prepare the precompiled Job-host helper");
+    const originalBytes = readFileSync(helper.path);
+    assert.ok(originalBytes.byteLength > 0);
+    const stateDirectory = mkdtempSync(join(tmpdir(), "aiboard-windows-job-probe-tamper-"));
+    let bodyError: unknown = undefined;
+    let hasBodyError = false;
+    let restoreError: unknown = undefined;
+    let hasRestoreError = false;
+    let restoreVerified = false;
+    let cleanupError: unknown = undefined;
+    let hasCleanupError = false;
     try {
-      current = readFileSync(helper.path);
-    } catch {
-      missing = true;
-    }
-    if (!missing && current !== null && Buffer.compare(current, originalBytes) === 0) {
-      restoreVerified = true;
-    } else {
+      const host = createWindowsJobProcessHost({ stateDirectory });
+      const tampered = Buffer.from(originalBytes);
+      tampered[Math.floor(tampered.byteLength / 2)] ^= 0xFF;
+      writeFileSync(helper.path, tampered);
+      const tamperStart = Date.now();
+      const tamperedResult = await host.probeActiveJobCreateClose();
+      const tamperElapsed = Date.now() - tamperStart;
+      assert.equal(tamperedResult, false, "digest-mismatched helper bytes must never verify");
+      assert.ok(tamperElapsed < 10_000, `tampered probe must fail closed within its bound, observed ${tamperElapsed}ms`);
       writeFileSync(helper.path, originalBytes);
-      assert.deepEqual(readFileSync(helper.path), originalBytes, "final helper restoration must restore exact original bytes");
-      restoreVerified = true;
-    }
-  } catch (error) {
-    restoreError = error;
-    hasRestoreError = true;
-    restoreVerified = false;
-  }
-  if (restoreVerified) {
-    try {
-      rmSync(stateDirectory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+      assert.deepEqual(readFileSync(helper.path), originalBytes, "tampered helper restoration must restore exact original bytes");
+      rmSync(helper.path, { force: true });
+      const missingStart = Date.now();
+      const missingResult = await host.probeActiveJobCreateClose();
+      const missingElapsed = Date.now() - missingStart;
+      assert.equal(missingResult, false, "missing helper file must never verify");
+      assert.ok(missingElapsed < 10_000, `missing-file probe must fail closed within its bound, observed ${missingElapsed}ms`);
+      writeFileSync(helper.path, originalBytes);
+      assert.deepEqual(readFileSync(helper.path), originalBytes, "missing helper restoration must restore exact original bytes");
+      const pinned = await ensureJobHostHelperAssembly();
+      assert.deepEqual(pinned, helper, "failing probes must not recompile or re-pin the helper");
+      assert.equal(await host.probeActiveJobCreateClose(), true, "restored helper must verify again");
     } catch (error) {
-      cleanupError = error;
-      hasCleanupError = true;
+      bodyError = error;
+      hasBodyError = true;
     }
-  }
-  if (hasBodyError || hasRestoreError || hasCleanupError) {
-    const errors: unknown[] = [];
-    if (hasBodyError) errors.push(bodyError);
-    if (hasRestoreError) errors.push(restoreError);
-    if (hasCleanupError) errors.push(cleanupError);
-    if (errors.length === 1) throw errors[0];
-    throw new AggregateError(errors, hasBodyError && hasRestoreError
-      ? `Tamper probe body failed and helper restoration also failed; primary error preserved. Retained owned root for diagnosis: ${stateDirectory}`
-      : hasRestoreError
-        ? `Tamper probe helper restoration failed; owned root retained for diagnosis: ${stateDirectory}`
-        : `Tamper probe body failed and owned cleanup also failed; primary error preserved.`);
-  }
-  if (!restoreVerified) {
-    throw new Error(`Tamper probe helper restoration unverified; retained owned root for diagnosis: ${stateDirectory}`);
-  }
+    try {
+      let current: Buffer | null = null;
+      let missing = false;
+      try {
+        current = readFileSync(helper.path);
+      } catch {
+        missing = true;
+      }
+      if (!missing && current !== null && Buffer.compare(current, originalBytes) === 0) {
+        restoreVerified = true;
+      } else {
+        writeFileSync(helper.path, originalBytes);
+        assert.deepEqual(readFileSync(helper.path), originalBytes, "final helper restoration must restore exact original bytes");
+        restoreVerified = true;
+      }
+    } catch (error) {
+      restoreError = error;
+      hasRestoreError = true;
+      restoreVerified = false;
+    }
+    if (restoreVerified) {
+      try {
+        rmSync(stateDirectory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+      } catch (error) {
+        cleanupError = error;
+        hasCleanupError = true;
+      }
+    }
+    if (hasBodyError || hasRestoreError || hasCleanupError) {
+      const errors: unknown[] = [];
+      if (hasBodyError) errors.push(bodyError);
+      if (hasRestoreError) errors.push(restoreError);
+      if (hasCleanupError) errors.push(cleanupError);
+      if (errors.length === 1) throw errors[0];
+      throw new AggregateError(errors, hasBodyError && hasRestoreError
+        ? `Tamper probe body failed and helper restoration also failed; primary error preserved. Retained owned root for diagnosis: ${stateDirectory}`
+        : hasRestoreError
+          ? `Tamper probe helper restoration failed; owned root retained for diagnosis: ${stateDirectory}`
+          : `Tamper probe body failed and owned cleanup also failed; primary error preserved.`);
+    }
+    if (!restoreVerified) {
+      throw new Error(`Tamper probe helper restoration unverified; retained owned root for diagnosis: ${stateDirectory}`);
+    }
+  });
 });
 
 function escapeCSharpVerbatimPath(path: string): string {

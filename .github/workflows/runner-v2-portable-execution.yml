@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       qualification-scope:
-        description: 'Bounded diagnostic scope. t8-portable-coverage runs only the T8 affected portable job plus scoped probe steps; suppressed jobs are UNQUALIFIED (not PASS) and this probe cannot qualify T8. full preserves full 13-job acceptance. windows-factory-diagnostic runs only the Windows factory probe; it cannot qualify T8, Win123, types/chat, shipping, or full. windows-semantic-diagnostic runs only the complete Windows semantic test file with passive evidence; it cannot qualify T8 or full.'
+        description: 'Bounded diagnostic scope. t8-portable-coverage runs only the T8 affected portable job plus scoped probe steps; suppressed jobs are UNQUALIFIED (not PASS) and this probe cannot qualify T8. full preserves full 13-job acceptance. windows-factory-diagnostic runs only the Windows factory probe; it cannot qualify T8, Win123, types/chat, shipping, or full. windows-semantic-diagnostic runs the complete Windows semantic and owned-fence files with passive evidence; it cannot qualify T8 or full.'
         required: false
         default: full
         type: choice
@@ -279,7 +279,7 @@ jobs:
         env:
           RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT: ${{ runner.temp }}/t8-semantic-diagnostic-evidence
           RUNNER_V2_SEMANTIC_PROBE_OBSERVER: '1'
-        run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/process-host-semantic-probes.test.ts
+        run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/process-host-semantic-probes.test.ts runner-v2/test/owned-fence-lock.test.ts runner-v2/test/owned-fence-lock-inspection.test.ts
       - name: Upload Windows semantic diagnostics
         if: always()
         uses: actions/upload-artifact@v4
