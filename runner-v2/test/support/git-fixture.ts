@@ -15,8 +15,8 @@ import type { OneShotCommandExecutor } from "../../src/one-shot-command-executor
 import type { PermissionProfile } from "../../src/contracts.js";
 
 export async function runGitBytes(options: GitCommandOptions): Promise<GitBinaryCommandResult> {
-  const cwd = realpathSync(resolve(options.cwd));
-  const inside = relative(realpathSync(tmpdir()), cwd);
+  const cwd = realpathSync.native(resolve(options.cwd));
+  const inside = relative(realpathSync.native(tmpdir()), cwd);
   if (!isAbsolute(options.cwd) || inside === ".." || inside.startsWith("..\\") || inside.startsWith("../") || isAbsolute(inside))
     throw new Error("Fixture Git may operate only in its explicit temporary repository.");
   const env: NodeJS.ProcessEnv = {};
