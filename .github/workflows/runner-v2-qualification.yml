@@ -1,7 +1,21 @@
 name: Runner V2 hosted qualification
 
+# UNAPPLIED diagnostic-probe candidate (no acceptance/REL1).
+# Default/scheduled/labeled runs retain exact existing 11-job coverage.
+# workflow_dispatch with qualification-scope=windows-portable-channel runs only
+# windows-portable-channel for focused RED classification; all other jobs are suppressed.
+# Probe mode cannot qualify skipped jobs or T8 acceptance.
 on:
   workflow_dispatch:
+    inputs:
+      qualification-scope:
+        description: 'Diagnostic probe only. full retains all jobs; windows-portable-channel runs only the Windows channel and cannot qualify skipped jobs or T8 acceptance.'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - windows-portable-channel
   schedule:
     - cron: '17 2 * * *'
   pull_request:
@@ -16,7 +30,7 @@ env:
 jobs:
   native-lifecycle:
     name: Native lifecycle qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'windows-portable-channel')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -52,7 +66,7 @@ jobs:
 
   cli-readiness:
     name: CLI readiness qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'windows-portable-channel')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -88,7 +102,7 @@ jobs:
 
   recovery:
     name: Recovery qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'windows-portable-channel')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -159,7 +173,7 @@ jobs:
 
   docker-oci-integration:
     name: Docker OCI qualification (Linux, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'windows-portable-channel')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
