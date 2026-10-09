@@ -4,6 +4,14 @@
 
 Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
+## 2026-10-09 14:51 UTC continuation — captured batch execution stall; native repair underway
+
+[Focused diagnostic37946288131](https://github.com/behzad62/aiboard/actions/runs/37946288131), exact source82561e7c/Windows job113873277524, completed FAILURE:32 tests/28 PASS/4 FAIL/zero skips/cancellations,80842.7847ms, actual exit1. Collection retained five hash-verified files and one artifact; primary decoded and hash-verified all seven captured file payloads. Evidence: `D:/tmp/t8-sol-final-windows-batch-repair-r2-37946288131-files.json`; primary observation `D:/tmp/t8-sol-final-windows-batch-repair-r2-observation.json`, SHA256 `f7278fccefbe91ccf3fc22f78cbe2a1c7e5f5d1f99d32d5b971dbdda6379555b`.
+
+All three natural batch reconciles returned running with zero output callbacks. Before the original cleanup force, owned state remained running/revision13/errornull, child-status started, stdout/stderr spools empty and checkpoint offsets zero;12 tree refreshes recorded no failures. The snapshot follows detach and is non-atomic. These facts narrow diagnosis to pre-output execution, without identifying a root cause or authorizing any new process control. Observer faults are empty;5/5 descriptors restored. Human-authorized native implementer `review_pending_fixtures` owns bounded external bridge reproduction and the evidenced minimum producer fix/regression; independent actual-outcome review is underway.
+
+The other three actual failures are healthy/default/restored-helper positive Job probes returning false. Their underlying native status/error was not captured. Previous7412 loader controls passed, but that historical proof does not resolve current recurrence. `review_bounded_inspection` separately diagnoses these failures; no timeout/noise attribution is accepted. Independent actual-outcome review `D:/tmp/t8-sol-final-windows-batch-repair-r2-outcome-review.md`, SHA256 `e0ba6330a5eb1a32da80cf43131a4e70633c8a10bc8cf313a419eae46485555c`, accepts retained observations only, verifying5/5 files and7/7 payloads. All four failures remain owning Gate C obligations. Broader nine-file/full/factory replay remains held. Source application, later gates and final acceptance remain pending. **Gate C IN_PROGRESS; T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 14:43 UTC continuation — native sub-agent owns recurring batch blocker
 
 The human authorized a native sub-agent fallback for unresolved Muse repairs. Existing `review_pending_fixtures` now implements the recurring Windows batch blocker directly, superseding the earlier Muse-only restriction for that work. The pending Muse diagnostic was interrupted through its owned session; actual tool exit1 and a prompt-specific process inventory found no remaining writer or candidate files. The proven loader fix is retained. The separate batch timeout remains UNKNOWN and Gate C remains open.

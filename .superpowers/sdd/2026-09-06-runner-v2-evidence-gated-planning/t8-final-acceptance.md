@@ -7,6 +7,12 @@ Status: **GATE C IN PROGRESS — final integration held; T8 is not accepted.**
 
 This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
 
+## 2026-10-09 14:51 UTC continuation — actual diagnostic failed; native producer repair underway
+
+[Diagnostic37946288131](https://github.com/behzad62/aiboard/actions/runs/37946288131), source82561e7c/job113873277524, completed32/28 PASS/4 FAIL/zero skips,80842.7847ms, actual exit1. Five retained files and seven captured payload hashes verified. Manifest `D:/tmp/t8-sol-final-windows-batch-repair-r2-37946288131-files.json`; primary observation `D:/tmp/t8-sol-final-windows-batch-repair-r2-observation.json`, SHA256 `f7278fccefbe91ccf3fc22f78cbe2a1c7e5f5d1f99d32d5b971dbdda6379555b`.
+
+Batch natural reconciles and pre-original-force state remain running, with no callbacks, empty spools and zero checkpoint offsets; snapshot is after detach/non-atomic. No diagnostic fault,5/5 descriptors restored. Native implementer owns bounded local bridge reproduction and minimum evidenced fix/regression. Three healthy/default/restored Job-probe positives also failed and are separately under diagnosis, with actual native cause unobserved. Independent actual-outcome review `D:/tmp/t8-sol-final-windows-batch-repair-r2-outcome-review.md`, SHA256 `e0ba6330a5eb1a32da80cf43131a4e70633c8a10bc8cf313a419eae46485555c`, verifies5/5 files and7/7 payloads and accepts bounded observations only. No broader nine-file/full/factory replay; all four failures remain Gate C obligations. **T8 NOT ACCEPTED; REL-1 NOT STARTED.**
+
 ## 2026-10-09 14:43 UTC continuation — native diagnostic dispatched
 
 Human-authorized native sub-agent fallback now owns the unresolved batch blocker. Final passive test-only diagnostic preserves32 roots/144 assertions and original caps; actual overlay types passes643 roots/zero diagnostics. Independent static ACCEPT `D:/tmp/t8-sol-final-windows-batch-repair-r2-review.md` SHA256 `f88994266161195a3e0f2e8e25ac9f2abbe88b3c8f5f5076f16d7fb5706eeccb` permits one diagnostic, not a producer fix or owning qualification. Original loader RED→GREEN remains proved; batch cause remains UNKNOWN.
