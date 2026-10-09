@@ -11,6 +11,8 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { withWindowsFenceBirthObserver } from "./support/windows-fence-birth-observer.js";
+
 import { inspectGenericPosixProcessBirth, isOwnedFenceLockContention, OwnedFenceContentionError, OwnedFenceLockUnavailableError, recoverRevokedOwnedFenceLock, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
 
 const fixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url));
@@ -68,6 +70,7 @@ test("current holder birth retries after a transient self-inspection failure ins
 });
 
 test("a single-link legacy coordination database migrates to immutable exact-path authority", () => {
+  return withWindowsFenceBirthObserver(() => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-legacy-authority-"));
   const lockPath = join(root, "effect.sqlite");
   try {
@@ -93,6 +96,7 @@ test("a single-link legacy coordination database migrates to immutable exact-pat
     assert.equal(triggers.has("owned_fence_authority_delete_immutable"), true);
     migrated.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });
 
 test("non-empty legacy coordination remains unbound when its original hard-link name disappears", () => {
