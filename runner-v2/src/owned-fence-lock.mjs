@@ -1106,7 +1106,7 @@ function inspectProcessBirth(pid) {
       catch (error) { return error?.code === "ESRCH" ? { state: "absent" } : { state: "unknown" }; }
       const output = execFileSync("powershell.exe", [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-        `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`,
+        `$ErrorActionPreference='Stop';$p=[System.Diagnostics.Process]::GetProcessById(${pid});try{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}finally{$p.Dispose()}`,
       ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
       if (output === "ABSENT") return { state: "absent" };
       if (output.startsWith("PRESENT:") && output.length > 8) return { state: "same", fingerprint: normalizeBirth(output.slice(8)) };

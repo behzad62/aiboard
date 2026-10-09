@@ -5,7 +5,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type { BackpressuredInteractiveProcessChannelProvider } from "../../src/interactive-process-channel.js";
 import { parseProcessLaunchResult, parseProcessReconciliation, type ProcessLaunchRequest } from "../../src/process-backend.js";
@@ -122,7 +121,6 @@ async function observe(action: () => Promise<void>): Promise<void> {
     const launch = prototype.launch;
     const reconcile = prototype.reconcile;
     const signal = prototype.signal;
-    const release = prototype.release;
     const channelProvider = prototype.backpressuredChannelProvider;
     patch(prototype, "launch", function (this: WindowsProcessBackend, request: ProcessLaunchRequest) {
       const root = batchFixtureRoot(request);
@@ -130,18 +128,7 @@ async function observe(action: () => Promise<void>): Promise<void> {
       const deadline = Reflect.get(this, "startupDeadlineAt") as unknown;
       const context: Batch = { root, ...(typeof deadline === "number" ? { deadline } : {}) };
       batches.set(this, context); batch = context;
-      const preload = fileURLToPath(new URL("./windows-batch-bridge-preload.cjs", import.meta.url));
-      if (/["\r\n\0]/.test(preload) || Object.keys(request.environment).some((key) => key.toLowerCase() === "node_options"))
-        throw new Error("Semantic phase observer refused an unsafe or preexisting Node preload.");
-      const preloadStat = lstatSync(preload);
-      if (!preloadStat.isFile() || preloadStat.isSymbolicLink() || preloadStat.nlink !== 1)
-        throw new Error("Semantic phase observer refused an indirect preload.");
-      // Enabled diagnostic only: original argv/intent/fence remain, while the
-      // actual child environment adds this inherited test-only preload.
-      const observedRequest = { ...request, environment: {
-        ...request.environment, NODE_OPTIONS: `--require "${preload.replace(/\\/g, "/")}"`,
-      } };
-      return watch("launch", context, () => launch.call(this, observedRequest), (value) => {
+      return watch("launch", context, () => launch.call(this, request), (value) => {
         const accepted = parseProcessLaunchResult(value);
         const identity = JSON.parse(Buffer.from(accepted.opaqueIdentity, "base64url").toString("utf8")) as { directory?: unknown; nonce?: unknown; supervisorPid?: unknown; supervisorBirth?: unknown };
         if (typeof identity.directory !== "string" || !samePath(dirname(identity.directory), join(root, "state")) ||
@@ -201,20 +188,6 @@ async function observe(action: () => Promise<void>): Promise<void> {
       }
       return watch("signal", context, () => signal.apply(this, args), () => ({ forwarded: true }));
     });
-    patch(prototype, "release", function (this: WindowsProcessBackend, ...args: Parameters<WindowsProcessBackend["release"]>) {
-      const context = batches.get(this);
-      if (context && context.identity === args[0].opaqueIdentity && !captureAttempted) {
-        captureAttempted = true;
-        guard(() => {
-          snapshot = {
-            phase: "before forwarding the first existing natural release, before fixture deletion",
-            atomic: false, captureStartMs: now(), lastNaturalReconcile: context.lastReconcile,
-            countersBeforeCapture: counters(), ...captureOwnedState(context, faults, true), captureEndMs: now(),
-          };
-        });
-      }
-      return release.apply(this, args);
-    });
     await action();
   } catch (error) { primary = error; failed = true; }
   finally {
@@ -235,9 +208,6 @@ async function observe(action: () => Promise<void>): Promise<void> {
           "Snapshot is non-atomic and follows detach; pending ACK work may have progressed before the existing force signal.",
           "No extra process inspection, reconciliation, subscription, control, retry or deadline extension.",
           "No snapshot on a healthy case is not universal release proof. No environment or encoded launch payload is captured.",
-          "Enabled phases add an inherited NODE_OPTIONS preload and modify the one real PowerShell encoded argument with fixed .NET CreateNew phase writes.",
-          "Phase I/O and preload startup perturb scheduling; this diagnostic cannot qualify the untouched batch behavior.",
-          "Missing phases remain unknown; captured writer faults or a missing valid contract fail the diagnostic while original cleanup still runs.",
         ],
       }, null, 2) + "\n");
       if (report.byteLength > MAX_ARTIFACT_BYTES) throw new Error("Semantic observer report exceeded its fixed byte limit.");
@@ -258,7 +228,7 @@ function batchFixtureRoot(request: ProcessLaunchRequest): string | undefined {
     samePath(dirname(root), tmpdir()) ? root : undefined;
 }
 
-function captureOwnedState(batch: Batch, faults: unknown[], naturalRelease = false): Fact {
+function captureOwnedState(batch: Batch, faults: unknown[]): Fact {
   if (!batch.directory) throw new Error("Semantic observer has no accepted owned directory.");
   const canonicalTemp = realpathSync(tmpdir());
   const expectedRoot = join(canonicalTemp, basename(batch.root));
@@ -273,7 +243,6 @@ function captureOwnedState(batch: Batch, faults: unknown[], naturalRelease = fal
   let channelEntries = 0;
   let entriesTruncated = false;
   const files: Fact[] = [];
-  const capturedPhaseFiles = new Set<string>();
   const read = (relative: string) => {
     let fd: number | undefined;
     const at = Date.now();
@@ -282,8 +251,6 @@ function captureOwnedState(batch: Batch, faults: unknown[], naturalRelease = fal
       const stat = lstatSync(path);
       if (stat.isSymbolicLink() || !stat.isFile() || !samePath(realpathSync(path), path))
         throw new Error("Semantic observer refused an indirect evidence file.");
-      if (relative.startsWith("bridge-") && stat.nlink !== 1)
-        throw new Error("Semantic phase observer refused a linked phase file.");
       if (bytesRead >= MAX_READ_BYTES) { files.push({ path: relative, skipped: "byte_budget", at }); return; }
       fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       const opened = fstatSync(fd);
@@ -298,47 +265,12 @@ function captureOwnedState(batch: Batch, faults: unknown[], naturalRelease = fal
         truncated: opened.size > count, capturedBytesSha256: createHash("sha256").update(bytes).digest("hex"),
         capturedBytesBase64: bytes.toString("base64"),
       });
-      if (relative === "bridge-observation-contract.json") {
-        const contract = JSON.parse(bytes.toString("utf8")) as { protocol?: unknown; nonce?: unknown };
-        const identity = JSON.parse(Buffer.from(batch.identity!, "base64url").toString("utf8")) as { nonce?: unknown };
-        if (opened.nlink !== 1 || opened.size > count || contract.protocol !== "aiboard-test-windows-batch-bridge/v1" ||
-            contract.nonce !== identity.nonce) throw new Error("Semantic phase observer rejected its mandatory bootstrap contract.");
-      }
-      if (relative === "bridge-observation-result.json") {
-        const result = JSON.parse(bytes.toString("utf8")) as { nonce?: unknown; diagnosticFaultOccurred?: unknown; exitedAt?: unknown };
-        const identity = JSON.parse(Buffer.from(batch.identity!, "base64url").toString("utf8")) as { nonce?: unknown };
-        if (opened.nlink !== 1 || opened.size > count || result.nonce !== identity.nonce ||
-            result.diagnosticFaultOccurred !== false || typeof result.exitedAt !== "string")
-          throw new Error("Semantic phase observer retained an invalid or faulted exit observation.");
-      }
-      const phaseMatch = /^bridge-phase-([1-5])\.txt$/.exec(relative);
-      if (phaseMatch) {
-        const expected = ["script_entered", "json_ready", "args_ready", "before_invoke", "after_invoke"][Number(phaseMatch[1]) - 1];
-        if (opened.nlink !== 1 || opened.size > count || !new RegExp(`^${expected}\\|[0-9T:.Z-]+\\|[1-9][0-9]*$`).test(bytes.toString("utf8")))
-          throw new Error("Semantic phase observer retained an invalid phase observation.");
-      }
-      if (relative === "bridge-observation-fault.json" || /^bridge-phase-[1-5]\.fault\.txt$/.test(relative))
-        throw new Error("Semantic phase observer retained an instrumentation writer fault: " + relative);
-      if (relative.startsWith("bridge-")) capturedPhaseFiles.add(relative);
     } catch (error) {
       files.push({ path: relative, at, error: errorFact(error) });
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") faults.push(error);
-      else if (relative === "bridge-observation-contract.json") faults.push(new Error("Semantic phase observer contract is missing; bootstrap activation is unproven."));
     } finally { if (fd !== undefined) { try { closeSync(fd); } catch (error) { faults.push(error); } } }
   };
   for (const name of ["state.json", "child-status.json", "fence.json", "lock-holder.json", "stdout.log", "stderr.log"]) read(name);
-  // Retained before first natural force/release. Fixed count; these share the
-  // original total32KiB read bound and4096-byte per-file prefix limit.
-  for (const name of ["bridge-observation-contract.json", "bridge-observation-result.json", "bridge-observation-fault.json"])
-    read(name);
-  for (let index = 1; index <= 5; index++) {
-    read(`bridge-phase-${index}.txt`);
-    read(`bridge-phase-${index}.fault.txt`);
-  }
-  if (naturalRelease) {
-    for (const name of ["bridge-observation-contract.json", "bridge-observation-result.json", ...Array.from({ length: 5 }, (_, index) => `bridge-phase-${index + 1}.txt`)])
-      if (!capturedPhaseFiles.has(name)) faults.push(new Error("Semantic phase observer cannot prove a complete diagnostic on natural release: " + name));
-  }
   try {
     const channel = join(batch.directory, "channel");
     if (lstatSync(channel).isSymbolicLink() || !samePath(realpathSync(channel), channel))

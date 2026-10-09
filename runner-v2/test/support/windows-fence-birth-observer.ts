@@ -18,7 +18,7 @@ export function withWindowsFenceBirthObserver<T>(action: () => T): T {
 
 function observe<T>(action: () => T): T {
   const startedAt = Date.now();
-  const command = `$ErrorActionPreference='Stop';$p=Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`;
+  const command = `$ErrorActionPreference='Stop';$p=[System.Diagnostics.Process]::GetProcessById(${process.pid});try{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}finally{$p.Dispose()}`;
   const commandSha256 = createHash("sha256").update(command).digest("hex");
   const calls: Fact[] = [];
   const faults: unknown[] = [];

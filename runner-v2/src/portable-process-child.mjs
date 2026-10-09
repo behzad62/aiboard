@@ -225,8 +225,9 @@ function resolveWindowsArgvLaunch(command, args, cwd, environment) {
   const systemRoot = environment.SystemRoot ?? environment.SYSTEMROOT;
   const powershell = systemRoot ? join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "";
   if (!powershell || !existsSync(powershell)) throw new Error("Windows PowerShell is required for argv-only batch launch.");
-  const payload = Buffer.from(JSON.stringify({ command: resolved, args })).toString("base64");
-  const script = `$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))|ConvertFrom-Json;$a=@($p.args|ForEach-Object{[string]$_});& ([string]$p.command) @a;if($null-eq$LASTEXITCODE){exit 0}else{exit $LASTEXITCODE}`;
+  // Base64 values are comma-free; decode with a shared loop without loading PowerShell modules.
+  const payload = [resolved, ...args].map((value) => Buffer.from(value, "utf8").toString("base64")).join(",");
+  const script = `$v=@('${payload}'.Split(','));$c=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($v[0]));$a=[string[]]::new($v.Length-1);for($i=1;$i-lt$v.Length;$i++){$a[$i-1]=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($v[$i]))};& $c @a;if($null-eq$LASTEXITCODE){exit 0}else{exit $LASTEXITCODE}`;
   return { executable: powershell, arguments: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")] };
 }
 
