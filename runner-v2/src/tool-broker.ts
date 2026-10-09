@@ -1,7 +1,7 @@
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import { lstat, realpath } from "node:fs/promises";
 import { authorizeFilesystemMutation, captureFilesystemMutation, filesystemMutationFailure,
-  isFilesystemMutation, filesystemMutationWorkspace } from "./filesystem-mutation-fence.js";
+  isFilesystemMutation, filesystemMutationWorkspace, isOpenRouterApplyPatch } from "./filesystem-mutation-fence.js";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
@@ -20,6 +20,7 @@ import type {
 } from "./agent-contracts.js";
 import type { PermissionProfile } from "./contracts.js";
 import {
+  ExecutionGrantError,
   createExecutionGrantAuthority,
   type ExecutionGrantAuthority,
   type OpaqueExecutionGrant,
@@ -155,6 +156,11 @@ export class ToolBroker implements AgentToolRuntime {
         `Extension ${extensionId} cannot register protected lifecycle tool ${tool.definition.name}.`,
       );
     }
+    if (isOpenRouterApplyPatch(tool.definition.name)) {
+      throw new Error(
+        `Extension ${extensionId} cannot register reserved native tool ${tool.definition.name}.`,
+      );
+    }
     this.registerAttributed(tool, extensionId);
   }
 
@@ -168,7 +174,7 @@ export class ToolBroker implements AgentToolRuntime {
       execute: async (input, context) => {
         try { return await this.executeAuthorized(tool, input as TInput, context, extensionId); }
         catch (error) {
-          const refusal = isFilesystemMutation(tool.definition.name) && filesystemMutationFailure(error, this.workspacePath);
+          const refusal = (isFilesystemMutation(tool.definition.name) || isOpenRouterApplyPatch(tool.definition.name)) && filesystemMutationFailure(error, this.workspacePath);
           if (refusal) return refusal;
           throw error;
         }
@@ -258,7 +264,10 @@ export class ToolBroker implements AgentToolRuntime {
     context: ToolExecutionContext,
     extensionId?: string,
   ): Promise<ToolExecutionOutput> {
-    const workspacePath = isFilesystemMutation(tool.definition.name) ? filesystemMutationWorkspace(this.workspacePath) : this.workspacePath;
+    if (extensionId !== undefined && isOpenRouterApplyPatch(tool.definition.name)) {
+      throw new ExecutionGrantError("grant_mismatch", "Reserved native tool cannot execute as an extension.");
+    }
+    const workspacePath = (isFilesystemMutation(tool.definition.name) || isOpenRouterApplyPatch(tool.definition.name)) ? filesystemMutationWorkspace(this.workspacePath) : this.workspacePath;
     const toolContext = { ...context, workspacePath };
     const callId = context.callId ?? "unknown";
     const access = tool.assessAccess?.(input, toolContext) ?? {
@@ -268,6 +277,10 @@ export class ToolBroker implements AgentToolRuntime {
     const mutationCapture = isFilesystemMutation(tool.definition.name)
       ? captureFilesystemMutation(workspacePath, tool.definition.name, access.paths ?? [])
       : undefined;
+    const openRouterDerived = isOpenRouterApplyPatch(tool.definition.name) ? derivedOpenRouterFilesystemOperation(input) : undefined;
+    if (isOpenRouterApplyPatch(tool.definition.name) && !openRouterDerived) throw new ExecutionGrantError("grant_mismatch", "OpenRouter operation does not map to a trusted filesystem mutation.");
+    const openRouterCapture = openRouterDerived ? captureFilesystemMutation(workspacePath, openRouterDerived, access.paths ?? [], { recordContentHash: openRouterDerived === "fs.patch" }) : undefined;
+    const effectiveCapture = mutationCapture ?? openRouterCapture;
     const outsideWorkspace = await this.hasOutsidePath(access);
     const requiresApproval =
       this.permissionProfile !== "full" &&
@@ -426,7 +439,7 @@ export class ToolBroker implements AgentToolRuntime {
             this.decisions.get(callId)?.decision === "approved"),
         signal,
       });
-      const filesystemMutation = mutationCapture ? authorizeFilesystemMutation(mutationCapture, {
+      const filesystemMutation = effectiveCapture ? authorizeFilesystemMutation(effectiveCapture, {
         authority: this.executionGrants, grant: executionGrant,
         binding: { runId: context.runId, sessionId: context.sessionId, actor: context.actor,
           toolName: tool.definition.name, callId, permissionProfile: this.git?.permissionProfile ?? this.permissionProfile },
@@ -469,7 +482,7 @@ export class ToolBroker implements AgentToolRuntime {
         return output;
       }
       this.settleToolBudget(budgetReservationId);
-      const refusal = isFilesystemMutation(tool.definition.name) && filesystemMutationFailure(error, this.workspacePath);
+      const refusal = (isFilesystemMutation(tool.definition.name) || isOpenRouterApplyPatch(tool.definition.name)) && filesystemMutationFailure(error, this.workspacePath);
       if (refusal) {
         this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, refusal);
         return refusal;
@@ -599,6 +612,17 @@ async function canonicalTarget(target: string): Promise<string> {
       current = parent;
     }
   }
+}
+
+function derivedOpenRouterFilesystemOperation(input: unknown): "fs.write" | "fs.patch" | "fs.delete" | undefined {
+  if (typeof input !== "object" || input === null) return undefined;
+  const operation = (input as { operation?: { type?: unknown } }).operation;
+  if (typeof operation !== "object" || operation === null) return undefined;
+  const type = (operation as { type?: unknown }).type;
+  if (type === "create_file") return "fs.write";
+  if (type === "update_file") return "fs.patch";
+  if (type === "delete_file") return "fs.delete";
+  return undefined;
 }
 
 function outputFailure(code: string, message: string): ToolExecutionOutput {

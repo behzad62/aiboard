@@ -167,7 +167,7 @@ test("planning recovery reconciliation distinguishes verified mismatched and unk
   assert.equal(reconcilePlanningProjection(projection, { assignments: [], evidence: [] }).status, "unknown");
 });
 
-test("planning checkpoint coverage is invalidated when an amendment changes a section digest", () => {
+test("planning resume derives coverage from current-manifest reads after an amendment changes a section digest", () => {
   const baseBytes = Buffer.from("AAA\nBBB\nCCC", "utf8");
   const amendedBytes = Buffer.from("AAA\nBXB\nCCC", "utf8");
   const spans = [
@@ -257,6 +257,15 @@ test("planning checkpoint coverage is invalidated when an amendment changes a se
     { role: "user", id: "owner" },
     { manifest: amended },
   ));
+  // C4: reads are bound to the current manifest revision. Base-manifest reads
+  // and the stored checkpoint grant no read authority at the amended revision.
+  assert.deepEqual(projection.resume.coveredSourceSectionIds, []);
+  assert.deepEqual(projection.resume.remainingSourceSectionIds, ["s1", "s2", "s3"]);
+  assert.equal(projection.resume.nextSourceSectionId, "s1");
+  // Genuine current-manifest reads re-establish coverage; the changed s2 stays pending.
+  for (const read of readEventsFor(amended, ["s1", "s3"])) {
+    projection = reducePlanningProjection(projection, read);
+  }
   assert.deepEqual(projection.resume.coveredSourceSectionIds, ["s1", "s3"]);
   assert.deepEqual(projection.resume.remainingSourceSectionIds, ["s2"]);
   assert.equal(projection.resume.nextSourceSectionId, "s2");

@@ -790,13 +790,19 @@ function matchesNormalizedPolicyPath(
   policyPaths: readonly string[] | undefined,
 ): boolean {
   const candidate = normalizePolicyPath(path);
+  const foldedCandidate = foldHostPath(candidate);
   return (policyPaths ?? []).some((policyPath) => {
     const protectedPath = normalizePolicyPath(policyPath);
-    if (!protectedPath.includes("/")) {
-      return candidate.split("/").includes(protectedPath);
+    const foldedProtected = foldHostPath(protectedPath);
+    if (!foldedProtected.includes("/")) {
+      return foldedCandidate.split("/").includes(foldedProtected);
     }
-    return candidate === protectedPath || candidate.startsWith(`${protectedPath}/`);
+    return foldedCandidate === foldedProtected || foldedCandidate.startsWith(`${foldedProtected}/`);
   });
+}
+
+function foldHostPath(path: string): string {
+  return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
 function matchesPolicyPath(

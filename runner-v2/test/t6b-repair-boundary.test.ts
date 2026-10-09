@@ -22,6 +22,7 @@ import {
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
 import {
+  currentExplicitStartIdentity,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
   type SchedulerActorRole,
@@ -33,6 +34,7 @@ import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import type { WorkerAssignment, WorkerOutcome, WorkerRuntimeDriver } from "../src/task-scheduler.js";
 import {
+  FIXTURE_AMENDED_TEXT,
   buildPlanningFixtureScenario,
   type PlanningFixtureScenario,
 } from "./fixtures/planning-source-fixture.js";
@@ -58,8 +60,10 @@ function event(type: SchedulerEventType | string, key: string, actor: { role: Sc
 
 function planningInputs(fixture: PlanningFixtureScenario): NewSchedulerEvent[] {
   return [
-    event("run.policy_configured", "policy", { role: "runner", id: "build-runtime" }, { runPolicy: "finish" }),
+    event("project_docs.policy_configured", "project-docs-policy", { role: "runner", id: "build-runtime" }, { version: 2 }),
+    event("run.initialized", "run-initialized", { role: "runner", id: "build-runtime" }, {}),
     event("planning.policy_configured", "planning-policy", { role: "runner", id: "build-runtime" }, { version: 1 }),
+    event("run.policy_configured", "policy", { role: "runner", id: "build-runtime" }, { runPolicy: "finish" }),
     event("planning.source_registered", "source", { role: "user", id: "owner" }, { manifest: fixture.priorManifest }),
     event("planning.source_amended", "source-amendment", { role: "user", id: "owner" }, { manifest: fixture.manifest }),
     event("request.triaged", "triage", { role: "architect", id: "architect" }, { decision: "build", rationale: "Build the fixture." }),
@@ -143,7 +147,7 @@ class ScriptedReviewer implements AgentModel {
       void lastTool;
       return call("record_deliverable_findings", { findings: this.script.findings?.(text) ?? [] });
     }
-    const claimIds = [...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!);
+    const claimIds = [...text.matchAll(/"id":\s*"(claim:[^"]+)"/g)].map((match) => match[1]!);
     const priorChecks = this.script.priorChecks?.(text);
     return call("submit_deliverable_verdict", {
       summary: "Reviewed against the criteria.",
@@ -258,15 +262,64 @@ const DEFAULT_CANDIDATES: AgentRuntimeCandidate[] = [
   { runtimeId: "reviewer-runtime", providerId: "reviewer", modelId: "reviewer-model", capabilities: ["code"], priority: 3 },
 ];
 
-function createHarness(options: HarnessOptions = {}): Harness {
+/**
+ * The approved amended fixture text extends the prior text with exactly one
+ * appended section line (see planning-source-fixture.ts). The prior bytes are
+ * derived deterministically from the exported amended text and then verified
+ * against the prior manifest, so any fixture drift fails loudly below.
+ */
+const FIXTURE_PRIOR_SUFFIX = "\nSECTION 8: AMENDMENT. Section 7 is retired by this amendment.";
+
+async function provisionPlanningSourceBytes(
+  artifacts: ArtifactStore,
+  scenario: Pick<PlanningFixtureScenario, "priorManifest" | "manifest">,
+): Promise<void> {
+  assert.ok(
+    FIXTURE_AMENDED_TEXT.endsWith(FIXTURE_PRIOR_SUFFIX),
+    "the approved amended fixture text still carries the deterministic prior-text suffix",
+  );
+  const priorText = FIXTURE_AMENDED_TEXT.slice(0, FIXTURE_AMENDED_TEXT.length - FIXTURE_PRIOR_SUFFIX.length);
+  const priorBytes = Buffer.from(priorText, "utf-8");
+  const amendedBytes = Buffer.from(FIXTURE_AMENDED_TEXT, "utf-8");
+  assert.equal(priorBytes.byteLength, scenario.priorManifest.byteLength, "prior manifest byteLength matches actual fixture bytes");
+  assert.equal(amendedBytes.byteLength, scenario.manifest.byteLength, "current manifest byteLength matches actual fixture bytes");
+  const prior = await artifacts.put(priorBytes, scenario.priorManifest.mediaType, "planning-source-prior.txt");
+  const amended = await artifacts.put(amendedBytes, scenario.manifest.mediaType, "planning-source.txt");
+  assert.equal(prior.hash, scenario.priorManifest.artifactDigest, "prior manifest digest matches actual stored bytes");
+  assert.equal(amended.hash, scenario.manifest.artifactDigest, "current manifest digest matches actual stored bytes");
+}
+
+async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), "aiboard-delivery-r3-"));
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
+  // Planning-source authority through real stored bytes: the approved
+  // fixture texts are provisioned via ArtifactStore.put and awaited before
+  // scheduler/runtime admission, and the manifest byteLength/digest are
+  // verified against the actual stored bytes. verifySync is NOT overridden,
+  // so unknown/missing/tampered digests still throw from the real store.
+  // One authority serves both the scheduler store and the runtime, so the
+  // two can never diverge on the current source.
+  const scenario = fixtureScenario();
+  await provisionPlanningSourceBytes(artifacts, scenario);
   const scheduler = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore: evidence, artifacts });
   const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
   let tick = 0;
   const clock = () => new Date(Date.UTC(2026, 8, 25, 0, 0, 0, tick++ * 10)).toISOString();
-  for (const input of planningInputs(fixtureScenario())) scheduler.append(input);
+  for (const input of planningInputs(scenario)) scheduler.append(input);
+  // Explicit owner start for the current ready plan (accepted T6/T7b
+  // contract): the scripted owner authorizes THIS current identity — plan
+  // revision + digest, source manifest + digest, planning + docs policy
+  // versions — with ownerChoice "execute" as user:local-user. Every
+  // scenario in this file intends execution, so the harness records the
+  // owner's choice here, before any worker dispatch.
+  {
+    const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(scheduler.readRun(RUN_ID)));
+    assert.ok(startIdentity, "the seeded ready plan has an exact owner-start identity");
+    scheduler.append(event("planning.execution_authorized", "owner-start:1", { role: "user", id: "local-user" }, {
+      authorization: { ...startIdentity, version: 1, ownerChoice: "execute" },
+    }));
+  }
   const candidates = options.candidates ?? DEFAULT_CANDIDATES;
   const router = new RuntimeRouter({ health: new ProviderHealthRegistry(), candidates });
   const reviewer = options.reviewer ?? new ScriptedReviewer({ inspect: true });
@@ -335,7 +388,11 @@ function createHarness(options: HarnessOptions = {}): Harness {
       if (options.boundaryThrowsOnceFor === taskId && call === 1) throw new Error("runner interrupted mid-boundary");
       const outcome = options.boundaryOutcome?.(taskId, call) ?? "passed";
       const passedReport = await junitReport(artifacts, 2, 0);
-      const checks = (["build", "tests"] as const).map((checkId) => {
+      // Repair decisions cite this check evidence, so it carries real
+      // content-addressed bytes: the decision tool resolves cited content
+      // whenever artifact authority is present, as it is for worker
+      // assignment in this harness.
+      const checks = await Promise.all((["build", "tests"] as const).map(async (checkId) => {
         const report = checkId === "tests"
           ? outcome === "passed"
             ? passedReport
@@ -343,9 +400,11 @@ function createHarness(options: HarnessOptions = {}): Harness {
           : undefined;
         if (outcome === "unknown") return { checkId, evidenceIds: [], exitCode: null, outcome: "unknown" as const, reason: "No command detected.", ...(report ? { report } : {}) };
         const exitCode = outcome === "passed" ? 0 : 1;
-        const record = evidence.record({ ...commandEvidence(`boundary:${taskId}:${checkId}:${call}`, { label: checkId, exitCode }), runId: RUN_ID, taskId: `delivery:${taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" } });
+        const stdout = await artifacts.put(Buffer.from(`boundary ${taskId} ${checkId} call ${call} stdout`), "text/plain", "boundary check stdout");
+        const stderr = await artifacts.put(Buffer.from(`boundary ${taskId} ${checkId} call ${call} stderr`), "text/plain", "boundary check stderr");
+        const record = evidence.record({ ...commandEvidence(`boundary:${taskId}:${checkId}:${call}`, { label: checkId, exitCode, stdoutArtifactHash: stdout.hash, stderrArtifactHash: stderr.hash }), runId: RUN_ID, taskId: `delivery:${taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" } });
         return { checkId, command: "npm", args: ["run", checkId], evidenceIds: [record.id], exitCode, outcome, ...(report ? { report } : {}) };
-      });
+      }));
       return { changedFiles: ["src/feature.ts"], executedScope: "full_test_script", selection: { rung: "full_suite", selectedTests: ["test/feature.test.ts"] }, checks };
     },
   };
@@ -364,6 +423,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     clock,
     evidenceStore: evidence,
     architectId: options.architectRuntimeId ?? "architect-runtime",
+    artifacts,
   });
   Object.assign(harness, {
     runtime,
@@ -412,7 +472,7 @@ async function junitReport(artifacts: ArtifactStore, passed: number, failed: num
 test("R3-B1: unrelated tasks' boundary failures charge per-task issues; no false exhaustion pause", async () => {
   // The run-level repair-plan budget is raised so the per-issue budget is
   // what is under test (four tasks x two checks each charge one cycle).
-  const harness = createHarness({ repairPlanLimit: 12, boundaryOutcome: (taskId, call) => (!taskId.endsWith("-fix") && call === 1 ? "failed" : "passed") });
+  const harness = await createHarness({ repairPlanLimit: 12, boundaryOutcome: (taskId, call) => (!taskId.endsWith("-fix") && call === 1 ? "failed" : "passed") });
   const architect = (harness as unknown as { architect: { run: (request: ArchitectActionRequest) => Promise<void> } }).architect;
   const original = architect.run.bind(architect);
   architect.run = async (request: ArchitectActionRequest) => {
@@ -461,7 +521,7 @@ test("R3-B1: unrelated tasks' boundary failures charge per-task issues; no false
 });
 
 test("R3-B1: one task's repeated boundary failures charge its own issue; the fourth pauses", async () => {
-  const harness = createHarness({ boundaryOutcome: (taskId) => (taskId === "T1" ? "failed" : "passed") });
+  const harness = await createHarness({ boundaryOutcome: (taskId) => (taskId === "T1" ? "failed" : "passed") });
   // Only T1 flows; every other planned task stays cancelled.
   const planned = Object.keys(harness.projection().tasks);
   for (const taskId of planned) {
@@ -483,7 +543,9 @@ test("R3-B1: one task's repeated boundary failures charge its own issue; the fou
     const checkEvidence = [...new Set(boundary.checks.flatMap((c) => c.evidenceIds))];
     // Fresh diagnostic evidence every round: a repeat decision must cite
     // evidence NEW to every prior approach (R2-B3 still holds per issue).
-    const diag = harness.evidence.record({ ...commandEvidence(`t6b-boundary-r3b1:T1:diag:${round}`, { label: "diag", exitCode: 0 }), runId: RUN_ID, taskId: "delivery:T1", actor: { role: "verifier", id: "t6b-boundary-diag" } });
+    const diagStdout = await harness.artifacts.put(Buffer.from(`t6b-boundary-r3b1:T1:diag:${round} stdout`), "text/plain", "round diagnostic stdout");
+    const diagStderr = await harness.artifacts.put(Buffer.from(`t6b-boundary-r3b1:T1:diag:${round} stderr`), "text/plain", "round diagnostic stderr");
+    const diag = harness.evidence.record({ ...commandEvidence(`t6b-boundary-r3b1:T1:diag:${round}`, { label: "diag", exitCode: 0, stdoutArtifactHash: diagStdout.hash, stderrArtifactHash: diagStderr.hash }), runId: RUN_ID, taskId: "delivery:T1", actor: { role: "verifier", id: "t6b-boundary-diag" } });
     const all = request.projection.repairIssues ?? {};
     for (const [id, issue] of Object.entries(all)) {
       if (!(issue as { rootCause: string }).rootCause.startsWith("delivery-boundary:T1:")) continue;
@@ -532,7 +594,7 @@ test("R3-B1: one task's repeated boundary failures charge its own issue; the fou
  * reducer, real tools, real pump.
  */
 test("R4-B1: partial member decisions refuse without charging; full decisions dispatch once; retry has no idempotency conflict", async () => {
-  const harness = createHarness({ repairPlanLimit: 12, boundaryOutcome: (taskId, call) => (taskId === "T1" && call === 1 ? "failed" : "passed") });
+  const harness = await createHarness({ repairPlanLimit: 12, boundaryOutcome: (taskId, call) => (taskId === "T1" && call === 1 ? "failed" : "passed") });
   const observed: Record<string, unknown>[] = [];
   const architect = (harness as unknown as { architect: { run: (request: ArchitectActionRequest) => Promise<void> } }).architect;
   const evidenceStore = (harness as unknown as { evidence: SqliteEvidenceStore }).evidence;
@@ -582,7 +644,9 @@ test("R4-B1: partial member decisions refuse without charging; full decisions di
     observed.push({ step: "decide-tests", r: await call("record_repair_approach_decision", { issueId: testsIssue, approachId: "a-tests", repeat: false, hypothesis: "fix tests", diagnosticSet: [], evidenceIds: checkEvidence }, "d2") });
     state.resolve2 = await call("resolve_delivery_boundary_failure", resolveArgs, "r2");
     observed.push({ step: "resolve-2", r: state.resolve2, used: used() });
-    const fresh = evidenceStore.record({ ...commandEvidence("diag:fresh-build", { label: "diag", exitCode: 1 }), runId: RUN_ID, taskId: `delivery:${reason.taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" } });
+    const freshStdout = await harness.artifacts.put(Buffer.from("diag:fresh-build stdout"), "text/plain", "fresh diagnostic stdout");
+    const freshStderr = await harness.artifacts.put(Buffer.from("diag:fresh-build stderr"), "text/plain", "fresh diagnostic stderr");
+    const fresh = evidenceStore.record({ ...commandEvidence("diag:fresh-build", { label: "diag", exitCode: 1, stdoutArtifactHash: freshStdout.hash, stderrArtifactHash: freshStderr.hash }), runId: RUN_ID, taskId: `delivery:${reason.taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" } });
     observed.push({ step: "decide-build-again-fresh", r: await call("record_repair_approach_decision", { issueId: buildIssue, approachId: "a-build-2", repeat: false, hypothesis: "fix build differently", diagnosticSet: [], evidenceIds: [fresh.id] }, "d3") });
     state.resolve3 = await call("resolve_delivery_boundary_failure", resolveArgs, "r3");
     observed.push({ step: "resolve-3", r: state.resolve3, used: used() });

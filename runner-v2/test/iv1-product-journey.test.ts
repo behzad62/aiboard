@@ -247,7 +247,7 @@ class Iv1JourneyReviewer implements AgentModel {
       }
       const text = iv1RequestText(request);
       assert.ok(text.includes(IV1_SCOPE_COMMAND), "the verdict context carries the durable scope");
-      const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+      const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
       for (const expected of ["claim:c1", "claim:c2", "claim:summary"]) {
         assert.ok(claimIds.includes(expected), `the verdict context names ${expected}`);
       }

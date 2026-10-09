@@ -10,12 +10,7 @@ import type { FinalVerificationPlan } from "../src/final-verification-contracts.
 import { IntegrationManager as ProductionIntegrationManager } from "../src/integration-manager.js";
 import type { ProjectHandoffResult } from "../src/integration-manager.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
-import {
-  deriveNativeVerifierRiskInput,
-  NativeBuildFactory,
-  snapshotNativeBuildAmbientEnvironment,
-} from "../src/native-build-factory.js";
-import type { RunnerProviderConfig } from "../src/provider-config-store.js";
+import { deriveNativeVerifierRiskInput } from "../src/native-build-factory.js";
 import { assessBuildRisk } from "../src/risk-policy.js";
 import {
   rebuildSchedulerProjection,
@@ -23,8 +18,6 @@ import {
   type ProjectHandoffChoice,
   type SchedulerActorRole,
 } from "../src/scheduler-store.js";
-import { ArtifactStore } from "../src/artifact-store.js";
-import { createExecutionHost } from "../src/execution-host.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -99,7 +92,10 @@ interface FinishSeedOptions {
  * Legacy-planning finish seed: plan.created with one integrated task, a
  * canonical integration revision, and a fully approved green FV generation.
  * Docs v1 also seeds the model-written STATE.md commit the v1 readiness gate
- * requires; docs v2 relies on the kernel snapshot instead.
+ * requires; docs v2 relies on the kernel snapshot instead. The docs-v2 shape
+ * is direct-only: the reducer and direct runtime support legacy+docs2, but a
+ * legacy factory spec recovering against docs2 fails closed by design, so no
+ * factory helper may withhold the docs stamp to recover it.
  */
 function finishSeed(runId: string, integrationRevision: string, options: FinishSeedOptions): NewSchedulerEvent[] {
   const plan = finishPlan();
@@ -283,10 +279,6 @@ function guidanceTriple(
 function advancingClock(start = "2026-09-26T00:00:00.000Z"): () => string {
   let now = Date.parse(start);
   return () => new Date((now += 1000)).toISOString();
-}
-
-function safeSegment(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "run";
 }
 
 /** Scripted Architect: exactly two completion turns (stop 1 and the post-guidance re-request); a third turn is a test failure. */
@@ -656,127 +648,7 @@ test("FX-1 v1 finish: guidance on the handoff invalidates risk, the green re-run
   }
 });
 
-function provider(runtimeId: string, priority: number): RunnerProviderConfig {
-  const [providerId, modelId] = runtimeId.split(":");
-  return { runtimeId, providerId: providerId!, modelId: modelId!, transport: "openai-compatible", baseUrl: "http://127.0.0.1:9", secret: "unused", capabilities: ["code"], priority };
-}
-
-class UnusedModel {
-  async complete(): Promise<never> {
-    throw new Error("This model must not be called on a harness-driven run.");
-  }
-}
-
-interface FactoryPortFixture {
-  root: string;
-  project: string;
-  state: string;
-  baselineRevision: string;
-  integration: ProductionIntegrationManager;
-  port: ProjectDocsPort;
-  factory: NativeBuildFactory;
-  evidence: SqliteEvidenceStore;
-  close: () => Promise<void>;
-}
-
-/**
- * The docs port under test is ALWAYS the one NativeBuildFactory.create
- * builds -- read off the factory-built runtime, never hand-built.
- */
-async function openFactoryPort(
-  label: string,
-  runId: string,
-  seed: (runId: string, baselineRevision: string) => NewSchedulerEvent[],
-  runPolicy: "finish" | "plan_only",
-): Promise<FactoryPortFixture> {
-  const root = mkdtempSync(join(tmpdir(), `aiboard-fx1-factory-${label}-`));
-  const project = join(root, "project");
-  const state = join(root, "state");
-  mkdirSync(project, { recursive: true });
-  mkdirSync(state, { recursive: true });
-  writeFileSync(join(project, "shared.txt"), "baseline\n");
-  writeFileSync(join(project, "package.json"), JSON.stringify({ name: `fx1-${label}-fixture`, version: "1.0.0", type: "module" }, null, 2));
-  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
-  const runRoot = join(state, "builds", safeSegment(runId));
-  mkdirSync(runRoot, { recursive: true });
-  const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  const seeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
-    evidenceStore: evidence,
-    validateExecutionProfile: acceptFinalVerificationProfile,
-    validateCleanupReceipt: () => undefined,
-  });
-  for (const input of seed(runId, baseline.revision)) seeder.append(input);
-  seeder.close();
-  const seen: ProductionIntegrationManager[] = [];
-  const origInitialize = ProductionIntegrationManager.prototype.initialize;
-  ProductionIntegrationManager.prototype.initialize = async function (this: ProductionIntegrationManager): Promise<void> {
-    seen.push(this);
-    return origInitialize.call(this);
-  };
-  const executionHost = createExecutionHost({
-    projectRoot: project,
-    stateDirectory: state,
-    artifacts: new ArtifactStore(join(state, "artifacts")),
-    ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
-  });
-  const factory = new NativeBuildFactory({
-    projectRoot: project,
-    stateDirectory: state,
-    providerConfigs: {
-      load: () => [provider("arch:architect", 1), provider("work:worker", 2), provider("rev:reviewer", 3)],
-      save: () => undefined,
-      close: () => undefined,
-    },
-    executionHost,
-    baselineFor: () => baseline.revision,
-    providerModelFactory: () => new UnusedModel(),
-  });
-  let built: { runtime: BuildRuntime; cleanup: () => Promise<void>; close: () => Promise<void> };
-  try {
-    built = await factory.create(await factory.prepareSpec({
-      version: 2,
-      runId,
-      projectId: "fx1-factory-fixture",
-      objective: "Prove the factory-wired docs port.",
-      architectRuntimeId: "arch:architect",
-      workerRuntimeIds: ["work:worker"],
-      verifierRuntimeIds: ["rev:reviewer"],
-      alwaysRequireIndependentVerifier: false,
-      maxConcurrency: 1,
-      permissionProfile: "full",
-      runPolicy,
-      budgetLimits: {},
-      createdAt: CLOCK,
-      idempotencyKey: `fx1-factory-${label}`,
-    })) as unknown as { runtime: BuildRuntime; cleanup: () => Promise<void>; close: () => Promise<void> };
-  } finally {
-    ProductionIntegrationManager.prototype.initialize = origInitialize;
-  }
-  assert.equal(seen.length, 1, "the factory builds exactly one integration manager");
-  const integration = seen[0]!;
-  const port = (built.runtime as unknown as { projectDocs: ProjectDocsPort }).projectDocs;
-  assert.ok(port, "the factory builds a docs port");
-  return {
-    root,
-    project,
-    state,
-    baselineRevision: baseline.revision,
-    integration,
-    port,
-    factory,
-    evidence,
-    close: async () => {
-      await built.cleanup();
-      await built.close();
-      await factory.close();
-      await executionHost.close();
-      evidence.close();
-      rmSync(root, { recursive: true, force: true });
-    },
-  };
-}
-
-/** Fail the factory integration's next snapshot read once (a transient post-commit failure). */
+/** Fail the integration's next snapshot read once (a transient post-commit failure). */
 function failNextSnapshotReadOnce(integration: ProductionIntegrationManager, message: string): void {
   const orig = integration.readHandoffSnapshotFile.bind(integration);
   let armed = true;
@@ -791,51 +663,61 @@ function failNextSnapshotReadOnce(integration: ProductionIntegrationManager, mes
 
 test("FX-1 docs-v2 finish: guidance on the handoff invalidates risk, the green re-run re-assesses, the run completes", async () => {
   const RUN = "run-fx1-docsv2";
-  const preSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
-    finishSeed(runId, baseline, {
-      docsVersion: 2,
-      generationId: "generation-fx1-docs",
-      taskId: "final-verification-fx1-docs",
-      keyPrefix: "",
-      planVersion: 1,
-    }).filter((event) => !event.type.startsWith("final_verification."));
-  const fvSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
-    finishSeed(runId, baseline, {
-      docsVersion: 2,
-      generationId: "generation-fx1-docs",
-      taskId: "final-verification-fx1-docs",
-      keyPrefix: "",
-      planVersion: 1,
-    }).filter((event) => event.type.startsWith("final_verification."));
-  const fixture = await openFactoryPort("docsv2", RUN, preSeed, "finish");
+  // Legacy-planning docs-v2 finish: supported by the reducer and the direct
+  // runtime; intentionally unrecoverable via the factory (a legacy spec
+  // recovering against docs2 fails closed), so this test uses the direct port
+  // to preserve docs-v2 snapshot/reconciliation + risk-reassessment coverage
+  // without hiding events from the guard.
+  const seedOptions = {
+    docsVersion: 2 as const,
+    generationId: "generation-fx1-docs",
+    taskId: "final-verification-fx1-docs",
+    keyPrefix: "",
+    planVersion: 1,
+  };
+  const repo = await openGitRepo("docsv2", RUN);
+  // The docs-v2 shape is explicitly legacy+docs2 direct: docs v2 present,
+  // planning v1 absent.
+  const shapeProbe = finishSeed(RUN, repo.baselineRevision, seedOptions);
+  assert.equal(shapeProbe.some((event) => event.type === "project_docs.policy_configured" && (event.payload as Record<string, unknown>).version === 2), true);
+  assert.equal(shapeProbe.some((event) => event.type === "planning.policy_configured"), false);
+  const schedulerPath = join(repo.root, "scheduler.sqlite");
+  const evidence = new SqliteEvidenceStore(join(repo.root, "evidence.sqlite"));
+  const seeder = new SqliteSchedulerStore(schedulerPath, {
+    evidenceStore: evidence,
+    validateExecutionProfile: acceptFinalVerificationProfile,
+    validateCleanupReceipt: () => undefined,
+  });
+  for (const input of finishSeed(RUN, repo.baselineRevision, seedOptions)) seeder.append(input);
+  seeder.close();
   // The stop-1 commit lands, then the read-back fails: a transient failure
   // after the commit (or a crash before the append).
-  failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+  failNextSnapshotReadOnce(repo.integration, "Injected handoff snapshot read failure.");
   const verifierCalls = { calls: 0 };
   let store: SqliteSchedulerStore | undefined;
   let manager: NativeBuildManager | undefined;
   const order: string[] = [];
   try {
     manager = new NativeBuildManager({
-      specs: new SqliteBuildSpecStore(join(fixture.root, "builds.sqlite")),
+      specs: new SqliteBuildSpecStore(join(repo.root, "builds.sqlite")),
       createRuntime: async () => {
-        store = new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(RUN), "scheduler.sqlite"), {
-          evidenceStore: fixture.evidence,
+        store = new SqliteSchedulerStore(schedulerPath, {
+          evidenceStore: evidence,
           validateExecutionProfile: acceptFinalVerificationProfile,
           validateCleanupReceipt: () => undefined,
         });
         const runtime = buildHarnessRuntime({
           runId: RUN,
           store,
-          projectDocs: fixture.port,
+          projectDocs: gitDocsPort(repo.integration),
           architect: completionArchitect(() => manager!.projection(RUN)),
           verifier: productionShapedVerifier(RUN, () => store!, verifierCalls),
           clock: advancingClock(),
-          evidenceStore: fixture.evidence,
+          evidenceStore: evidence,
         });
         return managedHandle(runtime, async () => {
           order.push(`projectHandoff:${manager!.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length}`);
-          const result = await fixture.integration.applyToProject();
+          const result = await repo.integration.applyToProject();
           order.push("applied");
           return result;
         }, RUN);
@@ -843,7 +725,6 @@ test("FX-1 docs-v2 finish: guidance on the handoff invalidates risk, the green r
     });
     await manager.create(managerSpec(RUN, "finish"));
     assert.ok(store);
-    for (const input of fvSeed(RUN, fixture.baselineRevision)) store.append(input);
     manager.activate(RUN);
     await manager.awaitIdle(RUN);
     // Stop 1: risk assessed through the real derivation, handoff requested,
@@ -852,18 +733,18 @@ test("FX-1 docs-v2 finish: guidance on the handoff invalidates risk, the green r
     assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
     assert.equal(manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
     assert.deepEqual(order, [], "no project mutation precedes the kernel record");
-    const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    const landed = await runGit({ cwd: repo.integration.path, args: ["rev-list", "--count", `${repo.baselineRevision}..HEAD`] });
     assert.equal(landed.stdout.trim(), "1", "the stop-1 kernel commit landed");
     assert.equal(riskEvents(store, RUN).length, 1);
     assert.equal(verifierCalls.calls, 1);
     const stop1 = manager.events(RUN).find((event) => event.type === "project.handoff_requested")!.sequence;
     // Guidance with no plan change withdraws the handoff and invalidates
     // the assessment; final verification re-runs green on the same revision.
-    guidanceTriple(RUN, store, fixture.evidence, "fx1-docsv2:evidence");
+    guidanceTriple(RUN, store, evidence, "fx1-docsv2:evidence");
     const withdrawn = manager.projection(RUN);
     assert.equal(withdrawn.projectHandoff, undefined, "guidance withdrew the handoff");
     assert.equal((withdrawn.projectHandoffHistory ?? []).length, 1);
-    for (const input of finishSeed(RUN, fixture.baselineRevision, {
+    for (const input of finishSeed(RUN, repo.baselineRevision, {
       docsVersion: 2,
       generationId: "generation-fx1-docs-rerun",
       taskId: "final-verification-fx1-docs-rerun",
@@ -875,7 +756,7 @@ test("FX-1 docs-v2 finish: guidance on the handoff invalidates risk, the green r
     assert.equal(risks.length, 2, "the re-assessment is recorded instead of deduped");
     assert.equal(
       risks[1]!.idempotencyKey,
-      `build-risk:${fixture.baselineRevision}:generation-fx1-docs-rerun`,
+      `build-risk:${repo.baselineRevision}:generation-fx1-docs-rerun`,
     );
     assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
     // FX-2: the Architect's real second complete_run re-requests (stop 2):
@@ -900,7 +781,8 @@ test("FX-1 docs-v2 finish: guidance on the handoff invalidates risk, the green r
   } finally {
     await manager?.close();
     store?.close();
-    await fixture.close();
+    evidence.close();
+    await repo.close();
   }
 });
 

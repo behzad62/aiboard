@@ -714,14 +714,46 @@ export class NativeBuildFactory {
       });
     }
     ensurePlanningProvisioningPrefix(schedulerStore, spec);
-    if (rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).evidenceContentPolicyVersion !== 1) {
-      schedulerStore.append({runId: spec.runId, type: "run.evidence_policy_activated", actor: {role: "runner", id: "build-runtime"}, occurredAt: new Date().toISOString(), idempotencyKey: "evidence-content-policy:v1", payload: {version: 1}});
-    }
-    const integrityInitialization = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).testIntegrity;
-    if (integrityInitialization && integrityInitialization.initialRevision === undefined) {
-      schedulerStore.append({ runId: spec.runId, type: "delivery.test_integrity_initialized", occurredAt: spec.createdAt,
-        actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "test-integrity-initial-revision:v1",
-        payload: { revision: baselineRevision, architectActorId: NATIVE_BUILD_ARCHITECT_ACTOR_ID } });
+    if (spec.planningPolicy?.version === 1) {
+      // Lane-B guards activate only during fresh explicit-policy
+      // construction, immediately after the T7a prefix (sequences 4-5),
+      // before source registration. A log carrying run history beyond
+      // the bare construction stamps is a recovery and is never
+      // restamped: historical shape is preserved, and the
+      // pending-guidance/open-question gates (which correctly deny
+      // mid-log advancement) are never tripped by factory creation. The
+      // bare-prefix-plus-evidence shape covers a crash between the two
+      // stamps; anything longer is real history.
+      const constructionEvents = schedulerStore.readRun(spec.runId);
+      const barePrefix = constructionEvents.length === 3;
+      const barePrefixPlusEvidence =
+        constructionEvents.length === 4 &&
+        constructionEvents[3]?.type === "run.evidence_policy_activated";
+      if (barePrefix || barePrefixPlusEvidence) {
+        if (rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).evidenceContentPolicyVersion !== 1) {
+          schedulerStore.append({runId: spec.runId, type: "run.evidence_policy_activated", actor: {role: "runner", id: "build-runtime"}, occurredAt: new Date().toISOString(), idempotencyKey: "evidence-content-policy:v1", payload: {version: 1}});
+        }
+        const integrityInitialization = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).testIntegrity;
+        if (integrityInitialization && integrityInitialization.initialRevision === undefined) {
+          schedulerStore.append({ runId: spec.runId, type: "delivery.test_integrity_initialized", occurredAt: spec.createdAt,
+            actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "test-integrity-initial-revision:v1",
+            payload: { revision: baselineRevision, architectActorId: NATIVE_BUILD_ARCHITECT_ACTOR_ID } });
+        }
+      }
+    } else if (schedulerStore.readRun(spec.runId).length === 0) {
+      // Fresh legacy run (no planningPolicy): initialize legitimately
+      // before any factory consumer reads the projection, mirroring
+      // BuildRuntime's legacy order (docs policy v1, then
+      // run.initialized carrying the spec objective).
+      // BuildRuntime.initializeRun runs later and reuses these durable
+      // records. Recovered legacy logs are never restamped, and the
+      // downgrade guard above still refuses a legacy spec against a
+      // recorded new-policy prefix.
+      schedulerStore.append({ runId: spec.runId, type: "project_docs.policy_configured", occurredAt: spec.createdAt,
+        actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "project-docs-policy", payload: { version: 1 } });
+      schedulerStore.append({ runId: spec.runId, type: "run.initialized", occurredAt: spec.createdAt,
+        actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "run-initialized",
+        payload: { objective: spec.objective } });
     }
     if (spec.approvedSource !== undefined) {
       registerApprovedSource(
@@ -4382,7 +4414,12 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
 }): Promise<void> {
   const { projection, integrationManager, targetRevision, canonicalRevision } = input;
   const refuse = (): never => { throw new Error("Canonical checkout revision changed without exact kernel snapshot authority."); };
-  if (projection.projectDocsPolicyVersion !== 2 || !projection.integrationRevision || projection.integrationRevision !== targetRevision) refuse();
+  // N6: before the first landing no integration revision is recorded, so the
+  // durably recorded creation baseline (delivery.test_integrity_initialized,
+  // stamped before verification exists) anchors the requested target instead.
+  // Authority comes only from durable records, never from the request.
+  const authoritativeRevision = projection.integrationRevision ?? projection.testIntegrity?.initialRevision;
+  if (projection.projectDocsPolicyVersion !== 2 || authoritativeRevision === undefined || authoritativeRevision !== targetRevision) refuse();
   if (canonicalRevision === targetRevision) return;
   const ancestor = await input.execute({ cwd: integrationManager.path, args: ["merge-base", "--is-ancestor", targetRevision, canonicalRevision], allowFailure: true });
   if (ancestor.exitCode !== 0) refuse();

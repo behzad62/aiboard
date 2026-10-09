@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
 
+import { ArtifactStore } from "../src/artifact-store.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import type { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -45,6 +46,8 @@ async function driveFullManager(
       const runtime = buildRuntimeForHandoff({
         runId, store, projectDocs: fixture.port,
         architect, clock: advancingClock(), runPolicy: "plan_only",
+        evidenceStore: fixture.evidence,
+        artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       });
       return managedHandle(runtime, async () => ({ integrationRevision: "unused", integrationBranch: "unused", appliedToProject: false }), runId);
     },

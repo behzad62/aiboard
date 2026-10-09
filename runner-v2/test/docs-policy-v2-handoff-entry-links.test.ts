@@ -289,7 +289,7 @@ test("C2c NF-2/probe L2: a link-mode AGENTS.md to CLAUDE.md writes the section i
     const committedTarget = await runGit({ cwd: worktree, args: ["show", `${commit}:CLAUDE.md`] });
     assert.ok(committedTarget.stdout.includes(V2_AGENTS_SECTION_BODY));
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2c-agentslink");
     assert.equal(selected.status, "completed");
   } finally {
@@ -356,7 +356,7 @@ test("C2c NF-2/probe L3: a CLAUDE.md link to another regular file writes the lin
     const mode = await runGit({ cwd: worktree, args: ["ls-tree", commit, "--", "CLAUDE.md"] });
     assert.match(mode.stdout.trim(), /^120000 blob/);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "NOTES.md", "docs/project/STATE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "NOTES.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2c-claudetarget");
     assert.equal(selected.status, "completed");
   } finally {
@@ -384,7 +384,7 @@ test("C2c NF-2: an AGENTS.md link to a missing target is skipped with a reason, 
     const mode = await runGit({ cwd: worktree, args: ["ls-tree", commit, "--", "AGENTS.md"] });
     assert.match(mode.stdout.trim(), /^120000 blob/);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2c-agentsmissing");
     assert.equal(selected.status, "completed");
   } finally {
@@ -495,7 +495,7 @@ test("C2c repair M-2/probe C9: a backslash link target from the index blob write
     assert.ok(target.includes("pre-existing notes"), "the target's own bytes survive");
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/notes.md", "docs/project/STATE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/notes.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2c-repair-c9");
     assert.equal(selected.status, "completed");
   } finally {
@@ -577,7 +577,7 @@ test("C2c repair cycle 4/probe RD-case: a link to notes.md when the index holds 
     assert.equal(readFileSync(join(worktree, "NOTES.md"), "utf8"), "# team notes\n", "the case-variant target is never written");
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2c-r4-rdcase");
     assert.equal(selected.status, "completed");
   } finally {
@@ -644,7 +644,7 @@ test("C2d/probe F-LC-agents: a lowercase agents.md link redirects through its ow
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
     assert.deepEqual(
       files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
-      ["CLAUDE.md", "NOTES.md", "docs/project/STATE.md"],
+      ["CLAUDE.md", "NOTES.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"],
       "the commit records the redirect target, not the link",
     );
     const target = readFileSync(join(worktree, "NOTES.md"), "utf8");
@@ -690,7 +690,7 @@ test("C2d/probe D-rd-lcagents: a lowercase claude.md regular file takes the line
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
     assert.deepEqual(
       files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
-      ["AGENTS.md", "claude.md", "docs/project/STATE.md"],
+      ["AGENTS.md", "claude.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"],
       "the commit holds the index's own spelling",
     );
     const line = readFileSync(join(worktree, "claude.md"), "utf8");
@@ -745,7 +745,7 @@ test("C2d/probe D-rd-collide: a redirect into a case-colliding target is refused
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
     assert.deepEqual(
       files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
-      ["CLAUDE.md", "docs/project/STATE.md"],
+      ["CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"],
       "no colliding write enters the commit",
     );
     assert.equal(readFileSync(join(outside, "own.txt"), "utf8"), "outside\n", "nothing is written outside the repository");
@@ -1002,7 +1002,7 @@ test("C2d repair cycle 1/escalation C-2: colliding AGENTS.md and agents.md skips
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
     assert.deepEqual(
       files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
-      ["CLAUDE.md", "docs/project/STATE.md"],
+      ["CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"],
       "no colliding write enters the commit",
     );
     assert.equal(readFileSync(join(worktree, "AGENTS.md"), "utf8"), "# upper team file\n", "the colliding entry files are never written");

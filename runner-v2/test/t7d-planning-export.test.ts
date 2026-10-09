@@ -133,6 +133,33 @@ function journeyLastToolValue(request: AgentModelRequest): Record<string, unknow
   return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
 }
 
+function t7dToolResults(request: AgentModelRequest): Array<{ toolName?: string; isError?: boolean }> {
+  return request.messages
+    .filter((message) => message.role === "tool")
+    .map((message) => message.content as { toolName?: string; isError?: boolean });
+}
+function t7dToolFailed(request: AgentModelRequest, toolName: string): boolean {
+  return t7dToolResults(request).some((result) => result.toolName === toolName && result.isError === true);
+}
+function t7dFailureDetail(request: AgentModelRequest, toolName: string): string {
+  const failed = request.messages
+    .filter((message) => message.role === "tool")
+    .reverse()
+    .find((message) => (message.content as { toolName?: string }).toolName === toolName && (message.content as { isError?: boolean }).isError === true);
+  return JSON.stringify(failed?.content).slice(0, 1500);
+}
+function t7dReadText(request: AgentModelRequest, path: string): string | undefined {
+  for (const message of request.messages) {
+    if (message.role !== "tool") continue;
+    const content = message.content as { toolName?: string; content?: Array<{ type: string; value?: unknown; text?: string }> };
+    if (content.toolName !== "fs.read") continue;
+    const meta = content.content?.find((item) => item.type === "json")?.value as { path?: string } | undefined;
+    if (meta?.path !== path) continue;
+    const text = content.content?.find((item) => item.type === "text")?.text;
+    if (typeof text === "string") return text;
+  }
+  return undefined;
+}
 class T7dJourneyArchitect implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   private calls = 0;
@@ -200,16 +227,30 @@ class T7dJourneyWorker implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
     this.requests.push(request);
+    if (t7dToolFailed(request, "submit_task")) {
+      throw new Error(`T7d fixture: submit_task refused: ${t7dFailureDetail(request, "submit_task")}`);
+    }
+    if (t7dToolFailed(request, "run_evidence_command")) {
+      throw new Error(`T7d fixture: run_evidence_command failed: ${t7dFailureDetail(request, "run_evidence_command")}`);
+    }
+    if (t7dToolFailed(request, "fs.write")) {
+      throw new Error(`T7d fixture: fs.write failed: ${t7dFailureDetail(request, "fs.write")}`);
+    }
     const toolCount = request.messages.filter((message) => message.role === "tool").length;
     if (toolCount === 0) return journeyCall("fs.write", { path: "src/value.mjs", content: T7D_LOW_CONTENT, createDirectories: true }, "write-1");
     if (toolCount === 1) return journeyCall("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
     const record = journeyLastToolValue(request)!;
-    const fact = record.fact as { stdoutArtifactHash: string };
+    const fact = record.fact as { stdoutArtifactHash: string; exitCode: number | null; timedOut?: boolean; cancelled?: boolean };
+    assert.equal(fact.exitCode, 0, `the evidence test run must genuinely succeed before the worker claims it passes: ${JSON.stringify(record).slice(0, 1500)}`);
+    assert.equal(fact.timedOut ?? false, false, "the evidence test run must not time out");
+    assert.equal(fact.cancelled ?? false, false, "the evidence test run must not be cancelled");
+    assert.ok(typeof record.id === "string" && record.id.length > 0, "the evidence test run records an evidence id");
     return journeyCall("submit_task", {
       summary: "Added src/value.mjs exporting value = 2; node --test passes.",
       readiness: "ready_for_architect_review",
       unresolvedConcerns: [],
       criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: { changed: ["src/value.mjs"], verified: ["src/value.mjs exports value = 2"], testsRun: [{ command: "node --test", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }], notRun: [] },
     }, "submit-1");
   }
 }
@@ -242,6 +283,12 @@ class T7dJourneyReviewer implements AgentModel {
       return journeyCall("record_deliverable_obligations", { obligations: [{ id: "o1", description: "value must be 2." }] }, `obl-${seen}`);
     }
     if (pass === "delivery-findings-system") {
+      if (t7dToolFailed(request, "fs.read")) {
+        throw new Error(`T7d fixture: findings fs.read failed: ${t7dFailureDetail(request, "fs.read")}`);
+      }
+      if (t7dToolFailed(request, "record_deliverable_findings")) {
+        throw new Error(`T7d fixture: record_deliverable_findings refused: ${t7dFailureDetail(request, "record_deliverable_findings")}`);
+      }
       if (seen === 0) return journeyCall("fs.read", { path: "src/value.mjs" }, "read-1");
       return journeyCall("record_deliverable_findings", { findings: [] }, `findings-${seen}`);
     }
@@ -274,13 +321,31 @@ class T7dJourneyReviewer implements AgentModel {
         }],
       }, "verifier-verdict-1");
     }
-    const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
-    return journeyCall("submit_deliverable_verdict", {
-      summary: "The module exports 2 and the cited test run passed.",
-      satisfied: true,
-      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout." })),
-    }, `verdict-${seen}`);
+    if (pass === "delivery-verdict-system") {
+      if (t7dToolFailed(request, "submit_deliverable_verdict")) {
+        throw new Error(`T7d fixture: submit_deliverable_verdict refused: ${t7dFailureDetail(request, "submit_deliverable_verdict")}`);
+      }
+      if (t7dToolFailed(request, "fs.read")) {
+        throw new Error(`T7d fixture: verdict fs.read failed: ${t7dFailureDetail(request, "fs.read")}`);
+      }
+      const inspected = t7dReadText(request, "src/value.mjs");
+      if (inspected === undefined) {
+        return journeyCall("fs.read", { path: "src/value.mjs" }, `verdict-read-${seen}`);
+      }
+      assert.ok(inspected.split("\n")[0]!.includes("export const value = 2;"), "the cited line 1 actually exports value = 2");
+      const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
+      const survivors = [...new Set([...text.matchAll(/"id"\s*:\s*"(mutation-survivor:[^"]+)"/g)].map((match) => match[1]!))];
+      assert.equal(survivors.length, 0, `unexpected mutation survivors on the value line are real gaps and cannot be blanket-released: ${survivors.join(", ")}`);
+      const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
+      assert.ok(claimIds.includes("claim:c1"), "the verdict context names the criterion claim");
+      assert.ok(claimIds.includes("claim:summary"), "the verdict context names the summary claim");
+      return journeyCall("submit_deliverable_verdict", {
+        summary: "The module exports 2 and the cited test run passed.",
+        satisfied: true,
+        claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Read src/value.mjs line 1 in this verdict session and confirmed it exports value = 2.", citations: [{ path: "src/value.mjs", line: 1 }] })),
+      }, `verdict-${seen}`);
+    }
+    throw new Error(`Unexpected T7d reviewer system ${pass}.`);
   }
 }
 
@@ -390,7 +455,7 @@ test("T7d product: real factory planning and delivery export canonical C1 state,
       "planning-policy",
     ]);
     assert.deepEqual(events[0]!.payload, { version: 2 });
-    assert.deepEqual(events[1]!.payload, { objective: "Deliver the value module." });
+    assert.deepEqual(events[1]!.payload, { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: "Deliver the value module." });
     assert.deepEqual(events[2]!.payload, { version: 1 });
     assert.ok(!events.some((event) => event.type === "planning.source_registered"));
     const control = (path: string, input?: unknown, token = "t7d-control-token") => fetch(`${address.url}/v2/runs/${T7D_RUN}/build/${path}`, { method: input === undefined ? "GET" : "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(input !== undefined ? { body: JSON.stringify(input) } : {}) });

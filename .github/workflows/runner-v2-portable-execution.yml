@@ -158,4 +158,37 @@ jobs:
           --input-dir runner-v2-cross-host-hashes
           --expected-labels windows-latest,ubuntu-latest,macos-latest
 
+  t8-portable-coverage:
+    name: T8 portable coverage (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node-version: [24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup maintained Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Acquire pinned Recoverable Job Service Runner source
+        shell: bash
+        run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
+      - name: Install dependencies
+        run: npm ci
+      - name: Run T8 affected portable filesystem grant patch broker coverage
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/execution-grants.test.ts
+          runner-v2/test/filesystem-mutation-fence.test.ts
+          runner-v2/test/filesystem-mutation-routing.test.ts
+          runner-v2/test/filesystem-tools.test.ts
+          runner-v2/test/openrouter-apply-patch-tool.test.ts
+          runner-v2/test/tool-broker.test.ts
+          runner-v2/test/openrouter-apply-patch-factory.test.ts
+
 

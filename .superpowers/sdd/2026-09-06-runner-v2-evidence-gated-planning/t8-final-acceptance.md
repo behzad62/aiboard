@@ -1,0 +1,177 @@
+# T8 final acceptance — DRAFT / NOT ACCEPTED
+
+Date: 2026-10-07
+Branch: `codex/p66-t8`
+Base: accepted T10 `51bf0da7395148e0c82be8e8c7aab22c7c312a17`
+Status: **FROZEN FOR LAYER 4 - T8 is not accepted until the exact frozen candidate passes the required final gates.**
+
+This is the single durable T8 evidence index. It does not replace the execution checklist and it does not claim P7/release/deployment acceptance.
+
+## Final acceptance continuation — 2026-10-09
+
+The owner requested **finish T8**. Current reviewed fixture source remains `bcfb2703`, all61+2 frozen raw inputs unchanged. A separate Node24 three-host portable coverage job now includes all seven affected grant/filesystem/patch/Broker files and actual OpenRouter factory; Muse implemented only that workflow addition, primary independent review ACCEPT, existing workflow contracts4/4 trueexit0. Evidence `D:/tmp/t8-sol-final-ci-{muse,contract}.{log,exit}` and `D:/tmp/t8-sol-final-ci-review.md`. Hosted executions are pending and are not inferred from modeled or local behavior.
+
+One complete stock npm qualification with all12 chains is authorized after this clean checkpoint. External capture `D:/tmp/t8-sol-final-full.cjs` preserves true exit and SPEC root counts, freezes the checkout, and observes A1 SQLite/Git read-only to retain per-pass manifests, original source/evidence artifacts and actual snapshot trees. Exact actual candidate/start/log/result will be `D:/tmp/t8-sol-full-<HEAD8>.{started.json,log,exit,meta.json}`. Platform, package reproducibility, OCI, certified benchmark, scoped resource disposition and final invariant mapping/review remain required. **T8 NOT ACCEPTED; REL-1 NOT STARTED.** No release/merge/deployment.
+
+## Current fixture qualification / fresh local full-suite readiness — 2026-10-09
+
+Reviewed five-fixture source commit `bcfb2703ad679d1805a84c03aa8c1d0eb335d140` preserves production recovery immutability, every original assertion/cap/endpoint and all non-owned bodies. Four genuine fresh baseline constructions now precede planning history/public owner start; A3 requires the correct plan-only semantic refusal. No production/package/workflow/UI/archive change. Primary Codex is the independent reviewer of Muse Spark1.3 Contributor/max output; additional usage-limited agents did not complete this delta and are not credited.
+
+Progressive completed actual Node0 gates: selected representatives5/5, remaining delivery6/6, remaining finish6/6, complete C3c owning file13/13, all zero fail/skip/cancel/todo. **29 distinct cases,30 executions**, because Node's matching file ancestor repeated C3c. Its wrapper count guard expected12 and returned1 after preserving Node13/13 exit0; untouched original evidence and `D:/tmp/t8-sol-post-full-c3-controls-r1.verified-meta.json` prove the mechanical mismatch. No duplicate is counted as new coverage.
+
+All17 full failures reconcile to currentPASS in audit `D:/tmp/t8-sol-post-full-qualification-audit.json`, SHA256 `524158cd49f82baa8b76b730430b7a0a98e2f6c2afae5290f136b462eee97ba9`. Complete code/test/source-obligation review ACCEPT, no focused blocker, `D:/tmp/t8-sol-post-full-final-review.md` SHA256 `8f5697abd94786cf2943978152e7f9d2c2ed4494ce9c236794960515a6662fbe`. Runner/app TypeScript, five-file lint and diff checks0. Freeze61 source/test plus two archives SHA256 `c0b0c45b24995ae525a3aed2e5c9d32eea00212639e7a594d224f10d92f9798b`; actual receipts retain their uncommitted-source identity on16b1474f, and the reviewed commit retains identical bytes. Original147 fullPASS plus genuine current IV-2 completeGREEN qualify all148 original remediation; the old concurrent-edit IV-2 receipt stays superseded.
+
+**Fresh local full-suite readiness YES after the clean documentation checkpoint. T8 NOT ACCEPTED; REL-1 NOT STARTED.** No reader/suite/writer is active. Required final acceptance still includes exact stock npm full and all12 chains, source/A1/manifests/token/host-disposition evidence, all Node24 Windows/Linux/macOS portable/native/readiness/recovery and explicitly affected Linux/macOS files omitted by current workflow, OCI/benchmark/three-host package parity, scoped owned-resource accounting and this final index. Unchanged lint/build/ZIP/UI results keep their original source identity. Missing pytest/C++ support remains host-skipped/unverified. Main/merge/deployment untouched; no numeric-PID cleanup or universal release claim. Historical failed full result follows without relabelling.
+
+## Completed qualification failure — 27824407
+
+Completed fresh local qualification at **27824407dc7d9c5fb3d8656623a347b860c1c8bc**: exact `npm run test:runner-v2`, Node v24.18.0, true exit **1**, **4653 tests / 4630 pass / 17 fail / 6 skip / 0 cancelled / 0 todo**, 26856260.0395 ms. It ran 2026-10-08T12:28:17Z–19:55:54Z with no checkout edits or overlapping gates. All 57 source/test and two shipping-archive hashes match; candidate was clean before/after. Raw evidence `D:/tmp/t8-sol-full-27824407.{log,exit,started.json,meta.json}`; log SHA256 `cf1d2989d640c4808174aeda116ad4b0a34c53ab5defc63554a14b873ae9d898`. The original TAP-only capture has empty counts; preserved supplemental `.result-meta.json` mechanically parses the actual SPEC summary and `.failures.json` retains all 17 exact raw blocks. The 12 chained scripts did not execute because the root stage failed.
+
+Original inventory reconciles to **147 PASS / original44 IV-2 FAIL**. Original75 is the faithfully renamed current-manifest coverage case; its original endpoints and companion SQLite checkpoint refusal pass. The earlier IV-2 focused GREEN started before the concurrent factory edit and does not qualify the final bootstrap guard. Prior claims of all148 qualifying final-source GREEN are superseded by this exact-candidate result. The 16 additional failures were previously passing fixtures, not new production acceptance: 15 missing-baseline construction fixtures plus one obsolete plan-only refusal assertion.
+
+Root causes: **16 cases** preseed later planning/readiness/start history before fresh factory initialization, so the correct recovery-preserving guard refuses missing trusted test-integrity baseline authority; **one A3 case** expects owner-start wording while the correct semantic refusal is `Plan-only runs never admit workers.`. Narrow Muse-only scope: delivery-factory helper, finish-specific handoff helper, C3c and IV-2 construction fixtures, and A3's exact refusal assertion. Preserve production recovery immutability, original assertions, full endpoints and caps. Complete inventory: [fresh17 failures](../../../docs/runner-v2/t8-full-27824407-failure-inventory.md). Captured A1 spine, Phase-C, V1/V2/V3 and the other147 original cases pass; pytest live coverage remains honestly host-skipped because pytest is absent.
+
+**Fresh full-suite readiness: NO until these fixture repairs, affected complete journeys, static checks and independent review pass. T8 NOT ACCEPTED; REL-1 NOT STARTED.** No full suite is active. Main remains unchanged; retained supervisor witnesses do not authorize numeric-PID cleanup or universal release claims.
+
+
+## Independent source-to-delivery reconciliation
+
+Controller: GPT-5.6 Sol, independent from Muse Spark 1.3 Contributor implementation/repair turns.
+
+| T8 / amendment obligation | Current evidence / scheduled final gate |
+|---|---|
+| Original source + approved amendments reconciled before expensive suite | Controller re-read SRC-P T8, EP16/27/28/29, AR-R31 and the accepted execution checklist. Earlier packet reviews are reused when their owned code is unchanged. T8-specific gaps are tested below; final full suite is still pending. |
+| Complete spec with amendment + mandatory/conditional/operational obligations | `t8-final-qualification.test.ts` A1 builds from source v1, appends the operational amendment, persists mandatory/conditional/operational requirements, resolves the conditional lifecycle and verifies the final source denominator. |
+| Parallel/disjoint tasks | A1 keeps `maxConcurrency: 2` and asserts T-A/T-B dispatch before T-A correction; `task-resource-claims.test.ts` T4 also exercises real SQLite concurrent admission. |
+| Shared-resource serialization | `t8-final-resource-budget.test.ts` proves two otherwise-disjoint tasks with the same normalized semantic resource conflict until the active claim is released. |
+| Failing check + zero-selection check | A1 records a deliberate red evidence command and a TAP zero-selection probe, excludes the zero-selection record from accepted criterion evidence, and requires the red probe to be genuinely non-zero. |
+| Corrected independent review | A1 rejects T-A attempt 1 for the missing conformance marker, sends correction guidance, accepts attempt 2 only after a fresh reviewer read/citations, then runs the independent final verifier. |
+| Restart mid-validation | A1 pauses with T-A submitted before its first rejection, snapshots the paused stop with Architect notes, closes/reopens the native manager, verifies exact event replay and in-flight task state, then resumes through review and correction. |
+| Evidence reuse / invalidation | AR-4 amends parent “unrelated-change reuse” to exact identity only. A1 proves identical T-B command/tree/environment reuse with the same output bytes; a related T-C content change forces a fresh execution. Semantic unrelated-change reuse remains P7. |
+| Budget exhaustion | `t8-final-resource-budget.test.ts` uses production `BudgetedToolRuntime` + SQLite ledger; the second call is `budget_exhausted` before dispatch and accepted usage is durable. |
+| Plan-only attempted execution | A3 proves explicit start and direct execution are refused, no worker dispatches, and the immutable plan-only snapshot contains the plan plus optional approved-spec copy. |
+| Answer journeys | B1 pure question, B2 answer→build, B3 mixed request→build, B4 clarify→ask_user→triage. Existing final-suite docs/phase-C tests prove the answered path changes no project bytes. |
+| Token cost per gate | A1 records `ContextManifest` for every model pass and prints a purpose→passes/tokens rollup. T10 before/after per-role P6.5.4 manifest counts are copied below. |
+| C#/.NET + TRX | D1 runs a real .NET fixture through the test pipeline with failing then passing TRX. Host: .NET 10.0.100 available. |
+| C/C++ + CMake/ctest JUnit | D2 executes real CMake/ctest report plumbing. CMake/ctest 4.1.2 are available; no C/C++ compiler is on PATH, so the compile-specific part is an explicit host-gated skip, never a pass. T8 fixes ctest relative-output handling so a newly planned JUnit path is absolute while reused user flags are not rewritten. |
+| Python family | D3a proves detection/planning/reader/mutator behavior. Python 3.11.9 exists; live pytest is an explicit host-gated skip because pytest is not installed. |
+| Unknown-language safe floor | D4 proves no invented language family and no false-green result. |
+| Source→requirement→task→evidence + final conjunction | A1 walks every applicable final requirement to contributing task, accepted review, passed boundary and executed check; requires no unsatisfied review, approved final verifier and `buildCompletionReadiness(...).ready === true`. E1/E1b independently pin omitted-obligation/open-failure fail-closed behavior. |
+| Explicit integration / cleanup / recovery / current identities | A1 uses real isolated Git worktrees, exact owner-start identity, integration revisions, pause/reopen recovery, final handoff and cleanup. Final tree is asserted exactly. |
+| v2 final build tree | A1 final snapshot permits only product files + `STATE.md` + marked `AGENTS.md` + `CLAUDE.md` pointer; no diary/progress/evidence files and no spec copy in this run. |
+| Answered run adds no project file | Existing `docs-policy-v2-handoff-gate.test.ts`, `docs-policy-v2-stop-snapshot.test.ts`, T7a source-free answer, and phase-C acceptance pin zero project mutation; included in the required final runner suite. |
+| Plan-only snapshot contains plan | A3 inspects immutable snapshot `STATE.md` for plan identities and validates optional spec copy. |
+| Pause snapshot contains stop + notes | A1 inspects the pause snapshot for stopKind=paused, T-A state and `T8S_NOTES`. |
+| v1 docs/replay compatibility | C5 replays a recorded v1 log to an unchanged projection; full replay/legacy suites remain in the final runner suite. |
+| Final full-suite / build / UI / package / platform gates | **PENDING** until the WIP is frozen to one commit. See “Layer 4” below. |
+
+### Local layer4 follow-up — full launch held
+
+Local layer4 UI prerequisite CLOSED: reviewed repair commit0dd47582b1e808be6d3294b1a5f4654b6eef7ef3, clean before/after complete combined Playwright gate9/9pass,trueexit0,0fail/skip/interrupted,144601ms (D:/tmp/t8-sol-ui-combined-r3.{log,exit,meta.json},logSHA2566b369023b87b189d9debd88d4039aea82b27a92c9d3806fd6873f424a7b3d2b1). Source/fixture identity is unchanged from the separately passing5/5 focused gate and independent ACCEPT. Full local lint exit0 (164 existing warnings,0errors) and production build exit0 (21 static routes) remain valid on unchanged app/production inputs; the additive UI fixture has current own/transitive tsc/lint/diff checks0. The build generated the exact Runner ZIP bytes now committed61029cf2; no main dev-server output was shared. Additive final source/test freeze D:/tmp/t8-sol-source-freeze-57.json:57files(10source,47test) plus2shipping-archive hashes, source head0dd47582, SHA256738970f0b2e02150ef76b1018571a04eb1bc551b935781eb5de82cdbb35db5e7. All prior56 raw hashes/292 frozen test receipts remain unchanged; no prior receipt is relabelled as57-file coverage. Complete old code/test review, source reconciliation and new complete UI review ACCEPT. Independent UI review record D:/tmp/t8-sol-ui-independent-review.md SHA2567adddad72c8231c27a2de14d41792f82a99c92d27e27833069be173c1ca3efa4.
+
+Fresh local full-suite readiness YES. Next action is one exact npm run test:runner-v2 from the next clean docs-only qualification commit, using D:/tmp/t8-sol-layer4.ps1 -Gate full. Its actual candidate/argv/start identity is persisted to D:/tmp/t8-sol-full-<HEAD8>.started.json; complete true exit/counts/final log hash go to matching .exit/.meta.json after termination. Guard checks all frozen receipts/log hashes,57source/test plus2archive bytes, completed9UI, no active writer/other full suite and clean worktree. No checkout edits or overlapping gates while that full reader runs. The completed original1052 failed suite is not restarted. Its unchanged package command runs every root Runner test and all12 chained client/policy/UI/observability scripts if the Runner stage succeeds. This is local qualification, not T8 acceptance; required source-manifest/A1-token/host-platform/package/owned-resource/final-index evidence remains. No full suite is active at this documentation checkpoint. T8 NOT ACCEPTED; REL-1 NOT STARTED; main unchanged.
+
+UI prerequisite repair current state: sole Muse-owned change tests/e2e/runner-v2-final-verification.spec.ts modernizes explicit finite tmp-only Git fixture adapters, real production one-shot command graph and real ExecutionHost managed-process authority. No production change. All55 original assertions,5 test names and90/45/60/60/60second caps are AST-confirmed unchanged. Controller required visible graph/run/host cleanup errors, attempted independent owner/remaining teardown, body+teardown error aggregation and CRLF UTF8noBOM restoration; final fileSHA25659a0171eea011ea6a9b2df489a3154a1e52804532b0cc28e4221da668117fdd3. All three bounded Muse sessions ended0. Controller complete-diff review and independent fresh fixture review ACCEPT, no blockers. Owned/transitive TypeScript, lint, assertion-preservation inspection and diffcheck all trueexit0 (D:/tmp/t8-sol-ui-{types,lint,original-assertions,diffcheck}.meta.json). Actual complete five original Playwright journeys GREEN5/5,exit0,0fail/skip/interrupted,81234ms; D:/tmp/t8-sol-ui-focused-r2.{log,exit,meta.json}, logSHA256ef66cd1fd492735850df2e1143cfe569d5326f5848ad6893c2e82b5f618c6e6e. They reach exact integrated real build/test/runtime/browser/evidence/cleanup, stale/breakage negatives, real CLI stop/port reuse/reopen, durable category resume with original evidence ID and exactly one submission, and real native descendant/browser cancellation with port release. Git fixture mechanics do not certify full product Git execution; the host binding's fixture digest is a descriptor and actual Windows probes run (no injected processHostFacts). Existing baseline browser/workspace/integration cleanup catches remain scope limits, not universal cleanup proof. All56 prior frozen hashes unchanged; additive reviewed UI fixture is the57th source/test input. Combined9-test planning/steering/final-verification UI gate remains required before intended full-suite launch. No new full suite active; T8 NOT ACCEPTED; REL-1 NOT STARTED; main untouched.
+
+Local layer4 follow-up on61029cf2769c9ae0b473b74e4391d0d32ec885f8: full lint exit0 (164 warnings/0errors), production build exit0 (21 static routes); regenerated native/WorkBench archives contain all10 changed production source files and are committed61029cf2. Verified main's active dev server has a separate physical/canonical .next output root; target had no active dev server. Three-feature Playwright gate completed trueexit1:9 tests,4pass/5fail,90722ms. All five final-verification tests stop at createFixture→captureGitBaseline with `An explicit run-owned Git runner is required`; planning1/1 and steering3/3 pass. Evidence D:/tmp/t8-sol-layer4-ui.{log,exit,meta.json}; logSHA2566f65f9d463427d68e454beceb3b22462eacaa48982f2dfa368c023e6731360db. UI fixture and Git guard/baseline files are byte-identical to1052d5b9 and acceptedT10; this is pre-existing fixture API drift, not evidence of a repair-created guard regression. No baseline source flip or new checkout was used. All56 frozen source/test hashes remain unchanged. Frozen runner-prerequisite eligibility staysYES, but the intended fresh full-suite launch is HELD until narrow Muse-only UI-fixture modernization, complete five-journey passing evidence, independent review and combined9-test UI rerun. Preserve all assertions, real process/browser/CLI/restart/cleanup journeys and existing caps; no production fallback, stubbed execution/receipts, skip or timeout inflation. T8 NOT ACCEPTED; REL-1 NOT STARTED; no full suite/writer active at diagnosis.
+
+### Repaired-candidate linkage — 2026-10-08
+
+Independent read-only source-to-delivery reconciliation ACCEPTS SRC-P T8/EP16/27-29 and AR-4/AR-R31 against repair delta `1052d5b9..9ba0eefd`. Complete code/test review ACCEPT. Manifest `D:/tmp/t8-sol-source-freeze.json` covers all56 changed source/test files; SHA256 `3beaf3c0122510afdf9ed748bacb8290dd696c8520db3e1f0d306d12bde72a6a`; every raw hash matches. `98ed8d38` adds only status documentation after `9ba0eefd`. Original completed full suite at1052d5b9 remains failed148/4616,exit1 and does not certify repaired code. All148 original failures have focused GREEN evidence.
+
+Applicable mandatory obligations in the table retain unchanged accepted packet evidence or these explicit current-candidate checks: fresh root npm suite includes A1/A3/B1-B4/C5/D1-D4/E1/E1b, A2/A4 resource/budget, T4 concurrency, docs/answer/T7/handoff/replay; fresh A1 manifests supply the per-gate token rollup. Missing pytest/compiler steps remain actual host-gated skips, never passes. CMake/ctest report plumbing is not compiled-C++ proof. The root wildcard omits nested hosted qualification tests.
+
+Frozen prerequisites: Runner/app types, changed-file lint and diff exit0; owning22/22,subsystem202/202 and complete E1-E5/V1-V3/W3 products24/24 exit0,zero fail/skip/cancel. Metadata/commands/log hashes: `D:/tmp/t8-sol-frozen-*.meta.json`. Whole triage36/36, seven selected T7b owner/source/readiness controls7/7 and actual Phase-C positive start/source/handoff1/1 now finish trueexit0,no fail/skip/cancel on docs-only7015ee67; all frozen test gates292/292, all56 source/test hashes unchanged. Fresh local full-suite eligibility YES. With those prerequisites complete, the owner's remediation request and SRC-P T8 permit one fresh exact `npm run test:runner-v2`, including all12 chained client/policy/UI/observability scripts. Local full lint/build/UI checks will run before that expensive launch. No other full run overlaps it.
+
+Remaining feature UI command: `npm run test:e2e -- tests/e2e/runner-v2-t8-planning-journey.spec.ts tests/e2e/runner-v2-user-steering.spec.ts tests/e2e/runner-v2-final-verification.spec.ts`. Build requires no active dev server. Remaining package/platform evidence: candidate-linked archive/installed-entrypoint parity, three-host archive hashes, Node24 Windows/Linux/macOS portable/native lifecycle/readiness/recovery, Windows channel/Job, OCI and benchmark dispositions. Explicit Linux/macOS affected coverage must include execution-grants, filesystem-mutation-fence, filesystem-mutation-routing, filesystem-tools, openrouter-apply-patch-tool, tool-broker and real openrouter-apply-patch-factory files. Current portable workflow excludes these repair files; its green alone cannot qualify the changed platform branches. Record actual filesystem case behavior and legitimate Windows-only skips.
+
+T8 remains NOT ACCEPTED pending final validation, truthful host/platform scope, exact owned-resource disposition and durable closure. REL-1 NOT STARTED. Independent reconciliation record: `D:/tmp/t8-sol-reconciliation-20261008.md`; no tests or edits during that review. Historical accepted unchanged phases and uncertainty remain preserved.
+
+## T10 per-role prompt-token handoff (P6.5.4 ContextManifest estimator)
+
+`ContextManifest.estimatedTokens = ceil(rendered UTF-8 bytes / 4)`. BEFORE is accepted R3; AFTER is accepted T10.
+
+| Role | Before | After | Delta |
+|---|---:|---:|---:|
+| worker | 794 | 876 | +82 |
+| architect docs-v2 plan_required | 975 | 1110 | +135 |
+| verifier expectations | 262 | 275 | +13 |
+| verifier verdict | 573 | 556 | -17 |
+| plan critic | 279 | 280 | +1 |
+| coverage derive | 414 | 411 | -3 |
+| coverage verdict | 219 | 253 | +34 |
+| answer-review findings | 221 | 255 | +34 |
+| answer-review verdict | 228 | 261 | +33 |
+
+The deliverable reviewer has no public ContextPack builder; no manifest number is invented. Full fixture/methodology remains in `prompt-review-2026-09-23.md`.
+
+
+### A1 per-gate ContextManifest rollup
+
+| Purpose | Passes | Estimated context tokens |
+|---|---:|---:|
+| architect:completion_decision_required | 1 | 11,419 |
+| architect:final_verification_plan_required | 1 | 21,021 |
+| architect:final_verification_review_required | 1 | 11,963 |
+| architect:integration_approval_required | 3 | 15,069 |
+| architect:plan_required | 5 | 41,378 |
+| architect:review_required | 4 | 21,268 |
+| coverage:derive | 1 | 577 |
+| coverage:verdict | 1 | 2,230 |
+| critic:plan_critique | 1 | 372 |
+| delivery:findings | 4 | 7,901 |
+| delivery:obligations | 2 | 392 |
+| delivery:verdict | 4 | 9,797 |
+| handoff_notes | 1 | 32 |
+| verifier:expectations | 1 | 334 |
+| verifier:verdict | 1 | 2,976 |
+| worker:task | 4 | 10,474 |
+
+These are the durable ContextManifest estimator values for the A1 synthetic qualification. Actual usage attribution is kept separate by the product usage projection; where several manifests share one session the UI intentionally reports attribution as ambiguous rather than inventing a per-pass actual-token split.
+## T8 defects / fixture debt found before freeze
+
+1. **Production:** ctest relative `--output-junit` is resolved against `--test-dir`; new plans now use an absolute owned JUnit path. Focused V3/T8 language tests cover the behavior.
+2. **Production:** docs-v2 first verification may be anchored only to the **durably recorded** `delivery.test_integrity_initialized` creation baseline when no integration revision exists. `validateKernelSnapshotVerificationAdvance` now uses `projection.integrationRevision ?? projection.testIntegrity.initialRevision`; missing durable authority or any mismatched/foreign movement fails closed.
+3. **Production:** project subprocesses inherited Node test-runner coordination state. `NODE_TEST_CONTEXT` and `NODE_TEST_WORKER_ID` are now stripped by the central child-environment policy; ordinary `NODE_OPTIONS` stays allowed. Focused child-environment coverage is required before freeze.
+4. **Fixture debt:** planning-review, native-architect-runtime, docs-v2 stop-revision and T4 resource-claim tests were modernized to current planning-v1/docs-v2 source authority and explicit-start contracts rather than weakening production guards.
+5. **T8 fixture:** scripted worker/reviewer/verifier handling was made truthful for current tool-result shapes, fresh-read citations, validation scope, final-verifier passes and restart-safe re-review.
+
+## Current focused evidence
+
+- Final-source A1 after all production repairs: **1/1 pass**, 0 fail/skip/cancel, 886595.5434ms test / 887449.6615ms total; this supersedes earlier A1 diagnostics.
+- Controller cheap regression batch on the same source: **113/113 pass** across child environment, planning-review, native-architect, T4 resource claims and T8 budget/resource; focused ctest + docs-v2 authority batch **4/4 pass**.
+- Full docs-v2 stop-revision suite after the fail-closed authority repair: **13/13 pass** (writer run; controller independently reran the three changed authority cases 3/3 inside the 4/4 focused batch).
+- Feature-specific Playwright gate on the same source: **1/1 pass** in Chromium (~1.4m), proving source→plan/coverage UI→export/copy/download→stale-start negatives→exact explicit owner start→subsequent dispatch.
+- `npm run typecheck:runner-v2`: exit 0. ESLint on every changed/new TS/TSX file: exit 0 (five pre-existing unused-variable warnings in `v3-language-profiles.test.ts`, no errors). `git diff --check`: exit 0.
+- `npm run publish-downloads`: exit 0 and a second publication produced identical SHA-256 bytes for both tracked Runner ZIPs, proving the final generated downloads are deterministic/current for this source.
+- Earlier pre-A1 combined batch (**173 pass, 2 diagnostic fail, 1 host-gated skip**) is retained only as defect-discovery history and is not acceptance evidence. Python live pytest remains an explicit host-gated skip because the module is absent; the Python family/reader/mutator path is otherwise green.
+
+## Platform / Node scope
+
+- Executed host: **Windows 10 Pro 64-bit 10.0.19045**.
+- Executed Node: **v24.18.0**; Runner source/package contract is `>=24.0.0 <25`.
+- Windows-specific process/job suites: required in final `npm run test:runner-v2`.
+- Linux and macOS: **not executed on this local Windows host**. Package reproducibility/cross-host hash and platform-contract logic are modeled/tested locally; actual OS execution remains CI/remote coverage and must not be described as locally executed.
+- C++ compiler: absent on PATH; C++ compile step host-gated.
+- Python: 3.11.9 available; pytest missing, so live pytest step host-gated.
+- .NET: 10.0.100 available.
+- CMake/ctest: 4.1.2 available.
+
+## Layer 4 — pending on one frozen commit
+
+Required after all T8 repairs are committed and no source changes occur:
+
+1. `npm run test:runner-v2`
+2. `npm run typecheck:runner-v2`
+3. `npm run lint`
+4. `npm run build` (with no dev server running)
+5. Feature Playwright gate: `npm run test:e2e` journeys required by T7d (source→plan→review→export→explicit-start / steering-final-verification coverage)
+6. Package/source parity including `runner-v2/test/package-parity.test.ts`
+7. Supported Node/platform contract checks including `runner-v2/test/node-version.test.ts` and Windows Job/process suites
+8. `git diff --check` / clean frozen candidate
+
+For every red: reproduce on the accepted T10 base when relevant, classify pre-existing vs T8-caused, repair T8-caused failures, rerun affected checks, then invalidate and rerun the full final suite if production/shared code changed.
+
+## Acceptance
+
+**NOT ACCEPTED YET.** Do not render the source completion string until the corrected A1 spine and layer 4 on the exact frozen commit are green (apart from explicit source-authorized host skips), with no mandatory finding or acceptance failure open.

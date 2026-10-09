@@ -12,30 +12,30 @@ import { ArtifactStore } from "../../runner-v2/src/artifact-store.js";
 import { BuildRuntime, type FinalVerificationCheckDriver } from "../../runner-v2/src/build-runtime.js";
 import type { BrowserConsoleEvent, BrowserNetworkEvent } from "../../runner-v2/src/browser-tools.js";
 import { loadFinalVerificationDiagnostics } from "../../runner-v2/src/build-observability.js";
-import {
-  FinalVerificationDiagnosticsArchive,
-  OwnedFinalVerificationCleanup,
-} from "../../runner-v2/src/final-verification-cleanup.js";
+import { createExecutionHost } from "../../runner-v2/src/execution-host.js";
+import { OwnedFinalVerificationCleanup } from "../../runner-v2/src/final-verification-cleanup.js";
 import {
   planFinalVerification,
   validateFinalVerificationPlan,
   type FinalVerificationPlan,
 } from "../../runner-v2/src/final-verification-contracts.js";
-import {
-  FinalVerificationRuntime,
-  type FinalVerificationBrowserSession,
-} from "../../runner-v2/src/final-verification-runtime.js";
-import {
-  FinalVerificationProfileAuthority,
-  type FinalVerificationExecutionProfile,
-} from "../../runner-v2/src/final-verification-profile.js";
-import { captureGitBaseline } from "../../runner-v2/src/git-baseline.js";
-import { runGit } from "../../runner-v2/src/git-command.js";
-import { IntegrationManager } from "../../runner-v2/src/integration-manager.js";
-import { ManagedProcessService } from "../../runner-v2/src/managed-process.js";
+import type { FinalVerificationBrowserSession } from "../../runner-v2/src/final-verification-runtime.js";
+import type { FinalVerificationExecutionProfile } from "../../runner-v2/src/final-verification-profile.js";
+import { emptyRunnerCapabilitiesConfig } from "../../runner-v2/src/runner-capabilities-config.js";
+import type { RunnerCapabilityContract } from "../../runner-v2/src/runner-capability-contract.js";
 import { SqliteEvidenceStore } from "../../runner-v2/src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../../runner-v2/src/sqlite-scheduler-store.js";
-import { VerificationWorkspaceManager } from "../../runner-v2/src/verification-workspace.js";
+import { minimalWindowsSemanticProbeEnvironment } from "../../runner-v2/src/windows-process-semantic-probes.js";
+import {
+  FinalVerificationDiagnosticsArchive,
+  FinalVerificationProfileAuthority,
+  FinalVerificationRuntime,
+  IntegrationManager,
+  VerificationWorkspaceManager,
+  captureGitBaseline,
+  runGit,
+} from "../../runner-v2/test/support/git-fixture.js";
+import { createProductionOneShotCommandFixture } from "../../runner-v2/test/support/one-shot-command-executor.js";
 
 test.describe("Runner V2 canonical final verification", () => {
   test("verifies the exact integrated revision with real commands, process, browser, evidence, and owned cleanup", async ({ browser }) => {
@@ -46,11 +46,11 @@ test.describe("Runner V2 canonical final verification", () => {
     const evidence = new SqliteEvidenceStore(join(fixture.state, "evidence.sqlite"));
     const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
     const workspace = verificationWorkspace(fixture);
-    const managed = new ManagedProcessService({
-      stateDirectory: join(fixture.state, "managed processes"),
-      platform: "win32",
-    });
+    const managedOwner = await createManagedExecution(fixture);
+    const graph = createProductionOneShotCommandFixture(undefined, { artifacts });
     const browserSession = new PlaywrightFixtureSession(browser);
+    let bodyError: unknown;
+    let hasBodyError = false;
     try {
       expect(isWithin(fixture.project, fixture.state)).toBe(false);
       expect(existsSync(join(fixture.project, "verification-workspaces"))).toBe(false);
@@ -60,7 +60,9 @@ test.describe("Runner V2 canonical final verification", () => {
         workspaceManager: workspace,
         artifacts,
         evidenceStore: evidence,
-        managedProcessService: managed,
+        execution: graph.runnerOwnedExecution,
+        managedProcessService: managedOwner.service,
+        managedProcessAuthority: managedOwner.authority,
         browserSession,
         runId: fixture.runId,
         taskId: "final-verification-task",
@@ -145,7 +147,7 @@ test.describe("Runner V2 canonical final verification", () => {
       const cleanup = new OwnedFinalVerificationCleanup({
         stateDirectory: fixture.state,
         runId: fixture.runId,
-        stopRun: async (runId) => await managed.stopRun(runId),
+        stopRun: async (runId) => await managedOwner.service.stopRun(runId),
         closeBrowserRun: async () => await browserSession.close(),
         workspaceManager: workspace,
         diagnostics: archive,
@@ -203,12 +205,20 @@ test.describe("Runner V2 canonical final verification", () => {
         taskId: "final-verification-task",
         targetRevision: fixture.integration.revision,
       })).toBeUndefined();
+    } catch (error) {
+      bodyError = error;
+      hasBodyError = true;
+      throw error;
     } finally {
-      evidence.close();
-      await browserSession.close().catch(() => undefined);
-      if (ui) await stopChild(ui);
-      await workspace.cleanup().catch(() => undefined);
-      await closeFixture(fixture);
+      await teardownHonestly([
+        { label: "evidence", run: () => evidence.close() },
+        { label: "browser session", run: () => browserSession.close().catch(() => undefined) },
+        { label: "fixture server", run: () => (ui ? stopChild(ui) : Promise.resolve()) },
+        { label: "one-shot command graph", run: () => graph.close() },
+        { label: "managed execution", run: () => managedOwner.close() },
+        { label: "verification workspace", run: () => workspace.cleanup().catch(() => undefined) },
+        { label: "fixture", run: () => closeFixture(fixture) },
+      ], { error: bodyError, failed: hasBodyError });
     }
   });
 
@@ -217,6 +227,10 @@ test.describe("Runner V2 canonical final verification", () => {
     const fixture = await createFixture("mechanical boundaries");
     const evidence = new SqliteEvidenceStore(join(fixture.state, "boundary-evidence.sqlite"));
     const workspace = verificationWorkspace(fixture);
+    const boundaryArtifacts = new ArtifactStore(join(fixture.state, "boundary-artifacts"));
+    const graph = createProductionOneShotCommandFixture(undefined, { artifacts: boundaryArtifacts });
+    let bodyError: unknown;
+    let hasBodyError = false;
     try {
       const noBuild = planFinalVerification({ checks: [
         na("build", "package.json has no build script"),
@@ -240,8 +254,9 @@ test.describe("Runner V2 canonical final verification", () => {
       });
       const runtime = new FinalVerificationRuntime({
         workspaceManager: brokenWorkspace,
-        artifacts: new ArtifactStore(join(fixture.state, "boundary-artifacts")),
+        artifacts: boundaryArtifacts,
         evidenceStore: evidence,
+        execution: graph.runnerOwnedExecution,
         runId: fixture.runId,
         taskId: "boundary-verification",
         currentIntegrationRevision: () => currentRevision,
@@ -266,6 +281,7 @@ test.describe("Runner V2 canonical final verification", () => {
       const staleRuntime = new FinalVerificationRuntime({
         workspaceManager: stale,
         artifacts: new ArtifactStore(join(fixture.state, "stale-artifacts")),
+        execution: graph.runnerOwnedExecution,
         runId: `${fixture.runId}-stale`,
         currentIntegrationRevision: () => currentRevision,
       });
@@ -276,10 +292,17 @@ test.describe("Runner V2 canonical final verification", () => {
       }))
         .rejects.toThrow(/stale|current integration revision/i);
       await stale.cleanup().catch(() => undefined);
+    } catch (error) {
+      bodyError = error;
+      hasBodyError = true;
+      throw error;
     } finally {
-      evidence.close();
-      await workspace.cleanup().catch(() => undefined);
-      await closeFixture(fixture);
+      await teardownHonestly([
+        { label: "evidence", run: () => evidence.close() },
+        { label: "one-shot command graph", run: () => graph.close() },
+        { label: "verification workspace", run: () => workspace.cleanup().catch(() => undefined) },
+        { label: "fixture", run: () => closeFixture(fixture) },
+      ], { error: bodyError, failed: hasBodyError });
     }
   });
 
@@ -320,6 +343,7 @@ test.describe("Runner V2 canonical final verification", () => {
       na("browser", "browser already covered by the real fixture test"),
     ] };
     const artifacts = new ArtifactStore(join(fixture.state, "resume-artifacts"));
+    const graph = createProductionOneShotCommandFixture(undefined, { artifacts });
     const authority = new FinalVerificationProfileAuthority({ stateDirectory: fixture.state, runId: fixture.runId });
     const profile = await authority.inspectAndPersist({
       repositoryRoot: fixture.integration.path,
@@ -328,7 +352,7 @@ test.describe("Runner V2 canonical final verification", () => {
     const storeOptions = {
       evidenceStore: evidence,
       artifacts,
-      validateExecutionProfile: (input: { profile: FinalVerificationExecutionProfile; targetRevision: string }) =>
+      validateExecutionProfile: (input: { runId: string; profile: FinalVerificationExecutionProfile; targetRevision: string }) =>
         authority.validate(input.profile, input.targetRevision),
     };
     let store = new SqliteSchedulerStore(schedulerPath, storeOptions);
@@ -340,18 +364,28 @@ test.describe("Runner V2 canonical final verification", () => {
           workspaceManager: workspace,
           artifacts,
           evidenceStore: evidence,
+          execution: graph.runnerOwnedExecution,
           runId: fixture.runId,
           taskId: input.taskId,
           generationId: input.generationId,
           attempt: input.attempt,
           currentIntegrationRevision: () => fixture.integration.revision,
         });
-        return await runtime.runCategory({
+        const category = await runtime.runCategory({
           plan,
           executionProfile: input.executionProfile,
+          ...(input.signal ? { signal: input.signal } : {}),
         }, input.category);
+        return {
+          workspacePath: category.workspacePath,
+          startedAt: category.startedAt,
+          finishedAt: category.finishedAt,
+          check: category.check,
+        };
       },
     };
+    let bodyError: unknown;
+    let hasBodyError = false;
     try {
       seedVerification(store, fixture, plan, profile);
       let runtime = schedulerRuntime(store, evidence, artifacts, driver, fixture.runId);
@@ -376,11 +410,18 @@ test.describe("Runner V2 canonical final verification", () => {
       expect(records).toHaveLength(2);
       expect(new Set(records.map((record) => record.id)).size).toBe(2);
       expect(records[0]?.id).toBe(evidenceAfterBuild[0]?.id);
+    } catch (error) {
+      bodyError = error;
+      hasBodyError = true;
+      throw error;
     } finally {
-      store.close();
-      evidence.close();
-      await workspace.cleanup().catch(() => undefined);
-      await closeFixture(fixture);
+      await teardownHonestly([
+        { label: "scheduler store", run: () => store.close() },
+        { label: "evidence", run: () => evidence.close() },
+        { label: "one-shot command graph", run: () => graph.close() },
+        { label: "verification workspace", run: () => workspace.cleanup().catch(() => undefined) },
+        { label: "fixture", run: () => closeFixture(fixture) },
+      ], { error: bodyError, failed: hasBodyError });
     }
   });
 
@@ -389,13 +430,19 @@ test.describe("Runner V2 canonical final verification", () => {
     const fixture = await createFixture("cancel lifecycle");
     const workspace = verificationWorkspace(fixture);
     const port = await unusedPort();
-    const managed = new ManagedProcessService({ stateDirectory: join(fixture.state, "cancel processes"), platform: "win32" });
+    const managedOwner = await createManagedExecution(fixture);
+    const cancelArtifacts = new ArtifactStore(join(fixture.state, "cancel artifacts"));
+    const graph = createProductionOneShotCommandFixture(undefined, { artifacts: cancelArtifacts });
+    let bodyError: unknown;
+    let hasBodyError = false;
     try {
       const abort = new AbortController();
       const runtime = new FinalVerificationRuntime({
         workspaceManager: workspace,
-        artifacts: new ArtifactStore(join(fixture.state, "cancel artifacts")),
-        managedProcessService: managed,
+        artifacts: cancelArtifacts,
+        execution: graph.runnerOwnedExecution,
+        managedProcessService: managedOwner.service,
+        managedProcessAuthority: managedOwner.authority,
         runId: fixture.runId,
         taskId: "cancel-runtime",
         currentIntegrationRevision: () => fixture.integration.revision,
@@ -433,6 +480,7 @@ test.describe("Runner V2 canonical final verification", () => {
         const browserRuntime = new FinalVerificationRuntime({
           workspaceManager: workspace,
           artifacts: new ArtifactStore(join(fixture.state, "cancel browser artifacts")),
+          execution: graph.runnerOwnedExecution,
           browserSession: session,
           runId: fixture.runId,
           taskId: "cancel-browser",
@@ -448,9 +496,17 @@ test.describe("Runner V2 canonical final verification", () => {
         expect(browserResult.green).toBe(false);
         expect(session.closed).toBe(true);
       } finally { await stopChild(ui); }
+    } catch (error) {
+      bodyError = error;
+      hasBodyError = true;
+      throw error;
     } finally {
-      await workspace.cleanup().catch(() => undefined);
-      await closeFixture(fixture);
+      await teardownHonestly([
+        { label: "one-shot command graph", run: () => graph.close() },
+        { label: "managed execution", run: () => managedOwner.close() },
+        { label: "verification workspace", run: () => workspace.cleanup().catch(() => undefined) },
+        { label: "fixture", run: () => closeFixture(fixture) },
+      ], { error: bodyError, failed: hasBodyError });
     }
   });
 });
@@ -500,6 +556,58 @@ function verificationWorkspace(fixture: Fixture): VerificationWorkspaceManager {
     runId: fixture.runId,
     integrationManager: fixture.integration,
   });
+}
+
+async function createManagedExecution(fixture: Fixture) {
+  const host = createExecutionHost({
+    projectRoot: fixture.project,
+    stateDirectory: join(fixture.state, "managed execution host with spaces"),
+    artifacts: new ArtifactStore(join(fixture.root, "managed artifacts with spaces")),
+    ambientEnvironment: process.platform === "win32" ? minimalWindowsSemanticProbeEnvironment(process.env) : {},
+  });
+  let boundRun: Awaited<ReturnType<typeof host.bindRun>>;
+  try {
+    boundRun = await host.bindRun({
+      runId: fixture.runId,
+      permissionProfile: "full",
+      capabilityContract: { digest: "f".repeat(64) } as RunnerCapabilityContract,
+      capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
+    });
+  } catch (bindError) {
+    try {
+      await host.close();
+    } catch (hostCloseError) {
+      throw new AggregateError(
+        [bindError, hostCloseError],
+        "managed execution bind failed and host cleanup also failed",
+      );
+    }
+    throw bindError;
+  }
+  const run = boundRun;
+  return {
+    service: run.managedProcesses,
+    authority: { executionGrants: run.executionGrants, permissionProfile: "full" as const },
+    async close() {
+      let runError: unknown;
+      let hasRunError = false;
+      try {
+        await run.close();
+      } catch (error) {
+        runError = error;
+        hasRunError = true;
+      }
+      try {
+        await host.close();
+      } catch (hostError) {
+        if (hasRunError) {
+          throw new AggregateError([runError, hostError], "managed execution close failed");
+        }
+        throw hostError;
+      }
+      if (hasRunError) throw runError;
+    },
+  };
 }
 
 function requiredPlan(): FinalVerificationPlan {
@@ -639,6 +747,28 @@ async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.integration.cleanup().catch(() => undefined);
   await runGit({ cwd: fixture.project, args: ["worktree", "prune", "--expire", "now"], allowFailure: true }).catch(() => undefined);
   await rm(fixture.root, { recursive: true, force: true });
+}
+
+async function teardownHonestly(
+  steps: Array<{ label: string; run: () => unknown | Promise<unknown> }>,
+  body?: { error: unknown; failed: boolean },
+): Promise<void> {
+  const failures: unknown[] = [];
+  const failedLabels: string[] = [];
+  for (const step of steps) {
+    try {
+      await step.run();
+    } catch (error) {
+      failures.push(error);
+      failedLabels.push(step.label);
+    }
+  }
+  if (failures.length === 0) return;
+  if (body?.failed) {
+    throw new AggregateError([body.error, ...failures], `test body failed and teardown failed: ${failedLabels.join(", ")}`);
+  }
+  if (failures.length === 1) throw failures[0];
+  throw new AggregateError(failures, `teardown failed: ${failedLabels.join(", ")}`);
 }
 
 interface RunnerProcess { child: ChildProcessWithoutNullStreams; url: string }

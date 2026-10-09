@@ -226,7 +226,7 @@ class ReviewerModel implements AgentModel {
       if (tools === 0) return call("fs.read", { path: A_SRC }, "read-1");
       return call("record_deliverable_findings", { findings: [] }, `findings-${tools}`);
     }
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
     return call("submit_deliverable_verdict", {
       summary: "The module exports 1 and the cited test run passed.",
       satisfied: true,
@@ -295,20 +295,7 @@ test("IV-2 product journey: a high-tier workspaces change runs selected at depth
   const runRoot = join(state, "builds", safeSegment(RUN_ID));
   mkdirSync(runRoot, { recursive: true });
   const seed = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
-  for (const input of planningEvents()) seed.append(input);
-  // T7b: the ready plan waits for its explicit owner start. The test acts as
-  // owner through the genuine authorization event, covering the kernel's own
-  // current ready identity (no authority is seeded or invented).
-  const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(seed.readRun(RUN_ID)));
-  assert.ok(startIdentity, "the journey plan is ready with a complete start identity");
-  seed.append({
-    runId: RUN_ID,
-    type: "planning.execution_authorized",
-    occurredAt: CLOCK,
-    actor: { role: "user", id: "local-user" },
-    idempotencyKey: "iv2-journey-owner-start",
-    payload: { authorization: { ...startIdentity!, version: 1, ownerChoice: "execute" } },
-  });
+  for (const input of planningEvents().slice(0, 3)) seed.append(input);
   seed.close();
   // The factory and the pump verify the registered source bytes before any
   // consumer reads them: the exact journey bytes hash to the manifest digest.
@@ -360,6 +347,26 @@ test("IV-2 product journey: a high-tier workspaces change runs selected at depth
       createdAt: CLOCK,
       idempotencyKey: "iv2-journey",
     }));
+    // T8 fresh bootstrap: the factory saw only the bare 3-event prefix, so it
+    // stamped genuine evidence activation + test-integrity initialRevision from
+    // the actual Git baseline. Append the original source/read/ledger/coverage/
+    // ready tail, then authorize the actual durable ready identity via the
+    // public API (no baseline is fabricated and no guard is relaxed).
+    const tailStore = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
+    let journeyStartIdentity: ReturnType<typeof currentExplicitStartIdentity>;
+    try {
+      for (const input of planningEvents().slice(3)) tailStore.append(input);
+      journeyStartIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(tailStore.readRun(RUN_ID)));
+    } finally {
+      tailStore.close();
+    }
+    assert.ok(journeyStartIdentity, "the journey plan is ready with a complete start identity");
+    await handle.runtime.authorizeExplicitPlanStart({
+      ...journeyStartIdentity,
+      version: 1,
+      ownerChoice: "execute",
+      idempotencyKey: "iv2-journey-owner-start",
+    });
     const actions: string[] = [];
     for (let step = 0; step < 40; step += 1) {
       const projection = handle.runtime.projection();

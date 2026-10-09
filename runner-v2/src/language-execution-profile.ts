@@ -604,19 +604,34 @@ export function planLanguageTestReport(input: {
   }
 
   if (name === "ctest") {
+    // T8: ctest resolves a relative --output-junit against the test dir
+    // (--test-dir), not the invocation directory: a workspace-relative
+    // flag would land in the build dir while the runner reads the
+    // checkout root, so green runs would go red for "no readable
+    // report". Fresh plans therefore carry an absolute path (like the
+    // dotnet TRX planner); a reused existing relative flag resolves
+    // against the test dir when one is given. The reused command itself
+    // is never rewritten.
+    const testDir = existingOptionValue(args, "--test-dir");
     const existing = existingOptionValue(args, "--output-junit");
     if (existing !== undefined) {
       if (!existing) return { runner: "ctest", unsupported: "ctest carries an empty --output-junit flag; the runner cannot read a report with no path." };
-      const relative = toWorkspaceRelative(existing);
+      const existingPosix = asPosix(existing);
+      const testDirBase = testDir ? asPosix(testDir) : undefined;
+      const candidate = testDirBase && !existingPosix.includes(":") && !existingPosix.startsWith("/")
+        ? `${testDirBase.replace(/\/+$/, "")}/${existingPosix.replace(/^\.\//, "")}`
+        : existing;
+      const relative = toWorkspaceRelative(candidate);
       if (!relative) return { runner: "ctest", unsupported: "ctest --output-junit points outside the runner-owned verification workspace." };
       return { runner: "ctest", format: "junit", reportPath: relative };
     }
     const reportPath = languageReportFileName(input.reportName, "junit");
+    const absolute = `${asPosix(input.checkoutPath)}/${reportPath}`;
     return {
       runner: "ctest",
       format: "junit",
       reportPath,
-      command: { ...input.command, args: [...args, "--output-junit", reportPath] },
+      command: { ...input.command, args: [...args, "--output-junit", absolute] },
     };
   }
 

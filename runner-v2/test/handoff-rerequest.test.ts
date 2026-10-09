@@ -63,9 +63,9 @@ import {
  * (`verifier-handoff:<run>:<runtime>`, `architect-handoff:<run>:<runtime>`),
  * so an answer to a NEW requirement deduped into the first selection and a
  * single-candidate run stayed stuck behind an unanswerable prompt.
- * BuildRuntime now scopes the STORED selection key to the requirement it
- * answers (`<caller key>:req-<requirement count>`, bare for the first
- * requirement), so a re-answer records while a replay still dedupes.
+ * BuildRuntime now scopes the STORED selection key to the displayed offer it
+ * answers (`<caller key>:offer-<offer sequence>`), and the answer must name
+ * that offer sequence, so a re-answer records while a replay still dedupes.
  *
  * Driver honesty: the CR-1 v1/restart, probe D, and B1 tests drive the
  * production NativeBuildManager end to end with real SQLite and an advancing
@@ -1413,13 +1413,22 @@ test("FX-2 B1 (N1 probe F): the owner's re-answer with the same product key reco
     );
     assert.equal(manager.projection(RUN).status, "paused");
     assert.equal(manager.projection(RUN).verifierSelection?.status, "required");
-    // The owner selects with the product key; the run resumes.
-    await manager.selectVerifierRuntime(RUN, "rev:reviewer", productKey);
+    assert.equal(manager.projection(RUN).verifierSelection?.requiredSequence, firstRequirements[0]!.sequence);
+    // The owner selects with the product key naming the displayed offer; the run resumes.
+    await manager.selectVerifierRuntime(RUN, "rev:reviewer", productKey, firstRequirements[0]!.sequence);
     assert.equal(manager.projection(RUN).status, "running");
     assert.equal(manager.projection(RUN).verifierSelection?.status, "selected");
     const firstSelections = selectionSelected(store, RUN);
     assert.equal(firstSelections.length, 1);
-    assert.equal(firstSelections[0]!.idempotencyKey, productKey, "the first answer keeps the caller key");
+    assert.equal(
+      firstSelections[0]!.idempotencyKey,
+      `${productKey}:offer-${firstRequirements[0]!.sequence}`,
+      "the first answer is scoped to the displayed offer",
+    );
+    assert.deepEqual(firstSelections[0]!.payload, {
+      runtimeId: "rev:reviewer",
+      requiredSequence: firstRequirements[0]!.sequence,
+    });
     // The selected verifier is unavailable again with the same reason: a NEW
     // requirement is recorded (keyed by the selection it follows) and the
     // owner is prompted again.
@@ -1434,23 +1443,29 @@ test("FX-2 B1 (N1 probe F): the owner's re-answer with the same product key reco
     );
     assert.equal(manager.projection(RUN).status, "paused", "the owner is prompted again");
     assert.equal(manager.projection(RUN).verifierSelection?.status, "required");
+    assert.equal(manager.projection(RUN).verifierSelection?.requiredSequence, secondRequirements[1]!.sequence);
     // The owner answers the NEW prompt the way the product does -- same
-    // runtime, same key. Pre-fix this deduped into the first selection and
-    // the single-candidate run stayed stuck; now a NEW selection records.
-    await manager.selectVerifierRuntime(RUN, "rev:reviewer", productKey);
+    // runtime, same key, naming the new displayed offer. Pre-fix this
+    // deduped into the first selection and the single-candidate run stayed
+    // stuck; now a NEW selection records.
+    await manager.selectVerifierRuntime(RUN, "rev:reviewer", productKey, secondRequirements[1]!.sequence);
     const secondSelections = selectionSelected(store, RUN);
     assert.equal(secondSelections.length, 2, "the re-answer records a new selection");
     assert.equal(
       secondSelections[1]!.idempotencyKey,
-      `${productKey}:req-2`,
+      `${productKey}:offer-${secondRequirements[1]!.sequence}`,
       "the re-answer is scoped to the requirement it answers",
     );
+    assert.deepEqual(secondSelections[1]!.payload, {
+      runtimeId: "rev:reviewer",
+      requiredSequence: secondRequirements[1]!.sequence,
+    });
     assert.equal(manager.projection(RUN).status, "running");
     assert.equal(manager.projection(RUN).verifierSelection?.status, "selected");
     assert.equal(manager.projection(RUN).verifierSelection?.selectedRuntimeId, "rev:reviewer");
     // A replay of the exact second answer dedupes: same requirement count,
     // same stored key, no third event.
-    await manager.selectVerifierRuntime(RUN, "rev:reviewer", productKey);
+    await manager.selectVerifierRuntime(RUN, "rev:reviewer", productKey, secondRequirements[1]!.sequence);
     assert.equal(selectionSelected(store, RUN).length, 2, "the replay dedupes");
     assert.equal(manager.projection(RUN).verifierSelection?.status, "selected");
     // The run continues to completion: the third verify submits a satisfied
@@ -1527,39 +1542,54 @@ test("FX-2 M2: an Architect-handoff re-offer answered with the same product key 
     // same shape the native architect router records on a provider failure;
     // the selections under test go through the manager.
     const productKey = `architect-handoff:${RUN}:arch:standby`;
-    store.append(seedEvent(RUN, "architect.handoff_required", "fx2-archb1:req-1", "runner", "runtime-router", {
+    const firstRequirement = store.append(seedEvent(RUN, "architect.handoff_required", "fx2-archb1:req-1", "runner", "runtime-router", {
       reason: "architect_unavailable",
       requiredCapabilities: ["code"],
       candidateRuntimeIds: ["arch:standby"],
     }));
     assert.equal(manager.projection(RUN).status, "paused");
-    await manager.selectArchitectHandoff(RUN, "arch:standby", productKey);
+    assert.equal(manager.projection(RUN).runtime.architect.handoff?.requiredSequence, firstRequirement.sequence);
+    await manager.selectArchitectHandoff(RUN, "arch:standby", productKey, firstRequirement.sequence);
     assert.equal(manager.projection(RUN).runtime.architect.runtimeId, "arch:standby");
     assert.equal(manager.projection(RUN).status, "running");
     const firstSelections = handoffSelected(store, RUN);
     assert.equal(firstSelections.length, 1);
-    assert.equal(firstSelections[0]!.idempotencyKey, productKey, "the first answer keeps the caller key");
+    assert.equal(
+      firstSelections[0]!.idempotencyKey,
+      `${productKey}:offer-${firstRequirement.sequence}`,
+      "the first answer is scoped to the displayed offer",
+    );
+    assert.deepEqual(firstSelections[0]!.payload, {
+      runtimeId: "arch:standby",
+      requiredSequence: firstRequirement.sequence,
+    });
     // A second offer after another failure, answered the way the product
-    // does: same runtime, same key. Pre-fix this deduped into the first
-    // selection and the run stayed paused; now a NEW selection records.
-    store.append(seedEvent(RUN, "architect.handoff_required", "fx2-archb1:req-2", "runner", "runtime-router", {
+    // does: same runtime, same key, naming the new displayed offer. Pre-fix
+    // this deduped into the first selection and the run stayed paused; now a
+    // NEW selection records.
+    const secondRequirement = store.append(seedEvent(RUN, "architect.handoff_required", "fx2-archb1:req-2", "runner", "runtime-router", {
       reason: "architect_unavailable",
       requiredCapabilities: ["code"],
       candidateRuntimeIds: ["arch:standby"],
     }));
     assert.equal(manager.projection(RUN).status, "paused", "the owner is prompted again");
-    await manager.selectArchitectHandoff(RUN, "arch:standby", productKey);
+    assert.equal(manager.projection(RUN).runtime.architect.handoff?.requiredSequence, secondRequirement.sequence);
+    await manager.selectArchitectHandoff(RUN, "arch:standby", productKey, secondRequirement.sequence);
     const secondSelections = handoffSelected(store, RUN);
     assert.equal(secondSelections.length, 2, "the re-answer records a new selection");
     assert.equal(
       secondSelections[1]!.idempotencyKey,
-      `${productKey}:req-2`,
+      `${productKey}:offer-${secondRequirement.sequence}`,
       "the re-answer is scoped to the requirement it answers",
     );
+    assert.deepEqual(secondSelections[1]!.payload, {
+      runtimeId: "arch:standby",
+      requiredSequence: secondRequirement.sequence,
+    });
     assert.equal(manager.projection(RUN).runtime.architect.runtimeId, "arch:standby");
     assert.equal(manager.projection(RUN).status, "running");
     // A replay of the exact second answer dedupes.
-    await manager.selectArchitectHandoff(RUN, "arch:standby", productKey);
+    await manager.selectArchitectHandoff(RUN, "arch:standby", productKey, secondRequirement.sequence);
     assert.equal(handoffSelected(store, RUN).length, 2, "the replay dedupes");
     assert.equal(manager.projection(RUN).runtime.architect.runtimeId, "arch:standby");
   } finally {

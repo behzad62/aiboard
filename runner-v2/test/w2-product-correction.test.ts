@@ -315,12 +315,12 @@ class W2JourneyReviewer implements AgentModel {
         return w2Call("fs.read", { path: "package.json" }, `verdict-package-read-${seen}`);
       }
       const text = w2RequestText(request);
-      const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+      const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
       const ownSection = text.split("Your durably recorded findings:")[1]?.split("The worker's report")[0] ?? "";
-      const ownBlocking = /"severity": "blocking"/.test(ownSection);
+      const ownBlocking = /"severity"\s*:\s*"blocking"/.test(ownSection);
       const priorSection = text.split("Prior review")[1] ?? "";
       const hasPrior = priorSection.length > 0;
-      const priorIds = [...new Set([...priorSection.matchAll(/"id": "((?!claim:)[^"]+)"/g)].map((match) => match[1]!))];
+      const priorIds = [...new Set([...priorSection.matchAll(/"id"\s*:\s*"((?!claim:)[^"]+)"/g)].map((match) => match[1]!))];
       // Resolution is read from the actual verdict-session checkout.
       const moduleText = w2ReadText(request, "src/value.mjs") ?? "";
       const checks = priorIds.map((findingId) => {
@@ -342,7 +342,7 @@ class W2JourneyReviewer implements AgentModel {
           .split("\n").map((line) => line.trim()).filter((line) => line.startsWith("- "))
           .map((line) => line.slice(2).trim()).filter((line) => line.length > 0)
         : [];
-      const ownFiles = [...new Set([...ownSection.matchAll(/"location": "([^":]+)(?::\d+)?"/g)].map((match) => match[1]!))];
+      const ownFiles = [...new Set([...ownSection.matchAll(/"location"\s*:\s*"([^":]+)(?::\d+)?"/g)].map((match) => match[1]!))];
       const ownOnChanged = ownFiles.some((file) => deltaFiles.includes(file));
       const satisfied = hasPrior
         ? checks.every((check) => check.resolution === "resolved") && !ownOnChanged
@@ -390,6 +390,12 @@ class W2JourneyWorker implements AgentModel {
       readiness: "ready_for_architect_review",
       unresolvedConcerns: [],
       criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [record.fact.stdoutArtifactHash] }],
+      validationScope: {
+        changed: ["src/value.mjs", "src/extra.mjs"],
+        verified: ["value exports 2"],
+        testsRun: [{ command: "node --test test/value.test.mjs", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }],
+        notRun: [{ what: "full suite", why: "narrow change with no shared contract touched" }],
+      },
     }, `submit-${attempt}`);
   }
 }
@@ -451,7 +457,7 @@ class W2JourneyArchitect implements AgentModel {
         decision: approved ? "approved" : "rejected",
         summary: approved ? "The correction review is satisfied." : "Open review findings remain.",
         evidenceArtifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))],
-        criterionVerdicts: [{ criterionId: "c1", verdict: approved ? "satisfied" : "unsatisfied", rationale: "Judged.", evidenceIds: links.map((link) => link.evidenceId), artifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))] }],
+        criterionVerdicts: [{ criterionId: "c1", verdict: approved ? "satisfied" : "unsatisfied", rationale: "Judged.", evidenceIds: links.map((link) => link.evidenceId), artifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))], ...(approved ? {} : { overrideReason: "The correction review left blocking findings open; the verified value claim alone does not satisfy the criterion." }) }],
       });
     }
     if (task.status === "approved") return this.next("request_integration", { taskId: "T1" });

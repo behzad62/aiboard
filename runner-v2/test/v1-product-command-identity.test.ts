@@ -16,7 +16,7 @@ import { buildExecutionPlanRevision, type ExecutionPlanPhase, type ExecutionTask
 import { NativeBuildFactory } from "../src/native-build-factory.js";
 import { captureGitBaseline, runGit } from "./support/git-fixture.js";
 import { buildApprovedSourceManifest, validateApprovedSourceInput, type ApprovedSourceInputV1 } from "../src/native-planning-provisioner.js";
-import { currentExplicitStartIdentity, rebuildSchedulerProjection, type SchedulerProjection } from "../src/scheduler-store.js";
+import { currentExplicitStartIdentity, rebuildSchedulerProjection, reduceSchedulerEvent, type SchedulerProjection } from "../src/scheduler-store.js";
 import { computeArtifactDigest } from "../src/source-manifest.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -132,6 +132,37 @@ function journeyLastToolValue(request: AgentModelRequest): Record<string, unknow
   return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
 }
 
+function v1LastToolText(request: AgentModelRequest): string {
+  const message = [...request.messages].reverse().find((candidate) => candidate.role === "tool");
+  return JSON.stringify(message?.content ?? null);
+}
+
+function v1ArchToolResults(request: AgentModelRequest): Array<{ toolName?: string; isError?: boolean }> {
+  return request.messages
+    .filter((message) => message.role === "tool")
+    .map((message) => message.content as { toolName?: string; isError?: boolean });
+}
+
+function v1ArchHasToolResult(request: AgentModelRequest, toolName: string): boolean {
+  return v1ArchToolResults(request).some((result) => result.toolName === toolName && result.isError !== true);
+}
+
+function v1ArchToolFailed(request: AgentModelRequest, toolName: string): boolean {
+  return v1ArchToolResults(request).some((result) => result.toolName === toolName && result.isError === true);
+}
+
+function v1ArchFailureDetail(request: AgentModelRequest, toolName: string): string {
+  const failed = request.messages
+    .filter((message) => message.role === "tool")
+    .reverse()
+    .find((message) => (message.content as { toolName?: string }).toolName === toolName && (message.content as { isError?: boolean }).isError === true);
+  return JSON.stringify(failed?.content).slice(0, 1500);
+}
+
+function v1ArchRequestText(request: AgentModelRequest): string {
+  return request.messages.map((message) => typeof message.content === "string" ? message.content : "").join("\n");
+}
+
 class V1JourneyArchitect implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   private calls = 0;
@@ -182,15 +213,45 @@ class V1JourneyArchitect implements AgentModel {
     }
     const task = projection.tasks.T1!;
     if (task.status === "submitted" || task.status === "architect_review") {
+      const text = v1ArchRequestText(request);
+      assert.ok(text.includes('"dispositionPrefill"'), "the Architect context carries the runner-owned prefill");
+      assert.ok(text.includes('"prefilledVerdict"'), "the prefill carries criterion verdicts");
+      assert.ok(/independent/i.test(text) && /confirm/i.test(text) && /override/i.test(text), "the Architect is told to confirm or override the independent review");
+      assert.ok(!text.includes("Use artifact.read with diffArtifactHash"), "no mandatory full-diff reread is instructed");
       assert.match(JSON.stringify(request.messages), /taken before later edits/, "actual Architect receives stale evidence links");
+      if (v1ArchToolResults(request).some((result) => result.toolName === "review_task" && result.isError !== true)) {
+        throw new Error("V1 fixture: review_task already succeeded; the turn should have ended.");
+      }
       const links = task.criterionEvidenceLinks ?? [];
-      return this.call("review_task", {
+      const evidenceIds = [...new Set(links.map((link) => link.evidenceId))];
+      const artifactHashes = [...new Set(links.flatMap((link) => link.artifactHashes))];
+      const payload = {
         taskId: "T1",
         decision: "approved",
-        summary: "Architect explicitly reconciles mechanical scope findings against the current plan.",
-        evidenceArtifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))],
-        criterionVerdicts: [{ criterionId: "c1", verdict: "satisfied", rationale: "Tests pass.", evidenceIds: links.map((link) => link.evidenceId), artifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))] }],
-      });
+        summary: "Approving c1 after reading the stale-but-green run: the post-command edit touches only src/notes.txt, which the value-only criterion does not cover; src/value.mjs and test/value.test.mjs are unchanged since the passing evidence.",
+        evidenceArtifactHashes: artifactHashes,
+        criterionVerdicts: [{
+          criterionId: "c1",
+          verdict: "satisfied",
+          rationale: "The actual passing run proves src/value.mjs exports value 2; the later notes-only patch (after to later) does not touch the criterion module or tests, so the stale evidence remains sufficient for c1.",
+          evidenceIds,
+          artifactHashes,
+          overrideReason: "Reviewer correctly holds c1 unverified (stale: taken before later edits). I read the cited green evidence in this session and the current submission metadata: the evidence ran after src/value.mjs and test/value.test.mjs reached their submitted bytes and passed 1/1; the only post-evidence change is src/notes.txt after to later, outside criterion c1 module and test scope, so the criterion is unchanged and satisfied without claiming fresh tests.",
+        }],
+        claimDispositions: [{ claimId: "claim:c1", status: "verified", rationale: "Read the green run in this session; the post-evidence notes-only edit leaves the value criterion unaffected, so the stale claim is semantically verified without rewriting its stale fact." }],
+      };
+      if (!v1ArchToolResults(request).some((result) => result.toolName === "review_task")) {
+        return this.call("review_task", payload);
+      }
+      if (!v1ArchHasToolResult(request, "inspect_evidence")) {
+        assert.ok(v1ArchToolFailed(request, "review_task"), "the unread override is refused before any read");
+        assert.match(v1ArchFailureDetail(request, "review_task"), /has not read the cited evidence/, "the refusal names the missing same-session read");
+        return this.call("inspect_evidence", { taskId: "T1" });
+      }
+      if (v1ArchToolFailed(request, "inspect_evidence")) {
+        throw new Error(`V1 fixture: inspect_evidence failed: ${v1ArchFailureDetail(request, "inspect_evidence")}`);
+      }
+      return this.call("review_task", payload);
     }
     if (task.status === "approved") return this.call("request_integration", { taskId: "T1" });
     throw new Error(`V1 journey script exhausted at T1 ${task.status}.`);
@@ -220,7 +281,18 @@ class V1JourneyWorker implements AgentModel {
     if (count === 8) return journeyCall("fs.patch", {path:"src/notes.txt", search:"after", replace:"later", expectedSha256:journeyLastToolValue(request)!.sha256}, "post-command-edit");
     const record = this.evidence!;
     const fact = record.fact as { stdoutArtifactHash: string };
-    return journeyCall("submit_task", { summary: "Product value and real tests pass.", readiness: "ready_for_architect_review", unresolvedConcerns: [], criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }] }, "submit-1");
+    return journeyCall("submit_task", {
+      summary: "Product value and real tests pass.",
+      readiness: "ready_for_architect_review",
+      unresolvedConcerns: [],
+      criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: {
+        changed: ["src/value.mjs", "test/value.test.mjs", "src/notes.txt"],
+        verified: ["value exports 2"],
+        testsRun: [{ command: "node --test test/value.test.mjs", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }],
+        notRun: [{ what: "full suite and post-evidence retest", why: "targeted run only; final notes patch intentionally postdates evidence to prove staleness detection" }],
+      },
+    }, "submit-1");
   }
 }
 
@@ -289,12 +361,23 @@ class V1JourneyReviewer implements AgentModel {
     if (pass === "delivery-verdict-system" && seen === 0) return journeyCall("fs.read", { path: "src/value.mjs", startLine: 1, endLine: 1 }, "verdict-read");
     if (pass === "delivery-verdict-system" && seen === 1) return journeyCall("fs.read", { path: "src/missing.mjs" }, "failed-read");
     const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const segments = text.split(/"id"\s*:\s*"(claim:[^"]+)"/g);
+    const staleIds = new Set<string>();
+    for (let i = 1; i < segments.length; i += 2) {
+      if (segments[i + 1]?.includes("stale: taken before later edits")) staleIds.add(segments[i]!);
+    }
+    assert.ok(staleIds.has("claim:c1"), "the stale criterion claim is identified from actual reviewer input");
+    if (seen === 3) assert.match(v1LastToolText(request), /citation actually read in this review session/, "the no-citation verdict is refused");
+    if (seen === 4) assert.match(v1LastToolText(request), /Citation evidence was not read in this review session/, "the foreign-evidence verdict is refused");
+    if (seen === 5) assert.match(v1LastToolText(request), /Citation location was not read in this review session/, "the unread-line verdict is refused");
     return journeyCall("submit_deliverable_verdict", {
-      summary: "The module exports 2 and the cited test run passed.",
-      satisfied: true,
-      survivorDispositions: [...text.matchAll(/"id": "(mutation-survivor:[^"]+)"/g)].map((match) => ({ findingId: match[1], disposition: "not_a_real_gap", rationale: "The changed arithmetic branch is deliberately unconstrained by the value-only criterion; this survivor does not weaken that criterion." })),
-      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout.", ...(seen === 2 ? {} : { citations: seen === 3 ? [{ evidenceId: "foreign-evidence" }] : [{ path: "src/value.mjs", line: seen === 4 ? 99 : 1 }] }) })),
+      summary: "The worker test run is stale (taken before later edits), so criterion c1 stays unverified.",
+      satisfied: false,
+      survivorDispositions: [...text.matchAll(/"id"\s*:\s*"(mutation-survivor:[^"]+)"/g)].map((match) => ({ findingId: match[1], disposition: "not_a_real_gap", rationale: "The changed arithmetic branch is deliberately unconstrained by the value-only criterion; this survivor does not weaken that criterion." })),
+      claimVerdicts: claimIds.map((claimId) => staleIds.has(claimId)
+        ? { claimId, status: "unverified", rationale: "Worker evidence predates the final notes patch (stale: taken before later edits); a mechanically unverified claim cannot be recorded verified." }
+        : { claimId, status: "verified", rationale: "Confirmed in the checkout.", ...(seen === 2 ? {} : { citations: seen === 3 ? [{ evidenceId: "foreign-evidence" }] : [{ path: "src/value.mjs", line: seen === 4 ? 99 : 1 }] }) }),
     }, `verdict-${seen}`);
   }
 }
@@ -338,18 +421,68 @@ test("V1 unseeded authenticated factory SQLite Git stale evidence journey", asyn
         };
         await stepUntil((p) => p.planning?.readiness === "ready"); assert.equal(workerA.requests.length, 0);
         const start = await control("plan-start", { ...currentExplicitStartIdentity(runtime!.projection()), version: 1, ownerChoice: "execute", idempotencyKey: "explicit-start" }); assert.equal(start.status, 200, await start.text());
-        const p = await stepUntil((p) => p.tasks.T1?.status === "approved");
-        const review = p.delivery!.reviews.T1!;
+        const reviewed = await stepUntil((p) => p.delivery?.reviews.T1?.stage === "completed");
+        const review = reviewed.delivery!.reviews.T1!;
         assert.equal(review.reviewerRuntimeId, "rev:reviewer"); assert.equal(review.independence, "distinct_model");
         assert.ok(review.depth!.inspectionToolCalls >= 1);
-        assert.equal(review.satisfied, true);
+        assert.equal(review.satisfied, false);
         assert.ok(review.readCapture!.reads.some((read) => read.path === "src/value.mjs" && read.startLine === 1 && read.endLine === 1));
-        assert.ok(review.claimVerdicts!.every((claim) => JSON.stringify(claim.citations) === JSON.stringify([{path:"src/value.mjs",line:1}])));
+        const staleClaim = review.claims!.find((claim) => claim.id === "claim:c1")!;
+        assert.equal(staleClaim.mechanical?.label, "unverified_claim");
+        assert.match(staleClaim.mechanical?.reason ?? "", /stale: taken before later edits/);
+        assert.equal(review.claims!.find((claim) => claim.id === "claim:summary")?.mechanical?.label, "reviewer_judgement");
+        const staleVerdict = review.claimVerdicts!.find((verdict) => verdict.claimId === "claim:c1")!;
+        assert.equal(staleVerdict.status, "unverified");
+        assert.match(staleVerdict.rationale, /stale: taken before later edits/);
+        const summaryVerdict = review.claimVerdicts!.find((verdict) => verdict.claimId === "claim:summary")!;
+        assert.equal(summaryVerdict.status, "verified");
+        assert.deepEqual(summaryVerdict.citations, [{ path: "src/value.mjs", line: 1 }]);
+        for (const verdict of review.claimVerdicts!) {
+          for (const citation of verdict.citations ?? []) {
+            if (!("line" in citation)) continue;
+            assert.ok(review.readCapture!.reads.some((read) => read.path === citation.path && read.startLine! <= citation.line && read.endLine! >= citation.line), `citation ${citation.path}:${citation.line} is covered by a current read range`);
+          }
+        }
+        const accepted = await stepUntil((p) => p.tasks.T1?.status === "approved");
+        assert.equal(accepted.tasks.T1!.status, "approved");
+        assert.equal(accepted.tasks.T1!.attempt, 1, "the read-authorized override avoids a repair cycle");
+        const decided = manager!.events(V1_RUN).find((event) => event.type === "review.decided");
+        assert.ok(decided, "the Architect records its decision");
+        const payload = decided!.payload as {
+          decision: string;
+          criterionVerdicts: Array<{ criterionId: string; verdict: string; overrideReason?: string; overrideReadProof?: Array<{ evidenceId?: string }> }>;
+          claimDispositions?: Array<{ claimId: string; status: string; rationale: string; readProof?: Array<{ evidenceId?: string }> }>;
+        };
+        assert.equal(payload.decision, "approved");
+        const c1 = payload.criterionVerdicts.find((verdict) => verdict.criterionId === "c1")!;
+        assert.equal(c1.verdict, "satisfied");
+        assert.ok(c1.overrideReason && c1.overrideReason.length > 0, "the c1 override records its reason");
+        assert.match(c1.overrideReason, /notes|stale/i, "the override explains the notes-only stale case");
+        const c1Links = accepted.tasks.T1!.criterionEvidenceLinks ?? [];
+        const c1Evidence = c1Links.find((link) => link.criterionId === "c1")!.evidenceId;
+        assert.ok((c1.overrideReadProof ?? []).some((proof) => proof.evidenceId === c1Evidence), "the c1 override proves its same-session read");
+        const disposition = (payload.claimDispositions ?? []).find((entry) => entry.claimId === "claim:c1")!;
+        assert.equal(disposition.status, "verified");
+        assert.ok((disposition.readProof ?? []).some((proof) => proof.evidenceId === c1Evidence), "the claim disposition proves the same read");
+        assert.equal(reviewed.delivery!.reviews.T1!.claimVerdicts?.find((verdict) => verdict.claimId === "claim:c1")?.disposition?.status, undefined, "sanity: the pre-decision snapshot predates the disposition");
+        assert.equal(accepted.delivery!.reviews.T1!.claimVerdicts?.find((verdict) => verdict.claimId === "claim:c1")?.disposition?.status, "verified");
+        const finalReview = accepted.delivery!.reviews.T1!;
+        assert.equal(finalReview.satisfied, false, "the reviewer record stays unsatisfied");
+        assert.equal(finalReview.claims!.find((claim) => claim.id === "claim:c1")!.mechanical?.label, "unverified_claim");
+        assert.match(finalReview.claims!.find((claim) => claim.id === "claim:c1")!.mechanical?.reason ?? "", /stale: taken before later edits/);
+        assert.equal(finalReview.claimVerdicts!.find((verdict) => verdict.claimId === "claim:c1")!.status, "unverified");
         const events = manager.events(V1_RUN);
-        const link = p.tasks.T1!.criterionEvidenceLinks![0]!;
+        const link = accepted.tasks.T1!.criterionEvidenceLinks![0]!;
         assert.equal(link.freshness?.status, "stale");
         assert.equal(link.freshness?.reason, "taken before later edits");
         assert.notEqual(link.freshness?.submittedTreeId, link.freshness?.evidenceTreeId);
+        const verdictIndex = events.findIndex((event) => event.type === "delivery.review_recorded");
+        const verdict = events[verdictIndex]!;
+        const before = rebuildSchedulerProjection(events.slice(0, verdictIndex));
+        const durableVerdicts = verdict.payload.claimVerdicts as Array<Record<string, unknown>>;
+        assert.throws(() => reduceSchedulerEvent(before, { ...verdict, payload: { ...verdict.payload, satisfied: true, claimVerdicts: durableVerdicts.map((claim) => claim.claimId === "claim:c1" ? { ...claim, status: "verified", rationale: "Forged stale acceptance.", citations: [{ path: "src/value.mjs", line: 1 }] } : claim) } }), /mechanically labeled unverified_claim/);
+        assert.throws(() => reduceSchedulerEvent(before, { ...verdict, payload: { ...verdict.payload, satisfied: true } }), /unsatisfied exactly/);
+        for (const citations of [undefined, [{ path: "src/value.mjs", line: 99 }], [{ evidenceId: "foreign-evidence" }]]) assert.throws(() => reduceSchedulerEvent(before, { ...verdict, payload: { ...verdict.payload, claimVerdicts: durableVerdicts.map((claim) => claim.claimId === "claim:summary" ? { ...claim, citations } : claim) } }), /citation|read/i);
         assert.deepEqual(rebuildSchedulerProjection(events), runtime!.projection());
         const runRoot = join(state, "builds", runnerRunStateSegment(V1_RUN));
         const evidence = new SqliteEvidenceStore(join(runRoot,"evidence.sqlite"),{readOnly:true});

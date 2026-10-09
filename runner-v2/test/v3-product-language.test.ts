@@ -260,6 +260,12 @@ class V3JourneyWorker implements AgentModel {
       readiness: "ready_for_architect_review",
       unresolvedConcerns: [],
       criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: {
+        changed: ["Calc.cs"],
+        verified: ["Calc exposes Value 2"],
+        testsRun: [{ command: "dotnet test --disable-build-servers", counts: { selected: 2, passed: 2, failed: 0, skipped: 0 } }],
+        notRun: [{ what: "full language matrix", why: "this journey covers the .NET/TRX fixture only; other language fixtures are outside the selected journey" }],
+      },
     }, "submit-1");
   }
 }
@@ -330,7 +336,7 @@ class V3JourneyReviewer implements AgentModel {
       return journeyCall("fs.read", { path: "Calc.cs", startLine: 3, endLine: 3 }, "cite-read-1");
     }
     const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
     return journeyCall("submit_deliverable_verdict", {
       summary: "Calc exposes 2 and the cited test run passed.",
       satisfied: true,

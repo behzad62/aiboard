@@ -2035,12 +2035,23 @@ class C4ArchitectModel implements AgentModel {
       // C5: the run id and authorship time are kernel-stamped (the factory
       // clock is real time, so the fixture's fixed values cannot match);
       // manifest, policy, lineage absence and requiredBase ride supplied.
+      // Decision times are kernel-stamped the same way: the fixture's fixed
+      // decidedAt values are omitted below so the submission clock stamps them.
       const { digest: _digest, runId: _run, createdAt: _created, ...rest } =
         this.fixture.revision as unknown as Record<string, unknown>;
       void _digest;
       void _run;
       void _created;
-      return this.call("draft_planning_plan", { revision: rest });
+      const revision = structuredClone(rest) as Record<string, unknown>;
+      for (const decision of (revision["planningDecisions"] as Array<Record<string, unknown>> | undefined) ?? []) {
+        delete decision["decidedAt"];
+      }
+      for (const requirement of (revision["requirements"] as Array<Record<string, unknown>> | undefined) ?? []) {
+        const applicability = requirement["applicability"] as Record<string, unknown> | undefined;
+        const disposition = applicability?.["disposition"] as Record<string, unknown> | undefined;
+        if (disposition) delete disposition["decidedAt"];
+      }
+      return this.call("draft_planning_plan", { revision });
 
     }
     if (!seen.has("request_coverage_review")) {
@@ -2090,9 +2101,10 @@ test("C4 CD-7: factory runtime plans without the checkpoint tool or docs templat
       actor: NewSchedulerEvent["actor"],
       payload: Record<string, unknown>,
     ) => seeder.append({ runId: RUN, type, occurredAt: CLOCK, actor, idempotencyKey: key, payload });
-    seed("run.policy_configured", "policy", { role: "runner", id: "runner" }, { runPolicy: "plan_only" });
-    seed("project_docs.policy_configured", "docs-policy", { role: "runner", id: "build-runtime" }, { version: 2 });
+    seed("project_docs.policy_configured", "project-docs-policy", { role: "runner", id: "build-runtime" }, { version: 2 });
+    seed("run.initialized", "run-initialized", { role: "runner", id: "build-runtime" }, { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: "Deliver the value module." });
     seed("planning.policy_configured", "planning-policy", { role: "runner", id: "build-runtime" }, { version: 1 });
+    seed("run.policy_configured", "policy", { role: "runner", id: "runner" }, { runPolicy: "plan_only" });
     seed("planning.source_registered", "source", { role: "user", id: "owner" }, { manifest: fixture.priorManifest });
     seed("planning.source_amended", "source-amend", { role: "user", id: "owner" }, { manifest: fixture.manifest });
     seeder.close();
@@ -2138,6 +2150,7 @@ test("C4 CD-7: factory runtime plans without the checkpoint tool or docs templat
       maxConcurrency: 1,
       permissionProfile: "full",
       planCritique: "off",
+      planningPolicy: { version: 1 },
       budgetLimits: {},
       createdAt: CLOCK,
       idempotencyKey: "c4-factory",
