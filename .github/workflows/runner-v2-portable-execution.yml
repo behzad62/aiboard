@@ -240,6 +240,7 @@ jobs:
       - name: Run Windows factory diagnostic probe (single run)
         env:
           RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT: ${{ runner.temp }}/t8-factory-diagnostic-evidence
+          RUNNER_V2_FACTORY_PROBE_OBSERVER: '1'
         run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/openrouter-apply-patch-factory.test.ts
       - name: Upload Windows factory diagnostics
         if: always()
