@@ -16,6 +16,7 @@ test("Windows exact process birth does not require optional PowerShell cmdlet au
   if (process.platform !== "win32") { t.skip("Real Windows birth fixture requires Windows."); return; }
   let queries = 0;
   let nativeFailure: Record<string, unknown> | undefined;
+  let nativeTiming: { startedUtcMs: number; endedUtcMs: number; elapsedMs: number } | undefined;
   const context = vm.createContext({
     process: {
       platform: "win32",
@@ -40,10 +41,21 @@ test("Windows exact process birth does not require optional PowerShell cmdlet au
         // They are never parsed as identity or ownership evidence.
         const before = "$ErrorActionPreference='Stop';$p=[System.Diagnostics.Process]::GetProcessById(" + process.pid + ");try{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}finally{$p.Dispose()}";
         assert.equal(args[4], before, "diagnostic refuses a changed native query");
-        const tagged = "[Console]::Error.WriteLine('T8_BIRTH_ENTRY');$PSModuleAutoLoadingPreference='None';"
-          + args[4].replace(";$p=", ";[Console]::Error.WriteLine('T8_BIRTH_BEFORE_QUERY');$p=")
-          + ";[Console]::Error.WriteLine('T8_BIRTH_AFTER_DISPOSE')";
-        return execFileSync(executable, [...args.slice(0, 4), tagged], options);
+        // These diagnostic clocks/tags cannot become identity or authority.
+        // Pre-entry time includes initializing the timing API and Console write.
+        const phase = (name: string) => "[Console]::Error.WriteLine('" + name
+          + "|utcTicks='+[DateTime]::UtcNow.Ticks+'|monoTicks='+[System.Diagnostics.Stopwatch]::GetTimestamp()+'|frequency='+[System.Diagnostics.Stopwatch]::Frequency)";
+        const tagged = phase("T8_BIRTH_ENTRY") + ";$PSModuleAutoLoadingPreference='None';"
+          + args[4].replace(";$p=", ";" + phase("T8_BIRTH_BEFORE_QUERY") + ";$p=")
+          + ";" + phase("T8_BIRTH_AFTER_DISPOSE");
+        const startedUtcMs = Date.now();
+        const startedMonotonicNs = process.hrtime.bigint();
+        try {
+          return execFileSync(executable, [...args.slice(0, 4), tagged], options);
+        } finally {
+          nativeTiming = { startedUtcMs, endedUtcMs: Date.now(),
+            elapsedMs: Number(process.hrtime.bigint() - startedMonotonicNs) / 1_000_000 };
+        }
       } catch (error) {
         const detail = error as { code?: unknown; status?: unknown; signal?: unknown; stderr?: unknown };
         const stderr = typeof detail.stderr === "string" ? detail.stderr : Buffer.isBuffer(detail.stderr) ? detail.stderr.toString("utf8") : "";
@@ -51,9 +63,9 @@ test("Windows exact process birth does not require optional PowerShell cmdlet au
           code: detail.code, status: detail.status, signal: detail.signal,
           missingGetProcessCommand: stderr.includes("Get-Process") && stderr.includes("CommandNotFoundException"),
           phaseMarkers: {
-            entry: stderr.slice(0, 4096).split(/\r?\n/).includes("T8_BIRTH_ENTRY"),
-            beforeQuery: stderr.slice(0, 4096).split(/\r?\n/).includes("T8_BIRTH_BEFORE_QUERY"),
-            afterDispose: stderr.slice(0, 4096).split(/\r?\n/).includes("T8_BIRTH_AFTER_DISPOSE"),
+            entry: stderr.slice(0, 4096).split(/\r?\n/).some(line => /^T8_BIRTH_ENTRY\|utcTicks=\d+\|monoTicks=\d+\|frequency=\d+$/.test(line)),
+            beforeQuery: stderr.slice(0, 4096).split(/\r?\n/).some(line => /^T8_BIRTH_BEFORE_QUERY\|utcTicks=\d+\|monoTicks=\d+\|frequency=\d+$/.test(line)),
+            afterDispose: stderr.slice(0, 4096).split(/\r?\n/).some(line => /^T8_BIRTH_AFTER_DISPOSE\|utcTicks=\d+\|monoTicks=\d+\|frequency=\d+$/.test(line)),
             inspectedPrefixCodeUnits: Math.min(stderr.length, 4096), totalStderrCodeUnits: stderr.length,
           },
         };
@@ -64,6 +76,10 @@ test("Windows exact process birth does not require optional PowerShell cmdlet au
   });
   vm.runInContext(inspectorSource(), context);
   const result = JSON.parse(JSON.stringify(vm.runInContext(`inspectProcessBirth(${process.pid})`, context)));
+  // Default execFileSync forwards collected stderr after the child finishes.
+  // Embedded child clocks are the observations; log receipt times are not phases.
+  console.error("T8_BIRTH_PARENT " + JSON.stringify({ timing: nativeTiming,
+    state: result.state, nativeFailure, diagnosticOnly: true, ownershipAuthority: false }));
   assert.equal(queries, 1, "the genuine birth query must run exactly once");
   assert.equal(result.state, "same", "birth must remain available without cmdlet autoload; actual native failure=" + JSON.stringify(nativeFailure));
   assert.match(result.fingerprint, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$/);

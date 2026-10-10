@@ -239,6 +239,20 @@ test("concurrent reclaimers elect one authoritative stale-lock effect", { timeou
         second: { state: secondResult.state, message: secondResult.message?.slice(0, 2_048) },
       }));
     assert.equal(readFileSync(effectPath, "utf8").trim().split(/\r?\n/).filter(Boolean).length, 1);
+    const firstPreparationMs = (firstResult as typeof firstResult & { preparationMs?: unknown }).preparationMs;
+    const secondPreparationMs = (secondResult as typeof secondResult & { preparationMs?: unknown }).preparationMs;
+    console.info("T8_OWNED_FENCE_ELECTION_RESULTS", JSON.stringify({
+      first: {
+        state: firstResult.state, message: firstResult.message?.slice(0, 2_048),
+        pid: typeof firstResult.pid === "number" && Number.isSafeInteger(firstResult.pid) && firstResult.pid > 0 ? firstResult.pid : undefined,
+        preparationMs: typeof firstPreparationMs === "number" && Number.isFinite(firstPreparationMs) && firstPreparationMs >= 0 ? firstPreparationMs : undefined,
+      },
+      second: {
+        state: secondResult.state, message: secondResult.message?.slice(0, 2_048),
+        pid: typeof secondResult.pid === "number" && Number.isSafeInteger(secondResult.pid) && secondResult.pid > 0 ? secondResult.pid : undefined,
+        preparationMs: typeof secondPreparationMs === "number" && Number.isFinite(secondPreparationMs) && secondPreparationMs >= 0 ? secondPreparationMs : undefined,
+      },
+    }));
   } finally {
     await stop(stale);
     if (first) await stop(first);
