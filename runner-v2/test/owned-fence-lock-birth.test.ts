@@ -36,13 +36,26 @@ test("Windows exact process birth does not require optional PowerShell cmdlet au
       // One cold original query, with optional module autoload unavailable.
       // No preflight, warmer, retry, alternate native query or larger deadline.
       try {
-        return execFileSync(executable, [...args.slice(0, 4), "$PSModuleAutoLoadingPreference='None';" + args[4]], options);
+        // Fixed phase markers perturb only this existing diagnostic call's script/stderr.
+        // They are never parsed as identity or ownership evidence.
+        const before = "$ErrorActionPreference='Stop';$p=[System.Diagnostics.Process]::GetProcessById(" + process.pid + ");try{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}finally{$p.Dispose()}";
+        assert.equal(args[4], before, "diagnostic refuses a changed native query");
+        const tagged = "[Console]::Error.WriteLine('T8_BIRTH_ENTRY');$PSModuleAutoLoadingPreference='None';"
+          + args[4].replace(";$p=", ";[Console]::Error.WriteLine('T8_BIRTH_BEFORE_QUERY');$p=")
+          + ";[Console]::Error.WriteLine('T8_BIRTH_AFTER_DISPOSE')";
+        return execFileSync(executable, [...args.slice(0, 4), tagged], options);
       } catch (error) {
         const detail = error as { code?: unknown; status?: unknown; signal?: unknown; stderr?: unknown };
         const stderr = typeof detail.stderr === "string" ? detail.stderr : Buffer.isBuffer(detail.stderr) ? detail.stderr.toString("utf8") : "";
         nativeFailure = {
           code: detail.code, status: detail.status, signal: detail.signal,
           missingGetProcessCommand: stderr.includes("Get-Process") && stderr.includes("CommandNotFoundException"),
+          phaseMarkers: {
+            entry: stderr.slice(0, 4096).split(/\r?\n/).includes("T8_BIRTH_ENTRY"),
+            beforeQuery: stderr.slice(0, 4096).split(/\r?\n/).includes("T8_BIRTH_BEFORE_QUERY"),
+            afterDispose: stderr.slice(0, 4096).split(/\r?\n/).includes("T8_BIRTH_AFTER_DISPOSE"),
+            inspectedPrefixCodeUnits: Math.min(stderr.length, 4096), totalStderrCodeUnits: stderr.length,
+          },
         };
         throw error;
       }

@@ -233,7 +233,11 @@ test("concurrent reclaimers elect one authoritative stale-lock effect", { timeou
     first = startHolder(lockPath, effectPath, 200, 500, "contend");
     second = startHolder(lockPath, effectPath, 200, 500, "contend");
     const [firstResult, secondResult] = await Promise.all([nextMessage(first), nextMessage(second)]);
-    assert.deepEqual([firstResult.state, secondResult.state].sort(), ["acquired", "refused"]);
+    assert.deepEqual([firstResult.state, secondResult.state].sort(), ["acquired", "refused"],
+      JSON.stringify({
+        first: { state: firstResult.state, message: firstResult.message?.slice(0, 2_048) },
+        second: { state: secondResult.state, message: secondResult.message?.slice(0, 2_048) },
+      }));
     assert.equal(readFileSync(effectPath, "utf8").trim().split(/\r?\n/).filter(Boolean).length, 1);
   } finally {
     await stop(stale);
