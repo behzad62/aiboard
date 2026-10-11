@@ -1,0 +1,159 @@
+name: FunBoard Domain HTTPS (Nginx + Certbot)
+
+# Manual-only, limited to the owner's established VPS. No source code, images,
+# domain API tokens, or private keys are uploaded to GitHub.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Prepare ACME HTTP bootstrap, test issuance, issue certificate, or activate HTTPS"
+        required: true
+        type: choice
+        options: [bootstrap, cert-test, cert-issue, activate]
+      bootstrap_sha256:
+        description: "SHA-256 of privately staged HTTP ACME Nginx template"
+        required: false
+        type: string
+      https_sha256:
+        description: "SHA-256 of privately staged HTTPS Nginx template"
+        required: false
+        type: string
+      maintenance_sha256:
+        description: "SHA-256 of privately staged maintenance HTML"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+concurrency:
+  group: funboard-private-vps
+  cancel-in-progress: false
+
+jobs:
+  domain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Restrict VPS SSH destination
+        shell: bash
+        env:
+          HOST: ${{ secrets.SSH_HOST }}
+          PORT: ${{ secrets.SSH_PORT }}
+          USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          if [[ "$HOST" != "178.79.134.104" || "$PORT" != "3192" || "$USER" != "pixel" ]]; then
+            echo "VPS destination did not match the approved FunBoard host"
+            exit 1
+          fi
+          echo "Approved VPS destination"
+      - name: Configure isolated FunBoard domain using existing SSH/sudo authorization
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          OPERATION: ${{ inputs.operation }}
+          BOOTSTRAP_SHA256: ${{ inputs.bootstrap_sha256 }}
+          HTTPS_SHA256: ${{ inputs.https_sha256 }}
+          MAINTENANCE_SHA256: ${{ inputs.maintenance_sha256 }}
+          SUDO_PASSWORD: ${{ secrets.SSH_PASS }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATEKEY }}
+          passphrase: ${{ secrets.SSH_KEYPASS }}
+          envs: OPERATION,BOOTSTRAP_SHA256,HTTPS_SHA256,MAINTENANCE_SHA256,SUDO_PASSWORD
+          command_timeout: 15m
+          # Do not enable the action's per-line script rewriter: nested if/else
+          # requires one shell. Strict Bash handles aborts and bad pipelines.
+          script_stop: false
+          script: |
+            set -euo pipefail
+            umask 077
+            sudo_safe() { printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' "$@"; }
+            test "$(id -un)" = pixel
+            sudo_safe true >/dev/null
+            test "$(systemctl is-active nginx)" = active
+            test "$(systemctl is-active mysql)" = active
+            test "$(curl -sS -m 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3180/api/health)" = 200
+            stage="$HOME/funboard-domain-staging"
+            test -d "$stage" && test ! -L "$stage"
+            boot="$stage/funboard.app.nginx-bootstrap.conf"
+            https="$stage/funboard.app.nginx.conf"
+            maintenance="$stage/maintenance.html"
+            site=/etc/nginx/sites-available/funboard.app
+            enabled=/etc/nginx/sites-enabled/funboard.app
+            acme=/var/www/funboard-acme
+            check_digest() {
+              expected="$1"; file="$2"
+              [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || { echo "Invalid SHA-256"; exit 1; }
+              test -f "$file" && test ! -L "$file"
+              printf '%s  %s\n' "$expected" "$file" | sha256sum --check --status
+            }
+            echo "DOMAIN_OPERATION=$OPERATION"
+            if [ "$OPERATION" = bootstrap ]; then
+              check_digest "$BOOTSTRAP_SHA256" "$boot"
+              test ! -e "$site" && test ! -L "$enabled" && test ! -e "$enabled" || {
+                echo "FunBoard Nginx vhost already exists; bootstrap refuses overwrite"; exit 1;
+              }
+              sudo_safe install -d -m 0755 "$acme"
+              sudo_safe install -d -o pixel -g www-data -m 0755 "$acme/.well-known/acme-challenge"
+              sudo_safe install -m 0644 "$boot" "$site"
+              sudo_safe ln -s "$site" "$enabled"
+              if ! sudo_safe nginx -t; then
+                sudo_safe rm -f "$enabled" "$site"
+                echo "Bootstrap syntax rejected; cleaned new vhost, prior Nginx untouched"
+                exit 1
+              fi
+              sudo_safe systemctl reload nginx
+              echo "FUNBOARD_HTTP_ACME_BOOTSTRAP_ACTIVE"
+            elif [ "$OPERATION" = cert-test ] || [ "$OPERATION" = cert-issue ]; then
+              check_digest "$BOOTSTRAP_SHA256" "$boot"
+              test -L "$enabled" && [ "$(readlink "$enabled")" = "$site" ]
+              [ "$(sudo_safe sha256sum "$site" | awk '{print $1}')" = "$BOOTSTRAP_SHA256" ] || {
+                echo "Bootstrap Nginx file differs from approved file"; exit 1;
+              }
+              sudo_safe nginx -t
+              if [ "$OPERATION" = cert-test ]; then
+                sudo_safe certbot certonly --dry-run --webroot -w "$acme" --non-interactive --agree-tos --cert-name funboard.app -d funboard.app -d www.funboard.app
+                echo "FUNBOARD_ACME_DRY_RUN_PASS"
+              else
+                sudo_safe certbot certonly --webroot -w "$acme" --non-interactive --agree-tos --cert-name funboard.app -d funboard.app -d www.funboard.app
+                sudo_safe openssl x509 -in /etc/letsencrypt/live/funboard.app/fullchain.pem -noout -checkend 86400
+                echo "FUNBOARD_ORIGIN_CERT_ISSUED"
+              fi
+            elif [ "$OPERATION" = activate ]; then
+              check_digest "$BOOTSTRAP_SHA256" "$boot"
+              check_digest "$HTTPS_SHA256" "$https"
+              check_digest "$MAINTENANCE_SHA256" "$maintenance"
+              [ -L "$enabled" ] && [ "$(readlink "$enabled")" = "$site" ]
+              [ "$(sudo_safe sha256sum "$site" | awk '{print $1}')" = "$BOOTSTRAP_SHA256" ] || {
+                echo "Expected bootstrap is no longer installed"; exit 1;
+              }
+              sudo_safe test -f /etc/letsencrypt/live/funboard.app/fullchain.pem
+              sudo_safe test -f /etc/letsencrypt/live/funboard.app/privkey.pem
+              sudo_safe openssl x509 -in /etc/letsencrypt/live/funboard.app/fullchain.pem -noout -checkend 86400
+              sudo_safe install -d -m 0755 /var/www/funboard-maintenance
+              sudo_safe install -m 0644 "$maintenance" /var/www/funboard-maintenance/maintenance.html
+              sudo_safe install -m 0644 "$https" "$site"
+              if ! sudo_safe nginx -t; then
+                sudo_safe install -m 0644 "$boot" "$site"
+                sudo_safe nginx -t
+                echo "HTTPS config rejected; restored bootstrap; no reload"
+                exit 1
+              fi
+              if ! sudo_safe systemctl reload nginx; then
+                sudo_safe install -m 0644 "$boot" "$site"
+                sudo_safe nginx -t
+                sudo_safe systemctl reload nginx
+                echo "Nginx reload failed; bootstrap restored"
+                exit 1
+              fi
+              curl -fsS --max-time 12 --resolve funboard.app:443:127.0.0.1 https://funboard.app/api/health | grep -q '"status":"ready"'
+              [ "$(curl -sS --max-time 12 --resolve www.funboard.app:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://www.funboard.app/)" = 308 ]
+              test "$(systemctl is-active nginx)" = active
+              test "$(systemctl is-active mysql)" = active
+              echo "FUNBOARD_HTTPS_ORIGIN_ACTIVE_AND_VERIFIED"
+            else
+              echo "Unknown operation"
+              exit 1
+            fi
