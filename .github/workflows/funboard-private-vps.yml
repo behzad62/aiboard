@@ -78,6 +78,7 @@ jobs:
             echo "SSH authentication and GitHub sudo authorization OK."
             sudo_safe docker version --format 'Docker server: {{.Server.Version}}'
             sudo_safe nginx -t >/dev/null
+            echo "ACTIVE_MODE=$MODE"
             if [ "$MODE" = preflight ]; then
             echo "ACTION_MODE=$MODE"
               echo "FUNBOARD_PREFLIGHT_OK: no changes made."
@@ -120,6 +121,9 @@ jobs:
                 echo "Unexpected recovery Compose content digest"; exit 1;
               }
               fixed="$stage/compose-fixed.yaml"
+              echo "REMOTE_HOME=$HOME"
+              echo "FILE_EXISTS=$([ -f "$fixed" ] && echo yes || echo no) IS_SYMLINK=$([ -L "$fixed" ] && echo yes || echo no)"
+              ls -ld "$stage" "$fixed" || true
               test -f "$fixed" && test ! -L "$fixed"
               echo "FIXED_FILE_OK"
               printf '%s  %s\n' "$COMPOSE_SHA256" "$fixed" | sha256sum --check --status
