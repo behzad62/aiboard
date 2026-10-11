@@ -9,7 +9,7 @@ on:
         description: "Prepare ACME HTTP bootstrap, test issuance, issue certificate, or activate HTTPS"
         required: true
         type: choice
-        options: [bootstrap, cert-test, cert-issue, activate]
+        options: [bootstrap, cert-test, cert-issue, activate, verify, renewal-test]
       bootstrap_sha256:
         description: "SHA-256 of privately staged HTTP ACME Nginx template"
         required: false
@@ -148,11 +148,33 @@ jobs:
                 echo "Nginx reload failed; bootstrap restored"
                 exit 1
               fi
-              curl -fsS --max-time 12 --resolve funboard.app:443:127.0.0.1 https://funboard.app/api/health | grep -q '"status":"ready"'
-              [ "$(curl -sS --max-time 12 --resolve www.funboard.app:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://www.funboard.app/)" = 308 ]
+              curl --noproxy "*" -fsS --max-time 12 --resolve funboard.app:443:127.0.0.1 https://funboard.app/api/health | grep -q '"status":"ready"'
+              [ "$(curl --noproxy "*" -sS --max-time 12 --resolve www.funboard.app:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://www.funboard.app/)" = 308 ]
               test "$(systemctl is-active nginx)" = active
               test "$(systemctl is-active mysql)" = active
               echo "FUNBOARD_HTTPS_ORIGIN_ACTIVE_AND_VERIFIED"
+            elif [ "$OPERATION" = verify ] || [ "$OPERATION" = renewal-test ]; then
+              # Read-only configuration and certificate validation; no Nginx reload.
+              check_digest "$HTTPS_SHA256" "$https"
+              [ -L "$enabled" ] && [ "$(readlink "$enabled")" = "$site" ]
+              [ "$(sudo_safe sha256sum "$site" | awk '{print $1}')" = "$HTTPS_SHA256" ] || {
+                echo "Installed HTTPS vhost differs from audited template"; exit 1;
+              }
+              sudo_safe nginx -t
+              sudo_safe openssl x509 -in /etc/letsencrypt/live/funboard.app/fullchain.pem -noout -checkend 86400
+              sudo_safe openssl x509 -in /etc/letsencrypt/live/funboard.app/fullchain.pem -noout -checkhost funboard.app
+              sudo_safe openssl x509 -in /etc/letsencrypt/live/funboard.app/fullchain.pem -noout -checkhost www.funboard.app
+              # VPS has system proxy variables, so --noproxy is essential:
+              # curl --resolve otherwise verifies the outbound proxy TLS cert.
+              curl --noproxy "*" -fsS --max-time 12 --resolve funboard.app:443:127.0.0.1 https://funboard.app/api/health | grep -q '"status":"ready"'
+              [ "$(curl --noproxy "*" -sS --max-time 12 --resolve www.funboard.app:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://www.funboard.app/)" = 308 ]
+              if [ "$OPERATION" = renewal-test ]; then
+                sudo_safe certbot renew --dry-run --non-interactive --cert-name funboard.app
+                echo "FUNBOARD_ONLY_CERT_RENEWAL_DRY_RUN_PASS"
+              fi
+              test "$(systemctl is-active nginx)" = active
+              test "$(systemctl is-active mysql)" = active
+              echo "FUNBOARD_HTTPS_ORIGIN_VERIFIED"
             else
               echo "Unknown operation"
               exit 1
