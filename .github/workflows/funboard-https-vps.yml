@@ -9,7 +9,7 @@ on:
         description: "Prepare ACME HTTP bootstrap, test issuance, issue certificate, or activate HTTPS"
         required: true
         type: choice
-        options: [bootstrap, cert-test, cert-issue, activate, verify, renewal-test]
+        options: [bootstrap, cert-test, cert-issue, activate, verify, renewal-test, install-renew-hook]
       bootstrap_sha256:
         description: "SHA-256 of privately staged HTTP ACME Nginx template"
         required: false
@@ -20,6 +20,10 @@ on:
         type: string
       maintenance_sha256:
         description: "SHA-256 of privately staged maintenance HTML"
+        required: false
+        type: string
+      hook_sha256:
+        description: "SHA-256 of staged FunBoard-specific Certbot deploy hook"
         required: false
         type: string
 
@@ -54,6 +58,7 @@ jobs:
           BOOTSTRAP_SHA256: ${{ inputs.bootstrap_sha256 }}
           HTTPS_SHA256: ${{ inputs.https_sha256 }}
           MAINTENANCE_SHA256: ${{ inputs.maintenance_sha256 }}
+          HOOK_SHA256: ${{ inputs.hook_sha256 }}
           SUDO_PASSWORD: ${{ secrets.SSH_PASS }}
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -61,7 +66,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATEKEY }}
           passphrase: ${{ secrets.SSH_KEYPASS }}
-          envs: OPERATION,BOOTSTRAP_SHA256,HTTPS_SHA256,MAINTENANCE_SHA256,SUDO_PASSWORD
+          envs: OPERATION,BOOTSTRAP_SHA256,HTTPS_SHA256,MAINTENANCE_SHA256,HOOK_SHA256,SUDO_PASSWORD
           command_timeout: 15m
           # Do not enable the action's per-line script rewriter: nested if/else
           # requires one shell. Strict Bash handles aborts and bad pipelines.
@@ -153,6 +158,24 @@ jobs:
               test "$(systemctl is-active nginx)" = active
               test "$(systemctl is-active mysql)" = active
               echo "FUNBOARD_HTTPS_ORIGIN_ACTIVE_AND_VERIFIED"
+            elif [ "$OPERATION" = install-renew-hook ]; then
+              hook="$stage/funboard-cert-deploy-hook.sh"
+              dest=/etc/letsencrypt/renewal-hooks/deploy/funboard-nginx-reload
+              check_digest "$HOOK_SHA256" "$hook"
+              test -d /etc/letsencrypt/renewal-hooks/deploy
+              if sudo_safe test -e "$dest" || sudo_safe test -L "$dest"; then
+                echo "Existing renewal hook detected; refusing to replace it"
+                exit 1
+              fi
+              sudo_safe /bin/sh -n "$hook"
+              sudo_safe nginx -t
+              sudo_safe install -m 0755 "$hook" "$dest"
+              # An unrelated certificate must be ignored without a reload.
+              sudo_safe env RENEWED_LINEAGE=/etc/letsencrypt/live/aiboard.me "$dest"
+              # Exercise the exact FunBoard certificate reload logic once.
+              sudo_safe env RENEWED_LINEAGE=/etc/letsencrypt/live/funboard.app "$dest"
+              test "$(systemctl is-active nginx)" = active
+              echo "FUNBOARD_CERTBOT_RENEWAL_HOOK_INSTALLED"
             elif [ "$OPERATION" = verify ] || [ "$OPERATION" = renewal-test ]; then
               # Read-only configuration and certificate validation; no Nginx reload.
               check_digest "$HTTPS_SHA256" "$https"
