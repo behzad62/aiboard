@@ -1,23 +1,27 @@
 name: FunBoard Private VPS Container
 
-# Install into the owner's existing PRIVATE PixelMaster GitHub repository.
-# The image is built on the PC and copied directly to the VPS over SSH.
-# Never upload FunBoard code or the Docker archive to a public repository.
+# Installed in the owner's existing AIboard GitHub repository. Manual only.
+# Closed-source FunBoard images are built locally, staged via private SCP and
+# never uploaded as GitHub source code, release assets or CI artifacts.
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Preflight SSH/sudo or deploy staged localhost-only container"
+        description: "SSH/sudo preflight, first-time deploy, or guarded recovery of interrupted first deploy"
         required: true
         type: choice
-        options: [preflight, deploy]
+        options: [preflight, deploy, resume]
         default: preflight
       release_tag:
-        description: "Approved 12-character lowercase Git SHA (deploy only)"
+        description: "Approved 12-character lowercase release Git SHA"
         type: string
         required: false
       archive_sha256:
         description: "SHA-256 of staged image.tar.gz (deploy only)"
+        type: string
+        required: false
+      compose_sha256:
+        description: "SHA-256 of staged compose-fixed.yaml (resume only)"
         type: string
         required: false
 
@@ -46,12 +50,13 @@ jobs:
           fi
           echo "Approved SSH destination confirmed."
 
-      - name: Perform isolated VPS preflight or private FunBoard installation
+      - name: Perform VPS preflight, first install, or guarded CPU-limit recovery
         uses: appleboy/ssh-action@v1.0.3
         env:
           MODE: ${{ inputs.mode }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+          COMPOSE_SHA256: ${{ inputs.compose_sha256 }}
           SUDO_PASSWORD: ${{ secrets.SSH_PASS }}
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -59,7 +64,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATEKEY }}
           passphrase: ${{ secrets.SSH_KEYPASS }}
-          envs: MODE,RELEASE_TAG,ARCHIVE_SHA256,SUDO_PASSWORD
+          envs: MODE,RELEASE_TAG,ARCHIVE_SHA256,COMPOSE_SHA256,SUDO_PASSWORD
           command_timeout: 14m
           script_stop: true
           script: |
@@ -77,30 +82,69 @@ jobs:
               echo "FUNBOARD_PREFLIGHT_OK: no changes made."
               exit 0
             fi
-            [ "$MODE" = deploy ] || { echo "Unsupported mode"; exit 1; }
+
+            [ "$MODE" = deploy ] || [ "$MODE" = resume ] || { echo "Unsupported mode"; exit 1; }
             [[ "$RELEASE_TAG" =~ ^[0-9a-f]{12}$ ]] || { echo "Invalid release tag"; exit 1; }
-            [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid checksum"; exit 1; }
             stage="$HOME/funboard-release-staging/$RELEASE_TAG"
-            archive="$stage/image.tar.gz"
-            test -d "$stage" && test -f "$archive" && test -f "$stage/compose.yaml" && test -f "$stage/funboard.env.example"
-            test ! -L "$stage" && test ! -L "$archive"
-            printf '%s  %s\n' "$ARCHIVE_SHA256" "$archive" | sha256sum --check --status
-            echo "Staged image checksum verified."
-            if [ -e /opt/funboard/compose.yaml ] || [ -e /etc/funboard/funboard.env ] || [ -e /var/lib/funboard/funboard.sqlite ]; then
-              echo "Existing FunBoard deployment detected. Refusing first-install overwrite."
-              exit 1
+            test -d "$stage" && test ! -L "$stage"
+
+            if [ "$MODE" = deploy ]; then
+              [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid image checksum"; exit 1; }
+              archive="$stage/image.tar.gz"
+              test -f "$archive" && test -f "$stage/compose.yaml" && test -f "$stage/funboard.env.example"
+              test ! -L "$archive" && test ! -L "$stage/compose.yaml" && test ! -L "$stage/funboard.env.example"
+              printf '%s  %s\n' "$ARCHIVE_SHA256" "$archive" | sha256sum --check --status
+              echo "Staged image checksum verified."
+              if [ -e /opt/funboard/compose.yaml ] || sudo_safe test -e /etc/funboard/funboard.env || [ -e /var/lib/funboard/funboard.sqlite ]; then
+                echo "Existing FunBoard deployment detected. Refusing first-install overwrite."
+                exit 1
+              fi
+              if ss -lnt | grep -Eq '[:.]3180[[:space:]]'; then
+                echo "FunBoard local-only port 3180 is already in use."
+                exit 1
+              fi
+              sudo_safe install -d -m 0755 /opt/funboard
+              sudo_safe install -d -m 0700 /etc/funboard
+              sudo_safe install -d -o 1000 -g 1000 -m 0700 /var/lib/funboard
+              sudo_safe install -m 0644 "$stage/compose.yaml" /opt/funboard/compose.yaml
+              sudo_safe install -m 0600 "$stage/funboard.env.example" /etc/funboard/funboard.env
+              sudo_safe docker load --input "$archive"
+            else
+              # One-off recovery of initial 1.5 CPU limit rejected on this 1-CPU VPS.
+              # Only the audited Compose file changes; DO NOT touch env, DB or user records.
+              [ "$RELEASE_TAG" = "c530e43470ef" ] || { echo "Unexpected recovery release"; exit 1; }
+              [[ "$COMPOSE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid replacement Compose hash"; exit 1; }
+              [ "$COMPOSE_SHA256" = "48d0c6b037bd58f57f96995dfa284c7dd8ccea780a795130cffea5ef23652ab5" ] || {
+                echo "Unexpected recovery Compose content digest"; exit 1;
+              }
+              fixed="$stage/compose-fixed.yaml"
+              test -f "$fixed" && test ! -L "$fixed"
+              printf '%s  %s\n' "$COMPOSE_SHA256" "$fixed" | sha256sum --check --status
+              echo "Corrected Compose checksum verified."
+              installed="$(sha256sum /opt/funboard/compose.yaml | awk '{print $1}')"
+              [ "$installed" = "2185268f341f17df3bd6d5237192dcb25300ed3a6700c55b26678d56c91818b6" ] || {
+                echo "Existing Compose differs from the audited pre-failure config. No overwrite."; exit 1;
+              }
+              sudo_safe test -f /etc/funboard/funboard.env
+              sudo_safe test -d /var/lib/funboard
+              if ! sudo_safe test ! -e /var/lib/funboard/funboard.sqlite; then
+                echo "Database already exists: this recovery must not touch it."; exit 1;
+              fi
+              if sudo_safe docker inspect funboard-beta >/dev/null 2>&1; then
+                echo "An existing FunBoard container is present; refusing replacement."; exit 1;
+              fi
+              if ss -lnt | grep -Eq '[:.]3180[[:space:]]'; then
+                echo "Local-only port 3180 is occupied; refusing replacement."; exit 1;
+              fi
+              image_id="$(sudo_safe docker image inspect "funboard-beta:$RELEASE_TAG" --format '{{.Id}}')"
+              [ "$image_id" = "sha256:14f56f507d83882a8923d15bab47d8ffe2fd567dd4853b985a318c10e8e25dd9" ] || {
+                echo "Unexpected loaded Docker image; refusing replacement."; exit 1;
+              }
+              sudo_safe install -m 0644 "$fixed" /opt/funboard/compose.yaml
+              echo "Guarded one-off CPU-limit fix applied without touching secrets or SQLite."
             fi
-            if ss -lnt | grep -Eq '[:.]3180[[:space:]]'; then
-              echo "FunBoard local-only port 3180 is already in use."
-              exit 1
-            fi
-            sudo_safe install -d -m 0755 /opt/funboard
-            sudo_safe install -d -m 0700 /etc/funboard
-            sudo_safe install -d -o 1000 -g 1000 -m 0700 /var/lib/funboard
-            sudo_safe install -m 0644 "$stage/compose.yaml" /opt/funboard/compose.yaml
-            sudo_safe install -m 0600 "$stage/funboard.env.example" /etc/funboard/funboard.env
-            sudo_safe docker load --input "$archive"
-            sudo_safe docker image inspect "funboard-beta:$RELEASE_TAG" --format 'Loaded image {{.Id}}'
+
+            sudo_safe docker image inspect "funboard-beta:$RELEASE_TAG" --format 'Verified image {{.Id}}'
             sudo_safe env FUNBOARD_RELEASE_TAG="$RELEASE_TAG" docker compose -f /opt/funboard/compose.yaml config --quiet
             sudo_safe env FUNBOARD_RELEASE_TAG="$RELEASE_TAG" docker compose -f /opt/funboard/compose.yaml up -d --no-build --no-deps
             healthy=0
@@ -108,10 +152,10 @@ jobs:
               if curl -fsS --max-time 3 http://127.0.0.1:3180/api/health >/dev/null 2>&1; then healthy=1; break; fi
               sleep 3
             done
-            [ "$healthy" = 1 ] || { echo "Container health check failed; inspect manually."; exit 1; }
+            [ "$healthy" = 1 ] || { echo "Container health check failed; operator review required."; exit 1; }
             bound="$(sudo_safe docker port funboard-beta 3100/tcp | tr -d '\r')"
             if [ "$bound" != "127.0.0.1:3180" ]; then
-              echo "Unexpected exposure; stopping the FunBoard container."
+              echo "Unexpected network exposure; stopping FunBoard."
               sudo_safe docker stop funboard-beta >/dev/null
               exit 1
             fi
@@ -119,4 +163,4 @@ jobs:
             systemctl is-active --quiet nginx
             systemctl is-active --quiet mysql
             sudo_safe nginx -t >/dev/null
-            echo "FUNBOARD_DEPLOY_OK: localhost-only, existing sites and MySQL preserved."
+            echo "FUNBOARD_DEPLOY_OK: localhost only; existing Nginx and MySQL preserved."
