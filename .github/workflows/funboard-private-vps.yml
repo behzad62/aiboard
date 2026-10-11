@@ -113,13 +113,17 @@ jobs:
               sudo_safe install -m 0600 "$stage/funboard.env.example" /etc/funboard/funboard.env
               sudo_safe docker load --input "$archive"
             else
+              echo "ENTERED_RESUME_BRANCH"
               # One-off recovery of initial 1.5 CPU limit rejected on this 1-CPU VPS.
               # Only the audited Compose file changes; DO NOT touch env, DB or user records.
               [ "$RELEASE_TAG" = "c530e43470ef" ] || { echo "Unexpected recovery release"; exit 1; }
+              echo "PINNED_RELEASE_OK"
               [[ "$COMPOSE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid replacement Compose hash"; exit 1; }
+              echo "REPLACEMENT_HASH_FORMAT_OK"
               [ "$COMPOSE_SHA256" = "48d0c6b037bd58f57f96995dfa284c7dd8ccea780a795130cffea5ef23652ab5" ] || {
                 echo "Unexpected recovery Compose content digest"; exit 1;
               }
+              echo "REPLACEMENT_HASH_PINNED_OK"
               fixed="$stage/compose-fixed.yaml"
               echo "REMOTE_HOME=$HOME"
               echo "FILE_EXISTS=$([ -f "$fixed" ] && echo yes || echo no) IS_SYMLINK=$([ -L "$fixed" ] && echo yes || echo no)"
