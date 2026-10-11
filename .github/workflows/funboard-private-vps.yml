@@ -79,6 +79,7 @@ jobs:
             sudo_safe docker version --format 'Docker server: {{.Server.Version}}'
             sudo_safe nginx -t >/dev/null
             if [ "$MODE" = preflight ]; then
+            echo "ACTION_MODE=$MODE"
               echo "FUNBOARD_PREFLIGHT_OK: no changes made."
               exit 0
             fi
@@ -87,6 +88,7 @@ jobs:
             [[ "$RELEASE_TAG" =~ ^[0-9a-f]{12}$ ]] || { echo "Invalid release tag"; exit 1; }
             stage="$HOME/funboard-release-staging/$RELEASE_TAG"
             test -d "$stage" && test ! -L "$stage"
+            echo "STAGING_DIR_OK"
 
             if [ "$MODE" = deploy ]; then
               [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid image checksum"; exit 1; }
@@ -119,14 +121,17 @@ jobs:
               }
               fixed="$stage/compose-fixed.yaml"
               test -f "$fixed" && test ! -L "$fixed"
+              echo "FIXED_FILE_OK"
               printf '%s  %s\n' "$COMPOSE_SHA256" "$fixed" | sha256sum --check --status
               echo "Corrected Compose checksum verified."
+              echo "FIXED_SHA_OK"
               installed="$(sha256sum /opt/funboard/compose.yaml | awk '{print $1}')"
               [ "$installed" = "2185268f341f17df3bd6d5237192dcb25300ed3a6700c55b26678d56c91818b6" ] || {
                 echo "Existing Compose differs from the audited pre-failure config. No overwrite."; exit 1;
               }
               sudo_safe test -f /etc/funboard/funboard.env
               sudo_safe test -d /var/lib/funboard
+              echo "SECRET_FILE_AND_DATA_DIR_GUARDS_OK"
               if ! sudo_safe test ! -e /var/lib/funboard/funboard.sqlite; then
                 echo "Database already exists: this recovery must not touch it."; exit 1;
               fi
