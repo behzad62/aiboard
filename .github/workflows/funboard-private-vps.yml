@@ -79,9 +79,7 @@ jobs:
             echo "SSH authentication and GitHub sudo authorization OK."
             sudo_safe docker version --format 'Docker server: {{.Server.Version}}'
             sudo_safe nginx -t >/dev/null
-            echo "ACTIVE_MODE=$MODE"
             if [ "$MODE" = preflight ]; then
-            echo "ACTION_MODE=$MODE"
               echo "FUNBOARD_PREFLIGHT_OK: no changes made."
               exit 0
             fi
@@ -90,7 +88,6 @@ jobs:
             [[ "$RELEASE_TAG" =~ ^[0-9a-f]{12}$ ]] || { echo "Invalid release tag"; exit 1; }
             stage="$HOME/funboard-release-staging/$RELEASE_TAG"
             test -d "$stage" && test ! -L "$stage"
-            echo "STAGING_DIR_OK"
 
             if [ "$MODE" = deploy ]; then
               [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid image checksum"; exit 1; }
@@ -114,33 +111,23 @@ jobs:
               sudo_safe install -m 0600 "$stage/funboard.env.example" /etc/funboard/funboard.env
               sudo_safe docker load --input "$archive"
             else
-              echo "ENTERED_RESUME_BRANCH"
               # One-off recovery of initial 1.5 CPU limit rejected on this 1-CPU VPS.
               # Only the audited Compose file changes; DO NOT touch env, DB or user records.
               [ "$RELEASE_TAG" = "c530e43470ef" ] || { echo "Unexpected recovery release"; exit 1; }
-              echo "PINNED_RELEASE_OK"
               [[ "$COMPOSE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid replacement Compose hash"; exit 1; }
-              echo "REPLACEMENT_HASH_FORMAT_OK"
               [ "$COMPOSE_SHA256" = "48d0c6b037bd58f57f96995dfa284c7dd8ccea780a795130cffea5ef23652ab5" ] || {
                 echo "Unexpected recovery Compose content digest"; exit 1;
               }
-              echo "REPLACEMENT_HASH_PINNED_OK"
               fixed="$stage/compose-fixed.yaml"
-              echo "REMOTE_HOME=$HOME"
-              echo "FILE_EXISTS=$([ -f "$fixed" ] && echo yes || echo no) IS_SYMLINK=$([ -L "$fixed" ] && echo yes || echo no)"
-              ls -ld "$stage" "$fixed" || true
               test -f "$fixed" && test ! -L "$fixed"
-              echo "FIXED_FILE_OK"
               printf '%s  %s\n' "$COMPOSE_SHA256" "$fixed" | sha256sum --check --status
               echo "Corrected Compose checksum verified."
-              echo "FIXED_SHA_OK"
               installed="$(sha256sum /opt/funboard/compose.yaml | awk '{print $1}')"
               [ "$installed" = "2185268f341f17df3bd6d5237192dcb25300ed3a6700c55b26678d56c91818b6" ] || {
                 echo "Existing Compose differs from the audited pre-failure config. No overwrite."; exit 1;
               }
               sudo_safe test -f /etc/funboard/funboard.env
               sudo_safe test -d /var/lib/funboard
-              echo "SECRET_FILE_AND_DATA_DIR_GUARDS_OK"
               if ! sudo_safe test ! -e /var/lib/funboard/funboard.sqlite; then
                 echo "Database already exists: this recovery must not touch it."; exit 1;
               fi
