@@ -1,0 +1,122 @@
+name: FunBoard Private VPS Container
+
+# Install into the owner's existing PRIVATE PixelMaster GitHub repository.
+# The image is built on the PC and copied directly to the VPS over SSH.
+# Never upload FunBoard code or the Docker archive to a public repository.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Preflight SSH/sudo or deploy staged localhost-only container"
+        required: true
+        type: choice
+        options: [preflight, deploy]
+        default: preflight
+      release_tag:
+        description: "Approved 12-character lowercase Git SHA (deploy only)"
+        type: string
+        required: false
+      archive_sha256:
+        description: "SHA-256 of staged image.tar.gz (deploy only)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+concurrency:
+  group: funboard-private-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy-private:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate existing secrets point only to the approved VPS
+        shell: bash
+        env:
+          HOST: ${{ secrets.SSH_HOST }}
+          PORT: ${{ secrets.SSH_PORT }}
+          USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          if [[ "$HOST" != "178.79.134.104" || "$PORT" != "3192" || "$USER" != "pixel" ]]; then
+            echo "Existing SSH secrets do not match the authorized VPS. Refusing connection."
+            exit 1
+          fi
+          echo "Approved SSH destination confirmed."
+
+      - name: Perform isolated VPS preflight or private FunBoard installation
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          MODE: ${{ inputs.mode }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+          SUDO_PASSWORD: ${{ secrets.SSH_PASS }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATEKEY }}
+          passphrase: ${{ secrets.SSH_KEYPASS }}
+          envs: MODE,RELEASE_TAG,ARCHIVE_SHA256,SUDO_PASSWORD
+          command_timeout: 14m
+          script_stop: true
+          script: |
+            set -euo pipefail
+            umask 077
+            sudo_safe() {
+              printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' "$@"
+            }
+            test "$(id -un)" = pixel
+            sudo_safe true >/dev/null
+            echo "SSH authentication and GitHub sudo authorization OK."
+            sudo_safe docker version --format 'Docker server: {{.Server.Version}}'
+            sudo_safe nginx -t >/dev/null
+            if [ "$MODE" = preflight ]; then
+              echo "FUNBOARD_PREFLIGHT_OK: no changes made."
+              exit 0
+            fi
+            [ "$MODE" = deploy ] || { echo "Unsupported mode"; exit 1; }
+            [[ "$RELEASE_TAG" =~ ^[0-9a-f]{12}$ ]] || { echo "Invalid release tag"; exit 1; }
+            [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid checksum"; exit 1; }
+            stage="$HOME/funboard-release-staging/$RELEASE_TAG"
+            archive="$stage/image.tar.gz"
+            test -d "$stage" && test -f "$archive" && test -f "$stage/compose.yaml" && test -f "$stage/funboard.env.example"
+            test ! -L "$stage" && test ! -L "$archive"
+            printf '%s  %s\n' "$ARCHIVE_SHA256" "$archive" | sha256sum --check --status
+            echo "Staged image checksum verified."
+            if [ -e /opt/funboard/compose.yaml ] || [ -e /etc/funboard/funboard.env ] || [ -e /var/lib/funboard/funboard.sqlite ]; then
+              echo "Existing FunBoard deployment detected. Refusing first-install overwrite."
+              exit 1
+            fi
+            if ss -lnt | grep -Eq '[:.]3180[[:space:]]'; then
+              echo "FunBoard local-only port 3180 is already in use."
+              exit 1
+            fi
+            sudo_safe install -d -m 0755 /opt/funboard
+            sudo_safe install -d -m 0700 /etc/funboard
+            sudo_safe install -d -o 1000 -g 1000 -m 0700 /var/lib/funboard
+            sudo_safe install -m 0644 "$stage/compose.yaml" /opt/funboard/compose.yaml
+            sudo_safe install -m 0600 "$stage/funboard.env.example" /etc/funboard/funboard.env
+            sudo_safe docker load --input "$archive"
+            sudo_safe docker image inspect "funboard-beta:$RELEASE_TAG" --format 'Loaded image {{.Id}}'
+            sudo_safe env FUNBOARD_RELEASE_TAG="$RELEASE_TAG" docker compose -f /opt/funboard/compose.yaml config --quiet
+            sudo_safe env FUNBOARD_RELEASE_TAG="$RELEASE_TAG" docker compose -f /opt/funboard/compose.yaml up -d --no-build --no-deps
+            healthy=0
+            for i in $(seq 1 36); do
+              if curl -fsS --max-time 3 http://127.0.0.1:3180/api/health >/dev/null 2>&1; then healthy=1; break; fi
+              sleep 3
+            done
+            [ "$healthy" = 1 ] || { echo "Container health check failed; inspect manually."; exit 1; }
+            bound="$(sudo_safe docker port funboard-beta 3100/tcp | tr -d '\r')"
+            if [ "$bound" != "127.0.0.1:3180" ]; then
+              echo "Unexpected exposure; stopping the FunBoard container."
+              sudo_safe docker stop funboard-beta >/dev/null
+              exit 1
+            fi
+            sudo_safe docker stats --no-stream --format 'FunBoard {{.MemUsage}} / {{.CPUPerc}}' funboard-beta
+            systemctl is-active --quiet nginx
+            systemctl is-active --quiet mysql
+            sudo_safe nginx -t >/dev/null
+            echo "FUNBOARD_DEPLOY_OK: localhost-only, existing sites and MySQL preserved."
