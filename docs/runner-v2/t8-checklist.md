@@ -42,15 +42,22 @@ Checked items have passed their scoped validation and independent review. Produc
 - [x] Remove runtime compiler dependency from bounded active Job availability probe —focused2/2, original semantic module27/27 and independent review;1 product candidate/1 alphabet-fixture candidate/2 native attempts (first failed with outer rescue). Original2s cap unchanged; fresh hosted qualification remains open.
 - [x] Preserve construction-rollback binding and shared prerequisites until dependent cleanup settles —baseline0/2 then combined6/6, full runner types and independent review;1 product candidate/0 native attempts. Fresh hosted outcome remains open.
 - [ ] Pass affected portable tests and required platform coverage.
+- [x] Retain bounded durable lifecycle evidence after a large runtime failure — exact runtime DB/WAL/SHM role gets8MiB per file; generic2MiB and growth guards retained; RED/GREEN, final7/7/types/lint and independent review PASS;2 evidence-capture candidates/0 product iterations.
 - [x] Classify the active Job probe deadline and apply the requested bounded5s limit — unchanged native command completes2368.6627ms on hosted Windows; owning4/4/types/lint and independent review PASS;1 product candidate/0 local native attempts. Fresh factory/platform outcome remains open.
 - [ ] Complete remaining canonical-path, lifecycle/OCI and benchmark acceptance gates.
 - [ ] Pass the final integrated matrix, package/freeze review and full T8 acceptance.
 
-**Current gate:** C / current hosted Windows probe and construction-rollback ordering. Prior accepted Gate C scopes in `1e1d9f03`, `1b652a44`, `c4b3fc88` remain evidence; the newly diagnosed paths require targeted repair and independent review. **T8 acceptance:** open.
+**Current gate:** C / fresh hosted Windows qualification of the reviewed availability and rollback repairs, now including the user-requested measured5s probe bound. Prior accepted Gate C scopes in `1e1d9f03`, `1b652a44`, `c4b3fc88` remain evidence. **T8 acceptance:** open.
 
 **Working now:** Reviewed fixes committed separately10de8aae (probe/fixture) and341f1339 (rollback/owning CI regressions). Actual original27 semantic module passes with natural settlement/no rescue; rollback6/6 and full runner types pass. Current hosted396c28c5 diagnostic remainsFAIL: compiler-dependent Job probe expired2012ms against2000ms, then workspace retry lost its binding. Its internal compiler/native phase timing was not observed. Fresh hosted Windows result is required for these repairs; prior Linux/macOS/package/native scopes remain preserved. No deadline increased or full local gate started.
 
-**Next:** finish affected platform coverage and the remaining ordered acceptance gates. Package validation remains open.
+**Current outcome:** reviewed requested5s bound committed/pushed `2faa4a55`; original native command completes2368.6627ms on hosted Windows under5s. Active-probe/rollback4/4, runner/script types, lint and independent review PASS. Required portable38315797240: three-host contracts/native/package plus reproducibility PASS; Linux/macOS affected123/120pass/0fail/3 Windows-only skips PASS. Windows affected115031989409 still IN_PROGRESS. Benchmark21→22 fixture failure recorded for Gate F; no early repair or full local suite.
+
+**Next:** finish current Windows qualification and Gate D platform closure, then E lifecycle/real OCI, F reviewed chat-fixture repair, and G shipping/freeze/final matrix. Final package regeneration and exact source-to-evidence freeze remain open.
+
+**Latest Windows result:** required2faa4a55 affected123/122pass/1fail. Construction now succeeds; original native factory fails later when `submit_task` returns `tool_timeout` after patch/evidence success. Existing exact-head factory diagnostic38317021112 running to retain current cause. No further deadline increase or gate advancement;40/3 retained.
+
+**Latest diagnostic:**38317021112 CANCELLED/unaccepted at original30min. Submission succeeded59.990s, then integration succeeded; later delivery Git cleanup failed with one `cleanup_blocked` invocation. All captured Job journals terminal, but required6MB DB/4MB WAL omitted. Independently accepted bounded retention fix prepares the next causal packet; no lifecycle fix or further timeout change.41/3; Windows qualification remains open.
 
 Startup/crash substeps:
 
@@ -90,7 +97,7 @@ Caller integration substeps:
 - [x] Qualify the original CLI restart-continuity/startup-blocked module —3 original tests accepted.
 - [x] Qualify recovery lifetimes and remaining affected caller tests —156 pure recovery tests plus original native CLI recovery accepted; broader crash/cross-platform obligations separate.
 
-**Progress:** 40 scoped items accepted;3 acceptance groups remain. Start-of-continuation recount corrected stale34 to37 already checked entries; two newly reviewed narrow fixes bring37 to39. The independently accepted requested5s deadline classification adds one scoped item to39, for40. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
+**Progress:** 41 scoped items accepted;3 acceptance groups remain. Start-of-continuation recount corrected stale34 to37 already checked entries; two newly reviewed narrow fixes bring37 to39. The independently accepted requested5s deadline classification adds one scoped item to39, for40; bounded evidence retention adds one more, for41. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
 
 **Iteration rule:** a changed candidate reaching scoped behavioral validation counts once; review-only revisions do not count. Unknown historical totals remain unknown.
 
