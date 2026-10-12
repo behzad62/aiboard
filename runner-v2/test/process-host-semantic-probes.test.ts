@@ -239,7 +239,7 @@ test("Windows semantic probes exclude unrelated ambient credentials from the enc
 
 test("live Windows portable probes actively attest duplex, argv boundaries, and birth-tagged tree behavior", { timeout: 60_000 }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows semantic fixtures require Windows."); return; }
-  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
+  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), registerCleanup: (cleanup) => { t.after(cleanup); } });
   const portableDuplex = await active.portableDuplex();
   const windowsBatchArgv = await active.windowsBatchArgv();
   const exactTreeBirth = await active.exactTreeBirth();
@@ -276,10 +276,10 @@ test("a timed-out live duplex probe tears down its channel, process, and owned r
   const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("aiboard-windows-semantic-duplex-")));
   const startedAt = Date.now();
   const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
-  const bounded = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 50, cleanupDeadlineMs: 15_000 });
+  const bounded = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 50, cleanupDeadlineMs: 15_000, registerCleanup: (cleanup) => { t.after(cleanup); } });
   await assert.rejects(bounded.portableDuplex(), /timed out/i);
   assert.ok(Date.now() - startedAt < 1_000, "the positive operation deadline must bound prewarming and startup");
-  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 0 });
+  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 0, registerCleanup: (cleanup) => { t.after(cleanup); } });
   await assert.rejects(active.portableDuplex(), /timed out/i);
   await new Promise((resolve) => setTimeout(resolve, 100));
   const after = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("aiboard-windows-semantic-duplex-")));
