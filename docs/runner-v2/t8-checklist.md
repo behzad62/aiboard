@@ -33,6 +33,8 @@ Checked items have passed their scoped validation and independent review. Produc
 - [x] Qualify actual higher Runner pre-BOOT death and readiness/crash/restart —2/2 accepted;2 harness attempts, no product change or active-workload claim.
 - [x] Qualify actual Worker partial-RPC failure propagation —prefix/body2/2 accepted;1 completed harness candidate/1 native attempt, no product change. UNKNOWN invalidates the lease; failed cleanup remains unverified despite physical settlement.
 - [x] Register the inspection Session as an audited raw-process boundary —owning policy6/6;1 validated audit/documentation candidate,0 native attempts. Installed pins match; comment/EOF-only changes preserve accepted runtime semantics.
+- [x] Restore original POSIX/protocol extracted-VM dependencies —Windows21/21 and local Linux99/99;1 validated fixture candidate,0 product iterations.
+- [x] Audit inspection read-only handles, including nested Session source —owning108/108 plus final audit2/2;2 validated audit candidates,0 native attempts.
 - [ ] Validate package/archive byte integrity and reproducibility.
 - [x] Wire all callers and verify preparation, recovery and cleanup lifetimes —scoped integration independently accepted; startup/crash and cross-platform coverage remain separate.
 - [x] Qualify remaining startup, partial-RPC and controller crash cases —enumerated helper/Session/Worker/CLI scopes independently reconciled; no blanket active-workload crash claim.
@@ -42,7 +44,7 @@ Checked items have passed their scoped validation and independent review. Produc
 
 **Current gate:** D / canonical paths and affected platform coverage. **Gate C Windows:** accepted in reviewed commit series `1e1d9f03`, `1b652a44`, `c4b3fc88`. **T8 acceptance:** open.
 
-**Working now:** affected Linux/macOS/platform coverage and package prerequisites. Enumerated startup/crash, caller integration, both Windows modules, factory lifetimes, CLI recovery and Gate C are accepted; full delivery and broader acceptance remain open.
+**Working now:** applied exact previously reviewed canonical-policy/npm/fixture repair (`0ac9c674`); current9-file Linux/macOS/platform qualification remains open. Full Windows factory packet reached240s observer and is unaccepted; original delivery state retained. Enumerated startup/crash, caller integration, both Windows modules, factory lifetimes, CLI recovery and Gate C remain accepted.
 
 **Next:** finish affected platform coverage and the remaining ordered acceptance gates. Package validation remains open.
 
@@ -84,7 +86,7 @@ Caller integration substeps:
 - [x] Qualify the original CLI restart-continuity/startup-blocked module —3 original tests accepted.
 - [x] Qualify recovery lifetimes and remaining affected caller tests —156 pure recovery tests plus original native CLI recovery accepted; broader crash/cross-platform obligations separate.
 
-**Progress:** 31 scoped items accepted;4 acceptance groups remain. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
+**Progress:** 33 scoped items accepted;4 acceptance groups remain. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
 
 **Iteration rule:** a changed candidate reaching scoped behavioral validation counts once; review-only revisions do not count. Unknown historical totals remain unknown.
 
