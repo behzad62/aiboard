@@ -39,13 +39,15 @@ Checked items have passed their scoped validation and independent review. Produc
 - [x] Validate package/archive byte integrity and archive reproducibility —fresh4 archives/all7 helper assets preserve installed pins; three-host package parity and cross-host hashes PASS on0ac9. Final shipping regeneration/freeze remains Gate G.
 - [x] Wire all callers and verify preparation, recovery and cleanup lifetimes —scoped integration independently accepted; startup/crash and cross-platform coverage remain separate.
 - [x] Qualify remaining startup, partial-RPC and controller crash cases —enumerated helper/Session/Worker/CLI scopes independently reconciled; no blanket active-workload crash claim.
+- [x] Remove runtime compiler dependency from bounded active Job availability probe —focused2/2, original semantic module27/27 and independent review;1 product candidate/1 alphabet-fixture candidate/2 native attempts (first failed with outer rescue). Original2s cap unchanged; fresh hosted qualification remains open.
+- [x] Preserve construction-rollback binding and shared prerequisites until dependent cleanup settles —baseline0/2 then combined6/6, full runner types and independent review;1 product candidate/0 native attempts. Fresh hosted outcome remains open.
 - [ ] Pass affected portable tests and required platform coverage.
 - [ ] Complete remaining canonical-path, lifecycle/OCI and benchmark acceptance gates.
 - [ ] Pass the final integrated matrix, package/freeze review and full T8 acceptance.
 
-**Current gate:** D / canonical paths and affected platform coverage. **Gate C Windows:** accepted in reviewed commit series `1e1d9f03`, `1b652a44`, `c4b3fc88`. **T8 acceptance:** open.
+**Current gate:** C / current hosted Windows probe and construction-rollback ordering. Prior accepted Gate C scopes in `1e1d9f03`, `1b652a44`, `c4b3fc88` remain evidence; the newly diagnosed paths require targeted repair and independent review. **T8 acceptance:** open.
 
-**Working now:** Linux9-file123/120pass/3 Windows skips and local original Windows factory/npm3/3 accepted on0ac9; hosted Linux/macOS affected suites also green. Hosted Windows123/122/1 construction/cleanup failure remains unresolved. Exact previously accepted bounded causal capture is applied to current source396c28c5; Windows-only diagnostic38276384897 running. Gate C stays accepted unless that current cause demonstrates an ownership/lifetime gap.
+**Working now:** Reviewed fixes committed separately10de8aae (probe/fixture) and341f1339 (rollback/owning CI regressions). Actual original27 semantic module passes with natural settlement/no rescue; rollback6/6 and full runner types pass. Current hosted396c28c5 diagnostic remainsFAIL: compiler-dependent Job probe expired2012ms against2000ms, then workspace retry lost its binding. Its internal compiler/native phase timing was not observed. Fresh hosted Windows result is required for these repairs; prior Linux/macOS/package/native scopes remain preserved. No deadline increased or full local gate started.
 
 **Next:** finish affected platform coverage and the remaining ordered acceptance gates. Package validation remains open.
 
@@ -87,7 +89,7 @@ Caller integration substeps:
 - [x] Qualify the original CLI restart-continuity/startup-blocked module —3 original tests accepted.
 - [x] Qualify recovery lifetimes and remaining affected caller tests —156 pure recovery tests plus original native CLI recovery accepted; broader crash/cross-platform obligations separate.
 
-**Progress:** 34 scoped items accepted;3 acceptance groups remain. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
+**Progress:** 39 scoped items accepted;3 acceptance groups remain. Start-of-continuation recount corrected stale34 to37 already checked entries; two newly reviewed narrow fixes bring37 to39. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
 
 **Iteration rule:** a changed candidate reaching scoped behavioral validation counts once; review-only revisions do not count. Unknown historical totals remain unknown.
 
