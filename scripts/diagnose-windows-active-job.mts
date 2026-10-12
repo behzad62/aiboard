@@ -21,6 +21,7 @@ let callCount = 0;
 let transport: SpawnSyncReturns<string | Buffer> | undefined;
 let commandDigest: string | undefined;
 let elapsedMs: number | undefined;
+let originalDeadlineMs: number | undefined;
 let probeResult = false;
 let failure: unknown;
 writeFileSync(join(root, "started.json"), JSON.stringify({ verifyOnly, pid: process.pid, node: process.version }));
@@ -31,7 +32,8 @@ try {
     assert.equal(executable, "powershell.exe");
     assert.deepEqual(args.slice(0, 4), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]);
     assert.equal(args.length, 5);
-    assert.equal(options.timeout, 2_000);
+    assert([2_000, 5_000].includes(options.timeout!), "Only reviewed product deadlines are supported.");
+    originalDeadlineMs = options.timeout;
     assert.equal(options.killSignal, "SIGKILL");
     assert.equal(options.windowsHide, true);
     assert.equal(options.stdio, "ignore");
@@ -54,10 +56,10 @@ finally {
   syncBuiltinESMExports();
   Object.defineProperty(process, "platform", originalPlatform);
   const summary = { verifyOnly, node: process.version, callCount, probeResult, commandDigest, elapsedMs,
-    originalDeadlineMs: 2_000, experimentDeadlineMs, status: transport?.status, signal: transport?.signal,
+    originalDeadlineMs, experimentDeadlineMs, status: transport?.status, signal: transport?.signal,
     errorCode: (transport?.error as NodeJS.ErrnoException | undefined)?.code,
     failure: failure instanceof Error ? { name: failure.name, message: failure.message, stack: failure.stack } : failure,
-    limitation: "Only the deadline differs from the public default. No workload assigned. Standalone completion is not factory/platform/T8 qualification; verify-only uses simulated transport and executes no native call." };
+    limitation: "The experimental deadline is fixed at 5s; originalDeadlineMs records the product bound. Command and all other options are unchanged. No workload assigned. Standalone completion is not factory/platform/T8 qualification; verify-only uses simulated transport and executes no native call." };
   writeFileSync(join(root, "summary.json"), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary));
 }

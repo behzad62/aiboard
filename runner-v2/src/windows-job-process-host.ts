@@ -15,7 +15,9 @@ import type { BackpressuredOutputMetadata } from "./interactive-process-channel.
 const PROTOCOL = "aiboard-managed-process/v1";
 const DEFAULT_START_DEADLINE_MS = 5_000;
 const DEFAULT_CONTROL_DEADLINE_MS = 5_000;
-const DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS = 2_000;
+// Bounds the entire cold PowerShell process, including host startup. The
+// unchanged create/close command completed in 2,369 ms on hosted Windows.
+const DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS = 5_000;
 const DEFAULT_MAX_INPUT_BYTES = 1024 * 1024;
 const JOB_HOST_HELPER_DLL_FILENAME = "ManagedProcessJobHost.dll";
 const JOB_HOST_SOURCE_MARKER_START = "$jobHostCsSource = @'";

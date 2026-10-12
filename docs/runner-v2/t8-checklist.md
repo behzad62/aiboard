@@ -42,6 +42,7 @@ Checked items have passed their scoped validation and independent review. Produc
 - [x] Remove runtime compiler dependency from bounded active Job availability probe —focused2/2, original semantic module27/27 and independent review;1 product candidate/1 alphabet-fixture candidate/2 native attempts (first failed with outer rescue). Original2s cap unchanged; fresh hosted qualification remains open.
 - [x] Preserve construction-rollback binding and shared prerequisites until dependent cleanup settles —baseline0/2 then combined6/6, full runner types and independent review;1 product candidate/0 native attempts. Fresh hosted outcome remains open.
 - [ ] Pass affected portable tests and required platform coverage.
+- [x] Classify the active Job probe deadline and apply the requested bounded5s limit — unchanged native command completes2368.6627ms on hosted Windows; owning4/4/types/lint and independent review PASS;1 product candidate/0 local native attempts. Fresh factory/platform outcome remains open.
 - [ ] Complete remaining canonical-path, lifecycle/OCI and benchmark acceptance gates.
 - [ ] Pass the final integrated matrix, package/freeze review and full T8 acceptance.
 
@@ -89,7 +90,7 @@ Caller integration substeps:
 - [x] Qualify the original CLI restart-continuity/startup-blocked module —3 original tests accepted.
 - [x] Qualify recovery lifetimes and remaining affected caller tests —156 pure recovery tests plus original native CLI recovery accepted; broader crash/cross-platform obligations separate.
 
-**Progress:** 39 scoped items accepted;3 acceptance groups remain. Start-of-continuation recount corrected stale34 to37 already checked entries; two newly reviewed narrow fixes bring37 to39. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
+**Progress:** 40 scoped items accepted;3 acceptance groups remain. Start-of-continuation recount corrected stale34 to37 already checked entries; two newly reviewed narrow fixes bring37 to39. The independently accepted requested5s deadline classification adds one scoped item to39, for40. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
 
 **Iteration rule:** a changed candidate reaching scoped behavioral validation counts once; review-only revisions do not count. Unknown historical totals remain unknown.
 
