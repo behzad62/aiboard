@@ -246,6 +246,8 @@ import {
 import { createPosixProcessBackend } from "./posix-process-backend.js";
 import { probeProcessHostSemantics, selectWindowsProcessBackendKinds, type ProcessHostSemanticFacts } from "./process-host-semantic-probes.js";
 import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "./windows-process-backend.js";
+import { NativeOwnedProcessBackend } from "./native-process-backend.js";
+import { assertSubprocessCleanupSettled } from "./inspection-cleanup.js";
 import { createWindowsProcessSemanticProbeSource } from "./windows-process-semantic-probes.js";
 import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
 import {
@@ -268,6 +270,7 @@ export type NativeBuildRuntimeResourceStage =
   | "capabilities"
   | "execution_isolation"
   | "subprocess_runtime"
+  | "process_inspection"
   | "evidence_store"
   | "scheduler_store"
   | "session_store"
@@ -1026,14 +1029,25 @@ export class NativeBuildFactory {
       ? await (this.windowsProcessFactsPromise ??= probeProcessHostSemantics({
           ...createWindowsProcessSemanticProbeSource({
             ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+            registerCleanup: (cleanup) => { constructionResources.add("process_inspection", cleanup, true); },
           }),
           activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
         }))
       : undefined;
-    const windowsPortableBackend = process.platform === "win32" && windowsFacts
+    const windowsBackendKinds = new Set(windowsFacts ? selectWindowsProcessBackendKinds(windowsFacts) : []);
+    const windowsPortableBackend = process.platform === "win32" && windowsFacts && windowsBackendKinds.has("portable")
       ? createWindowsProcessBackend({ stateDirectory: join(runRoot, "process-backend"), jobObjects: "unavailable", semanticFacts: windowsFacts })
       : undefined;
-    const windowsBackendKinds = new Set(windowsFacts ? selectWindowsProcessBackendKinds(windowsFacts) : []);
+    let subprocessWorkloadsSettled = true;
+    if (windowsPortableBackend instanceof NativeOwnedProcessBackend) {
+      windowsPortableBackend.registerInspectionCleanup(cleanup => {
+        constructionResources.add("process_inspection", async () => {
+          if (!subprocessWorkloadsSettled) throw new Error("Subprocess cleanup must settle before inspection retirement.");
+          await cleanup(Date.now() + 5_000);
+        }, true);
+      });
+      await windowsPortableBackend.prepareInspection(Date.now() + 30_000);
+    }
     const processBackends = process.platform === "win32"
       ? [
           ...(windowsBackendKinds.has("job") ? [{
@@ -1089,6 +1103,15 @@ export class NativeBuildFactory {
         artifacts: this.artifacts,
       }),
     });
+    subprocessWorkloadsSettled = false;
+    // Register immediately: startup reconciliation and grant construction may fail.
+    constructionResources.add("subprocess_runtime", async () => {
+      await executionGrants?.revokeAll("cleanup");
+      await subprocessKernel.runtime.reconcileStartup();
+      assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore);
+      subprocessKernel.readOnlyStore.close();
+      subprocessWorkloadsSettled = true;
+    }, true);
     await subprocessKernel.runtime.reconcileStartup();
     executionGrants = createExecutionGrantAuthority();
     commandExecution = createRuntimeBackedOneShotCommandExecutor({
@@ -1108,11 +1131,6 @@ export class NativeBuildFactory {
       permissionProfile: spec.permissionProfile,
       workspacePath: this.options.projectRoot,
     });
-    constructionResources.add("subprocess_runtime", async () => {
-      await executionGrants.revokeAll("cleanup");
-      await subprocessKernel.runtime.reconcileStartup();
-      subprocessKernel.readOnlyStore.close();
-    }, true);
     }
     await this.options.runtimeConstructionHooks?.afterAcquire?.("subprocess_runtime");
     bindCommandEvidenceReuse(commandExecution, spec.runId, {store: evidenceStore, artifacts: this.artifacts,
@@ -2997,10 +3015,17 @@ class NativeBuildResourceCleanupStack {
 
   private async closeEntries(mode: NativeBuildResourceCleanupMode): Promise<void> {
     const failures: unknown[] = [];
-    for (const entry of [...this.entries].reverse()) {
+    const ordered = [
+      ...this.entries.filter(entry => entry.stage !== "process_inspection").reverse(),
+      ...this.entries.filter(entry => entry.stage === "process_inspection").reverse(),
+    ];
+    for (const entry of ordered) {
       if (mode === "handle" && !entry.closeOnHandle) continue;
       if (mode === "failure" ? entry.completedOnFailure : entry.completedOnHandle) continue;
       try {
+        if (entry.stage === "process_inspection" && failures.length > 0) {
+          throw new Error("Process inspection is retained while dependent cleanup remains incomplete.");
+        }
         await this.hooks?.beforeCleanup?.(entry.stage);
         await entry.cleanup();
         if (mode === "failure") {

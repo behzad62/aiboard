@@ -18,6 +18,8 @@ import { createPortableProcessChannelProvider, validatePortableAcknowledgementEv
 import { parsePosixGroupMembers } from "./portable-process-posix-control.mjs";
 import { PortableOutputRetirementBlockedError, runPortableFenceSnapshotSync } from "./portable-process-protocol.mjs";
 import { OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
+import type { OwnedFenceLockOptions } from "./owned-fence-lock.mjs";
+import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
 
 const PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS = 2_000;
 const WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS = 15_000;
@@ -144,12 +146,27 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   private readonly stateDirectory: string;
   private readonly pollIntervalMs: number;
   private readonly operations: NativeProcessOperations;
+  private readonly inspectionOwner: WindowsBirthInspectionOwner | undefined;
   private readonly startupDeadlineAt: number | undefined;
   private readonly outputOffsets = new Map<string, { stdout: number; stderr: number }>();
   constructor(private readonly options: NativeOwnedProcessBackendOptions) {
     this.stateDirectory = resolve(options.stateDirectory ?? join(tmpdir(), "aiboard-portable-processes"));
     this.pollIntervalMs = options.pollIntervalMs ?? 25;
-    this.operations = options.operations ?? DEFAULT_OPERATIONS;
+    this.inspectionOwner = !options.operations && options.platform === "windows"
+      ? new WindowsBirthInspectionOwner() : undefined;
+    const owner = this.inspectionOwner;
+    this.operations = options.operations ?? (owner ? {
+      ...DEFAULT_OPERATIONS,
+      inspectProcessBirth: (...args) => {
+        try { return owner.operations().inspectProcessBirth(...args); } catch { return { state: "unknown" }; }
+      },
+      inspectProcessBirthAsync: async (...args) => {
+        try { return await owner.operations().inspectProcessBirthAsync!(...args); } catch { return { state: "unknown" }; }
+      },
+      inspectProcessBirths: (...args) => {
+        try { return owner.operations().inspectProcessBirths!(...args); } catch { return undefined; }
+      },
+    } : DEFAULT_OPERATIONS);
     this.startupDeadlineAt = options.startupDeadlineAt;
     if (this.startupDeadlineAt !== undefined && (!Number.isSafeInteger(this.startupDeadlineAt) || this.startupDeadlineAt < 1))
       throw new Error("Portable process absolute startup deadline must be a positive integer.");
@@ -171,6 +188,19 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     });
   }
 
+  registerInspectionCleanup(register: (cleanup: (absoluteDeadline?: number) => Promise<void>) => void): void {
+    this.inspectionOwner?.registerCleanup(register);
+  }
+  async prepareInspection(absoluteDeadline: number): Promise<void> {
+    await this.inspectionOwner?.prepareInspection(absoluteDeadline);
+  }
+  async closeInspection(absoluteDeadline = Date.now() + 5_000): Promise<void> {
+    await this.inspectionOwner?.closeInspection(absoluteDeadline);
+  }
+  private inspectionFenceOptions(): OwnedFenceLockOptions | undefined {
+    return this.inspectionOwner?.fenceOptions();
+  }
+
   async launch(request: ProcessLaunchRequest): Promise<unknown> {
     this.assertPlatform();
     const startupDeadline = Math.min(
@@ -178,6 +208,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       this.startupDeadlineAt ?? Number.MAX_SAFE_INTEGER,
     );
     if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
+    await this.prepareInspection(startupDeadline);
     const nonce = randomBytes(24).toString("hex");
     const directory = join(this.stateDirectory, `owned-${randomUUID()}`);
     mkdirSync(directory, { recursive: false, mode: 0o700 });
@@ -186,7 +217,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...request.fence }), { mode: 0o600 });
     const supervisor = join(dirname(fileURLToPath(import.meta.url)), "portable-process-supervisor.mjs");
     const windowsHelpers = this.options.platform === "windows"
-      ? windowsPortableSupervisorHelpers(request.environment)
+      ? windowsPortableSupervisorHelpers(request.environment, this.inspectionOwner === undefined)
       : {};
     const encoded = Buffer.from(JSON.stringify({
       nonce,
@@ -196,6 +227,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       workingDirectory: request.intent.workingDirectory,
       environment: { ...request.environment },
       platform: this.options.platform,
+      startupDeadlineAt: startupDeadline,
       pollIntervalMs: this.pollIntervalMs,
       replayCapacityChunks: this.options.replayCapacityChunks ?? 16,
       replayCapacityBytes: this.options.replayCapacityBytes ?? 256 * 1024,
@@ -356,14 +388,15 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           effect: (kind, effect) => {
             const preparation = this.options.beforeFenceEffect?.(kind);
             return preparation
-              ? Promise.resolve(preparation).then(() => commitOwnedFenceEffectAsync(identity, fence, effect))
-              : commitOwnedFenceEffectAsync(identity, fence, effect);
+              ? Promise.resolve(preparation).then(() => commitOwnedFenceEffectAsync(identity, fence, effect, undefined, this.inspectionFenceOptions()))
+              : commitOwnedFenceEffectAsync(identity, fence, effect, undefined, this.inspectionFenceOptions());
           },
           snapshot: (read) => runPortableFenceSnapshotSync({
             lockPath: join(identity.directory, ".fence.lock"),
             expectedFence: fence,
             readCurrentFence: () => readOwnedFence(join(identity.directory, "fence.json"), identity),
             read,
+            lockOptions: this.inspectionFenceOptions(),
           }),
         };
       },
@@ -471,7 +504,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (emptiness === "empty") {
       const stableValidation = this.validate(identity);
       if ((stableValidation === "live" || stableValidation === "exited") && this.hasTerminalStoppedProof(identity)) {
-        try { assertPortableOutputSettledAtFence(identity, _fence); } catch { return { empty: false, detail: "Owned output evidence is unsettled or unavailable." }; }
+        try { assertPortableOutputSettledAtFence(identity, _fence, this.inspectionFenceOptions()); } catch { return { empty: false, detail: "Owned output evidence is unsettled or unavailable." }; }
         try {
           return await this.fencedEffect(identity, _fence, "verify_empty", () => {
             const finalValidation = this.validate(identity);
@@ -526,7 +559,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     if (validation === "live") {
       return { state: "running" };
     }
-    try { assertPortableOutputSettledAtFence(identity, _fence); }
+    try { assertPortableOutputSettledAtFence(identity, _fence, this.inspectionFenceOptions()); }
     catch { return { state: "outcome_unknown" }; }
     try { this.assertObservationFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
     const finalValidation = this.validate(identity);
@@ -549,7 +582,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     else this.assertFence(identity, _fence);
     const assertOutputSettled = authorityRetired
       ? () => assertPortableOutputSettled(identity)
-      : () => assertPortableOutputSettledAtFence(identity, _fence);
+      : () => assertPortableOutputSettledAtFence(identity, _fence, this.inspectionFenceOptions());
     const validation = this.validate(identity);
     if (validation === "mismatch" || validation === "unknown") throw new Error("Cannot release ownership without exact supervisor birth re-attestation.");
     if (this.options.platform === "posix" && identity.version === 2 && validation !== "exited")
@@ -597,7 +630,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           (this.options.removeRetiredAuthority ?? removeRetiredAuthorityDirectory)(identity.directory);
           this.outputOffsets.delete(identity.nonce);
         }
-      : undefined);
+      : undefined, this.inspectionFenceOptions());
   }
   private identity(binding: ProcessBackendBinding): Identity {
     const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as OpaqueIdentityInput;
@@ -625,7 +658,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       if (!identity.fence) return;
       throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
     }
-    claimOwnedFence(identity, fence);
+    claimOwnedFence(identity, fence, this.inspectionFenceOptions());
   }
   private assertDurableFence(identity: Identity, fence: ProcessEffectFence | undefined): void {
     if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
@@ -876,7 +909,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   }
   private cleanupFenceEffect<T>(identity: Identity, effect: () => T): T {
     if (!identity.fence) return effect(); // Explicit legacy fixture compatibility; all current launches persist a fence.
-    return commitOwnedFenceEffect(identity, identity.fence, effect);
+    return commitOwnedFenceEffect(identity, identity.fence, effect, this.inspectionFenceOptions());
   }
   private hasTerminalStoppedProof(identity: Identity): boolean {
     const state = readState(identity.directory);
@@ -1174,6 +1207,7 @@ function sameProcessBirth(left: string, right: string): boolean {
 }
 function windowsPortableSupervisorHelpers(
   environment: Readonly<Record<string, string>>,
+  includeBirthInspector: boolean,
 ): Readonly<Record<string, Readonly<{ command: string }>>> {
   const value = (name: string): string | undefined => {
     const matches = Object.entries(environment)
@@ -1193,7 +1227,7 @@ function windowsPortableSupervisorHelpers(
   return Object.freeze({
     windowsTreeInspector: Object.freeze({ command: powershell }),
     windowsControlInspector: Object.freeze({ command: powershell }),
-    windowsBirthInspector: Object.freeze({ command: powershell }),
+    ...(includeBirthInspector ? { windowsBirthInspector: Object.freeze({ command: powershell }) } : {}),
     windowsTaskkill: Object.freeze({ command: taskkill }),
   });
 }
@@ -1216,7 +1250,7 @@ function birthDiscriminator(identity: Identity): string {
   return createHash("sha256").update(payload).digest("hex");
 }
 
-function claimOwnedFence(identity: Identity, candidate: ProcessEffectFence): void {
+function claimOwnedFence(identity: Identity, candidate: ProcessEffectFence, inspection?: OwnedFenceLockOptions): void {
   if (!candidate.ownerId || !Number.isSafeInteger(candidate.fencingToken) || candidate.fencingToken < 1)
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence is invalid.");
   const path = join(identity.directory, "fence.json");
@@ -1238,13 +1272,13 @@ function claimOwnedFence(identity: Identity, candidate: ProcessEffectFence): voi
         writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, ...candidate }), { mode: 0o600 });
         renameSync(temporary, path);
       }
-    });
+    }, inspection);
   } catch (error) {
     if (error instanceof OwnedProcessIdentityMismatchError) throw error;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence claim is unavailable.", { cause: error });
   }
 }
-function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T): T {
+function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T, inspection?: OwnedFenceLockOptions): T {
   const path = join(identity.directory, "fence.json");
   const lock = join(identity.directory, ".fence.lock");
   try {
@@ -1253,13 +1287,13 @@ function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectF
       if (candidate.ownerId !== current.ownerId || candidate.fencingToken !== current.fencingToken)
         throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
       return effect();
-    });
+    }, inspection);
   } catch (error) {
     if (error instanceof OwnedProcessIdentityMismatchError) throw error;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }
-async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T | Promise<T>, retireAuthority?: () => void): Promise<T> {
+async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T | Promise<T>, retireAuthority?: () => void, inspection?: OwnedFenceLockOptions): Promise<T> {
   const path = join(identity.directory, "fence.json");
   const lock = join(identity.directory, ".fence.lock");
   try {
@@ -1268,7 +1302,7 @@ async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: Pro
       if (candidate.ownerId !== current.ownerId || candidate.fencingToken !== current.fencingToken)
         throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
       return effect();
-    }, { retireAfterEffect: Boolean(retireAuthority), ...(retireAuthority ? { retireAuthority } : {}) });
+    }, { ...inspection, retireAfterEffect: Boolean(retireAuthority), ...(retireAuthority ? { retireAuthority } : {}) });
   } catch (error) {
     if (error instanceof OwnedProcessIdentityMismatchError) throw error;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
@@ -1306,13 +1340,14 @@ function readOwnedFence(path: string, identity: Identity): ProcessEffectFence {
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence evidence is invalid.");
   }
 }
-function assertPortableOutputSettledAtFence(identity: Identity, fence: ProcessEffectFence | undefined): void {
+function assertPortableOutputSettledAtFence(identity: Identity, fence: ProcessEffectFence | undefined, inspection?: OwnedFenceLockOptions): void {
   if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
   const snapshot = runPortableFenceSnapshotSync({
     lockPath: join(identity.directory, ".fence.lock"),
     expectedFence: fence,
     readCurrentFence: () => readOwnedFence(join(identity.directory, "fence.json"), identity),
     read: () => assertPortableOutputSettled(identity),
+    lockOptions: inspection,
   });
   if (snapshot.status === "applied") return;
   if (snapshot.status === "stale") throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the output snapshot boundary.");

@@ -17,8 +17,13 @@ import {
 import type { ProcessHostSemanticProbeSource } from "./process-host-semantic-probes.js";
 import { recordTempCreation } from "./cleanup-ownership.js";
 import { WindowsProcessBackend } from "./windows-process-backend.js";
+import { InspectionConstructionOwner, awaitInspectionConstruction } from "./inspection-cleanup.js";
 
 const PROBE_DEADLINE_MS = 15_000;
+interface PortableProbeCreator {
+  readonly owners: Set<InspectionConstructionOwner>;
+  readonly isClosed: () => boolean;
+}
 const FENCE: ProcessEffectFence = Object.freeze({ ownerId: "windows-semantic-probe", fencingToken: 1 });
 const WINDOWS_PROBE_ENVIRONMENT_KEYS = Object.freeze([
   "SystemRoot",
@@ -46,22 +51,55 @@ export function minimalWindowsSemanticProbeEnvironment(
 }
 
 /** Live, independently callable Windows probes. Callers should cache their settled facts. */
-export function createWindowsProcessSemanticProbeSource(options: { readonly deadlineMs?: number; readonly cleanupDeadlineMs?: number; readonly ambientEnvironment?: Readonly<Record<string, string | undefined>> } = {}): Pick<ProcessHostSemanticProbeSource,
+export function createWindowsProcessSemanticProbeSource(options: { readonly deadlineMs?: number; readonly cleanupDeadlineMs?: number; readonly ambientEnvironment?: Readonly<Record<string, string | undefined>>; readonly registerCleanup?: (cleanup: () => Promise<void>) => void } = {}): Pick<ProcessHostSemanticProbeSource,
   "portableDuplex" | "windowsBatchArgv" | "exactTreeBirth"> {
   // Each portable fixture performs Windows process inventory. Serialize the
   // one-time probes so capability discovery cannot create an inventory storm.
   let tail = Promise.resolve();
+  let closed = false;
+  let registered = false;
+  let closePromise: Promise<void> | undefined;
+  const owners = new Set<InspectionConstructionOwner>();
+  const creator: PortableProbeCreator = { owners, isClosed: () => closed };
+  const cleanupDeadlineMs = options.cleanupDeadlineMs ?? PROBE_DEADLINE_MS;
+  const closeOwners = async (deadline?: number) => {
+    const failures: unknown[] = [];
+    for (const owner of [...owners]) {
+      if (deadline !== undefined && Date.now() >= deadline) throw new Error("Windows semantic probe cleanup deadline exhausted.");
+      try { await owner.close(); if (owner.isComplete()) owners.delete(owner); }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "Windows semantic probe cleanup remains owned.");
+  };
+  const close = (): Promise<void> => {
+    closed = true;
+    const deadline = Date.now() + cleanupDeadlineMs;
+    if (closePromise) return awaitInspectionConstruction(closePromise, deadline);
+    const attempt = (async () => {
+      await awaitInspectionConstruction(tail, deadline);
+      await closeOwners(deadline);
+    })();
+    closePromise = attempt;
+    void attempt.finally(() => { if (closePromise === attempt) closePromise = undefined; }).catch(() => undefined);
+    return awaitInspectionConstruction(attempt, deadline);
+  };
+  if (options.registerCleanup) { options.registerCleanup(close); registered = true; }
   const serialize = <T>(probe: () => Promise<T>): Promise<T> => {
-    const result = tail.then(probe);
+    const result = tail.then(async () => {
+      if (closed) throw new Error("Windows semantic probe source is closed.");
+      if (!registered) throw new Error("Windows semantic probe cleanup must be registered before admission.");
+      await closeOwners();
+      if (closed) throw new Error("Windows semantic probe source closed during cleanup.");
+      return await probe();
+    });
     tail = result.then(() => undefined, () => undefined);
     return result;
   };
-  const cleanupDeadlineMs = options.cleanupDeadlineMs ?? PROBE_DEADLINE_MS;
   const ambientEnvironment = options.ambientEnvironment ?? {};
   return Object.freeze({
-    portableDuplex: async () => await serialize(async () => await probePortableDuplex(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs, ambientEnvironment)),
-    windowsBatchArgv: async () => await serialize(async () => await probeWindowsBatchArgv(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs, ambientEnvironment)),
-    exactTreeBirth: async () => await serialize(async () => await probeExactTreeBirth(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs, ambientEnvironment)),
+    portableDuplex: async () => await serialize(async () => await probePortableDuplex(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs, ambientEnvironment, creator)),
+    windowsBatchArgv: async () => await serialize(async () => await probeWindowsBatchArgv(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs, ambientEnvironment, creator)),
+    exactTreeBirth: async () => await serialize(async () => await probeExactTreeBirth(options.deadlineMs ?? PROBE_DEADLINE_MS, cleanupDeadlineMs, ambientEnvironment, creator)),
   });
 }
 
@@ -71,10 +109,10 @@ function remainingProbeDeadlineMs(deadline: number): number {
   return remaining;
 }
 
-async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number, ambientEnvironment: Readonly<Record<string, string | undefined>>): Promise<boolean> {
+async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number, ambientEnvironment: Readonly<Record<string, string | undefined>>, creator: PortableProbeCreator): Promise<boolean> {
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
-  return await withPortableProbe("duplex", deadline, cleanupDeadlineMs, async ({ backend, workspace, own }) => {
+  return await withPortableProbe("duplex", deadline, cleanupDeadlineMs, creator, async ({ backend, workspace, own, release }) => {
     const launch = parseProcessLaunchResult(await backend.launch(request(
       workspace,
       process.execPath,
@@ -103,7 +141,7 @@ async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number
       await waitForPortableTerminal(backend, binding, () =>
         Buffer.concat(received).equals(Buffer.from("probe:duplex-boundary")), remainingProbeDeadlineMs(deadline));
       await channel.detach(); attached = undefined;
-      await requireEmptyAndRelease(backend, binding, remainingProbeDeadlineMs(deadline));
+      await release(remainingProbeDeadlineMs(deadline));
       return Buffer.concat(received).equals(Buffer.from("probe:duplex-boundary"));
     } finally {
       await attached?.detach().catch(() => undefined);
@@ -111,10 +149,10 @@ async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number
   });
 }
 
-async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: number, ambientEnvironment: Readonly<Record<string, string | undefined>>): Promise<boolean> {
+async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: number, ambientEnvironment: Readonly<Record<string, string | undefined>>, creator: PortableProbeCreator): Promise<boolean> {
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
-  return await withPortableProbe("batch", deadline, cleanupDeadlineMs, async ({ backend, workspace, own }) => {
+  return await withPortableProbe("batch", deadline, cleanupDeadlineMs, creator, async ({ backend, workspace, own, release }) => {
     const script = join(workspace, "capture-argv.mjs");
     const shim = join(workspace, "capture-argv.cmd");
     writeFileSync(script, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n", { mode: 0o600 });
@@ -136,7 +174,7 @@ async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: numb
       });
       await waitForPortableTerminal(backend, binding, () => stdout.length > 0, remainingProbeDeadlineMs(deadline));
       await channel.detach(); attached = undefined;
-      await requireEmptyAndRelease(backend, binding, remainingProbeDeadlineMs(deadline));
+      await release(remainingProbeDeadlineMs(deadline));
       return JSON.stringify(JSON.parse(Buffer.concat(stdout).toString("utf8"))) === JSON.stringify(expected);
     } finally {
       await attached?.detach().catch(() => undefined);
@@ -144,10 +182,10 @@ async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: numb
   });
 }
 
-async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number, ambientEnvironment: Readonly<Record<string, string | undefined>>): Promise<"partial" | false> {
+async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number, ambientEnvironment: Readonly<Record<string, string | undefined>>, creator: PortableProbeCreator): Promise<"partial" | false> {
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
-  return await withPortableProbe<"partial" | false>("tree", deadline, cleanupDeadlineMs, async ({ backend, workspace, own }) => {
+  return await withPortableProbe<"partial" | false>("tree", deadline, cleanupDeadlineMs, creator, async ({ backend, workspace, own, release }) => {
     const child = "setTimeout(()=>process.exit(0),4000)";
     const parent = `const{spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'});setTimeout(()=>process.exit(0),4000)`;
     const launch = parseProcessLaunchResult(await backend.launch(request(workspace, process.execPath, ["-e", parent], ambientEnvironment)));
@@ -168,18 +206,20 @@ async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number
     // the independent tree/re-attestation contract without contending on a
     // second synchronous Windows inventory during capability discovery.
     await waitForPortableTerminal(backend, binding, () => true, remainingProbeDeadlineMs(deadline));
-    await requireEmptyAndRelease(backend, binding, remainingProbeDeadlineMs(deadline));
+    await release(remainingProbeDeadlineMs(deadline));
     // The portable supervisor proves birth-tagged known members, but not global
     // OS containment, so the honest semantic level remains partial.
     return "partial";
   });
 }
 
-async function withPortableProbe<T>(name: string, operationDeadline: number, cleanupDeadlineMs: number, action: (context: {
+async function withPortableProbe<T>(name: string, operationDeadline: number, cleanupDeadlineMs: number, creator: PortableProbeCreator, action: (context: {
   backend: WindowsProcessBackend;
   workspace: string;
   own(binding: ProcessBackendBinding): ProcessBackendBinding;
+  release(deadlineMs: number): Promise<void>;
 }) => Promise<T>): Promise<T> {
+  if (creator.isClosed()) throw new Error("Windows semantic probe source is closed.");
   // Initialize and validate the Windows inventory provider before the random
   // root exists. Protected provider helpers created by this query then have an
   // immutable birth strictly before the root rather than becoming an
@@ -192,7 +232,71 @@ async function withPortableProbe<T>(name: string, operationDeadline: number, cle
     throw error;
   }
   remainingProbeDeadlineMs(operationDeadline);
-  const root = mkdtempSync(join(tmpdir(), `aiboard-windows-semantic-${name}-`));
+  const owner = new InspectionConstructionOwner();
+  creator.owners.add(owner);
+  let root: string | undefined;
+  let backend: WindowsProcessBackend | undefined;
+  let binding: ProcessBackendBinding | undefined;
+  let released = false;
+  let workloadsVerified = false;
+  let primaryError: unknown;
+  let closeHelper: ((deadline: number) => Promise<void>) | undefined;
+  let workloadCleanup: Promise<void> | undefined;
+  const cleanupWorkloads = async (cleanupDeadline: number) => {
+    if (!root || !backend) { workloadsVerified = true; return; }
+    const remaining = () => {
+      const value = Math.floor(cleanupDeadline - Date.now());
+      if (value < 1) throw new Error("Windows semantic probe cleanup deadline exhausted.");
+      return value;
+    };
+    const cleanupErrors: unknown[] = [];
+    if (binding && !released) {
+      try { remaining(); await backend.signal(binding, "force_terminate", FENCE); }
+      catch (error) { cleanupErrors.push(error); }
+      try {
+        await settleProbeOutput(backend, binding, remaining());
+        await requireEmptyAndRelease(backend, binding, remaining());
+        released = true;
+      } catch (error) {
+        cleanupErrors.push(error);
+        try { await requireEmptyAndRelease(backend, binding, remaining()); released = true; }
+        catch (settleError) { cleanupErrors.push(settleError); }
+      }
+    }
+    try {
+    if (released || (!binding && removeUnboundSemanticProbeRoot(root, { removeRoot: false })) ||
+        (binding && removeInactiveSemanticProbeRoot(root, binding, { deadlineMs: remaining(), removeRoot: false }))) {
+      workloadsVerified = true;
+      return;
+    }
+    } catch (error) { cleanupErrors.push(error); }
+    throw new AggregateError(cleanupErrors, `Windows semantic probe cleanup preserved uncertain evidence at ${root}.`);
+  };
+  owner.add(async () => {
+    const deadline = Date.now() + cleanupDeadlineMs;
+    if (!workloadCleanup) {
+      const attempt = cleanupWorkloads(deadline);
+      workloadCleanup = attempt;
+      void attempt.finally(() => { if (workloadCleanup === attempt) workloadCleanup = undefined; }).catch(() => undefined);
+    }
+    try { await awaitInspectionConstruction(workloadCleanup, deadline); }
+    catch (error) {
+      throw new AggregateError([...(primaryError === undefined ? [] : [primaryError]), error], "Windows semantic probe workload cleanup remains owned.",
+        { ...(primaryError === undefined ? {} : { cause: primaryError }) });
+    }
+  });
+  owner.addInspection(async () => {
+    if (!workloadsVerified) throw new Error("Windows semantic probe workload cleanup must settle before inspection retirement.");
+    try {
+      await closeHelper?.(Date.now() + 5_000);
+      if (root) rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    } catch (error) {
+      throw new AggregateError([...(primaryError === undefined ? [] : [primaryError]), error], "Windows semantic probe inspection cleanup remains owned.",
+        { ...(primaryError === undefined ? {} : { cause: primaryError }) });
+    }
+  });
+  try {
+  root = mkdtempSync(join(tmpdir(), `aiboard-windows-semantic-${name}-`));
   // T6b repair (OA-17): probe roots self-clean with an exact verified
   // proof below (rmSync on release, preserved evidence otherwise). The
   // creation is validated synchronously; no shared registry is written,
@@ -204,7 +308,7 @@ async function withPortableProbe<T>(name: string, operationDeadline: number, cle
   // This backend exists only to measure the semantics themselves. The batch
   // probe is allowed through this private fixture path, and the resulting fact
   // is trusted by product construction only after exact argv output matches.
-  const backend = new WindowsProcessBackend({
+  backend = new WindowsProcessBackend({
     stateDirectory,
     startupDeadlineAt: operationDeadline,
     semanticFacts: {
@@ -214,51 +318,27 @@ async function withPortableProbe<T>(name: string, operationDeadline: number, cle
       jobContainment: "unavailable",
     },
   });
-  let binding: ProcessBackendBinding | undefined;
-  let released = false;
-  let primaryError: unknown;
-  try {
-    const value = await action({ backend, workspace, own: (owned) => (binding = owned) });
-    released = true;
+  backend.registerInspectionCleanup((cleanup) => { closeHelper = cleanup; });
+  await backend.prepareInspection(operationDeadline);
+  remainingProbeDeadlineMs(operationDeadline);
+  if (creator.isClosed()) throw new Error("Windows semantic probe source closed during preparation.");
+    const value = await action({ backend, workspace, own: (owned) => {
+      if (binding && binding !== owned) throw new Error("Windows semantic probe cannot replace its exact owned binding.");
+      return (binding = owned);
+    }, release: async (deadlineMs) => {
+      if (!backend || !binding) throw new Error("Windows semantic probe has no exact binding to release.");
+      await requireEmptyAndRelease(backend, binding, deadlineMs);
+      released = true;
+    } });
     return value;
   } catch (error) {
     primaryError = error;
     throw error;
   } finally {
-    const cleanupErrors: unknown[] = [];
-    if (binding && !released) {
-      try { await backend.signal(binding, "force_terminate", FENCE); }
-      catch (error) { cleanupErrors.push(error); }
-      try {
-        // The portable supervisor intentionally retains ownership until every
-        // durable output chunk is acknowledged.  Settle that output before
-        // waiting for terminal emptiness; reversing these two operations can
-        // consume the entire cleanup budget in a dependency deadlock.
-        await settleProbeOutput(backend, binding, cleanupDeadlineMs);
-        await requireEmptyAndRelease(backend, binding, cleanupDeadlineMs);
-        released = true;
-      } catch (error) {
-        cleanupErrors.push(error);
-        try {
-          await requireEmptyAndRelease(backend, binding, cleanupDeadlineMs);
-          released = true;
-        } catch (settleError) { cleanupErrors.push(settleError); }
-      }
-    }
-    if (released) rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-    else if (!binding) {
-      if (!removeUnboundSemanticProbeRoot(root)) {
-        const blocker = new Error(`Windows semantic probe cleanup preserved unbound launch evidence at ${root}.`);
-        throw new AggregateError(
-          [...(primaryError === undefined ? [] : [primaryError]), blocker],
-          `Windows semantic probe failed before binding and exact cleanup could not be verified${primaryError === undefined ? "." : `: ${String(primaryError)}`}`,
-          { ...(primaryError === undefined ? {} : { cause: primaryError }) },
-        );
-      }
-    } else if (!removeInactiveSemanticProbeRoot(root, binding, { deadlineMs: cleanupDeadlineMs })) {
-      const blocker = new Error(`Windows semantic probe cleanup preserved uncertain evidence at ${root}.`);
+    try { await owner.close(); if (owner.isComplete()) creator.owners.delete(owner); }
+    catch (cleanupError) {
       throw new AggregateError(
-        [...(primaryError === undefined ? [] : [primaryError]), ...cleanupErrors, blocker],
+        [...(primaryError === undefined ? [] : [primaryError]), cleanupError],
         `Windows semantic probe failed and exact cleanup could not be verified${primaryError === undefined ? "." : `: ${String(primaryError)}`}`,
         { ...(primaryError === undefined ? {} : { cause: primaryError }) },
       );
@@ -267,6 +347,7 @@ async function withPortableProbe<T>(name: string, operationDeadline: number, cle
 }
 
 export interface SemanticProbeCleanupOperations {
+  readonly removeRoot?: boolean;
   readonly deadlineMs?: number;
   readonly now?: () => number;
   readonly globalInventory?: (remainingMs: number) => readonly GlobalProbeProcess[];
@@ -297,16 +378,16 @@ export function removeInactiveSemanticProbeRoot(root: string, binding: ProcessBa
   }
   if (!probeEvidenceHasNoLiveOwners(resolvedRoot, binding, operations, budget)) return false;
   try { remainingCleanupMs(budget); } catch { return false; }
-  rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  if (operations.removeRoot !== false) rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   return true;
 }
 
-export function removeUnboundSemanticProbeRoot(root: string): boolean {
+export function removeUnboundSemanticProbeRoot(root: string, options: { readonly removeRoot?: boolean } = {}): boolean {
   const resolvedRoot = resolve(root);
   if (!validGeneratedProbeRoot(resolvedRoot)) return false;
   try {
     if (readdirSync(join(resolvedRoot, "state"), { withFileTypes: true }).length !== 0) return false;
-    rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    if (options.removeRoot !== false) rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
     return true;
   } catch { return false; }
 }

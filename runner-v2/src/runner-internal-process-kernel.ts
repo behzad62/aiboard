@@ -24,6 +24,7 @@ import {
 } from "./process-backend.js";
 import { createPosixProcessBackend } from "./posix-process-backend.js";
 import { createWindowsProcessBackend } from "./windows-process-backend.js";
+import { NativeOwnedProcessBackend } from "./native-process-backend.js";
 
 const POLL_INTERVAL_MS = 25;
 
@@ -59,6 +60,7 @@ export interface RunnerInternalOwnedProcess {
     readonly shutdownTimeoutMs: number;
     readonly terminationTimeoutMs: number;
     readonly forceImmediately?: boolean;
+    readonly absoluteDeadline?: number;
   }): Promise<Readonly<{ exitCode?: number; signal?: string }>>;
 }
 
@@ -76,7 +78,7 @@ export function createRunnerInternalProcessKernel(options: {
 }): RunnerInternalProcessKernel {
   const stateDirectory = resolve(options.stateDirectory);
   const platform = options.platform ?? process.platform;
-  const backend = asBackpressured(options.backend ?? (
+  const rawBackend = options.backend ?? (
     platform === "win32"
       ? createWindowsProcessBackend({
           stateDirectory,
@@ -89,14 +91,27 @@ export function createRunnerInternalProcessKernel(options: {
           replayCapacityChunks: 16,
           replayCapacityBytes: 256 * 1024,
         })
-  ));
+  );
+  let closeInspection: (() => Promise<void>) | undefined;
+  if (options.backend === undefined && rawBackend instanceof NativeOwnedProcessBackend) {
+    rawBackend.registerInspectionCleanup((cleanup) => {
+      closeInspection = () => cleanup(Date.now() + 5_000);
+    });
+  }
+  const backend = asBackpressured(rawBackend);
   const active = new Set<RunnerInternalOwnedProcess>();
+  const pendingLaunches = new Set<Promise<void>>();
   let closed = false;
+  let closingDeadline: number | undefined;
   let closePromise: Promise<void> | undefined;
 
   const kernel: RunnerInternalProcessKernel = Object.freeze({
     async launch(input: RunnerInternalProcessLaunchInput) {
       if (closed) throw new Error("Runner internal process kernel is closed.");
+      let finishLaunch!: () => void;
+      const completion = new Promise<void>((resolveCompletion) => { finishLaunch = resolveCompletion; });
+      pendingLaunches.add(completion);
+      try {
       await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
       const fence = Object.freeze({
         ownerId: boundedIdentity(input.principalId, "principalId"),
@@ -153,7 +168,7 @@ export function createRunnerInternalProcessKernel(options: {
         channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
       } catch (acquisitionError) {
         try {
-          await cleanupExactBackend(backend, binding, fence, 15_000);
+          await cleanupExactBackend(backend, binding, fence, 15_000, closed ? closingDeadline : undefined);
         } catch (cleanupError) {
           const retained = createCleanupOnlyOwner({
             backend,
@@ -224,10 +239,13 @@ export function createRunnerInternalProcessKernel(options: {
           readonly shutdownTimeoutMs: number;
           readonly terminationTimeoutMs: number;
           readonly forceImmediately?: boolean;
+          readonly absoluteDeadline?: number;
         }) {
           if (cleanupResult) return cleanupResult;
           if (cleanupPromise) return await cleanupPromise;
           const attempt = (async () => {
+            const absoluteDeadline = validateCleanupDeadline(closeInput.absoluteDeadline);
+            assertCleanupBudget(absoluteDeadline);
             if (!sink) {
               sink = () => undefined;
               resolveSink(sink);
@@ -241,25 +259,30 @@ export function createRunnerInternalProcessKernel(options: {
               closeInput.terminationTimeoutMs,
               "termination timeout",
             );
-            try { await writeTail; await channel.closeInput(); } catch {}
+            try { await writeTail; assertCleanupBudget(absoluteDeadline); await channel.closeInput(); } catch {}
+            assertCleanupBudget(absoluteDeadline);
             let observed = await waitForTerminal(
               backend,
               binding,
               fence,
-              Date.now() + shutdownTimeoutMs,
+              Math.min(Date.now() + shutdownTimeoutMs, absoluteDeadline),
+              absoluteDeadline,
             );
+            assertCleanupBudget(absoluteDeadline);
             if (observed.state !== "exited" && closeInput.forceImmediately !== true) {
               try {
                 parseProcessSignalResult(await backend.signal(binding, "terminate", fence));
               } catch {}
+              assertCleanupBudget(absoluteDeadline);
               observed = await waitForTerminal(
                 backend,
                 binding,
                 fence,
-                Date.now() + Math.min(terminationTimeoutMs, 5_000),
+                Math.min(Date.now() + terminationTimeoutMs, Date.now() + 5_000, absoluteDeadline),
+                absoluteDeadline,
               );
             }
-            const forceDeadline = Date.now() + terminationTimeoutMs;
+            const forceDeadline = Math.min(Date.now() + terminationTimeoutMs, absoluteDeadline);
             while (observed.state !== "exited" && Date.now() < forceDeadline) {
               try {
                 const signalled = parseProcessSignalResult(await backend.signal(binding, "force_terminate", fence));
@@ -268,6 +291,7 @@ export function createRunnerInternalProcessKernel(options: {
                   break;
                 }
               } catch {}
+              assertCleanupBudget(absoluteDeadline);
               observed = parseProcessReconciliation(
                 await backend.reconcile(binding, fence),
               );
@@ -280,12 +304,14 @@ export function createRunnerInternalProcessKernel(options: {
               ...(observed.exitCode === undefined ? {} : { exitCode: observed.exitCode }),
               ...(observed.signal === undefined ? {} : { signal: observed.signal }),
             });
-            const emptyDeadline = Date.now() + terminationTimeoutMs;
+            assertCleanupBudget(absoluteDeadline);
+            const emptyDeadline = Math.min(Date.now() + terminationTimeoutMs, absoluteDeadline);
             let empty = parseProcessEmptyVerification(
               await backend.verifyEmpty(binding, fence),
             );
             while (!empty.empty && Date.now() < emptyDeadline) {
               await delay(POLL_INTERVAL_MS);
+              assertCleanupBudget(absoluteDeadline);
               empty = parseProcessEmptyVerification(
                 await backend.verifyEmpty(binding, fence),
               );
@@ -293,10 +319,12 @@ export function createRunnerInternalProcessKernel(options: {
             if (!empty.empty) {
               throw new Error(`Runner internal process cleanup could not prove emptiness: ${empty.detail}`);
             }
+            assertCleanupBudget(absoluteDeadline);
             unsubscribe();
             await channel.detach();
-            const releaseDeadline = Date.now() + terminationTimeoutMs;
+            const releaseDeadline = Math.min(Date.now() + terminationTimeoutMs, absoluteDeadline);
             for (;;) {
+              assertCleanupBudget(absoluteDeadline);
               try {
                 parseProcessReleaseResult(await backend.release(binding, fence));
                 break;
@@ -320,10 +348,14 @@ export function createRunnerInternalProcessKernel(options: {
       });
       active.add(owned);
       if (closed) {
-        await owned.closeVerified({ shutdownTimeoutMs: 1, terminationTimeoutMs: 15_000 });
+        await owned.closeVerified({ shutdownTimeoutMs: 1, terminationTimeoutMs: 15_000, absoluteDeadline: closingDeadline });
         throw new Error("Runner internal process kernel closed during launch.");
       }
       return owned;
+      } finally {
+        finishLaunch();
+        pendingLaunches.delete(completion);
+      }
     },
     activeCount() {
       return active.size;
@@ -331,15 +363,21 @@ export function createRunnerInternalProcessKernel(options: {
     async close() {
       if (closePromise) return await closePromise;
       closed = true;
+      const deadline = Date.now() + 15_000;
+      closingDeadline = deadline;
       const attempt = (async () => {
-        const settled = await Promise.allSettled([...active].map(async (owned) =>
-          await owned.closeVerified({ shutdownTimeoutMs: 1_000, terminationTimeoutMs: 15_000 })));
+        await awaitCleanupSettlement(Promise.all([...pendingLaunches]), deadline);
+        assertCleanupBudget(deadline);
+        const settled = await awaitCleanupSettlement(Promise.allSettled([...active].map(async (owned) =>
+          await owned.closeVerified({ shutdownTimeoutMs: 1_000, terminationTimeoutMs: 15_000, absoluteDeadline: deadline }))), deadline);
         const failures = settled
           .filter((entry): entry is PromiseRejectedResult => entry.status === "rejected")
           .map((entry) => entry.reason);
         if (failures.length > 0) {
           throw new AggregateError(failures, "Runner internal process kernel cleanup failed.");
         }
+        assertCleanupBudget(deadline);
+        await closeInspection?.();
       })();
       closePromise = attempt;
       try {
@@ -380,7 +418,7 @@ function createCleanupOnlyOwner(options: {
       positiveTimeout(input.shutdownTimeoutMs, "shutdown timeout");
       const timeoutMs = positiveTimeout(input.terminationTimeoutMs, "termination timeout");
       const attempt = (async () => {
-        await cleanupExactBackend(options.backend, options.binding, options.fence, timeoutMs);
+        await cleanupExactBackend(options.backend, options.binding, options.fence, timeoutMs, input.absoluteDeadline);
         const result = Object.freeze({});
         options.onReleased(owned);
         return result;
@@ -403,23 +441,53 @@ async function cleanupExactBackend(
   binding: ProcessBackendBinding,
   fence: ProcessEffectFence,
   timeoutMs: number,
+  absoluteDeadline?: number,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Math.min(Date.now() + timeoutMs, validateCleanupDeadline(absoluteDeadline));
+  assertCleanupBudget(deadline);
   let observed = parseProcessReconciliation(await backend.reconcile(binding, fence));
   while (observed.state !== "exited" && Date.now() < deadline) {
     try { parseProcessSignalResult(await backend.signal(binding, "force_terminate", fence)); }
     catch {}
+    assertCleanupBudget(deadline);
     observed = parseProcessReconciliation(await backend.reconcile(binding, fence));
     if (observed.state !== "exited") await delay(POLL_INTERVAL_MS);
   }
   if (observed.state !== "exited") throw new Error("Runner internal failed-launch cleanup is unverified.");
+  assertCleanupBudget(deadline);
   let empty = parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence));
   while (!empty.empty && Date.now() < deadline) {
     await delay(POLL_INTERVAL_MS);
+    assertCleanupBudget(deadline);
     empty = parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence));
   }
   if (!empty.empty) throw new Error("Runner internal failed-launch cleanup could not prove emptiness.");
+  assertCleanupBudget(deadline);
   parseProcessReleaseResult(await backend.release(binding, fence));
+}
+
+function validateCleanupDeadline(deadline: number | undefined): number {
+  if (deadline === undefined) return Number.POSITIVE_INFINITY;
+  if (!Number.isFinite(deadline) || deadline <= 0) throw new Error("Runner internal cleanup absolute deadline is invalid.");
+  return deadline;
+}
+
+function assertCleanupBudget(deadline: number): void {
+  if (Date.now() >= deadline) throw new Error("Runner internal cleanup deadline exhausted; ownership remains retained.");
+}
+
+async function awaitCleanupSettlement<T>(promise: Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    void promise.catch(() => undefined);
+    throw new Error("Runner internal cleanup deadline exhausted; ownership remains retained.");
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Runner internal cleanup remains unsettled; ownership remains retained.")), remaining);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 
 async function waitForTerminal(
@@ -427,10 +495,14 @@ async function waitForTerminal(
   binding: ProcessBackendBinding,
   fence: ProcessEffectFence,
   deadline: number,
+  absoluteDeadline = Number.POSITIVE_INFINITY,
 ): Promise<ProcessReconciliation> {
+  assertCleanupBudget(absoluteDeadline);
   let observed = parseProcessReconciliation(await backend.reconcile(binding, fence));
   while (observed.state !== "exited" && Date.now() < deadline) {
-    await delay(POLL_INTERVAL_MS);
+    await delay(Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+    assertCleanupBudget(absoluteDeadline);
+    if (Date.now() >= deadline) break;
     observed = parseProcessReconciliation(await backend.reconcile(binding, fence));
   }
   return observed;
