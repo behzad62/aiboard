@@ -539,23 +539,19 @@ test("semantic cleanup detects executable and embedded strict base64 root refere
       commandLine: `node --payload=ABCDE${Buffer.from(JSON.stringify({ retainedRoot: root })).toString("base64url")}XYZAB`,
     })],
     ["standard-base64", (root) => {
-      let encoded = "";
-      for (let value = 0; value < 256 && !/[+/]/.test(encoded); value += 1)
-        encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: String.fromCharCode(value) })).toString("base64");
+      // Six question-mark bytes contain an aligned 0x3f triplet for every
+      // root-length residue, guaranteeing '/' independently of the temp path.
+      const encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: "??????" })).toString("base64");
       assert.match(encoded, /[+/]/, "fixture must exercise the standard-base64 alphabet");
       return { executable: "C:\\safe.exe", commandLine: `node --payload=${encoded}` };
     }],
     ["standard-base64-mixed-wrapper", (root) => {
-      let encoded = "";
-      for (let value = 0; value < 256 && !/[+/]/.test(encoded); value += 1)
-        encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: String.fromCharCode(value) })).toString("base64");
+      const encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: "??????" })).toString("base64");
       assert.match(encoded, /[+/]/, "fixture must exercise the standard-base64 alphabet");
       return { executable: "C:\\safe.exe", commandLine: `node --payload=_${encoded}-` };
     }],
     ["base64url-mixed-wrapper", (root) => {
-      let encoded = "";
-      for (let value = 0; value < 256 && !/[-_]/.test(encoded); value += 1)
-        encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: String.fromCharCode(value) })).toString("base64url");
+      const encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: "??????" })).toString("base64url");
       assert.match(encoded, /[-_]/, "fixture must exercise the base64url alphabet");
       return { executable: "C:\\safe.exe", commandLine: `node --payload=+${encoded}/` };
     }],

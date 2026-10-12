@@ -997,7 +997,23 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (this.platform !== "win32" || process.platform !== "win32") return false;
     const jobHost = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
     if (!existsSync(this.supervisorScriptPath) || !existsSync(jobHost)) return false;
-    const command = "$ErrorActionPreference='Stop';$s='using System;using System.Runtime.InteropServices;public static class P{[DllImport(\"kernel32.dll\",CharSet=CharSet.Unicode,SetLastError=true)]public static extern IntPtr CreateJobObject(IntPtr a,string n);[DllImport(\"kernel32.dll\",SetLastError=true)]public static extern bool CloseHandle(IntPtr h);}';Add-Type -TypeDefinition $s;$h=[P]::CreateJobObject([IntPtr]::Zero,$null);if($h -eq [IntPtr]::Zero){exit 1};if(-not [P]::CloseHandle($h)){exit 1}";
+    // Emit only the two fixed native signatures. Runtime C# compilation is
+    // unrelated to Job availability and can consume the entire active probe
+    // budget before either syscall. No workload is assigned to this Job.
+    const command = [
+      "$ErrorActionPreference='Stop'",
+      "$assembly=[AppDomain]::CurrentDomain.DefineDynamicAssembly([Reflection.AssemblyName]::new('AIBoardActiveJobProbe'),[Reflection.Emit.AssemblyBuilderAccess]::Run)",
+      "$module=$assembly.DefineDynamicModule('Native')",
+      "$builder=$module.DefineType('AIBoardActiveJobProbe',[Reflection.TypeAttributes]::Public -bor [Reflection.TypeAttributes]::Abstract -bor [Reflection.TypeAttributes]::Sealed)",
+      "$flags=[Reflection.MethodAttributes]::Public -bor [Reflection.MethodAttributes]::Static -bor [Reflection.MethodAttributes]::PinvokeImpl",
+      "foreach($definition in @(@('CreateJobObjectW',[IntPtr],[Type[]]@([IntPtr],[string])),@('CloseHandle',[bool],[Type[]]@([IntPtr])))){",
+      "$method=$builder.DefinePInvokeMethod([string]$definition[0],'kernel32.dll',$flags,[Reflection.CallingConventions]::Standard,[Type]$definition[1],[Type[]]$definition[2],[Runtime.InteropServices.CallingConvention]::Winapi,[Runtime.InteropServices.CharSet]::Unicode)",
+      "$method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)",
+      "}",
+      "$native=$builder.CreateType();$job=[IntPtr]::Zero",
+      "try{$job=$native.GetMethod('CreateJobObjectW').Invoke($null,[object[]]@([IntPtr]::Zero,$null));if($job -eq [IntPtr]::Zero){exit 1}}",
+      "finally{if($job -ne [IntPtr]::Zero){if(-not $native.GetMethod('CloseHandle').Invoke($null,[object[]]@($job))){exit 1}}}",
+    ].join("\n");
     const executable = this.activeJobProbe?.executable ?? "powershell.exe";
     const args = this.activeJobProbe?.arguments ?? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command];
     const deadlineMs = this.activeJobProbe?.deadlineMs ?? DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS;
