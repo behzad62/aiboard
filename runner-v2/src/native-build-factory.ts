@@ -2895,6 +2895,12 @@ export class NativeBuildFactory {
       } catch (error) {
         failures.push(error);
       }
+      // Incomplete construction still owns these shared prerequisites. In
+      // particular, a workspace retry may need the same managed service and
+      // provider configuration; do not retire them on a failed close pass.
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Could not close native Build factory resources.");
+      }
       if (this.memoryStore) {
         try {
           this.memoryStore.close();
@@ -3023,6 +3029,9 @@ class NativeBuildResourceCleanupStack {
       if (mode === "handle" && !entry.closeOnHandle) continue;
       if (mode === "failure" ? entry.completedOnFailure : entry.completedOnHandle) continue;
       try {
+        if (entry.stage === "execution_host_binding" && failures.length > 0) {
+          throw new Error("Execution-host binding is retained while dependent cleanup remains incomplete.");
+        }
         if (entry.stage === "process_inspection" && failures.length > 0) {
           throw new Error("Process inspection is retained while dependent cleanup remains incomplete.");
         }
