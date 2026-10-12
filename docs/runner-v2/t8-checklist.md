@@ -35,7 +35,8 @@ Checked items have passed their scoped validation and independent review. Produc
 - [x] Register the inspection Session as an audited raw-process boundary —owning policy6/6;1 validated audit/documentation candidate,0 native attempts. Installed pins match; comment/EOF-only changes preserve accepted runtime semantics.
 - [x] Restore original POSIX/protocol extracted-VM dependencies —Windows21/21 and local Linux99/99;1 validated fixture candidate,0 product iterations.
 - [x] Audit inspection read-only handles, including nested Session source —owning108/108 plus final audit2/2;2 validated audit candidates,0 native attempts.
-- [ ] Validate package/archive byte integrity and reproducibility.
+- [x] Qualify full original Windows factory and installed-npm delivery cases —3/3,242.39s, natural root/Job/stream/handle settlement, no rescue. Distinct original stock30min aggregate; prior240s packet stays failed.0 product iterations/2 current full native attempts.
+- [x] Validate package/archive byte integrity and archive reproducibility —fresh4 archives/all7 helper assets preserve installed pins; three-host package parity and cross-host hashes PASS on0ac9. Final shipping regeneration/freeze remains Gate G.
 - [x] Wire all callers and verify preparation, recovery and cleanup lifetimes —scoped integration independently accepted; startup/crash and cross-platform coverage remain separate.
 - [x] Qualify remaining startup, partial-RPC and controller crash cases —enumerated helper/Session/Worker/CLI scopes independently reconciled; no blanket active-workload crash claim.
 - [ ] Pass affected portable tests and required platform coverage.
@@ -44,7 +45,7 @@ Checked items have passed their scoped validation and independent review. Produc
 
 **Current gate:** D / canonical paths and affected platform coverage. **Gate C Windows:** accepted in reviewed commit series `1e1d9f03`, `1b652a44`, `c4b3fc88`. **T8 acceptance:** open.
 
-**Working now:** applied exact previously reviewed canonical-policy/npm/fixture repair (`0ac9c674`); current9-file Linux/macOS/platform qualification remains open. Full Windows factory packet reached240s observer and is unaccepted; original delivery state retained. Enumerated startup/crash, caller integration, both Windows modules, factory lifetimes, CLI recovery and Gate C remain accepted.
+**Working now:** Linux9-file123/120pass/3 Windows skips and local original Windows factory/npm3/3 accepted on0ac9; hosted Linux/macOS affected suites also green. Hosted Windows123/122/1 construction/cleanup failure remains unresolved. Exact previously accepted bounded causal capture is applied to current source396c28c5; Windows-only diagnostic38276384897 running. Gate C stays accepted unless that current cause demonstrates an ownership/lifetime gap.
 
 **Next:** finish affected platform coverage and the remaining ordered acceptance gates. Package validation remains open.
 
@@ -86,7 +87,7 @@ Caller integration substeps:
 - [x] Qualify the original CLI restart-continuity/startup-blocked module —3 original tests accepted.
 - [x] Qualify recovery lifetimes and remaining affected caller tests —156 pure recovery tests plus original native CLI recovery accepted; broader crash/cross-platform obligations separate.
 
-**Progress:** 33 scoped items accepted;4 acceptance groups remain. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
+**Progress:** 34 scoped items accepted;3 acceptance groups remain. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
 
 **Iteration rule:** a changed candidate reaching scoped behavioral validation counts once; review-only revisions do not count. Unknown historical totals remain unknown.
 
