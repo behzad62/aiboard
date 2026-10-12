@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
 const ASSETS = Object.freeze({
-  'protocol.mjs':'83d22d9baa526547059122186e5ffb21171f99a5866aa8aacc16779e1fa849e6',
+  'protocol.mjs':'b10e5c11ba3b404f57572c4b898b48e8a3ee99f7731747b784ef2f0bad2e64bb',
   'queue.mjs':'51cfea81aee122fd92e1a241ae435e96de83e1987aa55eec5efd16f6b17d8788',
   'runtime-worker.mjs':'3f35034f63a56c2727dab0459af05449177424a0b652e64667506dc96f3e45ce',
   'session.mjs':'4d590ec9c8974e07c5dfc1518db61bfb2d824f1327cc7dc3d0167366ee55576b',
