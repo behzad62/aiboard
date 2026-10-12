@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import childProcessBuiltin, { spawnSync } from "node:child_process";
+import * as childProcessObserverNamespace from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -30,6 +32,7 @@ import { buildSourceManifest } from "../src/source-manifest.js";
 import type { ValidationScope } from "../src/validation-scope.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { captureGitBaseline, NativeBuildFactory, runGit } from "./support/git-fixture.js";
+import { qualificationArtifactRoot, writeQualificationDiagnostics } from "./support/qualification-harness.js";
 
 /**
  * T8 G10c native-patch factory proof (CD-7 runtime behavior).
@@ -324,6 +327,803 @@ function safeSegment(value: string): string {
   return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
 }
 
+/**
+ * Windows factory failure observer (diagnostic only, failure path only).
+ *
+ * Narrow bounded capture for an actual construction/cleanup failure. The
+ * successful journey performs no observer I/O. Original error objects are
+ * never mutated; summaries are passive data, never replacement errors. Only
+ * name/message/code/stage/stack/cause/AggregateError.errors are read, with
+ * explicit finite bounds. No live SQLite queries, no process/ownership
+ * control, no env/credential inspection. Passive state copies via the
+ * existing qualification harness are concurrent observations, not coherent
+ * snapshots and not ownership, quiescence, or release proof.
+ */
+const FACTORY_DIAGNOSTIC_SCENARIO = "openrouter-apply-patch-factory";
+const FACTORY_DIAGNOSTIC_ERROR_MAX_DEPTH = 8;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_NODES = 64;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_CHILDREN = 16;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_NAME_CHARS = 200;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_MESSAGE_CHARS = 4000;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_CODE_CHARS = 200;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_STAGE_CHARS = 200;
+const FACTORY_DIAGNOSTIC_ERROR_MAX_STACK_CHARS = 8000;
+const FACTORY_DIAGNOSTIC_ERROR_JSON_BYTE_BUDGET = 131072;
+const FACTORY_DIAGNOSTIC_CAPTURE_NOTE =
+  "Concurrent passive file copies; non-coherent across files; read failures/omissions are diagnostic observations only, not ownership, quiescence, or release proof. State copies only; no live SQLite queries.";
+
+type FactoryDiagnosticTruncation = {
+  kind: "truncated";
+  reason: string;
+  depth: number;
+};
+
+type FactoryDiagnosticErrorNode = {
+  kind: "error" | "non-error";
+  depth: number;
+  name: string;
+  message: string;
+  code?: string;
+  stage?: string;
+  stack?: string;
+  cause?: FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation;
+  errors?: Array<FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation>;
+  truncated: boolean;
+  truncationReasons: string[];
+  readFailures: string[];
+};
+
+type FactoryDiagnosticPayload = {
+  scenario: string;
+  phase: "primary" | "post-close";
+  fixtureRoot: string;
+  boundedPrimary: (FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation) | null;
+  boundedTeardown: Array<FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation>;
+  nodeCount: number;
+  truncated: boolean;
+  truncationReasons: string[];
+  captureNote: string;
+  probeObserver?: FactoryProbeObserverSnapshot;
+};
+
+function boundFactoryDiagnosticText(value: unknown, maxChars: number): { text: string; truncated: boolean; omitted: boolean } {
+  try {
+    if (typeof value === "string") {
+      if (value.length > maxChars) return { text: value.slice(0, maxChars), truncated: true, omitted: false };
+      return { text: value, truncated: false, omitted: false };
+    }
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      const text = String(value);
+      if (text.length > maxChars) return { text: text.slice(0, maxChars), truncated: true, omitted: false };
+      return { text, truncated: false, omitted: false };
+    }
+    return { text: "", truncated: false, omitted: true };
+  } catch {
+    return { text: "", truncated: false, omitted: true };
+  }
+}
+
+function isFactoryDiagnosticTruncated(node: FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation): boolean {
+  if (node.kind === "truncated") return true;
+  return node.truncated;
+}
+
+function summarizeFactoryDiagnosticError(
+  value: unknown,
+  depth: number,
+  state: { nodes: number; reasons: string[] },
+  seen: Set<object>,
+): FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation {
+  if (depth > FACTORY_DIAGNOSTIC_ERROR_MAX_DEPTH) {
+    state.reasons.push(`depth-budget@${depth}`);
+    return { kind: "truncated", reason: "depth-budget", depth };
+  }
+  if (typeof value === "object" && value !== null) {
+    if (seen.has(value)) {
+      state.reasons.push(`cycle@${depth}`);
+      return { kind: "truncated", reason: "cycle", depth };
+    }
+  }
+  if (state.nodes >= FACTORY_DIAGNOSTIC_ERROR_MAX_NODES) {
+    state.reasons.push(`node-budget@${depth}`);
+    return { kind: "truncated", reason: "node-budget", depth };
+  }
+  state.nodes += 1;
+  if (typeof value === "object" && value !== null) seen.add(value);
+  if (!(value instanceof Error)) {
+    let text = "";
+    let truncated = false;
+    let stringifyFailed = false;
+    try {
+      const raw = String(value);
+      if (raw.length > FACTORY_DIAGNOSTIC_ERROR_MAX_MESSAGE_CHARS) {
+        text = raw.slice(0, FACTORY_DIAGNOSTIC_ERROR_MAX_MESSAGE_CHARS);
+        truncated = true;
+      } else {
+        text = raw;
+      }
+    } catch {
+      stringifyFailed = true;
+    }
+    const truncationReasons: string[] = [];
+    if (truncated) truncationReasons.push("message-budget");
+    if (stringifyFailed) truncationReasons.push("stringify-failed");
+    return {
+      kind: "non-error",
+      depth,
+      name: "non-error",
+      message: text,
+      truncated: truncated || stringifyFailed,
+      truncationReasons,
+      readFailures: stringifyFailed ? ["non-error-stringify-failed"] : [],
+    };
+  }
+  const truncationReasons: string[] = [];
+  const readFailures: string[] = [];
+  const readField = (field: string): { present: boolean; value: unknown; failed: boolean } => {
+    try {
+      const raw = (value as unknown as Record<string, unknown>)[field];
+      if (raw === undefined || raw === null) return { present: false, value: raw, failed: false };
+      return { present: true, value: raw, failed: false };
+    } catch {
+      return { present: false, value: undefined, failed: true };
+    }
+  };
+  const nameField = readField("name");
+  const messageField = readField("message");
+  const codeField = readField("code");
+  const stageField = readField("stage");
+  const stackField = readField("stack");
+  if (nameField.failed) readFailures.push("name-read-failed");
+  if (messageField.failed) readFailures.push("message-read-failed");
+  if (codeField.failed) readFailures.push("code-read-failed");
+  if (stageField.failed) readFailures.push("stage-read-failed");
+  if (stackField.failed) readFailures.push("stack-read-failed");
+  let name = value instanceof AggregateError ? "AggregateError" : "Error";
+  if (nameField.present) {
+    const bound = boundFactoryDiagnosticText(nameField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_NAME_CHARS);
+    if (!bound.omitted) {
+      name = bound.text;
+      if (bound.truncated) truncationReasons.push("name-budget");
+    } else {
+      readFailures.push("name-omitted-non-scalar");
+    }
+  }
+  let message = "";
+  if (messageField.present) {
+    const bound = boundFactoryDiagnosticText(messageField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_MESSAGE_CHARS);
+    if (!bound.omitted) {
+      message = bound.text;
+      if (bound.truncated) truncationReasons.push("message-budget");
+    } else {
+      readFailures.push("message-omitted-non-scalar");
+    }
+  }
+  let code: string | undefined;
+  if (codeField.present) {
+    const bound = boundFactoryDiagnosticText(codeField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_CODE_CHARS);
+    if (!bound.omitted) {
+      code = bound.text;
+      if (bound.truncated) truncationReasons.push("code-budget");
+    } else {
+      readFailures.push("code-omitted-non-scalar");
+    }
+  }
+  let stage: string | undefined;
+  if (stageField.present) {
+    const bound = boundFactoryDiagnosticText(stageField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_STAGE_CHARS);
+    if (!bound.omitted) {
+      stage = bound.text;
+      if (bound.truncated) truncationReasons.push("stage-budget");
+    } else {
+      readFailures.push("stage-omitted-non-scalar");
+    }
+  }
+  let stack: string | undefined;
+  if (stackField.present) {
+    const bound = boundFactoryDiagnosticText(stackField.value, FACTORY_DIAGNOSTIC_ERROR_MAX_STACK_CHARS);
+    if (!bound.omitted) {
+      stack = bound.text;
+      if (bound.truncated) truncationReasons.push("stack-budget");
+    } else {
+      readFailures.push("stack-omitted-non-scalar");
+    }
+  }
+  let cause: (FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation) | undefined;
+  const causeField = readField("cause");
+  if (causeField.failed) {
+    readFailures.push("cause-read-failed");
+  } else if (causeField.present) {
+    cause = summarizeFactoryDiagnosticError(causeField.value, depth + 1, state, seen);
+  }
+  let errors: Array<FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation> | undefined;
+  if (value instanceof AggregateError) {
+    const errorsField = readField("errors");
+    if (errorsField.failed) {
+      readFailures.push("errors-read-failed");
+    } else if (errorsField.present) {
+      const raw = errorsField.value;
+      if (Array.isArray(raw)) {
+        const kept = raw.slice(0, FACTORY_DIAGNOSTIC_ERROR_MAX_CHILDREN);
+        if (raw.length > kept.length) truncationReasons.push(`children-budget:kept=${kept.length}/total=${raw.length}`);
+        errors = kept.map((entry) => summarizeFactoryDiagnosticError(entry, depth + 1, state, seen));
+      } else {
+        readFailures.push("errors-omitted-non-array");
+      }
+    }
+  }
+  const childTruncated = (cause !== undefined && isFactoryDiagnosticTruncated(cause))
+    || (errors !== undefined && errors.some((entry) => isFactoryDiagnosticTruncated(entry)));
+  if (childTruncated) truncationReasons.push("child-truncated");
+  const truncated = truncationReasons.length > 0 || readFailures.length > 0;
+  const node: FactoryDiagnosticErrorNode = {
+    kind: "error",
+    depth,
+    name,
+    message,
+    truncated,
+    truncationReasons,
+    readFailures,
+  };
+  if (code !== undefined) node.code = code;
+  if (stage !== undefined) node.stage = stage;
+  if (stack !== undefined) node.stack = stack;
+  if (cause !== undefined) node.cause = cause;
+  if (errors !== undefined) node.errors = errors;
+  return node;
+}
+
+function buildFactoryDiagnosticPayload(input: {
+  phase: "primary" | "post-close";
+  fixtureRoot: string;
+  primary: unknown;
+  hasPrimary: boolean;
+  teardownErrors: readonly unknown[];
+  probeObserver?: FactoryProbeObserverSnapshot | null;
+}): FactoryDiagnosticPayload {
+  const state = { nodes: 0, reasons: [] as string[] };
+  const seen = new Set<object>();
+  let boundedPrimary: (FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation) | null = null;
+  if (input.hasPrimary) {
+    boundedPrimary = summarizeFactoryDiagnosticError(input.primary, 0, state, seen);
+  }
+  const keptTeardown = input.teardownErrors.slice(0, FACTORY_DIAGNOSTIC_ERROR_MAX_CHILDREN);
+  if (input.teardownErrors.length > keptTeardown.length) {
+    state.reasons.push(`teardown-budget:kept=${keptTeardown.length}/total=${input.teardownErrors.length}`);
+  }
+  const boundedTeardown = keptTeardown.map((entry) => summarizeFactoryDiagnosticError(entry, 0, state, seen));
+  const primaryTruncated = boundedPrimary !== null && isFactoryDiagnosticTruncated(boundedPrimary);
+  const teardownTruncated = boundedTeardown.some((entry) => isFactoryDiagnosticTruncated(entry));
+  const truncated = state.reasons.length > 0 || primaryTruncated || teardownTruncated;
+  return {
+    scenario: FACTORY_DIAGNOSTIC_SCENARIO,
+    phase: input.phase,
+    fixtureRoot: input.fixtureRoot,
+    boundedPrimary,
+    boundedTeardown,
+    nodeCount: state.nodes,
+    truncated,
+    truncationReasons: [...state.reasons],
+    captureNote: FACTORY_DIAGNOSTIC_CAPTURE_NOTE,
+    ...(input.probeObserver ? { probeObserver: input.probeObserver } : {}),
+  };
+}
+
+function stripFactoryDiagnosticStacks(payload: FactoryDiagnosticPayload): FactoryDiagnosticPayload {
+  const stripNode = (
+    node: FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation,
+  ): FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation => {
+    if (node.kind === "truncated") return node;
+    const copy: FactoryDiagnosticErrorNode = {
+      ...node,
+      truncationReasons: [...node.truncationReasons],
+      readFailures: [...node.readFailures],
+    };
+    if (copy.stack !== undefined) {
+      copy.stack = undefined;
+      copy.truncated = true;
+      if (!copy.truncationReasons.includes("byte-budget-stack-omitted")) copy.truncationReasons.push("byte-budget-stack-omitted");
+    }
+    if (copy.cause !== undefined) copy.cause = stripNode(copy.cause);
+    if (copy.errors !== undefined) copy.errors = copy.errors.map((entry) => stripNode(entry));
+    return copy;
+  };
+  return {
+    ...payload,
+    truncationReasons: [...payload.truncationReasons],
+    boundedPrimary: payload.boundedPrimary === null ? null : stripNode(payload.boundedPrimary),
+    boundedTeardown: payload.boundedTeardown.map((entry) => stripNode(entry)),
+  };
+}
+
+function toBoundedFactoryDiagnosticJson(payload: FactoryDiagnosticPayload): string {
+  const first = JSON.stringify(payload);
+  if (Buffer.byteLength(first, "utf8") <= FACTORY_DIAGNOSTIC_ERROR_JSON_BYTE_BUDGET) return first;
+  const stripped = stripFactoryDiagnosticStacks(payload);
+  stripped.truncated = true;
+  if (!stripped.truncationReasons.includes("byte-budget-stacks-omitted")) {
+    stripped.truncationReasons.push("byte-budget-stacks-omitted");
+  }
+  const second = JSON.stringify(stripped);
+  if (Buffer.byteLength(second, "utf8") <= FACTORY_DIAGNOSTIC_ERROR_JSON_BYTE_BUDGET) return second;
+  const minimal = {
+    scenario: payload.scenario,
+    phase: payload.phase,
+    fixtureRoot: payload.fixtureRoot,
+    nodeCount: payload.nodeCount,
+    truncated: true,
+    truncationReasons: [...payload.truncationReasons, "byte-budget-minimal"],
+    captureNote: payload.captureNote,
+    ...(payload.probeObserver ? { probeObserver: payload.probeObserver } : {}),
+  };
+  const third = JSON.stringify(minimal);
+  if (Buffer.byteLength(third, "utf8") <= FACTORY_DIAGNOSTIC_ERROR_JSON_BYTE_BUDGET) return third;
+  return JSON.stringify({ scenario: payload.scenario, phase: payload.phase, truncated: true });
+}
+
+/**
+ * Windows factory probe observer (manual diagnostic only, failure path only).
+ *
+ * Test-only transparent wrappers for Node builtins spawnSync/execFileSync,
+ * enabled solely by RUNNER_V2_FACTORY_PROBE_OBSERVER=1 (set only on the single
+ * Windows factory diagnostic RUN step). Records a bounded in-memory whitelist
+ * of the FIRST actual calls (max 64): API name, narrow purpose inferred from
+ * fixed known substrings (CreateJobObject for the Job probe, COMPLETE: for the
+ * global inventory probe, else other), executable basename only, elapsedMs,
+ * requested timeout if finite, result status/signal, error.code/status/signal
+ * (bounded), stdout/stderr byte counts only. NEVER raw argv/env/stdout/stderr/
+ * commands/message/stack/payload/secrets. Per-call performs NO file I/O;
+ * recording failures never throw and never mask primary outcomes (counted
+ * only). Supervisor/jobhost existence uses known repo-owned paths lazily only
+ * when building the failure snapshot (booleans plus fixed basenames, no
+ * content, no full paths). No new process/job/probe, no SQLite, no destructive
+ * cleanup, no env dump. Timing is diagnostic only, not ownership/quiescence/
+ * release proof. Ordinary default scope (env unset) disables entirely.
+ */
+const FACTORY_PROBE_OBSERVER_ENV = "RUNNER_V2_FACTORY_PROBE_OBSERVER";
+const FACTORY_PROBE_OBSERVER_MAX_CALLS = 64;
+const FACTORY_PROBE_OBSERVER_MAX_BASENAME_CHARS = 128;
+const FACTORY_PROBE_OBSERVER_MAX_CODE_CHARS = 200;
+const FACTORY_PROBE_OBSERVER_MAX_SIGNAL_CHARS = 32;
+const FACTORY_PROBE_OBSERVER_MAX_SETUP_FAILURES = 8;
+const FACTORY_PROBE_OBSERVER_MAX_SETUP_FAILURE_CHARS = 64;
+const FACTORY_PROBE_OBSERVER_MAX_ELAPSED_MS = 86400000;
+const FACTORY_PROBE_OBSERVER_MAX_TIMEOUT_MS = 86400000;
+const FACTORY_PROBE_OBSERVER_TIMING_NOTE =
+  "Elapsed/timeout/call diagnostics only; not ownership, quiescence, or release proof. No live SQLite queries.";
+
+type FactoryProbeObserverPurpose = "job-create-close" | "global-inventory" | "other";
+
+type FactoryProbeObserverCall = {
+  api: "spawnSync" | "execFileSync";
+  purpose: FactoryProbeObserverPurpose;
+  executable: string;
+  elapsedMs: number;
+  requestedTimeoutMs?: number;
+  status: number | null;
+  signal: string | null;
+  errorCode?: string;
+  errorStatus?: number | null;
+  errorSignal?: string | null;
+  stdoutBytes: number;
+  stderrBytes: number;
+};
+
+type FactoryProbeObserverSnapshot = {
+  enabled: boolean;
+  callCount: number;
+  droppedCalls: number;
+  recordFailures: number;
+  scalarTruncations: number;
+  setupFailures: string[];
+  existenceCheckFailed: boolean;
+  supervisorBasename: "managed-process-supervisor.mjs";
+  supervisorExists?: boolean;
+  jobHostBasename: "managed-process-job-host.ps1";
+  jobHostExists?: boolean;
+  timingNote: string;
+  calls: FactoryProbeObserverCall[];
+};
+
+type FactoryProbeObserverState = {
+  enabled: boolean;
+  calls: FactoryProbeObserverCall[];
+  droppedCalls: number;
+  recordFailures: number;
+  scalarTruncations: number;
+  setupFailures: string[];
+  originals?: { spawnSync: unknown; execFileSync: unknown };
+  installed: boolean;
+};
+
+function createFactoryProbeObserverState(): FactoryProbeObserverState {
+  let enabled = false;
+  try {
+    enabled = process.env[FACTORY_PROBE_OBSERVER_ENV] === "1";
+  } catch {
+    enabled = false;
+  }
+  return { enabled, calls: [], droppedCalls: 0, recordFailures: 0, scalarTruncations: 0, setupFailures: [], installed: false };
+}
+
+function narrowFactoryProbeBasename(value: unknown, state: FactoryProbeObserverState): string {
+  try {
+    if (typeof value !== "string" || value.length === 0) {
+      state.scalarTruncations += 1;
+      return "non-string-executable";
+    }
+    const segments = value.split("/");
+    const lastForward = segments[segments.length - 1] ?? "";
+    const backSegments = lastForward.split("\\");
+    const base = backSegments[backSegments.length - 1] ?? "";
+    if (base.length === 0) {
+      state.scalarTruncations += 1;
+      return "empty-basename";
+    }
+    if (base.length > FACTORY_PROBE_OBSERVER_MAX_BASENAME_CHARS) {
+      state.scalarTruncations += 1;
+      return base.slice(0, FACTORY_PROBE_OBSERVER_MAX_BASENAME_CHARS);
+    }
+    return base;
+  } catch {
+    try { state.recordFailures += 1; } catch { /* never throw */ }
+    return "basename-unreadable";
+  }
+}
+
+function inferFactoryProbePurpose(command: unknown, argsValue: unknown, state: FactoryProbeObserverState): FactoryProbeObserverPurpose {
+  try {
+    const candidates: string[] = [];
+    if (typeof command === "string") candidates.push(command);
+    if (Array.isArray(argsValue)) {
+      for (const entry of argsValue.slice(0, 32)) {
+        if (typeof entry === "string") candidates.push(entry);
+      }
+    }
+    for (const text of candidates) {
+      if (text.includes("CreateJobObject")) return "job-create-close";
+    }
+    for (const text of candidates) {
+      if (text.includes("COMPLETE:")) return "global-inventory";
+    }
+    return "other";
+  } catch {
+    try { state.recordFailures += 1; } catch { /* never throw */ }
+    return "other";
+  }
+}
+
+function extractFactoryProbeTimeout(callArgs: readonly unknown[], state: FactoryProbeObserverState): number | undefined {
+  try {
+    for (const candidate of callArgs.slice(1, 4)) {
+      if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) continue;
+      const timeout = (candidate as Record<string, unknown>).timeout;
+      if (typeof timeout !== "number" || !Number.isFinite(timeout)) continue;
+      const truncated = Math.trunc(timeout);
+      if (truncated < 0 || truncated > FACTORY_PROBE_OBSERVER_MAX_TIMEOUT_MS) {
+        state.scalarTruncations += 1;
+        continue;
+      }
+      return truncated;
+    }
+    return undefined;
+  } catch {
+    try { state.recordFailures += 1; } catch { /* never throw */ }
+    return undefined;
+  }
+}
+
+function countFactoryProbeBytes(value: unknown, state: FactoryProbeObserverState): number {
+  try {
+    if (value === null || value === undefined) return 0;
+    if (typeof value === "string") {
+      const count = Buffer.byteLength(value, "utf8");
+      return Number.isSafeInteger(count) && count >= 0 ? count : 0;
+    }
+    if (typeof value === "object" && value !== null) {
+      const byteLength = (value as { byteLength?: unknown }).byteLength;
+      if (typeof byteLength === "number" && Number.isSafeInteger(byteLength) && byteLength >= 0) return byteLength;
+      const length = (value as { length?: unknown }).length;
+      if (typeof length === "number" && Number.isSafeInteger(length) && length >= 0) return length;
+    }
+    return 0;
+  } catch {
+    try { state.recordFailures += 1; } catch { /* never throw */ }
+    return 0;
+  }
+}
+
+function boundFactoryProbeCode(value: unknown, state: FactoryProbeObserverState): string | undefined {
+  try {
+    if (typeof value !== "string" || value.length === 0) return undefined;
+    if (value.length > FACTORY_PROBE_OBSERVER_MAX_CODE_CHARS) {
+      state.scalarTruncations += 1;
+      return value.slice(0, FACTORY_PROBE_OBSERVER_MAX_CODE_CHARS);
+    }
+    return value;
+  } catch {
+    try { state.recordFailures += 1; } catch { /* never throw */ }
+    return undefined;
+  }
+}
+
+function boundFactoryProbeSignal(value: unknown, state: FactoryProbeObserverState): string | null {
+  try {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== "string" || value.length === 0) {
+      state.scalarTruncations += 1;
+      return null;
+    }
+    if (value.length > FACTORY_PROBE_OBSERVER_MAX_SIGNAL_CHARS) {
+      state.scalarTruncations += 1;
+      return value.slice(0, FACTORY_PROBE_OBSERVER_MAX_SIGNAL_CHARS);
+    }
+    return value;
+  } catch {
+    try { state.recordFailures += 1; } catch { /* never throw */ }
+    return null;
+  }
+}
+
+function boundFactoryProbeStatus(value: unknown, state: FactoryProbeObserverState): number | null {
+  try {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      state.scalarTruncations += 1;
+      return null;
+    }
+    return value;
+  } catch {
+    try { state.recordFailures += 1; } catch { /* never throw */ }
+    return null;
+  }
+}
+
+function boundFactoryProbeElapsed(value: number, state: FactoryProbeObserverState): number {
+  try {
+    if (!Number.isFinite(value)) {
+      state.scalarTruncations += 1;
+      return 0;
+    }
+    const truncated = Math.trunc(value);
+    if (truncated < 0 || truncated > FACTORY_PROBE_OBSERVER_MAX_ELAPSED_MS) {
+      state.scalarTruncations += 1;
+      return Math.min(Math.max(truncated, 0), FACTORY_PROBE_OBSERVER_MAX_ELAPSED_MS);
+    }
+    return truncated;
+  } catch {
+    try { state.recordFailures += 1; } catch { /* never throw */ }
+    return 0;
+  }
+}
+
+function recordFactoryProbeCall(state: FactoryProbeObserverState, call: FactoryProbeObserverCall): void {
+  try {
+    if (!state.enabled) return;
+    if (state.calls.length >= FACTORY_PROBE_OBSERVER_MAX_CALLS) {
+      state.droppedCalls += 1;
+      return;
+    }
+    state.calls.push(call);
+  } catch {
+    try { state.recordFailures += 1; } catch { /* never throw */ }
+  }
+}
+
+function installFactoryProbeObserverWrappers(state: FactoryProbeObserverState): void {
+  if (!state.enabled) return;
+  if (state.installed) return;
+  const builtin = childProcessBuiltin as unknown as Record<string, unknown>;
+  const namespace = childProcessObserverNamespace as unknown as Record<string, unknown>;
+  const originalSpawnSync = namespace.spawnSync ?? builtin.spawnSync;
+  const originalExecFileSync = namespace.execFileSync ?? builtin.execFileSync;
+  state.originals = { spawnSync: originalSpawnSync, execFileSync: originalExecFileSync };
+  const spawnSyncWrapper = function (this: unknown, ...callArgs: unknown[]): unknown {
+    const start = Date.now();
+    let executable = "unknown";
+    let purpose: FactoryProbeObserverPurpose = "other";
+    let requestedTimeoutMs: number | undefined;
+    try {
+      executable = narrowFactoryProbeBasename(callArgs[0], state);
+      purpose = inferFactoryProbePurpose(callArgs[0], Array.isArray(callArgs[1]) ? callArgs[1] : undefined, state);
+      requestedTimeoutMs = extractFactoryProbeTimeout(callArgs, state);
+    } catch {
+      try { state.recordFailures += 1; } catch { /* never throw */ }
+    }
+    let result: unknown;
+    let thrown: unknown;
+    let didThrow = false;
+    try {
+      result = Reflect.apply(originalSpawnSync as (...args: unknown[]) => unknown, this, callArgs);
+    } catch (error) {
+      didThrow = true;
+      thrown = error;
+    }
+    const elapsedMs = boundFactoryProbeElapsed(Date.now() - start, state);
+    try {
+      if (!didThrow) {
+        const record = result as Record<string, unknown> | null | undefined;
+        const errorRecord = (record?.error ?? undefined) as Record<string, unknown> | undefined;
+        const call: FactoryProbeObserverCall = {
+          api: "spawnSync",
+          purpose,
+          executable,
+          elapsedMs,
+          status: boundFactoryProbeStatus(record?.status, state),
+          signal: boundFactoryProbeSignal(record?.signal, state),
+          stdoutBytes: countFactoryProbeBytes(record?.stdout, state),
+          stderrBytes: countFactoryProbeBytes(record?.stderr, state),
+        };
+        if (requestedTimeoutMs !== undefined) call.requestedTimeoutMs = requestedTimeoutMs;
+        if (errorRecord !== undefined) {
+          const code = boundFactoryProbeCode(errorRecord.code, state);
+          if (code !== undefined) call.errorCode = code;
+          const errorStatus = boundFactoryProbeStatus(errorRecord.status, state);
+          if (errorStatus !== null) call.errorStatus = errorStatus;
+          const errorSignal = boundFactoryProbeSignal(errorRecord.signal, state);
+          if (errorSignal !== null) call.errorSignal = errorSignal;
+        }
+        recordFactoryProbeCall(state, call);
+      } else {
+        const errorRecord = thrown as Record<string, unknown> | null | undefined;
+        const call: FactoryProbeObserverCall = {
+          api: "spawnSync",
+          purpose,
+          executable,
+          elapsedMs,
+          status: boundFactoryProbeStatus(errorRecord?.status, state),
+          signal: boundFactoryProbeSignal(errorRecord?.signal, state),
+          stdoutBytes: countFactoryProbeBytes(errorRecord?.stdout, state),
+          stderrBytes: countFactoryProbeBytes(errorRecord?.stderr, state),
+        };
+        if (requestedTimeoutMs !== undefined) call.requestedTimeoutMs = requestedTimeoutMs;
+        const code = boundFactoryProbeCode(errorRecord?.code, state);
+        if (code !== undefined) call.errorCode = code;
+        recordFactoryProbeCall(state, call);
+      }
+    } catch {
+      try { state.recordFailures += 1; } catch { /* never throw */ }
+    }
+    if (didThrow) throw thrown;
+    return result;
+  };
+  const execFileSyncWrapper = function (this: unknown, ...callArgs: unknown[]): unknown {
+    const start = Date.now();
+    let executable = "unknown";
+    let purpose: FactoryProbeObserverPurpose = "other";
+    let requestedTimeoutMs: number | undefined;
+    try {
+      executable = narrowFactoryProbeBasename(callArgs[0], state);
+      purpose = inferFactoryProbePurpose(callArgs[0], Array.isArray(callArgs[1]) ? callArgs[1] : undefined, state);
+      requestedTimeoutMs = extractFactoryProbeTimeout(callArgs, state);
+    } catch {
+      try { state.recordFailures += 1; } catch { /* never throw */ }
+    }
+    let result: unknown;
+    let thrown: unknown;
+    let didThrow = false;
+    try {
+      result = Reflect.apply(originalExecFileSync as (...args: unknown[]) => unknown, this, callArgs);
+    } catch (error) {
+      didThrow = true;
+      thrown = error;
+    }
+    const elapsedMs = boundFactoryProbeElapsed(Date.now() - start, state);
+    try {
+      if (!didThrow) {
+        const call: FactoryProbeObserverCall = {
+          api: "execFileSync",
+          purpose,
+          executable,
+          elapsedMs,
+          status: 0,
+          signal: null,
+          stdoutBytes: countFactoryProbeBytes(result, state),
+          stderrBytes: 0,
+        };
+        if (requestedTimeoutMs !== undefined) call.requestedTimeoutMs = requestedTimeoutMs;
+        recordFactoryProbeCall(state, call);
+      } else {
+        const errorRecord = thrown as Record<string, unknown> | null | undefined;
+        const call: FactoryProbeObserverCall = {
+          api: "execFileSync",
+          purpose,
+          executable,
+          elapsedMs,
+          status: boundFactoryProbeStatus(errorRecord?.status, state),
+          signal: boundFactoryProbeSignal(errorRecord?.signal, state),
+          stdoutBytes: countFactoryProbeBytes(errorRecord?.stdout, state),
+          stderrBytes: countFactoryProbeBytes(errorRecord?.stderr, state),
+        };
+        if (requestedTimeoutMs !== undefined) call.requestedTimeoutMs = requestedTimeoutMs;
+        const code = boundFactoryProbeCode(errorRecord?.code, state);
+        if (code !== undefined) call.errorCode = code;
+        recordFactoryProbeCall(state, call);
+      }
+    } catch {
+      try { state.recordFailures += 1; } catch { /* never throw */ }
+    }
+    if (didThrow) throw thrown;
+    return result;
+  };
+  builtin.spawnSync = spawnSyncWrapper;
+  builtin.execFileSync = execFileSyncWrapper;
+  syncBuiltinESMExports();
+  state.installed = true;
+}
+
+function restoreFactoryProbeObserverWrappers(state: FactoryProbeObserverState): void {
+  if (!state.enabled) return;
+  if (!state.originals) return;
+  const builtin = childProcessBuiltin as unknown as Record<string, unknown>;
+  builtin.spawnSync = state.originals.spawnSync;
+  builtin.execFileSync = state.originals.execFileSync;
+  syncBuiltinESMExports();
+  state.installed = false;
+}
+
+function readFactoryProbeObserverSnapshot(state: FactoryProbeObserverState): FactoryProbeObserverSnapshot | null {
+  try {
+    if (!state.enabled) return null;
+    let supervisorExists: boolean | undefined;
+    let jobHostExists: boolean | undefined;
+    let existenceCheckFailed = false;
+    try {
+      const repoRoot = process.cwd();
+      supervisorExists = existsSync(join(repoRoot, "runner-v2", "src", "managed-process-supervisor.mjs"));
+      jobHostExists = existsSync(join(repoRoot, "runner-v2", "src", "managed-process-job-host.ps1"));
+    } catch {
+      existenceCheckFailed = true;
+      supervisorExists = undefined;
+      jobHostExists = undefined;
+    }
+    const setupFailures = state.setupFailures.slice(0, FACTORY_PROBE_OBSERVER_MAX_SETUP_FAILURES).map((entry) => {
+      try {
+        const text = String(entry);
+        return text.length > FACTORY_PROBE_OBSERVER_MAX_SETUP_FAILURE_CHARS
+          ? text.slice(0, FACTORY_PROBE_OBSERVER_MAX_SETUP_FAILURE_CHARS)
+          : text;
+      } catch {
+        return "setup-failure-unreadable";
+      }
+    });
+    const snapshot: FactoryProbeObserverSnapshot = {
+      enabled: true,
+      callCount: state.calls.length,
+      droppedCalls: state.droppedCalls,
+      recordFailures: state.recordFailures,
+      scalarTruncations: state.scalarTruncations,
+      setupFailures,
+      existenceCheckFailed,
+      supervisorBasename: "managed-process-supervisor.mjs",
+      jobHostBasename: "managed-process-job-host.ps1",
+      timingNote: FACTORY_PROBE_OBSERVER_TIMING_NOTE,
+      calls: state.calls.slice(0, FACTORY_PROBE_OBSERVER_MAX_CALLS),
+    };
+    if (supervisorExists !== undefined) snapshot.supervisorExists = supervisorExists;
+    if (jobHostExists !== undefined) snapshot.jobHostExists = jobHostExists;
+    return snapshot;
+  } catch {
+    try {
+      return {
+        enabled: true,
+        callCount: 0,
+        droppedCalls: 0,
+        recordFailures: 1,
+        scalarTruncations: 0,
+        setupFailures: ["snapshot-read-failed"],
+        existenceCheckFailed: true,
+        supervisorBasename: "managed-process-supervisor.mjs",
+        jobHostBasename: "managed-process-job-host.ps1",
+        timingNote: FACTORY_PROBE_OBSERVER_TIMING_NOTE,
+        calls: [],
+      };
+    } catch {
+      return null;
+    }
+  }
+}
+
 test("native patch factory applies refused then normal V4A patches through the worker broker", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-factory-")));
   const project = join(root, "project");
@@ -376,7 +1176,14 @@ test("native patch factory applies refused then normal V4A patches through the w
   let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
   let primary: unknown;
   let hasPrimary = false;
+  let diagnosticEvidenceRoot: string | undefined;
+  const diagnosticFailures: unknown[] = [];
+  const factoryProbeObserver = createFactoryProbeObserverState();
+  let factoryProbeObserverOuterPrimary: unknown;
+  let factoryProbeObserverHasOuterPrimary = false;
   try {
+  try {
+    installFactoryProbeObserverWrappers(factoryProbeObserver);
     const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: RUN_ID });
     const integritySeeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
     try {
@@ -491,6 +1298,43 @@ test("native patch factory applies refused then normal V4A patches through the w
   } catch (error) {
     primary = error;
     hasPrimary = true;
+    try {
+      if (diagnosticEvidenceRoot === undefined) {
+        diagnosticEvidenceRoot = qualificationArtifactRoot();
+      }
+      const factoryProbeObserverSnapshot = readFactoryProbeObserverSnapshot(factoryProbeObserver);
+      const payload = buildFactoryDiagnosticPayload({
+        phase: "primary",
+        fixtureRoot: root,
+        primary,
+        hasPrimary: true,
+        teardownErrors: [],
+        probeObserver: factoryProbeObserverSnapshot,
+      });
+      process.stderr.write(`${toBoundedFactoryDiagnosticJson(payload)}\n`);
+      writeQualificationDiagnostics({
+        evidenceRoot: diagnosticEvidenceRoot,
+        scenario: FACTORY_DIAGNOSTIC_SCENARIO,
+        fixtureRoots: [root],
+        error,
+        extra: {
+          phase: "primary",
+          boundedPrimary: payload.boundedPrimary,
+          nodeCount: payload.nodeCount,
+          truncated: payload.truncated,
+          truncationReasons: payload.truncationReasons,
+          captureNote: payload.captureNote,
+          ...(factoryProbeObserverSnapshot ? { probeObserver: factoryProbeObserverSnapshot } : {}),
+        },
+      });
+    } catch (captureError) {
+      diagnosticFailures.push(captureError);
+      try {
+        process.stderr.write("[factory-diagnostic] primary capture failed; primary preserved.\n");
+      } catch {
+        // stderr is best-effort; the original primary is still preserved below.
+      }
+    }
     throw error;
   } finally {
     const teardownErrors: unknown[] = [];
@@ -518,20 +1362,92 @@ test("native patch factory applies refused then normal V4A patches through the w
       }
     }
     if (teardownErrors.length > 0) {
+      try {
+        if (diagnosticEvidenceRoot === undefined) {
+          diagnosticEvidenceRoot = qualificationArtifactRoot();
+        }
+        const factoryProbeObserverSnapshot = readFactoryProbeObserverSnapshot(factoryProbeObserver);
+        const payload = buildFactoryDiagnosticPayload({
+          phase: "post-close",
+          fixtureRoot: root,
+          primary,
+          hasPrimary,
+          teardownErrors,
+          probeObserver: factoryProbeObserverSnapshot,
+        });
+        process.stderr.write(`${toBoundedFactoryDiagnosticJson(payload)}\n`);
+        writeQualificationDiagnostics({
+          evidenceRoot: diagnosticEvidenceRoot,
+          scenario: FACTORY_DIAGNOSTIC_SCENARIO,
+          fixtureRoots: [root],
+          error: hasPrimary ? primary : teardownErrors[0],
+          extra: {
+            phase: "post-close",
+            boundedPrimary: payload.boundedPrimary,
+            boundedTeardown: payload.boundedTeardown,
+            nodeCount: payload.nodeCount,
+            truncated: payload.truncated,
+            truncationReasons: payload.truncationReasons,
+            captureNote: payload.captureNote,
+            ...(factoryProbeObserverSnapshot ? { probeObserver: factoryProbeObserverSnapshot } : {}),
+          },
+        });
+      } catch (captureError) {
+        diagnosticFailures.push(captureError);
+        try {
+          process.stderr.write("[factory-diagnostic] post-close capture failed; primary/closure errors preserved.\n");
+        } catch {
+          // stderr is best-effort; original errors are still preserved below.
+        }
+      }
+    }
+    const diagnosticSuffix = diagnosticFailures.length > 0
+      ? ` Diagnostic capture reported ${diagnosticFailures.length} failure(s); primary/closure errors preserved.`
+      : "";
+    if (teardownErrors.length > 0) {
       if (hasPrimary) {
         throw new AggregateError(
-          [primary, ...teardownErrors],
+          [primary, ...teardownErrors, ...diagnosticFailures],
           resourceClosersSucceeded
-            ? `Native patch factory journey failed and teardown also failed during owned root removal; primary error preserved. owned root removal failed; location may be partially removed: ${root}`
-            : `Native patch factory journey failed and teardown also failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}`,
+            ? `Native patch factory journey failed and teardown also failed during owned root removal; primary error preserved. owned root removal failed; location may be partially removed: ${root}${diagnosticSuffix}`
+            : `Native patch factory journey failed and teardown also failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}${diagnosticSuffix}`,
         );
       }
       throw new AggregateError(
-        teardownErrors,
+        [...teardownErrors, ...diagnosticFailures],
         resourceClosersSucceeded
-          ? `Native patch factory teardown failed during owned root removal. owned root removal failed; location may be partially removed: ${root}`
-          : `Native patch factory teardown failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}`,
+          ? `Native patch factory teardown failed during owned root removal. owned root removal failed; location may be partially removed: ${root}${diagnosticSuffix}`
+          : `Native patch factory teardown failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}${diagnosticSuffix}`,
       );
+    }
+    if (diagnosticFailures.length > 0 && hasPrimary) {
+      throw new AggregateError(
+        [primary, ...diagnosticFailures],
+        `Native patch factory journey failed; diagnostic capture also failed. Primary error preserved.${diagnosticSuffix} Fixture root: ${root}`,
+      );
+    }
+    if (diagnosticFailures.length > 0) {
+      throw new AggregateError(
+        [...diagnosticFailures],
+        `Native patch factory diagnostic capture failed without a primary/closure failure.${diagnosticSuffix} Fixture root: ${root}`,
+      );
+    }
+  }
+  } catch (factoryProbeObserverOuterError) {
+    factoryProbeObserverOuterPrimary = factoryProbeObserverOuterError;
+    factoryProbeObserverHasOuterPrimary = true;
+    throw factoryProbeObserverOuterError;
+  } finally {
+    try {
+      restoreFactoryProbeObserverWrappers(factoryProbeObserver);
+    } catch (factoryProbeObserverRestoreError) {
+      if (factoryProbeObserverHasOuterPrimary) {
+        throw new AggregateError(
+          [factoryProbeObserverOuterPrimary, factoryProbeObserverRestoreError],
+          "Factory probe observer restoration failed; primary/closure errors preserved.",
+        );
+      }
+      throw factoryProbeObserverRestoreError;
     }
   }
 });
