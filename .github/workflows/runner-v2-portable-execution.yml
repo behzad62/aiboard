@@ -5,6 +5,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      qualification-scope:
+        description: 'Bounded diagnostic scope. t8-portable-coverage runs only the T8 affected portable job plus scoped probe steps; suppressed jobs are UNQUALIFIED (not PASS) and this probe cannot qualify T8. full preserves full 13-job acceptance.'
+        required: false
+        default: full
+        type: choice
+        options:
+          - full
+          - t8-portable-coverage
 
 permissions:
   contents: read
@@ -12,6 +21,7 @@ permissions:
 jobs:
   portable-contract:
     name: Portable contract (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 't8-portable-coverage'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -63,6 +73,7 @@ jobs:
 
   native-smoke:
     name: Native adapter probe (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 't8-portable-coverage'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -88,6 +99,7 @@ jobs:
 
   package-gate:
     name: Package parity (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 't8-portable-coverage'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -133,6 +145,7 @@ jobs:
   package-cross-host:
     name: Cross-host package reproducibility (Node ${{ matrix.node-version }})
     needs: package-gate
+    if: github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 't8-portable-coverage'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -190,5 +203,11 @@ jobs:
           runner-v2/test/openrouter-apply-patch-tool.test.ts
           runner-v2/test/tool-broker.test.ts
           runner-v2/test/openrouter-apply-patch-factory.test.ts
-
-
+          runner-v2/test/git-fixture-canonical-root.test.ts
+          runner-v2/test/npm-installed-profile.test.ts
+      - name: Typecheck Runner V2 (t8-portable-coverage probe only)
+        if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 't8-portable-coverage'
+        run: npm run typecheck:runner-v2
+      - name: Run scoped account-provider chat 21->22 stale-health target (t8-portable-coverage probe only)
+        if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 't8-portable-coverage'
+        run: node node_modules/tsx/dist/cli.mjs scripts/test-account-provider-runner-chat.mts

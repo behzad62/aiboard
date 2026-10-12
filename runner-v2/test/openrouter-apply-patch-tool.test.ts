@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,8 +31,18 @@ function call(callId: string, operation: Record<string, unknown>) {
   };
 }
 
+function sameFilesystemObject(lowerPath: string, upperPath: string): boolean {
+  try {
+    const lower = lstatSync(lowerPath, { bigint: true });
+    const upper = lstatSync(upperPath, { bigint: true });
+    return lower.dev === upper.dev && lower.ino === upper.ino;
+  } catch {
+    return false;
+  }
+}
+
 test("OpenRouter apply_patch executes create update and delete operations inside the workspace", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-")));
   mkdirSync(join(root, "src"));
   const broker = new ToolBroker({ permissionProfile: "project", workspacePath: root, approve: async () => true });
   broker.register(createOpenRouterApplyPatchTool());
@@ -76,7 +86,7 @@ test("OpenRouter apply_patch executes create update and delete operations inside
 });
 
 test("OpenRouter apply_patch applies multiple context-anchored update hunks", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-hunks-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-hunks-")));
   const path = join(root, "code.ts");
   writeFileSync(path, "function one() {\n  return 1;\n}\n\nfunction two() {\n  return 2;\n}\n");
   const broker = new ToolBroker({ permissionProfile: "project", workspacePath: root });
@@ -102,7 +112,7 @@ test("OpenRouter apply_patch applies multiple context-anchored update hunks", as
 });
 
 test("OpenRouter apply_patch rejects traversal and protected paths", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-policy-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-policy-")));
   const outside = join(root, "..", "outside.txt");
   writeFileSync(join(root, "protected.txt"), "keep\n");
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root });
@@ -135,7 +145,7 @@ test("OpenRouter apply_patch rejects traversal and protected paths", async () =>
 });
 
 test("OpenRouter apply_patch revocation at the last mile prevents update", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-revoke-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-revoke-")));
   const path = join(root, "value.txt");
   writeFileSync(path, "original\n");
   const authority = createExecutionGrantAuthority();
@@ -163,7 +173,7 @@ test("OpenRouter apply_patch revocation at the last mile prevents update", async
 });
 
 test("OpenRouter apply_patch alias swap during approval is refused without effect", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-alias-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-alias-")));
   const target = join(root, "value.txt");
   const real = join(root, "real.txt");
   writeFileSync(target, "original\n");
@@ -193,7 +203,7 @@ test("OpenRouter apply_patch alias swap during approval is refused without effec
 });
 
 test("OpenRouter apply_patch create existing file does not overwrite", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-exists-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-exists-")));
   const path = join(root, "exists.txt");
   writeFileSync(path, "keep\n");
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root });
@@ -212,7 +222,7 @@ test("OpenRouter apply_patch create existing file does not overwrite", async () 
 });
 
 test("OpenRouter apply_patch rejects reserved native extension registration, other extensions unchanged", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-spoof-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-spoof-")));
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root });
   try {
     assert.throws(
@@ -248,7 +258,7 @@ test("OpenRouter apply_patch rejects reserved native extension registration, oth
 });
 
 test("OpenRouter apply_patch rejects reserved native extension execution even if registration is bypassed", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-spoofexec-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-spoofexec-")));
   writeFileSync(join(root, "value.txt"), "original\n");
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root });
   const spoof = createOpenRouterApplyPatchTool();
@@ -270,7 +280,7 @@ test("OpenRouter apply_patch rejects reserved native extension execution even if
 });
 
 test("OpenRouter apply_patch rejects in-place content change captured before approval", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-inplace-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-inplace-")));
   const path = join(root, "value.txt");
   writeFileSync(path, "original\n");
   const broker = new ToolBroker({
@@ -296,7 +306,7 @@ test("OpenRouter apply_patch rejects in-place content change captured before app
 });
 
 test("OpenRouter apply_patch rejects input-swapped operation after capture", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-opswap-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-opswap-")));
   const swapped = call("opswap_1", { type: "create_file", path: "new.txt", diff: "+fresh\n" });
   const broker = new ToolBroker({
     permissionProfile: "guarded",
@@ -320,7 +330,7 @@ test("OpenRouter apply_patch rejects input-swapped operation after capture", asy
 });
 
 test("OpenRouter apply_patch rejects input-swapped path after capture", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-pathswap-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-pathswap-")));
   const first = join(root, "value.txt");
   const second = join(root, "other.txt");
   writeFileSync(first, "original\n");
@@ -347,7 +357,7 @@ test("OpenRouter apply_patch rejects input-swapped path after capture", async ()
 });
 
 test("OpenRouter apply_patch forbids move derivation", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-nomove-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-nomove-")));
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root });
   broker.register(createOpenRouterApplyPatchTool());
   try {
@@ -362,7 +372,7 @@ test("OpenRouter apply_patch forbids move derivation", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-  const moveRoot = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-movecap-"));
+  const moveRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-movecap-")));
   try {
     writeFileSync(join(moveRoot, "src.txt"), "data\n");
     const authority = createExecutionGrantAuthority();
@@ -408,7 +418,7 @@ test("OpenRouter apply_patch forbids move derivation", async () => {
 });
 
 test("OpenRouter apply_patch delete cannot escalate to recursive directory", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-norec-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-norec-")));
   const dir = join(root, "mydir");
   mkdirSync(dir);
   writeFileSync(join(dir, "inner.txt"), "keep\n");
@@ -428,7 +438,7 @@ test("OpenRouter apply_patch delete cannot escalate to recursive directory", asy
 });
 
 test("OpenRouter apply_patch delete requires destructive approval", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-destr-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-destr-")));
   const path = join(root, "value.txt");
   writeFileSync(path, "keep\n");
   const project = new ToolBroker({ permissionProfile: "project", workspacePath: root });
@@ -459,7 +469,7 @@ test("OpenRouter apply_patch delete requires destructive approval", async () => 
 });
 
 test("OpenRouter apply_patch respects host protected-path equality", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-case-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-case-")));
   writeFileSync(join(root, "protected.txt"), "keep\n");
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root });
   broker.register(createOpenRouterApplyPatchTool({ protectedPaths: ["protected.txt"] }));
@@ -476,14 +486,21 @@ test("OpenRouter apply_patch respects host protected-path equality", async () =>
       assert.equal(result.isError, true);
       assert.notEqual(result.error?.code, "protected_path");
       assert.equal(readFileSync(join(root, "protected.txt"), "utf8"), "keep\n");
-      writeFileSync(join(root, "PROTECTED.txt"), "upper\n");
-      const upper = await broker.invoke(
-        call("case_2", { type: "update_file", path: "PROTECTED.txt", diff: "@@\n-upper\n+changed\n" }),
-        context(root)
-      );
-      assert.equal(upper.isError, false);
-      assert.equal(readFileSync(join(root, "PROTECTED.txt"), "utf8"), "changed\n");
-      assert.equal(readFileSync(join(root, "protected.txt"), "utf8"), "keep\n");
+      const sameObject = sameFilesystemObject(join(root, "protected.txt"), join(root, "PROTECTED.txt"));
+      if (sameObject) {
+        assert.equal(result.error?.code, "filesystem_alias", "case-variant same object must fail closed on canonical spelling");
+        assert.equal(readFileSync(join(root, "PROTECTED.txt"), "utf8"), "keep\n", "same object shares protected bytes");
+        assert.equal(readFileSync(join(root, "protected.txt"), "utf8"), "keep\n");
+      } else {
+        writeFileSync(join(root, "PROTECTED.txt"), "upper\n");
+        const upper = await broker.invoke(
+          call("case_2", { type: "update_file", path: "PROTECTED.txt", diff: "@@\n-upper\n+changed\n" }),
+          context(root)
+        );
+        assert.equal(upper.isError, false);
+        assert.equal(readFileSync(join(root, "PROTECTED.txt"), "utf8"), "changed\n");
+        assert.equal(readFileSync(join(root, "protected.txt"), "utf8"), "keep\n");
+      }
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -491,7 +508,7 @@ test("OpenRouter apply_patch respects host protected-path equality", async () =>
 });
 
 test("OpenRouter apply_patch preserves original grant identity in broker audit", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-identity-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-identity-")));
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root });
   broker.register(createOpenRouterApplyPatchTool());
   try {

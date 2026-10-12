@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
 } from "node:fs";
@@ -20,7 +21,7 @@ import { ToolBroker } from "../src/tool-broker.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 
 test("project profile allows contained writes but blocks traversal and symlink escape", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-broker-paths-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-broker-paths-")));
   const workspace = join(root, "workspace");
   const outside = join(root, "outside");
   mkdirSync(workspace);
@@ -46,7 +47,7 @@ test("project profile allows contained writes but blocks traversal and symlink e
 });
 
 test("guarded approvals and full access follow the configured permission ceiling", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-broker-permission-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-broker-permission-")));
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
   let executions = 0;
@@ -77,7 +78,7 @@ test("guarded approvals and full access follow the configured permission ceiling
 });
 
 test("project profile never treats an external effect as an ordinary workspace action", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "aiboard-broker-external-"));
+  const workspace = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-broker-external-")));
   let executions = 0;
   const broker = new ToolBroker({
     permissionProfile: "project",
@@ -110,7 +111,7 @@ test("project profile never treats an external effect as an ordinary workspace a
 });
 
 test("call identity prevents duplicate or conflicting side effects", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "aiboard-broker-idempotency-"));
+  const workspace = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-broker-idempotency-")));
   let executions = 0;
   const broker = new ToolBroker({ permissionProfile: "project", workspacePath: workspace });
   broker.register(pathTool(() => executions++));
@@ -127,7 +128,7 @@ test("call identity prevents duplicate or conflicting side effects", async () =>
 });
 
 test("tool execution reserves the hard tool-call budget before side effects", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-broker-budget-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-broker-budget-")));
   const budget = new SqliteBudgetLedger(join(root, "budget.sqlite"), {
     limitsFor: () => ({ maxToolCalls: 1 }),
   });
@@ -153,7 +154,7 @@ test("tool execution reserves the hard tool-call budget before side effects", as
 });
 
 test("large outputs become artifacts and timeouts abort the tool", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-broker-output-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-broker-output-")));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const broker = new ToolBroker({
     permissionProfile: "project",
@@ -310,7 +311,7 @@ test("large outputs become artifacts and timeouts abort the tool", async () => {
 });
 
 test("authorization attaches one Runner-created call-bound grant and revokes leftovers", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "aiboard-broker-grant-"));
+  const workspace = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-broker-grant-")));
   const authority = createExecutionGrantAuthority({ ttlMs: 5_000 });
   const broker = new ToolBroker({
     permissionProfile: "project",

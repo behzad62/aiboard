@@ -36,6 +36,8 @@ const readHandleOwners = new Map<string, readonly string[]>([
   ["mcp-executable-digest.ts", ["open"]],
   ["repository-intelligence.ts", ["open"]],
   ["test-report-readers.ts", ["openSync"]],
+  ["windows-birth-inspection.mjs", ["openSync"]],
+  ["windows-birth/session.mjs", ["openSync"]],
 ]);
 function assertReadOnlyOpenSync(ast: ts.SourceFile, name: string): void {
   const openCalls: ts.CallExpression[] = [];
@@ -54,9 +56,16 @@ function assertReadOnlyOpenSync(ast: ts.SourceFile, name: string): void {
   const flag = openCalls[0]!.arguments[1];
   assert.ok(flag !== undefined && ts.isStringLiteral(flag) && flag.text === "r", `${name} must open with literal "r"`);
 }
+function sourceFiles(directory: string, prefix = ""): string[] {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) return sourceFiles(join(directory, entry.name), name);
+    return entry.isFile() && /\.(ts|mjs|js)$/.test(entry.name) ? [name] : [];
+  });
+}
 test("native filesystem mutation-capable imports have a closed reviewed ownership boundary", () => {
   const found: string[] = [];
-  for (const name of fs.readdirSync(source).filter((name) => /\.(ts|mjs|js)$/.test(name))) {
+  for (const name of sourceFiles(source)) {
     const text = fs.readFileSync(join(source, name), "utf8");
     const ast = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
     for (const node of ast.statements) {
@@ -72,7 +81,7 @@ test("native filesystem mutation-capable imports have a closed reviewed ownershi
       found.push(name);
       if (readHandleOwners.has(name)) {
         assert.deepEqual(imports, [...readHandleOwners.get(name)!], `${name} is inspected only for read handles`);
-        if (name === "test-report-readers.ts") assertReadOnlyOpenSync(ast, name);
+        if (name === "test-report-readers.ts" || name === "windows-birth-inspection.mjs" || name === "windows-birth/session.mjs") assertReadOnlyOpenSync(ast, name);
       }
       else assert.ok(name === "filesystem-mutation-fence.ts" || privateOwners.has(name), `Unreviewed native filesystem owner: ${name} (${imports})`);
     }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -325,7 +325,7 @@ function safeSegment(value: string): string {
 }
 
 test("native patch factory applies refused then normal V4A patches through the worker broker", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-factory-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-openrouter-patch-factory-")));
   const project = join(root, "project");
   const state = join(root, "state");
   mkdirSync(join(project, "test"), { recursive: true });
@@ -333,8 +333,16 @@ test("native patch factory applies refused then normal V4A patches through the w
   writeFileSync(join(project, "package.json"), JSON.stringify({ name: "openrouter-patch-factory-fixture", version: "1.0.0", type: "module", packageManager: "npm@11.0.0", scripts: { test: "node --test" } }, null, 2));
   writeFileSync(join(project, "test", "value.test.mjs"), VALUE_TEST);
   writeFileSync(join(project, "protected.txt"), PROTECTED_CONTENT);
-  const npmCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-  const lock = spawnSync(process.execPath, [npmCli, "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: project, encoding: "utf8" });
+  const npmCliCandidates = [
+    join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+    join(dirname(process.execPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ];
+  const npmCli = npmCliCandidates.find((candidate) => existsSync(candidate));
+  assert.ok(
+    typeof npmCli === "string",
+    `actual installed npm CLI entrypoint is required for genuine package-lock generation; tried ${JSON.stringify(npmCliCandidates)} from ${process.execPath}`
+  );
+  const lock = spawnSync(process.execPath, [npmCli!, "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: project, encoding: "utf8" });
   assert.equal(lock.status, 0, lock.stderr);
   const runRoot = join(state, "builds", safeSegment(RUN_ID));
   mkdirSync(runRoot, { recursive: true });
@@ -366,6 +374,8 @@ test("native patch factory applies refused then normal V4A patches through the w
   assert.equal(storedSource.hash, sourceManifest.artifactDigest, "the stored source bytes are the manifest authority");
   let factory: NativeBuildFactory | undefined;
   let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  let primary: unknown;
+  let hasPrimary = false;
   try {
     const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: RUN_ID });
     const integritySeeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
@@ -478,10 +488,50 @@ test("native patch factory applies refused then normal V4A patches through the w
     assert.equal(existsSync(join(project, "src/value.mjs")), false, "owner tree gains no product file");
     assert.equal(readFileSync(join(project, "protected.txt"), "utf8"), PROTECTED_CONTENT, "owner protected bytes unchanged");
     assert.equal(projection.projectHandoff?.status ?? "none", "none", "owner handoff never automatically requested or completed");
+  } catch (error) {
+    primary = error;
+    hasPrimary = true;
+    throw error;
   } finally {
-    await handle?.close();
-    await factory?.close();
-    await executionHost.close();
-    rmSync(root, { recursive: true, force: true });
+    const teardownErrors: unknown[] = [];
+    try {
+      await handle?.close();
+    } catch (error) {
+      teardownErrors.push(error);
+    }
+    try {
+      await factory?.close();
+    } catch (error) {
+      teardownErrors.push(error);
+    }
+    try {
+      await executionHost.close();
+    } catch (error) {
+      teardownErrors.push(error);
+    }
+    const resourceClosersSucceeded = teardownErrors.length === 0;
+    if (resourceClosersSucceeded) {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch (error) {
+        teardownErrors.push(error);
+      }
+    }
+    if (teardownErrors.length > 0) {
+      if (hasPrimary) {
+        throw new AggregateError(
+          [primary, ...teardownErrors],
+          resourceClosersSucceeded
+            ? `Native patch factory journey failed and teardown also failed during owned root removal; primary error preserved. owned root removal failed; location may be partially removed: ${root}`
+            : `Native patch factory journey failed and teardown also failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}`,
+        );
+      }
+      throw new AggregateError(
+        teardownErrors,
+        resourceClosersSucceeded
+          ? `Native patch factory teardown failed during owned root removal. owned root removal failed; location may be partially removed: ${root}`
+          : `Native patch factory teardown failed during resource closure; owned root removal not attempted. Retained owned root for bounded read-only diagnosis: ${root}`,
+      );
+    }
   }
 });
