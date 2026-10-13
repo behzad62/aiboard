@@ -2,7 +2,9 @@
 
 Checked items have passed their scoped validation and independent review. Product integration and final acceptance are separate items.
 
-**Current checkpoint:**44 scoped accepted/3 broadgroups open. Gate E CLOSED by independent current exact-head realDocker outcome; currentGateF stalehealthfixture.
+**Current checkpoint:**44 scoped accepted/2 broad groups open. Current13-jobplatformmatrix independentlyaccepted; affectedplatformgroupCLOSED. GateFframeworkstoprepaircandidate3underfinalreview; G/fullstockheld.
+
+**Previous checkpoint:**44 scoped accepted/3 broadgroups open. Gate E CLOSED by independent current exact-head realDocker outcome; currentGateF stalehealthfixture.
 
 **Previous checkpoint:**43 scoped accepted/3 broadgroups open. GateC/D independentlyCLOSED; currentEfocusedlifecycle/realDocker. Currente102Windowsfactorypendingkeepsbroadplatformitemopen; a regressionreturnsowninggate.
 
@@ -53,7 +55,7 @@ Checked items have passed their scoped validation and independent review. Produc
 - [x] Preserve construction-rollback binding and shared prerequisites until dependent cleanup settles —baseline0/2 then combined6/6, full runner types and independent review;1 product candidate/0 native attempts. Fresh hosted outcome remains open.
 - [x] Preserve Job writer, ACK and release authority across an awaited status precheck — two distinct RED findings;11 owning/36 combined tests and98 native PASS; independent source/outcome review,2 product candidates/1 native attempt. Fresh hosted qualification remains required.
 - [x] Accept exact OCI Darwin host aliases while retaining canonical grants and strict user-alias refusal — actual macOS RED→9/9GREEN, Windows/Linux6/6 applicable; source/placement/outcome independently accepted;1 product candidate/1 fixture candidate/1 placement candidate.
-- [ ] Pass affected portable tests and required platform coverage.
+- [x] Pass affected portable tests and required platform coverage — current433b7038 all13ordinaryjobsPASS, Windows123/123/factory740150.481ms/naturalcompletion; independent outcome de990919…; specificDarwinOCIalias/current3OScontracts already accepted. Final exact freeze/matrix remains Gate G.
 - [x] Retain bounded durable lifecycle evidence after a large runtime failure — exact runtime DB/WAL/SHM role gets8MiB per file; generic2MiB and growth guards retained; RED/GREEN, final7/7/types/lint and independent review PASS;2 evidence-capture candidates/0 product iterations.
 - [x] Classify the active Job probe deadline and apply the requested bounded5s limit — unchanged native command completes2368.6627ms on hosted Windows; owning4/4/types/lint and independent review PASS;1 product candidate/0 local native attempts. Fresh factory/platform outcome remains open.
 - [x] Qualify current lifecycle conjunction and real Docker composition —14 focused cases plus4 real scenarios/evidence root5/5, exact4ab39d0d/verifiedartifact/natural job; independent outcome accepted,0 product candidates/1 selector candidate.

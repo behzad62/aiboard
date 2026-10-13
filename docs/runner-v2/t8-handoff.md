@@ -1,5 +1,66 @@
 # T8 continuation — 2026-10-12
 
+## 2026-10-13 — Original native benchmark contract and extracted RJS bundle PASS
+
+Bothoriginalowningmodulescompletedactualexit0onreviewedC3bytes: benchcontract4590.3118ms, originalRJSbundle receipt `D:/tmp/t8-20261013-gate-f-rjs-bundle-candidate3.meta.json` withitselapsedMs. Logs/strictactualexitfilesretainedbesideboth. Bundleoriginalassertions includeextractedhealth/start/stop/verifierHTTP200/score/cleanup; nofixtureorlimit changed. Source/test/packagehashesstillmatchreview. Independentnativeoutcomereviewpendingbeforecommit/push/fresh2OSfullbenchmark.44/2;FOPEN/Gfullstockheld.
+
+
+## 2026-10-13 — Final stop source ACCEPT; original native qualification underway
+
+IndependentC3 `D:/tmp/t8-20261013-gate-f-bench-stop-candidate3-review.md` ACCEPT SOURCE SHA256711e609cb08b230670149ff89ce4688345474591facdd7a7511bd3cb2c1c8c6d. Reviewedsource57c847d4…/test622f6eb9…/packagef18dba56… frozen through owningnative. Originalbenchcontractactualexit0,4590.3118ms: `D:/tmp/t8-20261013-gate-f-bench-contract-candidate3.{log,exit,meta.json}`. OriginalRJSbundle nowrunningexecsession49042, `D:/tmp/t8-20261013-gate-f-rjs-bundle-candidate3.log`; actualexit+originalcleanupassertionsrequired. Theseare1attemptperoriginalmodule, nofullRunner/threshold/deadlinechange.
+
+Do notcommit/pushuntilowningpacketsettlesandoutcomereview; thenfreshrequiredWindows/LinuxbenchmarkbeforeFclosure.44/2/Gfullstockheld.
+
+
+## 2026-10-13 — Platform broad group CLOSED; stop candidate3 passes29 controls
+
+Independentcurrentplatform `D:/tmp/t8-20261013-433-platform-outcome-review.md` ACCEPT SHA256de990919b490646b81fc5dc1e855f5880e401cca933dfca71ee8ed1218e9b3b9: current13ordinaryjobsPASS, Windows123/123/factory740150.481ms/naturalcompletion. BroadaffectedplatformgroupCLOSED. Checklist44scopedaccepted/2broadgroupsopen; syntheticmergeandhistoricalunknowncausesretained.
+
+Frozen C2source review577012e4… ACCEPTssixoriginalsettlementrepairsbutrequirestwo classificationguards. NewactualcallerRED25PASS/4FAIL in `D:/tmp/t8-20261013-gate-f-bench-stop-startup-review-red.tap`; C3addsstartingoracle-refusal andexistingterminalrootstartuprefusalonly. Final29/29 `D:/tmp/t8-20261013-gate-f-bench-stop-candidate3-final.tap`, strictownedTS/lint/syntax/diff0.3validatedframeworkcandidates/0candidate-nativeattempts. Finalindependentreview beforeactualoriginalbenchcontract/bundle. FOPEN;G/fullstockheld.
+
+
+## 2026-10-13 — Stop repair review findings reproduced; second candidate25/25
+
+Frozen firstcandidate independentreview `D:/tmp/t8-20261013-gate-f-bench-stop-source-review.md` REPAIRREQUIRED SHA256938a0efc… . Fourfollow-up actualhelperregressionsRED13pass/4fail in `D:/tmp/t8-20261013-gate-f-bench-stop-review-red.tap`: duplicatecontrols, failedstoplostbyclosedtargetfastpath, nonzerocontrolaftertargetclose, signal-exitedrootnewnumericcontrol. Preservedfirstcandidate receipts.
+
+Secondcandidate retainsoneexactper-childstopPromise/disposition/controlhandle, failedbounds/controlcannotbeoverwrittenbylatefacts, validatesallcontrolresults, respectsrootexit/signal/stdiofacts. Verifier remainsfailclosed untilcreatorcloseplusno failed/pendingstop. Startupregistersexactchildbeforehealth, aggregatesoriginalstartup+cleanupfailuresandblocksstate reuse. Commandrejectionclearstimer/abort;shutdownjoinsallinitiatedboundedstopsbeforetruthfuldisposition. No newcontrolscope/productchange/deadlineinflation.
+
+Final25 actual-sourceAST/VM checksPASS/no nativecalls, strictownedTS/lint/nodecheck/diff0; report `D:/tmp/t8-20261013-gate-f-bench-stop-candidate2-final.tap`.2 validatedframeworkcandidates/0candidate-nativeattempts. Independentcandidate2reviewnext; broadplatformPASSawaitsfinaldisposition;44/3/FOPEN/Gfullstockheld.
+
+
+## 2026-10-13 — Current required platform matrix complete PASS; Gate F repair remains open
+
+Current433requiredportable38378790519all13ordinaryjobsPASS. Windowsaffected115233736148123/123,0skip/fail/cancel; factory740150.481ms/whole759112.3313ms/naturaljobcomplete. Fullprescribedreaderpacket `D:/tmp/t8-20261013-433-platform-ci.json`; nooldinaccessibleheadoutcomeinferred. SpecificD3OScontracts/source alreadyindependentlyaccepted; broadplatformchecklistreconciliation awaitsindependentcurrentmatrixdisposition, notnewtestreplay.
+
+Fstopcandidate source/callerreviewpending; preserveinitial13/13 andoriginalRED0/3. Parentidentifiedpossiblealready-exitedsignal/control-retryedges forreview; noacceptanceclaim. Noactualcandidate-nativeattempt ornewpush. Fullstocklocalheld;44/3untildurablebroadreconciliation.
+
+
+## 2026-10-13 — Gate F stop-helper race RED; first repair candidate under independent review
+
+Original extracted RJS bundle baseline completed actual exit0 locally (`D:/tmp/t8-20261013-gate-f-rjs-bundle-baseline.log`); hosted failure remains retained. Actual private terminateChild extracted by AST into VM proves3 baseline failures: early success on control completion, control launch error, nonzero control. RED `D:/tmp/t8-20261013-gate-f-bench-stop-red.tap`0/3. First benchmark-framework candidate tracks exact child close at creator, joins target stdio/control close, rejects control errors and unchanged5s wall-clock expiry, keeps verifier guard/control scope. No productRunner change.
+
+Final13 deterministic owning checks PASS/no nativecalls at `D:/tmp/t8-20261013-gate-f-bench-stop-bounded.tap`; strict owned script TS0, ESLint/node syntax/diff0. New pure regression added before existing benchmark contract in samechain, all oldcommands/stockRunnerliteral retained. Independent fullsource/caller review pending before actual bridge/bundle qualification.1 validatedframeworkcandidate/0candidate native attempts.44 scoped/3 broadgroups/FOPEN/Gfullstockheld.
+
+
+## 2026-10-13 — Gate F Windows later RJS bundle fails; exact stop boundary under triage
+
+433benchmark38378790724/Linux115233737019completePASS inclpublish/certified/benchmark/RJS/build;fullLinuxZIPbea0b6e8… verified at `D:/tmp/t8-gate-f-linux-benchmark-433b7038.zip`. Windows115233737260FAIL at later `scripts/test-recoverable-job-service-bundle.mts:238`: verifier409 Runner V2 muststop beforeverification immediatelyafterstopHTTP200. Itscompletecertified+benchmarkchains hadpassed; RJS laterstageandbuildnotpassed. FullWindowsZIP6287df31… verifiedat `D:/tmp/t8-gate-f-windows-benchmark-433b7038.zip`;prescribedreaderexplicittruncatedtrue.
+
+CurrentbenchframeworkterminateChild Windowsbranch resolvesonkillererror/exit withoutactualtargetexit/closeproof;stopAPIreportsrunningfalseunconditionally. Currentverifier409isfailclosed andmustremainstrict. Logsdo notretainkillerresult, so exactearliercause(race/killerfailure/other) remainsunclassified. Independentowningtriagepending; narroworiginalbundlebaseline running `D:/tmp/t8-20261013-gate-f-rjs-bundle-baseline.log`. No sourcefix/deadlineincrease/CIrepeat yet; FOPEN/G/fullstocklocalheld.44/3, C/D/Eacceptedscopespreserved.
+
+
+## 2026-10-13 — Complete local certified chain PASS; hosted Gate F remains open
+
+Actualexecsession47864completed trueexit0 after unchanged `npm run test:certified`; fullrawlog `D:/tmp/t8-20261013-gate-f-certified-local.log`, exitreceipt `D:/tmp/t8-20261013-gate-f-certified-local.exit`. Thisqualifies thatcompletecertifiedchainonlocalNode24.18.0, notseparate `test:benchmark`, RJS, buildorfullRunner root+12. Hosted2OS38378790724stillrunningatlastread;Fnotclosed.44/3;G/fullstocklocalheld.
+
+
+## 2026-10-13 — Reviewed Gate F fixture committed; complete benchmark validation running
+
+Exactreviewedhealth21→22fixturecommitted/pushed `433b7038ac756a0b591640964253f95e393e26a9`. Independent `D:/tmp/t8-20261013-gate-f-chat-fixture-review.md` ACCEPT; narrow44checksRED43pass/1fail→GREEN44/44,unchangedproductlimits. Required2OSbenchmark38378790724 Win115233737260/Linux115233737019running. Requiredportable38378790519running oncurrenthead; no furtherpushwhilewaitingexceptactualrequiredrepair. Localcertifiedexecsession47864 stillrunning, log `D:/tmp/t8-20261013-gate-f-certified-local.log`; actualexitrequired.
+
+Olde102/4abWindowsfactoryfinaloutcomesnotobserved: readerbinds currentPRrevision andrejectsoldworkflowwith409 evenafterreloadingcurrenthead. TheirlastreadIN_PROGRESS isnotPASSorFAIL. Retain accepted d263GateC native/hostedproof; current433freshaffectedresultrequiredforbroadplatformclosure. NoCLIfallback.44/3, GateFnotclosed, G/fullstocklocalheld.
+
+
 ## 2026-10-13 — Gate F health mismatch reproduced and exact fixture repair GREEN
 
 Narrow actualchatregression baseline `D:/tmp/t8-20261013-gate-f-chat-red.log` exit1: precisely1 staleversionassert expected21/actual22,43otherchecksPASS. Exacttwo-linebd7ea533fixturehunkapplied; green `D:/tmp/t8-20261013-gate-f-chat-green.log` exit0/44PASS; lint/diff0. No production/deadline/thresholdchange. Independentfixture reviewpending. Localcertified chain nowrunning withownlog `D:/tmp/t8-20261013-gate-f-certified-local.log`; this isGateFbenchmarkvalidation, notheld fullRunner stocksuite. Do notclaimlatercertified/benchmarkstagespassedbeforeactualexit.44/3;Eclosed;G/fullrunnerheld.
