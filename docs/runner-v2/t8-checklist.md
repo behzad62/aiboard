@@ -2,7 +2,9 @@
 
 Checked items have passed their scoped validation and independent review. Product integration and final acceptance are separate items.
 
-**Current checkpoint:**43 scoped accepted/3 broadgroups open. GateC/D independentlyCLOSED; currentEfocusedlifecycle/realDocker. Currente102Windowsfactorypendingkeepsbroadplatformitemopen; a regressionreturnsowninggate.
+**Current checkpoint:**44 scoped accepted/3 broadgroups open. Gate E CLOSED by independent current exact-head realDocker outcome; currentGateF stalehealthfixture.
+
+**Previous checkpoint:**43 scoped accepted/3 broadgroups open. GateC/D independentlyCLOSED; currentEfocusedlifecycle/realDocker. Currente102Windowsfactorypendingkeepsbroadplatformitemopen; a regressionreturnsowninggate.
 
 **Previous checkpoint (supersedes older entries):** Gate C CLOSED on d2634212 after independent final outcome review: all13 ordinary hosted portable jobs PASS, Windows123/123/factory609595.4929ms/natural completion. Gate D OCI trusted-host-alias regression next; historical causes unclassified.42 scoped/3 broad groups, E/F/G/full stock local held.
 
@@ -54,6 +56,7 @@ Checked items have passed their scoped validation and independent review. Produc
 - [ ] Pass affected portable tests and required platform coverage.
 - [x] Retain bounded durable lifecycle evidence after a large runtime failure — exact runtime DB/WAL/SHM role gets8MiB per file; generic2MiB and growth guards retained; RED/GREEN, final7/7/types/lint and independent review PASS;2 evidence-capture candidates/0 product iterations.
 - [x] Classify the active Job probe deadline and apply the requested bounded5s limit — unchanged native command completes2368.6627ms on hosted Windows; owning4/4/types/lint and independent review PASS;1 product candidate/0 local native attempts. Fresh factory/platform outcome remains open.
+- [x] Qualify current lifecycle conjunction and real Docker composition —14 focused cases plus4 real scenarios/evidence root5/5, exact4ab39d0d/verifiedartifact/natural job; independent outcome accepted,0 product candidates/1 selector candidate.
 - [ ] Complete remaining canonical-path, lifecycle/OCI and benchmark acceptance gates.
 - [ ] Pass the final integrated matrix, package/freeze review and full T8 acceptance.
 

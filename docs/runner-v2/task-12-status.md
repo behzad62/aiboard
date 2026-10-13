@@ -1,5 +1,24 @@
 # Runner V2 Task 12 — Durable Gate Status
 
+## 2026-10-13 — Gate F health mismatch reproduced and exact fixture repair GREEN
+
+Narrow actualchatregression baseline `D:/tmp/t8-20261013-gate-f-chat-red.log` exit1: precisely1 staleversionassert expected21/actual22,43otherchecksPASS. Exacttwo-linebd7ea533fixturehunkapplied; green `D:/tmp/t8-20261013-gate-f-chat-green.log` exit0/44PASS; lint/diff0. No production/deadline/thresholdchange. Independentfixture reviewpending. Localcertified chain nowrunning withownlog `D:/tmp/t8-20261013-gate-f-certified-local.log`; this isGateFbenchmarkvalidation, notheld fullRunner stocksuite. Do notclaimlatercertified/benchmarkstagespassedbeforeactualexit.44/3;Eclosed;G/fullrunnerheld.
+
+
+## 2026-10-13 — Gate E CLOSED; Gate F stale health regression next
+
+Independent `D:/tmp/t8-20261013-gate-e-final-outcome-review.md` ACCEPT/CLOSED boundedcurrent4ab scope: exactcheckout4ab39d0d, actualrequiredDocker daemon/images,4scenarios +evidenceroot5/5/no skipcancel/naturaljob;verifiedZIPe9267de2… and4code0/signalnulltimings. Actualscenarioassertions/finalizers +14focusedlifecyclechecks +retainedhistoricalscope mapping satisfyE. Explicitscenario process.exit0alone isnotunloggedhandleproof. Fullreader `D:/tmp/t8-20261013-gate-e-docker-ci.json`;artifactfolder `D:/tmp/t8-gate-e-docker-38377933208`. Four suppresseddefinitions represent10actualjobsUNQUALIFIED; full11matrixstillG.
+
+CurrentF: reproduce actual `scripts/test-account-provider-runner-chat.mts` stalehealth21 versusproductconst22 (summaryshortname test-account-runner-chat was shorthand, notexistingfile); exactpreviouslyreviewedbd7ea533 two-line21→22hunk only. No benchmarkthreshold/producttimeoutchange. Current4ab portable38377940673 pendingWindowsaffected/macaffected/repro;old e102finalWindowsoutcomeunobservedduetoolrevisionrestriction. Broadplatformgroupremainsopen. Checklist44scopedaccepted/3broadgroupsopen afteraddingcurrentrealDockerqualificationitem; F/G/fullstocklocalhelduntilremainingprereqs. T8 NOT ACCEPTED; REL-1 NOT STARTED.
+
+
+## 2026-10-13 — Reviewed bounded Gate E selector committed; real Docker running
+
+Reviewedworkflow/guardanddurablenotes committed/pushed `4ab39d0d23963465e091a877c91933af9c201a62`. Independent finalselector/lifecyclereview SHA25681a7861cb534ecf3869411ed8136d248daf3321b706d2b9561339e15672f9cfc; exactreviewedworkflowa6e1…/guardd3da…pins verifiedbeforecommit. ManualDocker-onlyrun38377933208/job115230899513 confirmedIN_PROGRESS onexact4ab39d0d byprescribedreader. NonDockergroupsSKIPPED/UNQUALIFIED; suppressionhappensbeforematrixexpansion so readerlists4skippeddefinitions, equivalentto10nonDockeractualjobsinthefullscope. No fullqualificationclaim.
+
+Prior e102Windowsaffected wasstillrunningatlastread; afterPRheadchanged, old-headreaderfollowup409Pullrequestchanged; reloaddiscovery/currentheadbeforeoldrunfollowup, noCLIdiagnosticfallback. No failureorPASSinferred.43/3/currentGateE; allremainingF/G/fullstocklocal prerequisitesheld.
+
+
 ## 2026-10-13 — Gate E focused lifecycle PASS; real Docker selector under review
 
 Unchanged focusedcurrenttestsPASS: `D:/tmp/t8-20261013-gate-e-quiesce-kernel.tap`9/9, `...-durable-subset.tap`4/4, `...-adopted-conjunction.tap`1/1;0fail/skip/cancel. Covers workloadquiescenceversusoutput, typedpendingrelease/terminalfailure, retainedcleanup, output-beforeverifiedcleanup, corruptrecovery/exhaustivedurablestate matrix and evidence/detach/isolationrelease conjunction. Fresh137contract resourcecleanup retained onunchangedsource. HistoricalrealDocker6bodies+coremechanics linked by independentretentionreview; they arehistorical, not freshcurrentOCI.

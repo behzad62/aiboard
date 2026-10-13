@@ -389,8 +389,8 @@ try {
   const healthResponse = await fetch(`${baseUrl}/health`);
   const health = await healthResponse.json();
   check(
-    "capability-handshake account-provider runner reports version 21",
-    healthResponse.ok && health.version === 21,
+    "capability-handshake account-provider runner reports version 22",
+    healthResponse.ok && health.version === 22,
     health
   );
 
