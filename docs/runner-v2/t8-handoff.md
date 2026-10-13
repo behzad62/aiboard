@@ -1,6 +1,15 @@
 # T8 continuation — 2026-10-12
 
+## 2026-10-13 — Gate C CLOSED; Gate D public OCI path regression next
+
+Gate C independently ACCEPTED/CLOSED for d2634212 by `D:/tmp/t8-20261013-gate-c-final-outcome-review.md`. Required portable38370898980: all13 ordinary jobs PASS; Windowsaffected115207334547123/123/no skips/cancel, factory609595.4929ms/whole629389.6638ms/natural completed success. Three-host contracts/native/package/repro and affected coverage PASS. Full reader evidence `D:/tmp/t8-20261013-d263-hosted-ci.json`. Combined reviewed source, both RED findings,11 owning/36 focused/98 native and1509pins qualify current C; historical failures remain unclassified. Synthetic merge97082f3 into51bf0da7 is not final exact freeze.
+
+Current gate D: independent readiness audit `D:/tmp/t8-20261013-gate-d-readiness-review.md` confirms OCI walker still rejects real Darwin /var aliases before canonical containment. Add real-filesystem/public acquire regressions using canonical CLI/state/grants and an inert injected CLI; actual macOS cwd/argv RED required before narrow shared-predicate repair. Canonical root identity and arbitrary symlink refusal remain strict. New negatives run allhosts, Darwin cases skip only offDarwin. No real Docker claim.42 accepted/3 broad groups open (affected group still awaits D); E/F/G/full stock local held. T8 NOT ACCEPTED; REL-1 NOT STARTED.
+
+
 ## Latest checkpoint — supersedes all older next-work lists below
+
+Reviewed status-fencing repair committed/pushed `d2634212e55b513c908957e2fff2dca7ccb148dd`. Required portable38370898980 is running; Windowsaffected115207334547 and Windowscontract115207334503 still in progress at last read; Linuxaffected, Linux/mac contracts,3OS probes/packages and reproducibility PASS. Do not dispatch a duplicate factory. Fresh current owning hosted result is the remaining Gate C prerequisite.42/3; later gates/full stock local suite held. Local Docker readonly check reports Desktop unable to start; real OCI will need a bounded hosted Linux scope after Gate D, not a daemon reset. Read-only next-Gate-D audit pending for strict OCI walker versus trusted Darwin aliases. Source/tests/workflow committed clean; newest notes intentionally unpushed.
 
 Status fencing fix is independently accepted by frozen source review6efb27… and separate `D:/tmp/t8-20261013-status-fencing-native-outcome-review.md`. Original98 native cases PASS122966.6668ms, natural inner/outer settlement/no rescue;1509/1509 pins independently match; actual native attempt1. Both RED findings plus final11 owning/36 combined/types/lint/diff0 retained.2 validated product candidates; artifact-r1 unspent. Checklist42/3. Commit/push reviewed gate delta, then fresh owning hosted Windows/platform qualification; if it passes without a new finding, current Gate C can close while earlier causes remain explicitly unclassified. No automatic manual repeat. Later gates/full local suite held.
 

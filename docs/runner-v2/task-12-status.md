@@ -1,10 +1,21 @@
 # Runner V2 Task 12 — Durable Gate Status
 
+## 2026-10-13 — Gate C CLOSED; Gate D public OCI path regression next
+
+Gate C independently ACCEPTED/CLOSED for d2634212 by `D:/tmp/t8-20261013-gate-c-final-outcome-review.md`. Required portable38370898980: all13 ordinary jobs PASS; Windowsaffected115207334547123/123/no skips/cancel, factory609595.4929ms/whole629389.6638ms/natural completed success. Three-host contracts/native/package/repro and affected coverage PASS. Full reader evidence `D:/tmp/t8-20261013-d263-hosted-ci.json`. Combined reviewed source, both RED findings,11 owning/36 focused/98 native and1509pins qualify current C; historical failures remain unclassified. Synthetic merge97082f3 into51bf0da7 is not final exact freeze.
+
+Current gate D: independent readiness audit `D:/tmp/t8-20261013-gate-d-readiness-review.md` confirms OCI walker still rejects real Darwin /var aliases before canonical containment. Add real-filesystem/public acquire regressions using canonical CLI/state/grants and an inert injected CLI; actual macOS cwd/argv RED required before narrow shared-predicate repair. Canonical root identity and arbitrary symlink refusal remain strict. New negatives run allhosts, Darwin cases skip only offDarwin. No real Docker claim.42 accepted/3 broad groups open (affected group still awaits D); E/F/G/full stock local held. T8 NOT ACCEPTED; REL-1 NOT STARTED.
+
+
 > **Authoritative continuation state.** Update this file whenever a gate changes status. Do not infer completion from chat summaries.
 
 Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
 ## 2026-10-13 — Status fencing repair independently accepted; fresh hosted qualification next
+
+Reviewed repair committed and pushed `d2634212e55b513c908957e2fff2dca7ccb148dd`; separate native outcome review SHA256 `8a57537d66831becbe8f00848bebd766fb96fccc26b3dfc2241e07e13f2f7a44`. Required portable [38370898980](https://github.com/behzad62/aiboard/actions/runs/38370898980) is running on that current PR head; owning Windowsaffected115207334547 and Windowscontract115207334503 remain IN_PROGRESS at last read. Linuxaffected, Linux/mac contracts,3OS nativeprobes/packageparity and reproducibility PASS. No duplicate factory/manual dispatch. Gate C remains held on fresh owning result;42/3, later gates/full local suite held. Source/tests/workflow committed; newest run notes intentionally unpushed to avoid another source matrix.
+
+Read-only next-stage readiness check: local Docker daemon reports `Docker Desktop is unable to start`; no daemon reset attempted. Existing hosted qualification workflow has real Docker Linux coverage but no narrow dispatch selector, so Gate E will need a bounded scope or restored existing runtime after prerequisites. Current OCI symbolic-component walker still rejects all aliases, including Darwin host mappings; independent read-only Gate D readiness audit pending. No later-gate source edit/test/dispatch has occurred.
 
 Independent source review `D:/tmp/t8-20261013-status-fencing-review.md` and separate native outcome review `D:/tmp/t8-20261013-status-fencing-native-outcome-review.md`: ACCEPT, no blocking finding. Reviewer independently rehashed1509/1509 candidate pins and verified frozen source-review binding. Original Windows backend module92 top-level/98 total PASS in122966.6668ms; direct capture exit0/process+stdout+stderr settled/no rescue; inner root0/active1 then natural Job0, outer reader/handles/guardian settled naturally. Packet `D:/tmp/t8-20261013-status-fencing-native-r2`, manifest03680954…; actual native attempt1. Artifact-r1 was unspent, not an additional attempt.
 

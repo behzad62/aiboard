@@ -2,7 +2,9 @@
 
 Checked items have passed their scoped validation and independent review. Product integration and final acceptance are separate items.
 
-**Current checkpoint:** 42 scoped items accepted; 3 broad groups open. Readonly Job status prechecks and exact current-authority classification are independently accepted: both RED findings,11 owning cases/36 combined checks and original98-case native module PASS with natural settlement/no rescue.2 validated product candidates/1 native attempt. Commit and obtain fresh owning hosted qualification before closing Gate C; earlier CI causes remain unclassified. Previous checkpoint lines below are historical.
+**Current checkpoint (supersedes older entries):** Gate C CLOSED on d2634212 after independent final outcome review: all13 ordinary hosted portable jobs PASS, Windows123/123/factory609595.4929ms/natural completion. Gate D OCI trusted-host-alias regression next; historical causes unclassified.42 scoped/3 broad groups, E/F/G/full stock local held.
+
+**Previous checkpoint:** 42 scoped items accepted; 3 broad groups open. Readonly Job status prechecks and exact current-authority classification are independently accepted: both RED findings,11 owning cases/36 combined checks and original98-case native module PASS with natural settlement/no rescue.2 validated product candidates/1 native attempt. Commit and obtain fresh owning hosted qualification before closing Gate C; earlier CI causes remain unclassified. Previous checkpoint lines below are historical.
 
 **Latest checkpoint (2026-10-13):** Current72fadb44 required Windows affected123/123 PASS; Linux/macOS123/120/3 genuineWindows skips PASS;3OS contracts/native/package/reproPASS. Independent scoped platformevidence accepted. GateC stillOPEN: earlier same-product pendingobservation/cleanup failures areunexplained. Reviewed exacthead exceptiondiagnostic38364203689/job115185315712 nowrunning; no automaticrepeat if itpasses.41scoped/3broadgroups remain. NextCcausalclosure→Dplatformclosure→Elifecycle/realOCI→Fknownchat21→22fixture/certifiedchecks→Gexactfreeze/shipping/finalmatrix/fullstockLOCALall12chains; no gateadvancement/fullsuite yet. Earlier notes below are historical.
 
@@ -102,7 +104,7 @@ Caller integration substeps:
 - [x] Qualify the original CLI restart-continuity/startup-blocked module —3 original tests accepted.
 - [x] Qualify recovery lifetimes and remaining affected caller tests —156 pure recovery tests plus original native CLI recovery accepted; broader crash/cross-platform obligations separate.
 
-**Progress:** 41 scoped items accepted;3 acceptance groups remain. Start-of-continuation recount corrected stale34 to37 already checked entries; two newly reviewed narrow fixes bring37 to39. The independently accepted requested5s deadline classification adds one scoped item to39, for40; bounded evidence retention adds one more, for41. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
+**Progress:** 42 scoped items accepted;3 acceptance groups remain. Start-of-continuation recount corrected stale34 to37 already checked entries; two newly reviewed narrow fixes bring37 to39. The independently accepted requested5s deadline classification adds one scoped item to39, for40; bounded evidence retention adds one more, for41; independently accepted status-fencing repair adds one, for42. These groups differ in size, so this is not a percentage estimate. This checklist is updated after each accepted fix, with its validated iteration count.
 
 **Iteration rule:** a changed candidate reaching scoped behavioral validation counts once; review-only revisions do not count. Unknown historical totals remain unknown.
 

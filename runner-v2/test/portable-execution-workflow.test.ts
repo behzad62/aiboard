@@ -15,6 +15,7 @@ const deterministicPrTests = [
   "runner-v2/test/runner-capability-contract.test.ts",
   "runner-v2/test/plugin-loader.test.ts",
   "runner-v2/test/qualification-harness.test.ts",
+  "runner-v2/test/oci-canonical-paths.test.ts",
   "runner-v2/test/native-build-manager.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
