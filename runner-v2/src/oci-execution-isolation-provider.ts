@@ -37,7 +37,10 @@ import {
   type ExecutionIsolationSelector,
 } from "./execution-isolation-provider.js";
 import { withOwnedFenceLock } from "./owned-fence-lock.mjs";
-import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
+import {
+  isTrustedRunnerHostAliasResolution,
+  type RunnerCapabilitiesConfig,
+} from "./runner-capabilities-config.js";
 
 const OWNED_LABEL = "ai-board.runner-v2.owned";
 const PROVIDER_LABEL = "ai-board.runner-v2.provider";
@@ -1121,7 +1124,15 @@ async function assertNoSymbolicPathComponents(input: string): Promise<void> {
     current = join(current, segment);
     try {
       if ((await lstat(current)).isSymbolicLink()) {
-        throw ociError("oci_path_escape", `OCI path crosses symbolic component ${current}.`);
+        let canonical: string;
+        try {
+          canonical = await realpath(current);
+        } catch (error) {
+          throw ociError("oci_path_escape", `OCI symbolic component ${current} cannot be resolved.`, error);
+        }
+        if (!isTrustedRunnerHostAliasResolution(current, canonical)) {
+          throw ociError("oci_path_escape", `OCI path crosses symbolic component ${current}.`);
+        }
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;

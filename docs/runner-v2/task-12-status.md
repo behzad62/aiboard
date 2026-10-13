@@ -1,5 +1,19 @@
 # Runner V2 Task 12 — Durable Gate Status
 
+## 2026-10-13 — Gate D Windows baseline failure retained; isolated required step prepared
+
+The test-only Windows contract job115216409566 failed its new canonical positive: `Current owned fence holder birth identity is unavailable`, surfaced as `oci_recovery_blocked` on first acquisition (2085.9918ms). Other new Windows path negatives passed; whole146/140pass/1fail/5genuineDarwinskips. Full reader `D:/tmp/t8-20261013-gate-d-baseline-windows-ci.json`. The native Get-Process inspection has an unchanged2s bound; the original exec error is not retained, so host contention/deadline is a hypothesis, not established cause.
+
+Prepared a controlled workflow placement change: the entire unchanged OCI path module runs in its own required serial3OS step after the original concurrent deterministic command. Every Windows case remains, with no fake birth/timeout increase/retry/skip. Source repair separately reviewed ACCEPT in `D:/tmp/t8-20261013-gate-d-source-review.md`; source/fixture behavior unchanged from that review. Workflow guard4/4/lint/diff0; separate isolation review pending. Fresh Windows owning PASS and actual macOS GREEN remain prerequisites. If native birth stays unavailable, investigate its owning boundary rather than repeating blindly.42/3; later gates/full local suite held.
+
+
+## 2026-10-13 — Gate D actual macOS RED captured; minimum repair under review
+
+Reviewed test-only baseline committed/pushed `76d812373bf747386bcca278b3b95fa28f3e6f4c`. Required macOS contract job115216409461 in run38373622282 fails exactly the two new cwd/argv positives at `OCI path crosses symbolic component /var`, code `oci_path_escape`; canonical control and seven remaining OCI path cases PASS. Whole contract146 tests/144pass/2fail/0skip/cancel. Full untruncated prescribed-reader evidence `D:/tmp/t8-20261013-gate-d-darwin-red-ci.json`; independent pre-RED fixture review `D:/tmp/t8-20261013-gate-d-red-fixture-review.md` ACCEPT. Product unchanged in that baseline.
+
+Candidate now reuses the existing exact Darwin alias helper only after resolving an actual symbolic component. A broken target is wrapped as `oci_path_escape` rather than inheriting the missing-component early return. Final component metadata, configured CLI canonical equality/digest, issued canonical root equality, containment and mount policy remain unchanged. Windows owning bounded43/38pass/5 genuine Darwin skips plus existing hostile path1/1 PASS; full Runner types/targeted lint/diff0. Source review pending; actual macOS GREEN still required after reviewed candidate commit/push.1 validated product candidate/1 path fixture candidate; fake CLI is not real OCI qualification. Gate C CLOSED;42 scoped/3 broad groups open; E/F/G/full stock local held.
+
+
 ## 2026-10-13 — Gate C CLOSED; Gate D public OCI path regression next
 
 Gate C independently ACCEPTED/CLOSED for d2634212 by `D:/tmp/t8-20261013-gate-c-final-outcome-review.md`. Required portable38370898980: all13 ordinary jobs PASS; Windowsaffected115207334547123/123/no skips/cancel, factory609595.4929ms/whole629389.6638ms/natural completed success. Three-host contracts/native/package/repro and affected coverage PASS. Full reader evidence `D:/tmp/t8-20261013-d263-hosted-ci.json`. Combined reviewed source, both RED findings,11 owning/36 focused/98 native and1509pins qualify current C; historical failures remain unclassified. Synthetic merge97082f3 into51bf0da7 is not final exact freeze.

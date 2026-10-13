@@ -54,12 +54,15 @@ jobs:
           runner-v2/test/qualification-harness.test.ts
           runner-v2/test/async-failure-observer.test.ts
           runner-v2/test/windows-job-status-fencing.test.ts
-          runner-v2/test/oci-canonical-paths.test.ts
           runner-v2/test/native-build-manager.test.ts
           runner-v2/test/runner-resource-cleanup.test.ts
           runner-v2/test/static-adapter-policy.test.ts
           runner-v2/test/windows-job-active-probe.test.ts
           runner-v2/test/native-build-rollback-order.test.ts
+      - name: Run OCI canonical path contracts
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/oci-canonical-paths.test.ts
       - name: Run targeted legacy CLI fixture regressions
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1

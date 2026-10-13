@@ -89,6 +89,11 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   for (const testPath of deterministicPrTests) {
     assert.equal(source.includes(testPath), true, `Required PR CI omits deterministic test ${testPath}.`);
   }
+  const ociStep = portable.indexOf("      - name: Run OCI canonical path contracts");
+  assert.ok(ociStep > 0, "Public OCI path contracts require their own host-birth inspection step.");
+  assert.equal(portable.slice(0, ociStep).includes("runner-v2/test/oci-canonical-paths.test.ts"), false,
+    "Native fence self-birth inspection must not overlap the concurrent deterministic files.");
+  assert.match(portable.slice(ociStep), /--test --test-concurrency=1\s+runner-v2\/test\/oci-canonical-paths\.test\.ts/);
   for (const testPath of posixHostedTests) {
     assert.equal(source.includes(testPath), true, `Required POSIX PR CI omits ${testPath}.`);
   }
