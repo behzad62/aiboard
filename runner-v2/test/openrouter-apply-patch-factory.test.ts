@@ -33,6 +33,9 @@ import type { ValidationScope } from "../src/validation-scope.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { captureGitBaseline, NativeBuildFactory, runGit } from "./support/git-fixture.js";
 import { qualificationArtifactRoot, writeQualificationDiagnostics } from "./support/qualification-harness.js";
+import { observeAsyncFailures } from "./support/async-failure-observer.js";
+import { AuthenticatedWindowsJobProcessHost } from "../src/windows-job-process-host.js";
+import { WindowsJobObjectProcessBackend } from "../src/windows-process-backend.js";
 
 /**
  * T8 G10c native-patch factory proof (CD-7 runtime behavior).
@@ -384,6 +387,7 @@ type FactoryDiagnosticPayload = {
   truncationReasons: string[];
   captureNote: string;
   probeObserver?: FactoryProbeObserverSnapshot;
+  boundedEffects: Array<{ operation: string; processId?: string; error: FactoryDiagnosticErrorNode | FactoryDiagnosticTruncation }>;
 };
 
 function boundFactoryDiagnosticText(value: unknown, maxChars: number): { text: string; truncated: boolean; omitted: boolean } {
@@ -580,6 +584,7 @@ function buildFactoryDiagnosticPayload(input: {
   hasPrimary: boolean;
   teardownErrors: readonly unknown[];
   probeObserver?: FactoryProbeObserverSnapshot | null;
+  effectFailures?: readonly FactoryEffectFailure[];
 }): FactoryDiagnosticPayload {
   const state = { nodes: 0, reasons: [] as string[] };
   const seen = new Set<object>();
@@ -592,15 +597,19 @@ function buildFactoryDiagnosticPayload(input: {
     state.reasons.push(`teardown-budget:kept=${keptTeardown.length}/total=${input.teardownErrors.length}`);
   }
   const boundedTeardown = keptTeardown.map((entry) => summarizeFactoryDiagnosticError(entry, 0, state, seen));
+  const boundedEffects = (input.effectFailures ?? []).slice(0, 16).map(({ operation, processId, error }) => ({
+    operation, ...(processId ? { processId } : {}), error: summarizeFactoryDiagnosticError(error, 0, state, seen),
+  }));
   const primaryTruncated = boundedPrimary !== null && isFactoryDiagnosticTruncated(boundedPrimary);
   const teardownTruncated = boundedTeardown.some((entry) => isFactoryDiagnosticTruncated(entry));
-  const truncated = state.reasons.length > 0 || primaryTruncated || teardownTruncated;
+  const truncated = state.reasons.length > 0 || primaryTruncated || teardownTruncated || boundedEffects.some(entry => isFactoryDiagnosticTruncated(entry.error));
   return {
     scenario: FACTORY_DIAGNOSTIC_SCENARIO,
     phase: input.phase,
     fixtureRoot: input.fixtureRoot,
     boundedPrimary,
     boundedTeardown,
+    boundedEffects,
     nodeCount: state.nodes,
     truncated,
     truncationReasons: [...state.reasons],
@@ -633,6 +642,7 @@ function stripFactoryDiagnosticStacks(payload: FactoryDiagnosticPayload): Factor
     truncationReasons: [...payload.truncationReasons],
     boundedPrimary: payload.boundedPrimary === null ? null : stripNode(payload.boundedPrimary),
     boundedTeardown: payload.boundedTeardown.map((entry) => stripNode(entry)),
+    boundedEffects: payload.boundedEffects.map(entry => ({ ...entry, error: stripNode(entry.error) })),
   };
 }
 
@@ -723,7 +733,13 @@ type FactoryProbeObserverSnapshot = {
   jobHostExists?: boolean;
   timingNote: string;
   calls: FactoryProbeObserverCall[];
+  effectSettlements?: FactoryEffectSettlement[];
+  droppedEffectFailures?: number;
+  droppedEffectSettlements?: number;
 };
+
+type FactoryEffectSettlement = { operation: string; processId?: string; outcome: "fulfilled" | "rejected" };
+type FactoryEffectFailure = { operation: string; processId?: string; error: unknown };
 
 type FactoryProbeObserverState = {
   enabled: boolean;
@@ -734,6 +750,11 @@ type FactoryProbeObserverState = {
   setupFailures: string[];
   originals?: { spawnSync: unknown; execFileSync: unknown };
   installed: boolean;
+  restoreEffects?: () => void;
+  effectFailures: FactoryEffectFailure[];
+  effectSettlements: FactoryEffectSettlement[];
+  droppedEffectFailures: number;
+  droppedEffectSettlements: number;
 };
 
 function createFactoryProbeObserverState(): FactoryProbeObserverState {
@@ -743,7 +764,16 @@ function createFactoryProbeObserverState(): FactoryProbeObserverState {
   } catch {
     enabled = false;
   }
-  return { enabled, calls: [], droppedCalls: 0, recordFailures: 0, scalarTruncations: 0, setupFailures: [], installed: false };
+  return { enabled, calls: [], droppedCalls: 0, recordFailures: 0, scalarTruncations: 0, setupFailures: [], installed: false,
+    effectFailures: [], effectSettlements: [], droppedEffectFailures: 0, droppedEffectSettlements: 0 };
+}
+
+function factoryEffectProcessId(args: readonly unknown[]): string | undefined {
+  const first = args[0];
+  let id: unknown = first;
+  if (first && typeof first === "object" && "opaqueIdentity" in first && typeof first.opaqueIdentity === "string")
+    id = JSON.parse(Buffer.from(first.opaqueIdentity, "base64url").toString("utf8")).processId;
+  return typeof id === "string" && /^process_[a-f0-9-]{36}$/.test(id) ? id : undefined;
 }
 
 function narrowFactoryProbeBasename(value: unknown, state: FactoryProbeObserverState): string {
@@ -913,6 +943,24 @@ function recordFactoryProbeCall(state: FactoryProbeObserverState, call: FactoryP
 function installFactoryProbeObserverWrappers(state: FactoryProbeObserverState): void {
   if (!state.enabled) return;
   if (state.installed) return;
+  // Manual diagnostic only: retain original exceptions before the runtime's
+  // generic failure mapping. Observe fulfillment too: a pending journal effect
+  // may instead fail after a successful backend call. No result payloads,
+  // native calls, retries, deadlines or ownership decisions are added.
+  state.restoreEffects = observeAsyncFailures(true, [
+    { target: AuthenticatedWindowsJobProcessHost.prototype, prefix: "jobHost", methods: ["launchOwned", "claimOwnedFence", "claimAndAttachOwnedChannel", "reconcileOwned", "readOwnedOutput", "acknowledgeOwnedOutput", "releaseOwned"] },
+    { target: WindowsJobObjectProcessBackend.prototype, prefix: "jobBackend", methods: ["observe"] },
+  ], (operation, args, error) => {
+    try {
+      if (state.effectFailures.length >= 16) { state.droppedEffectFailures++; return; }
+      state.effectFailures.push({ operation, processId: factoryEffectProcessId(args), error });
+    } catch { state.recordFailures++; }
+  }, (operation, args, outcome) => {
+    try {
+      if (state.effectSettlements.length >= 64) { state.effectSettlements.shift(); state.droppedEffectSettlements++; }
+      state.effectSettlements.push({ operation, processId: factoryEffectProcessId(args), outcome });
+    } catch { state.recordFailures++; }
+  });
   const builtin = childProcessBuiltin as unknown as Record<string, unknown>;
   const namespace = childProcessObserverNamespace as unknown as Record<string, unknown>;
   const originalSpawnSync = namespace.spawnSync ?? builtin.spawnSync;
@@ -1054,6 +1102,7 @@ function installFactoryProbeObserverWrappers(state: FactoryProbeObserverState): 
 
 function restoreFactoryProbeObserverWrappers(state: FactoryProbeObserverState): void {
   if (!state.enabled) return;
+  state.restoreEffects?.(); state.restoreEffects = undefined;
   if (!state.originals) return;
   const builtin = childProcessBuiltin as unknown as Record<string, unknown>;
   builtin.spawnSync = state.originals.spawnSync;
@@ -1099,6 +1148,9 @@ function readFactoryProbeObserverSnapshot(state: FactoryProbeObserverState): Fac
       jobHostBasename: "managed-process-job-host.ps1",
       timingNote: FACTORY_PROBE_OBSERVER_TIMING_NOTE,
       calls: state.calls.slice(0, FACTORY_PROBE_OBSERVER_MAX_CALLS),
+      effectSettlements: state.effectSettlements.map(entry => ({ ...entry })),
+      droppedEffectFailures: state.droppedEffectFailures,
+      droppedEffectSettlements: state.droppedEffectSettlements,
     };
     if (supervisorExists !== undefined) snapshot.supervisorExists = supervisorExists;
     if (jobHostExists !== undefined) snapshot.jobHostExists = jobHostExists;
@@ -1310,6 +1362,7 @@ test("native patch factory applies refused then normal V4A patches through the w
         hasPrimary: true,
         teardownErrors: [],
         probeObserver: factoryProbeObserverSnapshot,
+        effectFailures: factoryProbeObserver.effectFailures,
       });
       process.stderr.write(`${toBoundedFactoryDiagnosticJson(payload)}\n`);
       writeQualificationDiagnostics({
@@ -1320,6 +1373,7 @@ test("native patch factory applies refused then normal V4A patches through the w
         extra: {
           phase: "primary",
           boundedPrimary: payload.boundedPrimary,
+          boundedEffects: payload.boundedEffects,
           nodeCount: payload.nodeCount,
           truncated: payload.truncated,
           truncationReasons: payload.truncationReasons,
@@ -1374,6 +1428,7 @@ test("native patch factory applies refused then normal V4A patches through the w
           hasPrimary,
           teardownErrors,
           probeObserver: factoryProbeObserverSnapshot,
+          effectFailures: factoryProbeObserver.effectFailures,
         });
         process.stderr.write(`${toBoundedFactoryDiagnosticJson(payload)}\n`);
         writeQualificationDiagnostics({
@@ -1384,6 +1439,7 @@ test("native patch factory applies refused then normal V4A patches through the w
           extra: {
             phase: "post-close",
             boundedPrimary: payload.boundedPrimary,
+            boundedEffects: payload.boundedEffects,
             boundedTeardown: payload.boundedTeardown,
             nodeCount: payload.nodeCount,
             truncated: payload.truncated,
