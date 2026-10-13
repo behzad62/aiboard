@@ -2,7 +2,7 @@
 
 Checked items have passed their scoped validation and independent review. Product integration and final acceptance are separate items.
 
-**Current checkpoint:**44 scoped accepted/2 broad groups open. Current13-jobplatformmatrix independentlyaccepted; affectedplatformgroupCLOSED. GateFframeworkstoprepaircandidate3underfinalreview; G/fullstockheld.
+**Current checkpoint:** 46 historical scoped items accepted; 1 final broad group open. Gates A–F independently CLOSED, including reopened manager-reader/fixture E scope now accepted by original r7 outcome review5ab4b73b017badc3fccbcf1c309c41ea76ec79bbe239d9e0ce2e2e914a5d4b3a. Reader/fixture43 controls plus selected compaction5, types/lint0, source review and original native/browser1PASS with strict cleanup qualify that scope. Prior8 unaffected UI outcomes are preserved by independent actual caller trace; nine scopes reconciled, not one new combined invocation. Opted-in A1 selected journey/corpus remains accepted. Final current shipping/checks/clean freeze/matrix/CONFIG/full LOCAL stock Gate G held; user must be notified before full suite. T8 NOT ACCEPTED; REL-1 NOT STARTED.
 
 **Previous checkpoint:**44 scoped accepted/3 broadgroups open. Gate E CLOSED by independent current exact-head realDocker outcome; currentGateF stalehealthfixture.
 
@@ -59,7 +59,9 @@ Checked items have passed their scoped validation and independent review. Produc
 - [x] Retain bounded durable lifecycle evidence after a large runtime failure — exact runtime DB/WAL/SHM role gets8MiB per file; generic2MiB and growth guards retained; RED/GREEN, final7/7/types/lint and independent review PASS;2 evidence-capture candidates/0 product iterations.
 - [x] Classify the active Job probe deadline and apply the requested bounded5s limit — unchanged native command completes2368.6627ms on hosted Windows; owning4/4/types/lint and independent review PASS;1 product candidate/0 local native attempts. Fresh factory/platform outcome remains open.
 - [x] Qualify current lifecycle conjunction and real Docker composition —14 focused cases plus4 real scenarios/evidence root5/5, exact4ab39d0d/verifiedartifact/natural job; independent outcome accepted,0 product candidates/1 selector candidate.
-- [ ] Complete remaining canonical-path, lifecycle/OCI and benchmark acceptance gates.
+- [x] Qualify exact benchmark target/control settlement — original REDs,29 owning controls, both original native modules and complete Windows/Linux five-stage benchmark jobs; independent source/native/final outcome ACCEPT,3 framework candidates/1 attempt per original native module.
+- [x] Complete remaining canonical-path, lifecycle/OCI and benchmark acceptance gates — Gates D/E/F independently accepted; no broad timeout or threshold inflation.
+- [x] Retain the actual A1 terminal corpus before original teardown — meaningful28/28 controls, unchanged original selected journey actualexit0, all194 files/387 references/source/snapshots/35 manifests independently verified after cleanup;4 capture candidates/1 selected attempt.
 - [ ] Pass the final integrated matrix, package/freeze review and full T8 acceptance.
 
 **Current gate:** C / fresh hosted Windows qualification of the reviewed availability and rollback repairs, now including the user-requested measured5s probe bound. Prior accepted Gate C scopes in `1e1d9f03`, `1b652a44`, `c4b3fc88` remain evidence. **T8 acceptance:** open.

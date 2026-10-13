@@ -1,3 +1,5 @@
+import { finishOwnedFixture } from "../../runner-v2/test/support/owned-fixture-teardown.js";
+import { attachPlanningHttpDiagnostic } from "../../runner-v2/test/support/planning-http-diagnostic.js";
 import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -35,6 +37,7 @@ import {
   t8SourceInput,
 } from "../../runner-v2/test/support/t8-planning-journey.js";
 import { displayedPlanStart } from "../../lib/client/native-planning-view";
+import { nativeBuildDiscussionStatus } from "../../lib/client/discussion-live-state";
 import {
   exportNativePlanning,
   getNativeContextManifests,
@@ -59,6 +62,15 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
     let runtime:
       | { step: () => Promise<{ status: string; action?: string }>; projection: () => SchedulerProjection }
       | undefined;
+    let bodyFailed = false;
+    let bodyError: unknown;
+    let browserHttp: ReturnType<typeof attachPlanningHttpDiagnostic> | undefined;
+    let atBodyFailure: ReturnType<ReturnType<typeof attachPlanningHttpDiagnostic>["snapshot"]> | undefined;
+    const emitBrowserDiagnostic = () => {
+      browserHttp?.detach();
+      console.dir({ diagnostic: "T8 planning browser HTTP", atBodyFailure, afterOriginalCloses: browserHttp?.snapshot() }, { depth: null, maxArrayLength: null, maxStringLength: null });
+      browserHttp?.assertComplete();
+    };
     const worker = new T8JourneyWorker();
     const reviewer = new T8JourneyCoverageReviewer();
     try {
@@ -116,6 +128,7 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
         prepareSpec: (spec, options) => factory!.prepareSpec(spec, options),
       });
       server = new ControlServer({
+        runnerInfo: { projectPath: project, nodeVersion: process.versions.node },
         supervisor,
         token: TOKEN,
         builds: manager,
@@ -124,6 +137,7 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
         bootstrapRun: async () => ({ baselineRevision: baseline.revision, baselineRef: baseline.ref }),
       });
       const address = await server.start(0);
+      browserHttp = attachPlanningHttpDiagnostic(page, address.url, RUN_ID);
       const connection = { url: address.url, token: TOKEN };
 
       const body = {
@@ -185,17 +199,24 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
 
       for (let step = 0; step < 200; step += 1) {
         const projection = runtime!.projection();
-        if (projection.planning?.readiness === "ready") break;
+        if (projection.planning?.readiness === "ready" && projection.status === "paused" &&
+          projection.pauseReason?.reason === "plan_start_required") break;
         if (projection.status === "paused" || projection.status === "failed") {
           throw new Error(`ready plan: run ${projection.status} unexpectedly`);
         }
         await runtime!.step();
         if (step === 199) throw new Error("ready plan: not reached within 200 steps");
       }
+      expect(runtime!.projection().status).toBe("paused");
+      expect(runtime!.projection().pauseReason?.reason).toBe("plan_start_required");
       expect(worker.requests.length).toBe(0);
       expect(runtime!.projection().specCopy).toBe(false);
       expect(runtime!.projection().handoffFiles).toBe("export_only");
 
+      // The browser observes this manually stepped Build through its real paused supervisor.
+      supervisor.start(RUN_ID, "manual-planning-observer:start");
+      supervisor.pause(RUN_ID, "manual-planning-observer:pause", "plan_start_required");
+      expect(supervisor.getRun(RUN_ID).state).toBe("paused");
       const beforePreview = manager.events(RUN_ID);
       const readyResponse = await control("planning-readiness");
       expect(readyResponse.status).toBe(200);
@@ -225,8 +246,11 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
         runId: RUN_ID,
         runnerUrl: address.url,
         runnerToken: TOKEN,
+        status: nativeBuildDiscussionStatus(runtime!.projection()),
       });
-      await page.goto(`/discussion?id=${DISCUSSION_ID}`);
+      await openPlanningAttachment(page, {
+        pageUrl: `/discussion?id=${DISCUSSION_ID}`, runnerUrl: address.url, runId: RUN_ID,
+      });
 
       const planningPanel = page.getByLabel("Evidence-gated planning");
       await expect(planningPanel).toBeVisible();
@@ -298,8 +322,10 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
       expect(authorized.status).toBe("ready_authorized");
       expect(authorized.explicitStartAuthorized).toBe(true);
       const afterStart = manager.events(RUN_ID);
-      expect(afterStart.length).toBe(beforePreview.length + 1);
-      expect(afterStart[afterStart.length - 1]!.type).toBe("planning.execution_authorized");
+      expect(afterStart.length).toBe(beforePreview.length + 2);
+      expect(afterStart.slice(beforePreview.length).map((event) => event.type)).toEqual([
+        "planning.execution_authorized", "run.resumed",
+      ]);
 
       await runtime!.step();
       const afterOneStep = manager.events(RUN_ID);
@@ -309,20 +335,47 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
       }
       expect(worker.requests.length).toBeGreaterThan(0);
       expect(manager.events(RUN_ID).length).toBeGreaterThan(afterOneStep.length);
+    } catch (error) {
+      bodyFailed = true; bodyError = error;
+      atBodyFailure = browserHttp?.snapshot();
     } finally {
-      await server?.close().catch(() => undefined);
-      supervisor?.close();
-      await manager?.close().catch(() => undefined);
-      await factory?.close().catch(() => undefined);
-      await executionHost?.close().catch(() => undefined);
-      rmSync(root, { recursive: true, force: true });
+      try { await finishOwnedFixture({
+        bodyFailed, bodyError,
+        closers: [
+          { name: "browser-page", close: async () => { await page.close(); } },
+          { name: "server", close: async () => { await server?.close(); } },
+          { name: "supervisor", close: () => supervisor?.close() },
+          { name: "manager", close: async () => { await manager?.close(); } },
+          { name: "factory", close: async () => { await factory?.close(); } },
+          { name: "execution-host", close: async () => { await executionHost?.close(); } },
+        ],
+        remove: () => rmSync(root, { recursive: true, force: true }),
+        report: (failures) => { console.error("T8 planning fixture retained failure facts", root); console.dir(failures, { depth: null }); emitBrowserDiagnostic(); },
+      });
+      emitBrowserDiagnostic();
+      } finally { browserHttp?.detach(); }
     }
   });
 });
 
+async function openPlanningAttachment(page: Page, input: { pageUrl: string; runnerUrl: string; runId: string }): Promise<void> {
+  const origin = new URL(input.runnerUrl).origin;
+  const pathname = `/v2/runs/${encodeURIComponent(input.runId)}/build/files`;
+  const [response] = await Promise.all([
+    page.waitForResponse((candidate) => {
+      const url = new URL(candidate.url());
+      return url.origin === origin && url.pathname === pathname && candidate.request().method() === "GET";
+    }),
+    page.goto(input.pageUrl),
+  ]);
+  expect(response.status()).toBe(200);
+  const transferError = await response.finished();
+  if (transferError !== null) throw transferError;
+}
+
 async function seedBuildDiscussion(
   page: Page,
-  input: { discussionId: string; runId: string; runnerUrl: string; runnerToken: string },
+  input: { discussionId: string; runId: string; runnerUrl: string; runnerToken: string; status: ReturnType<typeof nativeBuildDiscussionStatus> },
 ): Promise<void> {
   await page.evaluate(async (seed) => {
     const now = "2026-10-07T00:00:00.000Z";
@@ -333,7 +386,7 @@ async function seedBuildDiscussion(
           topic: "Supervise the T8 evidence-gated planning journey",
           mode: "build",
           effort: "medium",
-          status: "running",
+          status: seed.status,
           modelIds: "[]",
           judgeModelId: null,
           reviewerModelId: null,
@@ -348,8 +401,8 @@ async function seedBuildDiscussion(
           buildSkillMode: "balanced",
           buildBudgetUsd: 0,
           buildTimeLimitMinutes: 120,
-          buildStopReason: null,
-          buildStoppedAt: null,
+          buildStopReason: seed.status === "stopped" ? "blocked" : null,
+          buildStoppedAt: seed.status === "stopped" ? now : null,
           currentRound: 0,
           maxRounds: 0,
           convergenceScore: null,

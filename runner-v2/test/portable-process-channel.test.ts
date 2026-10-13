@@ -1327,14 +1327,14 @@ test("portable takeover reports one truthful outcome for published input and adv
       const old = await provider.acquire(binding, fence);
       fixture.deferCleanup(() => old.detach());
       const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
-      let recovered: Awaited<ReturnType<typeof provider.acquire>> | undefined;
-      fixture.deferCleanup(() => recovered?.detach());
+      const recovery: { channel?: Awaited<ReturnType<typeof provider.acquire>> } = {};
+      fixture.deferCleanup(() => recovery.channel?.detach());
       const staleBytes = Buffer.from("stale\n");
       const stale = old.write({ sequence: 1, byteLength: staleBytes.byteLength, digest: createHash("sha256").update(staleBytes).digest("hex"), timeoutMs: 5000 }, staleBytes).then(() => ({ status: "acknowledged" as const }), (error: unknown) => ({ status: "rejected" as const, error }));
       fixture.deferCleanup(async () => { await stale; });
       await waitFor(() => portableInputPublished(identity.directory));
       fixture.useCleanupFence(higher);
-      recovered = await provider.acquire(binding, higher);
+      const recovered = recovery.channel = await provider.acquire(binding, higher);
       const output: Buffer[] = [];
       const unsubscribe = recovered.subscribeBackpressuredOutput(async (metadata, bytes) => { output.push(Buffer.from(bytes)); return metadata; });
       fixture.deferCleanup(unsubscribe);

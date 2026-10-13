@@ -47,6 +47,7 @@ import type {
 } from "../src/task-scheduler.js";
 import { buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
 import { acceptFinalVerificationProfile } from "./support/final-verification-profile.js";
+import { A1_CAPTURE_ENV, captureA1Terminal, finishA1Capture } from "./support/a1-terminal-capture.js";
 
 /**
  * T8 final qualification (SRC-P T8, EP16, EP27-EP29, EP40, EP52; AR-R31).
@@ -2652,6 +2653,12 @@ test("T8-A1 synthetic complete-spec build spine with restart, correction, reuse,
     architect, worker, reviewer,
     build: {},
   });
+  const a1CaptureDestination = process.env[A1_CAPTURE_ENV];
+  let a1BodyFailed = false;
+  let a1BodyError: unknown;
+  let a1BodySucceeded = false;
+  let a1ExpectedManifestIds: string[] | undefined;
+  let a1ObservedRollup: [string, { passes: number; tokens: number }][] | undefined;
   try {
     served = await serve();
     const created = await fetch(`${served.url}/v2/runs`, {
@@ -2908,6 +2915,8 @@ test("T8-A1 synthetic complete-spec build spine with restart, correction, reuse,
       entry.tokens += manifest.estimatedTokens;
       rollup.set(manifest.purpose, entry);
     }
+    a1ExpectedManifestIds = manifests.map((manifest) => manifest.manifestId);
+    a1ObservedRollup = [...rollup.entries()].sort();
     console.info(`T8-A1 context manifest rollup: ${JSON.stringify([...rollup.entries()].sort())}`);
     // AR-R31 final tree: product files plus the kernel snapshot and entry
     // lines, no spec copy on this run, no per-turn journals anywhere.
@@ -2935,7 +2944,9 @@ test("T8-A1 synthetic complete-spec build spine with restart, correction, reuse,
     const selected = await served.manager.selectProjectHandoff(runId, "keep_integration_branch", "handoff:t8-spine");
     assert.equal(selected.status, "completed");
     assert.equal(await t8GitText(project, ["rev-parse", "HEAD^{tree}"]), projectTreeBefore);
+    a1BodySucceeded = true;
   } catch (error) {
+    a1BodyFailed = true; a1BodyError = error;
     try {
       const projection = served?.runtime().projection();
       writeFileSync(join(tmpdir(), "t8a1-debug.json"), JSON.stringify({
@@ -2959,9 +2970,22 @@ test("T8-A1 synthetic complete-spec build spine with restart, correction, reuse,
         tail: served?.manager.events(runId).slice(-8),
       }, null, 2));
     } catch { /* debug never masks the original failure */ }
-    throw error;
+    if (a1CaptureDestination === undefined) throw error;
   } finally {
-    await served?.close();
-    rmSync(root, { recursive: true, force: true });
+    if (a1CaptureDestination === undefined) {
+      await served?.close();
+      rmSync(root, { recursive: true, force: true });
+    } else {
+      await finishA1Capture({
+        bodyFailed: a1BodyFailed, bodyError: a1BodyError,
+        capture: () => captureA1Terminal({
+          destination: a1CaptureDestination, fixtureRoot: root, project, state, runRoot, runId,
+          phase: a1BodySucceeded ? "terminal-success" : "failed-body",
+          expectedManifestIds: a1ExpectedManifestIds, observedRollup: a1ObservedRollup,
+        }),
+        close: async () => { await served?.close(); },
+        remove: () => rmSync(root, { recursive: true, force: true }),
+      });
+    }
   }
 });
