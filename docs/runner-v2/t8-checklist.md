@@ -2,7 +2,9 @@
 
 Checked items have passed their scoped validation and independent review. Product integration and final acceptance are separate items.
 
-**Current checkpoint (supersedes older entries):** Gate C CLOSED on d2634212 after independent final outcome review: all13 ordinary hosted portable jobs PASS, Windows123/123/factory609595.4929ms/natural completion. Gate D OCI trusted-host-alias regression next; historical causes unclassified.42 scoped/3 broad groups, E/F/G/full stock local held.
+**Current checkpoint:**43 scoped accepted/3 broadgroups open. GateC/D independentlyCLOSED; currentEfocusedlifecycle/realDocker. Currente102Windowsfactorypendingkeepsbroadplatformitemopen; a regressionreturnsowninggate.
+
+**Previous checkpoint (supersedes older entries):** Gate C CLOSED on d2634212 after independent final outcome review: all13 ordinary hosted portable jobs PASS, Windows123/123/factory609595.4929ms/natural completion. Gate D OCI trusted-host-alias regression next; historical causes unclassified.42 scoped/3 broad groups, E/F/G/full stock local held.
 
 **Previous checkpoint:** 42 scoped items accepted; 3 broad groups open. Readonly Job status prechecks and exact current-authority classification are independently accepted: both RED findings,11 owning cases/36 combined checks and original98-case native module PASS with natural settlement/no rescue.2 validated product candidates/1 native attempt. Commit and obtain fresh owning hosted qualification before closing Gate C; earlier CI causes remain unclassified. Previous checkpoint lines below are historical.
 
@@ -48,6 +50,7 @@ Checked items have passed their scoped validation and independent review. Produc
 - [x] Remove runtime compiler dependency from bounded active Job availability probe —focused2/2, original semantic module27/27 and independent review;1 product candidate/1 alphabet-fixture candidate/2 native attempts (first failed with outer rescue). Original2s cap unchanged; fresh hosted qualification remains open.
 - [x] Preserve construction-rollback binding and shared prerequisites until dependent cleanup settles —baseline0/2 then combined6/6, full runner types and independent review;1 product candidate/0 native attempts. Fresh hosted outcome remains open.
 - [x] Preserve Job writer, ACK and release authority across an awaited status precheck — two distinct RED findings;11 owning/36 combined tests and98 native PASS; independent source/outcome review,2 product candidates/1 native attempt. Fresh hosted qualification remains required.
+- [x] Accept exact OCI Darwin host aliases while retaining canonical grants and strict user-alias refusal — actual macOS RED→9/9GREEN, Windows/Linux6/6 applicable; source/placement/outcome independently accepted;1 product candidate/1 fixture candidate/1 placement candidate.
 - [ ] Pass affected portable tests and required platform coverage.
 - [x] Retain bounded durable lifecycle evidence after a large runtime failure — exact runtime DB/WAL/SHM role gets8MiB per file; generic2MiB and growth guards retained; RED/GREEN, final7/7/types/lint and independent review PASS;2 evidence-capture candidates/0 product iterations.
 - [x] Classify the active Job probe deadline and apply the requested bounded5s limit — unchanged native command completes2368.6627ms on hosted Windows; owning4/4/types/lint and independent review PASS;1 product candidate/0 local native attempts. Fresh factory/platform outcome remains open.

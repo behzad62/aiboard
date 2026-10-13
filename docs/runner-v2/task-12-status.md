@@ -1,5 +1,33 @@
 # Runner V2 Task 12 — Durable Gate Status
 
+## 2026-10-13 — Gate E focused lifecycle PASS; real Docker selector under review
+
+Unchanged focusedcurrenttestsPASS: `D:/tmp/t8-20261013-gate-e-quiesce-kernel.tap`9/9, `...-durable-subset.tap`4/4, `...-adopted-conjunction.tap`1/1;0fail/skip/cancel. Covers workloadquiescenceversusoutput, typedpendingrelease/terminalfailure, retainedcleanup, output-beforeverifiedcleanup, corruptrecovery/exhaustivedurablestate matrix and evidence/detach/isolationrelease conjunction. Fresh137contract resourcecleanup retained onunchangedsource. HistoricalrealDocker6bodies+coremechanics linked by independentretentionreview; they arehistorical, not freshcurrentOCI.
+
+Prepared explicitfull(default)/docker-oci-only manualscope:4nonDockerdefinitionssuppressonlymanualDockerchoice, default/schedule/label/full11jobs unchanged; Dockercommand/45m/requiredflag/4scenarios/180s+240s/diagnostics unchanged. Finalcontrols5/5 include30actualguardtruth-tablecombinations;fullRunner types/targetedlint/diff0. Independentselector/lifecyclereviewpending beforecommit/push/dispatch. NoEproductchange/realDockerexecutionyet.43/3; broadWinfactorye102stillrunning;F/G/fullstocklocalheld.
+
+
+## 2026-10-13 — Gate D CLOSED; Gate E bounded work begins
+
+Independent GateDfinaloutcome740cc57b… ACCEPT and `D:/tmp/t8-20261013-gate-d-order-disposition.md` permitDclosure/orderedEwork. GateDrequires its current canonical invariant/owning3OStests, not everyunaffectedfactoryjob. PriorC123/123accepted; d263→e102hasnoWindowsruntimechange. CurrentWindowsaffected115223398300stillrunning; broadplatformgroupremainsOPEN, prescribedreaderobservationcontinues. Anynewactualregressionreturnstoitsowninggatebeforedependentacceptance.
+
+New scopeditemaccepted: exact OCI Darwin hostaliases with strictcanonicalgrant/userlinkpolicy, actualmacRED→9/9GREEN, Win/Linuxapplicable6/6, reviewedsourceandrequiredserialplacement. Checklist43scopedaccepted/3broadgroupsopen. CurrentE: reviewedreadiness+retainedhistoricalDockerbehaviorlinkage `D:/tmp/t8-20261013-gate-e-readiness-review.md` and `D:/tmp/t8-20261013-gate-e-retained-docker-scope-review.md`; run minimalfocused lifecycleconjunction subset and prepare reviewedDocker-onlymanualselector preservingfull11jobdefault. RealDocker4scenario packet stillrequired. NoEacceptanceyet; F/G/fullstocklocalheld. T8 NOT ACCEPTED; REL-1 NOT STARTED.
+
+
+## 2026-10-13 — Specific Gate D OCI invariant independently accepted; broad coverage awaits factory
+
+Current e102e95a three-host contract jobs allPASS. Mac137/137 plus new9/9/no skips, cwd/argv alias positives and strict negatives PASS. Win/Linux137/135/2genuineDarwin plus new9/6pass/3genuineDarwin; Windows cold canonical acquisition/release667.4652ms under unchanged2s birth bound. All remaining contract steps finishnormally. Fullreader `D:/tmp/t8-20261013-gate-d-green-contract-ci.json`; independent outcome `D:/tmp/t8-20261013-gate-d-final-outcome-review.md` ACCEPT SHA256740cc57b1b851190236c5900586baac0cf6b75a56569805fd31ffeb8bd9188ef. Source/fixture/workflow pins match reviewedbytes. Syntheticmerge65a819a is notfinalfreeze. Old Windows birth failure remains unexplained, no contentioncauseinferred.
+
+SpecificDOCIaliasinvariant accepted; broad affectedgroup/countupdate stillwaitsWindowsaffected115223398300 (other12ordinaryjobsPASS atlastread). Preserve42/3 untildurablechecklistreconciliation. Independent GateE readinessaudit `D:/tmp/t8-20261013-gate-e-readiness-review.md` complete; noEtests/edits/dispatchyet. E/F/G/fullstocklocalheld.
+
+
+## 2026-10-13 — Reviewed Gate D repair committed; fresh owning hosted checks running
+
+Minimum alias repair and controlled required-step isolation committed/pushed `e102e95a2de082c668cfd58bd6e26f819ee2717c`. Independent source review ACCEPT SHA256f23f33c9f7b9006a2f074e49b3abbfa73aabef7fca1b903bef6c8e9d4791afeb; separate workflowplacement `D:/tmp/t8-20261013-gate-d-workflow-isolation-review.md` ACCEPT as experiment, not proven Windows cause. Exact reviewed source/test/workflow hashes verified before commit; fulltypes/lint/diff0.
+
+Required portable38375704086 now running: maccontract115223398242, Wincontract115223398358, Linuxcontract115223398563. Read each original137-case command and new9-case step footer separately; retain same strict negatives and genuine offDarwin skips. No duplicate manual dispatch. GateD staysOPEN pending fresh actualmacGREEN/Windowscontrol/Linuxnegatives and independent outcome.42/3; E/F/G/full local held; GateC CLOSED/T8 NOT ACCEPTED/REL-1 NOT STARTED.
+
+
 ## 2026-10-13 — Gate D Windows baseline failure retained; isolated required step prepared
 
 The test-only Windows contract job115216409566 failed its new canonical positive: `Current owned fence holder birth identity is unavailable`, surfaced as `oci_recovery_blocked` on first acquisition (2085.9918ms). Other new Windows path negatives passed; whole146/140pass/1fail/5genuineDarwinskips. Full reader `D:/tmp/t8-20261013-gate-d-baseline-windows-ci.json`. The native Get-Process inspection has an unchanged2s bound; the original exec error is not retained, so host contention/deadline is a hypothesis, not established cause.

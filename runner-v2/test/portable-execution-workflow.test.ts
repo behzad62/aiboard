@@ -152,6 +152,16 @@ test("host-sensitive lifecycle and Docker coverage uses focused qualification en
   const portable = jobBlock(source, "windows-portable-channel");
   const docker = jobBlock(source, "docker-oci-integration");
 
+  assert.match(source, /qualification-scope:[\s\S]*?default: full[\s\S]*?options:\s*\n\s*- full\s*\n\s*- docker-oci-only/);
+  for (const block of [native, cli, recovery, portable]) {
+    const guard = block.split(/\r?\n/).find((line) => line.trimStart().startsWith("if:"))!;
+    assert.match(guard, /github\.event_name != 'workflow_dispatch' \|\| inputs\['qualification-scope'\] != 'docker-oci-only'/);
+    assert.doesNotMatch(guard, /matrix\./, "Job selection must use only event/input context before matrix expansion.");
+  }
+  assert.match(docker, /if: github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'runner-v2-qualification'/);
+  assert.doesNotMatch(docker.split(/\r?\n/).find((line) => line.trimStart().startsWith("if:"))!, /qualification-scope/);
+  assert.match(docker, /timeout-minutes: 45/);
+
   assert.match(native, /qualification\/native-lifecycle\.test\.ts/);
   assert.match(cli, /qualification\/cli-readiness\.test\.ts/);
   assert.match(recovery, /qualification\/recovery\.test\.ts/);
@@ -165,6 +175,31 @@ test("host-sensitive lifecycle and Docker coverage uses focused qualification en
   assert.match(source, /if:\s*always\(\)/,
     "Artifact upload must use always() so killed/hung jobs still surface pre-created evidence roots.");
   assertWorkflowTestPathsExist(source);
+});
+
+test("Docker-only manual scope preserves full, schedule and labelled qualification selection", () => {
+  const source = readFileSync(qualificationWorkflowPath, "utf8");
+  const jobs = ["native-lifecycle", "cli-readiness", "recovery", "windows-portable-channel", "docker-oci-integration"];
+  for (const scenario of [
+    { event: "workflow_dispatch", scope: "full", label: undefined, ordinary: true },
+    { event: "workflow_dispatch", scope: undefined, label: undefined, ordinary: true },
+    { event: "workflow_dispatch", scope: "docker-oci-only", label: undefined, ordinary: false },
+    { event: "schedule", scope: undefined, label: undefined, ordinary: true },
+    { event: "pull_request", scope: undefined, label: "runner-v2-qualification", ordinary: true },
+    { event: "pull_request", scope: undefined, label: "unrelated", ordinary: false },
+  ]) {
+    for (const job of jobs) {
+      const guard = jobBlock(source, job).split(/\r?\n/).find((line) => line.trimStart().startsWith("if:"))!.trim().slice(3);
+      // These owned workflow guards use only the common boolean event/input expression subset.
+      const selected = new Function("github", "inputs", `return (${guard});`)(
+        { event_name: scenario.event, event: { label: { name: scenario.label } } },
+        { "qualification-scope": scenario.scope },
+      );
+      const expected = job === "docker-oci-integration" && scenario.event === "workflow_dispatch"
+        ? true : scenario.ordinary;
+      assert.equal(selected, expected, `${job}: ${scenario.event}/${scenario.scope}/${scenario.label}`);
+    }
+  }
 });
 
 test("required native smoke is an adapter probe rather than a lifecycle timing test", () => {
