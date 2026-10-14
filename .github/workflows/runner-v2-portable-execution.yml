@@ -350,7 +350,7 @@ jobs:
             if ($actual -cne $entry.Value) { throw "Diagnostic source pin mismatch: $($entry.Key)" }
             $observed[$entry.Key] = @{ rawSha256 = $rawHash; canonicalLfSha256 = $actual }
           }
-          $node = (Get-Command node -CommandType Application).Source
+          $node = (Get-Command node -CommandType Application | Select-Object -First 1).Source
           $nodeVersion = (& $node --version).Trim()
           if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v24\.') { throw 'Maintained Node 24.x required' }
           $npmVersion = (& npm --version).Trim()
