@@ -904,6 +904,59 @@ test("portable write returns its durable acknowledged outcome when takeover wins
   }
 });
 
+for (const outcome of ["acknowledged", "takeover", "takeover-absent", "failed", "absent", "nonce", "owner", "fence", "sequence", "status", "malformed", "read-error"] as const) {
+  test(`portable command deadline reconciles durable acknowledgement ${outcome}`, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "aiboard-portable-deadline-ack-"));
+    for (const directory of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, directory), { recursive: true });
+    writeOutputCheckpoint(root);
+    let now = 100; let published = false; let reattestations = 0; let takeover = false;
+    const effects: string[] = [];
+    const ackPath = join(root, "channel/ack/input-000000000001.json");
+    t.mock.method(Date, "now", () => now);
+    const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 1, clock: () => now,
+      authority: () => ({ directory: root, nonce: "nonce", fence,
+        reattest: () => {
+          reattestations++;
+          if (takeover) throw new Error("stale writer fence");
+          if (published) {
+            now = 2101; // The original 2000ms wait crossed while re-attestation was in flight.
+            const ack = { nonce: outcome === "nonce" ? "foreign" : "nonce", ownerId: outcome === "owner" ? "foreign" : fence.ownerId, fencingToken: outcome === "fence" ? fence.fencingToken + 1 : fence.fencingToken, sequence: outcome === "sequence" ? 2 : 1, status: outcome === "failed" ? "failed" : outcome === "status" ? "unknown" : "acknowledged" };
+            if (outcome === "read-error") mkdirSync(ackPath);
+            else if (outcome !== "absent" && outcome !== "takeover-absent") writeFileSync(ackPath, outcome === "malformed" ? "{" : JSON.stringify(ack));
+            takeover = outcome === "takeover" || outcome === "takeover-absent";
+          }
+          return "live";
+        },
+        effect: async (kind, effect) => {
+          effects.push(kind);
+          if (takeover) throw new Error("stale fence at effect boundary");
+          const result = effect(); if (kind === "write") published = true; return result;
+        },
+        snapshot: immediateSnapshot,
+      }),
+    });
+    let channel: Awaited<ReturnType<typeof provider.acquire>> | undefined;
+    try {
+      channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+      const payload = Buffer.from("sent");
+      const write = channel.write({ sequence: 1, byteLength: payload.length, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 2000 }, payload);
+      if (outcome === "acknowledged" || outcome === "takeover") {
+        assert.deepEqual(await write, { acknowledged: true, sequence: 1 });
+        assert.equal(existsSync(ackPath), true, "deadline reconciliation retains durable proof without a new effect");
+      } else await assert.rejects(write, outcome === "absent" || outcome === "takeover-absent" ? /acknowledgement timed out/ : outcome === "failed" ? /command failed/ : /acknowledgement is invalid/);
+      assert.deepEqual(effects, ["attach", "write"], "no consume or reauthorization effect may run after the deadline");
+      assert.equal(reattestations, 3);
+      assert.deepEqual(JSON.parse(readFileSync(join(root, "channel/client-state.json"), "utf8")), {
+        nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken,
+        nextCommand: 2, nextWrite: 2, inputClosed: false,
+      }, "one admitted publication advances only its original command/write state");
+    } finally {
+      await channel?.detach(); t.mock.restoreAll();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("portable output polling coalesces while one backpressured delivery is in flight", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-output-coalesce-"));
   for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });

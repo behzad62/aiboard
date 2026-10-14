@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, isAbsolute } from "node:path";
+import { join, relative, isAbsolute, win32 } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
@@ -13,6 +13,36 @@ import { buildSourceManifest } from "../src/source-manifest.js";
 import { runGitBytes } from "./support/git-fixture.js";
 import { A1_DATABASES, captureA1Terminal, finishA1Capture, readA1Database, writeA1File, type A1CaptureInput } from "./support/a1-terminal-capture.js";
 import { a1NestedReferences } from "./support/a1-terminal-references.js";
+
+for (const location of ["inside", "outside", "parent", "retry"] as const) test(`A1 fixture cleanup canonical temporary alias ${location}`, () => {
+  const source = fs.readFileSync(new URL(import.meta.url), "utf8");
+  const ast = ts.createSourceFile("capture.ts", source, ts.ScriptTarget.Latest, true);
+  let cleanup: ts.ArrowFunction | undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "fixture") {
+      const find = (child: ts.Node): void => {
+        if (ts.isVariableDeclaration(child) && child.name.getText(ast) === "cleanup" && child.initializer && ts.isArrowFunction(child.initializer)) cleanup = child.initializer;
+        ts.forEachChild(child, find);
+      };
+      find(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ast); assert.ok(cleanup);
+  const shortParent = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp";
+  const canonicalParent = "C:\\Users\\runneradmin\\AppData\\Local\\Temp";
+  const root = location === "inside" || location === "retry" ? win32.join(canonicalParent, "owned-control") : location === "parent" ? canonicalParent : "C:\\unrelated\\owned-control";
+  const removed: string[] = []; let closes = 0;
+  let removeAttempts = 0; const removalFailure = new Error("first removal failed");
+  const realpath = Object.assign((value: string) => value, { native: (value: string) => value === shortParent ? canonicalParent : value });
+  const expression = ts.createPrinter().printNode(ts.EmitHint.Expression, cleanup, ast);
+  const js = ts.transpileModule(`(${expression})`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
+  const actual = runInNewContext(js, { fs: { realpathSync: realpath, rmSync: (target: string) => { removeAttempts++; if (location === "retry" && removeAttempts === 1) throw removalFailure; removed.push(target); } }, dbs: { db: { close: () => { closes++; if (closes > 1) throw new Error("database already closed"); } } }, closedDatabases: new Set(), root, tmpdir: () => shortParent, relative: win32.relative, isAbsolute: win32.isAbsolute, assert }) as () => void;
+  if (location === "inside") { actual(); assert.deepEqual(removed, [root]); }
+  else if (location === "retry") { assert.throws(actual, (error) => error === removalFailure); actual(); assert.deepEqual(removed, [root]); }
+  else { assert.throws(actual, assert.AssertionError); assert.deepEqual(removed, []); }
+  assert.equal(closes, 1);
+});
 
 async function fixture() {
   const root = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "aiboard-a1-capture-control-")));
@@ -50,9 +80,13 @@ async function fixture() {
   dbs["sessions.sqlite"]!.prepare("INSERT INTO agent_compacted_checkpoint_idempotency VALUES ('session','checkpoint',?)").run(checkpoint.hash);
   dbs["sessions.sqlite"]!.prepare("INSERT INTO agent_artifact_cleanup VALUES (?)").run("a".repeat(64));
   const input: A1CaptureInput = { destination: join(root, "external-capture"), fixtureRoot, project, state, runRoot, runId: "run_t8_spine", phase: "failed-body" };
+  const closedDatabases = new Set<DatabaseSync>();
   const cleanup = () => {
-    for (const db of Object.values(dbs)) db.close();
-    const target = fs.realpathSync(root); const rel = relative(fs.realpathSync(tmpdir()), target);
+    for (const db of Object.values(dbs)) {
+      if (closedDatabases.has(db)) continue;
+      db.close(); closedDatabases.add(db);
+    }
+    const target = fs.realpathSync.native(root); const rel = relative(fs.realpathSync.native(tmpdir()), target);
     assert.ok(rel && rel !== ".." && !rel.startsWith("..\\") && !rel.startsWith("../") && !isAbsolute(rel));
     fs.rmSync(target, { recursive: true, force: true });
   };
@@ -195,7 +229,7 @@ test("A1 retains original binary Git commit/tree/blob objects after fixture clea
     assert.ok(receipt.gitObjects.some((o) => o.type === "commit") && receipt.gitObjects.some((o) => o.type === "tree"));
   } finally {
     if (fs.existsSync(f.root)) f.cleanup();
-    const rel = relative(fs.realpathSync(tmpdir()), fs.realpathSync(destination));
+    const rel = relative(fs.realpathSync.native(tmpdir()), fs.realpathSync.native(destination));
     assert.ok(rel && rel !== ".." && !rel.startsWith("..\\") && !rel.startsWith("../") && !isAbsolute(rel));
     fs.rmSync(destination, { recursive: true, force: true });
   }

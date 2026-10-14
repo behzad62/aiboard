@@ -107,6 +107,14 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   assert.match(portable,
     /if:\s*runner\.os\s*!=\s*'Windows'[\s\S]*portable-process-protocol\.test\.ts[\s\S]*portable-process-channel\.test\.ts/,
     "Real owned-fence protocol/channel files must stay off required Windows PR CI and run there in qualification.");
+  const acknowledgementStep = portable.indexOf("      - name: Run portable input acknowledgement deadline contracts on Windows");
+  assert.ok(acknowledgementStep > 0, "Required Windows PR CI must prove durable input acknowledgement deadline outcomes.");
+  const acknowledgementBlock = portable.slice(acknowledgementStep, portable.indexOf("\n      - name:", acknowledgementStep + 1));
+  assert.match(acknowledgementBlock, /if:\s*runner\.os\s*==\s*'Windows'/);
+  assert.match(acknowledgementBlock, /--test --test-concurrency=1\s+--test-name-pattern="\^portable command deadline reconciles durable acknowledgement "\s+runner-v2\/test\/portable-process-channel\.test\.ts/);
+  const acknowledgementPattern = new RegExp(acknowledgementBlock.match(/--test-name-pattern="([^"]+)"/)![1]!);
+  assert.equal(acknowledgementPattern.test("portable command deadline reconciles durable acknowledgement takeover"), true);
+  assert.equal(acknowledgementPattern.test("portable reconcile and release reject corrupt acknowledgement evidence"), false);
   assert.match(portable,
     /--test-name-pattern=[^\n]*active legacy Build[^\n]*unsupported persisted execution-safety[\s\S]*?cli-capabilities-config\.test\.ts/,
     "Legacy CLI repairs must stay targeted instead of restoring the giant file as a full gate.");

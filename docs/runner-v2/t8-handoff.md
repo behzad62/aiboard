@@ -1,5 +1,17 @@
 # T8 continuation — 2026-10-12
 
+## 2026-10-14 — Latest UI/shipping accepted; resume clean repair commit/final matrix
+
+Read latest task-12-status section "Four UI/current shipping ACCEPT; clean repair commit and fresh final matrix next". Complete independentreport41acf80e353db5b5fd932be296ecea9e93b07da79e9a8dee378fd3f9e11dc9d6 savedbeforeusageerror accepts UI4PASS/currentarchiveparity/package13/lint0/types0/build0. Currentnative5dedb4ad…/WorkBench982f5a24…/RJSaccountunchanged. Next11-pathreviewedcleancommit/newcompletefreeze/currentrequired13+benchmark2+full11/CONFIG/fullLOCAL/finalreview. A–Fclosed/Gheld46/1. FullLOCALNOTSTARTED; usermustbenotifiedBEFORElaunch. Preserveoldfailedmatrix/all16ZIPs. No selectedA1/UI/native replay needed. T8 NOT ACCEPTED/REL-1 NOT STARTED.
+
+## 2026-10-14 — Latest: original duplex accepted; four affected UI next
+
+Latest authoritative task-12-status: originalduplex ACCEPTf58c6febe32b8b5191594514af529f70d487ecdc75e27e0e09d0471fcf5d85ff closes newC/EACKscope. One1PASS/exit0close0/strictcleanup/HO3Ynmabsent; no actualfinalACKbranch/timingclaim. All a82CI terminal24success2fail2manualskips/all16artifacts preserved. Current4UI originalplanning+finalverifycases1/3/5 pendingexactinstance at `D:/tmp/t8-20261014-ack-ui4-instance-review.md`; manifest57af6cb6…/driver2e9be109… UNEXECUTED. PreserveotherfiveUI scopes viaupdatedcallertrace. A–Fclosed/Gheld46/1; currentshipping/newcleanfreeze/currentmatrices/full11/CONFIG/fullLOCAL/finalreview remain. FullLOCALNOTSTARTED; notifyuserBEFORElaunch. T8 NOT ACCEPTED/REL-1 NOT STARTED.
+
+## 2026-10-14 — Latest final-CI owning repair checkpoint
+
+Read latest task-12-status section "Final a82 CI exposes two Windows boundaries; C/E reopened, repair review pending" and external `D:/tmp/t8-20261013-final-validation-checkpoint.md`. a82 cleancommit/push/full11 run38458264235 and requiredportable/benchmark preserved; twoWindowsfailures require owningrepair. Current channel5line finalstrictread-onlyACK, A1test canonicalcleanup/successclosedSet and requiredWindows12purecoverage all have causalRED/32+15+5GREEN/typeslint0; exact21source/30evidence r3 manifest5d9d43c3… source/instance review pending. Original-only duplexr2 drivere11b1c2f… UNEXECUTED until accepted; originalA1native remainsaccepted/replayunnecessary. Preserve a82freeze as historical; no finalCONFIG/fullLOCAL. A/B/D/Fclosed,C/Eaffectedreopened,Gheld46/1; notifyuserbeforefull; T8 NOT ACCEPTED/REL-1 NOT STARTED. Native corruption case accidentally included firstgreen is supplemental only, not qualification.
+
 ## 2026-10-13 — Latest shipping/current checks independently ACCEPT
 
 Shipping review `D:/tmp/t8-20261013-post-reader-shipping-source-review.md` SHA3a92b7aeb2eae5ab56d99ff2baa2c0bdb5dd21fff9adf143811465f1d04006ca accepts current nativeead4fcc6…/WorkBenchf60e7b1c… plus unchangedRJS/account, full source parity and package13/13/lint0/build0. Gates A–Fclosed, Gheld46/1. Proceed intended reviewed cleancommit/alltracked+4archives+actualinstalled/externalfreeze; onepush and current final matrices/full11; independent R5CONFIG/readiness; notify user BEFORE unchanged full LOCAL stock; actualoutcome/finalmapping. No fullstock yet. Current consumer inventory1873/95/103/93; JSON489da15b…; oldcounts historical. Main untouched. No merge/deploy. T8 NOT ACCEPTED/REL-1 NOT STARTED.

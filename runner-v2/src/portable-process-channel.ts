@@ -488,6 +488,11 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       }
       await delay(this.pollIntervalMs);
     }
+    // Re-attestation or scheduling may cross the polling deadline after delivery
+    // committed. Reconcile its exact durable proof once without another effect.
+    const finalAcknowledgement = readAcknowledgement();
+    if (finalAcknowledgement === "acknowledged") return;
+    if (finalAcknowledgement === "failed") throw new Error("Portable channel command failed.");
     let detail = "state unavailable";
     try { detail = JSON.stringify({ state: JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8")), input: readdirSync(this.inputDirectory), ack: readdirSync(this.ackDirectory).map((name) => [name, readFileSync(join(this.ackDirectory, name), "utf8")]) }); } catch {}
     throw new Error(`Portable channel command acknowledgement timed out. ${detail}`);

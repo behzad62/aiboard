@@ -75,6 +75,12 @@ jobs:
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           --test-name-pattern="CLI rejects an active legacy Build without a capability contract before listening|CLI records an unsupported persisted execution-safety version as a per-run capability refusal"
           runner-v2/test/cli-capabilities-config.test.ts
+      - name: Run portable input acknowledgement deadline contracts on Windows
+        if: runner.os == 'Windows'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          --test-name-pattern="^portable command deadline reconciles durable acknowledgement "
+          runner-v2/test/portable-process-channel.test.ts
       - name: Run owned-fence protocol and channel contracts on POSIX hosts
         if: runner.os != 'Windows'
         run: >-
