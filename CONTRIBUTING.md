@@ -1,6 +1,16 @@
 # Contributing
 
-Issues and focused pull requests are welcome.
+Issues and focused pull requests are welcome. The official project is
+https://github.com/behzad62/aiboard. A GitHub fork used to develop a
+pull request is permitted; publishing a separate AIBoard product, build,
+or hosted service requires written permission under [LICENSE](LICENSE).
+
+By submitting a code or documentation contribution, and checking the
+agreement box in your pull request, you accept the
+[Contributor License Agreement](CONTRIBUTOR_LICENSE_AGREEMENT.md).
+You keep ownership of your contribution while granting the project owner
+broad rights to maintain, distribute, and license it. Do not submit
+third-party code or assets without describing their provenance and license.
 
 ## Before opening an issue
 

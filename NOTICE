@@ -1,6 +1,15 @@
-AI Board
+AI Board (AIBoard)
 
-Copyright (C) 2026 Behzad Shams
+Copyright (C) 2026 Behzad Shams. All rights reserved except as licensed.
 
-AI Board is licensed under the GNU Affero General Public License v3.0 only
-(AGPL-3.0-only). See LICENSE for the full license text.
+Current source releases are made available under the AIBoard Community
+Source License v1.0. See LICENSE for the complete terms.
+
+Original project: https://github.com/behzad62/aiboard
+Official website: https://aiboard.me
+Licensing inquiries: mail@aiboard.me
+
+This is source-available software, not OSI-approved open-source software.
+Earlier releases offered under GNU AGPL-3.0-only retain that license for
+copies validly received under it; this notice does not revoke those rights.
+Third-party components are subject to their own notices and licenses.

@@ -12,6 +12,22 @@
 - Guarded and Full access profiles.
 - Explicit user-controlled final project handoff.
 
+## License and contributions
+
+AI Board is **source-available** under the [AIBoard Community Source License v1.0](LICENSE).
+Copyright (C) 2026 Behzad Shams. You may study the code, run it locally,
+and fork it on GitHub to propose changes to the official project.
+**Independent releases, redistribution, and public hosting of modified copies
+require written permission** from the author. This is not an OSI-approved
+open-source license.
+
+Contributions to the official repository are welcome; read
+[CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Contributor License Agreement](CONTRIBUTOR_LICENSE_AGREEMENT.md).
+The name and logo are subject to the [trademark policy](TRADEMARKS.md).
+Earlier copies obtained under AGPL-3.0-only retain those earlier license
+rights; this license change does not revoke them.
+
 ## Privacy model
 
 The static web app has no backend or account system. Discussion data and provider settings stay in browser storage or the local storage folder you choose. Provider requests go directly to the configured provider.

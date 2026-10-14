@@ -150,6 +150,17 @@ export default function RootLayout({
             </div>
           </header>
           <main className="mx-auto w-full px-4 py-8">{children}</main>
+          <footer className="border-t px-4 py-4 text-center text-xs text-muted-foreground">
+            © 2026 Behzad Shams · AI Board ·{" "}
+            <a
+              href={`${SITE_GITHUB_URL}/blob/main/LICENSE`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground"
+            >
+              Community Source License
+            </a>
+          </footer>
         </div>
       </body>
     </html>

@@ -151,6 +151,8 @@ Default behavior already allows \`https://aiboard.me\` and \`https://www.aiboard
 Run \`npm start -- --help\` to list all options.
 
 Runner V2 prints its localhost URL and control token. Paste both into AI Board Build setup, then test the connection.
+
+Copyright (C) 2026 Behzad Shams. This distribution is source-available under the AIBoard Community Source License. See LICENSE and NOTICE. Redistribution and independent hosting require permission.
 `;
 
 function addNativeRunnerFiles(zip, archiveRoot = "") {
@@ -168,10 +170,12 @@ function addNativeRunnerFiles(zip, archiveRoot = "") {
     date: new Date(0),
     createFolders: false,
   });
-  zip.file(archivePath("LICENSE"), normalizedTextFile(path.join(root, "LICENSE")), {
-    date: new Date(0),
-    createFolders: false,
-  });
+  for (const legalFile of ["LICENSE", "NOTICE", "TRADEMARKS.md"]) {
+    zip.file(archivePath(legalFile), normalizedTextFile(path.join(root, legalFile)), {
+      date: new Date(0),
+      createFolders: false,
+    });
+  }
   zip.file(archivePath("README.md"), nativeRunnerReadme, {
     date: new Date(0),
     createFolders: false,
@@ -281,7 +285,9 @@ async function publishRjsWorkBenchRunner() {
   const lockBytes = Buffer.from(normalizedTextFile(path.join(bundleRoot, "package-lock.json")));
   entries.set("package.json", packageBytes);
   entries.set("package-lock.json", lockBytes);
-  entries.set("LICENSE", Buffer.from(normalizedTextFile(path.join(root, "LICENSE"))));
+  for (const legalFile of ["LICENSE", "NOTICE", "TRADEMARKS.md"]) {
+    entries.set(legalFile, Buffer.from(normalizedTextFile(path.join(root, legalFile))));
+  }
   entries.set("README.md", Buffer.from(`# AI Board Recoverable Job Service WorkBench runner\n\nThis self-contained local package runs the Recoverable Job Service benchmark with its exact trusted runtime and accepted Runner V2 source. Use Node.js 24.18.0.\n\n1. Run \`npm ci\`.\n2. Run \`npm run setup:browser\`.\n3. Run \`npm start\`.\n4. Paste the printed local URL and token into AI Board.\n\nThe private evaluator is trusted against benchmark agents, but it is present on and inspectable by the machine owner. Give models only the candidate-visible files shown in AI Board; do not provide the private evaluator or controls as solution material.\n`));
   const archiveAllowlist = [...entries.keys()].sort();
   const manifest = {
@@ -385,7 +391,9 @@ Copilot SDK and its built-in web_search/web_fetch tools.
 
 The runner prints the local URL and token to paste into AI Board Settings.
 `, { date: new Date(0), createFolders: false });
-  zip.file("LICENSE", normalizedTextFile(path.join(root, "LICENSE")), { date: new Date(0), createFolders: false });
+  for (const legalFile of ["LICENSE", "NOTICE", "TRADEMARKS.md"]) {
+    zip.file(legalFile, normalizedTextFile(path.join(root, legalFile)), { date: new Date(0), createFolders: false });
+  }
   const destination = path.join(publicDirectory, "aiboard-account-provider-runner.zip");
   fs.writeFileSync(destination, await zip.generateAsync({
     type: "nodebuffer",

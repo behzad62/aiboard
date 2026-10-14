@@ -21,7 +21,7 @@ const FAQ = [
   {
     question: "Is it free?",
     answer:
-      "The app itself is free and open source. You pay your AI providers directly for the tokens the discussion uses; the app shows a cost estimate before you start.",
+      "The official app is free to use, and its source is available for study and upstream contributions under the AIBoard Community Source License. Independent redistribution or hosting requires permission. You pay your AI providers directly for the tokens used.",
   },
   {
     question: "Which API keys do I need?",
@@ -141,6 +141,49 @@ export default function AboutPage() {
           This draws on your account&apos;s own entitlement, so rate limits,
           model availability, and behavior are set by OpenAI or GitHub rather
           than by {SITE_NAME}.
+        </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Author and license</h2>
+        <p>
+          AI Board was created by <strong>Behzad Shams</strong>.
+          Copyright © 2026 Behzad Shams.
+        </p>
+        <p>
+          The current project is source-available under the{" "}
+          <a
+            href={`${SITE_GITHUB_URL}/blob/main/LICENSE`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            AIBoard Community Source License
+          </a>
+          . You can inspect the code and submit improvements upstream, but
+          independent distribution and hosted forks need written permission.
+          Earlier AGPL-licensed copies retain their original rights.
+        </p>
+        <p>
+          Contributions follow the{" "}
+          <a
+            href={`${SITE_GITHUB_URL}/blob/main/CONTRIBUTOR_LICENSE_AGREEMENT.md`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            contributor agreement
+          </a>
+          . AIBoard branding is governed by the{" "}
+          <a
+            href={`${SITE_GITHUB_URL}/blob/main/TRADEMARKS.md`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            trademark policy
+          </a>
+          .
         </p>
       </section>
 
