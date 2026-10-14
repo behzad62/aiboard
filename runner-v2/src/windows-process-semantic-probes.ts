@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { types as nodeTypes } from "node:util";
 
 import type { InteractiveProcessChannel } from "./interactive-process-channel.js";
 import {
@@ -18,6 +19,7 @@ import type { ProcessHostSemanticProbeSource } from "./process-host-semantic-pro
 import { recordTempCreation } from "./cleanup-ownership.js";
 import { WindowsProcessBackend } from "./windows-process-backend.js";
 import { InspectionConstructionOwner, awaitInspectionConstruction } from "./inspection-cleanup.js";
+import { NativeProcessLaunchBlockedError } from "./native-process-backend.js";
 
 const PROBE_DEADLINE_MS = 15_000;
 interface PortableProbeCreator {
@@ -113,7 +115,7 @@ async function probePortableDuplex(deadlineMs: number, cleanupDeadlineMs: number
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
   return await withPortableProbe("duplex", deadline, cleanupDeadlineMs, creator, async ({ backend, workspace, own, release }) => {
-    const launch = parseProcessLaunchResult(await backend.launch(request(
+    const launch = parseProcessLaunchResult(await launchProbeWithCustody(backend, workspace, own, request(
       workspace,
       process.execPath,
       ["-e", "process.stdin.on('data',b=>process.stdout.write(Buffer.concat([Buffer.from('probe:'),b])));process.stdin.on('end',()=>process.exit(0))"],
@@ -158,7 +160,7 @@ async function probeWindowsBatchArgv(deadlineMs: number, cleanupDeadlineMs: numb
     writeFileSync(script, "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n", { mode: 0o600 });
     writeFileSync(shim, "@echo off\r\n\"%NODE_EXE%\" \"%PROBE_SCRIPT%\" %*\r\n", { mode: 0o600 });
     const expected = ["space value", "literal-value"];
-    const launch = parseProcessLaunchResult(await backend.launch(request(workspace, shim, expected, ambientEnvironment, {
+    const launch = parseProcessLaunchResult(await launchProbeWithCustody(backend, workspace, own, request(workspace, shim, expected, ambientEnvironment, {
       NODE_EXE: process.execPath,
       PROBE_SCRIPT: script,
     })));
@@ -188,7 +190,7 @@ async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number
   return await withPortableProbe<"partial" | false>("tree", deadline, cleanupDeadlineMs, creator, async ({ backend, workspace, own, release }) => {
     const child = "setTimeout(()=>process.exit(0),4000)";
     const parent = `const{spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'});setTimeout(()=>process.exit(0),4000)`;
-    const launch = parseProcessLaunchResult(await backend.launch(request(workspace, process.execPath, ["-e", parent], ambientEnvironment)));
+    const launch = parseProcessLaunchResult(await launchProbeWithCustody(backend, workspace, own, request(workspace, process.execPath, ["-e", parent], ambientEnvironment)));
     const binding = own(bindingFor(launch));
     remainingProbeDeadlineMs(deadline);
     const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
@@ -211,6 +213,50 @@ async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number
     // OS containment, so the honest semantic level remains partial.
     return "partial";
   });
+}
+
+/** A failed launch can still own an authenticated supervisor; it never certifies the probe. */
+async function launchProbeWithCustody(
+  backend: WindowsProcessBackend,
+  workspace: string,
+  own: (binding: ProcessBackendBinding) => ProcessBackendBinding,
+  launchRequest: ProcessLaunchRequest,
+): Promise<unknown> {
+  try { return await backend.launch(launchRequest); }
+  catch (error) {
+    const failed = failedProbeLaunch(error, workspace, launchRequest);
+    if (failed) {
+      try { own(bindingFor(failed)); }
+      catch (custodyError) { throw new AggregateError([error, custodyError], "Failed semantic launch custody could not be retained.", { cause: error }); }
+    }
+    throw error;
+  }
+}
+
+function failedProbeLaunch(error: unknown, workspace: string, launchRequest: ProcessLaunchRequest): ReturnType<typeof parseProcessLaunchResult> | undefined {
+  if (nodeTypes.isProxy(error) || !(error instanceof NativeProcessLaunchBlockedError)) return undefined;
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(error);
+    const code = descriptors.code, launch = descriptors.launchResult, evidence = descriptors.evidenceDirectory;
+    if (!code || !("value" in code) || code.value !== "native_process_launch_cleanup_blocked" ||
+        !launch || !("value" in launch) || !evidence || !("value" in evidence) || typeof evidence.value !== "string") return undefined;
+    const parsed = parseProcessLaunchResult(launch.value);
+    const identity = JSON.parse(Buffer.from(parsed.opaqueIdentity, "base64url").toString("utf8")) as {
+      version?: number; backendId?: string; directory?: string; nonce?: string;
+      supervisorPid?: number; supervisorBirth?: string; fence?: ProcessEffectFence;
+    };
+    if (launchRequest.intent.runId !== "windows-semantic-probe" || launchRequest.grant.runId !== "windows-semantic-probe" ||
+        launchRequest.intent.invocationId !== launchRequest.grant.invocationId || launchRequest.outputOwnerId !== "windows-semantic-probe" || launchRequest.fence.ownerId !== FENCE.ownerId ||
+        launchRequest.fence.fencingToken !== FENCE.fencingToken || launchRequest.intent.workingDirectory !== workspace ||
+        launchRequest.intent.requiredLifecycleScope !== "process_group" || identity.version !== 1 ||
+        identity.backendId !== "runner-windows-supervisor-v1" || typeof identity.directory !== "string" ||
+        resolve(identity.directory) !== resolve(evidence.value) || dirname(resolve(identity.directory)) !== resolve(dirname(workspace), "state") ||
+        !basename(identity.directory).startsWith("owned-") || typeof identity.nonce !== "string" || !identity.nonce ||
+        !validProbeOwner(identity.supervisorPid, identity.supervisorBirth) || identity.supervisorPid !== parsed.rootPid ||
+        identity.fence?.ownerId !== FENCE.ownerId || identity.fence.fencingToken !== FENCE.fencingToken ||
+        parsed.birthFingerprint.discriminator !== createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}`).digest("hex")) return undefined;
+    return parsed;
+  } catch { return undefined; }
 }
 
 async function withPortableProbe<T>(name: string, operationDeadline: number, cleanupDeadlineMs: number, creator: PortableProbeCreator, action: (context: {

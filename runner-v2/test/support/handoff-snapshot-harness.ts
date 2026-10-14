@@ -45,6 +45,7 @@ import {
 import type { EvidenceStore } from "../../src/evidence-store.js";
 import type { ValidationScope } from "../../src/validation-scope.js";
 import type { IndependentVerifierDriver } from "../../src/build-runtime.js";
+import { finishOwnedFixture } from "./owned-fixture-teardown.js";
 
 /**
  * TX-2 fast handoff harness. A test reaches the kernel handoff snapshot
@@ -920,6 +921,9 @@ export async function openFactoryPort(
   hooks: FactoryPortHooks = {},
 ): Promise<FactoryPortFixture> {
   const root = mkdtempSync(join(tmpdir(), `aiboard-c2b-factory-${label}-`));
+  const closers: { name: string; close: () => void | Promise<void> }[] = [];
+  let restoreInitialize: (() => void) | undefined;
+  try {
   const project = join(root, "project");
   const state = join(root, "state");
   mkdirSync(project, { recursive: true });
@@ -931,6 +935,7 @@ export async function openFactoryPort(
   const runRoot = join(state, "builds", safeSegment(runId));
   mkdirSync(runRoot, { recursive: true });
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  closers.push({ name: "evidence", close: () => evidence.close() });
   const schedulerDbOptions = {
     evidenceStore: evidence,
     validateExecutionProfile: acceptFinalVerificationProfile,
@@ -980,10 +985,14 @@ export async function openFactoryPort(
     assert.deepEqual(planning?.payload, { version: 1 }, "planning v1 carries exactly version 1");
   }
   const seeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), schedulerDbOptions);
-  for (const input of planned) seeder.append(input);
-  seeder.close();
+  let seedFailed = false;
+  let seedError: unknown;
+  try { for (const input of planned) seeder.append(input); }
+  catch (error) { seedFailed = true; seedError = error; }
+  await finishOwnedFixture({ bodyFailed: seedFailed, bodyError: seedError, closers: [{ name: "seeder", close: () => seeder.close() }], remove: () => undefined });
   const seen: ProductionIntegrationManager[] = [];
   const origInitialize = ProductionIntegrationManager.prototype.initialize;
+  restoreInitialize = () => { ProductionIntegrationManager.prototype.initialize = origInitialize; };
   ProductionIntegrationManager.prototype.initialize = async function (this: ProductionIntegrationManager): Promise<void> {
     seen.push(this);
     return origInitialize.call(this);
@@ -994,6 +1003,7 @@ export async function openFactoryPort(
     artifacts: new ArtifactStore(join(state, "artifacts")),
     ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
   });
+  closers.unshift({ name: "executionHost", close: () => executionHost.close() });
   const factory = new NativeBuildFactory({
     projectRoot: project,
     stateDirectory: state,
@@ -1006,6 +1016,7 @@ export async function openFactoryPort(
     baselineFor: () => baseline.revision,
     providerModelFactory: (config) => specOptions.modelsFor?.(config) ?? new UnusedModel(),
   });
+  closers.unshift({ name: "factory", close: () => factory.close() });
   if (newPolicySeed) {
     // Truthful registered-source bytes for creation-time verification: the
     // shared scenario manifest's exact bytes, in the store the factory reads.
@@ -1032,8 +1043,10 @@ export async function openFactoryPort(
       idempotencyKey: `c2b-factory-${label}`,
       ...specOptions,
     })) as unknown as { runtime: BuildRuntime; cleanup: () => Promise<void>; close: () => Promise<void> };
+    closers.unshift({ name: "built.cleanup", close: () => built.cleanup() }, { name: "built.close", close: () => built.close() });
   } finally {
-    ProductionIntegrationManager.prototype.initialize = origInitialize;
+    restoreInitialize?.();
+    restoreInitialize = undefined;
   }
   assert.equal(seen.length, 1, "the factory builds exactly one integration manager");
   if (hooks.onBuilt) await hooks.onBuilt(built);
@@ -1052,15 +1065,14 @@ export async function openFactoryPort(
     stopNotes,
     factory,
     evidence,
-    close: async () => {
-      await built.cleanup();
-      await built.close();
-      await factory.close();
-      await executionHost.close();
-      evidence.close();
-      rmSync(root, { recursive: true, force: true });
-    },
+    close: async () => await finishOwnedFixture({ bodyFailed: false, closers, remove: () => rmSync(root, { recursive: true, force: true }) }),
   };
+  } catch (error) {
+    restoreInitialize?.();
+    // Preserve failed-construction evidence, while every registered owner gets a close attempt.
+    await finishOwnedFixture({ bodyFailed: true, bodyError: error, closers, remove: () => undefined });
+    throw error;
+  }
 }
 
 /**
