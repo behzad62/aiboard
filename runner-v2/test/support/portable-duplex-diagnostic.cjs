@@ -1,6 +1,8 @@
 'use strict';
 // Test-only, supplemental, UNQUALIFIED. No product authority or recovery effect.
 const path = require('node:path');
+const { errorMonitor } = require('node:events');
+const WINDOWS_TREE_SCRIPT = "$ErrorActionPreference='Stop';Get-CimInstance Win32_Process|ForEach-Object{\"$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.ToUniversalTime().ToString('o'))\"}";
 
 function createObserver(deps) {
   const { cp, fs, proc, timers, syncBuiltinESMExports, root, preload, tmpdir } = deps;
@@ -21,6 +23,10 @@ function createObserver(deps) {
   const loader = require('node:url').pathToFileURL(path.join(root, 'node_modules/tsx/dist/loader.mjs')).href;
   const supervisor = path.join(root, 'runner-v2/src/portable-process-supervisor.mjs');
   const bootstrap = path.join(root, 'runner-v2/src/portable-process-child.mjs');
+  const systemRoot = typeof deps.systemRoot === 'string' ? deps.systemRoot : proc.env?.SystemRoot;
+  const treeInspector = typeof systemRoot === 'string' && absolute(systemRoot)
+    ? path.join(systemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe') : undefined;
+  const treeArgs = ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', WINDOWS_TREE_SCRIPT];
   const argv = proc.argv;
   const entry = Array.isArray(argv) ? argv[1] : undefined;
   const target = Array.isArray(argv) ? argv.at(-1) : undefined;
@@ -59,7 +65,7 @@ function createObserver(deps) {
       beforeBodyError: 'UNOBSERVED: no hook before original fixture cleanup',
       unobserved: Object.freeze(['command deadline start/final-read identity', 'ACK semantic validation/status',
         'fence acquisition/validation disposition and SQLite spans', 'client reattestation',
-        'inspection request/completion and synchronous native waits', 'pending input admission/state',
+        'inspection semantic results/native work and synchronous waits', 'pending input admission/state',
         'stdin destroyed flag', 'exact original cleanup completion']),
       facts: Object.freeze(facts.slice()) });
   }
@@ -147,14 +153,47 @@ function createObserver(deps) {
       };
     } catch { captureFailure(); }
   }
+  function watchTreeInspector(child, id) {
+    function result(codeValue, signalValue) {
+      let exitCode = null;
+      if (codeValue !== null && codeValue !== undefined) {
+        if (Number.isSafeInteger(codeValue) && codeValue >= -2147483648 && codeValue <= 4294967295) exitCode = codeValue;
+        else captureFailure();
+      }
+      const signal = signalValue == null ? null : signalValue === 'SIGKILL' || signalValue === 'SIGTERM' ? signalValue : 'other';
+      return { span: id, exitCode, signal };
+    }
+    // errorMonitor observes without installing an 'error' handler or suppressing throw.
+    try { child.on(errorMonitor, error => fact('tree-inspector.errorMonitor', { span: id, code: code(error) })); } catch { captureFailure(); }
+    try { child.on('exit', (exitCode, signal) => fact('tree-inspector.exit', result(exitCode, signal))); } catch { captureFailure(); }
+    try { child.on('close', (exitCode, signal) => fact('tree-inspector.close', result(exitCode, signal))); } catch { captureFailure(); }
+    try {
+      const original = child.kill;
+      if (typeof original !== 'function') { captureFailure(); return; }
+      child.kill = function (...args) {
+        if (args.length !== 1 || args[0] !== 'SIGKILL') return Reflect.apply(original, this, args);
+        fact('tree-inspector.kill.enter', { span: id, signal: 'SIGKILL' });
+        try {
+          const result = Reflect.apply(original, this, args);
+          fact('tree-inspector.kill.return', { span: id, ...(typeof result === 'boolean' ? { delivered: result } : {}) });
+          return result;
+        } catch (error) { fact('tree-inspector.kill.throw', { span: id, code: code(error) }); throw error; }
+      };
+    } catch { captureFailure(); }
+  }
   function install() {
     if (!enabled) return;
     fact('observer.installed');
     const originalSpawn = cp.spawn;
     try { cp.spawn = function (...args) {
-      let passed = args, selected = 'none', watch = false;
+      let passed = args, selected = 'none', watch = false, inspectorSpan;
       try {
         const [executable, childArgs] = args;
+        if (role === 'supervisor' && treeInspector && same(executable, treeInspector)
+          && Array.isArray(childArgs) && childArgs.length === treeArgs.length && childArgs.every((arg, index) => arg === treeArgs[index])) {
+          inspectorSpan = ++span;
+          fact('tree-inspector.spawn.enter', { span: inspectorSpan });
+        }
         if (same(executable, proc.execPath) && Array.isArray(childArgs)) {
           if (role === 'test' && childArgs.length === 2 && same(childArgs[0], tsx) && same(childArgs[1], scenario)) selected = 'scenario-launcher';
           else if (role === 'tsx-launcher' && nodeArgs(childArgs)) selected = 'tsx-descendant';
@@ -164,7 +203,10 @@ function createObserver(deps) {
         }
       } catch { captureFailure(); }
       // Original called once, same options, same receiver, same result/error.
-      const child = Reflect.apply(originalSpawn, this, passed);
+      let child;
+      try { child = Reflect.apply(originalSpawn, this, passed); }
+      catch (error) { if (inspectorSpan !== undefined) fact('tree-inspector.spawn.throw', { span: inspectorSpan, code: code(error) }); throw error; }
+      if (inspectorSpan !== undefined) { fact('tree-inspector.spawn.return', { span: inspectorSpan }); watchTreeInspector(child, inspectorSpan); }
       if (watch) { fact('bootstrap.spawn.return'); watchStdin(child); }
       return child;
     }; } catch { captureFailure(); }

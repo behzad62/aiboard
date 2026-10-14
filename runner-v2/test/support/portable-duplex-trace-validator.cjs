@@ -10,6 +10,9 @@ const FIELDS = {
   'stdin.write.throw': ['span', 'code'], 'stdin.callback.enter': ['span', 'outcome', 'code'],
   'stdin.callback.return': ['span'], 'stdin.callback.throw': ['span', 'code'],
   'tick.register': ['intervalMs'], 'tick.enter': [], 'tick.return': [], 'tick.throw': ['code'],
+  'tree-inspector.spawn.enter': ['span'], 'tree-inspector.spawn.return': ['span'], 'tree-inspector.spawn.throw': ['span', 'code'],
+  'tree-inspector.errorMonitor': ['span', 'code'], 'tree-inspector.exit': ['span', 'exitCode', 'signal'], 'tree-inspector.close': ['span', 'exitCode', 'signal'],
+  'tree-inspector.kill.enter': ['span', 'signal'], 'tree-inspector.kill.return': ['span', 'delivered'], 'tree-inspector.kill.throw': ['span', 'code'],
 };
 const OPERATIONS = ['readFileSync', 'writeFileSync', 'renameSync', 'unlinkSync', 'readdirSync', 'existsSync', 'openSync', 'closeSync', 'lstatSync', 'appendFileSync'];
 const CODES = ['ENOENT', 'EACCES', 'EPERM', 'EBUSY', 'EPIPE', 'ERR_STREAM_DESTROYED', 'other'];
@@ -54,6 +57,14 @@ function validateTraces(traces) {
       if (fact.event === 'tick.register') need(trace.role === 'supervisor' && fact.intervalMs === 10);
       if (['tick.enter', 'tick.return', 'tick.throw'].includes(fact.event)) need(fact.tick > 0);
       if (fact.event.startsWith('tick.') || fact.event.startsWith('stdin.') || fact.event === 'bootstrap.spawn.return') need(trace.role === 'supervisor');
+      if (fact.event.startsWith('tree-inspector.')) need(trace.role === 'supervisor');
+      if (fact.event === 'tree-inspector.errorMonitor') need(CODES.includes(fact.code));
+      if (fact.event === 'tree-inspector.exit' || fact.event === 'tree-inspector.close') {
+        need(fact.exitCode === null || Number.isSafeInteger(fact.exitCode) && fact.exitCode >= -2147483648 && fact.exitCode <= 4294967295);
+        need([null, 'SIGKILL', 'SIGTERM', 'other'].includes(fact.signal));
+      }
+      if (fact.event === 'tree-inspector.kill.enter') need(fact.signal === 'SIGKILL');
+      if (Object.hasOwn(fact, 'delivered')) need(typeof fact.delivered === 'boolean');
       if (fact.event === 'spawn.inject') injections.push(fact.childRole);
     }
     const expected = { 'tsx-launcher': 'tsx-descendant', test: 'scenario-launcher', scenario: 'supervisor' }[trace.role];

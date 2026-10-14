@@ -337,8 +337,8 @@ jobs:
             'runner-v2/test/support/qualification-process-fixture.ts' = '327f6e54fd22ed5948a65a7557940e1bbcc86e9b963a98e3dee7d6e7b19d84ff'
             'runner-v2/test/support/inspection-fixture.ts' = 'b2e97e838b2cb54b89e62b057654ad7c8aeb0cd9a8de87c44c23677a3d1ea6c3'
             'node_modules/tsx/dist/cli.mjs' = '8420e19483e82bf21d984fbb9aad752df9e83dfeec3237fef5e62f5546d45ec9'
-            'runner-v2/test/support/portable-duplex-diagnostic.cjs' = 'eb1483caac3f616d5a490955a1e4e332b8c33c52a8e65c751bd3a98bbe32c7bd'
-            'runner-v2/test/support/portable-duplex-trace-validator.cjs' = '8e2fe22273578e1268957937345b73e91b005867e16e73a3681d08237a058a01'
+            'runner-v2/test/support/portable-duplex-diagnostic.cjs' = '37da4ca4b778df2c005929b3ccc4188d8765578771c6cabf83e388bc1f0d9056'
+            'runner-v2/test/support/portable-duplex-trace-validator.cjs' = '92a8105870042cc75ff9278ef23ad225cbbf9ff872e571f87f1e069a5579afbe'
           }
           $observed = @{}
           foreach ($entry in $pins.GetEnumerator()) {
