@@ -16,6 +16,7 @@ import {
   finalVerificationEventArtifactHashes,
   reduceSchedulerEvent,
   explicitStartBlocked,
+  newPolicyTaskAdmissionBlocked,
   validateSchedulerEvidenceEvent,
 } from "./scheduler-store.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -136,11 +137,21 @@ export class SqliteSchedulerStore implements SchedulerStore {
         if (!pending || input.payload.requiredSequence !== sequence || !Number.isSafeInteger(sequence)) throw new Error("Selection answer refused: exact current pending requirement sequence is required.");
       }
       // Live admission only: old assignment events still replay byte-for-byte.
+      // Reducer order first (existence, then semantic admission), owner start
+      // and source artifact verification only for an admissible task.
       if (priorProjection?.planningPolicyVersion === 1 && input.type === "task.transitioned" &&
           (input.payload.status === "assigned" || input.payload.status === "running")) {
+        const taskId = input.payload.taskId;
+        if (typeof taskId === "string") {
+          if (!priorProjection.tasks[taskId]) throw new Error(`Unknown task ${taskId}.`);
+          const admissionBlocked = newPolicyTaskAdmissionBlocked(priorProjection, taskId);
+          if (admissionBlocked) throw new Error(admissionBlocked);
+        }
         const blocked = explicitStartBlocked(priorProjection);
         if (blocked) throw new Error(blocked);
-        const manifest = priorProjection.planning!.source.manifestsById[priorProjection.planning!.source.currentManifestId];
+        const source = priorProjection.planning?.source;
+        const manifest = source?.manifestsById[source.currentManifestId];
+        if (!manifest) throw new Error("Current planning source manifest is unavailable.");
         if (!this.artifacts) throw new Error("Current planning source artifact authority unavailable.");
         const record = this.artifacts.verifySync(manifest.artifactDigest);
         if (record.byteLength !== manifest.byteLength) throw new Error("Current planning source artifact byte length drift.");

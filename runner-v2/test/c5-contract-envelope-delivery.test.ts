@@ -1407,7 +1407,9 @@ test("C5 revise refuses null, blank and malformed expected identity without stam
 // provider call. The obligations pass stays criteria-only.
 // ---------------------------------------------------------------------------
 
-test("C5 reviewer resolves current authority before any loader or provider call", async () => {
+test("C5 reviewer resolves current authority before any loader or provider call", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c5-review-gate-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   const runId = "run_c5_review_gate";
   const fixture = c5Fixture(runId);
   const store = new MemorySchedulerStore();
@@ -1447,6 +1449,12 @@ test("C5 reviewer resolves current authority before any loader or provider call"
     },
   });
   assert.equal(projectionOf(store, runId).tasks["T1"]!.status, "submitted");
+  // W1 (F6): the review boundary verifies the exact immutable diff bytes
+  // at their addressed artifact before identity lookup. Provision the
+  // exact fixture bytes so the gate reaches the identity assertion.
+  const DIFF_TEXT = "diff --git a/src/t1.ts b/src/t1.ts";
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const diffArtifactHash = (await artifacts.put(Buffer.from(DIFF_TEXT, "utf8"), "text/x-diff", "diff")).hash;
   const buildInputs = (projection: SchedulerProjection, mutate?: (inputs: DeliverableReviewInputs) => void): DeliverableReviewInputs => {
     const task = projection.tasks["T1"]!;
     const resolution = resolveTaskContractReference(projection, "T1");
@@ -1458,8 +1466,8 @@ test("C5 reviewer resolves current authority before any loader or provider call"
       changeSetId: "changeset_1",
       baselineRevision: "b".repeat(40),
       taskRevision: "c".repeat(40),
-      diffArtifactHash: "ab".repeat(32),
-      diffText: "diff --git a/src/t1.ts b/src/t1.ts",
+      diffArtifactHash,
+      diffText: DIFF_TEXT,
       changedPaths: ["src/t1.ts"],
       objective: resolution.contract.outcome.user,
       criteria: resolution.contract.acceptance.criteria.map((criterion) => ({ id: criterion.id, text: criterion.text })),
@@ -1486,7 +1494,7 @@ test("C5 reviewer resolves current authority before any loader or provider call"
       models: new Map(),
       reviewerRuntimeIds: [],
       sessions: {} as never,
-      artifacts: {} as never,
+      artifacts,
       evidenceStore: {} as never,
       loadInputs: async (input) => {
         calls.count += 1;

@@ -20,7 +20,7 @@ import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { buildExecutionPlanRevision, type ExecutionPlanPhase, type ExecutionTaskContract, type SourceRequirement, type CoverageReview } from "../src/planning-contracts.js";
 import { NativeBuildFactory as FixtureNativeBuildFactory, captureGitBaseline, runGit } from "./support/git-fixture.js";
 import { buildApprovedSourceManifest, validateApprovedSourceInput, type ApprovedSourceInputV1 } from "../src/native-planning-provisioner.js";
-import { rebuildSchedulerProjection, reduceSchedulerEvent, currentExplicitStartIdentity, explicitStartBlocked, type SchedulerProjection } from "../src/scheduler-store.js";
+import { rebuildSchedulerProjection, reduceSchedulerEvent, currentExplicitStartIdentity, explicitStartBlocked, newPolicyTaskAdmissionBlocked, type SchedulerProjection } from "../src/scheduler-store.js";
 import { computeArtifactDigest, type ApprovedSourceManifest } from "../src/source-manifest.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -127,6 +127,33 @@ function journeyLastToolValue(request: AgentModelRequest): Record<string, unknow
   return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
 }
 
+function t7bToolResults(request: AgentModelRequest): Array<{ toolName?: string; isError?: boolean }> {
+  return request.messages
+    .filter((message) => message.role === "tool")
+    .map((message) => message.content as { toolName?: string; isError?: boolean });
+}
+function t7bToolFailed(request: AgentModelRequest, toolName: string): boolean {
+  return t7bToolResults(request).some((result) => result.toolName === toolName && result.isError === true);
+}
+function t7bFailureDetail(request: AgentModelRequest, toolName: string): string {
+  const failed = request.messages
+    .filter((message) => message.role === "tool")
+    .reverse()
+    .find((message) => (message.content as { toolName?: string }).toolName === toolName && (message.content as { isError?: boolean }).isError === true);
+  return JSON.stringify(failed?.content).slice(0, 1500);
+}
+function t7bReadText(request: AgentModelRequest, path: string): string | undefined {
+  for (const message of request.messages) {
+    if (message.role !== "tool") continue;
+    const content = message.content as { toolName?: string; content?: Array<{ type: string; value?: unknown; text?: string }> };
+    if (content.toolName !== "fs.read") continue;
+    const meta = content.content?.find((item) => item.type === "json")?.value as { path?: string } | undefined;
+    if (meta?.path !== path) continue;
+    const text = content.content?.find((item) => item.type === "text")?.text;
+    if (typeof text === "string") return text;
+  }
+  return undefined;
+}
 class T7bJourneyArchitect implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   private calls = 0;
@@ -194,16 +221,30 @@ class T7bJourneyWorker implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
     this.requests.push(request);
+    if (t7bToolFailed(request, "submit_task")) {
+      throw new Error(`T7b fixture: submit_task refused: ${t7bFailureDetail(request, "submit_task")}`);
+    }
+    if (t7bToolFailed(request, "run_evidence_command")) {
+      throw new Error(`T7b fixture: run_evidence_command failed: ${t7bFailureDetail(request, "run_evidence_command")}`);
+    }
+    if (t7bToolFailed(request, "fs.write")) {
+      throw new Error(`T7b fixture: fs.write failed: ${t7bFailureDetail(request, "fs.write")}`);
+    }
     const toolCount = request.messages.filter((message) => message.role === "tool").length;
     if (toolCount === 0) return journeyCall("fs.write", { path: "src/value.mjs", content: T7B_LOW_CONTENT, createDirectories: true }, "write-1");
     if (toolCount === 1) return journeyCall("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
     const record = journeyLastToolValue(request)!;
-    const fact = record.fact as { stdoutArtifactHash: string };
+    const fact = record.fact as { stdoutArtifactHash: string; exitCode: number | null; timedOut?: boolean; cancelled?: boolean };
+    assert.equal(fact.exitCode, 0, `the evidence test run must genuinely succeed before the worker claims it passes: ${JSON.stringify(record).slice(0, 1500)}`);
+    assert.equal(fact.timedOut ?? false, false, "the evidence test run must not time out");
+    assert.equal(fact.cancelled ?? false, false, "the evidence test run must not be cancelled");
+    assert.ok(typeof record.id === "string" && record.id.length > 0, "the evidence test run records an evidence id");
     return journeyCall("submit_task", {
       summary: "Added src/value.mjs exporting value = 2; node --test passes.",
       readiness: "ready_for_architect_review",
       unresolvedConcerns: [],
       criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: { changed: ["src/value.mjs"], verified: ["src/value.mjs exports value = 2"], testsRun: [{ command: "node --test", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }], notRun: [] },
     }, "submit-1");
   }
 }
@@ -236,6 +277,12 @@ class T7bJourneyReviewer implements AgentModel {
       return journeyCall("record_deliverable_obligations", { obligations: [{ id: "o1", description: "value must be 2." }] }, `obl-${seen}`);
     }
     if (pass === "delivery-findings-system") {
+      if (t7bToolFailed(request, "fs.read")) {
+        throw new Error(`T7b fixture: findings fs.read failed: ${t7bFailureDetail(request, "fs.read")}`);
+      }
+      if (t7bToolFailed(request, "record_deliverable_findings")) {
+        throw new Error(`T7b fixture: record_deliverable_findings refused: ${t7bFailureDetail(request, "record_deliverable_findings")}`);
+      }
       if (seen === 0) return journeyCall("fs.read", { path: "src/value.mjs" }, "read-1");
       return journeyCall("record_deliverable_findings", { findings: [] }, `findings-${seen}`);
     }
@@ -268,13 +315,31 @@ class T7bJourneyReviewer implements AgentModel {
         }],
       }, "verifier-verdict-1");
     }
-    const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
-    return journeyCall("submit_deliverable_verdict", {
-      summary: "The module exports 2 and the cited test run passed.",
-      satisfied: true,
-      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout." })),
-    }, `verdict-${seen}`);
+    if (pass === "delivery-verdict-system") {
+      if (t7bToolFailed(request, "submit_deliverable_verdict")) {
+        throw new Error(`T7b fixture: submit_deliverable_verdict refused: ${t7bFailureDetail(request, "submit_deliverable_verdict")}`);
+      }
+      if (t7bToolFailed(request, "fs.read")) {
+        throw new Error(`T7b fixture: verdict fs.read failed: ${t7bFailureDetail(request, "fs.read")}`);
+      }
+      const inspected = t7bReadText(request, "src/value.mjs");
+      if (inspected === undefined) {
+        return journeyCall("fs.read", { path: "src/value.mjs" }, `verdict-read-${seen}`);
+      }
+      assert.ok(inspected.split("\n")[0]!.includes("export const value = 2;"), "the cited line 1 actually exports value = 2");
+      const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
+      const survivors = [...new Set([...text.matchAll(/"id"\s*:\s*"(mutation-survivor:[^"]+)"/g)].map((match) => match[1]!))];
+      assert.equal(survivors.length, 0, `unexpected mutation survivors on the value line are real gaps and cannot be blanket-released: ${survivors.join(", ")}`);
+      const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
+      assert.ok(claimIds.includes("claim:c1"), "the verdict context names the criterion claim");
+      assert.ok(claimIds.includes("claim:summary"), "the verdict context names the summary claim");
+      return journeyCall("submit_deliverable_verdict", {
+        summary: "The module exports 2 and the cited test run passed.",
+        satisfied: true,
+        claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Read src/value.mjs line 1 in this verdict session and confirmed it exports value = 2.", citations: [{ path: "src/value.mjs", line: 1 }] })),
+      }, `verdict-${seen}`);
+    }
+    throw new Error(`Unexpected T7b reviewer system ${pass}.`);
   }
 }
 
@@ -372,7 +437,7 @@ test("T7b product: unseeded opt-in provisioning plans, covers, builds, and accep
       "planning-policy",
     ]);
     assert.deepEqual(events[0]!.payload, { version: 2 });
-    assert.deepEqual(events[1]!.payload, { objective: "Deliver the value module." });
+    assert.deepEqual(events[1]!.payload, { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: "Deliver the value module." });
     assert.deepEqual(events[2]!.payload, { version: 1 });
     assert.ok(!events.some((event) => event.type === "planning.source_registered"));
     const control = (path: string, input?: unknown, token = "t7b-control-token") => fetch(`${address.url}/v2/runs/${T7B_RUN}/build/${path}`, { method: input === undefined ? "GET" : "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(input !== undefined ? { body: JSON.stringify(input) } : {}) });
@@ -631,6 +696,74 @@ test("T7b current source drift refuses explicit start and direct live worker adm
     assert.throws(() => f.append("task.transitioned", "direct-worker", { taskId: "T1", status: "assigned" }, "runner", "task-scheduler"));
     assert.deepEqual(f.evidence(), before);
   } finally { f.cleanup(); }
+});
+
+test("T7b post-start source drift refuses assigned and running via unchanged artifact recheck", async () => {
+  // Coverage reinforcement (not original failure repair): the SqliteSchedulerStore
+  // assigned/running source-artifact recheck is unchanged, so no production
+  // mutation prove-red is required. The pre-start test stops at plan_start_required;
+  // this post-start case authorizes first, then proves the recheck after authorization.
+  for (const variant of ["corrupt", "missing"] as const) {
+    const f = controlFixture(`post-start-source-${variant}`);
+    try {
+      const scenario = await f.seedReady();
+      const start = f.start();
+      await f.runtime.authorizeExplicitPlanStart(start);
+      const authorized = f.runtime.projection();
+      assert.equal(authorized.planning?.readiness, "ready");
+      assert.equal(explicitStartBlocked(authorized), undefined);
+      assert.equal(f.runtime.planningReadiness().status, "ready_authorized");
+      assert.equal(newPolicyTaskAdmissionBlocked(authorized, "T1"), undefined);
+      assert.equal(authorized.tasks["T1"]?.status, "planned");
+      const hash = start.sourceArtifactDigest;
+      assert.equal(hash, scenario.manifest.artifactDigest);
+      const record = f.artifacts.verifySync(hash);
+      assert.ok(record.path.startsWith(f.root), "drift uses the dedicated temp fixture only");
+      assert.ok(f.root.startsWith(tmpdir()), "drift fixture is a safely verified temp directory only");
+      const originalBytes = readFileSync(record.path);
+      assert.deepEqual(Buffer.from(originalBytes).toString("utf8"), T7B_SOURCE);
+      if (variant === "corrupt") {
+        writeFileSync(record.path, "drifted post-start bytes");
+        const drifted = readFileSync(record.path);
+        assert.notDeepEqual(drifted, originalBytes);
+        assert.notEqual(createHash("sha256").update(drifted).digest("hex"), hash);
+        assert.throws(() => f.artifacts.verifySync(hash), new RegExp(`Artifact ${hash} hash mismatch`));
+      } else {
+        rmSync(record.path, { force: true });
+        assert.throws(() => readFileSync(record.path), /ENOENT/);
+        assert.throws(() => f.artifacts.verifySync(hash), new RegExp(`Artifact ${hash} was not found`));
+      }
+      const before = f.evidence();
+      for (const status of ["assigned", "running"] as const) {
+        try {
+          f.append("task.transitioned", `direct-worker-post-start-${variant}-${status}`, { taskId: "T1", status }, "runner", "task-scheduler");
+          assert.fail(`${status} admission must refuse on post-start source drift (${variant})`);
+        } catch (error) {
+          const message = (error as Error).message;
+          assert.ok(message.includes(hash), `refusal names the offending artifact ${hash}: ${message}`);
+          if (variant === "corrupt") assert.match(message, /hash mismatch/);
+          else assert.match(message, /was not found/);
+          assert.doesNotMatch(message, /explicit owner start|not bound|requires a ready plan/);
+        }
+        assert.deepEqual(f.evidence(), before, `no event/worker/allocation effect on ${status} refusal (${variant})`);
+        assert.equal(f.evidence().events.length, before.events.length);
+        assert.equal(f.evidence().workers, before.workers);
+        assert.equal(f.evidence().allocations, before.allocations);
+      }
+      writeFileSync(record.path, originalBytes);
+      const restored = f.artifacts.verifySync(hash);
+      assert.equal(restored.byteLength, scenario.manifest.byteLength);
+      assert.equal(explicitStartBlocked(f.runtime.projection()), undefined);
+      assert.equal(newPolicyTaskAdmissionBlocked(f.runtime.projection(), "T1"), undefined);
+      f.append("task.transitioned", `direct-worker-post-start-${variant}-assigned-ok`, { taskId: "T1", status: "assigned", patch: { attempt: 1, assignedWorkerId: "worker_T1_1" } }, "runner", "task-scheduler");
+      assert.equal(f.runtime.projection().tasks["T1"]?.status, "assigned");
+      f.append("task.transitioned", `direct-worker-post-start-${variant}-running-ok`, { taskId: "T1", status: "running" }, "runner", "task-scheduler");
+      assert.equal(f.runtime.projection().tasks["T1"]?.status, "running");
+      assert.equal(f.evidence().events.length, before.events.length + 2);
+      assert.equal(f.evidence().workers, before.workers);
+      assert.equal(f.evidence().allocations, before.allocations);
+    } finally { f.cleanup(); }
+  }
 });
 
 test("T7b source amendment invalidates readiness and refuses the previously approved start", async () => {

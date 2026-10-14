@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnContainedWindowsFixture } from "./support/windows-fixture-job.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
+import { withInspectionFixture } from "./support/inspection-fixture.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -9,9 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import childProcess from "node:child_process";
-import { EventEmitter } from "node:events";
-import { syncBuiltinESMExports } from "node:module";
 import vm from "node:vm";
 import ts from "typescript";
 import { inspectWindowsFixtureBirth, runLateBirthFixture } from "./support/late-birth-fixture.js";
@@ -42,12 +40,15 @@ test("Windows portable supervisor retries transient lock-holder read contention 
       if (reads === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
       return JSON.stringify({ nonce: "nonce", holderPid: 9001, holderBirth: "birth" });
     },
+    inspectionOwner: undefined, // This VM exercises the explicit injected inspector path.
     runPortableFenceEffectSync: (options: { effect: () => unknown }) => {
       effects += 1;
       return { status: "applied", value: options.effect() };
     },
   });
-  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  vm.runInContext(`${extractNamedFunction(source, "normalizeBirth")}
+${extractNamedFunction(source, "sameBirth")}
+${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
   assert.deepEqual(vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'ok')", context), { status: "applied", value: "ok" });
   assert.equal(reads, 2, "one transient Windows file-contention read must be retried");
   assert.equal(effects, 1, "the protected effect runs only after exact holder identity is proven");
@@ -64,9 +65,12 @@ test("Windows portable supervisor bounds persistent lock-holder contention by wa
     PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
     readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
     readFileSync: () => { reads += 1; throw Object.assign(new Error("busy"), { code: "EBUSY" }); },
+    inspectionOwner: undefined, // This VM exercises the explicit injected inspector path.
     runPortableFenceEffectSync: () => { effects += 1; return { status: "applied", value: "unexpected" }; },
   });
-  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  vm.runInContext(`${extractNamedFunction(source, "normalizeBirth")}
+${extractNamedFunction(source, "sameBirth")}
+${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
   const started = Date.now();
   const result = vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'no')", context) as { status: string; cause?: string };
   const elapsed = Date.now() - started;
@@ -87,9 +91,12 @@ test("Windows portable supervisor does not classify a missing lock-holder as eff
     PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
     readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
     readFileSync: () => { reads += 1; throw Object.assign(new Error("missing"), { code: "ENOENT" }); },
+    inspectionOwner: undefined, // This VM exercises the explicit injected inspector path.
     runPortableFenceEffectSync: () => { effects += 1; return { status: "applied", value: "unexpected" }; },
   });
-  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  vm.runInContext(`${extractNamedFunction(source, "normalizeBirth")}
+${extractNamedFunction(source, "sameBirth")}
+${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
   const result = vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'no')", context) as { status: string; cause?: string };
   assert.deepEqual({ status: result.status, cause: result.cause }, { status: "unavailable", cause: "authority" });
   assert.equal(reads, 1, "missing holder is startup/readiness evidence, not effect-level lock contention");
@@ -102,7 +109,7 @@ test("Windows portable supervisor waits for slow lock-holder publication before 
   assert.notEqual(helper, "", "Windows startup must have an explicit lock-holder readiness barrier");
   assert.match(source, /const WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS = 15_000;/,
     "the readiness budget must match the parent's bounded Windows supervisor birth-discovery window");
-  assert.match(source, /config\.fence === undefined \|\| waitForExactWindowsLockHolder\(WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS\)/,
+  assert.match(source, /config\.fence === undefined \|\| waitForExactWindowsLockHolder\(Math\.max\(0, Math\.min\(WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS, startupDeadlineAt - Date\.now\(\)\)\)\)/,
     "the production parent-managed Windows launch path must cross the readiness barrier before child startup");
   assert.match(source, /windowsLaunchUnknownDetail/,
     "Windows startup must retain the specific ownership-readiness failure reason instead of overwriting it with a generic birth-inspection error");
@@ -162,76 +169,168 @@ test("Windows portable supervisor never retries a mismatched readable lock-holde
     PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
     readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
     readFileSync: () => { reads += 1; return JSON.stringify({ nonce: "nonce", holderPid: 9002, holderBirth: "replacement" }); },
+    inspectionOwner: undefined, // This VM exercises the explicit injected inspector path.
     runPortableFenceEffectSync: () => { effects += 1; return { status: "applied", value: "unexpected" }; },
   });
-  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  vm.runInContext(`${extractNamedFunction(source, "normalizeBirth")}
+${extractNamedFunction(source, "sameBirth")}
+${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
   const result = vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'no')", context) as { status: string; cause?: string };
   assert.deepEqual({ status: result.status, cause: result.cause }, { status: "unavailable", cause: "authority" });
   assert.equal(reads, 1, "readable stale holder identity is terminal, not retryable contention");
   assert.equal(effects, 0);
 });
 
-for (const mode of ["present", "absent", "recycled", "malformed", "inspection_error", "cancel"] as const) {
-  test(`round4 default native birth observation preserves ${mode} and joins inspection close`, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "aiboard-c1-round4-transport-"));
-    console.log(`C1 round4 synthetic root: ${root}`);
-    const children: EventEmitter[] = [];
-    const callbacks: Array<(error: Error | null, stdout: string, stderr: string) => void> = [];
-    const signals: AbortSignal[] = [];
-    let synchronousCalls = 0;
-    t.mock.method(process, "kill", () => true);
-    t.mock.method(childProcess, "execFileSync", () => { synchronousCalls++; return "PRESENT:birth"; });
-    t.mock.method(childProcess, "execFile", ((_file: string, _args: string[], options: { signal: AbortSignal; timeout: number; maxBuffer: number; windowsHide: boolean }, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
-      assert.equal(options.timeout, 2_000);
-      assert.equal(options.maxBuffer, 64 * 1024);
-      assert.equal(options.windowsHide, true);
-      const child = new EventEmitter();
-      children.push(child); callbacks.push(callback); signals.push(options.signal);
-      return child;
-    }) as unknown as typeof childProcess.execFile);
-    syncBuiltinESMExports();
+type SessionTerminalMode = "present" | "absent" | "recycled" | "malformed" | "inspection_error" | "cancel";
+async function sessionTerminalFixture(t: import("node:test").TestContext, mode: SessionTerminalMode,
+  failure?: { stage: "prepare" | "setup"; error: Error; onCleanup(root: string): void }): Promise<void> {
+    const { WindowsBirthSession } = await import(new URL("../src/windows-birth/session.mjs", import.meta.url).href);
+    const { WindowsBirthInspectionOwner } = await import(new URL("../src/windows-birth-inspection.mjs", import.meta.url).href);
+    const { SLOT } = await import(new URL("../src/windows-birth/queue.mjs", import.meta.url).href);
+    const root = mkdtempSync(join(tmpdir(), "aiboard-c1-session-transport-"));
+    let closeScope: ((deadline?: number) => Promise<void>) | undefined;
+    let channel: Awaited<ReturnType<ReturnType<WindowsProcessBackend["backpressuredChannelProvider"]>["acquire"]>> | undefined;
+    let hasPrimaryFailure = false; let primaryFailure: unknown;
+    const fingerprint = "2026-10-12T00:00:00.123456Z";
+    const utc7 = "2026-10-12T00:00:00.1234567Z";
+    const lease = Object.freeze({ generation: "a".repeat(64), source: "b".repeat(64) });
+    const requests: Array<{ type: string; generation: string; source: string; requestId: number; nonce: string; pid: number; deadline: number; sab: SharedArrayBuffer }> = [];
+    const cancellations: unknown[] = [];
+    let kind = "sync", syncQueries = 0, syncRequests = 0, wireSeq = 0, absentConfirmed = false, terminateRequests = 0;
+    let resolveWorker!: () => void;
+    const workerRetired = new Promise<void>(resolve => { resolveWorker = resolve; });
+    const signal = () => { let resolve!: (value?: unknown) => void; const promise = new Promise<unknown>(done => { resolve = done; }); return { promise, resolve }; };
+    const session = Object.assign(Object.create(WindowsBirthSession.prototype), {
+      state: "NEW", registered: false, lease: null, generation: lease.generation, generationState: new SharedArrayBuffer(4),
+      config: { binary: { sha256: lease.source } }, requestId: 0, pending: new Map(), consumed: new Set(), errors: [], firstFailure: null,
+      failure: signal(), workerExited: signal(), child: null, descriptor: null, closePromise: null,
+      helperExit: null, helperClose: null, workerExit: null, rescueUsed: false, stdout: [], stderr: [],
+      counters: { queries: 0, existenceChecks: 0, maximumUnresolvedSlots: 0, helperSpawns: 0, workerStarts: 0, compilerSpawns: 0 },
+      // Trusted setup only; query/collection/cancellation/close methods remain installed code.
+      prepare: async () => { session.state = "READY"; session.lease = lease;
+        if (failure?.stage === "prepare") throw failure.error;
+        return lease; },
+    });
+    const publish = (record: typeof requests[number], outcome: "same" | "absent" | "recycled" | "malformed" | "inspection_error") => {
+      const value = {
+        ...(outcome === "absent" || outcome === "inspection_error"
+          ? { status: "unknown", reason: "native_error", nativeErrorFacts: { code: "TEST", class: "TestError", message: "inspection sentinel" } }
+          : { status: "same", fingerprint: outcome === "recycled" ? "2026-10-12T00:00:01.123456Z" : fingerprint,
+              utc7: outcome === "recycled" ? "2026-10-12T00:00:01.1234567Z" : utc7 }),
+        generation: record.generation, source: record.source, requestId: record.requestId, nonce: record.nonce, pid: record.pid,
+        wireSeq: ++wireSeq, publishedAt: performance.now(), ...(outcome === "malformed" ? { unexpected: true } : {}),
+      };
+      const bytes = Buffer.from(JSON.stringify(value)); new Uint8Array(record.sab, 16, bytes.length).set(bytes);
+      if (outcome === "absent") absentConfirmed = true;
+      const view = new Int32Array(record.sab, 0, 4); Atomics.store(view, 1, bytes.length); Atomics.store(view, 2, wireSeq); Atomics.store(view, 0, SLOT.RESULT); Atomics.notify(view, 0);
+    };
+    session.worker = {
+      postMessage(record: typeof requests[number]) {
+        if (record.type === "cancel") { cancellations.push(record); return; }
+        if (record.type === "close") return;
+        if (kind === "sync") { syncRequests++; publish(record, "same"); }
+        else requests.push(record);
+      },
+      terminate: () => { terminateRequests++; return workerRetired; },
+    };
+    const observedSession = new Proxy(session, { get(target, property, receiver) {
+      if (property === "querySync") { kind = "sync"; syncQueries++; }
+      if (property === "queryAsync") kind = "async";
+      return Reflect.get(target, property, receiver);
+    } });
+    const owner = new WindowsBirthInspectionOwner(async () => ({ Session: class { constructor() { return observedSession; } }, config: {} }));
+    // Register the creator's duty before preparation or filesystem/backend setup.
+    try {
+    owner.registerCleanup((cleanup: (deadline?: number) => Promise<void>) => { closeScope = cleanup; });
+    t.mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
+      assert.equal(signal, 0, "the fixture permits observation only");
+      if (pid === 9001 && absentConfirmed) throw Object.assign(new Error("recorded process absent"), { code: "ESRCH" });
+      return true;
+    });
+    await owner.prepareInspection(Date.now() + 2_000);
+    if (failure?.stage === "setup") throw failure.error;
     for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
     writeFileSync(join(root, "channel/output-checkpoint.json"), JSON.stringify({ nonce: "windows-contract-nonce", stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
-    writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "windows-contract-nonce", status: "stopped", exitCode: 0, signal: null }));
+    writeFileSync(join(root, "state.json"), JSON.stringify({ protocol: "aiboard-portable-process/v1", nonce: "windows-contract-nonce", supervisorPid: 9001, status: "stopped", launchEffect: "not_started", rootProcess: null, knownProcesses: [], exitCode: 0, signal: null }));
     const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 1 });
-    const channel = await backend.backpressuredChannelProvider().acquire(portableWindowsBinding(root, "birth"), fence);
-    const initialSync = synchronousCalls;
-    let settled = false;
-    const terminal = channel.waitForTerminal().then((result) => { settled = true; return result; });
-    try {
-      await round4Wait(() => children.length === 1);
-      const success = mode === "present" || mode === "absent";
-      callbacks[0]!(mode === "inspection_error" || mode === "cancel" ? new Error("inspection failed") : null,
-        mode === "present" ? "PRESENT:birth" : mode === "absent" ? "ABSENT" : mode === "recycled" ? "PRESENT:replacement" : "unreadable", "");
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      assert.equal(settled, false, "callback alone cannot relinquish the inspection child");
+    const composed = backend as unknown as { inspectionOwner: unknown; operations: NativeProcessOperations };
+    const unchanged = composed.operations;
+    composed.inspectionOwner = owner;
+    composed.operations = { ...unchanged, ...owner.operations() };
+    for (const name of Object.keys(unchanged).filter(name => !["inspectProcessBirth", "inspectProcessBirthAsync", "inspectProcessBirths"].includes(name)))
+      assert.equal(composed.operations[name as keyof NativeProcessOperations], unchanged[name as keyof NativeProcessOperations]);
+      channel = await backend.backpressuredChannelProvider().acquire(portableWindowsBinding(root, fingerprint), fence);
+      const initialSync = { queries: syncQueries, requests: syncRequests };
+      const terminal = channel.waitForTerminal();
+      await round4Wait(() => requests.length === 1);
       if (mode === "cancel") {
-        let detached = false;
-        const detaching = channel.detach().then(() => { detached = true; });
-        assert.equal(signals[0]!.aborted, true);
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        assert.equal(detached, false, "early error/abort callback must still join close");
-        children[0]!.emit("close", 1, null);
-        await detaching;
+        await channel.detach(); channel = undefined;
+        assert.ok(cancellations.length > 0);
+        assert.ok(session.pending.size > 0, "cancellation must retain the original unresolved slot until scope retirement");
       } else {
-        children[0]!.emit("close", 0, null);
-        if (success) {
-          await round4Wait(() => children.length === 2);
-          callbacks[1]!(null, mode === "present" ? "PRESENT:birth" : "ABSENT", "");
-          children[1]!.emit("close", 0, null);
+        publish(requests[0]!, mode === "present" ? "same" : mode);
+        if (mode === "present") {
+          await round4Wait(() => requests.length === 2);
+          publish(requests[1]!, "same");
         }
       }
-      assert.deepEqual(await terminal, success ? { state: "exited", exitCode: 0 } : { state: "outcome_unknown" });
-      assert.equal(synchronousCalls, initialSync, "terminal observation must use the asynchronous default transport");
-    } finally {
-      for (const child of children) child.emit("close", 1, null);
-      await channel.detach(); await terminal;
-      t.mock.restoreAll(); syncBuiltinESMExports();
-      rmSync(root, { recursive: true, force: true });
-      console.log(`C1 round4 synthetic root removed: ${root}`);
+      assert.deepEqual(await terminal, mode === "present" || mode === "absent" ? { state: "exited", exitCode: 0 } : { state: "outcome_unknown" });
+      assert.deepEqual({ queries: syncQueries, requests: syncRequests }, initialSync,
+        "terminal observation must add no synchronous Session query for any PID");
+      await channel?.detach(); channel = undefined;
+      let retired = false;
+      assert.ok(closeScope);
+      const closing = closeScope(Date.now() + 2_000).then(() => { retired = true; });
+      await round4Wait(() => terminateRequests === 1);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      assert.equal(retired, false, "scope cleanup must join its original retained Worker capability");
+      assert.equal(existsSync(root), true, "root must remain while scope retirement is unconfirmed");
+      session.workerExit = { code: 0, at: performance.now() }; session.workerExited.resolve(session.workerExit); resolveWorker();
+      await closing;
+    } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+    finally {
+      await finalizeCertifiedFixture({ fixtureName: "Session terminal transport", root, hasPrimaryFailure, primaryFailure,
+        cleanup: async () => {
+          await channel?.detach(); channel = undefined;
+          if (!closeScope) return;
+          // Start actual close before delivering the original fake Worker's exit.
+          const closing = closeScope(Date.now() + 2_000);
+          void closing.catch(() => undefined);
+          if (!session.workerExit) {
+            await round4Wait(() => terminateRequests === 1);
+            assert.equal(existsSync(root), true, "failed setup retains its root until original Worker retirement");
+            assert.equal(owner.receipt().state, "CLOSING");
+            session.workerExit = { code: 0, at: performance.now() };
+            session.workerExited.resolve(session.workerExit); resolveWorker();
+          }
+          await closing;
+        },
+        certify: async () => { assert.equal(owner.receipt().state, "CLOSED");
+          assert.equal(terminateRequests, 1, "success and early failure must terminate the original Worker exactly once");
+          assert.equal(session.receipt().state, "CLOSED");
+          failure?.onCleanup(root);
+        },
+        removeRoot: () => rmSync(root, { recursive: true, force: true }),
+      });
     }
+}
+for (const mode of ["present", "absent", "recycled", "malformed", "inspection_error", "cancel"] as const) {
+  test(`creator-owned Session terminal observation preserves ${mode} and joins scope retirement`, async (t) => {
+    await sessionTerminalFixture(t, mode);
   });
 }
+for (const stage of ["prepare", "setup"] as const) {
+  test(`Session fixture ${stage} failure retains cleanup duty and primary identity`, async (t) => {
+    const error = new Error(`${stage} sentinel`);
+    let retainedRoot: string | undefined;
+    await assert.rejects(sessionTerminalFixture(t, "present", { stage, error, onCleanup(root) { retainedRoot = root; } }),
+      actual => actual === error);
+    assert.ok(retainedRoot);
+    assert.equal(existsSync(retainedRoot), true, "primary failure retains its diagnostic root after certified retirement");
+    rmSync(retainedRoot, { recursive: true, force: true });
+  });
+}
+
 async function round4Wait(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (!predicate()) {
@@ -254,6 +353,7 @@ import {
   parseProcessEmptyVerification,
   parseProcessLaunchResult,
   parseProcessReconciliation,
+  parseProcessReleaseResult,
   parseProcessSignalResult,
   type ProcessBackend,
   type ProcessBackendBinding,
@@ -659,7 +759,10 @@ test("Windows portable launch rejects a birth result that arrives after its abso
   const stateDirectory = join(root, "state");
   const realNow = Date.now;
   const startupAt = realNow();
-  const startupDeadlineAt = startupAt + 50;
+  // Keep real subprocess admission inside the product's existing 30s budget.
+  // The causal clock exposes the genuine query result after this exact boundary;
+  // a 50ms wall deadline expired before the supervisor could admit its child.
+  const startupDeadlineAt = startupAt + 30_000;
   const lateClock = createLateBirthFixtureClock(startupAt, startupDeadlineAt, realNow);
   t.mock.method(Date, "now", () => lateClock.now());
   let inspections = 0;
@@ -788,26 +891,40 @@ test("Windows semantic facts independently gate batch launch and exact-tree atte
     jobObjects: "unavailable",
     semanticFacts: { portableDuplex: "verified", windowsBatchArgv: "unavailable", exactTreeBirth: "unavailable", jobContainment: "unavailable" },
   });
-  let unexpectedBatchBinding: ReturnType<typeof bindingFor> | undefined;
-  try {
+  assert.ok(backend instanceof WindowsProcessBackend);
+  const acquired: ProcessBackendBinding[] = [];
+  const released = new Set<ProcessBackendBinding>();
+  await withInspectionFixture({
+    fixtureName: "Windows semantic consumers", root,
+    registerCleanup: register => backend.registerInspectionCleanup(register),
+    body: async () => {
     const attestation = await backend.probe() as { capabilities: Record<string, string> };
     assert.equal(attestation.capabilities.tree_termination, "unavailable");
     assert.equal(attestation.capabilities.verified_emptiness, "unavailable");
     let batchError: unknown;
     try {
       const unexpected = parseProcessLaunchResult(await backend.launch({ ...request([]), intent: { ...request([]).intent, executable: shim, invocationId: "batch-fact-false", workingDirectory: workspace }, grant: { ...request([]).grant, invocationId: "batch-fact-false" } }));
-      unexpectedBatchBinding = bindingFor(unexpected);
-    } catch (error) { batchError = error; }
+      acquired.push(bindingFor(unexpected));
+    } catch (error) {
+      if (error instanceof NativeProcessLaunchBlockedError) acquired.push(bindingFor(error.launchResult));
+      batchError = error;
+    }
+    if (batchError instanceof NativeProcessLaunchBlockedError) throw batchError;
     assert.ok(batchError instanceof WindowsBatchLaunchUnavailableError && batchError.code === "windows_batch_argv_unverified");
     assert.deepEqual(readdirSync(stateDirectory), [], "batch refusal must happen before an owned target is created");
 
     const nativeRequest = request(["-e", "process.stdout.write('native-ok')"]);
-    const launch = parseProcessLaunchResult(await backend.launch({
+    let launch: ProcessLaunchResult;
+    try { launch = parseProcessLaunchResult(await backend.launch({
       ...nativeRequest,
       intent: { ...nativeRequest.intent, invocationId: "native-fact-independent", workingDirectory: workspace },
       grant: { ...nativeRequest.grant, invocationId: "native-fact-independent" },
-    }));
+    })); } catch (error) {
+      if (error instanceof NativeProcessLaunchBlockedError) acquired.push(bindingFor(error.launchResult));
+      throw error;
+    }
     const binding = bindingFor(launch);
+    acquired.push(binding);
     const output: Buffer[] = [];
     await backend.observe(binding, async (stream, bytes) => { if (stream === "stdout") output.push(Buffer.from(bytes)); }, fence);
     assert.equal(Buffer.concat(output).toString(), "native-ok");
@@ -816,15 +933,21 @@ test("Windows semantic facts independently gate batch launch and exact-tree atte
       if (Date.now() >= emptyDeadline) throw new Error("native semantic consumer did not reach stable verified emptiness");
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    await backend.release(binding, fence);
-  } finally {
-    if (unexpectedBatchBinding) {
-      await backend.observe(unexpectedBatchBinding, async () => undefined, fence).catch(() => undefined);
-      await backend.signal(unexpectedBatchBinding, "force_terminate", fence).catch(() => undefined);
-      await backend.release(unexpectedBatchBinding, fence).catch(() => undefined);
-    }
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+    parseProcessReleaseResult(await backend.release(binding, fence)); released.add(binding);
+    },
+    cleanupWorkloads: async () => {
+      assert.ok(acquired.length, "an exact acquired capability is required before inspection retirement");
+      const failures: unknown[] = [];
+      for (const binding of acquired) {
+        if (released.has(binding)) continue;
+        try { await drainAndCleanupWindowsFixture(backend, binding, fence); released.add(binding); }
+        catch (error) { failures.push(error); }
+      }
+      if (failures.length) throw new AggregateError(failures, "Semantic consumer cleanup remains owned.");
+    },
+    certifyWorkloads: async () => { assert.ok(acquired.length); assert.equal(released.size, acquired.length); },
+    removeRoot: () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }),
+  });
 });
 
 test("unverified batch argv rejects an extensionless PATH command that resolves first to cmd", async () => {
@@ -1077,19 +1200,55 @@ test("Windows portable backend launches a batch shim with argv boundaries while 
     jobObjects: "unavailable",
     semanticFacts: { portableDuplex: "verified", windowsBatchArgv: "verified", exactTreeBirth: "partial", jobContainment: "unavailable" },
   });
-  const batchRequest = request(["hello world", "literal"]);
-  const launch = parseProcessLaunchResult(await backend.launch({ ...batchRequest, intent: { ...batchRequest.intent, executable: shim, invocationId: "portable-batch", workingDirectory: workspace }, grant: { ...batchRequest.grant, invocationId: "portable-batch" } }));
-  const binding = bindingFor(launch); const output: Buffer[] = [];
-  try {
-    await backend.observe(binding, async (stream, bytes) => { if (stream === "stdout") output.push(Buffer.from(bytes)); }, fence);
-    assert.equal(Buffer.concat(output).toString().trim(), "[hello world][literal]");
-    const unsafe = request(["safe", "bad&injected"]);
-    await assert.rejects(backend.launch({ ...unsafe, intent: { ...unsafe.intent, executable: shim, invocationId: "portable-batch-refusal", workingDirectory: workspace }, grant: { ...unsafe.grant, invocationId: "portable-batch-refusal" } }), /unsafe.*batch|launch/i);
-  } finally {
-    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
-    await backend.release(binding, fence).catch(() => undefined);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+  assert.ok(backend instanceof WindowsProcessBackend);
+  let binding: ProcessBackendBinding | undefined;
+  const acquired: ProcessBackendBinding[] = [];
+  const released = new Set<ProcessBackendBinding>();
+  await withInspectionFixture({
+    fixtureName: "Windows portable batch", root,
+    registerCleanup: register => backend.registerInspectionCleanup(register),
+    body: async () => {
+      const batchRequest = request(["hello world", "literal"]);
+      try {
+        const launch = parseProcessLaunchResult(await backend.launch({ ...batchRequest, intent: { ...batchRequest.intent, executable: shim, invocationId: "portable-batch", workingDirectory: workspace }, grant: { ...batchRequest.grant, invocationId: "portable-batch" } }));
+        binding = bindingFor(launch);
+        acquired.push(binding);
+      } catch (error) {
+        if (error instanceof NativeProcessLaunchBlockedError) acquired.push(bindingFor(error.launchResult));
+        throw error;
+      }
+      const output: Buffer[] = [];
+      await backend.observe(binding, async (stream, bytes) => { if (stream === "stdout") output.push(Buffer.from(bytes)); }, fence);
+      assert.equal(Buffer.concat(output).toString().trim(), "[hello world][literal]");
+      const unsafe = request(["safe", "bad&injected"]);
+      let blockedRefusal: NativeProcessLaunchBlockedError | undefined;
+      await assert.rejects(async () => {
+        try {
+          const unexpected = parseProcessLaunchResult(await backend.launch({ ...unsafe, intent: { ...unsafe.intent, executable: shim, invocationId: "portable-batch-refusal", workingDirectory: workspace }, grant: { ...unsafe.grant, invocationId: "portable-batch-refusal" } }));
+          acquired.push(bindingFor(unexpected));
+        } catch (error) {
+          if (error instanceof NativeProcessLaunchBlockedError) {
+            acquired.push(bindingFor(error.launchResult));
+            blockedRefusal = error;
+          }
+          throw error;
+        }
+      }, /unsafe.*batch|launch/i);
+      if (blockedRefusal) throw blockedRefusal;
+    },
+    cleanupWorkloads: async () => {
+      assert.ok(acquired.length, "an exact acquired launch capability is required before inspection retirement");
+      const failures: unknown[] = [];
+      for (const owned of acquired) {
+        if (released.has(owned)) continue;
+        try { await cleanupWindowsProcessFixture(backend, owned, fence); released.add(owned); }
+        catch (error) { failures.push(error); }
+      }
+      if (failures.length) throw new AggregateError(failures, "Windows batch fixture cleanup remains owned.");
+    },
+    certifyWorkloads: async () => { assert.ok(acquired.length); assert.equal(released.size, acquired.length); },
+    removeRoot: () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }),
+  });
 });
 
 test("Windows reconciliation distinguishes missing opaque identity from a birth mismatch", async () => {
@@ -1898,10 +2057,21 @@ test("Windows portable fixture supervisor argv excludes ambient credential senti
   if (process.platform !== "win32") { t.skip("Windows supervisor argv fixture requires Windows."); return; }
   const key = "AIBOARD_FIXTURE_AMBIENT_SECRET"; const value = `sentinel-${Date.now()}-${Math.random()}`;
   const previous = process.env[key]; process.env[key] = value;
+  try {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-fixture-env-")); const backend = createWindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 20 });
   let binding: ReturnType<typeof bindingFor> | undefined;
-  try {
-    const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "setInterval(()=>{},1000)"]))); binding = bindingFor(launch);
+  assert.ok(backend instanceof WindowsProcessBackend);
+  let released = false;
+    await withInspectionFixture({
+      fixtureName: "Windows filtered supervisor environment", root,
+      registerCleanup: register => backend.registerInspectionCleanup(register),
+      body: async () => {
+    let launch: ProcessLaunchResult;
+    try { launch = parseProcessLaunchResult(await backend.launch(request(["-e", "setInterval(()=>{},1000)"]))); binding = bindingFor(launch); }
+    catch (error) {
+      if (error instanceof NativeProcessLaunchBlockedError) binding = bindingFor(error.launchResult);
+      throw error;
+    }
     const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { supervisorPid: number };
     const commandLine = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${identity.supervisorPid}';$p.CommandLine`], { encoding: "utf8", windowsHide: true }).trim();
     const encoded = /\s([A-Za-z0-9_-]+)\s*$/.exec(commandLine)?.[1]; assert.ok(encoded);
@@ -1921,13 +2091,17 @@ test("Windows portable fixture supervisor argv excludes ambient credential senti
     const expectedTaskkill = join(systemRoot, "System32", "taskkill.exe").toLowerCase();
     assert.equal(config.windowsTreeInspector?.command?.toLowerCase(), expectedPowerShell);
     assert.equal(config.windowsControlInspector?.command?.toLowerCase(), expectedPowerShell);
-    assert.equal(config.windowsBirthInspector?.command?.toLowerCase(), expectedPowerShell);
+    assert.equal(config.windowsBirthInspector, undefined, "the default Session transport must not serialize a per-query birth-shell fallback");
     assert.equal(config.windowsTaskkill?.command?.toLowerCase(), expectedTaskkill);
-  } finally {
-    try { if (binding) await cleanupWindowsProcessFixture(backend, binding, fence); }
-    finally { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; }
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+      },
+      cleanupWorkloads: async () => {
+        assert.ok(binding, "an exact acquired capability is required before inspection retirement");
+        await cleanupWindowsProcessFixture(backend, binding, fence); released = true;
+      },
+      certifyWorkloads: async () => { assert.equal(released, true); },
+      removeRoot: () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }),
+    });
+  } finally { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; }
 });
 
 test("Windows native supervisor owns a surviving descendant after launcher exit", async (t) => {
@@ -1941,13 +2115,24 @@ test("Windows native supervisor owns a surviving descendant after launcher exit"
     stateDirectory: root,
     pollIntervalMs: 20,
   });
-  const launch = parseProcessLaunchResult(await backend.launch(request([
-    "-e",
-    "const{spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore',detached:true});c.unref();console.log(c.pid);setTimeout(()=>process.exit(0),1500)",
-  ])));
-  const binding = bindingFor(launch);
-  let hasPrimaryFailure = false; let primaryFailure: unknown; let cleanupReleased = false;
-  try {
+  assert.ok(backend instanceof WindowsProcessBackend);
+  let binding: ProcessBackendBinding | undefined;
+  let cleanupReleased = false;
+  await withInspectionFixture({
+    fixtureName: "Windows owned backend", root,
+    registerCleanup: register => backend.registerInspectionCleanup(register),
+    body: async () => {
+    let launch: ProcessLaunchResult;
+    try {
+      launch = parseProcessLaunchResult(await backend.launch(request([
+        "-e",
+        "const{spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore',detached:true});c.unref();console.log(c.pid);setTimeout(()=>process.exit(0),1500)",
+      ])));
+      binding = bindingFor(launch);
+    } catch (error) {
+      if (error instanceof NativeProcessLaunchBlockedError) binding = bindingFor(error.launchResult);
+      throw error;
+    }
     await new Promise((resolve) => setTimeout(resolve, 1_800));
     let reconciled = parseProcessReconciliation(await backend.reconcile(binding, fence));
     const inspectionDeadline = Date.now() + 5_000;
@@ -1968,14 +2153,14 @@ test("Windows native supervisor owns a surviving descendant after launcher exit"
     }
     assert.equal(parseProcessSignalResult(terminated).state, "running");
     assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence)).empty, false);
-  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
-  finally {
-    await finalizeCertifiedFixture({ fixtureName: "Windows owned backend", root, hasPrimaryFailure, primaryFailure,
-      cleanup: async () => { if (!cleanupReleased) { await drainAndCleanupWindowsFixture(backend, binding, fence); cleanupReleased = true; } },
-      certify: async () => { assert.equal(cleanupReleased, true, "exact backend release must be certified"); },
-      removeRoot: () => { rmSync(root, { recursive: true, maxRetries: 30, retryDelay: 50 }); t.diagnostic(`certified backend fixture removed: ${root}`); },
-    });
-  }
+    },
+    cleanupWorkloads: async () => {
+      assert.ok(binding, "an exact acquired launch capability is required before inspection retirement");
+      if (!cleanupReleased) { await drainAndCleanupWindowsFixture(backend, binding, fence); cleanupReleased = true; }
+    },
+    certifyWorkloads: async () => { assert.equal(cleanupReleased, true, "exact backend release must be certified"); },
+    removeRoot: () => { rmSync(root, { recursive: true, maxRetries: 30, retryDelay: 50 }); t.diagnostic(`certified backend fixture removed: ${root}`); },
+  });
 });
 
 test("optional Windows Job adapter terminates and verifies a TERM-ignoring descendant tree", async (t) => {
@@ -3169,6 +3354,8 @@ async function drainAndCleanupWindowsFixture(backend: ProcessBackend, binding: P
   let channel: Awaited<ReturnType<ReturnType<WindowsProcessBackend["backpressuredChannelProvider"]>["acquire"]>> | undefined;
   let unsubscribe: (() => void) | undefined;
   const deadline = Date.now() + 15_000;
+  let hasPrimaryFailure = false;
+  let primaryFailure: unknown;
   try {
     channel = await streamed.backpressuredChannelProvider().acquire(binding, cleanupFence);
     unsubscribe = channel.subscribeBackpressuredOutput(async (metadata) => metadata);
@@ -3180,12 +3367,23 @@ async function drainAndCleanupWindowsFixture(backend: ProcessBackend, binding: P
       if (state.state === "exited") {
         assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, cleanupFence)).empty, true);
         unsubscribe(); unsubscribe = undefined; await channel.detach(); channel = undefined;
-        await backend.release(binding, cleanupFence); return;
+        parseProcessReleaseResult(await backend.release(binding, cleanupFence)); return;
       }
       if (Date.now() >= deadline) throw new Error("Fixture output/backend cleanup remains unverified at its deadline.");
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-  } finally { unsubscribe?.(); await channel?.detach(); }
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    const failures: unknown[] = [];
+    try { unsubscribe?.(); } catch (error) { failures.push(error); }
+    try { await channel?.detach(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(
+      [...(hasPrimaryFailure ? [primaryFailure] : []), ...failures],
+      "Windows fixture output cleanup remains unverified.",
+      hasPrimaryFailure ? { cause: primaryFailure } : undefined,
+    );
+    if (hasPrimaryFailure) throw primaryFailure;
+  }
 }
 
 async function cleanupWindowsProcessFixture(
@@ -3201,7 +3399,7 @@ async function cleanupWindowsProcessFixture(
     last = observation.state;
     if (observation.state === "identity_mismatch") throw new Error("Windows fixture cleanup lost exact ownership.");
     if (observation.state === "exited") {
-      try { await backend.release(binding, cleanupFence); return; }
+      try { parseProcessReleaseResult(await backend.release(binding, cleanupFence)); return; }
       catch (error) { last = String(error); }
     }
     await new Promise((resolve) => setTimeout(resolve, 50));

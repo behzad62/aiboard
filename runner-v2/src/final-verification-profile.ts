@@ -494,10 +494,12 @@ function npmInvocation(environment: Readonly<Record<string, string | undefined>>
     return { executable: process.execPath, args: [resolve(npmCli)] };
   }
   const bundled = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-  if (!existsSync(bundled)) throw new Error("Declared npm package manager is unavailable to Runner V2.");
+  const posixInstalled = join(dirname(process.execPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+  const resolved = existsSync(bundled) ? bundled : existsSync(posixInstalled) ? posixInstalled : undefined;
+  if (!resolved) throw new Error("Declared npm package manager is unavailable to Runner V2.");
   return {
     executable: process.execPath,
-    args: [bundled],
+    args: [resolved],
   };
 }
 

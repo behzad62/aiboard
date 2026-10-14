@@ -26,7 +26,7 @@ interface Fixture {
 }
 function fixtureTest(name: string, run: (fixture: Fixture) => Promise<void>): void {
   test(`filesystem fence: ${name}`, async (t) => {
-    const root = fs.mkdtempSync(join(tmpdir(), "aiboard-task10-fence-"));
+    const root = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "aiboard-task10-fence-")));
     const workspace = join(root, "workspace"); const outside = join(root, "outside");
     fs.mkdirSync(workspace); fs.mkdirSync(outside);
     fs.writeFileSync(join(outside, "sentinel.txt"), "outside-original");

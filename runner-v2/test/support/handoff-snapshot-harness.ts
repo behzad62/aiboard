@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AgentModel } from "../../src/agent-contracts.js";
+import type { AgentModel, AgentModelRequest } from "../../src/agent-contracts.js";
 import { ArtifactStore } from "../../src/artifact-store.js";
 import { BuildRuntime, type ArchitectRuntimeDriver, type ProjectDocsPort, type StopNotesDriver } from "../../src/build-runtime.js";
 import type { NativeBuildSpec } from "../../src/build-spec.js";
@@ -12,6 +12,7 @@ import type { RunnerProviderConfig } from "../../src/provider-config-store.js";
 import { createExecutionHost } from "../../src/execution-host.js";
 import {
   assertProjectHandoffSelectionAccepted,
+  currentExplicitStartIdentity,
   handoffSnapshotAtCurrentStop,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
@@ -42,6 +43,7 @@ import {
   emptyFinalVerificationProfile,
 } from "./final-verification-profile.js";
 import type { EvidenceStore } from "../../src/evidence-store.js";
+import type { ValidationScope } from "../../src/validation-scope.js";
 import type { IndependentVerifierDriver } from "../../src/build-runtime.js";
 
 /**
@@ -61,6 +63,10 @@ import type { IndependentVerifierDriver } from "../../src/build-runtime.js";
 export const CLOCK = "2026-09-25T00:00:00.000Z";
 export const SOURCE_TEXT = "SECTION 1: MANDATORY. The value module must export the value 2.";
 export const COMPLETION_SUMMARY = "The plan is ready for handoff. Notes for the next tool: keep the value module as is.";
+
+// Objective shared by factory-port recovery specs and the seeds they recover:
+// the recorded run.initialized objective must equal the spec objective.
+export const FACTORY_PORT_OBJECTIVE = "Prove the factory-wired docs port.";
 
 export function scenario() {
   const manifest = buildSourceManifest(Buffer.from(SOURCE_TEXT, "utf-8"), [{ id: "s1", startByte: 0, endByte: Buffer.byteLength(SOURCE_TEXT) }], {
@@ -181,7 +187,7 @@ export function lowRiskSeed(runId: string, baselineRevision: string, key = "risk
   })];
 }
 
-export function v2PlanOnlySeed(runId: string): NewSchedulerEvent[] {
+export function v2PlanOnlySeed(runId: string, objective = FACTORY_PORT_OBJECTIVE): NewSchedulerEvent[] {
   const { manifest, requirements, phases, revision, coverageReview } = scenario();
   const e = (
     type: string,
@@ -191,9 +197,10 @@ export function v2PlanOnlySeed(runId: string): NewSchedulerEvent[] {
     payload: Record<string, unknown>,
   ): NewSchedulerEvent => seedEvent(runId, type, key, role, id, payload);
   return [
-    e("project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 2 }),
-    e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "plan_only" }),
+    e("project_docs.policy_configured", "project-docs-policy", "runner", "build-runtime", { version: 2 }),
+    e("run.initialized", "run-initialized", "runner", "build-runtime", { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective }),
     e("planning.policy_configured", "planning-policy", "runner", "build-runtime", { version: 1 }),
+    e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "plan_only" }),
     e("planning.source_registered", "source", "user", "owner", { manifest }),
     e("request.triaged", "triage", "architect", "architect", { decision: "build", rationale: "Plan the module." }),
     e("planning.ledger_persisted", "ledger", "architect", "architect", { id: "ledger", requirements, phases, nonNormativeSections: [] }),
@@ -207,7 +214,7 @@ export function v2PlanOnlySeed(runId: string): NewSchedulerEvent[] {
   ];
 }
 
-export function v2AnsweredSeed(runId: string): NewSchedulerEvent[] {
+export function v2AnsweredSeed(runId: string, objective = FACTORY_PORT_OBJECTIVE): NewSchedulerEvent[] {
   const { manifest } = scenario();
   const e = (
     type: string,
@@ -217,9 +224,10 @@ export function v2AnsweredSeed(runId: string): NewSchedulerEvent[] {
     payload: Record<string, unknown>,
   ): NewSchedulerEvent => seedEvent(runId, type, key, role, id, payload);
   return [
-    e("project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 2 }),
-    e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
+    e("project_docs.policy_configured", "project-docs-policy", "runner", "build-runtime", { version: 2 }),
+    e("run.initialized", "run-initialized", "runner", "build-runtime", { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective }),
     e("planning.policy_configured", "planning-policy", "runner", "build-runtime", { version: 1 }),
+    e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
     e("planning.source_registered", "source", "user", "owner", { manifest }),
     e("request.triaged", "triage", "architect", "architect", { decision: "answer", rationale: "A pure question." }),
     e("request.answered", "answer", "architect", "architect", {
@@ -749,18 +757,22 @@ export function managedHandle(
   } as never;
 }
 
-export interface FactoryPortFixture {
+/** Minimal handoff fixture: state, docs port, and evidence. Factory ports add the factory and stop-notes driver. */
+export interface HandoffFixture {
   root: string;
   project: string;
   state: string;
   baselineRevision: string;
   integration: ProductionIntegrationManager;
   port: ProjectDocsPort;
+  evidence: SqliteEvidenceStore;
+  close: () => Promise<void>;
+}
+
+export interface FactoryPortFixture extends HandoffFixture {
   /** C3b: the factory-built runtime's stop-notes driver (the actual Architect runtime). */
   stopNotes: StopNotesDriver;
   factory: NativeBuildFactory;
-  evidence: SqliteEvidenceStore;
-  close: () => Promise<void>;
 }
 
 /**
@@ -769,12 +781,143 @@ export interface FactoryPortFixture {
  * injection patches the factory's own integration manager instance (the
  * port keeps delegating to it); the port object itself is the factory's.
  */
+/**
+ * P6.6 T8 Layer-4: factory-port finish acceptance. Build-finish handoff
+ * tests run through NativeBuildFactory with docs v2, so the seed must
+ * carry the exact new-policy provisioning prefix with planning v1 (the
+ * legacy-planning v2FinishSeed is intentionally unrecoverable via the
+ * factory). Planning v1 finish completion requires durable delivery
+ * acceptance, which cannot be faked: the helper below drives the real
+ * factory pump with scripted worker/reviewer/architect models (copied
+ * from the delivery factory scenario) until T1 is integrated and the
+ * P1 phase is accepted. Callers then append FV + risk and drive handoff
+ * exactly as before; complete_run succeeds because acceptance exists.
+ */
+const FINISH_VALUE_TEST = "import test from 'node:test'; import assert from 'node:assert/strict'; import { value } from '../src/value.mjs'; test('value', () => assert.equal(value, 2));\n";
+const FINISH_LOW_CONTENT = "export const value = 2;\n";
+const FINISH_VALIDATION_SCOPE: ValidationScope = {
+  changed: ["src/value.mjs"],
+  verified: ["src/value.mjs exports value = 2"],
+  testsRun: [{ command: "node --test", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }],
+  notRun: [],
+};
+
+function finishCall(name: string, args: unknown, id: string): ModelTurn {
+  return {
+    blocks: [{ type: "tool_call", callId: id, name, arguments: args }],
+    stopReason: "tool_calls",
+    usage: { inputTokens: 8, outputTokens: 4 },
+  };
+}
+
+function finishLastToolValue(request: AgentModelRequest): Record<string, unknown> | undefined {
+  const message = [...request.messages].reverse().find((candidate) => candidate.role === "tool");
+  const content = (message?.content as { content?: Array<{ type: string; value?: unknown }> } | undefined)?.content;
+  return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
+}
+
+class FinishWorkerModel implements AgentModel {
+  async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    const toolCount = request.messages.filter((message) => message.role === "tool").length;
+    if (toolCount === 0) return finishCall("fs.write", { path: "src/value.mjs", content: FINISH_LOW_CONTENT, createDirectories: true }, "write-1");
+    if (toolCount === 1) return finishCall("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
+    const record = finishLastToolValue(request)!;
+    const fact = record.fact as { stdoutArtifactHash: string };
+    return finishCall("submit_task", {
+      summary: "Added src/value.mjs exporting value = 2; node --test passes.",
+      readiness: "ready_for_architect_review",
+      unresolvedConcerns: [],
+      criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: FINISH_VALIDATION_SCOPE,
+    }, "submit-1");
+  }
+}
+
+class FinishReviewerModel implements AgentModel {
+  async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    const system = request.messages.find((message) => message.role === "system");
+    const pass = system?.id ?? "";
+    const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
+    const tools = request.messages.filter((message) => message.role === "tool").length;
+    if (pass === "delivery-obligations-system") {
+      return finishCall("record_deliverable_obligations", { obligations: [{ id: "o1", description: "value must be 2." }] }, `obl-${tools}`);
+    }
+    if (pass === "delivery-findings-system") {
+      if (tools === 0) return finishCall("fs.read", { path: "src/value.mjs" }, "read-1");
+      return finishCall("record_deliverable_findings", { findings: [] }, `findings-${tools}`);
+    }
+    if (tools === 0) return finishCall("fs.read", { path: "src/value.mjs" }, "verdict-read-1");
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    return finishCall("submit_deliverable_verdict", {
+      summary: "The module exports 2 and the cited test run passed.",
+      satisfied: true,
+      survivorDispositions: [],
+      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout.", citations: [{ path: "src/value.mjs", line: 1 }] })),
+    }, `verdict-${tools}`);
+  }
+}
+
+class FinishArchitectModel implements AgentModel {
+  constructor(private readonly projection: () => SchedulerProjection) {}
+  async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    const projection = this.projection();
+    const tools = request.messages.filter((message) => message.role === "tool").length;
+    const task = projection.tasks.T1!;
+    if (task.status === "submitted" || task.status === "architect_review") {
+      const links = task.criterionEvidenceLinks ?? [];
+      return finishCall("review_task", {
+        taskId: "T1",
+        decision: "approved",
+        summary: "The deliverable review is satisfied and the evidence passes.",
+        evidenceArtifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))],
+        criterionVerdicts: [{ criterionId: "c1", verdict: "satisfied", rationale: "Tests pass.", evidenceIds: links.map((link) => link.evidenceId), artifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))] }],
+      }, `review-${request.messages.length}-${tools}`);
+    }
+    if (task.status === "approved") return finishCall("request_integration", { taskId: "T1" }, `integrate-${request.messages.length}-${tools}`);
+    throw new Error(`Unexpected Architect turn with T1 ${task.status}.`);
+  }
+}
+
+/**
+ * Current-policy factory finish pre-seed: the exact T7a provisioning
+ * prefix (docs2/run.initialized/planning1) with FACTORY_PORT_OBJECTIVE,
+ * the finish run policy, the shared scenario planned through ready, and
+ * the explicit owner start for the current ready identity. No scheduler
+ * tasks are faked: T1 materializes from the ready plan and is driven to
+ * integrated + accepted by openFactoryFinishPort's real pump. FV, risk
+ * and handoff are appended by the caller exactly as before.
+ */
+export function v2FactoryFinishPreSeed(runId: string, objective = FACTORY_PORT_OBJECTIVE): NewSchedulerEvent[] {
+  const base = v2PlanOnlySeed(runId, objective).map((event) =>
+    event.type === "run.policy_configured"
+      ? { ...event, payload: { ...event.payload, runPolicy: "finish" } }
+      : event);
+  const synthesized = base.map((event, index) => ({ ...event, sequence: index + 1, eventId: `finish-pre-${index}` }));
+  const projection = rebuildSchedulerProjection(synthesized as unknown as Parameters<typeof rebuildSchedulerProjection>[0]);
+  const startIdentity = currentExplicitStartIdentity(projection);
+  assert.ok(startIdentity, "the factory finish pre-seed is ready with a complete start identity");
+  return [
+    ...base,
+    seedEvent(runId, "planning.execution_authorized", "owner-start", "user", "local-user", {
+      authorization: { ...startIdentity, version: 1, ownerChoice: "execute" },
+    }),
+  ];
+}
+
+export interface FactoryPortHooks {
+  /** Runs against the factory-built runtime before the fixture is returned. */
+  onBuilt?: (built: { runtime: BuildRuntime }) => Promise<void>;
+  /** Prepares the project directory before the git baseline is captured. */
+  prepareProject?: (project: string) => void;
+}
+
 export async function openFactoryPort(
   label: string,
   runId: string,
   seed: (runId: string, baselineRevision: string) => NewSchedulerEvent[],
   runPolicy: "finish" | "plan_only",
   specOptions: { specCopy?: boolean; handoffFiles?: "commit" | "export_only"; modelsFor?: (config: RunnerProviderConfig) => AgentModel } = {},
+  hooks: FactoryPortHooks = {},
 ): Promise<FactoryPortFixture> {
   const root = mkdtempSync(join(tmpdir(), `aiboard-c2b-factory-${label}-`));
   const project = join(root, "project");
@@ -783,16 +926,61 @@ export async function openFactoryPort(
   mkdirSync(state, { recursive: true });
   writeFileSync(join(project, "shared.txt"), "baseline\n");
   writeFileSync(join(project, "package.json"), JSON.stringify({ name: `c2b-${label}-fixture`, version: "1.0.0", type: "module" }, null, 2));
+  hooks.prepareProject?.(project);
   const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
   const runRoot = join(state, "builds", safeSegment(runId));
   mkdirSync(runRoot, { recursive: true });
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  const seeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
+  const schedulerDbOptions = {
     evidenceStore: evidence,
     validateExecutionProfile: acceptFinalVerificationProfile,
     validateCleanupReceipt: () => undefined,
-  });
-  for (const input of seed(runId, baseline.revision)) seeder.append(input);
+  };
+  const planned = seed(runId, baseline.revision);
+  // Supported policy shapes only. New-policy seeds (planning.policy_configured
+  // present) must carry the exact T7a provisioning prefix and recover with the
+  // explicit planningPolicy v1 opt-in. Genuinely legacy seeds carry neither
+  // docs v2 nor planning v1. A legacy-planning seed carrying docs v2 is
+  // intentionally unrecoverable via the factory: production fails closed
+  // rather than downgrade, so the helper refuses it instead of hiding the
+  // docs stamp from the guard and mutating history after creation.
+  const newPolicySeed = planned.some((event) => event.type === "planning.policy_configured");
+  const hasDocsV2 = planned.some((event) =>
+    event.type === "project_docs.policy_configured" &&
+    (event.payload as Record<string, unknown>).version === 2);
+  assert.equal(
+    hasDocsV2 && !newPolicySeed,
+    false,
+    "openFactoryPort refuses a legacy-planning seed carrying docs v2: modernize to the exact " +
+    "new-policy prefix (docs2/run.initialized/planning1) with planningPolicy v1, or keep the seed " +
+    "genuinely legacy (no docs2/planning1). Withholding the docs stamp around create() is not supported.",
+  );
+  if (newPolicySeed) {
+    const [docs, init, planning] = planned;
+    assert.equal(docs?.type, "project_docs.policy_configured", "new-policy seeds open with docs v2");
+    assert.equal(docs?.idempotencyKey, "project-docs-policy", "docs v2 carries the provisioning key");
+    assert.deepEqual(docs?.payload, { version: 2 }, "docs v2 carries exactly version 2");
+    assert.equal(init?.type, "run.initialized", "new-policy seeds carry run.initialized second");
+    assert.equal(init?.idempotencyKey, "run-initialized", "run.initialized carries the provisioning key");
+    assert.deepEqual(
+      init?.payload,
+      {
+        testIntegrityPolicyVersion: 1,
+        submissionScopePolicyVersion: 1,
+        reviewIntegrityPolicyVersion: 1,
+        encodingSafetyPolicyVersion: 1,
+        reviewEvidencePolicyVersion: 1,
+        validationScopePolicyVersion: 1,
+        objective: FACTORY_PORT_OBJECTIVE,
+      },
+      "run.initialized carries the exact provisioning policies and the factory-port objective",
+    );
+    assert.equal(planning?.type, "planning.policy_configured", "new-policy seeds carry planning v1 third");
+    assert.equal(planning?.idempotencyKey, "planning-policy", "planning v1 carries the provisioning key");
+    assert.deepEqual(planning?.payload, { version: 1 }, "planning v1 carries exactly version 1");
+  }
+  const seeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), schedulerDbOptions);
+  for (const input of planned) seeder.append(input);
   seeder.close();
   const seen: ProductionIntegrationManager[] = [];
   const origInitialize = ProductionIntegrationManager.prototype.initialize;
@@ -818,13 +1006,19 @@ export async function openFactoryPort(
     baselineFor: () => baseline.revision,
     providerModelFactory: (config) => specOptions.modelsFor?.(config) ?? new UnusedModel(),
   });
+  if (newPolicySeed) {
+    // Truthful registered-source bytes for creation-time verification: the
+    // shared scenario manifest's exact bytes, in the store the factory reads.
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    await artifacts.put(Buffer.from(SOURCE_TEXT, "utf-8"), "text/plain", "approved source");
+  }
   let built: { runtime: BuildRuntime; cleanup: () => Promise<void>; close: () => Promise<void> };
   try {
     built = await factory.create(await factory.prepareSpec({
       version: 2,
       runId,
       projectId: "c2b-factory-fixture",
-      objective: "Prove the factory-wired docs port.",
+      objective: FACTORY_PORT_OBJECTIVE,
       architectRuntimeId: "arch:architect",
       workerRuntimeIds: ["work:worker"],
       verifierRuntimeIds: ["rev:reviewer"],
@@ -832,6 +1026,7 @@ export async function openFactoryPort(
       maxConcurrency: 1,
       permissionProfile: "full",
       runPolicy,
+      ...(newPolicySeed ? { planningPolicy: { version: 1 as const } } : {}),
       budgetLimits: {},
       createdAt: CLOCK,
       idempotencyKey: `c2b-factory-${label}`,
@@ -841,6 +1036,7 @@ export async function openFactoryPort(
     ProductionIntegrationManager.prototype.initialize = origInitialize;
   }
   assert.equal(seen.length, 1, "the factory builds exactly one integration manager");
+  if (hooks.onBuilt) await hooks.onBuilt(built);
   const integration = seen[0]!;
   const port = (built.runtime as unknown as { projectDocs: ProjectDocsPort }).projectDocs;
   assert.ok(port, "the factory builds a docs port");
@@ -861,6 +1057,176 @@ export async function openFactoryPort(
       await built.close();
       await factory.close();
       await executionHost.close();
+      evidence.close();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+/**
+ * A direct (non-factory) handoff fixture for logs the factory intentionally
+ * cannot recover. Legacy-planning docs-v2 logs (the N6 baseline-fallback
+ * shape) are supported by the reducer and the direct BuildRuntime, but
+ * production fails closed when a legacy spec recovers against docs2, so no
+ * factory spec can legally open them. This helper seeds the log as-is and
+ * builds the production-shaped docs port directly around a fixture
+ * integration manager, without hiding events from any guard. New-policy
+ * factory tests keep using openFactoryPort; only genuinely factory-
+ * unrecoverable legacy shapes use this path.
+ */
+/**
+ * Factory-port finish fixture with real delivery acceptance. Opens the
+ * factory on v2FactoryFinishPreSeed, then steps the factory-built runtime
+ * with scripted worker/reviewer/architect models until T1 is integrated
+ * and P1 accepted (stopping before FV starts). The caller appends fvSeed
+ * + lowRiskSeed and drives handoff exactly as before.
+ */
+export async function openFactoryFinishPort(
+  label: string,
+  runId: string,
+  specOptions: { specCopy?: boolean; handoffFiles?: "commit" | "export_only" } = {},
+): Promise<FactoryPortFixture> {
+  let runtimeRef: BuildRuntime | undefined;
+  const worker = new FinishWorkerModel();
+  const reviewer = new FinishReviewerModel();
+  const modelsFor = (config: RunnerProviderConfig): AgentModel => {
+    if (config.runtimeId === "arch:architect") return new FinishArchitectModel(() => runtimeRef!.projection());
+    if (config.runtimeId === "work:worker") return worker;
+    return reviewer;
+  };
+  const fixture = await openFactoryPort(
+    label,
+    runId,
+    (seedRunId) => v2PlanOnlySeed(seedRunId).slice(0, 3),
+    "finish",
+    { ...specOptions, modelsFor },
+    {
+      // The scripted finish worker runs `node --test` and expects the value
+      // fixture: scoped to finish fixtures only via the preparation hook, so
+      // generic factory and direct fixtures keep their committed contents.
+      prepareProject: (project) => {
+        const packagePath = join(project, "package.json");
+        const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as Record<string, unknown>;
+        writeFileSync(packagePath, JSON.stringify({ ...pkg, scripts: { test: "node --test" } }, null, 2));
+        mkdirSync(join(project, "test"), { recursive: true });
+        writeFileSync(join(project, "test", "value.test.mjs"), FINISH_VALUE_TEST);
+      },
+      onBuilt: async (built) => {
+        runtimeRef = built.runtime;
+      },
+    },
+  );
+  try {
+    // T8 fresh bootstrap: the factory saw only the bare 3-event prefix, so it
+    // stamped genuine evidence activation + test-integrity initialRevision from
+    // the actual Git baseline. Preserve the exact source bytes in the actual
+    // artifact store, append the original source->ready tail, authorize the
+    // actual durable ready identity via the public API, then drive the real
+    // worker/reviewer/integration pump (no baseline is fabricated).
+    const { manifest } = scenario();
+    const sourceArtifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+    const stored = await sourceArtifacts.put(Buffer.from(SOURCE_TEXT, "utf-8"), "text/plain", "approved source");
+    assert.equal(stored.hash, manifest.artifactDigest, "the stored source bytes are the manifest authority");
+    const tail = v2FactoryFinishPreSeed(runId).slice(4, -1);
+    const tailStore = openHandoffStore(fixture, runId);
+    try {
+      for (const input of tail) tailStore.append(input);
+    } finally {
+      tailStore.close();
+    }
+    const { projection: readyProjection } = readHandoffLog(fixture, runId);
+    const startIdentity = currentExplicitStartIdentity(readyProjection);
+    assert.ok(startIdentity, "the factory finish pre-seed is ready with a complete start identity");
+    await runtimeRef!.authorizeExplicitPlanStart({
+      ...startIdentity,
+      version: 1,
+      ownerChoice: "execute",
+      idempotencyKey: "owner-start",
+    });
+    for (let step = 0; step < 40; step += 1) {
+      const projection = runtimeRef!.projection();
+      if (Object.keys(projection.delivery?.phaseAcceptances ?? {}).length > 0) break;
+      const result = await runtimeRef!.step();
+      if (result.status === "paused" || result.status === "failed") break;
+    }
+    const final = runtimeRef!.projection();
+    assert.ok(Object.keys(final.delivery?.phaseAcceptances ?? {}).length > 0, "the finish drive reaches phase acceptance");
+    assert.ok(final.delivery?.taskAcceptances.T1, "T1 is accepted before handoff");
+    assert.ok(final.integrationRevision, "integration revision exists before FV");
+    // The worker drive recorded evidence in the factory's own evidence store
+    // (runRoot), not the fixture's pre-create store. Point the fixture at the
+    // factory file so later harness opens replay with the worker evidence.
+    const factoryEvidence = new SqliteEvidenceStore(join(fixture.state, "builds", safeSegment(runId), "evidence.sqlite"));
+    const origClose = fixture.close;
+    fixture.evidence = factoryEvidence;
+    fixture.close = async () => {
+      factoryEvidence.close();
+      await origClose();
+    };
+  } catch (error) {
+    try {
+      await fixture.close();
+    } catch (closeError) {
+      throw new AggregateError([error, closeError], "openFactoryFinishPort prep/drive failed and cleanup also failed");
+    }
+    throw error;
+  }
+  return fixture;
+}
+
+/**
+ * The scheduler integration revision after openFactoryFinishPort's worker
+ * drive. Handoff tests seed FV + risk against this revision (not the git
+ * baseline: worker integration advanced it) and scope rev-list assertions
+ * from it so worker commits do not pollute handoff commit counts.
+ */
+export function finishIntegrationRevision(fixture: FactoryPortFixture, runId: string): string {
+  const { projection } = readHandoffLog(fixture, runId);
+  assert.ok(projection.integrationRevision, "the finish drive leaves an integration revision");
+  return projection.integrationRevision;
+}
+
+export async function openDirectPort(
+  label: string,
+  runId: string,
+  seed: (runId: string, baselineRevision: string) => NewSchedulerEvent[],
+): Promise<HandoffFixture> {
+  const root = mkdtempSync(join(tmpdir(), `aiboard-c2b-direct-${label}-`));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(project, "shared.txt"), "baseline\n");
+  writeFileSync(join(project, "package.json"), JSON.stringify({ name: `c2b-${label}-fixture`, version: "1.0.0", type: "module" }, null, 2));
+  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
+  const runRoot = join(state, "builds", safeSegment(runId));
+  mkdirSync(runRoot, { recursive: true });
+  const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const seeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {
+    evidenceStore: evidence,
+    validateExecutionProfile: acceptFinalVerificationProfile,
+    validateCleanupReceipt: () => undefined,
+  });
+  for (const input of seed(runId, baseline.revision)) seeder.append(input);
+  seeder.close();
+  const integration = new FixtureIntegrationManager({
+    repositoryRoot: project,
+    stateDirectory: state,
+    runId,
+    baselineRevision: baseline.revision,
+  });
+  await integration.initialize();
+  const port = gitDocsPort(integration);
+  return {
+    root,
+    project,
+    state,
+    baselineRevision: baseline.revision,
+    integration,
+    port,
+    evidence,
+    close: async () => {
+      await integration.cleanup();
       evidence.close();
       rmSync(root, { recursive: true, force: true });
     },
@@ -926,9 +1292,10 @@ export function headerDigest(body: string): string {
   return digest;
 }
 
-export function openHandoffStore(fixture: FactoryPortFixture, runId: string): SqliteSchedulerStore {
+export function openHandoffStore(fixture: HandoffFixture, runId: string): SqliteSchedulerStore {
   return new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(runId), "scheduler.sqlite"), {
     evidenceStore: fixture.evidence,
+    artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
     validateExecutionProfile: acceptFinalVerificationProfile,
     validateCleanupReceipt: () => undefined,
   });
@@ -940,7 +1307,7 @@ export function openHandoffStore(fixture: FactoryPortFixture, runId: string): Sq
  * real snapshot step runs with no model call.
  */
 export function seedHandoffRequested(
-  fixture: FactoryPortFixture,
+  fixture: HandoffFixture,
   runId: string,
   key = "handoff-requested",
   summary = COMPLETION_SUMMARY,
@@ -954,7 +1321,7 @@ export function seedHandoffRequested(
 }
 
 export function appendHandoffEvents(
-  fixture: FactoryPortFixture,
+  fixture: HandoffFixture,
   runId: string,
   events: NewSchedulerEvent[],
 ): void {
@@ -967,7 +1334,7 @@ export function appendHandoffEvents(
 }
 
 export function readHandoffLog(
-  fixture: FactoryPortFixture,
+  fixture: HandoffFixture,
   runId: string,
 ): { events: ReturnType<SqliteSchedulerStore["readRun"]>; projection: SchedulerProjection } {
   const store = openHandoffStore(fixture, runId);
@@ -999,7 +1366,7 @@ export interface DriveHandoffOptions {
  * applyAutomaticHandoff or selectHandoffOwner afterwards.
  */
 export async function driveHandoff(
-  fixture: FactoryPortFixture,
+  fixture: HandoffFixture,
   runId: string,
   options: DriveHandoffOptions = {},
 ): Promise<{ events: ReturnType<SqliteSchedulerStore["readRun"]>; projection: SchedulerProjection }> {
@@ -1013,6 +1380,7 @@ export async function driveHandoff(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "plan_only",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       ...(options.specCopy !== undefined ? { specCopy: options.specCopy } : {}),
       ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
       ...(options.artifacts ? { artifacts: options.artifacts } : {}),
@@ -1037,7 +1405,7 @@ export async function driveHandoff(
  * stop without notes).
  */
 export async function pauseHandoff(
-  fixture: FactoryPortFixture,
+  fixture: HandoffFixture,
   runId: string,
   reason: string,
   key: string,
@@ -1053,6 +1421,7 @@ export async function pauseHandoff(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "plan_only",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       ...(options.specCopy !== undefined ? { specCopy: options.specCopy } : {}),
       ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
       ...(options.stopNotes ? { stopNotes: options.stopNotes } : {}),
@@ -1066,7 +1435,7 @@ export async function pauseHandoff(
 
 /** The owner's resume through the real runtime: clears the failure pause so the next drive retries. */
 export async function resumeHandoff(
-  fixture: FactoryPortFixture,
+  fixture: HandoffFixture,
   runId: string,
   key: string,
   options: DriveHandoffOptions = {},
@@ -1081,6 +1450,7 @@ export async function resumeHandoff(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "plan_only",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       ...(options.specCopy !== undefined ? { specCopy: options.specCopy } : {}),
       ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
     });
@@ -1097,7 +1467,7 @@ export async function resumeHandoff(
  * any other choice records a stub result without touching the project.
  */
 export async function selectHandoffOwner(
-  fixture: FactoryPortFixture,
+  fixture: HandoffFixture,
   runId: string,
   choice: ProjectHandoffChoice,
   key: string,
@@ -1120,6 +1490,7 @@ export async function selectHandoffOwner(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "plan_only",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
       ...(options.specCopy !== undefined ? { specCopy: options.specCopy } : {}),
       ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
     });
@@ -1143,7 +1514,7 @@ export async function selectHandoffOwner(
  * selection.
  */
 export async function applyAutomaticHandoff(
-  fixture: FactoryPortFixture,
+  fixture: HandoffFixture,
   runId: string,
   options: DriveHandoffOptions = {},
 ): Promise<SchedulerProjection> {
@@ -1157,6 +1528,7 @@ export async function applyAutomaticHandoff(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "finish",
       evidenceStore: fixture.evidence,
+      artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
     });
     const projection = runtime.projection();
     assertProjectHandoffSelectionAccepted(

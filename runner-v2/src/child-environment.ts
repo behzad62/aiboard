@@ -241,12 +241,23 @@ function freezeAudit(
 }
 
 function isCredentialGrantName(name: string): boolean {
-  return isEnvironmentName(name) && isSensitiveKey(name) && !isRunnerName(name) && !canonicalName(name).startsWith("NPM_") && canonicalName(name) !== "INIT_CWD";
+  return isEnvironmentName(name) && isSensitiveKey(name) && !isRunnerName(name) && !canonicalName(name).startsWith("NPM_") && canonicalName(name) !== "INIT_CWD" && !isNodeTestRunnerInternalName(name);
 }
 
 function isForbiddenChildEnvironmentName(name: string): boolean {
   const canonical = canonicalName(name);
-  return isSensitiveKey(name) || isRunnerName(name) || canonical.startsWith("NPM_") || canonical === "INIT_CWD";
+  return isSensitiveKey(name) || isRunnerName(name) || canonical.startsWith("NPM_") || canonical === "INIT_CWD" || isNodeTestRunnerInternalName(name);
+}
+
+/**
+ * Node's test runner marks its children with these coordination variables
+ * (runner.js sets NODE_TEST_CONTEXT=child-v8 and NODE_TEST_WORKER_ID per
+ * worker). A nested `node --test` inheriting them believes it is a reporter
+ * child and misbehaves, so user/project subprocesses must never inherit them.
+ */
+function isNodeTestRunnerInternalName(name: string): boolean {
+  const canonical = canonicalName(name);
+  return canonical === "NODE_TEST_CONTEXT" || canonical === "NODE_TEST_WORKER_ID";
 }
 
 function isRunnerName(name: string): boolean {

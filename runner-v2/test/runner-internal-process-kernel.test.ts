@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
 import type {
   BackpressuredInteractiveProcessChannelProvider,
@@ -126,7 +127,38 @@ type TestBackend = ProcessBackend & Readonly<{
   backpressuredChannelProvider(): BackpressuredInteractiveProcessChannelProvider;
 }>;
 
+test("kernel close waits for accepted launch and its late cleanup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-internal-kernel-launch-close-"));
+  let releaseLaunch!: () => void;
+  let enteredLaunch!: () => void;
+  const launchBarrier = new Promise<void>((resolve) => { releaseLaunch = resolve; });
+  const launchEntered = new Promise<void>((resolve) => { enteredLaunch = resolve; });
+  const fixture = faultBackend({ beforeLaunch: async () => { enteredLaunch(); await launchBarrier; } });
+  const kernel = createRunnerInternalProcessKernel({ stateDirectory: root, backend: fixture.backend });
+  const launching = kernel.launch(launchInput(root, "close-during-launch"));
+  const rejectedLaunch = assert.rejects(launching, /closed during launch/);
+  let closing: Promise<void> | undefined;
+  try {
+    await launchEntered;
+    let closeSettled = false;
+    closing = kernel.close().then(() => { closeSettled = true; });
+    void closing.catch(() => undefined);
+    await nextTurn();
+    assert.equal(closeSettled, false, "close must wait for the already accepted launch");
+    await assert.rejects(kernel.launch(launchInput(root, "after-close")), /kernel is closed/);
+    releaseLaunch();
+    await Promise.all([closing, rejectedLaunch]);
+    assert.equal(fixture.releaseCalls(), 1, "late workload must be released exactly once");
+    assert.equal(kernel.activeCount(), 0);
+  } finally {
+    releaseLaunch();
+    await Promise.allSettled([launching, rejectedLaunch, closing, kernel.close()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function faultBackend(options: {
+  readonly beforeLaunch?: () => Promise<void>;
   readonly acquireFailure?: boolean;
   readonly verifyEmptyFailures?: number;
   readonly releasePendingFailures?: number;
@@ -162,7 +194,9 @@ function faultBackend(options: {
         write_confinement: "unavailable",
       },
     }),
-    launch: async () => ({
+    launch: async () => {
+      await options.beforeLaunch?.();
+      return {
       opaqueIdentity: "fault-owned-process",
       birthFingerprint: {
         observedAt: "2026-09-01T00:00:00.000Z",
@@ -170,7 +204,8 @@ function faultBackend(options: {
       },
       rootPid: 42,
       startedAt: "2026-09-01T00:00:00.000Z",
-    }),
+      };
+    },
     observe: async () => ({ state: "exited", exitCode: 0 }),
     signal: async () => ({ state: "exited" }),
     verifyEmpty: async () => {

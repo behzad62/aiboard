@@ -70,7 +70,7 @@ import type {
   WorkerOutcome,
   WorkerRuntimeDriver,
 } from "../src/task-scheduler.js";
-import { buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
+import { FIXTURE_AMENDED_TEXT, buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
 import {
   CLAUDE_POINTER_LINE,
   DEFAULT_AGENTS_SECTION_BODY,
@@ -741,6 +741,178 @@ test("T9 answer-path mutation attempts are refused at every layer, never applied
     assert.equal(after.integrationRevision, undefined);
     assert.equal(after.planning, undefined);
     assert.equal(isAnsweredRun(after), true);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("T9 live admission refuses unknown and known-not-ready tasks before planning artifacts", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-t9-admission-order-"));
+  const clock = advancingClock();
+  // No artifacts authority on purpose: semantic refusals precede artifact
+  // checks, so none of these refusals may mention artifact authority.
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const runId = "run_t9_admission_order";
+  const fixture = scopedFixture();
+  const append = (type: NewSchedulerEvent["type"], idempotencyKey: string, actor: NewSchedulerEvent["actor"], payload: Record<string, unknown>) => store.append({
+    runId,
+    type: type as "request.triaged",
+    occurredAt: clock(),
+    actor,
+    idempotencyKey,
+    payload,
+  });
+  const recordPassingReview = (reviewId: string, keyPrefix: string) => {
+    append("planning.coverage_obligations_recorded", `${keyPrefix}:obligations`, { role: "verifier", id: "reviewer" }, {
+      reviewId,
+      sourceManifestId: fixture.manifest.manifestId,
+      sourceManifestDigest: fixture.manifest.artifactDigest,
+      obligations: structuredClone(fixture.coverageReview.derivedObligations),
+      sectionCoverage: fixture.manifest.sections.map((section) => ({
+        sectionId: section.id,
+        obligationIds: fixture.coverageReview.derivedObligations.map((obligation) => obligation.id),
+      })),
+      recordedAt: clock(),
+    });
+    append("planning.coverage_plan_delivered", `${keyPrefix}:delivered`, { role: "runner", id: "runner" }, {
+      reviewId,
+      planRevisionId: fixture.revision.revisionId,
+      planRevisionDigest: fixture.revision.digest,
+      sourceManifestId: fixture.manifest.manifestId,
+      deliveredAt: clock(),
+    });
+    append("planning.coverage_review_recorded", `${keyPrefix}:recorded`, { role: "verifier", id: "reviewer" }, {
+      review: {
+        ...structuredClone(fixture.coverageReview),
+        id: reviewId,
+        runId: fixture.coverageReview.runId,
+        planRevisionId: fixture.revision.revisionId,
+        planRevisionDigest: fixture.revision.digest,
+      },
+    });
+  };
+  try {
+    seedNewPolicy(store, runId, clock);
+    seedTriage(store, runId, clock, "build", "triage:build");
+    // Unknown task with no planning manifest at all: the kernel refusal,
+    // never a TypeError from missing planning.
+    assert.throws(
+      () => store.append({
+        runId,
+        type: "task.transitioned",
+        occurredAt: clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: "forged:unknown",
+        payload: { taskId: "T1", status: "assigned" },
+      }),
+      /Unknown task T1/,
+    );
+    // Ready the plan (bridges scheduler tasks), then drop readiness with a
+    // fresh coverage verdict: the tasks stay known while not-ready.
+    append("planning.source_registered", "source:base", { role: "user", id: "owner" }, { manifest: fixture.priorManifest });
+    append("planning.source_amended", "source:amend-1", { role: "user", id: "owner" }, { manifest: fixture.manifest });
+    append("planning.ledger_persisted", "ledger:1", { role: "architect", id: "architect_1" }, {
+      id: "ledger-1",
+      requirements: fixture.requirements,
+      phases: fixture.phases,
+      nonNormativeSections: [],
+    });
+    for (const section of fixture.manifest.sections) {
+      append("planning.source_section_read", `read:${section.id}`, { role: "architect", id: "architect_1" }, {
+        manifestId: fixture.manifest.manifestId,
+        manifestDigest: fixture.manifest.artifactDigest,
+        sectionId: section.id,
+        sectionDigest: section.digest,
+        readAt: clock(),
+      });
+    }
+    append("planning.checkpoint_recorded", "checkpoint:1", { role: "architect", id: "architect_1" }, {
+      checkpoint: {
+        id: "checkpoint-1",
+        coveredSourceSectionIds: fixture.manifest.sections.map((section) => section.id),
+        completedPlanningContractIds: ["requirement-ledger"],
+        remainingWork: [],
+        nextAction: "Draft the plan.",
+        recordedAt: clock(),
+      },
+    });
+    append("planning.plan_drafted", "plan:revision-1", { role: "architect", id: "architect_1" }, {
+      revision: fixture.revision,
+      expectedRevisionId: null,
+      expectedDigest: null,
+    });
+    append("planning.coverage_review_requested", "coverage-request:1", { role: "architect", id: "architect_1" }, {
+      reviewId: fixture.coverageReview.id,
+      planRevisionId: fixture.revision.revisionId,
+      planRevisionDigest: fixture.revision.digest,
+      sourceManifestId: fixture.manifest.manifestId,
+      requestedAt: clock(),
+    });
+    recordPassingReview(fixture.coverageReview.id, "coverage:1");
+    append("planning.plan_ready", "ready:1", { role: "runner", id: "runner" }, {
+      hostCapabilities: fixture.hostCapabilities,
+    });
+    const bridged = Object.keys(projectionOf(store, runId).tasks);
+    assert.ok(bridged.length > 0, "the ready plan bridges scheduler tasks");
+    append("planning.coverage_review_requested", "coverage-request:2", { role: "architect", id: "architect_1" }, {
+      reviewId: "coverage_2",
+      planRevisionId: fixture.revision.revisionId,
+      planRevisionDigest: fixture.revision.digest,
+      sourceManifestId: fixture.manifest.manifestId,
+      requestedAt: clock(),
+    });
+    recordPassingReview("coverage_2", "coverage:2");
+    assert.equal(readyPlanIdentity(projectionOf(store, runId)), undefined, "the new verdict drops readiness");
+    const knownTaskId = bridged[0]!;
+    assert.ok(projectionOf(store, runId).tasks[knownTaskId], "the dropped plan keeps known tasks");
+    // Known-but-not-ready: the semantic admission refusal, with no artifact
+    // authority consulted before it.
+    const before = store.readRun(runId);
+    let refusal = "";
+    try {
+      store.append({
+        runId,
+        type: "task.transitioned",
+        occurredAt: clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: "forged:known",
+        payload: { taskId: knownTaskId, status: "assigned" },
+      });
+      assert.fail("known-not-ready admission must be refused");
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+    assert.match(refusal, /Worker admission requires a ready plan revision/);
+    assert.doesNotMatch(refusal, /artifact|manifest/i);
+    // Refused admission rolls back: the same key with a different status
+    // still reaches the semantic gate, not an idempotency conflict.
+    assert.throws(
+      () => store.append({
+        runId,
+        type: "task.transitioned",
+        occurredAt: clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: "forged:known",
+        payload: { taskId: knownTaskId, status: "running" },
+      }),
+      /Worker admission requires a ready plan revision/,
+    );
+    // Unknown task on the same not-ready run keeps the kernel refusal.
+    assert.throws(
+      () => store.append({
+        runId,
+        type: "task.transitioned",
+        occurredAt: clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: "forged:unknown-2",
+        payload: { taskId: "T-rogue", status: "assigned" },
+      }),
+      /Unknown task T-rogue/,
+    );
+    const after = store.readRun(runId);
+    assert.equal(after.length, before.length, "refused admission records no events");
+    assert.deepEqual(Object.keys(projectionOf(store, runId).tasks).sort(), [...bridged].sort());
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -2768,14 +2940,9 @@ test("T9 repair B3: user guidance on a planning-state run routes without planRev
         }, "triage");
         return;
       }
-      // After the acknowledgement the run proceeds: a planning turn that
-      // asks the user blocks on the question — no guidance error, no throw.
-      await invokeMustSucceed(request, "ask_user", {
-        questionId: `q${current}`,
-        version: current,
-        decisionKind: "requirement_conflict",
-        question: "Which scope should the plan cover?",
-      }, `ask-${current}`);
+      // After the acknowledgement the pump pauses for planning-source
+      // provisioning without driving another turn — no question is asked.
+      throw new Error(`unexpected architect turn ${request.reason.type}#${step}`);
     },
   };
   try {
@@ -2814,11 +2981,22 @@ test("T9 repair B3: user guidance on a planning-state run routes without planRev
     assert.equal(guided.action, "user_guidance_required");
     assert.deepEqual(reasons, ["plan_required", "user_guidance_required"]);
     assert.equal(projectionOf(store, runId).userGuidance["g1"]?.status, "acknowledged");
-    // The run proceeds past the acknowledgement with no pump error.
-    const blocked = await runtime.runUntilBlocked(10);
-    assert.equal(blocked.status, "blocked");
-    assert.equal(blocked.action, "architect_question_pending");
-    assert.ok(projectionOf(store, runId).blockingArchitectQuestionId);
+    assert.deepEqual(projectionOf(store, runId).userGuidance["g1"]?.resolution, {
+      type: "folded_into_planning",
+      rationale: "Planning has not started; the guidance is noted for the plan.",
+    });
+    // The run proceeds past the acknowledgement with no pump error: with no
+    // approved planning source the pump pauses for provisioning instead of
+    // driving another planning turn, so no blocking question is asked.
+    const paused = await runtime.runUntilBlocked(10);
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.action, "planning_source_missing");
+    assert.deepEqual(reasons, ["plan_required", "user_guidance_required"]);
+    const terminal = projectionOf(store, runId);
+    assert.equal(terminal.status, "paused");
+    assert.equal(terminal.pauseReason?.reason, "planning_source_missing");
+    assert.equal(terminal.blockingArchitectQuestionId, undefined);
+    assert.equal(terminal.planRevision, 0);
   } finally {
     evidenceStore.close();
     store.close();
@@ -4228,22 +4406,21 @@ test("T9 repair B4-r3: the folded rule covers the re-planning window after a rea
       if (request.reason.type === "plan_required") {
         const turn = planTurns++;
         if (turn === 0) {
-          // First planning turn after the fold: an explicit checkpoint
-          // reviewed against the folded guidance (the plan is unchanged).
-          await invokeMustSucceed(request, "record_planning_checkpoint", {
-            checkpoint: {
-              id: "checkpoint-2",
-              coveredSourceSectionIds: fixture.manifest.sections.map((section) => section.id),
-              completedPlanningContractIds: ["requirement-ledger"],
-              remainingWork: [],
-              nextAction: "Revise the plan against the folded audit-log guidance, then request a new coverage review.",
-              recordedAt: clock(),
-            },
-          }, "checkpoint");
+          // First planning turn after the fold: re-read the full current
+          // manifest through the real tool (C4: the checkpoint tool is gone
+          // and reads are authority; the plan is unchanged). Reads alone
+          // carry no planning-turn proof, so the stale review still blocks
+          // readiness below.
+          const inventory = await invokeMustSucceed(request, "read_planning_source_section", {}, "inventory");
+          const listing = outputJson(inventory);
+          assert.equal(listing.manifestId, fixture.manifest.manifestId);
+          for (const section of fixture.manifest.sections) {
+            await invokeMustSucceed(request, "read_planning_source_section", { sectionId: section.id }, `reread-${section.id}`);
+          }
           return;
         }
         if (turn === 1) {
-          // The checkpoint alone cannot unbind the stale review, so the
+          // The reads alone cannot unbind the stale review, so the
           // second turn revises the plan through the real tool. Kernel-owned
           // envelope (run, authorship time) is omitted for stamping and the
           // next revision's requiredBase rides on every task.
@@ -4285,6 +4462,10 @@ test("T9 repair B4-r3: the folded rule covers the re-planning window after a rea
   };
   try {
     seedNewPolicy(store, runId, clock);
+    // Real source bytes behind the amended manifest, so the post-fold turn
+    // re-reads through the actual artifact authority.
+    const provisioned = await artifacts.put(Buffer.from(FIXTURE_AMENDED_TEXT, "utf8"), "text/plain", "source.txt");
+    assert.equal(provisioned.hash, fixture.manifest.artifactDigest);
     append("planning.source_registered", "source:base", { role: "user", id: "owner" }, { manifest: fixture.priorManifest });
     append("planning.source_amended", "source:amend-1", { role: "user", id: "owner" }, { manifest: fixture.manifest });
     seedTriage(store, runId, clock, "build", "triage:build");
@@ -4388,14 +4569,24 @@ test("T9 repair B4-r3: the folded rule covers the re-planning window after a rea
     );
     // Pump mirror: the stale bound review returns the Architect as
     // plan_required WITHOUT attempting readiness (no gate) and WITHOUT
-    // calling the reviewer; the turn records the guidance checkpoint.
+    // calling the reviewer; the turn re-reads the full current manifest.
     const held = await runtime.step();
     assert.equal(held.status, "progressed");
     assert.equal(held.action, "plan_required");
     assert.equal(coverageInputs.length, 0, "the stale review is never re-driven");
     assert.equal(projectionOf(store, runId).planning?.coverageUnavailable, undefined, "readiness was not attempted");
     assert.deepEqual(reasons, ["user_guidance_required", "plan_required"]);
-    // The checkpoint alone cannot unbind the stale review: readiness is
+    // The re-reads landed durably and the read-derived resume still covers
+    // the full current manifest — yet no planning turn postdates the fold.
+    const rereads = store.readRun(runId).filter((event) => event.type === "planning.source_section_read");
+    assert.equal(rereads.length, fixture.manifest.sections.length * 2, "seeded reads plus one real re-read per section");
+    const rereadStatus = JSON.parse(renderPlanningStatus(projectionOf(store, runId))) as {
+      boundReviewRequestedAfterFold: boolean | null;
+      planningTurnRecordedAfterFold: boolean | null;
+    };
+    assert.equal(rereadStatus.boundReviewRequestedAfterFold, false);
+    assert.equal(rereadStatus.planningTurnRecordedAfterFold, false);
+    // The reads alone cannot unbind the stale review: readiness is
     // still refused until a revision and a new review follow.
     assert.throws(
       () => store.append({
@@ -4403,7 +4594,7 @@ test("T9 repair B4-r3: the folded rule covers the re-planning window after a rea
         type: "planning.plan_ready",
         occurredAt: clock(),
         actor: { role: "runner", id: "build-runtime" },
-        idempotencyKey: "ready:checkpoint-only",
+        idempotencyKey: "ready:rereads-only",
         payload: { hostCapabilities: fixture.hostCapabilities },
       }),
       /was requested before/,

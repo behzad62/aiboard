@@ -3,12 +3,16 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 
 import {
   STOP_SNAPSHOT_TABLE,
   classifyStopSnapshot,
+  currentExplicitStartIdentity,
+  rebuildSchedulerProjection,
   type NewSchedulerEvent,
   type SchedulerActorRole,
+  type SchedulerProjection,
 } from "../src/scheduler-store.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { BuildRuntime, type BuildStepResult, type IndependentVerifierDriver } from "../src/build-runtime.js";
@@ -35,7 +39,10 @@ import {
   v2PlanOnlySeed,
   withRunOptions,
   CLOCK,
-  CompletionArchitect,
+  SOURCE_TEXT,
+  FACTORY_PORT_OBJECTIVE,
+  COMPLETION_SUMMARY,
+  toolCall,
   UnusedModel,
   advancingClock,
   buildRuntimeForHandoff,
@@ -232,11 +239,12 @@ test("C3a: replay and resume create no duplicate commit; the next stop writes an
 
 test("C3a/CD-9: pause during triage, then answer, leaves the project tree hash unchanged", async () => {
   const RUN = "run-c3a-pretriage";
-  // No triage yet: docs v2 plus the run policy only.
+  // No triage yet: exact new-policy prefix plus the run policy only.
   const seed = (runId: string): NewSchedulerEvent[] => [
-    e(runId, "project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 2 }),
-    e(runId, "run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
+    e(runId, "project_docs.policy_configured", "project-docs-policy", "runner", "build-runtime", { version: 2 }),
+    e(runId, "run.initialized", "run-initialized", "runner", "build-runtime", { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: FACTORY_PORT_OBJECTIVE }),
     e(runId, "planning.policy_configured", "planning-policy", "runner", "build-runtime", { version: 1 }),
+    e(runId, "run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
     e(runId, "run.paused", "pause:pre-triage", "user", "local-user", { reason: "user" }),
   ];
   const fixture = await openFactoryPort("stop-pretriage", RUN, seed, "finish");
@@ -464,6 +472,32 @@ async function c3aStateBody(state: string, commit: string): Promise<string> {
   return shown.stdout;
 }
 
+/** Factory Architect for the C3a manager test: text notes for the bounded stop-notes one-shot, complete_run for the completion turn. */
+class C3aFactoryArchitect implements AgentModel {
+  completionCalls = 0;
+  stopNotesCalls = 0;
+  constructor(private readonly projection: () => SchedulerProjection) {}
+  async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    if (request.tools.length === 0) {
+      this.stopNotesCalls += 1;
+      return {
+        blocks: [{ type: "text", text: "Next: resume to handoff. Trap: none. Try: none." }],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 5 },
+      };
+    }
+    this.completionCalls += 1;
+    const projection = this.projection();
+    if (projection.projectHandoff) {
+      throw new Error(`Unexpected Architect turn after handoff: ${projection.projectHandoff.status}.`);
+    }
+    if (this.completionCalls > 1) {
+      throw new Error(`Unexpected second completion turn (call ${this.completionCalls}).`);
+    }
+    return toolCall("complete_run", { summary: COMPLETION_SUMMARY }, `complete-${this.completionCalls}`);
+  }
+}
+
 test("C3a/CD-7/B-1/M-5c: factory runtime plus manager snapshots an owner pause with no step, then handoff completes", async () => {
   const RUN = "run-c3a-factory-manager";
   const root = mkdtempSync(join(tmpdir(), "aiboard-c3a-factory-"));
@@ -482,10 +516,10 @@ test("C3a/CD-7/B-1/M-5c: factory runtime plus manager snapshots an owner pause w
     validateExecutionProfile: acceptFinalVerificationProfile,
     validateCleanupReceipt: () => undefined,
   });
-  for (const input of v2PlanOnlySeed(RUN)) seeder.append(input);
+  for (const input of v2PlanOnlySeed(RUN, "Plan the value module.")) seeder.append(input);
   seeder.close();
   let manager: NativeBuildManager | undefined;
-  const architect = new CompletionArchitect(() => manager!.projection(RUN));
+  const architect = new C3aFactoryArchitect(() => manager!.projection(RUN));
   const executionHost = createExecutionHost({
     projectRoot: project,
     stateDirectory: state,
@@ -511,6 +545,7 @@ test("C3a/CD-7/B-1/M-5c: factory runtime plus manager snapshots an owner pause w
       createRuntime: (spec) => factory!.create(spec),
       prepareSpec: (spec) => factory!.prepareSpec(spec),
     });
+    await executionHost.artifacts.put(Buffer.from(SOURCE_TEXT, "utf-8"), "text/plain", "approved source");
     await manager.create(await factory.prepareSpec({
       version: 2,
       runId: RUN,
@@ -523,16 +558,19 @@ test("C3a/CD-7/B-1/M-5c: factory runtime plus manager snapshots an owner pause w
       maxConcurrency: 1,
       permissionProfile: "full",
       runPolicy: "plan_only",
+      planningPolicy: { version: 1 },
       budgetLimits: {},
       createdAt: CLOCK,
       idempotencyKey: "c3a-factory-manager",
     }));
     // The owner pause through the manager snapshots the stop with no step:
-    // the pump never ran, so no Architect turn could have happened.
+    // the pump never ran, so no completion turn could have happened. The
+    // only model call is the bounded C3b stop-notes one-shot.
     const paused = await manager.pause(RUN, "user", "pause:c3a-factory");
     assert.equal(paused.status, "paused", "the stop proceeds");
     assert.equal(paused.pauseReason?.reason, "user");
-    assert.equal(architect.calls, 0, "the pause snapshot takes no step and no model call");
+    assert.equal(architect.completionCalls, 0, "the pause snapshot takes no step and no completion turn");
+    assert.equal(architect.stopNotesCalls, 1, "the pause snapshot takes exactly the bounded stop-notes call");
     let events = manager.events(RUN);
     let commits = snapshotCommits(events);
     assert.equal(commits.length, 1, "the owner pause commits exactly one stop snapshot");
@@ -545,7 +583,7 @@ test("C3a/CD-7/B-1/M-5c: factory runtime plus manager snapshots an owner pause w
     manager.activate(RUN);
     await manager.awaitIdle(RUN);
     assert.equal(manager.projection(RUN).projectHandoff?.status, "requested");
-    assert.equal(architect.calls, 1, "only the completion turn runs");
+    assert.equal(architect.completionCalls, 1, "only the completion turn runs");
     events = manager.events(RUN);
     commits = snapshotCommits(events);
     assert.equal(commits.length, 2, "resume adds only the handoff snapshot");
@@ -564,7 +602,7 @@ test("C3a/CD-7/B-1/M-5c: factory runtime plus manager snapshots an owner pause w
     );
     const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c3a-factory");
     assert.equal(selected.status, "completed", "handoff completes after the stop snapshot");
-    assert.equal(architect.calls, 1, "snapshots make no model call");
+    assert.equal(architect.completionCalls, 1, "snapshots make no completion turn");
   } finally {
     await manager?.close();
     await factory?.close();
@@ -598,8 +636,15 @@ function verifierFinishSeed(runId: string, baselineRevision: string): NewSchedul
     event.type === "run.policy_configured"
       ? { ...event, payload: { ...(event.payload as Record<string, unknown>), runPolicy: "finish" } }
       : event;
+  const readyBase = v2PlanOnlySeed(runId).map(finishPolicy);
+  const synthesized = readyBase.map((event, index) => ({ ...event, sequence: index + 1, eventId: `c3a-instep-pre-${index}` }));
+  const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(synthesized as unknown as Parameters<typeof rebuildSchedulerProjection>[0]));
+  assert.ok(startIdentity, "the verifier seed is ready with a complete start identity");
   return [
-    ...v2PlanOnlySeed(runId).map(finishPolicy),
+    ...readyBase,
+    e(runId, "planning.execution_authorized", "owner-start", "user", "local-user", {
+      authorization: { ...startIdentity, version: 1, ownerChoice: "execute" },
+    }),
     e(runId, "run.paused", "pause:old", "user", "local-user", { reason: "user" }),
     e(runId, "run.resumed", "resume:old", "user", "local-user", {}),
     e(runId, "integration.revision_advanced", "integration-revision", "runner", "integration", {
@@ -997,12 +1042,24 @@ test("C3a/R2-1: an owner pause during a blocked step returns promptly, quiesces 
 
 test("C3a/R2-1: an owner pause during a blocked step on a docs-v1 run returns promptly and writes nothing", async () => {
   const RUN = "run-c3a-blocked-pause-v1";
-  // Docs policy v1 stamped explicitly over the plan-only flow.
-  const seed = (runId: string): NewSchedulerEvent[] =>
-    v2PlanOnlySeed(runId).map((event) =>
-      event.type === "project_docs.policy_configured"
-        ? { ...event, payload: { ...(event.payload as Record<string, unknown>), version: 1 } }
-        : event);
+  // Genuinely legacy docs-v1 plan-only run: docs v1, run policy, legacy plan.
+  const seed = (runId: string): NewSchedulerEvent[] => [
+    e(runId, "project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 1 }),
+    e(runId, "run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "plan_only" }),
+    e(runId, "plan.created", "plan", "architect", "architect", {
+      revision: 1,
+      tasks: [{
+        id: "implementation",
+        objective: "Implement the requested behavior.",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "The behavior is implemented." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 1,
+      }],
+    }),
+  ];
   const fixture = await openFactoryPort("stop-blocked-pause-v1", RUN, seed, "plan_only");
   let manager: NativeBuildManager | undefined;
   const store = openHandoffStore(fixture, RUN);
@@ -1089,11 +1146,19 @@ test("C3a/R2-1c: a step that ends progressed after a mid-step owner pause still 
   // blocks, the owner pause lands mid-step, quiesce ends the blocked
   // integrate, and the step ends "progressed" with the run paused -- so
   // only the step-end call (R2-1c) can take the snapshot.
-  const seed = (runId: string, baselineRevision: string): NewSchedulerEvent[] => [
-    ...v2PlanOnlySeed(runId).map((event) =>
+  const seed = (runId: string, baselineRevision: string): NewSchedulerEvent[] => {
+    const readyBase = v2PlanOnlySeed(runId).map((event) =>
       event.type === "run.policy_configured"
         ? { ...event, payload: { ...(event.payload as Record<string, unknown>), runPolicy: "finish" } }
-        : event),
+        : event);
+    const synthesized = readyBase.map((event, index) => ({ ...event, sequence: index + 1, eventId: `c3a-progressed-pre-${index}` }));
+    const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(synthesized as unknown as Parameters<typeof rebuildSchedulerProjection>[0]));
+    assert.ok(startIdentity, "the progressed seed is ready with a complete start identity");
+    return [
+    ...readyBase,
+    e(runId, "planning.execution_authorized", "owner-start", "user", "local-user", {
+      authorization: { ...startIdentity, version: 1, ownerChoice: "execute" },
+    }),
     e(runId, "plan.created", "plan-overlay", "architect", "architect", {
       revision: 1,
       tasks: [{
@@ -1111,7 +1176,8 @@ test("C3a/R2-1c: a step that ends progressed after a mid-step owner pause still 
     e(runId, "integration.revision_advanced", "integration-revision", "runner", "integration", {
       integrationRevision: baselineRevision,
     }),
-  ];
+    ];
+  };
   const fixture = await openFactoryPort("stop-progressed-pause", RUN, seed, "finish");
   let manager: NativeBuildManager | undefined;
   const store = openHandoffStore(fixture, RUN);

@@ -15,7 +15,9 @@ import type { BackpressuredOutputMetadata } from "./interactive-process-channel.
 const PROTOCOL = "aiboard-managed-process/v1";
 const DEFAULT_START_DEADLINE_MS = 5_000;
 const DEFAULT_CONTROL_DEADLINE_MS = 5_000;
-const DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS = 2_000;
+// Bounds the entire cold PowerShell process, including host startup. The
+// unchanged create/close command completed in 2,369 ms on hosted Windows.
+const DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS = 5_000;
 const DEFAULT_MAX_INPUT_BYTES = 1024 * 1024;
 const JOB_HOST_HELPER_DLL_FILENAME = "ManagedProcessJobHost.dll";
 const JOB_HOST_SOURCE_MARKER_START = "$jobHostCsSource = @'";
@@ -858,7 +860,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   async signalOwned(processId: string, signal: "SIGTERM" | "SIGINT" | "SIGKILL", owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot> {
     const record = this.ownedRecord(processId, owner); this.assertActive(record); this.assertCurrentFence(record, fence);
     let stoppedRecord = record;
-    let status = await this.authenticatedStatus(record);
+    let status = await this.authenticatedStatus(record, false);
+    this.assertObservedStatusAuthority(record, status, fence);
     this.throwIfTerminalOutputPending(status);
     if (status.status !== "stopped") {
       try {
@@ -867,10 +870,18 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
           this.assertStatusIdentity(current, result); this.applyStatus(current, result); this.throwIfTerminalOutputPending(result); stoppedRecord = current; return result;
         });
       } catch (error) {
-        const terminal = await this.authenticatedStatus(this.ownedRecord(processId, owner));
+        const terminal = await this.withFenceEffect(record, fence, "reconcile", async current => await this.authenticatedStatus(current));
         this.throwIfTerminalOutputPending(terminal);
         throw error;
       }
+    } else {
+      // The precheck ran outside the writer fence. A terminal observation
+      // cannot publish success for an owner replaced during that await.
+      return await this.withFenceEffect(record, fence, "signal", async current => {
+        const terminal = await this.authenticatedStatus(current);
+        if (terminal.status !== "stopped") throw new WindowsJobHostError("process_control_unavailable", "Windows Job terminal observation changed before fenced confirmation.");
+        return this.snapshot(current);
+      });
     }
     if (status.status !== "stopped" && status.terminationRequested !== true)
       throw new WindowsJobHostError("process_stop_timeout", `Windows Job process ${processId} did not stop.`);
@@ -894,7 +905,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       await this.recoverReleasedFence(processId, record, owner, expectedStartedAt, fence);
       return { ...this.snapshot(this.ownedRecord(processId, owner)), ownershipReleased: true };
     }
-    const status = await this.authenticatedStatus(record);
+    const status = await this.authenticatedStatus(record, false);
+    this.assertObservedStatusAuthority(record, status, fence);
     this.throwIfTerminalOutputPending(status);
     if (status.status !== "stopped" || !status.ownershipReleased) {
       // PX-2b repair 1 (B4): a release refused while retained output is still
@@ -997,7 +1009,23 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (this.platform !== "win32" || process.platform !== "win32") return false;
     const jobHost = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
     if (!existsSync(this.supervisorScriptPath) || !existsSync(jobHost)) return false;
-    const command = "$ErrorActionPreference='Stop';$s='using System;using System.Runtime.InteropServices;public static class P{[DllImport(\"kernel32.dll\",CharSet=CharSet.Unicode,SetLastError=true)]public static extern IntPtr CreateJobObject(IntPtr a,string n);[DllImport(\"kernel32.dll\",SetLastError=true)]public static extern bool CloseHandle(IntPtr h);}';Add-Type -TypeDefinition $s;$h=[P]::CreateJobObject([IntPtr]::Zero,$null);if($h -eq [IntPtr]::Zero){exit 1};if(-not [P]::CloseHandle($h)){exit 1}";
+    // Emit only the two fixed native signatures. Runtime C# compilation is
+    // unrelated to Job availability and can consume the entire active probe
+    // budget before either syscall. No workload is assigned to this Job.
+    const command = [
+      "$ErrorActionPreference='Stop'",
+      "$assembly=[AppDomain]::CurrentDomain.DefineDynamicAssembly([Reflection.AssemblyName]::new('AIBoardActiveJobProbe'),[Reflection.Emit.AssemblyBuilderAccess]::Run)",
+      "$module=$assembly.DefineDynamicModule('Native')",
+      "$builder=$module.DefineType('AIBoardActiveJobProbe',[Reflection.TypeAttributes]::Public -bor [Reflection.TypeAttributes]::Abstract -bor [Reflection.TypeAttributes]::Sealed)",
+      "$flags=[Reflection.MethodAttributes]::Public -bor [Reflection.MethodAttributes]::Static -bor [Reflection.MethodAttributes]::PinvokeImpl",
+      "foreach($definition in @(@('CreateJobObjectW',[IntPtr],[Type[]]@([IntPtr],[string])),@('CloseHandle',[bool],[Type[]]@([IntPtr])))){",
+      "$method=$builder.DefinePInvokeMethod([string]$definition[0],'kernel32.dll',$flags,[Reflection.CallingConventions]::Standard,[Type]$definition[1],[Type[]]$definition[2],[Runtime.InteropServices.CallingConvention]::Winapi,[Runtime.InteropServices.CharSet]::Unicode)",
+      "$method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)",
+      "}",
+      "$native=$builder.CreateType();$job=[IntPtr]::Zero",
+      "try{$job=$native.GetMethod('CreateJobObjectW').Invoke($null,[object[]]@([IntPtr]::Zero,$null));if($job -eq [IntPtr]::Zero){exit 1}}",
+      "finally{if($job -ne [IntPtr]::Zero){if(-not $native.GetMethod('CloseHandle').Invoke($null,[object[]]@($job))){exit 1}}}",
+    ].join("\n");
     const executable = this.activeJobProbe?.executable ?? "powershell.exe";
     const args = this.activeJobProbe?.arguments ?? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command];
     const deadlineMs = this.activeJobProbe?.deadlineMs ?? DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS;
@@ -1135,7 +1163,16 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     }
   }
 
-  private async authenticatedStatus(record: HostRecord): Promise<SupervisorStatus> {
+  private assertObservedStatusAuthority(record: HostRecord, status: SupervisorStatus, fence: WindowsJobWriterFence | undefined): void {
+    const current = this.ownedRecord(record.processId, record);
+    this.assertActive(current);
+    this.assertCurrentFence(current, fence);
+    if (current.startedAt !== record.startedAt)
+      throw new WindowsJobHostError("process_identity_mismatch", "Windows Job birth changed during status observation.");
+    this.assertStatusIdentity(current, status);
+  }
+
+  private async authenticatedStatus(record: HostRecord, persistRecord = true): Promise<SupervisorStatus> {
     this.assertSupervisor(record.supervisor);
     let status = readSupervisorStatus(record.supervisor.statusPath);
     if (!status) throw new WindowsJobHostError("process_control_unavailable", `Process ${record.processId} has no durable supervisor status.`);
@@ -1152,8 +1189,15 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       this.assertStatusIdentity(record, status);
     }
     this.assertOutputEvidence(record, status);
-    if (status.status === "stopped") this.assertJobOutputSettled(record, status);
-    this.applyStatus(record, status); return status;
+    // Outside-fence prechecks may span another writer's claim or output ACK.
+    // Their old record must never overwrite its fence, cursor or tombstone.
+    // Only the fenced caller can validate exact current ACK offsets and
+    // publish status; an outside observation alone cannot certify release.
+    if (persistRecord) {
+      if (status.status === "stopped") this.assertJobOutputSettled(record, status);
+      this.applyStatus(record, status);
+    }
+    return status;
   }
 
   private ownedRecord(processId: string, owner: WindowsJobOwnershipKey): HostRecord {

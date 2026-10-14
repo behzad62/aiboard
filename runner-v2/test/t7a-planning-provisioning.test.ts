@@ -1598,9 +1598,9 @@ class T7aJourneyReviewer implements AgentModel {
       }
       assert.ok(inspected.split("\n")[0]!.includes("export const value = 2;"), "the cited line 1 actually exports value = 2");
       const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-      const survivors = [...new Set([...text.matchAll(/"id": "(mutation-survivor:[^"]+)"/g)].map((match) => match[1]!))];
+      const survivors = [...new Set([...text.matchAll(/"id"\s*:\s*"(mutation-survivor:[^"]+)"/g)].map((match) => match[1]!))];
       assert.equal(survivors.length, 0, `unexpected mutation survivors on the value line are real gaps and cannot be blanket-released: ${survivors.join(", ")}`);
-      const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+      const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
       assert.ok(claimIds.includes("claim:c1"), "the verdict context names the criterion claim");
       assert.ok(claimIds.includes("claim:summary"), "the verdict context names the summary claim");
       return journeyCall("submit_deliverable_verdict", {

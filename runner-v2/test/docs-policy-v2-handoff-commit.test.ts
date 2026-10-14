@@ -25,6 +25,7 @@ import {
   CLOCK,
   CompletionArchitect,
   DocsPortHooks,
+  SOURCE_TEXT,
   UnusedModel,
   advancingClock,
   buildRuntimeForHandoff,
@@ -33,6 +34,7 @@ import {
   headerDigest,
   managedHandle,
   managerSpec,
+  openDirectPort,
   openFactoryPort,
   openGitRepo,
   provider,
@@ -60,7 +62,9 @@ import {
  * - C2a B1 nomutate: the only
  *   automatic_project_handoff_failed + selection-refused coverage.
  * - C2a B2+M4: the only manager.resume -> retry coverage.
- * - C2b B1-R/N6-factory: the baseline handoff through the factory port.
+ * - C2b B1-R/N6-direct: the baseline handoff through the direct port (the
+ *   legacy-planning docs-v2 log is factory-unrecoverable by design, so the
+ *   direct port preserves baseline-fallback coverage without a guard bypass).
  *
  * (C2b B1-R/G2-prod lives in the project-links file: withdrawn-stop
  * reconciliation plus risk re-assessment through the manager.)
@@ -77,7 +81,7 @@ test("C2a B1: production-manager plan-only run commits one kernel STATE.md snaps
   const runRoot = join(state, "builds", safeSegment(RUN));
   mkdirSync(runRoot, { recursive: true });
   const seed = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
-  for (const input of v2PlanOnlySeed(RUN)) seed.append(input);
+  for (const input of v2PlanOnlySeed(RUN, "Plan the value module.")) seed.append(input);
   seed.close();
   const architect = new CompletionArchitect(() => manager!.projection(RUN));
   const executionHost = createExecutionHost({
@@ -107,6 +111,9 @@ test("C2a B1: production-manager plan-only run commits one kernel STATE.md snaps
       createRuntime: (spec) => factory!.create(spec),
       prepareSpec: (spec) => factory!.prepareSpec(spec),
     });
+    // Truthful registered-source bytes for creation-time verification: the
+    // shared scenario manifest's exact bytes, in the store the factory reads.
+    await new ArtifactStore(join(state, "artifacts")).put(Buffer.from(SOURCE_TEXT, "utf-8"), "text/plain", "approved source");
     // Production flow only: create -> activate -> awaitIdle -> selectProjectHandoff. No manual step().
     await manager.create(await factory.prepareSpec({
       version: 2,
@@ -121,6 +128,7 @@ test("C2a B1: production-manager plan-only run commits one kernel STATE.md snaps
       permissionProfile: "full",
       runPolicy: "plan_only",
       planCritique: "off",
+      planningPolicy: { version: 1 },
       budgetLimits: {},
       createdAt: CLOCK,
       idempotencyKey: "c2a-factory",
@@ -142,7 +150,7 @@ test("C2a B1: production-manager plan-only run commits one kernel STATE.md snaps
     assert.equal(payload.stopKind, "plan_only");
     assert.equal(payload.revision, "revision_value");
     assert.match(String(payload.bodyDigest), /^[a-f0-9]{64}$/);
-    assert.deepEqual(payload.paths, ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(payload.paths, ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
     assert.equal(payload.previousSnapshotEdited, false);
     assert.equal(payload.agentsSectionCommitted, true);
     assert.equal(payload.claudeLineCommitted, true);
@@ -153,9 +161,13 @@ test("C2a B1: production-manager plan-only run commits one kernel STATE.md snaps
     const commits = log.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
     assert.deepEqual(commits, [payload.commit], "exactly one kernel commit");
     const files = await runGit({ cwd: repoPath, args: ["show", "--name-only", "--format=", String(payload.commit)] });
-    // C2b: one kernel commit holds STATE.md plus the v2 entry lines (no
-    // spec copy here: the factory artifact store holds no source bytes).
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    // C2b: one kernel commit holds STATE.md plus the v2 entry lines. The
+    // registered source bytes are truthfully provisioned (creation is
+    // fail-closed without them), so the snapshot also carries the spec copy.
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
+    assert.equal(payload.specCopied, true, "the event claims the spec copy");
+    const specShow = await runGit({ cwd: repoPath, args: ["show", `${String(payload.commit)}:docs/project/specs/source_value.md`] });
+    assert.equal(specShow.stdout, SOURCE_TEXT, "the spec copy holds the registered source bytes");
     const meta = await runGit({ cwd: repoPath, args: ["log", "-1", "--format=%an%x00%ae%x00%cn%x00%ce%x00%B", String(payload.commit)] });
     const [authorName, authorEmail, committerName, committerEmail, ...rest] = meta.stdout.split("\0");
     assert.equal(authorName, "AIBoard Integrator");
@@ -413,8 +425,8 @@ test("C2a B2+M4: fail -> resume -> retry returns to the handoff wait with no mod
   }
 });
 
-test("C2b repair B1-R/N6-factory: a docs-v2 run without a plan revision hands off the baseline through the factory port", async () => {
-  const RUN = "run-c2b-n6factory";
+test("C2b repair B1-R/N6-direct: a docs-v2 run without a plan revision hands off the baseline through the direct port", async () => {
+  const RUN = "run-c2b-n6direct";
   const seedN6 = (runId: string): NewSchedulerEvent[] => {
     const e = (
       type: string,
@@ -427,7 +439,10 @@ test("C2b repair B1-R/N6-factory: a docs-v2 run without a plan revision hands of
       e("project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 2 }),
       e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "plan_only" }),
       // Legacy planning: a plan revision but no planning policy v1, and no
-      // integration revision anywhere in the log (the N6 shape).
+      // integration revision anywhere in the log (the N6 shape). Supported by
+      // the reducer and the direct runtime; intentionally unrecoverable via
+      // the factory (legacy spec + docs2 fails closed), so this test uses the
+      // direct port to preserve baseline-fallback coverage without a bypass.
       e("plan.created", "plan", "architect", "architect", {
         revision: 1,
         tasks: [{
@@ -443,7 +458,13 @@ test("C2b repair B1-R/N6-factory: a docs-v2 run without a plan revision hands of
       }),
     ];
   };
-  const fixture = await openFactoryPort("n6factory", RUN, seedN6, "plan_only");
+  // The N6 shape is explicitly legacy+docs2 direct: docs v2 present, planning
+  // v1 absent, driven without factory recovery (no factory/stopNotes fields).
+  assert.equal(seedN6(RUN).some((event) => event.type === "project_docs.policy_configured"), true);
+  assert.equal(seedN6(RUN).some((event) => event.type === "planning.policy_configured"), false);
+  const fixture = await openDirectPort("n6direct", RUN, seedN6);
+  assert.equal("factory" in fixture, false, "N6 uses the direct port, not factory recovery");
+  assert.equal("stopNotes" in fixture, false, "N6 uses the direct port, not factory recovery");
   const architect = silentArchitect();
   let store: SqliteSchedulerStore | undefined;
   let manager: NativeBuildManager | undefined;
@@ -473,7 +494,7 @@ test("C2b repair B1-R/N6-factory: a docs-v2 run without a plan revision hands of
     assert.equal(payload.revision, fixture.baselineRevision);
     assert.equal(payload.specCopySkipped, "no_manifest");
     assert.equal(manager.projection(RUN).pauseReason, undefined);
-    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2b-n6factory");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2b-n6direct");
     assert.equal(selected.status, "completed");
   } finally {
     await manager?.close();
@@ -500,7 +521,7 @@ test("C2b: the handoff commit splices the v2 entry lines, keeping outside bytes"
     const payload = snapshots[0]!.payload as Record<string, unknown>;
     const commit = String(payload.commit);
     const files = await runGit({ cwd: fixture.integration.path, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
     const agents = await runGit({ cwd: fixture.integration.path, args: ["show", `${commit}:AGENTS.md`] });
     assert.ok(agents.stdout.startsWith(agentsBefore), "bytes outside the markers are kept byte-for-byte");
     assert.ok(agents.stdout.includes(V2_AGENTS_SECTION_BODY), "the static v2 section is spliced in");
@@ -574,7 +595,10 @@ test("C2b repair CD-14/N6: a docs-v2 run without a plan revision hands off the b
       e("project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 2 }),
       e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "plan_only" }),
       // Legacy planning: a plan revision but no planning policy v1, and no
-      // integration revision anywhere in the log (the N6 shape).
+      // integration revision anywhere in the log (the N6 shape). Supported by
+      // the reducer and the direct runtime; intentionally unrecoverable via
+      // the factory (legacy spec + docs2 fails closed), so this test uses the
+      // direct port to preserve baseline-fallback coverage without a bypass.
       e("plan.created", "plan", "architect", "architect", {
         revision: 1,
         tasks: [{
@@ -590,7 +614,13 @@ test("C2b repair CD-14/N6: a docs-v2 run without a plan revision hands off the b
       }),
     ];
   };
-  const fixture = await openFactoryPort("n6baseline", RUN, seedN6, "plan_only");
+  // The N6 shape is explicitly legacy+docs2 direct: docs v2 present, planning
+  // v1 absent, driven without factory recovery (no factory/stopNotes fields).
+  assert.equal(seedN6(RUN).some((event) => event.type === "project_docs.policy_configured"), true);
+  assert.equal(seedN6(RUN).some((event) => event.type === "planning.policy_configured"), false);
+  const fixture = await openDirectPort("n6baseline", RUN, seedN6);
+  assert.equal("factory" in fixture, false, "N6 uses the direct port, not factory recovery");
+  assert.equal("stopNotes" in fixture, false, "N6 uses the direct port, not factory recovery");
   try {
     seedHandoffRequested(fixture, RUN);
     const { events, projection } = await driveHandoff(fixture, RUN);

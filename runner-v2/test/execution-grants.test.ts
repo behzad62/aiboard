@@ -6,9 +6,11 @@ import test from "node:test";
 
 import {
   ExecutionGrantError,
+  RESERVED_TRUSTED_NATIVE_PATCH_TOOL,
   assertCurrentConsumedExecutionGrantClaims,
   createExecutionGrantAuthority,
   registerConsumedExecutionGrantRevoker,
+  reserveExecutionGrantForFilesystemMutation,
 } from "../src/execution-grants.js";
 
 test("issues a canonical opaque grant and consumes it for exactly its bound call", async () => {
@@ -319,6 +321,237 @@ test("restart and cancellation close an asynchronous issuance barrier", async ()
     await assert.rejects(
       authority.issue({ ...request, signal: cancelled.signal }),
       (error) => error instanceof ExecutionGrantError && error.code === "grant_revoked",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("filesystem reservation allows the reserved trusted native adapter with exact same binding", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-grant-reserve-native-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  try {
+    assert.equal(RESERVED_TRUSTED_NATIVE_PATCH_TOOL, "openrouter.apply_patch");
+    const authority = createExecutionGrantAuthority();
+    const binding = {
+      runId: "run-1",
+      sessionId: "session-1",
+      actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "openrouter.apply_patch",
+      callId: "call-1",
+      permissionProfile: "project" as const,
+    };
+    const grant = await authority.issue({
+      ...binding,
+      workspacePath: workspace,
+      access: [{ path: workspace, mode: "write" as const }],
+      externalApproved: false,
+      destructiveApproved: false,
+      networkApproved: false,
+    });
+    const reservation = reserveExecutionGrantForFilesystemMutation(authority, grant, binding);
+    assert.equal(reservation.destructiveApproved, false);
+    assert.equal(reservation.access.length, 1);
+    reservation.assertCurrent();
+    assert.throws(
+      () => reserveExecutionGrantForFilesystemMutation(authority, grant, binding),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_consumed"
+    );
+    await authority.revoke(grant, "cleanup");
+    assert.throws(
+      () => reservation.assertCurrent(),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_revoked"
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("filesystem reservation still allows the four native names with exact binding", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-grant-reserve-fs-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  try {
+    const authority = createExecutionGrantAuthority();
+    for (const toolName of ["fs.write", "fs.patch", "fs.move", "fs.delete"] as const) {
+      const binding = {
+        runId: "run-1",
+        sessionId: "session-1",
+        actor: { role: "worker" as const, id: "worker-1" },
+        toolName,
+        callId: `call-${toolName}`,
+        permissionProfile: "project" as const,
+      };
+      const grant = await authority.issue({
+        ...binding,
+        workspacePath: workspace,
+        access: [{ path: workspace, mode: "write" as const }],
+        externalApproved: false,
+        destructiveApproved: toolName === "fs.delete",
+        networkApproved: false,
+      });
+      const reservation = reserveExecutionGrantForFilesystemMutation(authority, grant, binding);
+      assert.equal(reservation.destructiveApproved, toolName === "fs.delete");
+      await authority.revoke(grant, "cleanup");
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("filesystem reservation rejects generic aliases and rewritten bindings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-grant-reserve-alias-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  try {
+    const authority = createExecutionGrantAuthority();
+    const nativeBinding = {
+      runId: "run-1",
+      sessionId: "session-1",
+      actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "openrouter.apply_patch",
+      callId: "call-1",
+      permissionProfile: "project" as const,
+    };
+    const nativeGrant = await authority.issue({
+      ...nativeBinding,
+      workspacePath: workspace,
+      access: [{ path: workspace, mode: "write" as const }],
+      externalApproved: false,
+      destructiveApproved: false,
+      networkApproved: false,
+    });
+    assert.throws(
+      () => reserveExecutionGrantForFilesystemMutation(authority, nativeGrant, { ...nativeBinding, toolName: "fs.write" }),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_mismatch"
+    );
+    await authority.revoke(nativeGrant, "cleanup");
+
+    const fsBinding = {
+      runId: "run-1",
+      sessionId: "session-1",
+      actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "fs.write" as const,
+      callId: "call-2",
+      permissionProfile: "project" as const,
+    };
+    const fsGrant = await authority.issue({
+      ...fsBinding,
+      workspacePath: workspace,
+      access: [{ path: workspace, mode: "write" as const }],
+      externalApproved: false,
+      destructiveApproved: false,
+      networkApproved: false,
+    });
+    assert.throws(
+      () => reserveExecutionGrantForFilesystemMutation(authority, fsGrant, { ...fsBinding, toolName: "openrouter.apply_patch" }),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_mismatch"
+    );
+    await authority.revoke(fsGrant, "cleanup");
+
+    for (const toolName of ["evil.tool", "openrouter.apply_patch.evil", "fs.write.evil"]) {
+      const binding = {
+        runId: "run-1",
+        sessionId: "session-1",
+        actor: { role: "worker" as const, id: "worker-1" },
+        toolName,
+        callId: `call-${toolName}`,
+        permissionProfile: "project" as const,
+      };
+      const grant = await authority.issue({
+        ...binding,
+        workspacePath: workspace,
+        access: [{ path: workspace, mode: "write" as const }],
+        externalApproved: false,
+        destructiveApproved: false,
+        networkApproved: false,
+      });
+      assert.throws(
+        () => reserveExecutionGrantForFilesystemMutation(authority, grant, binding),
+        (error) => error instanceof ExecutionGrantError && error.code === "grant_mismatch"
+      );
+      await authority.revoke(grant, "cleanup");
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("filesystem reservation retains revoked, expired, consumed, and issuer refusal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-grant-reserve-current-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  try {
+    const authority = createExecutionGrantAuthority();
+    const binding = {
+      runId: "run-1",
+      sessionId: "session-1",
+      actor: { role: "worker" as const, id: "worker-1" },
+      toolName: "openrouter.apply_patch",
+      callId: "call-1",
+      permissionProfile: "project" as const,
+    };
+    const revoked = await authority.issue({
+      ...binding,
+      workspacePath: workspace,
+      access: [{ path: workspace, mode: "write" as const }],
+      externalApproved: false,
+      destructiveApproved: false,
+      networkApproved: false,
+    });
+    await authority.revoke(revoked, "cancelled");
+    assert.throws(
+      () => reserveExecutionGrantForFilesystemMutation(authority, revoked, binding),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_revoked"
+    );
+
+    const consumedGrant = await authority.issue({
+      ...binding,
+      callId: "call-consumed",
+      workspacePath: workspace,
+      access: [{ path: workspace, mode: "write" as const }],
+      externalApproved: false,
+      destructiveApproved: false,
+      networkApproved: false,
+    });
+    authority.consume(consumedGrant, { ...binding, callId: "call-consumed" });
+    assert.throws(
+      () => reserveExecutionGrantForFilesystemMutation(authority, consumedGrant, { ...binding, callId: "call-consumed" }),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_consumed"
+    );
+    await authority.revoke(consumedGrant, "cleanup");
+
+    const foreign = createExecutionGrantAuthority();
+    const crossGrant = await authority.issue({
+      ...binding,
+      callId: "call-cross",
+      workspacePath: workspace,
+      access: [{ path: workspace, mode: "write" as const }],
+      externalApproved: false,
+      destructiveApproved: false,
+      networkApproved: false,
+    });
+    assert.throws(
+      () => reserveExecutionGrantForFilesystemMutation(foreign, crossGrant, { ...binding, callId: "call-cross" }),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_forged"
+    );
+    await authority.revoke(crossGrant, "cleanup");
+
+    let now = new Date("2026-08-28T10:00:00.000Z");
+    const expiring = createExecutionGrantAuthority({ clock: () => now, ttlMs: 10 });
+    const expiringGrant = await expiring.issue({
+      ...binding,
+      workspacePath: workspace,
+      access: [{ path: workspace, mode: "write" as const }],
+      externalApproved: false,
+      destructiveApproved: false,
+      networkApproved: false,
+    });
+    now = new Date("2026-08-28T10:00:00.020Z");
+    assert.throws(
+      () => reserveExecutionGrantForFilesystemMutation(expiring, expiringGrant, binding),
+      (error) => error instanceof ExecutionGrantError && error.code === "grant_expired"
     );
   } finally {
     await rm(root, { recursive: true, force: true });

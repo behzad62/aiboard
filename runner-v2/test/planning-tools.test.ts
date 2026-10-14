@@ -29,9 +29,12 @@ import {
   PlanningStateInspectionRuntime,
   type ArchitectCommandWorkspaceProvider,
 } from "../src/native-architect-runtime.js";
-import type {
-  ExecutionPlanPhase,
-  SourceRequirement,
+import {
+  KERNEL_STAMPED_REVISION_FIELDS,
+  requiredBaseForRevision,
+  type ExecutionPlanPhase,
+  type PlanSubmissionRevision,
+  type SourceRequirement,
 } from "../src/planning-contracts.js";
 import {
   createPlanningTools,
@@ -39,6 +42,8 @@ import {
   PLANNING_TOOL_NAMES,
 } from "../src/planning-tools.js";
 import {
+  currentExplicitStartIdentity,
+  explicitStartBlocked,
   isPlanningState,
   newPolicyStaleTasksRequireArchitect,
   newPolicyTaskAdmissionBlocked,
@@ -50,7 +55,7 @@ import {
   type SchedulerProjection,
   type SchedulerStore,
 } from "../src/scheduler-store.js";
-import { buildSourceManifest, type ApprovedSourceManifest } from "../src/source-manifest.js";
+import { buildSourceManifest, computeArtifactDigest, type ApprovedSourceManifest } from "../src/source-manifest.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
 import { SkillCatalog } from "../src/skill-catalog.js";
@@ -67,7 +72,7 @@ import {
   type WorkerRuntimeDriver,
 } from "../src/task-scheduler.js";
 import { ToolRegistry } from "../src/tool-registry.js";
-import { buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
+import { FIXTURE_AMENDED_TEXT, buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
 import { emptyFinalVerificationProfile } from "./support/final-verification-profile.js";
 import {
   REVIEW_ID as VERIFIER_REVIEW_ID,
@@ -205,26 +210,115 @@ function scopedFixture(runId = "run_fixture", createdAt = "2026-09-08T00:00:00.0
   };
 }
 
-function withoutDigest<T extends { digest: string }>(value: T): Omit<T, "digest"> {
-  const { digest: _digest, ...rest } = value;
-  return rest;
+/** C5: model submission with every kernel-owned value omitted (stamping path). Mirrors c5-contract-envelope-delivery.test.ts. */
+function strippedSubmission(
+  fixture: ReturnType<typeof scopedFixture>,
+  revisionId: string,
+): PlanSubmissionRevision {
+  const clone = structuredClone(fixture.revision) as unknown as Record<string, unknown>;
+  for (const field of [...KERNEL_STAMPED_REVISION_FIELDS]) delete clone[field];
+  const tasks = clone["tasks"] as Record<string, unknown>[];
+  for (const task of tasks) delete task["requiredBase"];
+  for (const key of ["planningDecisions", "nonNormativeSections", "retiredRequirementIds"] as const) {
+    const records = clone[key];
+    if (Array.isArray(records)) {
+      for (const record of records) delete (record as Record<string, unknown>)["decidedAt"];
+    }
+  }
+  for (const requirement of clone["requirements"] as Array<{ applicability: { disposition?: Record<string, unknown> } }>) {
+    if (requirement.applicability.disposition) delete requirement.applicability.disposition["decidedAt"];
+  }
+  clone["revisionId"] = revisionId;
+  if (revisionId !== "revision_1") {
+    for (const task of tasks) task["requiredBase"] = requiredBaseForRevision(revisionId);
+  }
+  delete clone["digest"];
+  return clone as unknown as PlanSubmissionRevision;
 }
 
 /**
- * A kernel-acceptable revise submission for the next revision id: the
- * envelope already matches the run (threaded fixture), and every task's
- * kernel-owned requiredBase names the NEW revision, not the prior one.
+ * A kernel-acceptable revise submission for the next revision id: every
+ * kernel-owned envelope/timestamp value is omitted so the kernel stamps it,
+ * and requiredBase names the NEW revision (kernel-derived when omitted).
  */
-function reviseToNext(revision: { digest: string }, revisionId: string) {
-  const rest = withoutDigest(revision) as unknown as {
-    tasks: { requiredBase?: string }[];
-    [key: string]: unknown;
-  };
-  return {
-    ...rest,
-    revisionId,
-    tasks: rest.tasks.map((task) => ({ ...task, requiredBase: `accepted plan revision ${revisionId}` })),
-  };
+function reviseToNext(revision: { digest: string }, revisionId: string): PlanSubmissionRevision {
+  const clone = structuredClone(revision) as unknown as Record<string, unknown>;
+  for (const field of [...KERNEL_STAMPED_REVISION_FIELDS]) delete clone[field];
+  const tasks = clone["tasks"] as Record<string, unknown>[];
+  for (const task of tasks) delete task["requiredBase"];
+  for (const key of ["planningDecisions", "nonNormativeSections", "retiredRequirementIds"] as const) {
+    const records = clone[key];
+    if (Array.isArray(records)) {
+      for (const record of records) delete (record as Record<string, unknown>)["decidedAt"];
+    }
+  }
+  for (const requirement of (clone["requirements"] as Array<{ applicability: { disposition?: Record<string, unknown> } }> | undefined) ?? []) {
+    if (requirement.applicability.disposition) delete requirement.applicability.disposition["decidedAt"];
+  }
+  clone["revisionId"] = revisionId;
+  for (const task of tasks) task["requiredBase"] = requiredBaseForRevision(revisionId);
+  delete clone["digest"];
+  return clone as unknown as PlanSubmissionRevision;
+}
+
+/** T7a: docs policy v2 stamp required for a complete explicit-start identity. */
+function seedDocsV2(store: SchedulerStore, runId: string): void {
+  store.append({
+    runId,
+    type: "project_docs.policy_configured",
+    occurredAt: CLOCK,
+    actor: { role: "runner", id: "runner" },
+    idempotencyKey: "project-docs-policy:2",
+    payload: { version: 2 },
+  });
+}
+
+/** T7b: genuine owner start bound to the current ready identity (no authority invented). */
+function authorizeOwnerStart(store: SchedulerStore, runId: string, key = "owner-start:1"): void {
+  const identity = currentExplicitStartIdentity(projectionOf(store, runId));
+  assert.ok(identity, "the fixture plan is ready with a complete start identity");
+  store.append({
+    runId,
+    type: "planning.execution_authorized",
+    occurredAt: CLOCK,
+    actor: { role: "user", id: "local-user" },
+    idempotencyKey: key,
+    payload: { authorization: { ...identity, version: 1, ownerChoice: "execute" } },
+  });
+}
+
+/** T4: fixture source artifact authority -- fail-closed on unknown/missing bytes. */
+function fixtureArtifactAuthority(projection: SchedulerProjection): void {
+  const planning = projection.planning;
+  if (!planning) throw new Error("Current planning source artifact authority unavailable: missing planning.");
+  const manifest = planning.source.manifestsById[planning.source.currentManifestId];
+  if (!manifest || manifest.manifestId !== "manifest_amend_1") throw new Error("Current planning source artifact authority unavailable: unknown or missing source bytes.");
+  const bytes = Buffer.from(FIXTURE_AMENDED_TEXT, "utf8");
+  if (bytes.length !== manifest.byteLength) throw new Error("source byte length drift");
+  if (computeArtifactDigest(bytes) !== manifest.artifactDigest) throw new Error("source artifact drift");
+}
+
+/** C5: coverage bound to the stored current revision (fixture obligations preserved). */
+function seedCoverageForStoredPlan(
+  store: SchedulerStore,
+  runId: string,
+  fixture: ReturnType<typeof scopedFixture>,
+  reviewId?: string,
+): void {
+  const plan = projectionOf(store, runId).planning!.plan!;
+  const stored = plan.revisionsById[plan.currentRevisionId]!;
+  seedCoverageStandIn(
+    store,
+    runId,
+    fixture,
+    {
+      ...fixture.coverageReview,
+      ...(reviewId !== undefined ? { id: reviewId } : {}),
+      planRevisionId: stored.revisionId,
+      planRevisionDigest: stored.digest,
+    },
+    stored,
+  );
 }
 
 
@@ -473,18 +567,46 @@ test("T3a unread section is never counted as covered", async () => {
       tools, "read_planning_source_section", { sectionId: "s1" }, runId,
     );
     assert.equal(read.isError, false);
-    const first = await invokePlanningTool(
-      tools, "record_planning_checkpoint", checkpointArgs("checkpoint-1", ["s1"]), runId,
+    // C4: the checkpoint tool is gone; coverage derives from durable reads.
+    assert.equal((PLANNING_TOOL_NAMES as readonly string[]).includes("record_planning_checkpoint"), false);
+    assert.equal(tools.some((tool) => tool.definition.name === "record_planning_checkpoint"), false);
+    const registry = new ToolRegistry();
+    for (const tool of tools) registry.register(tool);
+    const unknown = await registry.invoke(
+      { type: "tool_call", callId: "checkpoint-absent", name: "record_planning_checkpoint", arguments: checkpointArgs("checkpoint-1", ["s1"]) },
+      { runId, sessionId: `architect:${runId}`, actor: { role: "architect", id: "architect_1" } },
     );
-    assert.equal(first.isError, false);
+    assert.equal(unknown.isError, true);
+    assert.equal(unknown.error?.code, "unknown_tool");
+    assert.deepEqual(projectionOf(store, runId).planning!.resume.coveredSourceSectionIds, ["s1"]);
+
+    // Historical checkpoint stays stored/replayable for the read section.
+    store.append({
+      runId,
+      type: "planning.checkpoint_recorded",
+      occurredAt: CLOCK,
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "checkpoint:1",
+      payload: checkpointArgs("checkpoint-1", ["s1"]) as never,
+    });
+    assert.deepEqual(projectionOf(store, runId).planning!.resume.coveredSourceSectionIds, ["s1"]);
 
     // s2 was never read: counting it is refused and durable coverage is unchanged.
-    const refused = await invokePlanningTool(
-      tools, "record_planning_checkpoint", checkpointArgs("checkpoint-2", ["s1", "s2"]), runId,
-    );
-    assert.equal(refused.isError, true);
-    assert.equal(refused.error?.code, "unread_source_section");
-    assert.match(refused.error?.message ?? "", /s2/);
+    let refusal = "";
+    try {
+      store.append({
+        runId,
+        type: "planning.checkpoint_recorded",
+        occurredAt: CLOCK,
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "checkpoint:2",
+        payload: checkpointArgs("checkpoint-2", ["s1", "s2"]) as never,
+      });
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+    assert.match(refusal, /without a durable full read/);
+    assert.match(refusal, /s2/);
     assert.deepEqual(projectionOf(store, runId).planning!.resume.coveredSourceSectionIds, ["s1"]);
   } finally {
     store.close();
@@ -530,11 +652,25 @@ test("T3a oversized section is refused, never truncated, and never counted", asy
     assert.equal(read.error?.code, "source_section_too_large");
     assert.match(read.error?.message ?? "", /never counts as covered/);
 
-    const checkpoint = await invokePlanningTool(
-      tools, "record_planning_checkpoint", checkpointArgs("checkpoint-1", ["s2"]), runId,
-    );
-    assert.equal(checkpoint.isError, true);
-    assert.equal(checkpoint.error?.code, "unread_source_section");
+    // C4: the checkpoint tool is gone; the oversized section never counts via reads.
+    assert.equal((PLANNING_TOOL_NAMES as readonly string[]).includes("record_planning_checkpoint"), false);
+    assert.equal(tools.some((tool) => tool.definition.name === "record_planning_checkpoint"), false);
+    assert.deepEqual(projectionOf(store, runId).planning!.resume.coveredSourceSectionIds, []);
+    let refusal = "";
+    try {
+      store.append({
+        runId,
+        type: "planning.checkpoint_recorded",
+        occurredAt: CLOCK,
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "checkpoint:oversized",
+        payload: checkpointArgs("checkpoint-1", ["s2"]) as never,
+      });
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+    assert.match(refusal, /without a durable full read/);
+    assert.match(refusal, /s2/);
     assert.deepEqual(projectionOf(store, runId).planning!.resume.coveredSourceSectionIds, []);
   } finally {
     store.close();
@@ -597,7 +733,7 @@ test("T3a draft before the ledger is refused; ledger then draft then revise succ
   const tools = createPlanningTools({ store, clock });
   try {
     const early = await invokePlanningTool(tools, "draft_planning_plan", {
-      revision: withoutDigest(fixture.revision),
+      revision: strippedSubmission(fixture, "revision_1"),
     }, runId);
     assert.equal(early.isError, true);
     assert.equal(early.error?.code, "ledger_required");
@@ -611,12 +747,17 @@ test("T3a draft before the ledger is refused; ledger then draft then revise succ
     assert.equal(persisted.isError, false, JSON.stringify(persisted.error));
 
     const drafted = await invokePlanningTool(tools, "draft_planning_plan", {
-      revision: withoutDigest(fixture.revision),
+      revision: strippedSubmission(fixture, "revision_1"),
     }, runId);
     assert.equal(drafted.isError, false, JSON.stringify(drafted.error));
     const plan = projectionOf(store, runId).planning!.plan!;
     assert.equal(plan.currentRevisionId, "revision_1");
-    assert.equal(plan.currentDigest, fixture.revision.digest);
+    // C5: the stored revision is authoritative; kernel stamping changes the digest.
+    const storedR1 = plan.revisionsById[plan.currentRevisionId]!;
+    assert.equal(plan.currentDigest, storedR1.digest);
+    assert.notEqual(plan.currentDigest, fixture.revision.digest);
+    assert.equal(storedR1.planningDecisions[0]!.decidedAt, CLOCK);
+    assert.equal(storedR1.tasks.find((task) => task.id === "T1")!.requiredBase, "accepted plan revision revision_1");
     // The investigation contract survives the tool round-trip intact.
     const investigation = plan.revisionsById[plan.currentRevisionId]!.tasks
       .find((task) => task.id === "T-INV")!.investigation!;
@@ -635,6 +776,8 @@ test("T3a draft before the ledger is refused; ledger then draft then revise succ
     const after = projectionOf(store, runId).planning!.plan!;
     assert.equal(after.currentRevisionId, "revision_2");
     assert.deepEqual(after.revisionHistoryIds, ["revision_1", "revision_2"]);
+    const storedR2 = after.revisionsById["revision_2"]!;
+    assert.equal(storedR2.tasks.find((task) => task.id === "T1")!.requiredBase, "accepted plan revision revision_2");
   } finally {
     store.close();
   }
@@ -666,13 +809,13 @@ test("T3a invalid ledger and stale revise base are refused", async () => {
     }, runId);
     assert.equal(persisted.isError, false);
     const drafted = await invokePlanningTool(tools, "draft_planning_plan", {
-      revision: withoutDigest(fixture.revision),
+      revision: strippedSubmission(fixture, "revision_1"),
     }, runId);
     assert.equal(drafted.isError, false);
     const plan = projectionOf(store, runId).planning!.plan!;
 
     const stale = await invokePlanningTool(tools, "revise_planning_plan", {
-      revision: { ...withoutDigest(fixture.revision), revisionId: "revision_2" },
+      revision: strippedSubmission(fixture, "revision_2"),
       expectedRevisionId: plan.currentRevisionId,
       expectedDigest: "0".repeat(64),
     }, runId);
@@ -707,10 +850,17 @@ test("T3a checkpoint and resume through the tools, including after restart", asy
       firstTools, "read_planning_source_section", { sectionId: "s1" }, runId,
     );
     assert.equal(read.isError, false);
-    const checkpoint = await invokePlanningTool(
-      firstTools, "record_planning_checkpoint", checkpointArgs("checkpoint-1", ["s1"]), runId,
-    );
-    assert.equal(checkpoint.isError, false);
+    // C4: read-derived resume without the removed checkpoint tool.
+    assert.equal((PLANNING_TOOL_NAMES as readonly string[]).includes("record_planning_checkpoint"), false);
+    assert.equal(firstTools.some((tool) => tool.definition.name === "record_planning_checkpoint"), false);
+    firstStore.append({
+      runId,
+      type: "planning.checkpoint_recorded",
+      occurredAt: CLOCK,
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "checkpoint:1",
+      payload: checkpointArgs("checkpoint-1", ["s1"]) as never,
+    });
     const resume = projectionOf(firstStore, runId).planning!.resume;
     assert.deepEqual(resume.coveredSourceSectionIds, ["s1"]);
     assert.deepEqual(resume.remainingSourceSectionIds, ["s2", "s3"]);
@@ -731,19 +881,34 @@ test("T3a checkpoint and resume through the tools, including after restart", asy
       clock,
       readSource: async () => bytes,
     });
-    const refused = await invokePlanningTool(
-      secondTools, "record_planning_checkpoint", checkpointArgs("checkpoint-2", ["s1", "s2"]), runId,
-    );
-    assert.equal(refused.isError, true);
-    assert.equal(refused.error?.code, "unread_source_section");
+    assert.equal(secondTools.some((tool) => tool.definition.name === "record_planning_checkpoint"), false);
+    let refusal = "";
+    try {
+      secondStore.append({
+        runId,
+        type: "planning.checkpoint_recorded",
+        occurredAt: CLOCK,
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "checkpoint:2",
+        payload: checkpointArgs("checkpoint-2", ["s1", "s2"]) as never,
+      });
+    } catch (error) {
+      refusal = (error as Error).message;
+    }
+    assert.match(refusal, /without a durable full read/);
+    assert.match(refusal, /s2/);
     const read = await invokePlanningTool(
       secondTools, "read_planning_source_section", { sectionId: "s2" }, runId,
     );
     assert.equal(read.isError, false);
-    const checkpoint = await invokePlanningTool(
-      secondTools, "record_planning_checkpoint", checkpointArgs("checkpoint-2", ["s1", "s2"]), runId,
-    );
-    assert.equal(checkpoint.isError, false);
+    secondStore.append({
+      runId,
+      type: "planning.checkpoint_recorded",
+      occurredAt: CLOCK,
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "checkpoint:2-read",
+      payload: checkpointArgs("checkpoint-2-read", ["s1", "s2"]) as never,
+    });
     const after = projectionOf(secondStore, runId).planning!.resume;
     assert.deepEqual(after.coveredSourceSectionIds, ["s1", "s2"]);
     assert.equal(after.nextSourceSectionId, "s3");
@@ -1350,12 +1515,16 @@ class PlanningArchitectDriver implements ArchitectRuntimeDriver {
         requirements: this.fixture.requirements,
         phases: this.fixture.phases,
       });
-    } else if (step === 2) {
+    } else if (step === 1) {
       await invoke(`plan-${step}`, "draft_planning_plan", {
-        revision: withoutDigest(this.fixture.revision),
+        revision: strippedSubmission(this.fixture, "revision_1"),
       });
     } else {
-      await invoke(`plan-${step}`, "record_planning_checkpoint", checkpointArgs(`checkpoint-${step}`, []));
+      // C4/C5: revise replaces the removed checkpoint turn; omitted expected
+      // identity lets the kernel stamp the durable current revision.
+      await invoke(`plan-${step}`, "revise_planning_plan", {
+        revision: strippedSubmission(this.fixture, "revision_2"),
+      });
     }
   }
 }
@@ -1428,7 +1597,7 @@ test("T3a plan_only new-policy run dispatches zero workers, including after rest
     }
     // The sharp arm: a READY plan plus real scheduler tasks, then a tick.
     // Without the plan_only guards this dispatches.
-    seedCoverageStandIn(firstStore, runId, fixture);
+    seedCoverageForStoredPlan(firstStore, runId, fixture);
     seedLegacyPlan(firstStore, runId, [planTask("a"), planTask("b")]);
     const scheduler = new TaskScheduler({
       runId,
@@ -1518,6 +1687,7 @@ test("T3a worker admission refused until ready, blocked again after a source cha
   const runId = "run_t3a_admission";
 
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
+  seedDocsV2(store, runId);
   const tools = createPlanningTools({ store, clock });
   try {
     // Ledger and draft flow through the tools; coverage + ready are the T3b stand-in.
@@ -1528,7 +1698,7 @@ test("T3a worker admission refused until ready, blocked again after a source cha
     }, runId);
     assert.equal(persisted.isError, false);
     const drafted = await invokePlanningTool(tools, "draft_planning_plan", {
-      revision: withoutDigest(fixture.revision),
+      revision: strippedSubmission(fixture, "revision_1"),
     }, runId);
     assert.equal(drafted.isError, false);
     const driver = new DeferredDriver();
@@ -1539,6 +1709,7 @@ test("T3a worker admission refused until ready, blocked again after a source cha
       maxConcurrency: 2,
       workspaceFor: async (task, attempt) => `C:/work/${task.id}/${attempt}`,
       clock,
+      assertPlanningArtifact: fixtureArtifactAuthority,
     });
     // Before readiness no scheduler task can even exist on a new-policy run:
     // the reducer refuses plan.created outright (see the B1 direct-event
@@ -1547,10 +1718,17 @@ test("T3a worker admission refused until ready, blocked again after a source cha
     assert.deepEqual(driver.assignments, []);
     assert.deepEqual(Object.keys(projectionOf(store, runId).tasks), []);
 
-    seedCoverageStandIn(store, runId, fixture);
+    seedCoverageForStoredPlan(store, runId, fixture);
     // Legacy scheduler tasks stand in for the T4 bridge. They may only be
     // seeded once the ready plan exists, and are bound to it at creation.
     seedLegacyPlan(store, runId, [planTask("a"), planTask("b"), planTask("c")]);
+    // T7b: ready alone never authorizes execution; the owner start does.
+    assert.equal(projectionOf(store, runId).planning!.readiness, "ready");
+    assert.ok(explicitStartBlocked(projectionOf(store, runId)), "missing owner start blocks dispatch");
+    await scheduler.tick();
+    assert.deepEqual(driver.assignments, []);
+    authorizeOwnerStart(store, runId);
+    assert.equal(explicitStartBlocked(projectionOf(store, runId)), undefined);
     await scheduler.tick();
     assert.deepEqual(driver.assignments, ["T1", "T3"]);
     driver.resolve("T1", { type: "failed", reason: "fixture_failure" });
@@ -1616,6 +1794,7 @@ test("T3a worker admission blocked again after a plan change, with a ready contr
     const fixture = scopedFixture(runId, CLOCK);
 
     seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
+    seedDocsV2(store, runId);
     const tools = createPlanningTools({ store, clock });
     try {
       const persisted = await invokePlanningTool(tools, "persist_planning_ledger", {
@@ -1625,10 +1804,10 @@ test("T3a worker admission blocked again after a plan change, with a ready contr
       }, runId);
       assert.equal(persisted.isError, false);
       const drafted = await invokePlanningTool(tools, "draft_planning_plan", {
-        revision: withoutDigest(fixture.revision),
+        revision: strippedSubmission(fixture, "revision_1"),
       }, runId);
       assert.equal(drafted.isError, false);
-      seedCoverageStandIn(store, runId, fixture);
+      seedCoverageForStoredPlan(store, runId, fixture);
       // Tasks stand in for the T4 bridge; seeding requires the ready plan.
       seedLegacyPlan(store, runId, [planTask("a"), planTask("b")]);
       const driver = new DeferredDriver();
@@ -1639,7 +1818,9 @@ test("T3a worker admission blocked again after a plan change, with a ready contr
         maxConcurrency: 1,
         workspaceFor: async (task, attempt) => `C:/work/${task.id}/${attempt}`,
         clock,
+        assertPlanningArtifact: fixtureArtifactAuthority,
       });
+      authorizeOwnerStart(store, runId);
       await scheduler.tick();
       assert.deepEqual(driver.assignments, ["T1"], label);
       driver.resolve("T1", { type: "failed", reason: "fixture_failure" });
@@ -2042,6 +2223,7 @@ test("T3a repair B1: no task outside the ready plan is ever dispatched", async (
   const runId = "run_t3a_b1_repro";
 
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
+  seedDocsV2(store, runId);
   try {
     // The reviewer's reproduction: plan_tasks before the ledger is refused,
     // so no `rogue` task exists when the ready plan later arrives.
@@ -2082,10 +2264,10 @@ test("T3a repair B1: no task outside the ready plan is ever dispatched", async (
     }, runId);
     assert.equal(persisted.isError, false);
     const drafted = await invokePlanningTool(planningTools, "draft_planning_plan", {
-      revision: withoutDigest(fixture.revision),
+      revision: strippedSubmission(fixture, "revision_1"),
     }, runId);
     assert.equal(drafted.isError, false);
-    seedCoverageStandIn(store, runId, fixture);
+    seedCoverageForStoredPlan(store, runId, fixture);
     const r1 = readyPlanIdentity(projectionOf(store, runId))!;
     assert.ok(r1);
 
@@ -2102,7 +2284,9 @@ test("T3a repair B1: no task outside the ready plan is ever dispatched", async (
       maxConcurrency: 1,
       workspaceFor: async (task, attempt) => `C:/work/${task.id}/${attempt}`,
       clock,
+      assertPlanningArtifact: fixtureArtifactAuthority,
     });
+    authorizeOwnerStart(store, runId);
     await scheduler.tick();
     assert.deepEqual(driver.assignments, ["T1"]);
     assert.equal(driver.assignments.includes("rogue"), false);
@@ -2160,6 +2344,7 @@ test("T3a repair N3: a source change during workspace allocation cannot dispatch
     const store = new MemorySchedulerStore();
     const runId = `run_t3a_n3_${label}`;
     seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
+    seedDocsV2(store, runId);
     seedReadyPlan(store, runId, fixture);
     seedLegacyPlan(store, runId, [planTask("a"), planTask("b")]);
     if (label === "running" || label === "assigned") {
@@ -2214,6 +2399,8 @@ test("T3a repair N3: a source change during workspace allocation cannot dispatch
     try {
       const driver = new DeferredDriver();
       let amended = false;
+      // T7b: the start authorizes allocation; the amendment during allocation revokes it.
+      authorizeOwnerStart(store, runId);
       const scheduler = new TaskScheduler({
         runId,
         store,
@@ -2229,6 +2416,7 @@ test("T3a repair N3: a source change during workspace allocation cannot dispatch
           return `C:/work/${task.id}/${attempt}`;
         },
         clock,
+        assertPlanningArtifact: fixtureArtifactAuthority,
       });
       // Must resolve cleanly: the re-check skips the task instead of letting
       // the reducer throw out of tick(). Assertions come before awaitIdle so
@@ -2312,6 +2500,7 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
   const runId = "run_t3a_b2_rebind";
 
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
+  seedDocsV2(store, runId);
   try {
     const planningTools = createPlanningTools({ store, clock });
     const persisted = await invokePlanningTool(planningTools, "persist_planning_ledger", {
@@ -2321,10 +2510,10 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
     }, runId);
     assert.equal(persisted.isError, false);
     const drafted = await invokePlanningTool(planningTools, "draft_planning_plan", {
-      revision: withoutDigest(fixture.revision),
+      revision: strippedSubmission(fixture, "revision_1"),
     }, runId);
     assert.equal(drafted.isError, false);
-    seedCoverageStandIn(store, runId, fixture);
+    seedCoverageForStoredPlan(store, runId, fixture);
     const r1 = readyPlanIdentity(projectionOf(store, runId))!;
     assert.ok(r1);
 
@@ -2334,6 +2523,7 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
       projectionOf(store, runId).readyPlanTaskBindings?.T1,
       { revisionId: r1.revisionId, digest: r1.digest, contractId: "T1" },
     );
+    authorizeOwnerStart(store, runId, "owner-start:r1");
 
     // A plan revision supersedes R1; admission closes until re-readiness.
     const r1plan = projectionOf(store, runId).planning!.plan!;
@@ -2378,6 +2568,9 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
       contractId: "T3",
     });
 
+    // T7b: the R1 start is stale for R2; a fresh start is required.
+    assert.ok(explicitStartBlocked(projectionOf(store, runId)), "stale R1 start blocks R2 dispatch");
+
     // Direct admission succeeds again after the rebind.
     store.append({
       runId,
@@ -2402,7 +2595,12 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
       maxConcurrency: 2,
       workspaceFor: async (task, attempt) => `C:/work/${task.id}/${attempt}`,
       clock,
+      assertPlanningArtifact: fixtureArtifactAuthority,
     });
+    await scheduler.tick();
+    assert.deepEqual(driver.assignments, [], "stale start dispatches nothing");
+    authorizeOwnerStart(store, runId, "owner-start:r2");
+    assert.equal(explicitStartBlocked(projectionOf(store, runId)), undefined);
     await scheduler.tick();
     assert.deepEqual(driver.assignments, ["T3"]);
     driver.resolve("T3", { type: "failed", reason: "fixture_failure" });
@@ -2793,6 +2991,7 @@ test("T3a repair B3: verifier repair tasks are bound to the ready plan and dispa
   const store = new MemorySchedulerStore();
   const runId = "run_t3a_b3_verifier";
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
+  seedDocsV2(store, runId);
   seedReadyPlan(store, runId, fixture);
   try {
     // Integrated implementation plan (mirrors the verifier fixture) under
@@ -2921,7 +3120,9 @@ test("T3a repair B3: verifier repair tasks are bound to the ready plan and dispa
       maxConcurrency: 2,
       workspaceFor: async (task, attempt) => `C:/work/${task.id}/${attempt}`,
       clock,
+      assertPlanningArtifact: fixtureArtifactAuthority,
     });
+    authorizeOwnerStart(store, runId);
     await scheduler.tick();
     assert.deepEqual(driver.assignments, ["repair-api"]);
     driver.resolve("repair-api", { type: "failed", reason: "fixture_failure" });
@@ -2936,6 +3137,7 @@ test("T3a repair B3: final-verification repair tasks are bound to the ready plan
   const store = new MemorySchedulerStore();
   const runId = "run_t3a_b3_fv";
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
+  seedDocsV2(store, runId);
   seedReadyPlan(store, runId, fixture);
   try {
     const targetRevision = "a".repeat(40);
@@ -3049,7 +3251,9 @@ test("T3a repair B3: final-verification repair tasks are bound to the ready plan
       maxConcurrency: 2,
       workspaceFor: async (task, attempt) => `C:/work/${task.id}/${attempt}`,
       clock,
+      assertPlanningArtifact: fixtureArtifactAuthority,
     });
+    authorizeOwnerStart(store, runId);
     await scheduler.tick();
     assert.equal(driver.assignments.length, 1);
     const firstRepair = driver.assignments[0]!;

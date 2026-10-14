@@ -1,15 +1,5 @@
+import { lstat } from "node:fs/promises";
 import {
-  lstat,
-  mkdir,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import {
-  dirname,
   isAbsolute,
   relative,
   resolve,
@@ -22,6 +12,13 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
+import {
+  FilesystemMutationError,
+  fencedDelete,
+  fencedPatch,
+  fencedWrite,
+  filesystemMutationFailure,
+} from "./filesystem-mutation-fence.js";
 
 export interface OpenRouterApplyPatchToolOptions {
   protectedPaths?: readonly string[];
@@ -65,6 +62,7 @@ export function createOpenRouterApplyPatchTool(
     validate: validateApplyPatchInput,
     assessAccess: (input) => ({
       capability: "workspace",
+      ...(input.operation.type === "delete_file" ? { destructive: true as const } : {}),
       paths: [
         {
           path: brokerAccessPath(input.operation.path),
@@ -127,7 +125,7 @@ async function executeApplyPatch(
   }
   let target: string;
   try {
-    target = await safeWorkspaceTarget(context.workspacePath, input.operation.path);
+    target = safeWorkspaceTarget(context.workspacePath, input.operation.path);
   } catch (error) {
     return failure(
       "path_outside_workspace",
@@ -142,33 +140,90 @@ async function executeApplyPatch(
     );
   }
 
-  try {
-    switch (input.operation.type) {
-      case "create_file": {
-        if (await pathExists(target)) {
+  const workspace = context.workspacePath;
+  switch (input.operation.type) {
+    case "create_file": {
+      let content: string;
+      try {
+        content = applyCreateDiff(input.operation.diff);
+      } catch (error) {
+        return failure(
+          "patch_apply_failed",
+          error instanceof Error ? error.message : "Failed to apply OpenRouter patch."
+        );
+      }
+      try {
+        fencedWrite(context, target, Buffer.from(content), undefined, true);
+        return success(`Created ${displayPath}`);
+      } catch (error) {
+        if (error instanceof FilesystemMutationError && (error.code === "target_already_exists" || error.code === "expected_revision_required")) {
           return failure("file_exists", `${displayPath} already exists.`);
         }
-        const content = applyCreateDiff(input.operation.diff);
-        await mkdir(dirname(target), { recursive: true });
-        await atomicWrite(target, Buffer.from(content));
-        return success(`Created ${displayPath}`);
-      }
-      case "update_file": {
-        const current = await readFile(target, "utf8");
-        const next = applyUpdateDiff(current, input.operation.diff);
-        await atomicWrite(target, Buffer.from(next));
-        return success(`Updated ${displayPath}`);
-      }
-      case "delete_file": {
-        await rm(target, { force: false });
-        return success(`Deleted ${displayPath}`);
+        const refusal = filesystemMutationFailure(error, workspace);
+        if (refusal) return refusal;
+        return failure(
+          "patch_apply_failed",
+          error instanceof Error ? error.message : "Failed to apply OpenRouter patch."
+        );
       }
     }
-  } catch (error) {
-    return failure(
-      "patch_apply_failed",
-      error instanceof Error ? error.message : "Failed to apply OpenRouter patch."
-    );
+    case "update_file": {
+      try {
+        parseUpdateHunks(input.operation.diff);
+      } catch (error) {
+        return failure(
+          "patch_apply_failed",
+          error instanceof Error ? error.message : "Failed to apply OpenRouter patch."
+        );
+      }
+      const diff = input.operation.diff;
+      try {
+        fencedPatch(context, target, undefined, (originalBytes) => {
+          const currentText = originalBytes.toString("utf8");
+          let nextText: string;
+          try {
+            nextText = applyUpdateDiff(currentText, diff);
+          } catch (error) {
+            throw new FilesystemMutationError(
+              "ambiguous_patch",
+              error instanceof Error ? error.message : "Patch hunk could not be matched."
+            );
+          }
+          return Buffer.from(nextText);
+        });
+        return success(`Updated ${displayPath}`);
+      } catch (error) {
+        const refusal = filesystemMutationFailure(error, workspace);
+        if (refusal) return refusal;
+        return failure(
+          "patch_apply_failed",
+          error instanceof Error ? error.message : "Failed to apply OpenRouter patch."
+        );
+      }
+    }
+    case "delete_file": {
+      try {
+        const stat = await lstat(target);
+        if (stat.isDirectory()) {
+          return failure("patch_apply_failed", "Delete target is a directory.");
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          // Fall through to the fence for last-mile revalidation; lstat alone never authorizes.
+        }
+      }
+      try {
+        fencedDelete(context, target, false);
+        return success(`Deleted ${displayPath}`);
+      } catch (error) {
+        const refusal = filesystemMutationFailure(error, workspace);
+        if (refusal) return refusal;
+        return failure(
+          "patch_apply_failed",
+          error instanceof Error ? error.message : "Failed to apply OpenRouter patch."
+        );
+      }
+    }
   }
 }
 
@@ -292,25 +347,12 @@ function normalizeDiffLines(diff: string): string[] {
   return lines;
 }
 
-async function safeWorkspaceTarget(workspacePath: string, requestedPath: string): Promise<string> {
+function safeWorkspaceTarget(workspacePath: string, requestedPath: string): string {
   const normalizedPath = normalizeHostedPatchPath(requestedPath);
-  const root = await realpath(workspacePath);
   const target = resolve(workspacePath, normalizedPath);
-  const lexical = relative(root, target);
+  const lexical = relative(workspacePath, target);
   if (lexical.startsWith("..") || isAbsolute(lexical)) {
     throw new Error("Patch path escapes the workspace root.");
-  }
-
-  let probe = target;
-  while (!(await pathExists(probe))) {
-    const parent = dirname(probe);
-    if (parent === probe) break;
-    probe = parent;
-  }
-  const canonicalProbe = await realpath(probe);
-  const canonicalRelative = relative(root, canonicalProbe);
-  if (canonicalRelative.startsWith("..") || isAbsolute(canonicalRelative)) {
-    throw new Error("Patch path resolves outside the workspace root.");
   }
   return target;
 }
@@ -343,38 +385,23 @@ function matchesProtectedPath(
   protectedPaths: readonly string[] | undefined
 ): boolean {
   const candidate = normalizePolicyPath(path);
+  const foldedCandidate = foldHostPath(candidate);
   return (protectedPaths ?? []).some((entry) => {
     const protectedPath = normalizePolicyPath(entry);
-    if (!protectedPath.includes("/")) {
-      return candidate.split("/").includes(protectedPath);
+    const foldedProtected = foldHostPath(protectedPath);
+    if (!foldedProtected.includes("/")) {
+      return foldedCandidate.split("/").includes(foldedProtected);
     }
-    return candidate === protectedPath || candidate.startsWith(`${protectedPath}/`);
+    return foldedCandidate === foldedProtected || foldedCandidate.startsWith(`${foldedProtected}/`);
   });
+}
+
+function foldHostPath(path: string): string {
+  return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
 function normalizePolicyPath(path: string): string {
   return path.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-async function atomicWrite(path: string, bytes: Buffer): Promise<void> {
-  const temporary = `${path}.aiboard-openrouter-${randomUUID()}.tmp`;
-  await writeFile(temporary, bytes, { flag: "wx" });
-  try {
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
 }
 
 function success(message: string): ToolExecutionOutput {

@@ -214,14 +214,30 @@ test("V3 ctest plan appends --output-junit and reuses an owned path", () => {
     reportName: "abc",
   });
   assert.equal(fresh?.runner, "ctest");
-  assert.deepEqual(fresh?.command?.args.slice(-2), ["--output-junit", ".aiboard-report-abc.xml"]);
+  // T8: ctest resolves a relative --output-junit against the test dir, so
+  // fresh plans carry an absolute path (like the dotnet TRX planner).
+  assert.deepEqual(fresh?.command?.args.slice(-2), ["--output-junit", "C:/repo/.aiboard-report-abc.xml"]);
+  assert.equal(fresh?.reportPath, ".aiboard-report-abc.xml");
   const existing = planLanguageTestReport({
     checkoutPath: "C:/repo",
     command: { label: "ctest", executable: "ctest", args: ["--test-dir", "b", "--output-junit", "owned.xml"] },
     reportName: "abc",
   });
   assert.equal(existing?.command, undefined);
-  assert.equal(existing?.reportPath, "owned.xml");
+  assert.equal(existing?.reportPath, "b/owned.xml", "a reused relative flag resolves against the test dir");
+  const noTestDir = planLanguageTestReport({
+    checkoutPath: "C:/repo",
+    command: { label: "ctest", executable: "ctest", args: ["--output-junit", "owned.xml"] },
+    reportName: "abc",
+  });
+  assert.equal(noTestDir?.command, undefined);
+  assert.equal(noTestDir?.reportPath, "owned.xml", "without --test-dir the flag resolves against the checkout");
+  const outside = planLanguageTestReport({
+    checkoutPath: "C:/repo",
+    command: { label: "ctest", executable: "ctest", args: ["--test-dir", "b", "--output-junit", "../escape.xml"] },
+    reportName: "abc",
+  });
+  assert.ok(outside?.unsupported, "an escaping reuse stays unsupported");
 });
 
 test("V3 maven plans an invocation-owned report set; gradle, cargo, and go stay unsupported", () => {

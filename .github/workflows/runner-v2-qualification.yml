@@ -2,6 +2,15 @@ name: Runner V2 hosted qualification
 
 on:
   workflow_dispatch:
+    inputs:
+      qualification-scope:
+        description: 'full runs all 11 qualification jobs. docker-oci-only runs the bounded real Docker job; the other 10 jobs remain UNQUALIFIED.'
+        required: false
+        default: full
+        type: choice
+        options:
+          - full
+          - docker-oci-only
   schedule:
     - cron: '17 2 * * *'
   pull_request:
@@ -16,7 +25,7 @@ env:
 jobs:
   native-lifecycle:
     name: Native lifecycle qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'docker-oci-only')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -52,7 +61,7 @@ jobs:
 
   cli-readiness:
     name: CLI readiness qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'docker-oci-only')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -88,7 +97,7 @@ jobs:
 
   recovery:
     name: Recovery qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'docker-oci-only')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -124,7 +133,7 @@ jobs:
 
   windows-portable-channel:
     name: Windows portable channel qualification (Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification') && (github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'docker-oci-only')
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:

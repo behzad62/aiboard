@@ -355,7 +355,7 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async observability(runId: string): Promise<BuildObservabilitySnapshot> {
-    return await this.require(runId).observability();
+    return await this.withRuntimeActivity(async () => await this.require(runId).observability());
   }
 
   contextManifests(runId: string): import("./context-manifest-store.js").ContextManifest[] {
@@ -363,11 +363,11 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async transcript(runId: string, afterSequence = 0): Promise<BuildTranscriptPage> {
-    return await this.require(runId).transcript(afterSequence);
+    return await this.withRuntimeActivity(async () => await this.require(runId).transcript(afterSequence));
   }
 
   async files(runId: string): Promise<IntegrationFileSnapshot> {
-    return await this.require(runId).files();
+    return await this.withRuntimeActivity(async () => await this.require(runId).files());
   }
 
   events(runId: string, afterSequence = 0): SchedulerEvent[] {

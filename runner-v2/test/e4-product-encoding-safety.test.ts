@@ -125,6 +125,19 @@ function journeyLastToolValue(request: AgentModelRequest): Record<string, unknow
   return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
 }
 
+function e4ReadText(request: AgentModelRequest, path: string): string | undefined {
+  for (const message of request.messages) {
+    if (message.role !== "tool") continue;
+    const content = message.content as { toolName?: string; content?: Array<{ type: string; value?: unknown; text?: string }> };
+    if (content.toolName !== "fs.read") continue;
+    const meta = content.content?.find((item) => item.type === "json")?.value as { path?: string } | undefined;
+    if (meta?.path !== path) continue;
+    const text = content.content?.find((item) => item.type === "text")?.text;
+    if (typeof text === "string") return text;
+  }
+  return undefined;
+}
+
 class E4JourneyArchitect implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   private calls = 0;
@@ -210,7 +223,18 @@ class E4JourneyWorker implements AgentModel {
     if (count === 6) return journeyCall("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
     const record = journeyLastToolValue(request)!;
     const fact = record.fact as { stdoutArtifactHash: string };
-    return journeyCall("submit_task", { summary: "Product value and real tests pass.", readiness: "ready_for_architect_review", unresolvedConcerns: [], criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }] }, "submit-1");
+    return journeyCall("submit_task", {
+      summary: "Product value and real tests pass.",
+      readiness: "ready_for_architect_review",
+      unresolvedConcerns: [],
+      criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: {
+        changed: ["src/value.mjs", "test/value.test.mjs", "src/notes.txt"],
+        verified: ["value exports 2"],
+        testsRun: [{ command: "node --test", counts: { selected: 2, passed: 2, failed: 0, skipped: 0 } }],
+        notRun: [],
+      },
+    }, "submit-1");
   }
 }
 
@@ -275,12 +299,22 @@ class E4JourneyReviewer implements AgentModel {
         }],
       }, "verifier-verdict-1");
     }
+    if (pass === "delivery-verdict-system" && request.messages.some((message) => message.role === "tool" && (message.content as { toolName?: string }).toolName === "fs.read" && (message.content as { isError?: boolean }).isError === true)) {
+      throw new Error("E4 fixture: verdict fs.read failed; not resubmitting blindly.");
+    }
+    if (pass === "delivery-verdict-system" && e4ReadText(request, "src/value.mjs") === undefined) {
+      return journeyCall("fs.read", { path: "src/value.mjs", startLine: 1, endLine: 1 }, `verdict-read-${seen}`);
+    }
+    if (pass === "delivery-verdict-system") {
+      const inspected = e4ReadText(request, "src/value.mjs") ?? "";
+      assert.ok(inspected.split("\n")[0]!.includes("export const value = 2;"), "the cited line 1 actually exports value = 2");
+    }
     const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
     return journeyCall("submit_deliverable_verdict", {
       summary: "The module exports 2 and the cited test run passed.",
       satisfied: this.mode === "clean",
-      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout." })),
+      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Read src/value.mjs line 1 in this verdict session and confirmed it exports value = 2.", citations: [{ path: "src/value.mjs", line: 1 }] })),
     }, `verdict-${seen}`);
   }
 }
@@ -328,6 +362,13 @@ describe("E4 product journey", { concurrency: 2 }, () => {
         const review = p.delivery!.reviews.T1!;
         assert.equal(review.reviewerRuntimeId, "rev:reviewer"); assert.equal(review.independence, "distinct_model");
         assert.ok(review.depth!.inspectionToolCalls >= 1);
+        assert.ok(review.readCapture!.reads.some((read) => read.path === "src/value.mjs" && read.startLine === 1 && read.endLine === 1));
+        for (const verdict of review.claimVerdicts!) {
+          for (const citation of verdict.citations ?? []) {
+            if (!("line" in citation)) continue;
+            assert.ok(review.readCapture!.reads.some((read) => read.path === citation.path && read.startLine! <= citation.line && read.endLine! >= citation.line), `citation ${citation.path}:${citation.line} is covered by a current read range`);
+          }
+        }
         const record = p.tasks.T1!.encodingSubmission!;
         assert.equal(record.taskRevision, p.tasks.T1!.submissionScope!.taskRevision);
         assert.deepEqual(review.runnerEncoding, record);

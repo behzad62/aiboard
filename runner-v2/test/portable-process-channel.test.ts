@@ -8,6 +8,8 @@ import test from "node:test";
 import { writeFile } from "node:fs/promises";
 import { NativeOwnedProcessBackend, type ProcessBirthInspection } from "../src/native-process-backend.js";
 
+import { boundedConverge } from "./support/qualification-harness.js";
+import { withWindowsInspectionQualification } from "./support/qualification-process-fixture.js";
 import { WindowsProcessBackend } from "../src/windows-process-backend.js";
 import { parseProcessLaunchResult, parseProcessReconciliation, type ProcessBackendBinding, type ProcessEffectFence } from "../src/process-backend.js";
 import type { BackpressuredOutputMetadata } from "../src/interactive-process-channel.js";
@@ -902,6 +904,59 @@ test("portable write returns its durable acknowledged outcome when takeover wins
   }
 });
 
+for (const outcome of ["acknowledged", "takeover", "takeover-absent", "failed", "absent", "nonce", "owner", "fence", "sequence", "status", "malformed", "read-error"] as const) {
+  test(`portable command deadline reconciles durable acknowledgement ${outcome}`, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "aiboard-portable-deadline-ack-"));
+    for (const directory of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, directory), { recursive: true });
+    writeOutputCheckpoint(root);
+    let now = 100; let published = false; let reattestations = 0; let takeover = false;
+    const effects: string[] = [];
+    const ackPath = join(root, "channel/ack/input-000000000001.json");
+    t.mock.method(Date, "now", () => now);
+    const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 1, clock: () => now,
+      authority: () => ({ directory: root, nonce: "nonce", fence,
+        reattest: () => {
+          reattestations++;
+          if (takeover) throw new Error("stale writer fence");
+          if (published) {
+            now = 2101; // The original 2000ms wait crossed while re-attestation was in flight.
+            const ack = { nonce: outcome === "nonce" ? "foreign" : "nonce", ownerId: outcome === "owner" ? "foreign" : fence.ownerId, fencingToken: outcome === "fence" ? fence.fencingToken + 1 : fence.fencingToken, sequence: outcome === "sequence" ? 2 : 1, status: outcome === "failed" ? "failed" : outcome === "status" ? "unknown" : "acknowledged" };
+            if (outcome === "read-error") mkdirSync(ackPath);
+            else if (outcome !== "absent" && outcome !== "takeover-absent") writeFileSync(ackPath, outcome === "malformed" ? "{" : JSON.stringify(ack));
+            takeover = outcome === "takeover" || outcome === "takeover-absent";
+          }
+          return "live";
+        },
+        effect: async (kind, effect) => {
+          effects.push(kind);
+          if (takeover) throw new Error("stale fence at effect boundary");
+          const result = effect(); if (kind === "write") published = true; return result;
+        },
+        snapshot: immediateSnapshot,
+      }),
+    });
+    let channel: Awaited<ReturnType<typeof provider.acquire>> | undefined;
+    try {
+      channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+      const payload = Buffer.from("sent");
+      const write = channel.write({ sequence: 1, byteLength: payload.length, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 2000 }, payload);
+      if (outcome === "acknowledged" || outcome === "takeover") {
+        assert.deepEqual(await write, { acknowledged: true, sequence: 1 });
+        assert.equal(existsSync(ackPath), true, "deadline reconciliation retains durable proof without a new effect");
+      } else await assert.rejects(write, outcome === "absent" || outcome === "takeover-absent" ? /acknowledgement timed out/ : outcome === "failed" ? /command failed/ : /acknowledgement is invalid/);
+      assert.deepEqual(effects, ["attach", "write"], "no consume or reauthorization effect may run after the deadline");
+      assert.equal(reattestations, 3);
+      assert.deepEqual(JSON.parse(readFileSync(join(root, "channel/client-state.json"), "utf8")), {
+        nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken,
+        nextCommand: 2, nextWrite: 2, inputClosed: false,
+      }, "one admitted publication advances only its original command/write state");
+    } finally {
+      await channel?.detach(); t.mock.restoreAll();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("portable output polling coalesces while one backpressured delivery is in flight", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-output-coalesce-"));
   for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
@@ -981,91 +1036,124 @@ test("portable provider retains a chunk until the identical sink acknowledgement
   }
 });
 
-test("real portable channel preserves ordered duplex bytes and exact acknowledgement metadata", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("real portable channel preserves ordered duplex bytes and exact acknowledgement metadata", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-channel-"));
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, replayCapacityChunks: 2, replayCapacityBytes: 32 });
-  const launch = parseProcessLaunchResult(await backend.launch(request([
-    "-e",
-    "process.stdin.on('data',b=>{process.stdout.write(b);process.stderr.write(Buffer.from(b).reverse())});process.stdin.on('end',()=>process.exit(0))",
-  ])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number };
-  const provider = backend.backpressuredChannelProvider();
-  const channel = await provider.acquire(binding, fence);
-  const seen: Array<{ metadata: BackpressuredOutputMetadata; bytes: Buffer }> = [];
-  const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
-    seen.push({ metadata, bytes: Buffer.from(bytes) });
-    return metadata;
-  });
-  try {
-    for (const [sequence, text] of [[1, "abc"], [2, "def"]] as const) {
-      const payload = Buffer.from(text);
-      assert.deepEqual(await channel.write({
-        sequence,
-        byteLength: payload.byteLength,
-        digest: createHash("sha256").update(payload).digest("hex"),
-        timeoutMs: 2_000,
-      }, payload), { acknowledged: true, sequence });
-    }
-    await channel.closeInput();
-    const terminal = await channel.waitForTerminal() as { state: string };
-    assert.equal(terminal.state, "exited");
-    const supervisorState = JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")) as {
-      revision?: number;
-      windowsTreeRefreshCount?: number;
-      windowsTreeRefreshMinimumGapMs?: number | null;
-    };
-    assert.ok((supervisorState.windowsTreeRefreshCount ?? 0) >= 2, "fixture must observe multiple Windows tree refreshes");
-    assert.ok((supervisorState.windowsTreeRefreshMinimumGapMs ?? 0) >= 250, "Windows tree refreshes must remain cadence bounded");
-    assert.ok((supervisorState.revision ?? Number.POSITIVE_INFINITY) <= (supervisorState.windowsTreeRefreshCount ?? 0) + 12,
-      "unchanged polling ticks must not churn the durable state file");
-    await waitFor(() => seen.some((entry) => entry.metadata.stream === "stdout") && seen.some((entry) => entry.metadata.stream === "stderr"));
-    assert.equal(Buffer.concat(seen.filter((entry) => entry.metadata.stream === "stdout").map((entry) => entry.bytes)).toString(), "abcdef");
-    assert.equal(Buffer.concat(seen.filter((entry) => entry.metadata.stream === "stderr").map((entry) => entry.bytes)).toString(), "cbafed");
-    for (const stream of ["stdout", "stderr"] as const) {
-      const entries = seen.filter((entry) => entry.metadata.stream === stream);
-      assert.deepEqual(entries.map((entry) => entry.metadata.sequence), entries.map((_, index) => index + 1));
-      assert.ok(entries.every(({ metadata, bytes }) => metadata.byteLength === bytes.byteLength && metadata.digest === createHash("sha256").update(bytes).digest("hex")));
-    }
-  } finally {
-    unsubscribe();
-    await channel.detach();
-    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
-    await backend.release(binding, fence).catch(() => undefined);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+  await withWindowsInspectionQualification({ fixtureName: "real portable channel preserves ordered duplex bytes and exact acknowledgement metadata", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request([
+        "-e",
+        "process.stdin.on('data',b=>{process.stdout.write(b);process.stderr.write(Buffer.from(b).reverse())});process.stdin.on('end',()=>process.exit(0))",
+      ]));
+      const binding = bindingFor(launch);
+      const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
+        directory: string;
+        supervisorPid: number;
+      };
+      const provider = backend.backpressuredChannelProvider();
+      const channel = await provider.acquire(binding, fence);
+      fixture.deferCleanup(() => channel.detach());
+      const seen: Array<{
+        metadata: BackpressuredOutputMetadata;
+        bytes: Buffer;
+      }> = [];
+      const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
+        seen.push({ metadata, bytes: Buffer.from(bytes) });
+        return metadata;
+      });
+      fixture.deferCleanup(unsubscribe);
+      for (const [sequence, text] of [[1, "abc"], [2, "def"]] as const) {
+        const payload = Buffer.from(text);
+        assert.deepEqual(await channel.write({
+          sequence,
+          byteLength: payload.byteLength,
+          digest: createHash("sha256").update(payload).digest("hex"),
+          timeoutMs: 2000,
+        }, payload), { acknowledged: true, sequence });
+      }
+      let refreshSample = "";
+      await boundedConverge({
+        label: "portable duplex live refresh samples", deadlineMs: 5000,
+        sample: () => {
+          refreshSample = readFileSync(join(identity.directory, "state.json"), "utf8");
+          const state = JSON.parse(refreshSample) as {
+            status?: string;
+            error?: unknown;
+            windowsTreeRefreshCount?: number;
+          };
+          if (state.status !== "running" || state.error != null)
+            return { kind: "fail", reason: "workload did not remain healthy before refresh sampling" };
+          return (state.windowsTreeRefreshCount ?? 0) >= 2 ? { kind: "pass" } : { kind: "retry" };
+        },
+        evidence: () => refreshSample,
+      });
+      console.log(JSON.stringify({ qualification: "portable-duplex-live-refresh", state: JSON.parse(refreshSample) }));
+      await channel.closeInput();
+      const terminal = await channel.waitForTerminal() as {
+        state: string;
+      };
+      assert.equal(terminal.state, "exited");
+      const supervisorState = JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")) as {
+        revision?: number;
+        windowsTreeRefreshCount?: number;
+        windowsTreeRefreshMinimumGapMs?: number | null;
+      };
+      assert.ok((supervisorState.windowsTreeRefreshCount ?? 0) >= 2, "fixture must observe multiple Windows tree refreshes");
+      assert.ok((supervisorState.windowsTreeRefreshMinimumGapMs ?? 0) >= 250, "Windows tree refreshes must remain cadence bounded");
+      assert.ok((supervisorState.revision ?? Number.POSITIVE_INFINITY) <= (supervisorState.windowsTreeRefreshCount ?? 0) + 12, "unchanged polling ticks must not churn the durable state file");
+      await waitFor(() => seen.some((entry) => entry.metadata.stream === "stdout") && seen.some((entry) => entry.metadata.stream === "stderr"));
+      assert.equal(Buffer.concat(seen.filter((entry) => entry.metadata.stream === "stdout").map((entry) => entry.bytes)).toString(), "abcdef");
+      assert.equal(Buffer.concat(seen.filter((entry) => entry.metadata.stream === "stderr").map((entry) => entry.bytes)).toString(), "cbafed");
+      for (const stream of ["stdout", "stderr"] as const) {
+        const entries = seen.filter((entry) => entry.metadata.stream === stream);
+        assert.deepEqual(entries.map((entry) => entry.metadata.sequence), entries.map((_, index) => index + 1));
+        assert.ok(entries.every(({ metadata, bytes }) => metadata.byteLength === bytes.byteLength && metadata.digest === createHash("sha256").update(bytes).digest("hex")));
+      }
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
-test("portable release refuses unsettled retained output until sink acknowledgement deletion is verified", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("portable release refuses unsettled retained output until sink acknowledgement deletion is verified", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-release-output-"));
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.stdout.write('retained')"])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
-  try {
-    await waitFor(() => readdirSync(join(identity.directory, "channel/output")).length > 0);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    assert.ok(readdirSync(join(identity.directory, "channel/output")).length > 0, "retained output must survive delayed first channel claim");
-    const channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
-    await assert.rejects(backend.release(binding, fence), /output.*unsettled|release.*refused/i);
-    channel.subscribeBackpressuredOutput(async (metadata) => metadata);
-    await waitFor(() => readdirSync(join(identity.directory, "channel/output")).length === 0 && readdirSync(join(identity.directory, "channel/ack")).length === 0);
-    assert.equal((await channel.waitForTerminal() as { state: string }).state, "exited");
-    await channel.detach();
-    assert.deepEqual(await backend.release(binding, fence), { released: true });
-  } finally {
-    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
-    rmSync(root, { recursive: true, force: true });
-  }
+  await withWindowsInspectionQualification({ fixtureName: "portable release refuses unsettled retained output until sink acknowledgement deletion is verified", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request(["-e", "process.stdout.write('retained')"]));
+      const binding = bindingFor(launch);
+      const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
+        directory: string;
+        supervisorPid: number;
+        supervisorBirth: string;
+      };
+      await waitFor(() => readdirSync(join(identity.directory, "channel/output")).length > 0);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      assert.ok(readdirSync(join(identity.directory, "channel/output")).length > 0, "retained output must survive delayed first channel claim");
+      const channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
+      fixture.deferCleanup(() => channel.detach());
+      await assert.rejects(backend.release(binding, fence), /output.*unsettled|release.*refused/i);
+      const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+      fixture.deferCleanup(unsubscribe);
+      await waitFor(() => readdirSync(join(identity.directory, "channel/output")).length === 0 && readdirSync(join(identity.directory, "channel/ack")).length === 0);
+      assert.equal((await channel.waitForTerminal() as {
+        state: string;
+      }).state, "exited");
+      await channel.detach();
+      assert.deepEqual(await fixture.release(), { released: true });
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
 test("portable release retries exact retired-authority cleanup without reopening an effect", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
-  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-retired-cleanup-"));
-  let removals = 0;
-  const backend = new WindowsProcessBackend({
+if (process.platform !== "win32") return;
+const root = mkdtempSync(join(tmpdir(), "aiboard-portable-retired-cleanup-"));
+let removals = 0;
+const backend = new WindowsProcessBackend({
     stateDirectory: root,
     pollIntervalMs: 10,
     removeRetiredAuthority: (directory) => {
@@ -1074,202 +1162,247 @@ test("portable release retries exact retired-authority cleanup without reopening
       rmSync(directory, { recursive: true, force: true });
     },
   });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
-  const channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
-  try {
-    channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+await withWindowsInspectionQualification({fixtureName:"portable release retries exact retired-authority cleanup without reopening an effect",root,backend,body:async fixture=>{fixture.useCleanupFence(fence);
+const launch = await fixture.launch(request(["-e", "process.exit(0)"]));
+const binding = bindingFor(launch);
+const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
+const channel = await backend.backpressuredChannelProvider().acquire(binding, fence);
+fixture.deferCleanup(() => channel.detach());
+
+    const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+fixture.deferCleanup(unsubscribe);
     assert.equal((await channel.waitForTerminal() as { state: string }).state, "exited");
     await channel.detach();
     assert.equal(parseProcessReconciliation(await backend.reconcile(binding, fence)).state, "exited");
     const empty = await backend.verifyEmpty(binding, fence) as { empty: boolean; proofArtifactId: string };
     assert.equal(empty.empty, true);
     assert.match(empty.proofArtifactId, /^native-empty:[0-9a-f]{48}$/);
-    await assert.rejects(backend.release(binding, fence), /writer fence effect boundary is unavailable/);
+    await assert.rejects(fixture.release(), /writer fence effect boundary is unavailable/);
     assert.equal(existsSync(identity.directory), true);
-    assert.deepEqual(await backend.release(binding, fence), { released: true });
+    assert.deepEqual(await fixture.retryRelease(), { released: true });
     assert.equal(removals, 2);
     assert.equal(existsSync(identity.directory), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+
+}});
+rmSync(root,{recursive:true,force:true,maxRetries:30,retryDelay:50});
+assert.equal(existsSync(root),false);
 });
 
-test("portable retained window backpressures output and replays it after exact reattach", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("portable retained window backpressures output and replays it after exact reattach", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-replay-"));
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, replayCapacityChunks: 2, replayCapacityBytes: 32, operations: stateBackedWindowsFixtureOperations(root) });
-  const launch = parseProcessLaunchResult(await backend.launch(request([
-    "-e",
-    "process.stdout.write('x'.repeat(96));process.stdin.resume();process.stdin.on('end',()=>process.exit(0))",
-  ])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
-  const provider = backend.backpressuredChannelProvider();
-  const first = await provider.acquire(binding, fence);
-  try {
-    await waitFor(() => readdirSync(join(identity.directory, "channel", "output")).some((name) => name.endsWith(".json")));
-    const retained = readdirSync(join(identity.directory, "channel", "output")).filter((name) => name.endsWith(".json"));
-    const retainedBytes = retained.reduce((total, name) => total + Buffer.from(JSON.parse(readFileSync(join(identity.directory, "channel", "output", name), "utf8")).bytes, "base64").byteLength, 0);
-    assert.ok(retained.length <= 2);
-    assert.ok(retainedBytes <= 32);
-    await first.detach();
-
-    const reattached = await provider.reattach(binding, fence);
-    assert.ok(reattached.retainedWindow.length > 0);
-    const replayed: Buffer[] = [];
-    const unsubscribe = reattached.channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
-      if (metadata.stream === "stdout") replayed.push(Buffer.from(bytes));
-      return metadata;
-    });
-    await reattached.channel.closeInput();
-    const terminal = await reattached.channel.waitForTerminal() as { state: string; detail?: string };
-    assert.equal(terminal.state, "exited", JSON.stringify(terminal));
-    await waitFor(() => Buffer.concat(replayed).byteLength === 96);
-    assert.equal(Buffer.concat(replayed).toString(), "x".repeat(96));
-    unsubscribe();
-    await reattached.channel.detach();
-  } finally {
-    await cleanupPortableBackendFixture(backend, binding, fence);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+  await withWindowsInspectionQualification({ fixtureName: "portable retained window backpressures output and replays it after exact reattach", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request([
+        "-e",
+        "process.stdout.write('x'.repeat(96));process.stdin.resume();process.stdin.on('end',()=>process.exit(0))",
+      ]));
+      const binding = bindingFor(launch);
+      const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
+        directory: string;
+      };
+      const provider = backend.backpressuredChannelProvider();
+      const first = await provider.acquire(binding, fence);
+      fixture.deferCleanup(() => first.detach());
+      await waitFor(() => readdirSync(join(identity.directory, "channel", "output")).some((name) => name.endsWith(".json")));
+      const retained = readdirSync(join(identity.directory, "channel", "output")).filter((name) => name.endsWith(".json"));
+      const retainedBytes = retained.reduce((total, name) => total + Buffer.from(JSON.parse(readFileSync(join(identity.directory, "channel", "output", name), "utf8")).bytes, "base64").byteLength, 0);
+      assert.ok(retained.length <= 2);
+      assert.ok(retainedBytes <= 32);
+      await first.detach();
+      const reattached = await provider.reattach(binding, fence);
+      fixture.deferCleanup(() => reattached.channel.detach());
+      assert.ok(reattached.retainedWindow.length > 0);
+      const replayed: Buffer[] = [];
+      const unsubscribe = reattached.channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
+        if (metadata.stream === "stdout")
+          replayed.push(Buffer.from(bytes));
+        return metadata;
+      });
+      fixture.deferCleanup(unsubscribe);
+      await reattached.channel.closeInput();
+      const terminal = await reattached.channel.waitForTerminal() as {
+        state: string;
+        detail?: string;
+      };
+      assert.equal(terminal.state, "exited", JSON.stringify(terminal));
+      await waitFor(() => Buffer.concat(replayed).byteLength === 96);
+      assert.equal(Buffer.concat(replayed).toString(), "x".repeat(96));
+      unsubscribe();
+      await reattached.channel.detach();
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
-test("portable control and channel acquisition reject a stale writer fence before effects", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("portable control and channel acquisition reject a stale writer fence before effects", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-stale-fence-"));
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "setInterval(()=>{},1000)"])));
-  const binding = bindingFor(launch);
-  const staleFence = { ownerId: fence.ownerId, fencingToken: fence.fencingToken - 1 };
-  try {
-    await assert.rejects(backend.signal(binding, "terminate", staleFence), /fence|identity/i);
-    const identity = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8"));
-    identity.fence = staleFence;
-    const staleBinding = { ...binding, opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url") };
-    await assert.rejects(backend.backpressuredChannelProvider().acquire(staleBinding, staleFence), /birth|identity|fence/i);
-  } finally {
-    await cleanupPortableBackendFixture(backend, binding, fence);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+  await withWindowsInspectionQualification({ fixtureName: "portable control and channel acquisition reject a stale writer fence before effects", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request(["-e", "setInterval(()=>{},1000)"]));
+      const binding = bindingFor(launch);
+      const staleFence = { ownerId: fence.ownerId, fencingToken: fence.fencingToken - 1 };
+      await assert.rejects(backend.signal(binding, "terminate", staleFence), /fence|identity/i);
+      const identity = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8"));
+      identity.fence = staleFence;
+      const staleBinding = { ...binding, opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url") };
+      await assert.rejects(backend.backpressuredChannelProvider().acquire(staleBinding, staleFence), /birth|identity|fence/i);
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
-test("a higher portable writer fence atomically takes over and immediately revokes the old writer", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("a higher portable writer fence atomically takes over and immediately revokes the old writer", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-takeover-"));
   const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.stdin.resume();setInterval(()=>{},1000)"])));
-  const binding = bindingFor(launch);
-  const provider = backend.backpressuredChannelProvider();
-  const oldChannel = await provider.acquire(binding, fence);
-  const nextFence = { ownerId: "recovery-owner", fencingToken: fence.fencingToken + 1 };
-  const recovered = await provider.reattach(binding, nextFence);
-  const payload = Buffer.from("x");
-  try {
-    await assert.rejects(oldChannel.write({ sequence: 1, byteLength: 1, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 1_000 }, payload), /stale|fence|writer/i);
-    assert.deepEqual(await recovered.channel.write({ sequence: recovered.nextSequence, byteLength: 1, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 5_000 }, payload), { acknowledged: true, sequence: recovered.nextSequence });
-  } finally {
-    await oldChannel.detach(); await recovered.channel.detach();
-    await cleanupPortableBackendFixture(backend, binding, nextFence);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+  await withWindowsInspectionQualification({ fixtureName: "a higher portable writer fence atomically takes over and immediately revokes the old writer", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request(["-e", "process.stdin.resume();setInterval(()=>{},1000)"]));
+      const binding = bindingFor(launch);
+      const provider = backend.backpressuredChannelProvider();
+      const oldChannel = await provider.acquire(binding, fence);
+      fixture.deferCleanup(() => oldChannel.detach());
+      const nextFence = { ownerId: "recovery-owner", fencingToken: fence.fencingToken + 1 };
+      fixture.useCleanupFence(nextFence);
+      const recovered = await provider.reattach(binding, nextFence);
+      fixture.deferCleanup(() => recovered.channel.detach());
+      const payload = Buffer.from("x");
+      await assert.rejects(oldChannel.write({ sequence: 1, byteLength: 1, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 1000 }, payload), /stale|fence|writer/i);
+      assert.deepEqual(await recovered.channel.write({ sequence: recovered.nextSequence, byteLength: 1, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 5000 }, payload), { acknowledged: true, sequence: recovered.nextSequence });
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
-test("portable signal paused before its effect cannot publish control after higher-fence takeover", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("portable signal paused before its effect cannot publish control after higher-fence takeover", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-signal-effect-fence-"));
-  let entered!: () => void; let resume!: () => void;
+  let entered!: () => void;
+  let resume!: () => void;
   const atBoundary = new Promise<void>((resolve) => { entered = resolve; });
   const barrier = new Promise<void>((resolve) => { resume = resolve; });
   let hold = true;
-  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, operations: stateBackedWindowsFixtureOperations(root), beforeFenceEffect: async (kind) => { if (kind === "signal" && hold) { hold = false; entered(); await barrier; } } });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "setInterval(()=>{},1000)"])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
-  const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
-  try {
-    const stale = backend.signal(binding, "terminate", fence);
-    await atBoundary;
-    await backend.reconcile(binding, higher);
-    resume();
-    await assert.rejects(stale, /stale|fence|identity/i);
-    assert.equal(readdirSync(identity.directory).includes("control.json"), false);
-  } finally {
-    resume();
-    await cleanupPortableBackendFixture(backend, binding, higher);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, operations: stateBackedWindowsFixtureOperations(root), beforeFenceEffect: async (kind) => { if (kind === "signal" && hold) {
+      hold = false;
+      entered();
+      await barrier;
+    } } });
+  await withWindowsInspectionQualification({ fixtureName: "portable signal paused before its effect cannot publish control after higher-fence takeover", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request(["-e", "setInterval(()=>{},1000)"]));
+      const binding = bindingFor(launch);
+      const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
+        directory: string;
+      };
+      const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
+      const stale = backend.signal(binding, "terminate", fence);
+      void stale.catch(() => undefined);
+      fixture.deferCleanup(async () => { await stale.catch(() => undefined); });
+      fixture.deferCleanup(() => resume());
+      await atBoundary;
+      fixture.useCleanupFence(higher);
+      await backend.reconcile(binding, higher);
+      resume();
+      await assert.rejects(stale, /stale|fence|identity/i);
+      assert.equal(readdirSync(identity.directory).includes("control.json"), false);
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
-test("portable write paused before its effect cannot overwrite takeover state or publish input", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("portable write paused before its effect cannot overwrite takeover state or publish input", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-write-effect-fence-"));
-  let entered!: () => void; let resume!: () => void;
+  let entered!: () => void;
+  let resume!: () => void;
   const atBoundary = new Promise<void>((resolve) => { entered = resolve; });
   const barrier = new Promise<void>((resolve) => { resume = resolve; });
   let hold = true;
-  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, beforeFenceEffect: async (kind) => { if (kind === "write" && hold) { hold = false; entered(); await barrier; } } });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.stdin.resume();setInterval(()=>{},1000)"])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
-  const provider = backend.backpressuredChannelProvider();
-  const old = await provider.acquire(binding, fence);
-  const payload = Buffer.from("stale");
-  const stale = old.write({ sequence: 1, byteLength: payload.byteLength, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 2_000 }, payload);
-  await atBoundary;
-  const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
-  const recovered = await provider.acquire(binding, higher);
-  const takeoverState = readFileSync(join(identity.directory, "channel", "client-state.json"), "utf8");
-  resume();
-  try {
-    await assert.rejects(stale, /stale|fence|identity/i);
-    assert.deepEqual(readdirSync(join(identity.directory, "channel", "input")), []);
-    assert.equal(readFileSync(join(identity.directory, "channel", "client-state.json"), "utf8"), takeoverState);
-  } finally {
-    resume(); await old.detach(); await recovered.detach();
-    await cleanupPortableBackendFixture(backend, binding, higher);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-    assert.equal(existsSync(root), false);
-  }
+  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, beforeFenceEffect: async (kind) => { if (kind === "write" && hold) {
+      hold = false;
+      entered();
+      await barrier;
+    } } });
+  await withWindowsInspectionQualification({ fixtureName: "portable write paused before its effect cannot overwrite takeover state or publish input", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request(["-e", "process.stdin.resume();setInterval(()=>{},1000)"]));
+      const binding = bindingFor(launch);
+      const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
+        directory: string;
+      };
+      const provider = backend.backpressuredChannelProvider();
+      const old = await provider.acquire(binding, fence);
+      fixture.deferCleanup(() => old.detach());
+      const payload = Buffer.from("stale");
+      const stale = old.write({ sequence: 1, byteLength: payload.byteLength, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 2000 }, payload);
+      void stale.catch(() => undefined);
+      fixture.deferCleanup(async () => { await stale.catch(() => undefined); });
+      fixture.deferCleanup(() => resume());
+      await atBoundary;
+      const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
+      fixture.useCleanupFence(higher);
+      const recovered = await provider.acquire(binding, higher);
+      fixture.deferCleanup(() => recovered.detach());
+      const takeoverState = readFileSync(join(identity.directory, "channel", "client-state.json"), "utf8");
+      resume();
+      await assert.rejects(stale, /stale|fence|identity/i);
+      assert.deepEqual(readdirSync(join(identity.directory, "channel", "input")), []);
+      assert.equal(readFileSync(join(identity.directory, "channel", "client-state.json"), "utf8"), takeoverState);
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
-test("portable takeover reports one truthful outcome for published input and advances to token2 command", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("portable takeover reports one truthful outcome for published input and advances to token2 command", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-published-stale-input-"));
-  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 1_000 });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.stdin.on('data',b=>process.stdout.write('seen:'+b));process.stdin.on('end',()=>process.exit(0))"])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
-    directory: string;
-    supervisorPid: number;
-    supervisorBirth: string;
-  };
-  const provider = backend.backpressuredChannelProvider(); const old = await provider.acquire(binding, fence);
-  const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
-  let recovered: Awaited<ReturnType<typeof provider.acquire>> | undefined;
-  try {
-    const staleBytes = Buffer.from("stale\n");
-    const stale = old.write({ sequence: 1, byteLength: staleBytes.byteLength, digest: createHash("sha256").update(staleBytes).digest("hex"), timeoutMs: 5_000 }, staleBytes).then(
-      () => ({ status: "acknowledged" as const }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
-    await waitFor(() => portableInputPublished(identity.directory));
-    recovered = await provider.acquire(binding, higher);
-    const output: Buffer[] = [];
-    recovered.subscribeBackpressuredOutput(async (metadata, bytes) => { output.push(Buffer.from(bytes)); return metadata; });
-    const freshBytes = Buffer.from("fresh\n");
-    const staleOutcome = await stale;
-    if (staleOutcome.status === "rejected") assert.match(String(staleOutcome.error), /failed|stale|fence|rejected/i);
-    assert.deepEqual(await recovered.write({ sequence: 2, byteLength: freshBytes.byteLength, digest: createHash("sha256").update(freshBytes).digest("hex"), timeoutMs: 5_000 }, freshBytes), { acknowledged: true, sequence: 2 });
-    await recovered.closeInput(); await recovered.waitForTerminal();
-    const seen = Buffer.concat(output).toString();
-    assert.equal(seen, staleOutcome.status === "acknowledged" ? "seen:stale\nseen:fresh\n" : "seen:fresh\n");
-  } finally {
-    await old.detach(); await recovered?.detach();
-    await cleanupPortableBackendFixture(backend, binding, higher);
-    await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth);
-  }
+  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 1000 });
+  await withWindowsInspectionQualification({ fixtureName: "portable takeover reports one truthful outcome for published input and advances to token2 command", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request(["-e", "process.stdin.on('data',b=>process.stdout.write('seen:'+b));process.stdin.on('end',()=>process.exit(0))"]));
+      const binding = bindingFor(launch);
+      const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
+        directory: string;
+        supervisorPid: number;
+        supervisorBirth: string;
+      };
+      const provider = backend.backpressuredChannelProvider();
+      const old = await provider.acquire(binding, fence);
+      fixture.deferCleanup(() => old.detach());
+      const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
+      const recovery: { channel?: Awaited<ReturnType<typeof provider.acquire>> } = {};
+      fixture.deferCleanup(() => recovery.channel?.detach());
+      const staleBytes = Buffer.from("stale\n");
+      const stale = old.write({ sequence: 1, byteLength: staleBytes.byteLength, digest: createHash("sha256").update(staleBytes).digest("hex"), timeoutMs: 5000 }, staleBytes).then(() => ({ status: "acknowledged" as const }), (error: unknown) => ({ status: "rejected" as const, error }));
+      fixture.deferCleanup(async () => { await stale; });
+      await waitFor(() => portableInputPublished(identity.directory));
+      fixture.useCleanupFence(higher);
+      const recovered = recovery.channel = await provider.acquire(binding, higher);
+      const output: Buffer[] = [];
+      const unsubscribe = recovered.subscribeBackpressuredOutput(async (metadata, bytes) => { output.push(Buffer.from(bytes)); return metadata; });
+      fixture.deferCleanup(unsubscribe);
+      const freshBytes = Buffer.from("fresh\n");
+      const staleOutcome = await stale;
+      if (staleOutcome.status === "rejected")
+        assert.match(String(staleOutcome.error), /failed|stale|fence|rejected/i);
+      assert.deepEqual(await recovered.write({ sequence: 2, byteLength: freshBytes.byteLength, digest: createHash("sha256").update(freshBytes).digest("hex"), timeoutMs: 5000 }, freshBytes), { acknowledged: true, sequence: 2 });
+      await recovered.closeInput();
+      await recovered.waitForTerminal();
+      const seen = Buffer.concat(output).toString();
+      assert.equal(seen, staleOutcome.status === "acknowledged" ? "seen:stale\nseen:fresh\n" : "seen:fresh\n");
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
 test("portable output acknowledgement paused after sink success cannot delete bytes after takeover", async () => {
@@ -1335,59 +1468,86 @@ test("portable detach waits for a held sink and leaves its bytes unacknowledged 
   } finally { resume(); await first.detach(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("portable release paused before deletion preserves the complete root after takeover", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("portable release paused before deletion preserves the complete root after takeover", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-release-effect-fence-"));
-  let entered!: () => void; let resume!: () => void;
+  let entered!: () => void;
+  let resume!: () => void;
   const atBoundary = new Promise<void>((resolve) => { entered = resolve; });
   const barrier = new Promise<void>((resolve) => { resume = resolve; });
   let hold = true;
-  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, beforeFenceEffect: async (kind) => { if (kind === "release" && hold) { hold = false; entered(); await barrier; } } });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
-  await backend.observe(binding, async () => undefined, fence);
-  const stale = backend.release(binding, fence);
-  await atBoundary;
-  const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
-  await backend.reconcile(binding, higher);
-  resume();
-  try {
-    await assert.rejects(stale, /stale|fence|identity/i);
-    assert.equal(readFileSync(join(identity.directory, "state.json"), "utf8").length > 0, true);
-    assert.deepEqual(await backend.release(binding, higher), { released: true });
-  } finally {
-    resume();
-    await backend.signal(binding, "force_terminate", higher).catch(() => undefined);
-    await backend.release(binding, higher).catch(() => undefined);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
-  }
+  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, beforeFenceEffect: async (kind) => { if (kind === "release" && hold) {
+      hold = false;
+      entered();
+      await barrier;
+    } } });
+  await withWindowsInspectionQualification({ fixtureName: "portable release paused before deletion preserves the complete root after takeover", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request(["-e", "process.exit(0)"]));
+      const binding = bindingFor(launch);
+      const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
+        directory: string;
+      };
+      await backend.observe(binding, async () => undefined, fence);
+      const stale = backend.release(binding, fence);
+      void stale.catch(() => undefined);
+      fixture.deferCleanup(async () => { await stale.catch(() => undefined); });
+      fixture.deferCleanup(() => resume());
+      await atBoundary;
+      const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
+      fixture.useCleanupFence(higher);
+      await backend.reconcile(binding, higher);
+      resume();
+      await assert.rejects(stale, /stale|fence|identity/i);
+      assert.equal(readFileSync(join(identity.directory, "state.json"), "utf8").length > 0, true);
+      assert.deepEqual(await fixture.release(), { released: true });
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
-test("portable empty proof paused at its final fence cannot survive higher-fence takeover", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
+test("portable empty proof paused at its final fence cannot survive higher-fence takeover", { timeout: 60000 }, async () => {
+  if (process.platform !== "win32")
+    return;
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-empty-effect-fence-"));
-  let entered!: () => void; let resume!: () => void;
+  let entered!: () => void;
+  let resume!: () => void;
   const atBoundary = new Promise<void>((resolve) => { entered = resolve; });
   const barrier = new Promise<void>((resolve) => { resume = resolve; });
   let hold = true;
-  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, beforeFenceEffect: async (kind) => { if (kind === "verify_empty" && hold) { hold = false; entered(); await barrier; } } });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { supervisorPid: number; supervisorBirth: string };
-  await backend.observe(binding, async () => undefined, fence);
-  const stale = backend.verifyEmpty(binding, fence);
-  await atBoundary;
-  const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
-  await backend.reconcile(binding, higher);
-  resume();
-  try {
-    assert.equal((await stale as { empty: boolean }).empty, false);
-    assert.equal((await backend.verifyEmpty(binding, higher) as { empty: boolean }).empty, true);
-  } finally {
-    resume(); await backend.release(binding, higher).catch(() => undefined);
-    await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth);
-  }
+  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, beforeFenceEffect: async (kind) => { if (kind === "verify_empty" && hold) {
+      hold = false;
+      entered();
+      await barrier;
+    } } });
+  await withWindowsInspectionQualification({ fixtureName: "portable empty proof paused at its final fence cannot survive higher-fence takeover", root, backend, body: async (fixture) => {
+      fixture.useCleanupFence(fence);
+      const launch = await fixture.launch(request(["-e", "process.exit(0)"]));
+      const binding = bindingFor(launch);
+      const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as {
+        supervisorPid: number;
+        supervisorBirth: string;
+      };
+      await backend.observe(binding, async () => undefined, fence);
+      const stale = backend.verifyEmpty(binding, fence);
+      void stale.catch(() => undefined);
+      fixture.deferCleanup(async () => { await stale.catch(() => undefined); });
+      fixture.deferCleanup(() => resume());
+      await atBoundary;
+      const higher = { ownerId: "portable-recovery", fencingToken: fence.fencingToken + 1 };
+      fixture.useCleanupFence(higher);
+      await backend.reconcile(binding, higher);
+      resume();
+      assert.equal((await stale as {
+        empty: boolean;
+      }).empty, false);
+      assert.equal((await backend.verifyEmpty(binding, higher) as {
+        empty: boolean;
+      }).empty, true);
+    } });
+  rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  assert.equal(existsSync(root), false);
 });
 
 test("portable release refuses a live supervisor even when membership is empty", async () => {
@@ -1409,45 +1569,54 @@ test("portable release refuses a live supervisor even when membership is empty",
 });
 
 test("portable reconcile and release reject corrupt acknowledgement evidence", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
-  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-release-corrupt-ack-"));
-  const exitGate = join(root, "target-exit");
-  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", `
+if (process.platform !== "win32") return;
+const root = mkdtempSync(join(tmpdir(), "aiboard-portable-release-corrupt-ack-"));
+const exitGate = join(root, "target-exit");
+const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
+await withWindowsInspectionQualification({fixtureName:"portable reconcile and release reject corrupt acknowledgement evidence",root,backend,body:async fixture=>{fixture.useCleanupFence(fence);
+const launch = await fixture.launch(request(["-e", `
     const fs = require("node:fs");
     const gate = process.argv[1];
     const waiter = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 30_000;
     while (!fs.existsSync(gate) && Date.now() < deadline) Atomics.wait(waiter, 0, 0, 10);
     process.exit(fs.existsSync(gate) ? 0 : 1);
-  `, exitGate])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; nonce: string; supervisorPid: number; supervisorBirth: string };
-  const statePath = join(identity.directory, "state.json");
-  const lockScript = "$ErrorActionPreference='Stop';$s=[IO.File]::Open($env:AIBOARD_TEST_LOCK_PATH,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite);try{[Console]::Out.WriteLine('LOCKED');[Threading.Thread]::Sleep([int]$env:AIBOARD_TEST_LOCK_MS)}finally{$s.Dispose()}";
-  const holder = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", lockScript], {
+  `, exitGate]));
+const binding = bindingFor(launch);
+const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; nonce: string; supervisorPid: number; supervisorBirth: string };
+const statePath = join(identity.directory, "state.json");
+const lockScript = "$ErrorActionPreference='Stop';$s=[IO.File]::Open($env:AIBOARD_TEST_LOCK_PATH,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite);try{[Console]::Out.WriteLine('LOCKED');[Threading.Thread]::Sleep([int]$env:AIBOARD_TEST_LOCK_MS)}finally{$s.Dispose()}";
+const holder = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", lockScript], {
     env: { ...fixtureEnvironment(), AIBOARD_TEST_LOCK_PATH: statePath, AIBOARD_TEST_LOCK_MS: "1500" },
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  try {
+fixture.deferCleanup(async () => { if (holder.exitCode === null) holder.kill(); await waitForChildExit(holder); });
+
     await waitForChildText(holder, "LOCKED");
     writeFileSync(exitGate, "exit");
     await waitFor(() => JSON.parse(readFileSync(statePath, "utf8")).status === "stopped", 10_000);
     await waitForChildExit(holder);
     assert.equal(readdirSync(identity.directory).some((name) => name === `state.json.${identity.supervisorPid}.tmp`), false,
       "a transient destination lock must not strand the supervisor's atomic state publication");
-    writeFileSync(join(identity.directory, "channel", "ack", "corrupt.json"), "{}");
+    const injectedAck = join(identity.directory, "channel", "ack", "corrupt.json");
+    const ackIdentity = lstatSync(join(identity.directory, "channel", "ack"));
+    assert.equal(existsSync(injectedAck), false);
+    fixture.deferCleanup(() => {
+      const current = lstatSync(join(identity.directory, "channel", "ack"));
+      assert.ok(current.isDirectory() && !current.isSymbolicLink());
+      assert.equal(current.dev, ackIdentity.dev); assert.equal(current.ino, ackIdentity.ino);
+      assert.equal(readFileSync(injectedAck, "utf8"), "{}", "injected acknowledgement changed before cleanup");
+      unlinkSync(injectedAck);
+    });
+    writeFileSync(injectedAck, "{}");
     assert.deepEqual(await backend.reconcile(binding, fence), { state: "outcome_unknown" });
     await assert.rejects(backend.release(binding, fence), /acknowledgement|evidence|output/i);
     assert.equal(existsSync(identity.directory), true);
-  } finally {
-    if (holder.exitCode === null) holder.kill();
-    await waitForChildExit(holder).catch(() => undefined);
-    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
-    await backend.release(binding, fence).catch(() => undefined);
-    await removePortableTestRootAfterExactOwnerAbsence(root, identity.directory, identity.nonce, identity.supervisorPid, identity.supervisorBirth);
-  }
+
+}});
+rmSync(root,{recursive:true,force:true,maxRetries:30,retryDelay:50});
+assert.equal(existsSync(root),false);
 });
 
 test("portable publication cleanup preserves unknown owner identity", async () => {
@@ -1494,36 +1663,60 @@ test("portable supervisor reserves adaptive atomic replacement for durable state
 });
 
 test("portable final effects fail closed when durable fence evidence disappears", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
-  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-missing-fence-"));
-  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
-  await backend.observe(binding, async () => undefined, fence);
-  unlinkSync(join(identity.directory, "fence.json"));
-  try {
+if (process.platform !== "win32") return;
+const root = mkdtempSync(join(tmpdir(), "aiboard-portable-missing-fence-"));
+const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
+await withWindowsInspectionQualification({fixtureName:"portable final effects fail closed when durable fence evidence disappears",root,backend,body:async fixture=>{fixture.useCleanupFence(fence);
+const launch = await fixture.launch(request(["-e", "process.exit(0)"]));
+const binding = bindingFor(launch);
+const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
+await backend.observe(binding, async () => undefined, fence);
+const fencePath = join(identity.directory, "fence.json");
+const savedFence = readFileSync(fencePath);
+const authorityIdentity = lstatSync(identity.directory);
+fixture.deferCleanup(() => {
+  const current = lstatSync(identity.directory);
+  assert.ok(current.isDirectory() && !current.isSymbolicLink());
+  assert.equal(current.dev, authorityIdentity.dev); assert.equal(current.ino, authorityIdentity.ino);
+  assert.equal(existsSync(fencePath), false); writeFileSync(fencePath, savedFence, { flag: "wx" });
+});
+unlinkSync(fencePath);
+
     await assert.rejects(backend.release(binding, fence), /fence.*invalid|identity/i);
     assert.equal(existsSync(identity.directory), true);
-  } finally {
-    await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth);
-  }
+
+}});
+rmSync(root,{recursive:true,force:true,maxRetries:30,retryDelay:50});
+assert.equal(existsSync(root),false);
 });
 
 test("portable terminal and release fail closed after owned output evidence disappears", { timeout: 60_000 }, async () => {
-  if (process.platform !== "win32") return;
-  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-missing-terminal-output-"));
-  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
-  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "process.exit(0)"])));
-  const binding = bindingFor(launch);
-  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
-  await waitFor(() => JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")).status === "stopped", 15_000);
-  rmSync(join(identity.directory, "channel", "output"), { recursive: true, force: true });
-  try {
+if (process.platform !== "win32") return;
+const root = mkdtempSync(join(tmpdir(), "aiboard-portable-missing-terminal-output-"));
+const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
+await withWindowsInspectionQualification({fixtureName:"portable terminal and release fail closed after owned output evidence disappears",root,backend,body:async fixture=>{fixture.useCleanupFence(fence);
+const launch = await fixture.launch(request(["-e", "process.exit(0)"]));
+const binding = bindingFor(launch);
+const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string; supervisorPid: number; supervisorBirth: string };
+await waitFor(() => JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")).status === "stopped", 15_000);
+const outputPath = join(identity.directory, "channel", "output");
+assert.deepEqual(readdirSync(outputPath), [], "fixture removes only an empty output directory");
+const channelIdentity = lstatSync(join(identity.directory, "channel"));
+fixture.deferCleanup(() => {
+  const current = lstatSync(join(identity.directory, "channel"));
+  assert.ok(current.isDirectory() && !current.isSymbolicLink());
+  assert.equal(current.dev, channelIdentity.dev); assert.equal(current.ino, channelIdentity.ino);
+  assert.equal(existsSync(outputPath), false); mkdirSync(outputPath);
+});
+rmSync(outputPath, { recursive: true, force: true });
+
     assert.deepEqual(await backend.reconcile(binding, fence), { state: "outcome_unknown" });
     await assert.rejects(backend.release(binding, fence), /output|evidence|missing|unreadable/i);
     assert.equal(existsSync(identity.directory), true);
-  } finally { await removeSettledPortableTestRoot(root, identity.supervisorPid, identity.supervisorBirth); }
+
+}});
+rmSync(root,{recursive:true,force:true,maxRetries:30,retryDelay:50});
+assert.equal(existsSync(root),false);
 });
 
 test("portable acquire fails closed on a corrupt retained filename, nonce, metadata, digest, or payload", { timeout: 60_000 }, async (t) => {

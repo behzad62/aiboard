@@ -166,14 +166,19 @@ test("an unavailable critic pauses for verifier selection", async () => {
   await withRuntime({
     critic: { mode: "risk_based", result: "unavailable" },
     taskCount: 5,
-  }, async ({ runtime, critic }) => {
+  }, async ({ runtime, critic, store }) => {
     assert.equal((await runtime.step()).action, "plan_required");
     assert.equal((await runtime.step()).action, "plan_risk_assessed");
     const paused = await runtime.step();
     assert.equal(paused.status, "paused");
     assert.equal(paused.action, "verifier_selection_required");
     assert.equal(runtime.projection().verifierSelection?.reason, "plan_critique_no_independent_runtime");
-    runtime.selectVerifierRuntime("fallback:verifier", "select:1");
+    const offer = runtime.projection().verifierSelection;
+    assert.equal(offer?.status, "required");
+    const requirement = store.readRun(RUN_ID).findLast((event) => event.type === "verifier.selection_required");
+    assert.ok(requirement);
+    assert.equal(offer?.requiredSequence, requirement.sequence);
+    runtime.selectVerifierRuntime("fallback:verifier", "select:1", requirement.sequence);
     assert.equal((await runtime.step()).action, "plan_critique_submitted");
     assert.equal(critic.preferredRuntimeIds.at(-1), "fallback:verifier");
   });

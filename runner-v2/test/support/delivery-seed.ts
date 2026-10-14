@@ -17,6 +17,8 @@ export interface SeedDeliveryReviewOptions {
   independence?: "distinct_model" | "fresh_context";
   /** Record a worker.runtime_assigned first (fixtures without a worker driver). */
   assignAuthor?: boolean;
+  /** Author model identity for the seeded assignment/review (defaults to the captured assignment, then a synthetic identity). */
+  authorModelIdentity?: string;
   findings?: unknown[];
   claimStatus?: (claimId: string) => "verified" | "unverified";
   changedFiles?: string[];
@@ -67,13 +69,16 @@ export function seedCompletedDeliveryReview(
   const authorRuntimeId = options.authorRuntimeId ?? "fixture-author";
   const append = (type: string, key: string, actor: NewSchedulerEvent["actor"], payload: Record<string, unknown>) =>
     store.append({ runId, type: type as NewSchedulerEvent["type"], occurredAt: clock, actor, idempotencyKey: key, payload });
+  const syntheticAuthorIdentity = (runtimeId: string) => `${runtimeId}-model`.toLowerCase().replaceAll(":", "-");
   if (options.assignAuthor !== false && !projection.runtime.workerAssignments[`${taskId}:${task.attempt}`]) {
     append("worker.runtime_assigned", `seed-author:${taskId}:${task.attempt}`, { role: "runner", id: "runtime-router" }, {
       taskId, attempt: task.attempt, runtimeId: authorRuntimeId, sessionId: `seed-session:${taskId}:${task.attempt}`,
+      ...(projection.reviewIntegrityPolicyVersion === 1 ? { modelIdentity: options.authorModelIdentity ?? syntheticAuthorIdentity(authorRuntimeId) } : {}),
     });
     projection = rebuildSchedulerProjection(store.readRun(runId));
   }
   const author = projection.runtime.workerAssignments[`${taskId}:${task.attempt}`]!.runtimeId;
+  const authorModelIdentity = projection.runtime.workerAssignments[`${taskId}:${task.attempt}`]!.modelIdentity ?? options.authorModelIdentity ?? syntheticAuthorIdentity(author);
   const current = projection.delivery?.reviews[taskId];
   const history = projection.delivery?.reviewHistory[taskId] ?? [];
   const generation = Math.max(0, current?.generation ?? 0, ...history.map((review) => review.generation)) + 1;
@@ -85,17 +90,18 @@ export function seedCompletedDeliveryReview(
   append("delivery.review_started", `${reviewId}:started`, runner, {
     taskId, reviewId, generation, attempt: task.attempt, changeSetId: task.changeSetId,
     diffArtifactHash: SEED_DIFF_HASH, criteriaIds,
-    authorRuntimeId: author, authorModelIdentity: `${author}-model`.toLowerCase().replaceAll(":", "-"),
+    authorRuntimeId: author, authorModelIdentity,
     architectRuntimeId: projection.runtime.architect.runtimeId ?? "architect_1",
     architectModelIdentity: "fixture-architect-model",
   });
   const riskInput = {
-    authorModelId: `${author}-model`.toLowerCase().replaceAll(":", "-"),
+    authorModelId: authorModelIdentity,
     changedFiles: options.changedFiles ?? ["src/feature.ts"],
     linesAdded: 3,
     linesRemoved: 1,
     attempts: task.attempt,
     acceptedFailuresUsed: false,
+    ...(projection.reviewIntegrityPolicyVersion === 1 && task.reviewSignals ? { runnerSignals: task.reviewSignals.signals } : {}),
   };
   const risk = assessDeliveryRisk(riskInput);
   const prior = [...history, ...(current ? [current] : [])].reverse().find((review) => review.stage === "completed");
@@ -118,11 +124,26 @@ export function seedCompletedDeliveryReview(
     { id: "claim:summary", text: "Implemented.", evidenceIds: [] },
   ];
   append("delivery.report_delivered", `${reviewId}:report`, runner, { taskId, reviewId, claims });
-  const claimVerdicts = claims.map((claim) => ({
-    claimId: claim.id,
-    status: options.claimStatus?.(claim.id) ?? "verified",
-    rationale: "Checked against the diff.",
-  }));
+  if (projection.reviewEvidencePolicyVersion === 1) {
+    append("delivery.reads_captured", `${reviewId}:reads`, runner, {
+      taskId, reviewId, sessionId: `${reviewId}:verdict`,
+      capture: {
+        runId, taskId, reviewId, changeSetId: task.changeSetId, submissionAttempt: task.attempt,
+        reviewerRuntimeId, reviewerModelIdentity: options.reviewerModelIdentity ?? "fixture-reviewer-model",
+        sessionId: `${reviewId}:verdict`,
+        reads: [{ invocationKey: `${runId}\0${reviewId}:verdict\0seed-read`, completedSequence: 1, toolName: "fs.read", path: "src/feature.ts", startLine: 1, endLine: 2 }],
+      },
+    });
+  }
+  const claimVerdicts = claims.map((claim) => {
+    const status = options.claimStatus?.(claim.id) ?? "verified";
+    return {
+      claimId: claim.id,
+      status,
+      rationale: "Checked against the diff.",
+      ...(status === "verified" && projection.reviewEvidencePolicyVersion === 1 ? { citations: [{ path: "src/feature.ts", line: 1 }] } : {}),
+    };
+  });
   const blocking = (options.findings ?? []).some((finding) => (finding as { severity?: string }).severity === "blocking") ||
     claimVerdicts.some((verdict) => verdict.status === "unverified");
   append("delivery.review_recorded", `${reviewId}:verdict`, reviewer, {

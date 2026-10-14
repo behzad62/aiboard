@@ -3,18 +3,22 @@
  * Exact-owned cleanup only; PID/tree kills are never authority.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import {
   parseProcessEmptyVerification,
   parseProcessLaunchResult,
   parseProcessReconciliation,
+  parseProcessReleaseResult,
+  type ProcessLaunchRequest,
   type ProcessBackend,
   type ProcessBackendBinding,
   type ProcessEffectFence,
   type ProcessLaunchResult,
 } from "../../src/process-backend.js";
 import type { WindowsProcessBackend } from "../../src/windows-process-backend.js";
+import { NativeProcessLaunchBlockedError } from "../../src/native-process-backend.js";
+import { withInspectionFixture } from "./inspection-fixture.js";
 import { finalizeCertifiedFixture } from "./certified-fixture-cleanup.js";
 import { deferQualificationFixtureRemoval } from "./qualification-harness.js";
 
@@ -85,15 +89,13 @@ export function opaqueDirectory(launch: ProcessLaunchResult): string {
   return identity.directory;
 }
 
-export async function drainAndCleanupWindowsFixture(
-  backend: ProcessBackend,
-  binding: ProcessBackendBinding,
-  cleanupFence: ProcessEffectFence,
-): Promise<void> {
+export async function drainAndCleanupWindowsFixture(backend: ProcessBackend, binding: ProcessBackendBinding, cleanupFence: ProcessEffectFence): Promise<void> {
   const streamed = backend as ProcessBackend & Pick<WindowsProcessBackend, "backpressuredChannelProvider">;
   let channel: Awaited<ReturnType<ReturnType<WindowsProcessBackend["backpressuredChannelProvider"]>["acquire"]>> | undefined;
   let unsubscribe: (() => void) | undefined;
   const deadline = Date.now() + 15_000;
+  let hasPrimaryFailure = false;
+  let primaryFailure: unknown;
   try {
     channel = await streamed.backpressuredChannelProvider().acquire(binding, cleanupFence);
     unsubscribe = channel.subscribeBackpressuredOutput(async (metadata) => metadata);
@@ -105,12 +107,23 @@ export async function drainAndCleanupWindowsFixture(
       if (state.state === "exited") {
         assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, cleanupFence)).empty, true);
         unsubscribe(); unsubscribe = undefined; await channel.detach(); channel = undefined;
-        await backend.release(binding, cleanupFence); return;
+        parseProcessReleaseResult(await backend.release(binding, cleanupFence)); return;
       }
       if (Date.now() >= deadline) throw new Error("Fixture output/backend cleanup remains unverified at its deadline.");
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-  } finally { unsubscribe?.(); await channel?.detach(); }
+  } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
+  finally {
+    const failures: unknown[] = [];
+    try { unsubscribe?.(); } catch (error) { failures.push(error); }
+    try { await channel?.detach(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(
+      [...(hasPrimaryFailure ? [primaryFailure] : []), ...failures],
+      "Windows fixture output cleanup remains unverified.",
+      hasPrimaryFailure ? { cause: primaryFailure } : undefined,
+    );
+    if (hasPrimaryFailure) throw primaryFailure;
+  }
 }
 
 export async function cleanupPortableBackendFixture(
@@ -118,13 +131,16 @@ export async function cleanupPortableBackendFixture(
   binding: ProcessBackendBinding,
   cleanupFence: ProcessEffectFence,
 ): Promise<void> {
+  let drainFailure: unknown;
   // Prefer drain+release so retained output cannot keep the session running.
   try {
     await drainAndCleanupWindowsFixture(backend, binding, cleanupFence);
     return;
-  } catch {
+  } catch (error) {
+    drainFailure = error;
     // Fall through to bounded force/reconcile cleanup below.
   }
+  try {
   const deadline = Date.now() + 30_000;
   let last = "cleanup not attempted";
   while (Date.now() < deadline) {
@@ -133,12 +149,17 @@ export async function cleanupPortableBackendFixture(
     last = observation.state;
     if (observation.state === "identity_mismatch") throw new Error("Portable fixture cleanup lost exact ownership.");
     if (observation.state === "exited") {
-      await backend.release(binding, cleanupFence);
-      return;
+      assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, cleanupFence)).empty, true);
+      parseProcessReleaseResult(await backend.release(binding, cleanupFence));
+      throw drainFailure; // Fresh workload release cannot settle the original failed channel.
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`Portable fixture cleanup did not reach durable terminal state: ${last}`);
+  } catch (error) {
+    if (error === drainFailure) throw error;
+    throw new AggregateError([drainFailure, error], "Portable fixture fallback cleanup remains unverified.", { cause: drainFailure });
+  }
 }
 
 export async function finalizePosixLiveFixture(
@@ -224,3 +245,96 @@ export function ensureDir(path: string): void {
 }
 
 export { parseProcessLaunchResult, parseProcessReconciliation, parseProcessEmptyVerification };
+
+/** Creator escrow for the default Windows inspection scope and its exact workload. */
+export async function withWindowsInspectionQualification(input: Readonly<{
+  fixtureName: string;
+  root: string;
+  backend: WindowsProcessBackend;
+  body(fixture: Readonly<{
+    launch(request: ProcessLaunchRequest): Promise<ProcessLaunchResult>;
+    deferCleanup(cleanup: () => void | Promise<unknown>): void;
+    useCleanupFence(fence: ProcessEffectFence): void;
+    release(): Promise<{ released: true }>;
+    retryRelease(): Promise<{ released: true }>;
+  }>): Promise<void>;
+}>): Promise<void> {
+  const { backend } = input;
+  let binding: ProcessBackendBinding | undefined;
+  let retainedLaunch: unknown;
+  let rootWitness: { canonical: string; dev: number | bigint; ino: number | bigint } | undefined;
+  let noWorkload = false;
+  let released = false;
+  let releaseAttempted = false;
+  let cleanupFence = QUAL_FENCE;
+  const channelCleanup: Array<() => void | Promise<unknown>> = [];
+  const retain = (launch: ProcessLaunchResult) => {
+    binding = bindingFor(launch, "runner-windows-supervisor-v1");
+    return launch;
+  };
+  const certifyEmptyRoot = () => {
+    assert.equal(retainedLaunch, undefined); assert.equal(binding, undefined); assert.ok(rootWitness);
+    const stat = lstatSync(input.root);
+    assert.ok(stat.isDirectory() && !stat.isSymbolicLink());
+    assert.equal(realpathSync.native(input.root), rootWitness.canonical);
+    assert.equal(stat.dev, rootWitness.dev); assert.equal(stat.ino, rootWitness.ino);
+    assert.equal(readdirSync(input.root).length, 0, "an unreturned capability cannot retire inspection while authority files remain");
+    const after = lstatSync(input.root);
+    assert.equal(after.dev, rootWitness.dev); assert.equal(after.ino, rootWitness.ino);
+    assert.ok(after.isDirectory() && !after.isSymbolicLink());
+    assert.equal(realpathSync.native(input.root), rootWitness.canonical);
+  };
+  await withInspectionFixture({
+    fixtureName: input.fixtureName, root: input.root,
+    registerCleanup: register => backend.registerInspectionCleanup(register),
+    body: async () => {
+      const stat = lstatSync(input.root);
+      assert.ok(stat.isDirectory() && !stat.isSymbolicLink());
+      rootWitness = { canonical: realpathSync.native(input.root), dev: stat.dev, ino: stat.ino };
+      return await input.body({
+      launch: async request => {
+        if (retainedLaunch !== undefined) throw new Error("Qualification fixture already retains its workload capability.");
+        try {
+          retainedLaunch = await backend.launch(request);
+          return retain(parseProcessLaunchResult(retainedLaunch));
+        }
+        catch (error) {
+          if (error instanceof NativeProcessLaunchBlockedError) { retainedLaunch = error.launchResult; retain(error.launchResult); }
+          throw error;
+        }
+      },
+      deferCleanup: cleanup => { channelCleanup.push(cleanup); },
+      useCleanupFence: fence => { cleanupFence = fence; },
+      release: async () => {
+        assert.ok(binding, "release requires the original retained launch capability");
+        assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, cleanupFence)).empty, true);
+        releaseAttempted = true;
+        const result = parseProcessReleaseResult(await backend.release(binding, cleanupFence));
+        assert.equal(result.released, true); released = true;
+        return { released: true };
+      },
+      retryRelease: async () => {
+        assert.ok(binding && releaseAttempted && !released, "release retry requires a prior verified release attempt");
+        // release() itself freshly reattests terminal emptiness/output and the
+        // exact durable fence, including its retired-authority cleanup path.
+        const result = parseProcessReleaseResult(await backend.release(binding, cleanupFence));
+        assert.equal(result.released, true); released = true;
+        return { released: true };
+      },
+    }); },
+    cleanupWorkloads: async () => {
+      const failures: unknown[] = [];
+      for (const cleanup of channelCleanup.reverse()) {
+        try { await cleanup(); } catch (error) { failures.push(error); }
+      }
+      try {
+        if (!binding && retainedLaunch !== undefined) retain(parseProcessLaunchResult(retainedLaunch));
+        if (!binding) { certifyEmptyRoot(); noWorkload = true; }
+        else if (!released) { await drainAndCleanupWindowsFixture(backend, binding, cleanupFence); released = true; }
+      } catch (error) { failures.push(error); }
+      if (failures.length) throw new AggregateError(failures, "Windows qualification workload cleanup remains unverified.");
+    },
+    certifyWorkloads: async () => { if (noWorkload) certifyEmptyRoot(); else assert.equal(released, true); },
+    removeRoot: () => deferQualificationFixtureRemoval(input.root),
+  });
+}

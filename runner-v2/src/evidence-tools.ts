@@ -271,14 +271,17 @@ function stableExecutionErrorCode(error: unknown): string | undefined {
   ]).has(code) ? code : undefined;
 }
 
-function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId?: string }> {
+function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId?: string; evidenceId?: string }> {
   return {
     definition: {
       name: "inspect_evidence",
-      description: "Inspect immutable command and browser evidence facts; no semantic verdict is provided",
+      description: "Inspect immutable command and browser evidence facts; no semantic verdict is provided. Without evidenceId, returns the task list; with evidenceId, returns only that exact record in the same JSON array shape. Prefer evidenceId when the full list would exceed the inline output bound.",
       inputSchema: {
         type: "object",
-        properties: { taskId: { type: "string", minLength: 1 } },
+        properties: {
+          taskId: { type: "string", minLength: 1 },
+          evidenceId: { type: "string", minLength: 1, description: "Optional singular evidence ID to read exactly; scoped to this run and the requested task." },
+        },
         additionalProperties: false,
       },
       readOnly: true,
@@ -288,23 +291,51 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
       if (typeof input !== "object" || input === null || Array.isArray(input)) {
         return { ok: false, issues: ["arguments must be an object"] };
       }
-      const taskId = (input as { taskId?: unknown }).taskId;
-      return taskId === undefined || (typeof taskId === "string" && taskId.trim())
-        ? { ok: true, value: taskId ? { taskId } as { taskId: string } : {} }
-        : { ok: false, issues: ["taskId must be a non-empty string"] };
-    },
-    execute: async (input, context) => ({
-      content: [
-        {
-          type: "json",
-          value: options.store.list({
-            runId: context.runId,
-            taskId: input.taskId ?? options.taskId,
-          }),
+      const record = input as Record<string, unknown>;
+      for (const key of Object.keys(record)) {
+        if (key !== "taskId" && key !== "evidenceId") {
+          return { ok: false, issues: [`unknown argument: ${key}`] };
+        }
+      }
+      const taskId = record.taskId;
+      const evidenceId = record.evidenceId;
+      if (taskId !== undefined && (typeof taskId !== "string" || !taskId.trim())) {
+        return { ok: false, issues: ["taskId must be a non-empty string"] };
+      }
+      if (evidenceId !== undefined && (typeof evidenceId !== "string" || !evidenceId.trim())) {
+        return { ok: false, issues: ["evidenceId must be a non-empty string"] };
+      }
+      return {
+        ok: true,
+        value: {
+          ...(taskId !== undefined ? { taskId: taskId as string } : {}),
+          ...(evidenceId !== undefined ? { evidenceId: evidenceId as string } : {}),
         },
-      ],
-      isError: false,
-    }),
+      };
+    },
+    execute: async (input, context) => {
+      const taskId = input.taskId ?? options.taskId;
+      if (input.evidenceId === undefined) {
+        return {
+          content: [
+            {
+              type: "json",
+              value: options.store.list({ runId: context.runId, taskId }),
+            },
+          ],
+          isError: false,
+        };
+      }
+      const found = options.store.getByIds({ runId: context.runId, taskId, ids: [input.evidenceId] });
+      const record = found.find((candidate) => candidate.id === input.evidenceId && candidate.runId === context.runId && candidate.taskId === taskId);
+      if (!record) {
+        return failure("evidence_not_found", "No evidence with that ID exists for this run and task.");
+      }
+      return {
+        content: [{ type: "json", value: [record] }],
+        isError: false,
+      };
+    },
   };
 }
 

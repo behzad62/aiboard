@@ -47,6 +47,8 @@ const attemptMetaRoot = join(root, ".attempt-meta");
 const runnerStateRoot = join(root, ".runner-v2-state");
 const rjsReplayStateRoot = join(root, ".trusted-rjs-replay");
 const managedAttemptRunners = new Map();
+const closedBenchChildren = new WeakSet();
+const benchChildStops = new WeakMap();
 const activeVerifierRuns = new Map();
 const runnerV2Discovery = discoverRunnerV2(runnerV2DirectoryOption);
 const runnerV2Launcher = runnerV2Discovery?.ready ? runnerV2Discovery : null;
@@ -137,11 +139,13 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    void Promise.all(
+    void Promise.allSettled(
       [...managedAttemptRunners.values()].map((managed) => terminateChild(managed.child))
-    ).finally(() => server.close(() => {
-      process.exitCode = signal === "SIGINT" ? 130 : 0;
-    }));
+    ).then((results) => {
+      const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+      if (errors.length) console.error("Managed Runner termination remains unsettled:", new AggregateError(errors));
+      server.close(() => { process.exitCode = errors.length ? 1 : signal === "SIGINT" ? 130 : 0; });
+    });
   });
 }
 
@@ -228,7 +232,7 @@ async function route(pathname, body, signal) {
     case "/bench/attempt-runner/restore-oracle":
       return withAttempt(body, async ({ attemptRoot, meta }) => {
         const liveRunner = managedAttemptRunners.get(meta.attemptId);
-        if (!liveRunner || liveRunner.child.exitCode !== null) {
+        if (!liveRunner || liveRunner.starting || liveRunner.child.exitCode !== null || liveRunner.child.signalCode !== null || liveRunner.exited) {
           throw new HttpError(409, "Runner V2 must be running before oracle restoration.");
         }
         if (meta.trustedPolicy?.kind === "recoverable-job-service") {
@@ -668,7 +672,7 @@ async function runVerifier(attemptRoot, meta, body, signal) {
 
 async function runVerifierExclusive(attemptRoot, meta, body, signal) {
   const liveRunner = managedAttemptRunners.get(meta.attemptId);
-  if (liveRunner?.child.exitCode === null) {
+  if (liveRunner && !hasSettledBenchChild(liveRunner.child)) {
     throw new HttpError(409, "Runner V2 must stop before verifier execution.");
   }
   const command = optionalString(body, "command") ?? meta.verifierCommand;
@@ -777,56 +781,52 @@ async function startAttemptRunner(body) {
     );
   }
   const existing = managedAttemptRunners.get(attemptId);
-  if (existing?.child.exitCode === null) return managedRunnerResult(existing, true);
+  if (existing && !hasSettledBenchChild(existing.child)) {
+    if (existing.starting || benchChildStops.has(existing.child) || existing.child.exitCode !== null || existing.child.signalCode !== null || existing.exited) {
+      throw new HttpError(409, "Previous Runner V2 startup or termination remains unsettled.");
+    }
+    return managedRunnerResult(existing, true);
+  }
 
   const statePath = runnerStatePath(attemptId);
   await rm(statePath, { recursive: true, force: true });
   await mkdir(statePath, { recursive: true });
   const token = randomBytes(32).toString("hex");
   const invocation = runnerV2Invocation(runnerV2Launcher, attemptRoot, statePath, token);
-  const child = spawn(invocation.command, invocation.args, {
+  const child = trackBenchChild(spawn(invocation.command, invocation.args, {
     cwd: runnerV2Launcher.directory,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
-  });
-  const startupDeadline = Date.now() + 45_000;
-  const started = await waitForRunnerV2Startup(child, 45_000).catch(async (error) => {
-    await terminateChild(child);
-    throw error;
-  });
-  const health = await readManagedRunnerHealth(
-    started.url,
-    token,
-    attemptRoot,
-    Math.max(1, startupDeadline - Date.now())
-  ).catch(async (error) => {
-    await terminateChild(child);
-    throw error;
-  });
-  if (
-    meta.trustedPolicy?.kind === "recoverable-job-service" &&
-    health.nodeVersion !== meta.trustedPolicy.requiredNodeVersion
-  ) {
-    await terminateChild(child);
-    throw new HttpError(
-      409,
-      `Recoverable Job Service requires managed Runner Node ${meta.trustedPolicy.requiredNodeVersion}.`
-    );
-  }
-  const managed = {
-    attemptId,
-    child,
-    url: started.url,
-    token,
-    projectPath: attemptRoot,
-    statePath,
-    nodeVersion: health.nodeVersion,
-  };
+  }));
+  const managed = { attemptId, child, token, projectPath: attemptRoot, statePath, starting: true };
   managedAttemptRunners.set(attemptId, managed);
-  child.once("exit", () => {
-    if (managedAttemptRunners.get(attemptId) === managed) managed.exited = true;
-  });
-  return managedRunnerResult(managed, true);
+  child.once("exit", () => { managed.exited = true; });
+  try {
+    const startupDeadline = Date.now() + 45_000;
+    const started = await waitForRunnerV2Startup(child, 45_000);
+    const health = await readManagedRunnerHealth(
+      started.url,
+      token,
+      attemptRoot,
+      Math.max(1, startupDeadline - Date.now())
+    );
+    if (
+      meta.trustedPolicy?.kind === "recoverable-job-service" &&
+      health.nodeVersion !== meta.trustedPolicy.requiredNodeVersion
+    ) {
+      throw new HttpError(
+        409,
+        `Recoverable Job Service requires managed Runner Node ${meta.trustedPolicy.requiredNodeVersion}.`
+      );
+    }
+    Object.assign(managed, { url: started.url, nodeVersion: health.nodeVersion, starting: false });
+    return managedRunnerResult(managed, true);
+  } catch (error) {
+    managed.starting = false;
+    try { await terminateChild(child); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], "Runner V2 startup and termination failed."); }
+    throw error;
+  }
 }
 
 async function statusAttemptRunner(body) {
@@ -842,7 +842,10 @@ async function statusAttemptRunner(body) {
       statePath: runnerStatePath(attemptId),
     };
   }
-  return managedRunnerResult(managed, managed.child.exitCode === null && !managed.exited);
+  if (managed.starting || benchChildStops.has(managed.child) && !hasSettledBenchChild(managed.child)) {
+    throw new HttpError(409, "Runner V2 startup or termination remains unsettled.");
+  }
+  return managedRunnerResult(managed, managed.child.exitCode === null && managed.child.signalCode === null && !managed.exited);
 }
 
 async function stopAttemptRunner(body) {
@@ -918,13 +921,13 @@ function runCommand(command, cwd, timeoutSeconds, environment, signal) {
     const sizes = { stdout: 0, stderr: 0 };
     // A separate POSIX process group lets cancellation stop the shell and its children.
     const processGroup = process.platform !== "win32";
-    const child = spawn(command, {
+    const child = trackBenchChild(spawn(command, {
       cwd,
       shell: true,
       detached: processGroup,
       windowsHide: true,
       ...(environment ? { env: environment } : {}),
-    });
+    }));
     const finish = (code) => {
       if (settled) return;
       settled = true;
@@ -948,7 +951,13 @@ function runCommand(command, cwd, timeoutSeconds, environment, signal) {
       if (stopping || settled) return;
       stopping = true;
       failed = true;
-      void terminateChild(child, processGroup).then(() => finish(1), rejectCommand);
+      void terminateChild(child, processGroup).then(() => finish(1), (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", onAbort);
+        rejectCommand(error);
+      });
     };
     const onAbort = () => {
       if (settled) return;
@@ -1416,55 +1425,83 @@ function waitForRunnerV2Startup(child, timeoutMs) {
   });
 }
 
+function trackBenchChild(child) {
+  child.once("close", () => closedBenchChildren.add(child));
+  return child;
+}
+
+function hasSettledBenchChild(child) {
+  return closedBenchChildren.has(child) && (!benchChildStops.has(child) || benchChildStops.get(child).status === "succeeded");
+}
+
 function terminateChild(child, processGroup = false) {
-  if (processGroup && child.pid) {
-    // This group was created exclusively for this command. Kill descendants even
-    // when the shell has already exited, then join its stdio closure.
-    return new Promise((resolveStop, rejectStop) => {
-      child.once("close", resolveStop);
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH") {
-          child.removeListener("close", resolveStop);
-          rejectStop(error);
-          return;
-        }
-        child.removeListener("close", resolveStop);
-        resolveStop();
-      }
-    });
-  }
-  if (process.platform === "win32" && child.pid && child.exitCode === null) {
-    return new Promise((resolveStop) => {
-      const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
-      killer.once("error", () => resolveStop());
-      killer.once("exit", () => resolveStop());
-    });
-  }
-  return new Promise((resolveStop) => {
-    if (child.exitCode !== null || child.killed) {
-      resolveStop();
-      return;
-    }
+  const previous = benchChildStops.get(child);
+  if (previous) return previous.promise;
+  if (!processGroup && closedBenchChildren.has(child)) return Promise.resolve();
+  let resolveStop, rejectStop;
+  const operation = { status: "pending", promise: new Promise((resolve, reject) => { resolveStop = resolve; rejectStop = reject; }) };
+  benchChildStops.set(child, operation);
+  {
+    let targetClosed = closedBenchChildren.has(child);
+    let controlClosed = true;
     let settled = false;
-    const finish = () => {
+    let killer;
+    const deadlineAt = Date.now() + 5_000;
+    const finish = (...errors) => {
       if (settled) return;
+      if (errors.length === 0 && Date.now() >= deadlineAt) {
+        errors.push(new Error("Bench termination settlement exceeded the 5000ms stop budget."));
+      }
       settled = true;
-      clearTimeout(force);
-      resolveStop();
+      operation.status = errors.length ? "failed" : "succeeded";
+      if (errors.length) operation.failure = errors[0];
+      clearTimeout(deadline);
+      child.removeListener("close", onTargetClose);
+      killer?.removeListener("error", onControlError);
+      killer?.removeListener("close", onControlClose);
+      if (errors.length) rejectStop(errors[0]); else resolveStop();
     };
-    child.once("exit", finish);
-    child.kill("SIGTERM");
-    const force = setTimeout(() => {
-      if (child.exitCode === null) child.kill("SIGKILL");
-      finish();
+    const onTargetClose = () => {
+      targetClosed = true;
+      if (controlClosed) finish();
+    };
+    const onControlError = (error) => finish(error);
+    const onControlClose = (code) => {
+      controlClosed = true;
+      if (code !== 0) {
+        finish(new Error(`taskkill control failed (${code}); target termination is unverified.`));
+      } else if (targetClosed) finish();
+    };
+    child.once("close", onTargetClose);
+    // Preserve the existing five-second stop budget. Expiry never certifies exit.
+    const deadline = setTimeout(() => {
+      if (!processGroup && process.platform !== "win32" && child.exitCode === null && child.signalCode === null) {
+        try { child.kill("SIGKILL"); } catch (error) { finish(error); return; }
+      }
+      finish(new Error("Bench target/control termination did not settle within the 5000ms stop budget."));
     }, 5_000);
-    force.unref();
-  });
+    deadline.unref();
+    try {
+      if (processGroup && child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); }
+        catch (error) { if (error.code !== "ESRCH") throw error; }
+        if (targetClosed) finish();
+      } else if (process.platform === "win32" && child.pid && child.exitCode === null && child.signalCode === null) {
+        controlClosed = false;
+        killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+          windowsHide: true,
+          stdio: "ignore",
+        });
+        operation.control = killer;
+        killer.once("error", onControlError);
+        killer.once("close", onControlClose);
+      } else {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+        if (targetClosed) finish();
+      }
+    } catch (error) { finish(error); }
+  }
+  return operation.promise;
 }
 
 async function copyFixtureTree(source, target) {

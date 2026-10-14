@@ -103,6 +103,9 @@ test("supervisor ACK takeover at the protected effect is a nonfatal stale no-op"
   vm.runInContext(`${extractFunction(supervisorSource, "readCurrentFence")}
 ${extractFunction(supervisorSource, "readCurrentFenceStrict")}
 ${extractFunction(supervisorSource, "readFenceHolderForEffect")}
+const inspectionOwner = undefined;
+${extractFunction(supervisorSource, "normalizeBirth")}
+${extractFunction(supervisorSource, "sameBirth")}
 ${extractFunction(supervisorSource, "withCurrentFenceEffect")}
 ${extractFunction(supervisorSource, "forgetRetiredOutput")}
 ${extractFunction(supervisorSource, "handleChannelAcks")}`, context);

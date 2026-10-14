@@ -13,12 +13,12 @@ import {
   type HandoffSnapshotInput,
   type HandoffSnapshotVerificationEntry,
 } from "../src/handoff-snapshot.js";
-import { rebuildSchedulerProjection, type SchedulerProjection } from "../src/scheduler-store.js";
+import { currentExplicitStartIdentity, rebuildSchedulerProjection, type SchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { buildExecutionPlanRevision } from "../src/planning-contracts.js";
-import { buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
+import { FIXTURE_AMENDED_TEXT, buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
 import { seedCompletedDeliveryReview } from "./support/delivery-seed.js";
 import { acceptFinalVerificationProfile } from "./support/final-verification-profile.js";
 
@@ -1447,11 +1447,18 @@ function submitTaskT1(fixture: AdapterFixture, runId: string): void {
   });
 }
 
-test("C1 adapter real store: blocking findings from delivery-seed name their task", () => {
+test("C1 adapter real store: blocking findings from delivery-seed name their task", async () => {
   const fixture = createAdapterStore();
   try {
     const runId = "run-c1-findings";
     seedNewPolicyBase(fixture, runId);
+    await fixture.artifacts.put(Buffer.from(FIXTURE_AMENDED_TEXT, "utf-8"), "text/plain", "approved source");
+    appendEvent(fixture, runId, "project_docs.policy_configured", "c1-docs", { role: "runner", id: "build-runtime" }, { version: 2 });
+    const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(fixture.store.readRun(runId)));
+    assert.ok(startIdentity, "the delivery seed is ready with a complete start identity");
+    appendEvent(fixture, runId, "planning.execution_authorized", "c1-owner-start", { role: "user", id: "local-user" }, {
+      authorization: { ...startIdentity, version: 1, ownerChoice: "execute" },
+    });
     submitTaskT1(fixture, runId);
     seedCompletedDeliveryReview(fixture.store, runId, "T1", {
       findings: [

@@ -126,6 +126,19 @@ function journeyLastToolValue(request: AgentModelRequest): Record<string, unknow
   return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
 }
 
+function e3ReadText(request: AgentModelRequest, path: string): string | undefined {
+  for (const message of request.messages) {
+    if (message.role !== "tool") continue;
+    const content = message.content as { toolName?: string; content?: Array<{ type: string; value?: unknown; text?: string }> };
+    if (content.toolName !== "fs.read") continue;
+    const meta = content.content?.find((item) => item.type === "json")?.value as { path?: string } | undefined;
+    if (meta?.path !== path) continue;
+    const text = content.content?.find((item) => item.type === "text")?.text;
+    if (typeof text === "string") return text;
+  }
+  return undefined;
+}
+
 class E3JourneyArchitect implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   private calls = 0;
@@ -193,6 +206,19 @@ class E3JourneyArchitect implements AgentModel {
 
 type JourneyMode = "clean" | "unreferenced" | "test_only" | "failover";
 const journeyPackage = () => JSON.stringify({ name: "e3-journey", version: "1.0.0", type: "module", scripts: { test: "node --test" } }, null, 2);
+function e3ValidationScope(mode: JourneyMode): { changed: string[]; verified: string[]; testsRun: Array<{ command: string; counts: { selected: number; passed: number; failed: number; skipped: number } }>; notRun: Array<{ what: string; why: string }> } {
+
+  switch (mode) {
+    case "clean":
+    case "failover":
+      return { changed: ["src/value.mjs", "test/value.test.mjs"], verified: ["value exports 2"], testsRun: [{ command: "node --test", counts: { selected: 2, passed: 2, failed: 0, skipped: 0 } }], notRun: [] };
+    case "unreferenced":
+      return { changed: ["src/value.mjs", "src/new.mjs"], verified: ["value exports 2"], testsRun: [{ command: "node --test", counts: { selected: 2, passed: 2, failed: 0, skipped: 0 } }], notRun: [] };
+    case "test_only":
+      return { changed: ["test/value.test.mjs"], verified: ["value exports 2"], testsRun: [{ command: "node --test", counts: { selected: 2, passed: 2, failed: 0, skipped: 0 } }], notRun: [] };
+  }
+}
+
 class E3JourneyWorker implements AgentModel {
   constructor(private readonly mode: JourneyMode, private readonly failFirst = false) {}
   readonly requests: AgentModelRequest[] = [];
@@ -211,7 +237,13 @@ class E3JourneyWorker implements AgentModel {
     if (toolCount === evidenceTurn) return journeyCall("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
     const record = journeyLastToolValue(request)!;
     const fact = record.fact as { stdoutArtifactHash: string };
-    return journeyCall("submit_task", { summary: "Product value and real tests pass.", readiness: "ready_for_architect_review", unresolvedConcerns: [], criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }] }, "submit-1");
+    return journeyCall("submit_task", {
+      summary: "Product value and real tests pass.",
+      readiness: "ready_for_architect_review",
+      unresolvedConcerns: [],
+      criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: e3ValidationScope(this.mode),
+    }, "submit-1");
   }
 }
 
@@ -276,12 +308,22 @@ class E3JourneyReviewer implements AgentModel {
         }],
       }, "verifier-verdict-1");
     }
+    if (pass === "delivery-verdict-system" && request.messages.some((message) => message.role === "tool" && (message.content as { toolName?: string }).toolName === "fs.read" && (message.content as { isError?: boolean }).isError === true)) {
+      throw new Error("E3 fixture: verdict fs.read failed; not resubmitting blindly.");
+    }
+    if (pass === "delivery-verdict-system" && e3ReadText(request, "src/value.mjs") === undefined) {
+      return journeyCall("fs.read", { path: "src/value.mjs" }, `verdict-read-${seen}`);
+    }
+    if (pass === "delivery-verdict-system") {
+      const inspected = e3ReadText(request, "src/value.mjs") ?? "";
+      assert.ok(inspected.split("\n")[0]!.includes("export const value = 2;"), "the cited line 1 actually exports value = 2");
+    }
     const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
     return journeyCall("submit_deliverable_verdict", {
       summary: "The module exports 2 and the cited test run passed.",
       satisfied: true,
-      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout." })),
+      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Read src/value.mjs line 1 in this verdict session and confirmed it exports value = 2.", citations: [{ path: "src/value.mjs", line: 1 }] })),
     }, `verdict-${seen}`);
   }
 }

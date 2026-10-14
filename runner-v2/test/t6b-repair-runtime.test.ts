@@ -17,11 +17,15 @@ import type { FinalVerificationCategory } from "../src/final-verification-contra
 import type { FinalVerificationExecutionProfile } from "../src/final-verification-profile.js";
 import type { FinalVerificationCommandFact } from "../src/final-verification-runtime.js";
 import { repairIssueIdentity, repairRootCauseForCheck } from "../src/repair-budget-contracts.js";
-import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
+import { currentExplicitStartIdentity, rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
-import { buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
+import {
+  FIXTURE_AMENDED_TEXT,
+  buildPlanningFixtureScenario,
+  type PlanningFixtureScenario,
+} from "./fixtures/planning-source-fixture.js";
 import { commandEvidence } from "./support/evidence-fixtures.js";
 import { seedCompletedDeliveryReview } from "./support/delivery-seed.js";
 import {
@@ -50,10 +54,46 @@ interface Fixture {
   close(): void;
 }
 
-function createStore(): Fixture {
+/**
+ * The approved amended fixture text extends the prior text with exactly one
+ * appended section line (see planning-source-fixture.ts). The prior bytes are
+ * derived deterministically from the exported amended text and then verified
+ * against the prior manifest, so any fixture drift fails loudly below.
+ */
+const FIXTURE_PRIOR_SUFFIX = "\nSECTION 8: AMENDMENT. Section 7 is retired by this amendment.";
+
+async function provisionPlanningSourceBytes(
+  artifacts: ArtifactStore,
+  scenario: Pick<PlanningFixtureScenario, "priorManifest" | "manifest">,
+): Promise<void> {
+  assert.ok(
+    FIXTURE_AMENDED_TEXT.endsWith(FIXTURE_PRIOR_SUFFIX),
+    "the approved amended fixture text still carries the deterministic prior-text suffix",
+  );
+  const priorText = FIXTURE_AMENDED_TEXT.slice(0, FIXTURE_AMENDED_TEXT.length - FIXTURE_PRIOR_SUFFIX.length);
+  const priorBytes = Buffer.from(priorText, "utf-8");
+  const amendedBytes = Buffer.from(FIXTURE_AMENDED_TEXT, "utf-8");
+  assert.equal(priorBytes.byteLength, scenario.priorManifest.byteLength, "prior manifest byteLength matches actual fixture bytes");
+  assert.equal(amendedBytes.byteLength, scenario.manifest.byteLength, "current manifest byteLength matches actual fixture bytes");
+  const prior = await artifacts.put(priorBytes, scenario.priorManifest.mediaType, "planning-source-prior.txt");
+  const amended = await artifacts.put(amendedBytes, scenario.manifest.mediaType, "planning-source.txt");
+  assert.equal(prior.hash, scenario.priorManifest.artifactDigest, "prior manifest digest matches actual stored bytes");
+  assert.equal(amended.hash, scenario.manifest.artifactDigest, "current manifest digest matches actual stored bytes");
+}
+
+async function createStore(): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), "aiboard-t6b-runtime-"));
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
+  // Planning-source authority through real stored bytes: the approved
+  // fixture texts are provisioned via ArtifactStore.put and awaited before
+  // scheduler/runtime admission, and the manifest byteLength/digest are
+  // verified against the actual stored bytes. verifySync is NOT overridden,
+  // so unknown/missing/tampered digests still throw from the real store.
+  // One authority serves both the scheduler store and the runtime, so the
+  // two can never diverge on the current source.
+  const scenario = buildPlanningFixtureScenario();
+  await provisionPlanningSourceBytes(artifacts, scenario);
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
     evidenceStore: evidence,
     artifacts,
@@ -87,7 +127,8 @@ function append(fixture: Fixture, type: string, key: string, actor: { role: "run
 }
 
 function seedPolicy(fixture: Fixture): void {
-  append(fixture, "run.initialized", "run-initialized", { role: "runner", id: "runner-test" }, {});
+  append(fixture, "project_docs.policy_configured", "project-docs-policy", { role: "runner", id: "build-runtime" }, { version: 2 });
+  append(fixture, "run.initialized", "run-initialized", { role: "runner", id: "build-runtime" }, {});
   append(fixture, "planning.policy_configured", "planning-policy", { role: "runner", id: "build-runtime" }, { version: 1 });
 }
 
@@ -119,6 +160,22 @@ function seedReadyPlan(fixture: Fixture): void {
   append(fixture, "planning.coverage_plan_delivered", "t6b-coverage-plan", { role: "runner", id: "build-runtime" }, { reviewId: SCENARIO.coverageReview.id, planRevisionId: SCENARIO.revision.revisionId, planRevisionDigest: SCENARIO.revision.digest, sourceManifestId: SCENARIO.manifest.manifestId, deliveredAt: fixture.clock() });
   append(fixture, "planning.coverage_review_recorded", "t6b-coverage-review", { role: "verifier", id: "coverage-reviewer" }, { review: SCENARIO.coverageReview });
   append(fixture, "planning.plan_ready", "t6b-ready", { role: "runner", id: "build-runtime" }, { hostCapabilities: SCENARIO.hostCapabilities });
+}
+
+// Explicit owner start for the current ready plan (accepted T6/T7b
+// contract): the scripted owner authorizes THIS current identity — plan
+// revision + digest, source manifest + digest, planning + docs policy
+// versions — with ownerChoice "execute" as user:local-user. Each scenario
+// that intends execution calls this explicitly after seedReadyPlan; it is
+// never called for legacy runs, never for plan_only, and never with a
+// stale identity (a new ready revision needs a fresh call).
+function authorizeOwnerStart(fixture: Fixture, key = "owner-start:1"): void {
+  const projection = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+  const identity = currentExplicitStartIdentity(projection);
+  assert.ok(identity, "the seeded ready plan has an exact owner-start identity");
+  append(fixture, "planning.execution_authorized", key, { role: "user", id: "local-user" }, {
+    authorization: { ...identity, version: 1, ownerChoice: "execute" },
+  });
 }
 
 function seedLegacyPlan(fixture: Fixture): void {
@@ -237,6 +294,11 @@ function buildTestRuntime(
     deliveryReview?: { review: (input: { runId: string; taskId: string }) => Promise<{ status: "reviewed"; reviewId: string; runtimeId: string; independence: "fresh_context"; tier: "medium"; replayed: boolean }> };
     deliveryBoundary?: { check: (input: { runId: string; taskId: string; boundaryId: string; attempt: number; integrationRevision: string }) => Promise<{ changedFiles: string[]; executedScope: "full_test_script"; selection: { rung: string; selectedTests: string[] }; checks: { checkId: string; command: string; args: string[]; evidenceIds: string[]; exitCode: number; outcome: "failed"; report: { status: "failed"; runner: string; counts: { selected: number; passed: number; failed: number; skipped: number } } }[] }> };
     finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
+    // Worker assignment requires artifact authority (T7b); only scenarios
+    // that assign workers opt in. Final-verification-only flows keep the
+    // original artifacts-absent configuration, which preserves the
+    // decision tool's evidence-store refusal codes exactly as committed.
+    withArtifacts?: boolean;
   } = {},
 ) {
   const cleanupDriver: FinalVerificationCleanupDriver = {
@@ -246,6 +308,7 @@ function buildTestRuntime(
     runId: RUN_ID,
     store: fixture.store,
     evidenceStore: fixture.evidence,
+    ...(options.withArtifacts ? { artifacts: fixture.artifacts } : {}),
     clock: fixture.clock,
     projectId: PROJECT_ID,
     maxConcurrency: 1,
@@ -298,10 +361,11 @@ function seedRepairIssue(fixture: Fixture, cycles: number): string {
 }
 
 test("a failing check opens the issue without charging and searches cleanup", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
     const calls: string[] = [];
@@ -334,12 +398,13 @@ test("a failing check opens the issue without charging and searches cleanup", as
 });
 
 test("seeded cycles survive the check and the fourth correction pauses through the real pump", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
+    authorizeOwnerStart(fixture);
     seedRepairIssue(fixture, 2);
     // T6b repair (B5): the check itself charges nothing; two seeded cycles
     // stay two until a correction is dispatched.
@@ -349,12 +414,13 @@ test("seeded cycles survive the check and the fourth correction pauses through t
   } finally {
     fixture.close();
   }
-  const refused = createStore();
+  const refused = await createStore();
   try {
     seedPolicy(refused);
     seedReadyPlan(refused);
     seedIntegrationRevision(refused);
     seedGeneration(refused);
+    authorizeOwnerStart(refused);
     seedRepairIssue(refused, 3);
     const runtime = buildTestRuntime(refused, failingCheckDriver(refused, []));
     // T6b repair (B3): the fourth correction pauses instead of throwing.
@@ -369,10 +435,11 @@ test("seeded cycles survive the check and the fourth correction pauses through t
 });
 
 test("flaky pass-on-rerun charges nothing but still blocks acceptance", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
     const runtime = buildTestRuntime(fixture, failingCheckDriver(fixture, [], { failingTestIds: ["red-one"] }), {
@@ -401,10 +468,11 @@ test("flaky pass-on-rerun charges nothing but still blocks acceptance", async ()
 });
 
 test("flaky fail-again records a consistent failure and charges nothing at the check", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
     const runtime = buildTestRuntime(fixture, failingCheckDriver(fixture, [], { failingTestIds: ["red-one"] }), {
@@ -425,10 +493,11 @@ test("flaky fail-again records a consistent failure and charges nothing at the c
 });
 
 test("an unsupported rerun records not_performed with its reason and charges nothing at the check", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
     const runtime = buildTestRuntime(fixture, failingCheckDriver(fixture, [], { failingTestIds: ["red-one"] }), {
@@ -450,12 +519,13 @@ test("an unsupported rerun records not_performed with its reason and charges not
 });
 
 test("a proven external blocker consumes no charge and still blocks", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
+    authorizeOwnerStart(fixture);
     const issueId = seedRepairIssue(fixture, 0);
     append(fixture, "repair.external_blocker_recorded", `repair-blocker:${issueId}`, { role: "architect", id: "architect-test" }, {
       issueId,
@@ -517,12 +587,13 @@ function repairPlanningArchitectDriver(plans: { count: number }, taskPrefix: str
 }
 
 test("an exhausted issue pauses repair dispatch through the real pump", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
+    authorizeOwnerStart(fixture);
     await driveToDispatchReady(fixture);
     // T6b repair (B5): reaching dispatch-ready charges nothing by itself.
     assert.equal(rebuildSchedulerProjection(fixture.store.readRun(RUN_ID)).repairIssues?.[testsIssueId()]?.used, 0);
@@ -559,12 +630,13 @@ function seedRepairIssueExtraCycles(fixture: Fixture, cycles: number): void {
 }
 
 test("a failed approach gives the Architect a turn; a new approach dispatches and charges", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
+    authorizeOwnerStart(fixture);
     await driveToDispatchReady(fixture);
     const issueId = testsIssueId();
     append(fixture, "repair.approach_decided", `repair-approach:${issueId}:a1`, { role: "architect", id: "architect-test" }, {
@@ -609,11 +681,12 @@ test("a failed approach gives the Architect a turn; a new approach dispatches an
 });
 
 test("a stricter run cap pauses dispatch although the issue has credits", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     append(fixture, "repair.policy_configured", "repair-policy:zero", { role: "runner", id: "build-runtime" }, { repairPlanLimit: 0 });
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
     await driveToDispatchReady(fixture);
@@ -626,7 +699,7 @@ test("a stricter run cap pauses dispatch although the issue has credits", async 
 });
 
 test("legacy runs charge nothing and record no T6b events", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     append(fixture, "run.initialized", "run-initialized", { role: "runner", id: "runner-test" }, {});
     seedLegacyPlan(fixture);
@@ -657,7 +730,7 @@ test("legacy runs charge nothing and record no T6b events", async () => {
 });
 
 test("scheduler refuses a second blocker, post-blocker charges, and evidence reuse", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
@@ -713,12 +786,13 @@ test("scheduler refuses a second blocker, post-blocker charges, and evidence reu
  * instead of throwing an idempotency conflict.
  */
 test("an owner extension lets the next exhaustion pause again instead of throwing", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
+    authorizeOwnerStart(fixture);
     await driveToDispatchReady(fixture);
     seedRepairIssueExtraCycles(fixture, 3);
     const issueId = testsIssueId();
@@ -756,12 +830,13 @@ test("an owner extension lets the next exhaustion pause again instead of throwin
  * while the projection says running.
  */
 test("a generic owner resume re-pauses durably instead of leaving a phantom running run", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
+    authorizeOwnerStart(fixture);
     await driveToDispatchReady(fixture);
     seedRepairIssueExtraCycles(fixture, 3);
     const runtime = buildTestRuntime(fixture, failingCheckDriver(fixture, []));
@@ -787,12 +862,13 @@ test("a generic owner resume re-pauses durably instead of leaving a phantom runn
  * nothing, and charges nothing.
  */
 test("a failed approach relabelled with no evidence is refused and charges nothing", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
+    authorizeOwnerStart(fixture);
     await driveToDispatchReady(fixture);
     const issueId = testsIssueId();
     const diag = fixture.evidence.record({
@@ -854,12 +930,13 @@ test("a failed approach relabelled with no evidence is refused and charges nothi
  * id is refused by the unknown-evidence gate and charges nothing.
  */
 test("a repair approach citing unknown diagnostic evidence is refused and charges nothing", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
+    authorizeOwnerStart(fixture);
     await driveToDispatchReady(fixture);
     const issueId = testsIssueId();
     const diag = fixture.evidence.record({
@@ -941,10 +1018,11 @@ test("model review outcomes are isolated per run and legacy tables migrate", () 
  * round pauses with a durable owner-visible reason instead of retrying.
  */
 test("blocking review fix rounds charge the review issue budget and the fourth round pauses", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     // Only T1 flows; the other planned tasks stay cancelled.
     for (const taskId of ["T2", "T3", "T4", "T5", "T-INV"]) {
       append(fixture, "task.transitioned", `cancel:${taskId}`, { role: "architect", id: "architect-test" }, { taskId, status: "cancelled" });
@@ -952,6 +1030,7 @@ test("blocking review fix rounds charge the review issue budget and the fourth r
     const workerEvidence: string[] = [];
     const runtime = buildTestRuntime(fixture, failingCheckDriver(fixture, []), {
       maxTaskAttempts: 6,
+      withArtifacts: true,
       workerDriver: {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         run: async (assignment: any) => {
@@ -1031,10 +1110,11 @@ test("blocking review fix rounds charge the review issue budget and the fourth r
  * a fresh generation (fresh evidence, same failing test id).
  */
 test("three real fixes on the same failing test charge once each, then the fourth round pauses", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     for (const taskId of ["T1", "T2", "T3", "T4", "T5", "T-INV"]) {
       append(fixture, "task.transitioned", `cancel:${taskId}`, { role: "architect", id: "architect-test" }, { taskId, status: "cancelled" });
     }
@@ -1182,10 +1262,11 @@ test("three real fixes on the same failing test charge once each, then the fourt
  * append — and the fix is charged exactly once.
  */
 test("a failed delivery boundary opens repair issues so the Architect resolves through the tools", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     for (const taskId of ["T2", "T3", "T4", "T5", "T-INV"]) {
       append(fixture, "task.transitioned", `cancel:${taskId}`, { role: "architect", id: "architect-test" }, { taskId, status: "cancelled" });
     }
@@ -1193,6 +1274,7 @@ test("a failed delivery boundary opens repair issues so the Architect resolves t
     const workerEvidence: string[] = [];
     const observed: { turnSawIssue: boolean; decisionIsError?: boolean; resolveIsError?: boolean; resolveDetail?: string } = { turnSawIssue: false };
     const runtime = buildTestRuntime(fixture, failingCheckDriver(fixture, []), {
+      withArtifacts: true,
       workerDriver: {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         run: async (assignment: any) => {
@@ -1222,11 +1304,17 @@ test("a failed delivery boundary opens repair issues so the Architect resolves t
       },
       deliveryBoundary: {
         check: async () => {
+          // The boundary repair decision cites this check evidence, so it
+          // carries real content-addressed bytes (the decision tool
+          // resolves cited content whenever artifact authority is
+          // present, as it is for worker assignment in this scenario).
+          const boundaryStdout = await fixture.artifacts.put(Buffer.from("t6b-boundary:tests:1 stdout"), "text/plain", "boundary check stdout");
+          const boundaryStderr = await fixture.artifacts.put(Buffer.from("t6b-boundary:tests:1 stderr"), "text/plain", "boundary check stderr");
           const record = fixture.evidence.record({
             runId: RUN_ID,
             taskId: "T1",
             actor: { role: "worker", id: "t6b-boundary-check" },
-            fact: commandEvidence("t6b-boundary:tests:1", { label: "tests", command: "npm", args: ["test"], exitCode: 1 }).fact as never,
+            fact: commandEvidence("t6b-boundary:tests:1", { label: "tests", command: "npm", args: ["test"], exitCode: 1, stdoutArtifactHash: boundaryStdout.hash, stderrArtifactHash: boundaryStderr.hash }).fact as never,
             createdAt: fixture.clock(),
             idempotencyKey: "t6b-boundary:tests:1",
             attempt: 1,
@@ -1347,10 +1435,11 @@ test("a failed delivery boundary opens repair issues so the Architect resolves t
  * PROBE-LIVE, where rounds 2 and 3 dispatched with no new decision.
  */
 test("a decision recorded only in round 1 refuses the round-2 dispatch until a new decision is recorded", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     for (const taskId of ["T1", "T2", "T3", "T4", "T5", "T-INV"]) {
       append(fixture, "task.transitioned", `cancel:${taskId}`, { role: "architect", id: "architect-test" }, { taskId, status: "cancelled" });
     }
@@ -1521,10 +1610,11 @@ test("a decision recorded only in round 1 refuses the round-2 dispatch until a n
  * where every T6b charge lands.
  */
 test("the third correction dispatches and charges through the real pump", async () => {
-  const fixture = createStore();
+  const fixture = await createStore();
   try {
     seedPolicy(fixture);
     seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
     seedIntegrationRevision(fixture);
     seedGeneration(fixture);
     const issueId = testsIssueId();

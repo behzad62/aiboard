@@ -15,7 +15,12 @@ const deterministicPrTests = [
   "runner-v2/test/runner-capability-contract.test.ts",
   "runner-v2/test/plugin-loader.test.ts",
   "runner-v2/test/qualification-harness.test.ts",
+  "runner-v2/test/oci-canonical-paths.test.ts",
+  "runner-v2/test/a1-terminal-capture.test.ts",
+  "runner-v2/test/owned-fixture-teardown.test.ts",
+  "runner-v2/test/planning-ui-fixture.test.ts",
   "runner-v2/test/native-build-manager.test.ts",
+  "runner-v2/test/native-build-manager-readers.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",
@@ -88,6 +93,11 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   for (const testPath of deterministicPrTests) {
     assert.equal(source.includes(testPath), true, `Required PR CI omits deterministic test ${testPath}.`);
   }
+  const ociStep = portable.indexOf("      - name: Run OCI canonical path contracts");
+  assert.ok(ociStep > 0, "Public OCI path contracts require their own host-birth inspection step.");
+  assert.equal(portable.slice(0, ociStep).includes("runner-v2/test/oci-canonical-paths.test.ts"), false,
+    "Native fence self-birth inspection must not overlap the concurrent deterministic files.");
+  assert.match(portable.slice(ociStep), /--test --test-concurrency=1\s+runner-v2\/test\/oci-canonical-paths\.test\.ts/);
   for (const testPath of posixHostedTests) {
     assert.equal(source.includes(testPath), true, `Required POSIX PR CI omits ${testPath}.`);
   }
@@ -97,6 +107,14 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   assert.match(portable,
     /if:\s*runner\.os\s*!=\s*'Windows'[\s\S]*portable-process-protocol\.test\.ts[\s\S]*portable-process-channel\.test\.ts/,
     "Real owned-fence protocol/channel files must stay off required Windows PR CI and run there in qualification.");
+  const acknowledgementStep = portable.indexOf("      - name: Run portable input acknowledgement deadline contracts on Windows");
+  assert.ok(acknowledgementStep > 0, "Required Windows PR CI must prove durable input acknowledgement deadline outcomes.");
+  const acknowledgementBlock = portable.slice(acknowledgementStep, portable.indexOf("\n      - name:", acknowledgementStep + 1));
+  assert.match(acknowledgementBlock, /if:\s*runner\.os\s*==\s*'Windows'/);
+  assert.match(acknowledgementBlock, /--test --test-concurrency=1\s+--test-name-pattern="\^portable command deadline reconciles durable acknowledgement "\s+runner-v2\/test\/portable-process-channel\.test\.ts/);
+  const acknowledgementPattern = new RegExp(acknowledgementBlock.match(/--test-name-pattern="([^"]+)"/)![1]!);
+  assert.equal(acknowledgementPattern.test("portable command deadline reconciles durable acknowledgement takeover"), true);
+  assert.equal(acknowledgementPattern.test("portable reconcile and release reject corrupt acknowledgement evidence"), false);
   assert.match(portable,
     /--test-name-pattern=[^\n]*active legacy Build[^\n]*unsupported persisted execution-safety[\s\S]*?cli-capabilities-config\.test\.ts/,
     "Legacy CLI repairs must stay targeted instead of restoring the giant file as a full gate.");
@@ -146,6 +164,16 @@ test("host-sensitive lifecycle and Docker coverage uses focused qualification en
   const portable = jobBlock(source, "windows-portable-channel");
   const docker = jobBlock(source, "docker-oci-integration");
 
+  assert.match(source, /qualification-scope:[\s\S]*?default: full[\s\S]*?options:\s*\n\s*- full\s*\n\s*- docker-oci-only/);
+  for (const block of [native, cli, recovery, portable]) {
+    const guard = block.split(/\r?\n/).find((line) => line.trimStart().startsWith("if:"))!;
+    assert.match(guard, /github\.event_name != 'workflow_dispatch' \|\| inputs\['qualification-scope'\] != 'docker-oci-only'/);
+    assert.doesNotMatch(guard, /matrix\./, "Job selection must use only event/input context before matrix expansion.");
+  }
+  assert.match(docker, /if: github\.event_name != 'pull_request' \|\| github\.event\.label\.name == 'runner-v2-qualification'/);
+  assert.doesNotMatch(docker.split(/\r?\n/).find((line) => line.trimStart().startsWith("if:"))!, /qualification-scope/);
+  assert.match(docker, /timeout-minutes: 45/);
+
   assert.match(native, /qualification\/native-lifecycle\.test\.ts/);
   assert.match(cli, /qualification\/cli-readiness\.test\.ts/);
   assert.match(recovery, /qualification\/recovery\.test\.ts/);
@@ -159,6 +187,31 @@ test("host-sensitive lifecycle and Docker coverage uses focused qualification en
   assert.match(source, /if:\s*always\(\)/,
     "Artifact upload must use always() so killed/hung jobs still surface pre-created evidence roots.");
   assertWorkflowTestPathsExist(source);
+});
+
+test("Docker-only manual scope preserves full, schedule and labelled qualification selection", () => {
+  const source = readFileSync(qualificationWorkflowPath, "utf8");
+  const jobs = ["native-lifecycle", "cli-readiness", "recovery", "windows-portable-channel", "docker-oci-integration"];
+  for (const scenario of [
+    { event: "workflow_dispatch", scope: "full", label: undefined, ordinary: true },
+    { event: "workflow_dispatch", scope: undefined, label: undefined, ordinary: true },
+    { event: "workflow_dispatch", scope: "docker-oci-only", label: undefined, ordinary: false },
+    { event: "schedule", scope: undefined, label: undefined, ordinary: true },
+    { event: "pull_request", scope: undefined, label: "runner-v2-qualification", ordinary: true },
+    { event: "pull_request", scope: undefined, label: "unrelated", ordinary: false },
+  ]) {
+    for (const job of jobs) {
+      const guard = jobBlock(source, job).split(/\r?\n/).find((line) => line.trimStart().startsWith("if:"))!.trim().slice(3);
+      // These owned workflow guards use only the common boolean event/input expression subset.
+      const selected = new Function("github", "inputs", `return (${guard});`)(
+        { event_name: scenario.event, event: { label: { name: scenario.label } } },
+        { "qualification-scope": scenario.scope },
+      );
+      const expected = job === "docker-oci-integration" && scenario.event === "workflow_dispatch"
+        ? true : scenario.ordinary;
+      assert.equal(selected, expected, `${job}: ${scenario.event}/${scenario.scope}/${scenario.label}`);
+    }
+  }
 });
 
 test("required native smoke is an adapter probe rather than a lifecycle timing test", () => {

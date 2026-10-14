@@ -9,6 +9,7 @@ import test from "node:test";
 import type { BuildTask } from "../src/task-contracts.js";
 import { BuildRuntime } from "../src/build-runtime.js";
 import {
+  currentExplicitStartIdentity,
   droppedReadyContractTasks,
   newPolicyStaleTasksRequireArchitect,
   newPolicyTaskAdmissionBlocked,
@@ -55,6 +56,7 @@ import type {
   SourceRequirement,
 } from "../src/planning-contracts.js";
 import type { ApprovedSourceManifest } from "../src/source-manifest.js";
+import type { ArtifactStore } from "../src/artifact-store.js";
 import { buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
 import { seedBoundCoverageAndReady } from "./support/planning-seed.js";
 import { emptyFinalVerificationProfile } from "./support/final-verification-profile.js";
@@ -74,6 +76,48 @@ import { emptyFinalVerificationProfile } from "./support/final-verification-prof
 
 const SEED_AT = "2026-09-24T00:00:00.000Z";
 
+/**
+ * Exact deterministic planning-source artifact authority for this direct
+ * scheduler unit fixture. Accepts only the deterministic current planning
+ * manifest digest and returns its exact byteLength/mediaType; any other
+ * digest fails. This models already-proven stored bytes;
+ * NativeBuildFactory/T7a proves real ArtifactStore bytes in production.
+ */
+function planningSourceArtifacts(): Pick<ArtifactStore, "verifySync"> {
+  const source = buildPlanningFixtureScenario().manifest;
+  return {
+    verifySync: (hash) => {
+      if (hash !== source.artifactDigest) {
+        throw new Error(`Unknown planning source artifact ${hash}.`);
+      }
+      return {
+        hash,
+        mediaType: source.mediaType,
+        byteLength: source.byteLength,
+        createdAt: SEED_AT,
+        path: "fixture://planning-source",
+        metadataPath: "fixture://planning-source-metadata",
+      };
+    },
+  };
+}
+
+/** Planning-source authority shaped for the BuildRuntime artifacts option. */
+function planningSourceArtifactsForRuntime(): ArtifactStore {
+  return planningSourceArtifacts() as unknown as ArtifactStore;
+}
+
+/** Open a new-policy scheduler store with truthful artifact authority. */
+function openNewPolicyStore(
+  databasePath: string,
+  evidence: SqliteEvidenceStore,
+): SqliteSchedulerStore {
+  return new SqliteSchedulerStore(databasePath, {
+    evidenceStore: evidence,
+    artifacts: planningSourceArtifacts(),
+  });
+}
+
 interface T4Fixture {
   root: string;
   evidence: SqliteEvidenceStore;
@@ -85,9 +129,7 @@ interface T4Fixture {
 function openFixture(name: string): T4Fixture {
   const root = mkdtempSync(join(tmpdir(), `aiboard-t4-${name}-`));
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
-    evidenceStore: evidence,
-  });
+  const store = openNewPolicyStore(join(root, "scheduler.sqlite"), evidence);
   let now = Date.parse(SEED_AT);
   const clock = (): string => {
     const iso = new Date(now).toISOString();
@@ -371,6 +413,28 @@ function appendEvent(
   });
 }
 
+/**
+ * Authorize the kernel's own current ready identity through the genuine
+ * owner-start event. Never forged: the identity is read from the real
+ * projection, so a superseded revision/source/policy stays uncovered until
+ * the owner re-authorizes the current plan.
+ */
+function authorizeCurrentReadyPlan(
+  store: SchedulerStore,
+  runId: string,
+  idempotencyKey: string,
+): void {
+  const startIdentity = currentExplicitStartIdentity(projectionOf(store, runId));
+  assert.ok(startIdentity, "the current ready plan has an exact owner-start identity");
+  appendEvent(store, {
+    runId,
+    type: "planning.execution_authorized",
+    actor: { role: "user", id: "local-user" },
+    idempotencyKey,
+    payload: { authorization: { ...startIdentity, version: 1, ownerChoice: "execute" } },
+  });
+}
+
 function seedReadyPlan(
   store: SchedulerStore,
   fixture: ReadyPlanFixture,
@@ -389,6 +453,13 @@ function seedReadyPlan(
     actor: { role: "runner", id: "build-runtime" },
     idempotencyKey: "run:policy",
     payload: { runPolicy: "finish" },
+  });
+  appendEvent(store, {
+    runId,
+    type: "project_docs.policy_configured",
+    actor: { role: "runner", id: "build-runtime" },
+    idempotencyKey: "project-docs:policy",
+    payload: { version: 2 },
   });
   appendEvent(store, {
     runId,
@@ -446,6 +517,7 @@ function seedReadyPlan(
     review: fixture.review,
     hostCapabilities: buildPlanningFixtureScenario().hostCapabilities,
   });
+  authorizeCurrentReadyPlan(store, runId, `owner-start:${fixture.revision.revisionId}`);
 }
 
 function fixtureClock(): () => string {
@@ -476,6 +548,14 @@ function schedulerFor(
 ): TaskScheduler {
   return new TaskScheduler({
     runId: "run_t4",
+    assertPlanningArtifact: (projection) => {
+      const planning = projection.planning;
+      assert.ok(planning?.source.currentManifestId);
+      const manifest = planning.source.manifestsById[planning.source.currentManifestId];
+      const verified = planningSourceArtifacts().verifySync(manifest.artifactDigest);
+      assert.equal(verified.byteLength, manifest.byteLength);
+      assert.equal(verified.mediaType, manifest.mediaType);
+    },
     store,
     driver,
     maxConcurrency: options.maxConcurrency ?? 4,
@@ -509,10 +589,7 @@ test("T4 real SQLite admission runs independent cross-phase tasks concurrently t
     await scheduler.tick();
     assert.deepEqual(driver.assignments.sort(), ["A1", "A2", "A3", "A4"]);
 
-    const lowerStore = new SqliteSchedulerStore(
-      join(fixture.root, "lower.sqlite"),
-      { evidenceStore: fixture.evidence },
-    );
+    const lowerStore = openNewPolicyStore(join(fixture.root, "lower.sqlite"), fixture.evidence);
     seedReadyPlan(
       lowerStore,
       buildReadyPlanFixture("run_t4", specs, {
@@ -585,10 +662,7 @@ test("T4 dependencies, shared worktrees and overlapping or aliased writes preven
     worktreeDriver.resolve("W1", { type: "failed", reason: "done" });
     await worktreeScheduler.awaitIdle();
 
-    const conflictStore = new SqliteSchedulerStore(
-      join(fixture.root, "conflicts.sqlite"),
-      { evidenceStore: fixture.evidence },
-    );
+    const conflictStore = openNewPolicyStore(join(fixture.root, "conflicts.sqlite"), fixture.evidence);
     const overlap = buildReadyPlanFixture("run_t4", [
       { id: "O1", files: ["src/shared.ts"] },
       { id: "O2", files: ["src/shared.ts"] },
@@ -602,10 +676,7 @@ test("T4 dependencies, shared worktrees and overlapping or aliased writes preven
     await overlapScheduler.awaitIdle();
     conflictStore.close();
 
-    const aliasStore = new SqliteSchedulerStore(
-      join(fixture.root, "alias.sqlite"),
-      { evidenceStore: fixture.evidence },
-    );
+    const aliasStore = openNewPolicyStore(join(fixture.root, "alias.sqlite"), fixture.evidence);
     const alias = buildReadyPlanFixture("run_t4", [
       { id: "L1", files: ["src/./../src/A.ts"] },
       { id: "L2", files: ["SRC/a.TS"] },
@@ -619,10 +690,7 @@ test("T4 dependencies, shared worktrees and overlapping or aliased writes preven
     await aliasScheduler.awaitIdle();
     aliasStore.close();
 
-    const dependencyStore = new SqliteSchedulerStore(
-      join(fixture.root, "dependency.sqlite"),
-      { evidenceStore: fixture.evidence },
-    );
+    const dependencyStore = openNewPolicyStore(join(fixture.root, "dependency.sqlite"), fixture.evidence);
     seedReadyPlan(dependencyStore, buildReadyPlanFixture("run_t4", [
       { id: "D1" },
       { id: "D2", dependencies: ["D1"] },
@@ -665,10 +733,7 @@ test("T4 shared DB-port-schema-config resources and shared config files serializ
     await schedulerFor(fixture.store, driver).tick();
     assert.deepEqual(driver.assignments, ["R1"]);
 
-    const configStore = new SqliteSchedulerStore(
-      join(fixture.root, "config.sqlite"),
-      { evidenceStore: fixture.evidence },
-    );
+    const configStore = openNewPolicyStore(join(fixture.root, "config.sqlite"), fixture.evidence);
     seedReadyPlan(configStore, buildReadyPlanFixture("run_t4", [
       { id: "C1", files: ["config/alpha.json"] },
       { id: "C2", files: ["config/beta.json"] },
@@ -718,7 +783,7 @@ test("T4 ending a caller never frees an unconfirmed live claim; ambiguous restar
   const root = mkdtempSync(join(tmpdir(), "aiboard-t4-restart-"));
   const database = join(root, "scheduler.sqlite");
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  let store = new SqliteSchedulerStore(database, { evidenceStore: evidence });
+  let store = openNewPolicyStore(database, evidence);
   try {
     seedReadyPlan(store, buildReadyPlanFixture("run_t4", [
       { id: "K1", files: ["src/k1.ts"] },
@@ -734,7 +799,7 @@ test("T4 ending a caller never frees an unconfirmed live claim; ambiguous restar
     );
 
     store.close();
-    store = new SqliteSchedulerStore(database, { evidenceStore: evidence });
+    store = openNewPolicyStore(database, evidence);
     const recoveredDriver = new DeferredDriver();
     const recovered = schedulerFor(store, recoveredDriver);
     await recovered.tick();
@@ -869,6 +934,7 @@ test("T4 ready-plan bridge creates contract tasks and the real pump dispatches t
     const runtime = new BuildRuntime({
       runId: "run_t4",
       store: fixture.store,
+      artifacts: planningSourceArtifactsForRuntime(),
       workerDriver: driver,
       architectDriver: {
         run: async () => {
@@ -939,6 +1005,10 @@ test("T4 true membership drops a contract, blocks stale digest, surfaces it, and
       /not in the current ready plan revision|not bound to the current ready plan revision/,
     );
     assert.equal(newPolicyStaleTasksRequireArchitect(after), true);
+
+    // The revised ready plan needs its own explicit owner start: the
+    // revision_1 authorization stays durable but covers nothing new.
+    authorizeCurrentReadyPlan(fixture.store, "run_t4", "owner-start:revision_2");
 
     const driver = new DeferredDriver();
     await schedulerFor(fixture.store, driver).tick();
@@ -1055,7 +1125,7 @@ test("R1-B3 restart counts all four durable in-flight writers and admits no fift
   const root = mkdtempSync(join(tmpdir(), "aiboard-r1-b3-"));
   const database = join(root, "scheduler.sqlite");
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  let store = new SqliteSchedulerStore(database, { evidenceStore: evidence });
+  let store = openNewPolicyStore(database, evidence);
   try {
     seedReadyPlan(store, buildReadyPlanFixture("run_t4", [
       { id: "C1" }, { id: "C2" }, { id: "C3" }, { id: "C4" },
@@ -1065,7 +1135,7 @@ test("R1-B3 restart counts all four durable in-flight writers and admits no fift
     await schedulerFor(store, firstDriver).tick();
     assert.equal(firstDriver.assignments.length, 4);
     store.close();
-    store = new SqliteSchedulerStore(database, { evidenceStore: evidence });
+    store = openNewPolicyStore(database, evidence);
     const recoveredDriver = new DeferredDriver();
     const recoveredScheduler = schedulerFor(store, recoveredDriver);
     await recoveredScheduler.tick();
@@ -1326,6 +1396,8 @@ test("R1-B7 revised ready contracts enforce newly added dependencies", async () 
       hostCapabilities: buildPlanningFixtureScenario().hostCapabilities,
     });
     assert.deepEqual(projectionOf(fixture.store, "run_t4").tasks.E2.dependencies, ["E1"]);
+    // The revised ready plan needs its own explicit owner start before dispatch.
+    authorizeCurrentReadyPlan(fixture.store, "run_t4", "owner-start:revision_2");
     const driver = new DeferredDriver();
     await schedulerFor(fixture.store, driver).tick();
     assert.deepEqual(driver.assignments, ["E1"]);
@@ -1367,7 +1439,7 @@ test("R2-B1 resume ignores its existing slot while new admissions stay bounded",
   const root = mkdtempSync(join(tmpdir(), "aiboard-r2-b1-"));
   const database = join(root, "scheduler.sqlite");
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  let store = new SqliteSchedulerStore(database, { evidenceStore: evidence });
+  let store = openNewPolicyStore(database, evidence);
   try {
     seedReadyPlan(store, buildReadyPlanFixture("run_t4", [
       { id: "A1" }, { id: "A2" }, { id: "A3" }, { id: "A4" }, { id: "A5" },
@@ -1377,7 +1449,7 @@ test("R2-B1 resume ignores its existing slot while new admissions stay bounded",
     await firstScheduler.tick();
     assert.deepEqual(first.assignments.sort(), ["A1", "A2", "A3", "A4"]);
     store.close();
-    store = new SqliteSchedulerStore(database, { evidenceStore: evidence });
+    store = openNewPolicyStore(database, evidence);
     const recovered = new DeferredDriver();
     const recoveredScheduler = schedulerFor(store, recovered, { maxConcurrency: 4 });
     await recoveredScheduler.tick();
@@ -1556,7 +1628,7 @@ test("R2-B1 real pump resumes an in-flight same-owner task without admitting a f
   const root = mkdtempSync(join(tmpdir(), "aiboard-r2-b1-pump-"));
   const database = join(root, "scheduler.sqlite");
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  let store = new SqliteSchedulerStore(database, { evidenceStore: evidence });
+  let store = openNewPolicyStore(database, evidence);
   try {
     seedReadyPlan(store, buildReadyPlanFixture("run_t4", [
       { id: "S1" }, { id: "S2" },
@@ -1566,11 +1638,12 @@ test("R2-B1 real pump resumes an in-flight same-owner task without admitting a f
     await firstScheduler.tick();
     assert.deepEqual(firstDriver.assignments, ["S1"]);
     store.close();
-    store = new SqliteSchedulerStore(database, { evidenceStore: evidence });
+    store = openNewPolicyStore(database, evidence);
     const recoveredDriver = new DeferredDriver();
     const runtime = new BuildRuntime({
       runId: "run_t4",
       store,
+      artifacts: planningSourceArtifactsForRuntime(),
       workerDriver: recoveredDriver,
       architectDriver: {
         run: async () => {

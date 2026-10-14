@@ -430,12 +430,12 @@ class W1Reviewer implements AgentModel {
       return call("record_deliverable_findings", { findings: this.script.findings?.() ?? [] });
     }
     const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
     const priorSection = text.split("Prior review")[1] ?? "";
     const hasPrior = priorSection.length > 0;
-    const priorIds = [...new Set([...priorSection.matchAll(/"id": "((?!claim:)[^"]+)"/g)].map((match) => match[1]!))];
+    const priorIds = [...new Set([...priorSection.matchAll(/"id"\s*:\s*"((?!claim:)[^"]+)"/g)].map((match) => match[1]!))];
     this.verdictCalls += 1;
-    const blocking = /"severity": "blocking"/.test(text.split("Your durably recorded findings:")[1]?.split("The worker's report")[0] ?? "");
+    const blocking = /"severity"\s*:\s*"blocking"/.test(text.split("Your durably recorded findings:")[1]?.split("The worker's report")[0] ?? "");
     // The script always resolves prior checks as outstanding: an
     // outstanding prior finding carries forward as this review's
     // blocking finding, so a re-review with a prior is unsatisfied.

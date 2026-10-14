@@ -150,7 +150,7 @@ class ScriptedReviewer implements AgentModel {
       }
       return call("record_deliverable_findings", { findings: [] });
     }
-    const claimIds = [...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!);
+    const claimIds = [...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!);
     return call("submit_deliverable_verdict", {
       summary: "Reviewed against the criteria.",
       satisfied: true,

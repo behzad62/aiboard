@@ -212,7 +212,18 @@ class E5JourneyWorker implements AgentModel {
     if (count === 6) return journeyCall("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
     const record = journeyLastToolValue(request)!;
     const fact = record.fact as { stdoutArtifactHash: string };
-    return journeyCall("submit_task", { summary: "Product value and real tests pass.", readiness: "ready_for_architect_review", unresolvedConcerns: [], criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }] }, "submit-1");
+    return journeyCall("submit_task", {
+      summary: "Product value and real tests pass.",
+      readiness: "ready_for_architect_review",
+      unresolvedConcerns: [],
+      criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: {
+        changed: ["src/value.mjs", "test/value.test.mjs", "src/notes.txt"],
+        verified: [],
+        testsRun: [{ command: "node --test", counts: { selected: 2, passed: 2, failed: 0, skipped: 0 } }],
+        notRun: [{ what: "value behavior assertion", why: "fixture tests are vacuous by design; value=2 is verified by reviewer read, not worker tests" }],
+      },
+    }, "submit-1");
   }
 }
 
@@ -280,11 +291,11 @@ class E5JourneyReviewer implements AgentModel {
     if (pass === "delivery-verdict-system" && seen === 0) return journeyCall("fs.read", { path: "src/value.mjs", startLine: 1, endLine: 1 }, "verdict-read");
     if (pass === "delivery-verdict-system" && seen === 1) return journeyCall("fs.read", { path: "src/missing.mjs" }, "failed-read");
     const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
     return journeyCall("submit_deliverable_verdict", {
       summary: "The module exports 2 and the cited test run passed.",
       satisfied: true,
-      survivorDispositions: [...text.matchAll(/"id": "(mutation-survivor:[^"]+)"/g)].map((match) => ({ findingId: match[1], disposition: "not_a_real_gap", rationale: "The changed arithmetic branch is deliberately unconstrained by the value-only criterion; this survivor does not weaken that criterion." })),
+      survivorDispositions: [...text.matchAll(/"id"\s*:\s*"(mutation-survivor:[^"]+)"/g)].map((match) => ({ findingId: match[1], disposition: "not_a_real_gap", rationale: "The changed arithmetic branch is deliberately unconstrained by the value-only criterion; this survivor does not weaken that criterion." })),
       claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout.", ...(seen === 2 ? {} : { citations: seen === 3 ? [{ evidenceId: "foreign-evidence" }] : [{ path: "src/value.mjs", line: seen === 4 ? 99 : 1 }] }) })),
     }, `verdict-${seen}`);
   }

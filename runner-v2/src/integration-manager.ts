@@ -1047,6 +1047,18 @@ export class IntegrationManager {
         skipped.push({ path, reason: `spec copy skipped (write_failed): ${briefErrorDetail(error)}.` });
         continue;
       }
+      // C2d repair cycle 1 (escalation C-1): a case collision at a spec
+      // ancestor (say `docs` with `Docs`) skips the optional copy before
+      // any write. On disk there is one directory, so a write stages under
+      // the other spelling and every commit wedges on the pathspec. The
+      // commit-tree attestation is the same one the STATE.md stage uses;
+      // a single variant spelling (legitimate Docs/Project) is not a
+      // collision and still copies.
+      const ancestorCollision = await this.commitStateNonLinkBlocker("HEAD");
+      if (ancestorCollision !== null && ancestorCollision.kind === "case-collision") {
+        skipped.push({ path, reason: `spec copy skipped (write_failed): the commit tree tracks two spellings of ${ancestorCollision.component}.` });
+        continue;
+      }
       // C2d (DOCS-dir): a spec copy under a case-variant docs directory
       // writes and stages through the index's own spelling, like STATE.md.
       // The skipped record keeps the canonical path.
@@ -3781,6 +3793,12 @@ export class IntegrationManager {
       if (!checked.ok) return { stageable: false };
       await this.ensureIntegrationWorkspace();
       if (await this.specPathHasLinkComponent(checked.path)) return { stageable: false };
+      // C2d repair cycle 1 (escalation C-1): the pre-render check agrees
+      // with the stage-time guard above. A colliding ancestor makes the
+      // copy unstageable here, so STATE.md renders "not recorded" instead
+      // of naming a copy the commit cannot hold.
+      const ancestorCollision = await this.commitStateNonLinkBlocker("HEAD");
+      if (ancestorCollision !== null && ancestorCollision.kind === "case-collision") return { stageable: false };
       const absolute = this.containedProjectDocPath(checked.path);
       let existing: Buffer | null = null;
       try {

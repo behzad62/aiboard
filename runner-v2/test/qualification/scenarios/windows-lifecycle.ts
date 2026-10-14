@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "../../../src/windows-process-backend.js";
+import { createWindowsProcessBackend, WindowsProcessBackend, WindowsJobObjectProcessBackend } from "../../../src/windows-process-backend.js";
 import { createWindowsJobProcessHost } from "../../../src/windows-job-process-host.js";
 import { parseProcessSignalResult } from "../../../src/process-backend.js";
 import {
@@ -23,51 +23,46 @@ import {
   processLaunchRequest,
   verifiedWindowsSemanticFacts,
   withCertifiedRoot,
+  withWindowsInspectionQualification,
 } from "../../support/qualification-process-fixture.js";
 
 async function runNativeDescendant(): Promise<void> {
   if (process.platform !== "win32") throw new Error("Windows lifecycle qualification ran on a non-Windows host.");
   const root = createQualificationFixtureRoot("windows-native-descendant");
   const backend = createWindowsProcessBackend({ jobObjects: "unavailable", stateDirectory: root, pollIntervalMs: 20 });
-  const launch = parseProcessLaunchResult(await backend.launch(processLaunchRequest({
-    invocationId: "windows-native-descendant",
-    args: ["-e", "const{spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore',detached:true});c.unref();console.log(c.pid);setTimeout(()=>process.exit(0),7000)"],
-  })));
-  const binding = bindingFor(launch, "runner-windows-supervisor-v1");
-  const directory = opaqueDirectory(launch);
-  let cleanupReleased = false;
-  await withCertifiedRoot({
-    fixtureName: "windows-native-descendant", root,
-    body: async () => {
-      await new Promise((resolve) => setTimeout(resolve, 7_300));
-      await boundedConverge({
-        label: "windows native running after launcher exit", deadlineMs: 5_000, pollMs: 100,
-        sample: async () => {
-          const reconciled = parseProcessReconciliation(await backend.reconcile(binding, QUAL_FENCE));
-          if (reconciled.state === "running") return { kind: "pass" };
-          if (reconciled.state === "exited" || reconciled.state === "identity_mismatch") {
-            return { kind: "fail", reason: `definitive ${reconciled.state}` };
+  assert.ok(backend instanceof WindowsProcessBackend);
+  await withWindowsInspectionQualification({ fixtureName: "windows-native-descendant", root, backend, body: async fixture => {
+    const launch = await fixture.launch(processLaunchRequest({
+        invocationId: "windows-native-descendant",
+        args: ["-e", "const{spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore',detached:true});c.unref();console.log(c.pid);setTimeout(()=>process.exit(0),7000)"],
+      }));
+    const binding = bindingFor(launch, "runner-windows-supervisor-v1");
+    const directory = opaqueDirectory(launch);
+    await new Promise((resolve) => setTimeout(resolve, 7_300));
+    await boundedConverge({
+            label: "windows native running after launcher exit", deadlineMs: 5_000, pollMs: 100,
+            sample: async () => {
+              const reconciled = parseProcessReconciliation(await backend.reconcile(binding, QUAL_FENCE));
+              if (reconciled.state === "running") return { kind: "pass" };
+              if (reconciled.state === "exited" || reconciled.state === "identity_mismatch") {
+                return { kind: "fail", reason: `definitive ${reconciled.state}` };
+              }
+              return { kind: "retry" };
+            },
+            evidence: () => readFileSync(join(directory, "state.json"), "utf8"),
+          });
+    let terminated: unknown;
+    const signalDeadline = Date.now() + 15_000;
+    while (terminated === undefined) {
+            try { terminated = await backend.signal(binding, "terminate", QUAL_FENCE); }
+            catch (error) {
+              if (!/unknown|unavailable|inspect/i.test(error instanceof Error ? error.message : String(error)) || Date.now() >= signalDeadline) throw error;
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
           }
-          return { kind: "retry" };
-        },
-        evidence: () => readFileSync(join(directory, "state.json"), "utf8"),
-      });
-      let terminated: unknown; const signalDeadline = Date.now() + 15_000;
-      while (terminated === undefined) {
-        try { terminated = await backend.signal(binding, "terminate", QUAL_FENCE); }
-        catch (error) {
-          if (!/unknown|unavailable|inspect/i.test(error instanceof Error ? error.message : String(error)) || Date.now() >= signalDeadline) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-      }
-      assert.equal(parseProcessSignalResult(terminated).state, "running");
-      assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, QUAL_FENCE)).empty, false);
-    },
-    cleanup: async () => {
-      if (!cleanupReleased) { await drainAndCleanupWindowsFixture(backend, binding, QUAL_FENCE); cleanupReleased = true; }
-    },
-    certify: async () => { assert.equal(cleanupReleased, true); },
-  });
+    assert.equal(parseProcessSignalResult(terminated).state, "running");
+    assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, QUAL_FENCE)).empty, false);
+  } });
 }
 
 async function runJobDescendant(): Promise<void> {

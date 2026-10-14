@@ -86,7 +86,18 @@ class OwnedFenceProtocolObservationChangedError extends OwnedFenceContentionErro
   }
 }
 
+class OwnedFenceIdentityInspectionError extends OwnedFenceLockUnavailableError {}
+
+function containsIdentityInspectionFailure(error, seen = new Set()) {
+  if (!(error instanceof Error) || seen.has(error)) return false;
+  seen.add(error);
+  if (error instanceof OwnedFenceIdentityInspectionError) return true;
+  if (error instanceof AggregateError && error.errors.some(entry => containsIdentityInspectionFailure(entry, seen))) return true;
+  return containsIdentityInspectionFailure(error.cause, seen);
+}
+
 export function isOwnedFenceLockContention(error) {
+  if (containsIdentityInspectionFailure(error)) return false;
   if (error instanceof AggregateError)
     return error.errors.length > 0 && error.errors.every((entry) => isOwnedFenceLockContention(entry));
   if (error instanceof OwnedFenceContentionError) return true;
@@ -236,9 +247,11 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
   }
 }
 
-export function currentProcessBirthFingerprint() {
+export function currentProcessBirthFingerprint(remainingMs = DEFAULT_DEADLINE_MS) {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0)
+    throw new OwnedFenceLockUnavailableError("Current owned fence holder inspection deadline is exhausted.");
   if (cachedCurrentBirth?.state === "same") return cachedCurrentBirth.fingerprint;
-  const inspected = inspectProcessBirth(process.pid);
+  const inspected = inspectProcessBirth(process.pid, remainingMs);
   if (inspected.state !== "same")
     throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
   cachedCurrentBirth = inspected;
@@ -300,12 +313,18 @@ function acquire(path, options) {
   const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
     throw new OwnedFenceLockUnavailableError("Owned fence lock bounds are invalid.");
-  const deadline = Date.now() + deadlineMs;
+  if (options.deadlineAt !== undefined && (!Number.isFinite(options.deadlineAt) || options.deadlineAt <= 0))
+    throw new OwnedFenceLockUnavailableError("Owned fence absolute deadline is invalid.");
+  const deadline = Math.min(Date.now() + deadlineMs, options.deadlineAt ?? Number.POSITIVE_INFINITY);
+  if (Date.now() >= deadline)
+    throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
   const holderPid = options.holderPid ?? process.pid;
-  const holderBirth = options.holderBirth ?? currentProcessBirthFingerprint();
+  const holderBirth = options.holderBirth ?? currentProcessBirthFingerprint(deadline - Date.now());
   if (!Number.isSafeInteger(holderPid) || holderPid < 1 || typeof holderBirth !== "string" || holderBirth.length === 0)
     throw new OwnedFenceLockUnavailableError("Owned fence holder identity is invalid.");
   const acquisitionId = randomUUID();
+  if (Date.now() >= deadline)
+    throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
   const authorityId = coordinationAuthorityId(path);
   const { database, pathIdentity } = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority);
   const context = {
@@ -512,28 +531,67 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
   }
 }
 
+function acquisitionTimeRemaining(context) {
+  const remaining = context.deadline - Date.now();
+  if (remaining <= 0)
+    throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
+  return remaining;
+}
+function holderProposal(database) {
+  return database.prepare(`
+    SELECT h.acquisition_id AS acquisitionId, h.holder_pid AS holderPid,
+           h.holder_birth AS holderBirth, a.holder_pid AS proposalPid,
+           a.holder_birth AS proposalBirth
+    FROM owned_fence_holder h
+    LEFT JOIN owned_fence_acquisition a ON a.acquisition_id = h.acquisition_id
+    WHERE h.lock_key = 'owned'
+  `).get();
+}
+function sameHolderProposal(left, right) {
+  return left && right && ["acquisitionId", "holderPid", "holderBirth", "proposalPid", "proposalBirth"]
+    .every(key => left[key] === right[key]);
+}
 function tryClaim(context) {
   const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, inspectHolder } = context;
+  let observed, inspection;
   try {
-    database.exec("BEGIN IMMEDIATE");
+    acquisitionTimeRemaining(context);
+    assertCoordinationPathIdentity(path, pathIdentity);
+    assertActiveProtocol(database, authorityId);
+    observed = holderProposal(database);
   } catch (error) {
     if (isBusy(error)) return false;
     throw error;
   }
+  if (observed) {
+    if (!validHolderRow(observed))
+      throw new OwnedFenceLockUnavailableError("Owned fence holder metadata is corrupt or incomplete.");
+    if (observed.acquisitionId !== acquisitionId) {
+      // Inspector failures are identity uncertainty, never SQLite coordination retries.
+      const remaining = acquisitionTimeRemaining(context);
+      try { inspection = inspectHolder(Number(observed.holderPid), String(observed.holderBirth), remaining); }
+      catch (cause) {
+        throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection failed.", { cause });
+      }
+      acquisitionTimeRemaining(context);
+      if (inspection === "same") return false;
+      if (inspection !== "absent" && inspection !== "birth_mismatch")
+        throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection is unavailable or uncertain.");
+    }
+  }
+  acquisitionTimeRemaining(context);
+  try { database.exec("BEGIN IMMEDIATE"); }
+  catch (error) { if (isBusy(error)) return false; throw error; }
   try {
+    acquisitionTimeRemaining(context);
     assertCoordinationPathIdentity(path, pathIdentity);
     assertActiveProtocol(database, authorityId);
-    const row = database.prepare(`
-      SELECT h.acquisition_id AS acquisitionId, h.holder_pid AS holderPid,
-             h.holder_birth AS holderBirth, a.holder_pid AS proposalPid,
-             a.holder_birth AS proposalBirth
-      FROM owned_fence_holder h
-      LEFT JOIN owned_fence_acquisition a ON a.acquisition_id = h.acquisition_id
-      WHERE h.lock_key = 'owned'
-    `).get();
+    const row = holderProposal(database);
     if (!row) {
+      acquisitionTimeRemaining(context);
       insertHolder(database, acquisitionId, holderPid, holderBirth);
       assertCoordinationPathIdentity(path, pathIdentity);
+      acquisitionTimeRemaining(context);
       database.exec("COMMIT");
       return true;
     }
@@ -541,13 +599,14 @@ function tryClaim(context) {
       throw new OwnedFenceLockUnavailableError("Owned fence holder metadata is corrupt or incomplete.");
     if (row.acquisitionId === acquisitionId) {
       assertCoordinationPathIdentity(path, pathIdentity);
+      acquisitionTimeRemaining(context);
       database.exec("COMMIT");
       return true;
     }
-    const inspection = inspectHolder(Number(row.holderPid), String(row.holderBirth));
-    if (inspection === "same") { database.exec("ROLLBACK"); return false; }
+    if (!sameHolderProposal(observed, row)) { database.exec("ROLLBACK"); return false; }
     if (inspection !== "absent" && inspection !== "birth_mismatch")
-      throw new OwnedFenceLockUnavailableError("Owned fence holder inspection is unavailable or uncertain.");
+      throw new OwnedFenceIdentityInspectionError("Owned fence stale-holder observation is unavailable.");
+    acquisitionTimeRemaining(context);
     const update = database.prepare(`
       UPDATE owned_fence_holder
       SET acquisition_id = ?, holder_pid = ?, holder_birth = ?
@@ -557,6 +616,7 @@ function tryClaim(context) {
       throw new OwnedFenceLockUnavailableError("Owned fence stale-holder election changed concurrently.");
     database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(row.acquisitionId);
     assertCoordinationPathIdentity(path, pathIdentity);
+    acquisitionTimeRemaining(context);
     database.exec("COMMIT");
     return true;
   } catch (error) {
@@ -1044,22 +1104,25 @@ function validHolderRow(row) {
     Number(row.proposalPid) === Number(row.holderPid) && row.proposalBirth === row.holderBirth;
 }
 
-function defaultInspectHolder(pid, birth) {
-  const inspection = inspectProcessBirth(pid);
+function defaultInspectHolder(pid, birth, remainingMs = DEFAULT_DEADLINE_MS) {
+  const inspection = inspectProcessBirth(pid, remainingMs);
   if (inspection.state === "absent") return "absent";
   if (inspection.state !== "same") return "unknown";
   return sameBirth(inspection.fingerprint, birth) ? "same" : "birth_mismatch";
 }
 
-function inspectProcessBirth(pid) {
+function inspectProcessBirth(pid, remainingMs = DEFAULT_DEADLINE_MS) {
+  if (!Number.isFinite(remainingMs) || remainingMs < 1) return { state: "unknown" };
+  const deadline = Date.now() + remainingMs;
+  const timely = result => Date.now() < deadline ? result : { state: "unknown" };
   try {
     if (process.platform === "win32") {
       const output = execFileSync("powershell.exe", [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
         `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`,
-      ], { encoding: "utf8", windowsHide: true, timeout: 2_000 }).trim();
-      if (output === "ABSENT") return { state: "absent" };
-      if (output.startsWith("PRESENT:") && output.length > 8) return { state: "same", fingerprint: normalizeBirth(output.slice(8)) };
+      ], { encoding: "utf8", windowsHide: true, timeout: Math.floor(Math.min(2_000, remainingMs)) }).trim();
+      if (output === "ABSENT") return timely({ state: "absent" });
+      if (output.startsWith("PRESENT:") && output.length > 8) return timely({ state: "same", fingerprint: normalizeBirth(output.slice(8)) });
       return { state: "unknown" };
     }
     if (process.platform === "linux") {
@@ -1067,28 +1130,38 @@ function inspectProcessBirth(pid) {
         const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
         const close = stat.lastIndexOf(")");
         const start = stat.slice(close + 2).split(" ")[19];
-        return start ? { state: "same", fingerprint: `proc-start:${start}` } : { state: "unknown" };
-      } catch (error) { return error?.code === "ENOENT" ? { state: "absent" } : { state: "unknown" }; }
+        return timely(start ? { state: "same", fingerprint: `proc-start:${start}` } : { state: "unknown" });
+      } catch (error) { return timely(error?.code === "ENOENT" ? { state: "absent" } : { state: "unknown" }); }
     }
-    return inspectGenericPosixProcessBirth(pid);
+    return timely(inspectGenericPosixProcessBirth(pid, genericPosixInspectionOperations, deadline - Date.now()));
   } catch { return { state: "unknown" }; }
 }
 
-export function inspectGenericPosixProcessBirth(pid, operations = genericPosixInspectionOperations) {
-  const firstExistence = operations.probeExistence(pid);
+export function inspectGenericPosixProcessBirth(pid, operations = genericPosixInspectionOperations, remainingMs = DEFAULT_DEADLINE_MS) {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return { state: "unknown" };
+  const deadline = Date.now() + remainingMs, expired = Symbol("expired");
+  const invoke = method => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return expired;
+    const result = operations[method](pid, remaining);
+    return Date.now() < deadline ? result : expired;
+  };
+  const firstExistence = invoke("probeExistence");
   if (firstExistence === "absent") return { state: "absent" };
   if (firstExistence !== "live") return { state: "unknown" };
-  const firstBirth = operations.inspectBirth(pid);
+  const firstBirth = invoke("inspectBirth");
+  if (firstBirth === expired) return { state: "unknown" };
   if (firstBirth.outcome !== "ok")
-    return operations.probeExistence(pid) === "absent" ? { state: "absent" } : { state: "unknown" };
+    return invoke("probeExistence") === "absent" ? { state: "absent" } : { state: "unknown" };
   if (!firstBirth.fingerprint.trim()) return { state: "unknown" };
-  if (operations.probeExistence(pid) !== "live") return { state: "unknown" };
-  const secondBirth = operations.inspectBirth(pid);
+  if (invoke("probeExistence") !== "live") return { state: "unknown" };
+  const secondBirth = invoke("inspectBirth");
+  if (secondBirth === expired) return { state: "unknown" };
   if (secondBirth.outcome !== "ok")
-    return operations.probeExistence(pid) === "absent" ? { state: "absent" } : { state: "unknown" };
+    return invoke("probeExistence") === "absent" ? { state: "absent" } : { state: "unknown" };
   if (!secondBirth.fingerprint.trim() || !sameBirth(firstBirth.fingerprint, secondBirth.fingerprint))
     return { state: "unknown" };
-  const finalExistence = operations.probeExistence(pid);
+  const finalExistence = invoke("probeExistence");
   if (finalExistence === "absent") return { state: "absent" };
   if (finalExistence !== "live") return { state: "unknown" };
   return { state: "same", fingerprint: normalizeBirth(secondBirth.fingerprint) };
@@ -1103,9 +1176,10 @@ const genericPosixInspectionOperations = Object.freeze({
       return "unknown";
     }
   },
-  inspectBirth(pid) {
+  inspectBirth(pid, remainingMs = DEFAULT_DEADLINE_MS) {
+    if (!Number.isFinite(remainingMs) || remainingMs < 1) return { outcome: "timeout" };
     try {
-      const output = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 2_000 }).trim();
+      const output = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: Math.floor(Math.min(2_000, remainingMs)) }).trim();
       return output ? { outcome: "ok", fingerprint: output } : { outcome: "malformed" };
     } catch (error) {
       if (error?.code === "ETIMEDOUT" || error?.signal) return { outcome: "timeout" };

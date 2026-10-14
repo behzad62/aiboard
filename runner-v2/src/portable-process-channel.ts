@@ -92,6 +92,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   private readonly deliveredOutput = new Set<string>();
   private readonly terminalSinks = new Set<(result: unknown) => void>();
   private channelFailure?: Error;
+  private terminalDiagnostic?: { readonly reason: string; readonly stage: string; readonly error?: unknown };
   private stateNeedsPersist = false;
   private outputTasks = 0;
   private outputSettlementDeadlineAt?: number;
@@ -487,6 +488,11 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       }
       await delay(this.pollIntervalMs);
     }
+    // Re-attestation or scheduling may cross the polling deadline after delivery
+    // committed. Reconcile its exact durable proof once without another effect.
+    const finalAcknowledgement = readAcknowledgement();
+    if (finalAcknowledgement === "acknowledged") return;
+    if (finalAcknowledgement === "failed") throw new Error("Portable channel command failed.");
     let detail = "state unavailable";
     try { detail = JSON.stringify({ state: JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8")), input: readdirSync(this.inputDirectory), ack: readdirSync(this.ackDirectory).map((name) => [name, readFileSync(join(this.ackDirectory, name), "utf8")]) }); } catch {}
     throw new Error(`Portable channel command acknowledgement timed out. ${detail}`);
@@ -494,13 +500,22 @@ class PortableProcessChannel implements InteractiveProcessChannel {
 
   private async terminal(signal: AbortSignal): Promise<unknown | undefined> {
     if (this.channelFailure) return { state: "outcome_unknown", detail: this.channelFailure.message };
+    let stage = "identity";
+    const unknown = (reason: string, error?: unknown) => {
+      // A cancelled observation cannot become the diagnostic for a later caller.
+      // Preserve the first original failure without changing its public outcome.
+      if (!signal.aborted && !this.detached && !this.terminalDiagnostic)
+        this.terminalDiagnostic = Object.freeze({ reason, stage, ...(error === undefined ? {} : { error }) });
+      return { state: "outcome_unknown" };
+    };
     try {
       const birth = await this.reattestObservation(signal);
+      stage = "state";
       let state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
       if (state.nonce !== this.authority.nonce) throw new Error("Portable channel identity mismatch.");
-      if (!["running", "stopping", "stopped", "outcome_unknown"].includes(state.status)) return { state: "outcome_unknown" };
-      if (birth === "exited" && state.status !== "stopped") return { state: "outcome_unknown" };
-      if (this.liveStoppedObserved && state.status !== "stopped") return { state: "outcome_unknown" };
+      if (!["running", "stopping", "stopped", "outcome_unknown"].includes(state.status)) return unknown("invalid_status");
+      if (birth === "exited" && state.status !== "stopped") return unknown("supervisor_exited_before_stopped");
+      if (this.liveStoppedObserved && state.status !== "stopped") return unknown("stopped_state_regressed");
       // A live supervisor with durable stopped state may still own output
       // retirement. Inspect that protocol read-only so terminal polling never
       // competes for the writer lock. Once the retained window is fully retired,
@@ -508,13 +523,18 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       // supervisor process itself to disappear.
       if (state.status === "stopped" && birth === "live") {
         this.liveStoppedObserved = true;
+        stage = "live_stopped_output";
         const pending = this.readLiveStoppedOutput();
         if (!pending || this.hasPendingOutput(pending)) return undefined;
+        stage = "live_stopped_identity";
         await this.reattestObservation(signal);
+        stage = "live_stopped_state";
         state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
-        if (state.nonce !== this.authority.nonce || state.status !== "stopped") return { state: "outcome_unknown" };
+        if (state.nonce !== this.authority.nonce || state.status !== "stopped") return unknown("stopped_proof_changed");
+        stage = "live_stopped_final_output";
         const finalOutput = this.readLiveStoppedOutput();
         if (!finalOutput || this.hasPendingOutput(finalOutput)) return undefined;
+        stage = "live_stopped_fence";
         if (this.authority.reattestFence) this.authority.reattestFence();
         else {
           const finalFence = this.authority.snapshot(() => true);
@@ -524,13 +544,16 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         return { state: "exited", ...(state.exitCode === null ? {} : { exitCode: state.exitCode }), ...(state.signal ? { signal: state.signal } : {}) };
       }
       if (state.status === "stopped") {
+        stage = "exited_output";
         const snapshot = this.outputSnapshot();
         if (snapshot.status === "unavailable" && snapshot.cause === "coordination") return undefined;
         const output = this.requireSnapshot(snapshot);
         if (output.output.length > 0 || output.acknowledgements.some((name) => /^(stdout|stderr)-/.test(name))) return undefined;
+        stage = "exited_identity";
         await this.reattestObservation(signal);
         // The asynchronous identity wait cannot preserve an earlier output or
         // terminal snapshot. Read both again under the current exact fence.
+        stage = "exited_snapshot";
         const final = this.authority.snapshot(() => ({
           state: JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8")),
           output: this.readOutputSnapshot(),
@@ -543,8 +566,8 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       }
       return state.status === "stopped"
         ? { state: "exited", ...(state.exitCode === null ? {} : { exitCode: state.exitCode }), ...(state.signal ? { signal: state.signal } : {}) }
-        : state.status === "outcome_unknown" ? { state: "outcome_unknown" } : undefined;
-    } catch { return { state: "outcome_unknown" }; }
+        : state.status === "outcome_unknown" ? unknown("supervisor_outcome_unknown") : undefined;
+    } catch (error) { return unknown("caught_exception", error); }
   }
 
   private readLiveStoppedOutput(): PortableOutputSnapshot | undefined {

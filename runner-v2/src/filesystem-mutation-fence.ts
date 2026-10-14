@@ -4,6 +4,15 @@
  * outside writers can race the final path-based syscall; POSIX inode reuse is
  * another residual ABA limitation. Detected changes fail closed with progress.
  * Atomic replacement preserves complete bytes, not ACLs/xattrs or crash durability.
+ * OpenRouter V4A adapter: V4A lacks expected SHA, so ToolBroker captures the
+ * pre-approval file SHA-256 synchronously before any approval yield. Update
+ * verifies observed bytes still match that captured hash via checkedRevision
+ * before the hunk transform runs. No post-approval read mints revision
+ * authority. Create stays create-only; delete needs destructive approval.
+ * Trusted preapproval property: the captured pre-approval byte hash is the
+ * revision authority; in-place changes after capture fail closed.
+ * V4A hunk matching is inherited: exact, then trimEnd, then trim fallback;
+ * a header-anchored hunk may apply at its first match when several match.
  */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -27,6 +36,11 @@ type Operation = typeof OPERATIONS[number];
 export function isFilesystemMutation(name: string): name is Operation {
   return (OPERATIONS as readonly string[]).includes(name);
 }
+/** Reserved native V4A adapter. Only ToolBroker may bind this name to a derived fs operation. */
+export const OPENROUTER_APPLY_PATCH_TOOL = "openrouter.apply_patch";
+export function isOpenRouterApplyPatch(name: string): boolean {
+  return name === OPENROUTER_APPLY_PATCH_TOOL;
+}
 const CAPTURE: unique symbol = Symbol("filesystem-mutation-capture");
 const PERMIT: unique symbol = Symbol("filesystem-mutation-permit");
 export interface FilesystemMutationCapture { readonly [CAPTURE]: true }
@@ -39,6 +53,7 @@ interface Captured {
   identities: Map<string, Identity | null>;
   directories: Map<string, readonly string[]>;
   tree: string[];
+  contentHashes: Map<string, string | null>;
 }
 interface Authorized extends Captured {
   binding: ExecutionGrantBinding;
@@ -134,11 +149,11 @@ function captureTree(record: Captured, path: string, depth = 0): void {
  * or the run-owned bootstrap can bind this capture to an existing real grant.
  */
 export function captureFilesystemMutation(workspace: string, operation: Operation,
-  paths: readonly ToolPathAccess[]): FilesystemMutationCapture {
+  paths: readonly ToolPathAccess[], options?: Readonly<{ recordContentHash?: boolean }>): FilesystemMutationCapture {
   if (!isAbsolute(workspace)) throw new ExecutionGrantError("grant_invalid_path", "Mutation workspace must be absolute.");
   const record: Captured = { workspace: safePath(workspace, workspace), operation,
     targets: paths.map((entry) => Object.freeze({ path: safePath(workspace, entry.path), access: entry.access })),
-    identities: new Map(), directories: new Map(), tree: [] };
+    identities: new Map(), directories: new Map(), tree: [], contentHashes: new Map() };
   const expected = operation === "fs.move" ? ["delete", "write"] : [operation === "fs.delete" ? "delete" : "write"];
   if (!isFilesystemMutation(operation) || paths.length !== expected.length || paths.some((p, i) => p.access !== expected[i])) throw new ExecutionGrantError("grant_mismatch", "The exact filesystem operation paths/access do not match.");
   captureChain(record, record.workspace);
@@ -146,6 +161,21 @@ export function captureFilesystemMutation(workspace: string, operation: Operatio
   for (const target of record.targets) {
     if (normalize(target.path) === normalize(record.workspace) || dirname(target.path) === target.path) fail("filesystem_safety_unsupported", target.path, "The workspace or volume root cannot be a mutation target.");
     captureChain(record, target.path);
+  }
+  if (options?.recordContentHash === true && (operation === "fs.write" || operation === "fs.patch") && record.targets.length === 1) {
+    const targetPath = record.targets[0]!.path;
+    const key = normalize(targetPath);
+    const id = record.identities.get(key);
+    if (id && !id.directory) {
+      try {
+        record.contentHashes.set(key, digest(fs.readFileSync(targetPath)));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") fail("filesystem_identity_changed", targetPath, "Authorized filesystem identity changed before mutation.");
+        throw error;
+      }
+    } else {
+      record.contentHashes.set(key, null);
+    }
   }
   if (operation === "fs.move" || operation === "fs.delete") captureTree(record, record.targets[0]!.path);
   const capture = Object.freeze({ [CAPTURE]: true }) as FilesystemMutationCapture;
@@ -155,7 +185,11 @@ export function authorizeFilesystemMutation(capture: FilesystemMutationCapture, 
   authority: ExecutionGrantAuthority; grant: OpaqueExecutionGrant; binding: ExecutionGrantBinding; signal?: AbortSignal;
 }>): FilesystemMutationPermit {
   const captured = CAPTURES.get(capture);
-  if (!captured || captured.operation !== input.binding.toolName) throw new ExecutionGrantError("grant_forged", "Filesystem authorization capture is not Runner-owned.");
+  const isOpenRouterBinding = input.binding.toolName === OPENROUTER_APPLY_PATCH_TOOL;
+  const expectedOperation = isOpenRouterBinding ? captured?.operation : input.binding.toolName;
+  if (!captured || captured.operation !== expectedOperation) throw new ExecutionGrantError("grant_forged", "Filesystem authorization capture is not Runner-owned.");
+  if (isOpenRouterBinding && captured.operation === "fs.move") throw new ExecutionGrantError("grant_mismatch", "OpenRouter adapter cannot derive a move operation.");
+  if (isOpenRouterBinding && captured.operation === "fs.patch" && !captured.contentHashes.has(normalize(captured.targets[0]!.path))) throw new ExecutionGrantError("grant_mismatch", "OpenRouter update capture is missing its pre-approval revision.");
   CAPTURES.delete(capture);
   const reservation = reserveExecutionGrantForFilesystemMutation(input.authority, input.grant, input.binding);
   const binding = Object.freeze({ ...input.binding, actor: Object.freeze({ ...input.binding.actor }) });
@@ -375,6 +409,16 @@ function publish(record: Authorized, path: string, bytes: Buffer, expected: unkn
 function write(record: Authorized, path: string, expected: unknown, createDirectories: boolean,
   transform: (original: Buffer) => Buffer): Buffer {
   const original = record.identities.get(normalize(path));
+  const isOpenRouter = record.binding.toolName === OPENROUTER_APPLY_PATCH_TOOL;
+  if (isOpenRouter && expected !== undefined) throw new ExecutionGrantError("grant_mismatch", "OpenRouter revision is Broker-captured, never model-supplied.");
+  if (isOpenRouter && record.operation === "fs.write" && original) fail("target_already_exists", path, "Creation and move destinations are create-only and cannot overwrite.");
+  if (isOpenRouter && record.operation === "fs.patch" && !original) {
+    current(record, dirname(path));
+    const currentIdentity = observe(path);
+    if (currentIdentity) fail("filesystem_identity_changed", path, "Authorized filesystem identity changed before mutation.");
+    throw new FilesystemMutationError("revision_conflict", "Expected file does not exist.", { path, expectedSha256: null, currentSha256: null });
+  }
+  if (isOpenRouter && record.operation === "fs.patch" && original && original.directory) fail("filesystem_safety_unsupported", path, "Content replacement requires a regular file.");
   if (original === undefined) throw new ExecutionGrantError("grant_mismatch", "Uncaptured replacement target.");
   if (!original) {
     current(record, dirname(path)); absent(path);
@@ -385,11 +429,13 @@ function write(record: Authorized, path: string, expected: unknown, createDirect
     const bytes = Buffer.from(transform(Buffer.alloc(0)));
     parents(record, path, createDirectories); publish(record, path, bytes, undefined, false); return bytes;
   }
-  const read = checkedRevision(record, path, expected);
+  const openRouterExpected = isOpenRouter && record.operation === "fs.patch" ? record.contentHashes.get(normalize(path)) : expected;
+  if (isOpenRouter && record.operation === "fs.patch" && typeof openRouterExpected !== "string") throw new ExecutionGrantError("grant_mismatch", "OpenRouter update capture is missing its pre-approval revision.");
+  const read = checkedRevision(record, path, isOpenRouter && record.operation === "fs.patch" ? openRouterExpected : expected);
   let bytes: Buffer;
   try { bytes = Buffer.from(transform(read.bytes)); }
   finally { fs.closeSync(read.fd); }
-  publish(record, path, bytes, expected, true); return bytes;
+  publish(record, path, bytes, isOpenRouter && record.operation === "fs.patch" ? openRouterExpected : expected, true); return bytes;
 }
 export function fencedWrite(context: FilesystemMutationContext, path: string, bytes: Buffer | ((original: Buffer) => Buffer),
   expectedSha256: unknown, createDirectories: boolean): Buffer {

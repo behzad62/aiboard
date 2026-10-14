@@ -25,6 +25,7 @@ import {
 import type { FinalVerificationPlan } from "../src/final-verification-contracts.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import {
+  currentExplicitStartIdentity,
   readyPlanIdentity,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
@@ -52,6 +53,7 @@ import {
   NativeBuildFactory,
   captureGitBaseline,
   runGit,
+  runGitBytes,
 } from "./support/git-fixture.js";
 import { seedEvent } from "./support/handoff-snapshot-harness.js";
 import { acceptFinalVerificationProfile } from "./support/final-verification-profile.js";
@@ -192,14 +194,15 @@ function buildScenario(runId: string) {
   return { manifest, requirements, phases, revision, coverageReview };
 }
 
-function buildPlanningEvents(runId: string): NewSchedulerEvent[] {
+function buildPlanningEvents(runId: string, baselineRevision: string): NewSchedulerEvent[] {
   const { manifest, requirements, phases, revision, coverageReview } = buildScenario(runId);
   const e = (type: string, key: string, role: SchedulerActorRole, id: string, payload: Record<string, unknown>): NewSchedulerEvent =>
     seedEvent(runId, type, key, role, id, payload);
-  return [
-    e("project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 2 }),
-    e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
+  const base: NewSchedulerEvent[] = [
+    e("project_docs.policy_configured", "project-docs-policy", "runner", "build-runtime", { version: 2 }),
+    e("run.initialized", "run-initialized", "runner", "build-runtime", { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: "Deliver the value module." }),
     e("planning.policy_configured", "planning-policy", "runner", "build-runtime", { version: 1 }),
+    e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
     e("planning.source_registered", "source", "user", "owner", { manifest }),
     e("request.triaged", "triage", "architect", "architect", { decision: "build", rationale: "Build the module." }),
     e("planning.ledger_persisted", "ledger", "architect", "architect", { id: "ledger", requirements, phases, nonNormativeSections: [] }),
@@ -210,6 +213,21 @@ function buildPlanningEvents(runId: string): NewSchedulerEvent[] {
     e("planning.coverage_plan_delivered", "coverage-plan", "runner", "build-runtime", { reviewId: coverageReview.id, planRevisionId: revision.revisionId, planRevisionDigest: revision.digest, sourceManifestId: manifest.manifestId, deliveredAt: CLOCK }),
     e("planning.coverage_review_recorded", "coverage-review", "verifier", "coverage-reviewer", { review: coverageReview }),
     e("planning.plan_ready", "ready", "runner", "build-runtime", { hostCapabilities: T1A_SEEDED_HOST_PLANNING_CAPABILITIES }),
+  ];
+  const synthesized = base.map((event, index) => ({ ...event, sequence: index + 1, eventId: `phase-c-pre-${index}` }));
+  const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(synthesized as unknown as Parameters<typeof rebuildSchedulerProjection>[0]));
+  assert.ok(startIdentity, "the phase-c plan is ready with a complete start identity");
+  return [
+    ...base,
+    e("planning.execution_authorized", "owner-start", "user", "local-user", {
+      authorization: { ...startIdentity, version: 1, ownerChoice: "execute" },
+    }),
+    // Seeded recovery runs are never restamped by the factory, so the
+    // trusted test-integrity baseline (git baseline) is seeded explicitly.
+    e("delivery.test_integrity_initialized", "test-integrity-initial-revision", "runner", "build-runtime", {
+      revision: baselineRevision,
+      architectActorId: "architect_1",
+    }),
   ];
 }
 
@@ -249,7 +267,11 @@ class WorkerModel implements AgentModel {
     if (toolCount === 0) return call("fs.write", { path: "src/value.mjs", content: LOW_CONTENT, createDirectories: true }, "write-1");
     if (toolCount === 1) return call("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
     const record = lastToolValue(request)!;
-    const fact = record.fact as { stdoutArtifactHash: string };
+    const fact = record.fact as { stdoutArtifactHash: string; exitCode: number | null; timedOut?: boolean; cancelled?: boolean };
+    assert.equal(fact.exitCode, 0, "the evidence test run must genuinely succeed before the worker claims it passes");
+    assert.equal(fact.timedOut ?? false, false, "the evidence test run must not time out");
+    assert.equal(fact.cancelled ?? false, false, "the evidence test run must not be cancelled");
+    assert.ok(typeof record.id === "string" && record.id.length > 0, "the evidence test run records an evidence id");
     return call("submit_task", {
       // Forged trailers in model free text must never establish authority:
       // the integration trailer comes only from the kernel-resolved contract.
@@ -257,8 +279,22 @@ class WorkerModel implements AgentModel {
       readiness: "ready_for_architect_review",
       unresolvedConcerns: [],
       criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: { changed: ["src/value.mjs"], verified: ["src/value.mjs exports value = 2"], testsRun: [{ command: "node --test", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }], notRun: [] },
     }, "submit-1");
   }
+}
+
+function phaseCReadText(request: AgentModelRequest, path: string): string | undefined {
+  for (const message of request.messages) {
+    if (message.role !== "tool") continue;
+    const content = message.content as { toolName?: string; content?: Array<{ type: string; value?: unknown; text?: string }> };
+    if (content.toolName !== "fs.read") continue;
+    const meta = content.content?.find((item) => item.type === "json")?.value as { path?: string } | undefined;
+    if (meta?.path !== path) continue;
+    const text = content.content?.find((item) => item.type === "text")?.text;
+    if (typeof text === "string") return text;
+  }
+  return undefined;
 }
 
 class ReviewerModel implements AgentModel {
@@ -267,7 +303,6 @@ class ReviewerModel implements AgentModel {
     this.observed.push(request);
     const system = request.messages.find((message) => message.role === "system");
     const pass = system?.id ?? "";
-    const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
     const tools = request.messages.filter((message) => message.role === "tool").length;
     if (pass === "delivery-obligations-system") {
       return call("record_deliverable_obligations", { obligations: [{ id: "o1", description: "value must be 2." }] }, `obl-${tools}`);
@@ -305,12 +340,25 @@ class ReviewerModel implements AgentModel {
         }],
       }, "verifier-verdict-1");
     }
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
-    return call("submit_deliverable_verdict", {
-      summary: "The module exports 2 and the cited test run passed.",
-      satisfied: true,
-      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout." })),
-    }, `verdict-${tools}`);
+    if (pass === "delivery-verdict-system") {
+      const inspected = phaseCReadText(request, "src/value.mjs");
+      if (inspected === undefined) {
+        return call("fs.read", { path: "src/value.mjs" }, `verdict-read-${tools}`);
+      }
+      assert.ok(inspected.split("\n")[0]!.includes("export const value = 2;"), "the cited line 1 actually exports value = 2");
+      const verdictText = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
+      const survivors = [...new Set([...verdictText.matchAll(/"id"\s*:\s*"(mutation-survivor:[^"]+)"/g)].map((match) => match[1]!))];
+      assert.equal(survivors.length, 0, `unexpected mutation survivors on the value line are real gaps and cannot be blanket-released: ${survivors.join(", ")}`);
+      const claimIds = [...new Set([...verdictText.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
+      assert.ok(claimIds.includes("claim:c1"), "the verdict context names the criterion claim");
+      assert.ok(claimIds.includes("claim:summary"), "the verdict context names the summary claim");
+      return call("submit_deliverable_verdict", {
+        summary: "The module exports 2 and the cited test run passed.",
+        satisfied: true,
+        claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Read src/value.mjs line 1 in this verdict session and confirmed it exports value = 2.", citations: [{ path: "src/value.mjs", line: 1 }] })),
+      }, `verdict-${tools}`);
+    }
+    throw new Error(`Unexpected phase-c reviewer system ${pass}.`);
   }
 }
 
@@ -453,7 +501,7 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
   const runRoot = join(state, "builds", safeSegment(BUILD_RUN));
   mkdirSync(runRoot, { recursive: true });
   const seeder = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
-  for (const input of buildPlanningEvents(BUILD_RUN)) seeder.append(input);
+  for (const input of buildPlanningEvents(BUILD_RUN, baseline.revision)) seeder.append(input);
   seeder.close();
   const workerRequests: AgentModelRequest[] = [];
   const reviewerRequests: AgentModelRequest[] = [];
@@ -494,6 +542,7 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
       }),
       prepareSpec: (spec) => factory!.prepareSpec(spec),
     });
+    await executionHost.artifacts.put(Buffer.from(SOURCE_TEXT, "utf-8"), "text/plain", "approved source");
     await manager.create(await factory.prepareSpec({
       version: 2,
       runId: BUILD_RUN,
@@ -507,6 +556,7 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
       permissionProfile: "full",
       runPolicy: "finish",
       planCritique: "off",
+      planningPolicy: { version: 1 },
       budgetLimits: {},
       createdAt: CLOCK,
       idempotencyKey: "phase-c-exit-build",
@@ -765,9 +815,15 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
         record.agentsSectionCommitted === true || typeof record.agentsSectionViaLink === "string",
         `snapshot ${index} satisfies the AGENTS.md section exactly as the kernel records`,
       );
-      // Spec policy: no spec source on this run, so no verbatim copy.
-      assert.ok(record.specCopied !== true, `snapshot ${index} writes no spec copy`);
-      assert.equal(record.specPath, undefined, `snapshot ${index} records no spec path`);
+      // Spec policy: pause snapshots carry no spec copy; the handoff
+      // snapshot preserves the planning source as a verbatim spec copy.
+      if (record.stopKind === "completed") {
+        assert.equal(record.specCopied, true, `snapshot ${index} preserves the source as a spec copy`);
+        assert.equal(record.specPath, "docs/project/specs/source_value.md", `snapshot ${index} records the spec path`);
+      } else {
+        assert.ok(record.specCopied !== true, `snapshot ${index} writes no spec copy`);
+        assert.equal(record.specPath, undefined, `snapshot ${index} records no spec path`);
+      }
     }
     assert.equal(String(docsSnapshots[1]!.revision), canonical, "mid-verification record names the canonical revision");
     assert.equal(String(docsSnapshots[2]!.revision), canonical, "handoff record names the canonical revision");
@@ -778,12 +834,12 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
     const kernelFiles = finalFiles.filter((path) => path !== ".gitignore" && path !== "package.json" && path !== "test/value.test.mjs" && path !== "src/value.mjs").sort();
     assert.deepEqual(
       finalFiles,
-      [".gitignore", "AGENTS.md", "CLAUDE.md", HANDOFF_STATE_PATH, "package.json", "src/value.mjs", "test/value.test.mjs"],
+      [".gitignore", "AGENTS.md", "CLAUDE.md", HANDOFF_STATE_PATH, "docs/project/specs/source_value.md", "package.json", "src/value.mjs", "test/value.test.mjs"],
       "the handed-off tree is exactly baseline plus the product module plus the kernel handoff files",
     );
-    assert.deepEqual(kernelFiles, ["AGENTS.md", "CLAUDE.md", HANDOFF_STATE_PATH]);
+    assert.deepEqual(kernelFiles, ["AGENTS.md", "CLAUDE.md", HANDOFF_STATE_PATH, "docs/project/specs/source_value.md"]);
     assert.deepEqual((await gitText(repoPath, ["diff", "--name-status", baseline.revision, handoffCommit])).split("\n").sort(),
-      ["AGENTS.md", "CLAUDE.md", HANDOFF_STATE_PATH, "src/value.mjs"].map((path) => `A\t${path}`).sort(),
+      ["AGENTS.md", "CLAUDE.md", HANDOFF_STATE_PATH, "docs/project/specs/source_value.md", "src/value.mjs"].map((path) => `A\t${path}`).sort(),
       "only intended product and kernel files were added; baseline files unchanged");
     assert.equal((await runGit({ cwd: repoPath, args: ["show", `${handoffCommit}:src/value.mjs`] })).stdout, LOW_CONTENT, "product bytes are exact");
     for (const path of [".gitignore", "package.json", "test/value.test.mjs"]) {
@@ -797,7 +853,8 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
         `no diary/evidence file in the handed-off tree (got ${path})`,
       );
     }
-    assert.ok(!finalFiles.some((path) => path.startsWith("docs/project/specs/")), "no spec copies without a spec source");
+    assert.deepEqual(finalFiles.filter((path) => path.startsWith("docs/project/specs/")), ["docs/project/specs/source_value.md"], "the handoff preserves exactly the planning source as a spec copy");
+    assert.deepEqual((await runGitBytes({ cwd: repoPath, args: ["show", `${handoffCommit}:docs/project/specs/source_value.md`] })).stdout, Buffer.from(SOURCE_TEXT, "utf-8"), "the spec copy is byte-exact");
     assert.ok(!finalFiles.some((path) => path.startsWith("docs/project/evidence/")), "no evidence directory");
     const agentsBody = await gitText(repoPath, ["show", `${handoffCommit}:AGENTS.md`]);
     assert.ok(agentsBody.includes(V2_AGENTS_SECTION_BODY), "the committed AGENTS.md holds the static v2 section body");
@@ -851,11 +908,12 @@ test("PHASE-C-EXIT: answered run through real triage/answer tools writes nothing
     status: await gitText(project, ["status", "--porcelain=v1", "--untracked-files=all"]),
     files: fileFingerprint(project),
   };
-  // Pre-triage pause with no triage decision yet: docs v2 plus policies only.
+  // Pre-triage pause with no triage decision yet: exact new-policy prefix plus run policy only.
   const seed = (runId: string): NewSchedulerEvent[] => [
-    seedEvent(runId, "project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 2 }),
-    seedEvent(runId, "run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
+    seedEvent(runId, "project_docs.policy_configured", "project-docs-policy", "runner", "build-runtime", { version: 2 }),
+    seedEvent(runId, "run.initialized", "run-initialized", "runner", "build-runtime", { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: "What must the value module export?" }),
     seedEvent(runId, "planning.policy_configured", "planning-policy", "runner", "build-runtime", { version: 1 }),
+    seedEvent(runId, "run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
     seedEvent(runId, "run.paused", "pause:pre-triage", "user", "local-user", { reason: "user" }),
   ];
   const runRoot = join(state, "builds", safeSegment(ANSWER_RUN));
@@ -950,6 +1008,7 @@ test("PHASE-C-EXIT: answered run through real triage/answer tools writes nothing
       permissionProfile: "full",
       runPolicy: "finish",
       planCritique: "off",
+      planningPolicy: { version: 1 },
       budgetLimits: {},
       createdAt: CLOCK,
       idempotencyKey: "phase-c-exit-answer",

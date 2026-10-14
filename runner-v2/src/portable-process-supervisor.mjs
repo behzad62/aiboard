@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 // RUNNER_RAW_PROCESS_BOUNDARY: portable lifecycle supervisor launches, inspects, and terminates owned child trees.
 import { createHash } from "node:crypto";
+import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -105,11 +106,44 @@ const posixRecordedMembers = new Map();
 let posixChildStatusSignature;
 let posixStdoutClosed = false;
 let posixStderrClosed = false;
+let windowsStdoutEnded = false;
+let windowsStderrEnded = false;
 let posixTerminalError = null;
+let timer;
+let terminalRequested = false;
+let terminalPromise;
+let terminalStatus;
+let terminalMessage;
+let terminalExitCode;
+let closeInspection;
+const inspectionOwner = config.platform === "windows" && !config.windowsBirthInspector
+  ? new WindowsBirthInspectionOwner() : undefined;
+const startupDeadlineAt = config.startupDeadlineAt ?? Date.now() + 30_000;
+let child;
+try { await startSupervisor(); }
+catch (error) { await fail(error instanceof Error ? error.message : String(error)); }
+
+async function startSupervisor() {
+if (config.platform === "windows" && (!Number.isSafeInteger(startupDeadlineAt) || startupDeadlineAt <= Date.now())) {
+  launchEffect = "not_started";
+  await fail("Portable supervisor startup deadline is exhausted.");
+  return;
+}
+if (inspectionOwner) {
+  inspectionOwner.registerCleanup(cleanup => { closeInspection = () => cleanup(Date.now() + 5_000); });
+  launchEffect = "not_started";
+  await inspectionOwner.prepareInspection(startupDeadlineAt);
+  launchEffect = "prepared";
+}
+if (config.platform === "windows" && Date.now() >= startupDeadlineAt) {
+  launchEffect = "not_started";
+  throw new Error("Portable supervisor startup deadline is exhausted after inspection preparation.");
+}
 
 const childBootstrap = new URL("./portable-process-child.mjs", import.meta.url);
 const posixBootstrapSupervisor = config.platform === "posix" ? inspectPosixProcessIdentity(process.pid) : undefined;
-const child = config.platform === "windows"
+if (config.platform === "windows") launchEffect = "not_started";
+child = config.platform === "windows"
   ? spawn(process.execPath, [fileURLToPath(childBootstrap), Buffer.from(JSON.stringify({
       executable: config.executable,
       arguments: config.arguments,
@@ -147,12 +181,37 @@ const child = config.platform === "windows"
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
+// Retain error and output observers before any post-spawn await or early unwind.
+child.stdin?.on("error", () => {});
+child.once("error", (error) => { void fail(error.message); });
+for (const [stream, readable, evidencePath] of [["stdout", child.stdout, stdoutPath], ["stderr", child.stderr, stderrPath]]) {
+  if (!readable) continue;
+  installOutput(stream, readable, evidencePath);
+  if (config.platform === "posix") installPosixOutputLifecycle(stream, readable);
+  else installWindowsOutputLifecycle(stream, readable);
+}
+child.once("exit", (code, signal) => {
+  if (terminalRequested) return;
+  if (config.platform === "posix") {
+    handlePosixAnchorExit(code, signal);
+    return;
+  }
+  try {
+    targetExited = true;
+    targetExitCode = code;
+    targetSignal = signal;
+    publish(launchEffect === "started" ? "running" : "outcome_unknown");
+  } catch (error) { void fail(error instanceof Error ? error.message : String(error)); }
+});
 if (!child.pid) {
   launchEffect = "not_started";
-  fail("Owned process has no PID.", "stopped");
+  await fail("Owned process has no PID.", "stopped");
+  return;
 }
+if (!child.stdin || !child.stdout || !child.stderr) throw new Error("Owned process output/input pipes are unavailable.");
+if (config.platform === "windows") launchEffect = "prepared";
 if (config.platform === "windows") {
-  const holderReady = config.fence === undefined || waitForExactWindowsLockHolder(WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS);
+  const holderReady = config.fence === undefined || waitForExactWindowsLockHolder(Math.max(0, Math.min(WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS, startupDeadlineAt - Date.now())));
   if (!holderReady) {
     launchEffect = "unknown";
     windowsLaunchUnknownDetail = "Windows supervisor fence-holder authority is unavailable before child startup.";
@@ -163,12 +222,17 @@ if (config.platform === "windows") {
       rootProcess = { pid: child.pid, birth: inspection.fingerprint };
       knownProcesses.set(child.pid, inspection.fingerprint);
       publish("preparing");
+      if (Date.now() >= startupDeadlineAt) {
+        launchEffect = "unknown";
+        throw new Error("Portable supervisor startup deadline is exhausted before executable release.");
+      }
       writeFileSync(childGoPath, config.nonce);
-      const startup = waitForChildStartup(5_000);
+      const startup = waitForChildStartup(Math.max(0, Math.min(5_000, startupDeadlineAt - Date.now())));
       if (startup?.status === "started") launchEffect = "started";
       else if (startup?.status === "error") {
         launchEffect = "started";
-        fail(startup.error ?? "Owned process failed to start.", "stopped");
+        await fail(startup.error ?? "Owned process failed to start.", "stopped");
+        return;
       } else {
         launchEffect = "unknown";
         windowsLaunchUnknownDetail = "Windows child startup did not complete before its deadline.";
@@ -179,34 +243,17 @@ if (config.platform === "windows") {
     }
   }
 } else initializePosixBootstrap();
-installOutput("stdout", child.stdout, stdoutPath);
-installOutput("stderr", child.stderr, stderrPath);
-if (config.platform === "posix") {
-  installPosixOutputLifecycle("stdout", child.stdout);
-  installPosixOutputLifecycle("stderr", child.stderr);
-}
-// A pipe error belongs to its retained input callback, not process ownership.
-child.stdin.on("error", () => {});
-child.once("error", (error) => fail(error.message));
-child.once("exit", (code, signal) => {
-  if (config.platform === "posix") {
-    handlePosixAnchorExit(code, signal);
-    return;
-  }
-  targetExited = true;
-  targetExitCode = code;
-  targetSignal = signal;
-  publish(launchEffect === "started" ? "running" : "outcome_unknown");
-});
 if (config.platform === "windows")
   publish(launchEffect === "started" ? "running" : "outcome_unknown", launchEffect === "unknown" ? windowsLaunchUnknownDetail : null);
 
-const timer = setInterval(tick, Math.max(10, config.pollIntervalMs ?? 25));
+timer = setInterval(tick, Math.max(10, config.pollIntervalMs ?? 25));
 process.stdin.resume();
 process.on("SIGTERM", () => {});
 process.on("SIGINT", () => {});
+}
 
 function tick() {
+  if (terminalRequested) return;
   try {
     if (config.platform === "posix") {
       tickPosix();
@@ -247,15 +294,14 @@ function tick() {
       publish("outcome_unknown", "Owned process membership inspection is unavailable.");
       return;
     }
-    if (targetExited && active.length === 0 && retained.size === 0) {
-      publish("stopped");
-      clearInterval(timer);
-      process.exit(0);
+    if (targetExited && active.length === 0 && retained.size === 0 && windowsStdoutEnded && windowsStderrEnded) {
+      void finishSupervisor("stopped", null, 0);
+      return;
     }
     publish("running");
     if (config.platform === "windows") windowsTreeSnapshotReady = false;
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+    void fail(error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -424,7 +470,27 @@ function tickPosix() {
 }
 
 function installOutput(stream, readable, evidencePath) {
-  readable.on("readable", () => drainOutput(stream, readable, evidencePath));
+  readable.on("readable", () => {
+    if (config.platform !== "windows") { drainOutput(stream, readable, evidencePath); return; }
+    try {
+      if (terminalRequested) {
+        if (readable.readableLength > 0) void fail("Windows output arrived during supervisor retirement.");
+        return;
+      }
+      drainOutput(stream, readable, evidencePath);
+    } catch (error) { void fail(error instanceof Error ? error.message : String(error)); }
+  });
+}
+
+function installWindowsOutputLifecycle(stream, readable) {
+  readable.once("end", () => {
+    if (stream === "stdout") windowsStdoutEnded = true;
+    else windowsStderrEnded = true;
+  });
+  readable.once("error", error => { void fail(`Windows ${stream} output failed: ${error.message}`); });
+  readable.once("close", () => {
+    if (!readable.readableEnded) void fail(`Windows ${stream} output closed before EOF.`);
+  });
 }
 
 function drainOutput(stream, readable, evidencePath) {
@@ -671,12 +737,16 @@ function withCurrentFenceEffect(ownerId, fencingToken, effect) {
     const holder = readFenceHolderForEffect();
     if (holder.nonce !== config.nonce || holder.holderPid !== process.pid || typeof holder.holderBirth !== "string" || !holder.holderBirth)
       throw new Error("Portable fence holder identity is invalid.");
+    const lockOptions = inspectionOwner
+      ? inspectionOwner.fenceOptions(Date.now() + 2_000)
+      : { holderPid: holder.holderPid, holderBirth: holder.holderBirth };
+    if (!sameBirth(lockOptions.holderBirth, holder.holderBirth)) throw new Error("Portable fence holder birth changed.");
     return runPortableFenceEffectSync({
       lockPath: lock,
       expectedFence: { ownerId, fencingToken },
       readCurrentFence: readCurrentFenceStrict,
       effect,
-      lockOptions: { holderPid: holder.holderPid, holderBirth: holder.holderBirth },
+      lockOptions,
     });
   } catch (error) {
     return { status: "unavailable", cause: "authority", error: new PortableAuthorityUnavailableError("Portable fence holder identity is unavailable.", { cause: error }) };
@@ -1324,7 +1394,7 @@ function activeOwnedPids() {
 function inspectWindowsBirthWithRetry(pid) {
   const configuredInspector = config.windowsBirthInspector;
   const hasConfiguredDeadline = Number.isSafeInteger(configuredInspector?.deadlineMs) && configuredInspector.deadlineMs > 0;
-  const absoluteDeadline = Date.now() + WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS;
+  const absoluteDeadline = Math.min(Date.now() + WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS, startupDeadlineAt);
   const maximumAttempts = hasConfiguredDeadline ? 1 : WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS;
   let attemptDeadlineMs = hasConfiguredDeadline ? configuredInspector.deadlineMs : WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS;
   let inspection = { state: "unknown" };
@@ -1340,6 +1410,10 @@ function inspectWindowsBirthWithRetry(pid) {
 }
 
 function inspectWindowsBirth(pid, deadlineMs = WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS) {
+  if (inspectionOwner) {
+    try { return inspectionOwner.operations().inspectProcessBirth(pid, "windows", deadlineMs); }
+    catch { return { state: "unknown" }; }
+  }
   const configuredInspector = config.windowsBirthInspector;
   const script = `$ErrorActionPreference='Stop';try{$p=Get-Process -Id ${pid} -ErrorAction Stop;$start=$p.StartTime;if($null-eq$start){throw 'PROCESS_BIRTH_UNAVAILABLE'};'PRESENT:'+$start.ToUniversalTime().ToString('o')}catch{$current=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null-eq$current){'ABSENT'}else{throw}}`;
   const command = typeof configuredInspector?.command === "string"
@@ -1475,5 +1549,42 @@ function replaceAtomic(temporary, destination, maximumRetryMs) {
 }
 
 function fail(message, status = "outcome_unknown") {
+  if (config.platform === "windows") return finishSupervisor(status, message, 1);
   try { publish(status, message); } finally { process.exit(1); }
+}
+
+function finishSupervisor(status, message, exitCode) {
+  if (terminalPromise) {
+    if (exitCode !== 0 && terminalExitCode === 0) {
+      terminalStatus = status;
+      terminalMessage = message;
+      terminalExitCode = exitCode;
+    }
+    return terminalPromise;
+  }
+  terminalRequested = true;
+  terminalStatus = status;
+  terminalMessage = message;
+  terminalExitCode = exitCode;
+  clearInterval(timer);
+  terminalPromise = (async () => {
+    try { await closeInspection?.(); }
+    catch (error) {
+      terminalStatus = "outcome_unknown";
+      terminalMessage = [terminalMessage, `Inspection cleanup remains unverified: ${error instanceof Error ? error.message : String(error)}`].filter(Boolean).join("; ");
+      terminalExitCode = 1;
+    }
+    if (terminalExitCode === 0 && (!targetExited || !windowsStdoutEnded || !windowsStderrEnded || retained.size !== 0 || activeOwnedPids()?.length !== 0)) {
+      terminalStatus = "outcome_unknown";
+      terminalMessage = "Windows terminal workload/output evidence changed during inspection retirement.";
+      terminalExitCode = 1;
+    }
+    try { publish(terminalStatus, terminalMessage); }
+    catch (error) {
+      terminalExitCode = 1;
+      process.stderr.write(`Portable supervisor terminal publication failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+    process.exit(terminalExitCode);
+  })();
+  return terminalPromise;
 }
