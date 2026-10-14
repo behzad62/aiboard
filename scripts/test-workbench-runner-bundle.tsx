@@ -11,6 +11,9 @@ import { WorkBenchRunnerStatus } from "../components/benchmark/workbench/WorkBen
 import { getCertifiedRunGate } from "../lib/benchmark/certified/ui-gates";
 import type { BenchRunnerHealth } from "../lib/client/bench-runner";
 
+import benchmarkStartupDiagnosticModule from "./support/benchmark-startup-diagnostic.cjs";
+const benchmarkStartupDiagnostic = benchmarkStartupDiagnosticModule.createBenchmarkStartupDiagnostic();
+
 let failures = 0;
 
 function check(name: string, ok: boolean, detail?: unknown): void {
@@ -72,6 +75,7 @@ async function runningHealth(
   runnerRoot: string
 ): Promise<{ health: BenchRunnerHealth; stdout: string }> {
   const port = 40_000 + Math.floor(Math.random() * 10_000);
+  benchmarkStartupDiagnostic.selectedPort(port);
   const token = "bundle-health-test-token";
   const child = spawn(
     process.execPath,
@@ -89,33 +93,52 @@ async function runningHealth(
       stdio: ["ignore", "pipe", "pipe"],
     }
   );
+  benchmarkStartupDiagnostic.observeChild(child);
   let stdout = "";
   child.stdout.on("data", (chunk) => {
     stdout += String(chunk);
   });
   try {
     let lastError = "";
+    let diagnosticOriginalChildBreak = false;
     for (let attempt = 0; attempt < 80; attempt++) {
       try {
+        benchmarkStartupDiagnostic.attempt(attempt);
         const response = await fetch(`http://127.0.0.1:${port}/bench/health`, {
           headers: { "x-runner-token": token },
         });
+        benchmarkStartupDiagnostic.fetched(attempt, response);
         if (response.ok) {
-          return {
-            health: (await response.json()) as BenchRunnerHealth,
-            stdout,
-          };
+          const health = (await response.json()) as BenchRunnerHealth;
+          benchmarkStartupDiagnostic.decoded(attempt);
+          benchmarkStartupDiagnostic.loopExit("health_decoded", child);
+          return { health, stdout };
         }
         lastError = await response.text();
       } catch (error) {
+        benchmarkStartupDiagnostic.rejected(attempt, error);
         lastError = error instanceof Error ? error.message : String(error);
       }
-      if (child.exitCode !== null) break;
+      if (child.exitCode !== null) {
+        diagnosticOriginalChildBreak = true;
+        benchmarkStartupDiagnostic.loopExit("child_exit", child);
+        break;
+      }
+      benchmarkStartupDiagnostic.waitStart(attempt);
       await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+      benchmarkStartupDiagnostic.waitEnd(attempt);
     }
+    if (!diagnosticOriginalChildBreak) benchmarkStartupDiagnostic.loopExit("exhausted", child);
     throw new Error(`extracted bench runner did not become healthy: ${lastError}`);
   } finally {
-    await stop(child);
+    benchmarkStartupDiagnostic.beforeStop(child);
+    let diagnosticStopReturned = false;
+    try {
+      await stop(child);
+      diagnosticStopReturned = true;
+    } finally {
+      benchmarkStartupDiagnostic.afterStop(child, diagnosticStopReturned);
+    }
   }
 }
 
@@ -408,7 +431,14 @@ if (failures === 0) {
 
 process.exitCode = failures === 0 ? 0 : 1;
 } finally {
-  await rm(testRoot, { recursive: true, force: true });
+  let diagnosticRootCleanupReturned = false;
+  try {
+    await rm(testRoot, { recursive: true, force: true });
+    diagnosticRootCleanupReturned = true;
+  } finally {
+    benchmarkStartupDiagnostic.rootCleanup(diagnosticRootCleanupReturned);
+    benchmarkStartupDiagnostic.publish();
+  }
 }
 }
 

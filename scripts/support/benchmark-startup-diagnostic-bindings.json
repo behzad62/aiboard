@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "candidateVersion": 2,
+  "qualification": "UNQUALIFIED_DIAGNOSTIC",
+  "baseCommit": "361be91bf0687c0111cf8c37b249dbf0953c7f3c",
+  "nodeVersion": "v24.18.0",
+  "originalTestSource": {
+    "path": "scripts/test-workbench-runner-bundle.tsx",
+    "canonicalText": true,
+    "bytes": 14514,
+    "rawSha256": "cff2b6f9e4a5ac775e6a349c5456f295b2fe637ac633b4056c9084ecb7b102c3",
+    "canonicalSha256": "b665686bab120ff632ff87c9db617372b9e3a0a1efb41767c0bc4a8fcf23b54b"
+  },
+  "files": [
+    {
+      "path": "scripts/test-workbench-runner-bundle.tsx",
+      "canonicalText": true,
+      "bytes": 15976,
+      "rawSha256": "fdb2ff000d0eaa0cf3977ca97df7ed0c613176ce8c04553498ab7e0a671930e4",
+      "canonicalSha256": "48525fc6dee90b9ca495de9d484992b180bc09398ed41921a88dd8fae4a84f6d"
+    },
+    {
+      "path": "scripts/support/benchmark-startup-diagnostic.cjs",
+      "canonicalText": true,
+      "bytes": 13353,
+      "rawSha256": "e21f5e4dcbe0a6dfe1ef18be2fbaf019146dffe42c21472995029b74868ff823",
+      "canonicalSha256": "e21f5e4dcbe0a6dfe1ef18be2fbaf019146dffe42c21472995029b74868ff823"
+    },
+    {
+      "path": "scripts/support/benchmark-startup-diagnostic-driver.cjs",
+      "canonicalText": true,
+      "bytes": 5982,
+      "rawSha256": "dcb33766b727057156c441c0ccf8c5e435b78234636757fba603858aef971a33",
+      "canonicalSha256": "dcb33766b727057156c441c0ccf8c5e435b78234636757fba603858aef971a33"
+    },
+    {
+      "path": "scripts/bench-runner.mjs",
+      "canonicalText": true,
+      "bytes": 71142,
+      "rawSha256": "57c847d4b27f49f92652c0e72bde1cea02e1d6aaf707185a8ce593d3dd30b024",
+      "canonicalSha256": "57c847d4b27f49f92652c0e72bde1cea02e1d6aaf707185a8ce593d3dd30b024"
+    },
+    {
+      "path": "scripts/workbench-rjs-support.mjs",
+      "canonicalText": true,
+      "bytes": 889,
+      "rawSha256": "dfb4fc0061f682573cb85bb32d9fa0d5c21826e843641d5ec2b431ce98299157",
+      "canonicalSha256": "d0c44f17deacb616911776e433774e4060ed2bd2bed775200a36b3c12d3e1f40"
+    },
+    {
+      "path": "scripts/publish-downloads.mjs",
+      "canonicalText": true,
+      "bytes": 17114,
+      "rawSha256": "fb5c71968dda021fcd09eb342ca0003769bab8dd248fe39892bf0ab5a0f2cd13",
+      "canonicalSha256": "3d7b715a88987329a7f09fed4d79335863d0120f3b60a570f21bec3461ab96c2"
+    },
+    {
+      "path": "scripts/pinned-rjs-runner-source.mjs",
+      "canonicalText": true,
+      "bytes": 6078,
+      "rawSha256": "edc7b9fcb8fc0dd4df80b076747cfbf3230d102b60f561d1568c8d94dff520bd",
+      "canonicalSha256": "49d5e742dc760de9e61317ca6daef6f464246210406cb8c70d25894e2294d2b2"
+    },
+    {
+      "path": "package.json",
+      "canonicalText": true,
+      "bytes": 12507,
+      "rawSha256": "f18dba568db26914bf05b794e1cc53e30649eb2f0c3e92fce3387a2f62ccc863",
+      "canonicalSha256": "f18dba568db26914bf05b794e1cc53e30649eb2f0c3e92fce3387a2f62ccc863"
+    },
+    {
+      "path": "package-lock.json",
+      "canonicalText": true,
+      "bytes": 401647,
+      "rawSha256": "46c30cf349f5c3f79f89c1872c5710030de5ee29e915d18ce1925e9b99ae3bb6",
+      "canonicalSha256": "c94077c1fcfd001492f4a232a4b5fd9925f32b7866a387698da53e4e971671d3"
+    },
+    {
+      "path": "public/aiboard-runner-v2.zip",
+      "canonicalText": false,
+      "bytes": 1555064,
+      "rawSha256": "5dedb4ad35c466c97f6a3851a48f64144cc8c08d00bb0601ec42d7cffeb3c8d3",
+      "canonicalSha256": "5dedb4ad35c466c97f6a3851a48f64144cc8c08d00bb0601ec42d7cffeb3c8d3"
+    },
+    {
+      "path": "public/aiboard-workbench-runner.zip",
+      "canonicalText": false,
+      "bytes": 1584074,
+      "rawSha256": "982f5a24c5aaf8cef3efdeed7068ece728003e7e33f74e18b64b3895c7a21e85",
+      "canonicalSha256": "982f5a24c5aaf8cef3efdeed7068ece728003e7e33f74e18b64b3895c7a21e85"
+    },
+    {
+      "path": "public/aiboard-rjs-workbench-runner.zip",
+      "canonicalText": false,
+      "bytes": 1042827,
+      "rawSha256": "36c7e512b52fae54516d392de9c0a055b7bd4545559341fbda7b19f1a6632ede",
+      "canonicalSha256": "36c7e512b52fae54516d392de9c0a055b7bd4545559341fbda7b19f1a6632ede"
+    },
+    {
+      "path": "public/aiboard-account-provider-runner.zip",
+      "canonicalText": false,
+      "bytes": 29556,
+      "rawSha256": "d2f7483959039fc65552d7404cdc164ff43f4fcecdef08847d2f373bfbc25b1e",
+      "canonicalSha256": "d2f7483959039fc65552d7404cdc164ff43f4fcecdef08847d2f373bfbc25b1e"
+    }
+  ]
+}
