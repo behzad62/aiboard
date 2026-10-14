@@ -109,7 +109,9 @@ function createObserver(deps) {
     if (!Array.isArray(args) || !args.every(item => typeof item === 'string')) return false;
     // exact tsx 4.x source composition: preflight, loader, then forwarded arguments.
     if (args[0] !== '--require' || !same(args[1], preflight) || args[2] !== '--import' || args[3] !== loader) return false;
-    const tail = args.slice(4);
+    // Installed tsx prepends this one automatic flag to its test reexec. Admit
+    // only its exact first position once; all remaining original shapes stay exact.
+    const tail = args.slice(args[4] === '--enable-source-maps' ? 5 : 4);
     return (tail.length === 1 && same(tail[0], scenario))
       || (tail.length === 4 && tail[0] === '--test' && tail[1] === '--test-concurrency=1'
         && tail[2] === '--test-name-pattern=^qualification: portable-duplex$' && same(tail[3], testModule));
