@@ -331,7 +331,7 @@ jobs:
             'runner-v2/src/portable-process-protocol.mjs' = '6f25843bbafe46641bcefead1e1815a7f3934fb3a81533a9bdd96cc17f6d93f0'
             'runner-v2/src/owned-fence-lock.mjs' = '160afe983b8dc56934b2fc4a5973fe5249419b34b662f3ac8725a6fede18c311'
             'runner-v2/src/windows-birth-inspection.mjs' = 'c3e26d53d4126c00f6f50d9bbc21b17ea4fd49c43f488a67daf67dd8b187fdc2'
-            'runner-v2/test/qualification/scenarios/windows-portable.ts' = 'f59d48a345340e5e4180b70da7ecd29f7cfbf3fd218c724e7cd0512318162472'
+            'runner-v2/test/qualification/scenarios/windows-portable.ts' = '83178c93e1dba508cf9aa2d8b0742aaa5891c795d1b87d39513543f3f1ebc0da'
             'runner-v2/test/qualification/windows-portable-channel.test.ts' = 'bfec65b4fb639958908ec433de5d638271784fafd9669f09af0e82213cb721a7'
             'runner-v2/test/support/qualification-harness.ts' = '7067deaa3e9674d65f91a6624bdc258263b6f09b105c940224004f40a70a0217'
             'runner-v2/test/support/qualification-process-fixture.ts' = '327f6e54fd22ed5948a65a7557940e1bbcc86e9b963a98e3dee7d6e7b19d84ff'
@@ -359,7 +359,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $commit -cne $env:GITHUB_SHA) { throw 'Checkout identity mismatch' }
           $root = [System.IO.Path]::GetFullPath($env:RUNNER_V2_QUALIFICATION_EVIDENCE_ROOT)
           New-Item -ItemType Directory -Path $root -Force | Out-Null
-          @{ qualification = 'UNQUALIFIED'; sourceBase = '361be91bf0687c0111cf8c37b249dbf0953c7f3c'; commit = $commit; nodeVersion = $nodeVersion; npmVersion = $npmVersion; nodeSha256 = (Get-FileHash -LiteralPath $node -Algorithm SHA256).Hash.ToLowerInvariant(); runId = $env:GITHUB_RUN_ID; runAttempt = $env:GITHUB_RUN_ATTEMPT; sourcePins = $observed; selected = 'qualification: portable-duplex'; originalBoundsMs = @{ outer = 180000; isolated = 120000; write = 2000; refresh = 5000; streams = 5000 } } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $root 'diagnostic-instance.json') -Encoding utf8
+          @{ qualification = 'UNQUALIFIED'; sourceBase = '361be91bf0687c0111cf8c37b249dbf0953c7f3c'; commit = $commit; nodeVersion = $nodeVersion; npmVersion = $npmVersion; nodeSha256 = (Get-FileHash -LiteralPath $node -Algorithm SHA256).Hash.ToLowerInvariant(); runId = $env:GITHUB_RUN_ID; runAttempt = $env:GITHUB_RUN_ATTEMPT; sourcePins = $observed; selected = 'qualification: portable-duplex'; originalBoundsMs = @{ outer = 180000; isolated = 120000; write = 5000; refresh = 5000; streams = 5000 } } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $root 'diagnostic-instance.json') -Encoding utf8
       - name: Observe ONE original duplex; supplemental UNQUALIFIED evidence
         shell: pwsh
         env:
