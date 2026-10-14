@@ -1,5 +1,11 @@
 # T8 final acceptance — DRAFT / NOT ACCEPTED
 
+## 2026-10-14 — Current scope and final acceptance still pending
+
+Latest authority is `docs/runner-v2/task-12-status.md`. Consolidated independent outcome76f7de3fe30ff48a22391385e5c6791d433d2a9e9e17ad1b00971f0fdfea5f2b accepts both bounded diagnostic original-command PASS outcomes (duplex38541866855; WorkBench bundle38541886074) and permits final uninstrumented verification. Earlier failed attempts/unknown causes remain; separate diagnostic branch has no qualified CI-job conclusion. User-authorized duplex loop write wait is5s; all other assertions/bounds/ownership/cleanup unchanged. Product/runtime/four shipping ZIPs remain accepted361 bytes; instrumentation is excluded from T8 product delivery.
+
+Remaining: minimal reviewed test/durable-record commit, new exact-input freeze, current-head ordinary13portable+2benchmark and FULL11qualification; concrete R5 CONFIG/receipt/eligibility; user notification BEFORE unchanged full LOCAL root+12; actual terminal/A1-derived evidence and final independent invariant/resource/index mapping. Accepted unchanged A1/UI/package/build scopes are reused. Full LOCAL NOT STARTED; Gate G HELD; T8 NOT ACCEPTED; REL-1 NOT STARTED. No merge/deployment. Older entries below are historical.
+
 ## 2026-10-14 — Post-ACK UI and shipping refresh ACCEPT; final commit/freeze/matrix pending
 
 Independent `D:/tmp/t8-20261014-post-ack-ui-shipping-outcome-review.md` SHA41acf80e353db5b5fd932be296ecea9e93b07da79e9a8dee378fd3f9e11dc9d6 accepts fouraffectedoriginalUIcases actual4PASS/exit0close0/guards0 and current full258archiveentry/7rawWindowsasset parity, package13/13,l int0/171warnings,types0,build0/21routes. FiveunaffectedUI outcomes preserved by updatedcallertrace, nine scopesreconcilednotnewall9. Currentnative5dedb4ad35c466c97f6a3851a48f64144cc8c08d00bb0601ec42d7cffeb3c8d3/WorkBench982f5a24c5aaf8cef3efdeed7068ece728003e7e33f74e18b64b3895c7a21e85/RJSaccountunchanged. OriginalA1source/corpus unchanged; noreplayrequired. A–Fclosed/Gheld46/1. Intendedcleanrepaircommit/postcommitreview/newfreeze/currentrequiredmatrices/full11/CONFIG/fullLOCAL/finalreconciliationpending. Olda82matrixfailedpreserved. Notifyuser BEFOREfullLOCAL; notstarted. T8 NOT ACCEPTED; REL-1 NOT STARTED.

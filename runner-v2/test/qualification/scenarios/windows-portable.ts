@@ -42,7 +42,7 @@ async function runDuplexOrdered(): Promise<void> {
           const payload = Buffer.from(text);
           assert.deepEqual(await channel.write({
             sequence, byteLength: payload.byteLength,
-            digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 2_000,
+            digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 5_000,
           }, payload), { acknowledged: true, sequence });
         }
     let refreshSample = "";
