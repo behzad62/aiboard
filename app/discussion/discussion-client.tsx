@@ -48,6 +48,7 @@ import {
   type DiscussionSessionSettingsValue,
 } from "@/components/DiscussionSessionSettings";
 import { DiscussionAttachments } from "@/components/DiscussionAttachments";
+import { ChatThread, type ChatThreadMessage } from "@/components/chat/ChatThread";
 import type { ExtractedFile } from "@/lib/artifacts/extract";
 import { getBuildCheckpoint, getBuildFiles, updateDiscussion } from "@/lib/client/store";
 import {
@@ -65,6 +66,7 @@ import {
   Paperclip,
   Play,
   RotateCcw,
+  Settings2,
   Square,
   X,
 } from "lucide-react";
@@ -93,6 +95,7 @@ import {
   interruptOrphanedRunningBuild,
   loadDashboard,
   restartDiscussion,
+  sendChatMessage,
   runDiscussion as runClientDiscussion,
   setDiscussionRunner,
   stopDiscussion,
@@ -177,6 +180,7 @@ import {
   modelMonogram,
 } from "@/lib/ui/model-accent";
 import { downloadJson, downloadMarkdown, fileSlug } from "@/lib/ui/download";
+import { chatTurns } from "@/lib/orchestrator/chat";
 
 interface DiscussionData {
   discussion: Discussion;
@@ -430,6 +434,7 @@ function DiscussionPageInner() {
               round: event.round,
               modelId: event.modelId,
               modelName: event.modelName,
+              role: event.role,
               content: "",
               streaming: true,
             },
@@ -814,6 +819,7 @@ function DiscussionPageInner() {
           id: m.id,
           round: m.round,
           modelId: m.modelId,
+          role: m.role,
           modelName:
             m.modelId === "user"
               ? "Your note"
@@ -1216,6 +1222,38 @@ function DiscussionPageInner() {
     stopDiscussion(id);
   };
 
+  // Single-model chat: store the next user turn and re-arm the run effect,
+  // which answers the newest unanswered turn.
+  const handleChatSend = (text: string): boolean => {
+    let updated: Discussion | undefined;
+    try {
+      updated = sendChatMessage(id, text);
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : "Couldn't send the message");
+      return false;
+    }
+    if (!updated) return false;
+    setMessages(
+      (getDiscussionData(id)?.messages ?? []).map((m) => ({
+        id: m.id,
+        round: m.round,
+        modelId: m.modelId,
+        role: m.role,
+        modelName:
+          m.role === "user"
+            ? "You"
+            : modelNames[m.modelId] ?? getModelDisplayName(m.modelId),
+        content: m.content,
+      }))
+    );
+    setDiscussion(updated);
+    setError(null);
+    notifiedRef.current = false;
+    startedRef.current = false;
+    setStatus("pending");
+    return true;
+  };
+
   // Restart: wipe the previous run's output and re-queue; the run effect
   // picks the discussion up again as soon as status returns to "pending".
   const handleRestart = () => {
@@ -1235,6 +1273,7 @@ function DiscussionPageInner() {
         id: m.id,
         round: m.round,
         modelId: m.modelId,
+        role: m.role,
         modelName:
           m.modelId === "user"
             ? "Your note"
@@ -1638,6 +1677,32 @@ function DiscussionPageInner() {
         `${fileSlug(discussion.topic)}-transcript.md`,
         buildBuildTranscriptMarkdown(discussion.topic, buildAttachmentView.messages)
       );
+      return;
+    }
+    if (discussion.mode === "chat") {
+      const turns = chatTurns(
+        discussion.topic,
+        messages.map((message) => ({
+          id: message.id,
+          round: message.round,
+          role: message.role ?? "assistant",
+          content: message.content,
+          createdAt: "",
+        }))
+      );
+      const chatModel = discussion.judgeModelId ?? "";
+      const modelName = modelNames[chatModel] ?? getModelDisplayName(chatModel);
+      const lines = [
+        `# ${discussion.topic.split("\n")[0]!.slice(0, 120)}`,
+        "",
+        `- **Model:** ${modelName}`,
+        `- **Date:** ${new Date(discussion.createdAt).toLocaleString()}`,
+        "",
+      ];
+      for (const turn of turns) {
+        lines.push(`## ${turn.role === "user" ? "You" : modelName}`, "", turn.content, "");
+      }
+      downloadMarkdown(`${fileSlug(discussion.topic)}-chat.md`, lines.join("\n"));
       return;
     }
     const nameOf = (modelId: string) =>
@@ -2442,6 +2507,115 @@ function DiscussionPageInner() {
           </>
         }
       />
+    );
+  }
+
+  if (discussion.mode === "chat") {
+    const chatModelId = participantIds[0] ?? discussion.judgeModelId ?? "";
+    const chatModelName = chatModelId ? modelLabel(chatModelId) : "Model";
+    const threadMessages: ChatThreadMessage[] = [
+      { id: `${discussion.id}:opening`, role: "user", content: discussion.topic },
+      ...messages
+        .map((message, index) => ({ message, index }))
+        .sort((a, b) =>
+          a.message.round !== b.message.round
+            ? a.message.round - b.message.round
+            : a.message.role === b.message.role
+              ? a.index - b.index
+              : a.message.role === "user"
+                ? -1
+                : 1
+        )
+        .map(({ message }) => ({
+          id: message.id,
+          role: message.role === "user" ? ("user" as const) : ("assistant" as const),
+          content: message.content,
+          modelName: message.role === "user" ? undefined : chatModelName,
+          streaming: message.streaming,
+        })),
+    ];
+    const replying = isActive;
+    const interrupted = (status === "failed" || status === "stopped") && !streamConnected;
+    const settingsOpen = activeTab === "settings";
+    return (
+      <div className="mx-auto max-w-3xl">
+        <header className="mb-6 flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Link
+              href="/"
+              aria-label="Back to workspace"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            </Link>
+            <div className="min-w-0">
+              <h1 className="truncate text-base font-semibold" title={discussion.topic}>
+                {discussion.topic}
+              </h1>
+              <p className="truncate text-xs text-muted-foreground">
+                {chatModelName}
+                {replying ? " · replying…" : status === "failed" ? " · reply failed" : status === "stopped" ? " · stopped" : ""}
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {interrupted && (
+              <Button size="sm" onClick={handleResume}>
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                Retry
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9"
+              onClick={downloadTranscript}
+              aria-label="Download conversation as Markdown"
+              title="Download conversation as Markdown"
+            >
+              <Download className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9"
+              aria-expanded={settingsOpen}
+              aria-controls="chat-settings"
+              onClick={() => setActiveTab(settingsOpen ? "activity" : "settings")}
+              aria-label="Chat settings"
+              title="Chat settings"
+            >
+              <Settings2 className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </div>
+        </header>
+        {errorBanner}
+        {settingsOpen && (
+          <div id="chat-settings" className="mb-6">
+            <DiscussionSessionSettings
+              discussion={discussion}
+              enabledModels={enabledModels}
+              attachments={attachments}
+              canEdit={!isActive && !streamConnected}
+              onSave={handleSessionSettingsSave}
+              onRunnerChange={handleRunnerChange}
+            />
+          </div>
+        )}
+        <DiscussionAttachments attachments={attachments} />
+        <ChatThread
+          messages={threadMessages}
+          running={replying}
+          canSend={!replying}
+          sendHint={
+            interrupted
+              ? "The last reply didn't finish. Retry it, or send another message."
+              : null
+          }
+          onSend={handleChatSend}
+          onStop={handleStop}
+        />
+      </div>
     );
   }
 

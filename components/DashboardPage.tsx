@@ -101,8 +101,10 @@ interface DashboardData {
 
 type ChatMode = Exclude<DiscussionMode, "build">;
 
-const CHAT_MODES: ChatMode[] = ["panel", "debate", "specialist"];
+// Single model first: it is the default way to chat.
+const CHAT_MODES: ChatMode[] = ["chat", "panel", "debate", "specialist"];
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
+  chat: "Single model",
   panel: "Panel",
   debate: "Debate",
   specialist: "Specialist + reviewers",
@@ -119,9 +121,11 @@ export default function DashboardPage() {
   const [projectFolderName, setProjectFolderName] = useState<string | null>(null);
   const [runner, setRunner] = useState<RunnerSelection | null>(null);
   const [topic, setTopic] = useState("");
-  const [mode, setMode] = useState<DiscussionMode>("panel");
+  const [mode, setMode] = useState<DiscussionMode>("chat");
   // The chat style to return to when switching back from Build.
-  const [chatMode, setChatMode] = useState<ChatMode>("panel");
+  const [chatMode, setChatMode] = useState<ChatMode>("chat");
+  // The one model a single-model chat talks to.
+  const [chatModelId, setChatModelId] = useState("");
   const [effort, setEffort] = useState<EffortLevel>("medium");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [judgeModelId, setJudgeModelId] = useState<string>("");
@@ -210,11 +214,12 @@ export default function DashboardPage() {
         setSelectedModels(
           defaultSelectedModels.length > 0 ? defaultSelectedModels : models
         );
-        setJudgeModelId(
+        const defaultLead =
           d.settings.judgeModelId && models.includes(d.settings.judgeModelId)
             ? d.settings.judgeModelId
-            : defaultSelectedModels[0] ?? models[0] ?? ""
-        );
+            : defaultSelectedModels[0] ?? models[0] ?? "";
+        setJudgeModelId(defaultLead);
+        setChatModelId(defaultLead);
       }
     })().catch(() => setError("Failed to load dashboard"));
   }, []);
@@ -268,15 +273,27 @@ export default function DashboardPage() {
       supportsInputTypes(model.capabilities, requiredInputTypes)
     ) ?? [];
   const effectiveEffort = mode === "build" ? "high" : effort;
+  const singleChat = mode === "chat";
+  const effectiveChatModelId = compatibleJudgeOptions.some(
+    (model) => model.fullId === chatModelId
+  )
+    ? chatModelId
+    : compatibleJudgeOptions[0]?.fullId ?? "";
+  // The models this session will actually call.
+  const runModelIds = singleChat
+    ? effectiveChatModelId
+      ? [effectiveChatModelId]
+      : []
+    : effectiveSelectedModels;
 
   const costEstimate =
-    effectiveSelectedModels.length > 0
-      ? estimateDiscussionCost(effectiveSelectedModels.length, effectiveEffort, mode)
+    runModelIds.length > 0
+      ? estimateDiscussionCost(runModelIds.length, effectiveEffort, mode)
       : null;
   const usdEstimate =
-    effectiveSelectedModels.length > 0
+    runModelIds.length > 0
       ? estimateDiscussionCostUsd(
-          effectiveSelectedModels.map((id) =>
+          runModelIds.map((id) =>
             getModelPricing(id, data?.settings.modelPricingOverrides)
           ),
           effectiveEffort,
@@ -286,11 +303,10 @@ export default function DashboardPage() {
   const modeInfo = getModeInfo(mode);
   const totalEnabledModels = data?.enabledModels.length ?? 0;
   const hasTopic = topic.trim().length > 0;
-  const hasEnoughModels = hasEnoughParticipatingModels(
-    mode,
-    effectiveSelectedModels.length
-  );
-  const hasJudge = Boolean(judgeModelId || effectiveSelectedModels[0]);
+  const hasEnoughModels = hasEnoughParticipatingModels(mode, runModelIds.length);
+  const hasJudge = singleChat
+    ? Boolean(effectiveChatModelId)
+    : Boolean(judgeModelId || effectiveSelectedModels[0]);
   const buildBudgetEnforceabilityError = useMemo(() => {
     if (mode !== "build") return null;
     const runtimeIds = [...new Set([
@@ -339,7 +355,9 @@ export default function DashboardPage() {
       : mode === "build" && !runner
         ? "Connect Runner V2 below to start a build."
       : !hasEnoughModels
-        ? participatingModelRequirementMessage(mode)
+        ? singleChat
+          ? "Choose a model for this chat."
+          : participatingModelRequirementMessage(mode)
       : !hasJudge
           ? "Choose a judge model."
           : buildBudgetEnforceabilityError
@@ -347,7 +365,9 @@ export default function DashboardPage() {
           : !hasTopic
             ? mode === "build"
               ? "Describe what to build."
-              : "Type a question to begin."
+              : singleChat
+                ? "Type a message to begin."
+                : "Type a question to begin."
             : null;
   const canStart = !loading && !blockerHint;
 
@@ -359,8 +379,10 @@ export default function DashboardPage() {
         topic,
         mode,
         effort: mode === "build" ? "high" : effort,
-        modelIds: effectiveSelectedModels,
-        judgeModelId: judgeModelId || effectiveSelectedModels[0],
+        modelIds: runModelIds,
+        judgeModelId: singleChat
+          ? effectiveChatModelId
+          : judgeModelId || effectiveSelectedModels[0],
         attachmentIds: attachments.map((a) => a.id),
         verbosity,
         styleNote: styleNote.trim() || undefined,
@@ -420,7 +442,9 @@ export default function DashboardPage() {
   }
 
   const isBuild = mode === "build";
-  const leadModelId = judgeModelId || effectiveSelectedModels[0] || "";
+  const leadModelId = singleChat
+    ? effectiveChatModelId
+    : judgeModelId || effectiveSelectedModels[0] || "";
   const leadName =
     data?.enabledModels.find((model) => model.fullId === leadModelId)?.name ??
     "No model";
@@ -431,12 +455,18 @@ export default function DashboardPage() {
     ? `Architect ${leadName} · ${modelCountLabel} as workers · ${
         buildBudgetUsd > 0 ? `$${buildBudgetUsd} budget` : "no budget cap"
       }`
-    : `${modelCountLabel} · judge ${leadName} · ${effort} effort`;
+    : singleChat
+      ? `${verbosity} answers · ${reasoningEffort === "default" ? "provider default" : reasoningEffort} reasoning${
+          attachments.length > 0 ? ` · ${attachments.length} attachment${attachments.length === 1 ? "" : "s"}` : ""
+        }`
+      : `${modelCountLabel} · judge ${leadName} · ${effort} effort`;
   const startLabel = loading
     ? "Starting…"
     : isBuild
       ? "Start build"
-      : `Start chat${
+      : singleChat
+        ? "Send"
+        : `Start chat${
           effectiveSelectedModels.length > 0 ? ` · ${modelCountLabel}` : ""
         }`;
 
@@ -451,8 +481,9 @@ export default function DashboardPage() {
             What are we working on?
           </h1>
           <p className="mt-2 max-w-2xl text-muted-foreground">
-            Chat with a panel of models, or hand a build to an architect and
-            its workers. Keys, sessions, and files stay on this device.
+            Chat with any model, put a panel of models on a hard question, or
+            hand a build to an architect and its workers. Keys, sessions, and
+            files stay on this device.
           </p>
         </div>
 
@@ -563,7 +594,29 @@ export default function DashboardPage() {
                   );
                 })}
               </div>
-              <p className="text-sm text-muted-foreground">{modeInfo.summary}</p>
+              {singleChat ? (
+                compatibleJudgeOptions.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <Label htmlFor="chat-model" className="text-sm text-muted-foreground">
+                      Model
+                    </Label>
+                    <Select value={effectiveChatModelId} onValueChange={setChatModelId}>
+                      <SelectTrigger id="chat-model" className="h-9 w-auto min-w-[14rem] max-w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {compatibleJudgeOptions.map((model) => (
+                          <SelectItem key={model.fullId} value={model.fullId}>
+                            {model.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )
+              ) : (
+                <p className="text-sm text-muted-foreground">{modeInfo.summary}</p>
+              )}
             </div>
           )}
 
@@ -633,12 +686,14 @@ export default function DashboardPage() {
             />
           </summary>
           <div className="space-y-6 border-t px-4 py-5 sm:px-5">
-            <ModelSelector
-              models={modelsForSelector}
-              selected={visibleSelectedModels}
-              onChange={setSelectedModels}
-              requiredInputTypes={participantRequiredInputTypes}
-            />
+            {!singleChat && (
+              <ModelSelector
+                models={modelsForSelector}
+                selected={visibleSelectedModels}
+                onChange={setSelectedModels}
+                requiredInputTypes={participantRequiredInputTypes}
+              />
+            )}
 
             {isBuild && buildCapabilityDecision.diagnostics.length > 0 && (
               <div className="rounded-lg border border-warning/40 bg-warning-soft p-3 text-sm text-warning">
@@ -648,7 +703,7 @@ export default function DashboardPage() {
               </div>
             )}
 
-            {compatibleJudgeOptions.length > 0 && (
+            {!singleChat && compatibleJudgeOptions.length > 0 && (
               <div className="space-y-2">
                 <Label>
                   {isBuild
@@ -703,7 +758,7 @@ export default function DashboardPage() {
                   );
                 }}
               />
-            ) : (
+            ) : singleChat ? null : (
               <EffortSlider value={effort} onChange={setEffort} mode={mode} />
             )}
 

@@ -38,6 +38,7 @@ import type {
 import type { ModelInfo } from "@/lib/providers/base";
 import { formatContextWindowTokens } from "@/lib/providers/model-context";
 import { supportsInputTypes } from "@/lib/providers/capabilities";
+import { getModeLabel } from "@/lib/orchestrator/config";
 import {
   hasEnoughParticipatingModels,
   participatingModelRequirementMessage,
@@ -212,17 +213,18 @@ export function DiscussionSessionSettings({
           access: discussion.runnerAccess ?? "ask",
         }
       : null;
-  const hasEnoughModels = hasEnoughParticipatingModels(
-    discussion.mode,
-    compatibleSelected.length
-  );
+  // A single-model chat talks to exactly the model chosen in "Model".
+  const singleChat = discussion.mode === "chat";
+  const hasEnoughModels = singleChat
+    ? Boolean(compatibleJudgeModelId)
+    : hasEnoughParticipatingModels(discussion.mode, compatibleSelected.length);
   const canSave = canEdit && !busy && hasEnoughModels;
 
   const save = () => {
     if (!canSave) return;
     const saved = onSave({
       effort,
-      modelIds: compatibleSelected,
+      modelIds: singleChat ? [compatibleJudgeModelId] : compatibleSelected,
       judgeModelId: compatibleJudgeModelId || compatibleSelected[0] || null,
       verbosity,
       styleNote,
@@ -278,8 +280,8 @@ export function DiscussionSessionSettings({
           <div className="rounded-lg border bg-muted/25 p-4">
             <Label>Mode</Label>
             <p className="mt-1 text-sm text-muted-foreground">
-              {discussion.mode} mode is fixed for this discussion. Start a new
-              discussion to change modes.
+              {getModeLabel(discussion.mode)} is fixed for this session. Start a
+              new session to change modes.
             </p>
           </div>
 
@@ -307,7 +309,7 @@ export function DiscussionSessionSettings({
               planningOptionsLocked={Boolean(discussion.nativeBuildRunId && !discussion.nativeBuildRequestedAt)}
               disabled={!canEdit || busy}
             />
-          ) : (
+          ) : singleChat ? null : (
             <EffortSlider
               value={effort}
               onChange={setEffort}
@@ -329,12 +331,14 @@ export function DiscussionSessionSettings({
             onChange={setReasoningEffort}
           />
 
-          <ModelSelector
-            models={modelsForSelector}
-            selected={selectedModels}
-            onChange={setSelectedModels}
-            requiredInputTypes={participantRequiredInputTypes}
-          />
+          {!singleChat && (
+            <ModelSelector
+              models={modelsForSelector}
+              selected={selectedModels}
+              onChange={setSelectedModels}
+              requiredInputTypes={participantRequiredInputTypes}
+            />
+          )}
 
           {discussion.mode === "build" && buildContextRows.length > 0 && (
             <div className="space-y-2">
@@ -395,7 +399,9 @@ export function DiscussionSessionSettings({
               <Label>
                 {discussion.mode === "build"
                   ? "Architect model"
-                  : "Judge model"}
+                  : singleChat
+                    ? "Model"
+                    : "Judge model"}
               </Label>
               <Select value={judgeModelId} onValueChange={setJudgeModelId}>
                 <SelectTrigger>

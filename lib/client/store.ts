@@ -139,7 +139,8 @@ const DEFAULT_STORE: ClientStore = {
   userSettings: {
     id: "default",
     defaultEffort: "medium",
-    defaultMode: "panel",
+    defaultMode: "chat",
+    chatDefaultApplied: true,
     judgeModelId: null,
     defaultVerbosity: "balanced",
     defaultStyleNote: "",
@@ -216,6 +217,16 @@ function hydrateStore(data: Partial<ClientStore> = {}): ClientStore {
     ...data,
   };
   for (const field of RETIRED_STORE_FIELDS) delete hydrated[field];
+  // Single-model chat became the default mode in 2026-10. Stores saved before
+  // then carry the old implicit "panel" default; move them over exactly once.
+  const settings = hydrated.userSettings;
+  if (settings && !settings.chatDefaultApplied) {
+    hydrated.userSettings = {
+      ...settings,
+      defaultMode: settings.defaultMode === "panel" ? "chat" : settings.defaultMode,
+      chatDefaultApplied: true,
+    };
+  }
   return hydrated;
 }
 

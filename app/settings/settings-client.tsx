@@ -75,7 +75,7 @@ interface SettingsData {
   };
 }
 
-const MODES: DiscussionMode[] = ["panel", "debate", "specialist", "build"];
+const MODES: DiscussionMode[] = ["chat", "panel", "debate", "specialist", "build"];
 
 const TAB_VALUES = ["providers", "tools", "capability-lab", "pricing", "defaults", "storage", "security"];
 

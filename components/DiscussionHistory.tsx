@@ -66,7 +66,11 @@ export function DiscussionHistory({
                 {statusLabel(d.status)}
               </span>
               {" · "}
-              {d.mode === "build" ? "Build" : `Chat · ${d.mode}`}
+              {d.mode === "build"
+                ? "Build"
+                : d.mode === "chat"
+                  ? "Chat"
+                  : `Chat · ${d.mode}`}
               {" · "}
               {formatDate(d.createdAt)}
             </p>

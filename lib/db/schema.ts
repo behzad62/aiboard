@@ -298,6 +298,8 @@ export interface UserSettings {
   id: string;
   defaultEffort: EffortLevel;
   defaultMode: DiscussionMode;
+  /** Set once the 2026-10 single-model-chat default has been applied. */
+  chatDefaultApplied?: boolean;
   judgeModelId: string | null;
   defaultVerbosity?: Verbosity;
   defaultStyleNote?: string;
@@ -547,7 +549,7 @@ export type DiscussionStatus =
   | "stopped"
   | "failed";
 
-export type DiscussionMode = "panel" | "debate" | "specialist" | "build";
+export type DiscussionMode = "chat" | "panel" | "debate" | "specialist" | "build";
 export type EffortLevel = "low" | "medium" | "high";
 export type Verbosity = "brief" | "balanced" | "comprehensive" | "exhaustive";
 /** Per-model reasoning effort, mapped to each provider's parameter. */

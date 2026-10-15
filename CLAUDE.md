@@ -47,6 +47,8 @@ For any Runner V2 Task 12 / P6 acceptance work, **read `docs/runner-v2/task-12-b
 
 A **fully client-side** Next.js 15 app (App Router, React 19, TS strict, static export — no backend, no API routes). Several AI models discuss a topic across rounds and a judge model synthesizes the final answer; Build mode turns the judge into an Architect that plans tasks for worker models. Everything — storage, the engines, provider calls — runs in the browser tab. Import alias `@/*` → repo root.
 
+Modes (`DiscussionMode`): **`chat`** (single-model, multi-turn — the default and first option), `panel` / `debate` / `specialist` (multi-model rounds + judge), and `build`. Single-model chat logic is pure in `lib/orchestrator/chat.ts` (turn ordering, pending-turn detection, context-window trimming); the topic is turn 1, follow-ups are stored `role: "user"` Messages via `sendChatMessage` (lib/client/api.ts), and the `chat` branch of `runDiscussion` answers the newest unanswered turn. UI: `components/chat/ChatThread.tsx`. Test: `npm run test:chat`.
+
 The flow is: **page creates a `Discussion` in the client store → `runClientDiscussion` starts the in-browser engine → the engine streams provider output and `emit`s `OrchestratorEvent`s via a direct callback → React state updates render them.** No SSE, no polling, no server.
 
 ### Client store — one JSON blob in the browser
