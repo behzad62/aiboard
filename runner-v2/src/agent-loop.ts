@@ -531,7 +531,34 @@ export function compactAgentMessages(
     Buffer.byteLength(JSON.stringify(currentMessages)) <= limits.maxBytes
   ) return currentMessages;
 
-  let cutoff = Math.max(0, currentMessages.length - limits.retainRecent);
+  const fits = (list: readonly AgentMessage[]) =>
+    list.length <= limits.maxMessages && Buffer.byteLength(JSON.stringify(list)) <= limits.maxBytes;
+  const naiveCutoff = Math.max(0, currentMessages.length - limits.retainRecent);
+
+  // Prompt-cache stability: provider caches reuse only an identical prefix, and the compacted
+  // prefix (protected messages + summary) used to change on every turn as the cutoff slid by one
+  // message and the summary was trimmed to whatever room the recent window left. Anchor the cutoff
+  // to a coarse grid and bound the summary by its own budget, so the prefix stays byte-identical
+  // for COMPACTION_GRID messages. Fall back to the exact sliding compaction when that cannot fit.
+  const anchored = compactAtCutoff(
+    currentMessages,
+    Math.floor(naiveCutoff / COMPACTION_GRID) * COMPACTION_GRID,
+    (summary) => Buffer.byteLength(JSON.stringify(summary)) <= Math.floor(limits.maxBytes / 2)
+  );
+  if (anchored && fits(anchored)) return anchored;
+
+  return compactAtCutoff(currentMessages, naiveCutoff, (_summary, result) => fits(result)) ??
+    currentMessages;
+}
+
+const COMPACTION_GRID = 16;
+
+function compactAtCutoff(
+  currentMessages: readonly AgentMessage[],
+  requestedCutoff: number,
+  accept: (summary: AgentMessage, result: readonly AgentMessage[]) => boolean
+): AgentMessage[] | null {
+  let cutoff = requestedCutoff;
   // Never split a tool result from the assistant turn that issued it: providers reject a tool output
   // whose call was compacted away ("No tool call found for function call output").
   while (cutoff > 0 && currentMessages[cutoff]?.role === "tool") cutoff -= 1;
@@ -542,17 +569,13 @@ export function compactAgentMessages(
     .slice(0, cutoff)
     .filter((message) => message.role === "assistant" || message.role === "tool");
   const recent = currentMessages.slice(cutoff);
-  if (compactable.length === 0) return currentMessages;
+  if (compactable.length === 0) return null;
 
   const facts = compactable.map(historyFact);
   let included = facts.length;
   let summary = summaryMessage(facts, included);
   let result = [...protectedMessages, summary, ...recent];
-  while (
-    included > 1 &&
-    (result.length > limits.maxMessages ||
-      Buffer.byteLength(JSON.stringify(result)) > limits.maxBytes)
-  ) {
+  while (included > 1 && !accept(summary, result)) {
     included = Math.max(1, Math.floor(included * 0.75));
     summary = summaryMessage(facts.slice(facts.length - included), facts.length);
     result = [...protectedMessages, summary, ...recent];

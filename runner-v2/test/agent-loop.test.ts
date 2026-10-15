@@ -1284,7 +1284,7 @@ test("model working context compacts deterministically without deleting raw sess
   const compacted = compactAgentMessages(messages, {
     maxMessages: 30,
     maxBytes: 64 * 1024,
-    retainRecent: 12,
+    retainRecent: 6, // 102 - 6 = 96 sits on the 16-message compaction grid
   });
   assert.equal(messages.length, 102, "raw checkpoint history is untouched");
   assert.equal(compacted.length < messages.length, true);
@@ -1321,7 +1321,7 @@ test("model working context compacts deterministically without deleting raw sess
     );
   }
   assert.deepEqual(
-    compactAgentMessages(messages, { maxMessages: 30, maxBytes: 64 * 1024, retainRecent: 12 }),
+    compactAgentMessages(messages, { maxMessages: 30, maxBytes: 64 * 1024, retainRecent: 6 }),
     compacted,
     "same history produces byte-identical working context"
   );
@@ -1582,4 +1582,36 @@ test("a long session is warned before its turn limit and told to finish with its
   assert.deepEqual(reminders(5), ["You have 3 model turns left in this session."]);
   assert.deepEqual(reminders(7), ["This is your final model turn in this session."], "only the newest reminder is kept");
   assert.match(String(model.requests[7]!.messages.find((message) => message.id.startsWith("turn-budget-reminder:"))!.content), /submit_task/);
+});
+
+test("working-set compaction keeps a byte-identical prefix across consecutive turns for prompt caching", () => {
+  const messages: AgentMessage[] = [
+    { id: "system", role: "system", content: "Stable policy" },
+    { id: "intent", role: "user", content: "Build it" },
+  ];
+  const pushTurn = (index: number) => {
+    messages.push({
+      id: `assistant-${index}`,
+      role: "assistant",
+      content: [{ type: "tool_call", callId: `call-${index}`, name: "fs.read", arguments: { path: `f${index}` } }],
+    });
+    messages.push({
+      id: `tool-${index}`,
+      role: "tool",
+      content: { callId: `call-${index}`, toolName: "fs.read", isError: false, content: [{ type: "text", text: "x".repeat(200) }] },
+    });
+  };
+  for (let index = 0; index < 60; index += 1) pushTurn(index);
+  const limits = { maxMessages: 80, maxBytes: 512 * 1024, retainRecent: 24 };
+  const prefixOf = (list: AgentMessage[]) => JSON.stringify(list.slice(0, list.findIndex((message) => message.id.startsWith("compacted-history:")) + 1));
+  const prefixes: string[] = [];
+  for (let turn = 0; turn < 8; turn += 1) {
+    pushTurn(60 + turn);
+    const working = compactAgentMessages(messages, limits);
+    assert.ok(working.some((message) => message.id.startsWith("compacted-history:")));
+    assert.ok(working.length <= limits.maxMessages);
+    prefixes.push(prefixOf(working));
+  }
+  const changes = prefixes.filter((prefix, index) => index > 0 && prefix !== prefixes[index - 1]).length;
+  assert.ok(changes <= 1, `the compacted prefix changed ${changes} times in 8 turns; it must stay stable within a grid window`);
 });
