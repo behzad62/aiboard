@@ -26,6 +26,10 @@ const SAFE_CONFIG = [
   "commit.gpgSign=false", "merge.gpgSign=false", "tag.gpgSign=false", "log.showSignature=false",
   "merge.verifySignatures=false", "submodule.recurse=false", "protocol.ext.allow=never",
 ] as const;
+// Global/system config is suppressed above, so a user's own core.longpaths never reaches Runner Git.
+// Task/integration worktrees live under a deep state directory; without this, checkouts of repositories
+// with long relative paths fail on Windows with "Filename too long". Path handling only, no execution surface.
+const WINDOWS_SAFE_CONFIG = ["core.longpaths=true"] as const;
 const ALLOWED_COMMANDS = new Set([
   "rev-parse", "symbolic-ref", "status", "show", "diff", "ls-files", "ls-tree", "log", "cat-file",
   "rev-list", "merge-base", "diff-tree", "for-each-ref", "branch", "init", "hash-object", "add",
@@ -73,6 +77,7 @@ export function prepareGitExecutionPolicy(
   });
   const policyArguments = ["--no-pager"];
   for (const entry of SAFE_CONFIG) policyArguments.push("-c", entry);
+  if (platform === "win32") for (const entry of WINDOWS_SAFE_CONFIG) policyArguments.push("-c", entry);
   policyArguments.push(...options.args);
   return Object.freeze({ arguments: Object.freeze(policyArguments), environment: Object.freeze(environment) });
 }

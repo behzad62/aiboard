@@ -533,6 +533,7 @@ export interface CreateDiscussionInput {
   modelIds: string[];
   judgeModelId?: string | null;
   reviewerModelId?: string | null;
+  buildReviewerReasoningEffort?: ReasoningEffort | null;
   verbosity?: Verbosity;
   reasoningEffort?: ReasoningEffort;
   styleNote?: string;
@@ -584,6 +585,8 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     modelIds: JSON.stringify(input.modelIds),
     judgeModelId: input.judgeModelId ?? settings.judgeModelId ?? input.modelIds[0],
     reviewerModelId: input.reviewerModelId ?? null,
+    buildReviewerReasoningEffort:
+      input.mode === "build" ? input.buildReviewerReasoningEffort ?? null : undefined,
     status: "pending",
     currentRound: 0,
     maxRounds: 0,

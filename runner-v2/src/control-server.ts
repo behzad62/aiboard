@@ -1,4 +1,5 @@
 import { ExecutionIsolationError } from "./execution-isolation-provider.js";
+import { NativeBuildRuntimeInitializationError } from "./native-build-factory.js";
 import { timingSafeEqual } from "node:crypto";
 import {
   createServer,
@@ -296,6 +297,11 @@ export class ControlServer {
         return;
       }
       const httpError = toHttpError(error);
+      if (httpError.status >= 500) {
+        // Operator diagnostics only: the response stays generic for internal errors.
+        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        console.error(`[runner] ${request.method ?? "?"} ${(request.url ?? "/").split("?")[0]} -> ${httpError.status} ${httpError.code}: ${detail.slice(0, 2000)}`);
+      }
       sendJson(response, httpError.status, {
         error: httpError.message,
         code: httpError.code,
@@ -1441,6 +1447,11 @@ function toHttpError(error: unknown): HttpError {
     // Only the trusted typed failure is projected, never exception details or
     // an arbitrary object's code. The requested profile is not downgraded.
     return new HttpError(412, error.code, "The requested execution isolation capability is unavailable.");
+  }
+  if (error instanceof NativeBuildRuntimeInitializationError) {
+    // The factory bounds this message (stage + cause, at most ~600 chars); without it a failed Build start
+    // was indistinguishable from any other internal error in the UI and nothing was logged.
+    return new HttpError(500, "build_initialization_failed", error.message);
   }
   const message = error instanceof Error ? error.message : "Unknown error.";
   if (/^Unknown run /.test(message)) return new HttpError(404, "run_not_found", message);

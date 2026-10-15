@@ -401,11 +401,14 @@ export interface Discussion {
   modelIds: string;
   judgeModelId: string | null;
   /**
-   * Build mode: optional mid-tier model that pre-screens the workers' code
-   * each wave and hands the (expensive) Architect a compact digest instead
-   * of full files.
+   * Build mode: optional reviewer. Runner V2 Builds configure it right after
+   * the Architect (so it is first in line for plan critique and independent
+   * verification) and never assign it worker tasks. Legacy benchmark Builds
+   * use it as a mid-tier pre-screen reviewer.
    */
   reviewerModelId?: string | null;
+  /** Build mode: reasoning effort for the reviewer; null/undefined = `reasoningEffort`. */
+  buildReviewerReasoningEffort?: ReasoningEffort | null;
   attachmentIds: string | null;
   /** Build mode: display name of the granted project folder (handle lives in IndexedDB). */
   projectFolderName?: string | null;

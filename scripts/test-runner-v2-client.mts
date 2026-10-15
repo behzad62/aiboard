@@ -97,6 +97,34 @@ assert.deepEqual(
     verifierRuntimeIds: ["chatgpt:gpt-5.5", "chatgpt:gpt-5.4"],
   }
 );
+// An explicit reviewer is configured right after the Architect (priority 1, first in line for plan
+// critique and independent verification) and is never a worker, even when also selected as a participant.
+assert.deepEqual(
+  selectNativeBuildRuntimes(
+    ["deepseek:flash", "google:gemini", "openrouter:mimo"],
+    "openai:sol",
+    "google:gemini"
+  ),
+  {
+    configuredRuntimeIds: ["openai:sol", "google:gemini", "deepseek:flash", "openrouter:mimo"],
+    workerRuntimeIds: ["deepseek:flash", "openrouter:mimo"],
+    verifierRuntimeIds: ["openai:sol", "google:gemini", "deepseek:flash", "openrouter:mimo"],
+  }
+);
+// A reviewer outside the participant list is still configured; the Architect can't be its own reviewer.
+assert.deepEqual(
+  selectNativeBuildRuntimes(["deepseek:flash"], "openai:sol", "google:gemini").configuredRuntimeIds,
+  ["openai:sol", "google:gemini", "deepseek:flash"]
+);
+assert.deepEqual(
+  selectNativeBuildRuntimes(["deepseek:flash"], "openai:sol", "openai:sol"),
+  selectNativeBuildRuntimes(["deepseek:flash"], "openai:sol")
+);
+assert.deepEqual(
+  selectNativeBuildRuntimes(["google:gemini"], "openai:sol", "google:gemini").workerRuntimeIds,
+  ["openai:sol"],
+  "a reviewer-only selection falls back to the Architect as the worker, never the reviewer"
+);
 assert.deepEqual(resolveNativeProviderTransport("openai"), {
   transport: "openai-compatible",
   baseUrl: "https://api.openai.com/v1",

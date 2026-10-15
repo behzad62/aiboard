@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ControlServer } from "../src/control-server.js";
+import { NativeBuildRuntimeInitializationError } from "../src/native-build-factory.js";
 import { BuildRuntimeRegistry, type BuildControlPlane } from "../src/build-runtime-registry.js";
 import { BuildRuntime } from "../src/build-runtime.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
@@ -612,6 +613,50 @@ test("run creation stops before persistence when Git is unavailable", async () =
     assert.equal((await json(response)).code, "git_missing");
     assert.deepEqual(supervisor.listRuns(), []);
   } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Native Build initialization failure is reported with its bounded cause instead of a generic internal error", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-build-init-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const cause = "Native Build integration_workspace initialization failed: git worktree add failed with exit code 128: error: unable to create file deep.json: Filename too long.";
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => gitReady,
+    bootstrapRun: async () => ({ baselineRevision: "a".repeat(40), baselineRef: "refs/aiboard/runs/run_init/baseline" }),
+    buildProvisioner: {
+      create: async () => { throw new NativeBuildRuntimeInitializationError("integration_workspace", cause); },
+      listSpecs: () => [],
+    },
+  });
+  const logged: unknown[][] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+    const { url } = await server.start(0);
+    const response = await fetch(`${url}/v2/runs`, authorized({
+      method: "POST",
+      body: JSON.stringify({
+        runId: "run_init", projectPath: directory, permissionProfile: "full", idempotencyKey: "create:run_init",
+        build: {
+          projectId: "project", objective: "objective", architectRuntimeId: "a:architect",
+          workerRuntimeIds: ["w:worker"], verifierRuntimeIds: ["a:architect", "w:worker"],
+          alwaysRequireIndependentVerifier: false, maxConcurrency: 1, runPolicy: "finish", budgetLimits: {},
+        },
+      }),
+    }));
+    assert.equal(response.status, 500);
+    const body = await json(response);
+    assert.equal(body.code, "build_initialization_failed");
+    assert.match(String(body.error), /Filename too long/);
+    assert.equal(logged.length, 1);
+    assert.match(String(logged[0]![0]), /POST \/v2\/runs -> 500 build_initialization_failed: .*Filename too long/);
+  } finally {
+    console.error = originalError;
     await server.close();
     supervisor.close();
     rmSync(directory, { recursive: true, force: true });

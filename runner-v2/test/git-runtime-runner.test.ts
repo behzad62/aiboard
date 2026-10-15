@@ -101,6 +101,20 @@ for (const outcome of ["cancelled", "timed_out", "cleanup_failed", "launch_faile
   });
 }
 
+test("Git failure message drops checkout progress so the actual error survives bounded messages", async () => {
+  const progress = Array.from({ length: 200 }, (_, i) => `Updating files:  ${Math.floor(i / 2)}% (${i * 30}/6138)`).join("\r");
+  const stderr = `Preparing worktree (new branch 'aiboard/run/integration')\n${progress}\nerror: unable to create file deep/path.json: Filename too long\nfatal: Could not reset index file to revision 'HEAD'.\n`;
+  const f = fixture(Buffer.from(""), Buffer.from(stderr));
+  f.state.outcome = { ...f.state.outcome, process: { ...f.state.outcome.process, exitCode: 128 } };
+  await assert.rejects(f.runner.run({ cwd, args: ["worktree", "add", "x"] }), (error: unknown) => {
+    assert.ok(error instanceof GitCommandError && error.code === "command_failed");
+    assert.doesNotMatch(error.message, /Updating files/);
+    assert.match(error.message.slice(0, 512), /Filename too long/);
+    assert.equal(error.result?.stderr, stderr, "typed result keeps exact stderr");
+    return true;
+  });
+});
+
 test("Git snapshots caller arguments and explicit environment before asynchronous authorization", async () => {
   const f = fixture(); const args = ["status"]; const env = { GIT_AUTHOR_NAME: "expected" };
   const running = f.runner.run({ cwd, args, env }); args.push("--evil"); env.GIT_AUTHOR_NAME = "changed";

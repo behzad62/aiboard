@@ -75,7 +75,7 @@ export function createRuntimeGitCommandRunner(input: RuntimeGitCommandRunnerOpti
       result = { exitCode: process.exitCode!, stdout, stderr: stderr.toString("utf8") };
       if (result.exitCode !== 0 && !options.allowFailure) {
         const text = { ...result, stdout: result.stdout.toString("utf8") };
-        throw new GitCommandError("command_failed", `git ${options.args.join(" ")} failed with exit code ${result.exitCode}: ${text.stderr.trim() || text.stdout.trim() || "no output"}`, text);
+        throw new GitCommandError("command_failed", `git ${options.args.join(" ")} failed with exit code ${result.exitCode}: ${gitFailureDetail(text.stderr) || text.stdout.trim() || "no output"}`, text);
       }
     } catch (error) { failed = true; primary = error; }
     try { await authorization.release(); }
@@ -126,6 +126,13 @@ async function exactOutput(stream: ProcessOutputDisposition, artifacts: Pick<Art
     if (error instanceof GitCommandError) throw error;
     throw outputError(maximum);
   }
+}
+
+// Git checkout progress ("Updating files:  34% (2120/6138)") can be thousands of lines and pushes the actual
+// error past every bounded message. The message drops progress lines; `error.result.stderr` stays exact.
+const GIT_PROGRESS_LINE = /^(?:Updating files|Checking out files|Enumerating objects|Counting objects|Compressing objects|Receiving objects|Resolving deltas|Writing objects|Updating index flags):\s/;
+export function gitFailureDetail(stderr: string): string {
+  return stderr.split(/\r\n|\r|\n/).filter((line) => line.trim() && !GIT_PROGRESS_LINE.test(line)).join("\n").trim();
 }
 
 function outputError(maximum: number): GitCommandError {

@@ -187,14 +187,24 @@ export async function runNativeBuildDiscussion(
   const modelIds = JSON.parse(discussion.modelIds) as string[];
   const architectRuntimeId = discussion.judgeModelId ?? modelIds[0];
   if (!architectRuntimeId) throw new Error("Build mode requires an Architect model.");
+  const reviewerRuntimeId = discussion.reviewerModelId ?? null;
   const { configuredRuntimeIds, workerRuntimeIds, verifierRuntimeIds } = selectNativeBuildRuntimes(
     modelIds,
-    architectRuntimeId
+    architectRuntimeId,
+    reviewerRuntimeId
   );
   await configureNativeProviders(
     connection,
     configuredRuntimeIds.map((runtimeId, index) =>
-      createNativeProviderConfig(runtimeId, index, discussion.reasoningEffort)
+      createNativeProviderConfig(
+        runtimeId,
+        index,
+        runtimeId === reviewerRuntimeId &&
+          runtimeId !== architectRuntimeId &&
+          discussion.buildReviewerReasoningEffort
+          ? discussion.buildReviewerReasoningEffort
+          : discussion.reasoningEffort
+      )
     )
   );
   if (!runId) {
@@ -422,19 +432,36 @@ function emitArchitectHandoffPause(
   });
 }
 
+/**
+ * Runtime order is provider priority (index), and Runner V2 picks the plan critic and independent
+ * verifier as the highest-priority model that is neither the Architect nor an accepted-change author.
+ * An explicit reviewer is therefore configured right after the Architect and is never a worker, so it
+ * stays independent of every change it reviews.
+ */
 export function selectNativeBuildRuntimes(
   modelIds: readonly string[],
-  architectRuntimeId: string
+  architectRuntimeId: string,
+  reviewerRuntimeId?: string | null
 ): {
   configuredRuntimeIds: string[];
   workerRuntimeIds: string[];
   verifierRuntimeIds: string[];
 } {
+  const reviewer =
+    reviewerRuntimeId && reviewerRuntimeId !== architectRuntimeId
+      ? reviewerRuntimeId
+      : null;
   const workers = [
-    ...new Set(modelIds.filter((runtimeId) => runtimeId !== architectRuntimeId)),
+    ...new Set(
+      modelIds.filter(
+        (runtimeId) => runtimeId !== architectRuntimeId && runtimeId !== reviewer
+      )
+    ),
   ];
   if (workers.length === 0) workers.push(architectRuntimeId);
-  const configuredRuntimeIds = [...new Set([architectRuntimeId, ...workers])];
+  const configuredRuntimeIds = [
+    ...new Set([architectRuntimeId, ...(reviewer ? [reviewer] : []), ...workers]),
+  ];
   return {
     configuredRuntimeIds,
     workerRuntimeIds: workers,

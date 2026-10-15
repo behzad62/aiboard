@@ -51,6 +51,18 @@ test("Git policy installs the complete safe config/environment baseline", async 
   });
 });
 
+test("Git policy enables long paths for Runner Git on Windows only", async () => {
+  await withRepository(async (root) => {
+    const windows = await prepare(root);
+    const index = windows.arguments.indexOf("core.longpaths=true");
+    assert.notEqual(index, -1);
+    assert.equal(windows.arguments[index - 1], "-c");
+    assert.ok(index < windows.arguments.indexOf("status"), "config precedes the Git command");
+    const posix = prepareGitExecutionPolicy({ cwd: root, args: ["status"] }, "linux");
+    assert.equal(posix.arguments.includes("core.longpaths=true"), false);
+  });
+});
+
 test("Git policy preserves existing Runner command shapes including remotes, push and log patch output", async () => {
   await withRepository(async (root) => {
     for (const args of [
