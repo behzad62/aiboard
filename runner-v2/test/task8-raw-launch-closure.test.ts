@@ -41,7 +41,8 @@ const RAW_EXECUTION_ALLOWLIST: readonly RawExecutionRule[] = [
   { file: "portable-process-posix-control.mjs", container: "<module>", kinds: ["child-process-import"], reason: "portable POSIX identity helper import only" },
   { file: "portable-process-posix-control.mjs", container: "inspectPosixProcessIdentity", kinds: ["child-process-execFileSync"], reason: "exact POSIX process identity inspection only" },
   { file: "portable-process-posix-control.mjs", container: "listOwnedPosixGroupMembers", kinds: ["child-process-execFileSync"], reason: "exact POSIX process-group membership inspection only" },
-  { file: "portable-process-supervisor.mjs", container: "<module>", kinds: ["child-process-import", "child-process-spawn"], reason: "approved portable supervisor bootstrap/child launch seam" },
+  { file: "portable-process-supervisor.mjs", container: "<module>", kinds: ["child-process-import"], reason: "approved portable supervisor host import only" },
+  { file: "portable-process-supervisor.mjs", container: "startSupervisor", kinds: ["child-process-spawn"], reason: "approved portable bootstrap launch after creator-owned inspection preparation and startup-deadline checks" },
   { file: "portable-process-supervisor.mjs", container: "handleControl", kinds: ["taskkill-launcher", "child-process-spawnSync"], reason: "fenced Windows tree-control fallback only" },
   { file: "portable-process-supervisor.mjs", container: "requestWindowsTreeRefresh", kinds: ["powershell-launcher", "child-process-spawn", "member-kill"], reason: "bounded authenticated Windows tree inventory only" },
   { file: "portable-process-supervisor.mjs", container: "refreshWindowsTree", kinds: ["powershell-launcher", "child-process-spawnSync"], reason: "bounded authenticated Windows tree inventory only" },
@@ -58,6 +59,11 @@ const RAW_EXECUTION_ALLOWLIST: readonly RawExecutionRule[] = [
   { file: "windows-process-semantic-probes.ts", container: "stopExactProbeSupervisor", kinds: ["child-process-execFileSync", "taskkill-launcher"], reason: "bounded exact semantic-probe fixture cleanup only" },
   { file: "windows-process-semantic-probes.ts", container: "probeProcessInventory", kinds: ["child-process-execFileSync", "powershell-launcher"], reason: "capability-probe process inventory only" },
   { file: "windows-process-semantic-probes.ts", container: "probeGlobalProcessInventory", kinds: ["child-process-execFileSync", "powershell-launcher"], reason: "capability-probe global inventory only" },
+  { file: "windows-birth/session.mjs", container: "<module>", kinds: ["child-process-import"], reason: "creator-owned pinned Windows birth helper host import only" },
+  { file: "windows-birth/session.mjs", container: "prepareOnce", kinds: ["child-process-spawn"], reason: "single pinned installed helper spawn after registered cleanup, canonical binary and build-provenance checks" },
+  { file: "windows-birth/session.mjs", container: "submit", kinds: ["process-kill"], reason: "signal-zero existence observation within a valid inspection lease; never destructive PID authority" },
+  { file: "windows-birth/session.mjs", container: "collect", kinds: ["process-kill"], reason: "signal-zero absence confirmation after native error, gated by exact live inspection generation and request deadline" },
+  { file: "windows-birth/session.mjs", container: "closeOnce", kinds: ["member-kill"], reason: "rescue only through the retained original helper ChildProcess handle after EOF retirement fails; rescue remains cleanup failure" },
 ] as const;
 
 type Finding = Readonly<{

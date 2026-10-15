@@ -136,6 +136,7 @@ assert.deepEqual(
   durableBuildHandoffPanels({
     verifierSelection: {
       status: "required",
+      requiredSequence: 103,
       reason: "Choose a distinct verifier.",
       requiredCapabilities: ["code"],
       candidateRuntimeIds: ["google:verifier"],
@@ -145,6 +146,7 @@ assert.deepEqual(
   {
     architect: null,
     verifier: {
+      requiredSequence: 103,
       reason: "Choose a distinct verifier.",
       requiredCapabilities: ["code"],
       candidateRuntimeIds: ["google:verifier"],

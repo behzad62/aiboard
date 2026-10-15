@@ -1126,6 +1126,9 @@ test("NativeBuildFactory handle close releases owned stores while retaining reco
       "evidence_store",
       "capabilities",
       "execution_isolation",
+      // The certified Windows portable host owns both the semantic-probe
+      // inspection session and the run's portable-backend inspection session.
+      ...(process.platform === "win32" ? ["process_inspection", "process_inspection"] : []),
     ]);
     const root = runRoot(fixture.state, runId);
     for (const database of [

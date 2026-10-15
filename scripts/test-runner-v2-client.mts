@@ -102,7 +102,7 @@ assert.deepEqual(resolveNativeProviderTransport("openai"), {
   baseUrl: "https://api.openai.com/v1",
 });
 assert.equal(nativeProviderProtocol("openai", "gpt-5.3-codex"), "responses");
-assert.equal(nativeProviderProtocol("openai", "gpt-5.6"), "chat-completions");
+assert.equal(nativeProviderProtocol("openai", "gpt-5.6"), "responses");
 assert.equal(nativeProviderProtocol("openrouter", "openai/gpt-5.3-codex"), "responses");
 assert.deepEqual(resolveNativeProviderTransport("anthropic"), {
   transport: "anthropic",
@@ -370,6 +370,11 @@ await answerNativeArchitectQuestion(
   fetchImpl,
   requestController.signal,
 );
+const verifierRequirementSequence = 41;
+await assert.rejects(
+  () => selectNativeVerifierRuntime(connection, "run_1", "google:verifier", "verifier:missing", fetchImpl, requestController.signal),
+  /Selection must name the requirement displayed to the owner/,
+);
 await selectNativeVerifierRuntime(
   connection,
   "run_1",
@@ -377,6 +382,7 @@ await selectNativeVerifierRuntime(
   "verifier:google",
   fetchImpl,
   requestController.signal,
+  verifierRequirementSequence,
 );
 await selectNativeProjectHandoff(
   connection,
@@ -766,6 +772,7 @@ assert.equal(calls[5].url, "http://127.0.0.1:8787/v2/runs/run_1/build/verifier-h
 assert.deepEqual(JSON.parse(String(calls[5].init.body)), {
   runtimeId: "google:verifier",
   idempotencyKey: "verifier:google",
+  requiredSequence: verifierRequirementSequence,
 });
 
 const repairCycleCalls: Array<{ url: string; init: RequestInit }> = [];

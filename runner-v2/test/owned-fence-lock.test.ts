@@ -56,7 +56,9 @@ test("current holder birth retries after a transient self-inspection failure ins
     },
     OwnedFenceLockUnavailableError,
   });
-  vm.runInContext("let cachedCurrentBirth;", context);
+  const deadlineDeclaration = source.match(/^const DEFAULT_DEADLINE_MS = [\d_]+;\r?$/m)?.[0];
+  assert.ok(deadlineDeclaration, "bind the actual source default used by the extracted function");
+  vm.runInContext(`${deadlineDeclaration}\nlet cachedCurrentBirth;`, context);
   vm.runInContext(extractNamedJsFunction(source, "currentProcessBirthFingerprint").replace(/^export\s+/, ""), context);
 
   assert.throws(
@@ -222,20 +224,41 @@ test("concurrent reclaimers elect one authoritative stale-lock effect", { timeou
   const stale = startHolder(lockPath, undefined, 2_000, 60_000);
   let first: ChildProcess | undefined;
   let second: ChildProcess | undefined;
+  let electionComplete = false;
   try {
     assert.equal((await nextMessage(stale)).state, "acquired");
     stale.kill("SIGKILL");
     await exited(stale);
-    first = startHolder(lockPath, effectPath, 200, 500, "contend");
-    second = startHolder(lockPath, effectPath, 200, 500, "contend");
-    const [firstResult, secondResult] = await Promise.all([nextMessage(first), nextMessage(second)]);
-    assert.deepEqual([firstResult.state, secondResult.state].sort(), ["acquired", "refused"]);
+    const prepared = process.platform === "win32";
+    const gatePath = join(root, "election.go");
+    const startContender = () => prepared
+      ? spawn(process.execPath, [fixture, "election-prepared", lockPath, effectPath, "200", "500", gatePath], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
+      : startHolder(lockPath, effectPath, 200, 500, "contend");
+    first = startContender();
+    second = startContender();
+    const results = Promise.all([nextMessage(first), nextMessage(second)]);
+    if (prepared) {
+      await Promise.race([
+        Promise.all([waitForPath(`${gatePath}.${first.pid}.ready`), waitForPath(`${gatePath}.${second.pid}.ready`)]),
+        results.then(() => { throw new Error("Election contender refused before readiness"); }),
+      ]);
+      writeFileSync(gatePath, "go");
+    }
+    const [firstResult, secondResult] = await results;
+    assert.deepEqual([firstResult.state, secondResult.state].sort(), ["acquired", "refused"],
+      JSON.stringify({ root, firstResult, secondResult }));
     assert.equal(readFileSync(effectPath, "utf8").trim().split(/\r?\n/).filter(Boolean).length, 1);
+    if (prepared) {
+      await Promise.all([exited(first), exited(second)]);
+      assert.deepEqual([first.exitCode, second.exitCode].sort(), [0, 2], "both exact inspection owners must settle before completion");
+    }
+    electionComplete = true;
   } finally {
     await stop(stale);
-    if (first) await stop(first);
-    if (second) await stop(second);
-    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    if (first) { if (process.platform === "win32") await exited(first); else await stop(first); }
+    if (second) { if (process.platform === "win32") await exited(second); else await stop(second); }
+    if (electionComplete) rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+    else console.error(`Failed election fixture retained: ${root}`);
   }
 });
 

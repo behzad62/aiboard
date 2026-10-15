@@ -49,6 +49,7 @@ assert.deepEqual(
     runtime: {
       architect: {
         handoff: {
+          requiredSequence: 101,
           reason: "Architect unavailable",
           candidateRuntimeIds: ["chatgpt:gpt-5.4"],
         },
@@ -57,6 +58,7 @@ assert.deepEqual(
   } as never),
   {
     kind: "architect_handoff",
+    requiredSequence: 101,
     reason: "Architect unavailable",
     candidateRuntimeIds: ["chatgpt:gpt-5.4"],
   }
@@ -66,6 +68,7 @@ assert.deepEqual(
   nativeBuildPauseGate({
     verifierSelection: {
       status: "required",
+      requiredSequence: 102,
       reason: "Choose a distinct verifier.",
       requiredCapabilities: ["code"],
       candidateRuntimeIds: ["google:verifier"],
@@ -74,6 +77,7 @@ assert.deepEqual(
   } as never),
   {
     kind: "verifier_selection",
+    requiredSequence: 102,
     reason: "Choose a distinct verifier.",
     requiredCapabilities: ["code"],
     candidateRuntimeIds: ["google:verifier"],
