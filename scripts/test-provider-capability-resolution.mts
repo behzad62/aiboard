@@ -18,6 +18,7 @@ function pass(name: string): void {
 
 assert.deepEqual(CAPABILITY_MANIFEST_PROVIDER_IDS, [
   "openai",
+  "deepseek",
   "anthropic",
   "foundry",
   "google",
@@ -39,6 +40,7 @@ const transportSnapshot = Object.fromEntries(
 );
 assert.deepEqual(transportSnapshot, {
   openai: ["responses", "chat_completions"],
+  deepseek: ["chat_completions"],
   anthropic: ["messages"],
   foundry: ["messages"],
   google: ["gemini_interactions", "gemini_generate_content"],
@@ -65,6 +67,7 @@ assert.deepEqual(
     openaiSearch: capability("openai", "web_search"),
     openaiFileSearch: capability("openai", "file_search"),
     anthropicShell: capability("anthropic", "shell"),
+    deepseekFunctions: capability("deepseek", "function_calling"),
     foundrySearch: capability("foundry", "web_search"),
     googleComputer: capability("google", "computer_use"),
     xaiCollections: capability("xai", "file_search"),
@@ -112,6 +115,14 @@ assert.deepEqual(
           configurationPath: "tools.localShell",
         },
       ],
+      supportSource: "provider-docs",
+      verifiedAt: "2026-09-29",
+    },
+    deepseekFunctions: {
+      id: "function_calling",
+      support: "supported",
+      execution: "client",
+      transports: ["chat_completions"],
       supportSource: "provider-docs",
       verifiedAt: "2026-09-29",
     },

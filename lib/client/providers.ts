@@ -15,9 +15,11 @@ import type {
 import { formatModelId, parseModelId } from "@/lib/providers/base";
 import {
   resolveModelContextProfile,
+  type DiscoveredModelContextMap,
   type ModelContextOverrides,
 } from "@/lib/providers/model-context";
 import { openaiProvider, streamOpenAIResponses } from "@/lib/providers/openai";
+import { deepseekProvider } from "@/lib/providers/deepseek";
 import { anthropicProvider } from "@/lib/providers/anthropic";
 import { foundryProvider } from "@/lib/providers/foundry";
 import { googleProvider } from "@/lib/providers/google";
@@ -58,6 +60,7 @@ export const CHATGPT_PROVIDER_ID = "chatgpt";
 export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
 export const NVIDIA_PROVIDER_ID = "nvidia";
 export const OPENROUTER_PROVIDER_ID = "openrouter";
+export const DEEPSEEK_PROVIDER_ID = "deepseek";
 
 const RUNNER_CAPABILITY_PROVIDER_IDS = new Set<RunnerCapabilityProviderId>([
   "chatgpt",
@@ -190,6 +193,7 @@ const NVIDIA_MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
 
 const providers: Record<ProviderId, AIProvider> = {
   openai: openaiProvider,
+  deepseek: deepseekProvider,
   anthropic: anthropicProvider,
   foundry: foundryProvider,
   google: googleProvider,
@@ -211,23 +215,28 @@ export function getAllProviders(): AIProvider[] {
 
 function withContextProfile(
   model: ModelInfo,
-  overrides?: ModelContextOverrides
+  overrides?: ModelContextOverrides,
+  discoveredModelContext?: DiscoveredModelContextMap,
 ): ModelInfo {
   return {
     ...model,
     contextProfile: resolveModelContextProfile(
       model.id,
       model.providerId,
-      overrides
+      overrides,
+      discoveredModelContext,
     ),
   };
 }
 
 function withContextProfiles(
   models: ModelInfo[],
-  overrides?: ModelContextOverrides
+  overrides?: ModelContextOverrides,
+  discoveredModelContext?: DiscoveredModelContextMap,
 ): ModelInfo[] {
-  return models.map((model) => withContextProfile(model, overrides));
+  return models.map((model) =>
+    withContextProfile(model, overrides, discoveredModelContext),
+  );
 }
 
 export function customModelPlanningContext(model: CustomModel): {
@@ -322,7 +331,7 @@ export function listNvidiaModelInfos(): ModelInfo[] {
 }
 
 export function getAllModels(): ModelInfo[] {
-  const overrides = getUserSettings().modelContextOverrides;
+  const settings = getUserSettings();
   return withContextProfiles(
     [
       ...getAllProviders().flatMap((provider) =>
@@ -330,7 +339,8 @@ export function getAllModels(): ModelInfo[] {
       ),
       ...listCustomModelInfos(),
     ],
-    overrides
+    settings.modelContextOverrides,
+    settings.discoveredModelMetadata,
   );
 }
 
@@ -352,25 +362,37 @@ export function getProviderRunnerToken(providerId: string): string | undefined {
 }
 
 export function getEnabledModels(): ModelInfo[] {
-  const overrides = getUserSettings().modelContextOverrides;
+  const settings = getUserSettings();
   const keyed = getAllProviders()
     .map((p) => p.id as ProviderId)
     .filter((id) => getDecryptedApiKey(id) !== null);
+  const providerRows = Object.fromEntries(
+    keyed.map((providerId) => [providerId, getProviderKey(providerId)]),
+  );
   return withContextProfiles(
     [
-      ...keyed.flatMap((providerId) => listProviderModelInfos(providerId)),
+      ...keyed.flatMap((providerId) => {
+        const models = listProviderModelInfos(providerId);
+        const configuredIds = providerRows[providerId]?.enabledModelIds;
+        if (configuredIds === undefined || configuredIds === null) return models;
+        const enabledSet = new Set(configuredIds);
+        return models.filter((model) => enabledSet.has(model.id));
+      }),
       ...listCustomModelInfos(),
     ],
-    overrides
+    settings.modelContextOverrides,
+    settings.discoveredModelMetadata,
   );
 }
 
 export function resolveClientModelContextProfile(fullId: string) {
   const { providerId, model } = parseModelId(fullId);
+  const settings = getUserSettings();
   return resolveModelContextProfile(
     model,
     providerId,
-    getUserSettings().modelContextOverrides
+    settings.modelContextOverrides,
+    settings.discoveredModelMetadata,
   );
 }
 

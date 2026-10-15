@@ -16,6 +16,13 @@ export interface ModelPricing {
   isOverride?: boolean;
 }
 
+export interface DiscoveredModelPricingMetadata {
+  inputUsdPer1M?: number;
+  outputUsdPer1M?: number;
+  updatedAt?: string;
+  source?: "openrouter-models" | "provider-models";
+}
+
 const VERIFIED_AT = "2026-06-10";
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
@@ -321,17 +328,43 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
 
 export function getModelPricing(
   fullModelId: string,
-  overrides?: Record<string, ModelPricingOverride>
+  overrides?: Record<string, ModelPricingOverride>,
+  discoveredMetadata?: Record<string, DiscoveredModelPricingMetadata | undefined>,
 ): ModelPricing | null {
   const base = MODEL_PRICING[fullModelId] ?? null;
   const override = overrides?.[fullModelId];
+  const discovered = discoveredMetadata?.[fullModelId];
+  const discoveredInput = discovered?.inputUsdPer1M;
+  const discoveredOutput = discovered?.outputUsdPer1M;
+  const hasDiscoveredPricing =
+    typeof discoveredInput === "number" &&
+    Number.isFinite(discoveredInput) &&
+    discoveredInput >= 0 &&
+    typeof discoveredOutput === "number" &&
+    Number.isFinite(discoveredOutput) &&
+    discoveredOutput >= 0;
 
-  if (!override && !base) {
+  if (!override && !base && !hasDiscoveredPricing) {
     return null;
   }
 
   if (!override && base) {
     return base;
+  }
+
+  if (!override && hasDiscoveredPricing) {
+    return {
+      inputUsdPer1M: discoveredInput!,
+      outputUsdPer1M: discoveredOutput!,
+      sourceLabel:
+        discovered?.source === "openrouter-models"
+          ? "OpenRouter live catalog pricing"
+          : "Provider live catalog pricing",
+      sourceUrl: "",
+      verifiedAt:
+        discovered?.updatedAt?.split("T")[0] ??
+        new Date().toISOString().split("T")[0],
+    };
   }
 
   return {

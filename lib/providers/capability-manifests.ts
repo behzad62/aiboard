@@ -14,6 +14,7 @@ const VERIFIED_AT = "2026-09-29";
 
 export const CAPABILITY_MANIFEST_PROVIDER_IDS = [
   "openai",
+  "deepseek",
   "anthropic",
   "foundry",
   "google",
@@ -199,6 +200,18 @@ const OPENAI_MANIFEST: ProviderCapabilityManifest = {
       modelPattern: /^gpt-(?:[1-4](?:\.|-|$)|5\.[0-3](?:-|$))/i,
       capabilities: { web_search: { support: "unsupported" } },
     },
+  ],
+};
+
+const DEEPSEEK_MANIFEST: ProviderCapabilityManifest = {
+  providerId: "deepseek",
+  transports: ["chat_completions"],
+  capabilities: [
+    documentedCapability({
+      id: "function_calling",
+      execution: "client",
+      transports: ["chat_completions"],
+    }),
   ],
 };
 
@@ -510,6 +523,7 @@ export const PROVIDER_CAPABILITY_MANIFESTS: Readonly<
   Record<CapabilityManifestProviderId, ProviderCapabilityManifest>
 > = {
   openai: OPENAI_MANIFEST,
+  deepseek: DEEPSEEK_MANIFEST,
   anthropic: ANTHROPIC_MANIFEST,
   foundry: FOUNDRY_MANIFEST,
   google: GOOGLE_MANIFEST,

@@ -38,6 +38,7 @@ import {
 } from "./store";
 import {
   CUSTOM_PROVIDER_ID,
+  DEEPSEEK_PROVIDER_ID,
   FOUNDRY_PROVIDER_ID,
   NVIDIA_PROVIDER_ID,
   OPENROUTER_PROVIDER_ID,
@@ -53,6 +54,7 @@ import {
   resolveModelCapabilities,
 } from "./providers";
 import { formatModelId } from "@/lib/providers/base";
+import { DEEPSEEK_BASE_URL } from "@/lib/providers/deepseek";
 import type { ProviderId } from "@/lib/providers/provider-registry";
 import type {
   CapabilityEvidence,
@@ -72,6 +74,7 @@ export interface ProviderConfig {
   providerId: string;
   name: string;
   models: ModelInfo[];
+  enabledModelIds?: string[];
   hasKey: boolean;
   keyHint?: string | null;
   baseURL?: string | null;
@@ -95,7 +98,8 @@ export function loadProviders(): {
     contextProfile: resolveModelContextProfile(
       model.id,
       model.providerId,
-      settings.modelContextOverrides
+      settings.modelContextOverrides,
+      settings.discoveredModelMetadata
     ),
   });
   const providers = getAllProviders().map((p) => {
@@ -104,6 +108,7 @@ export function loadProviders(): {
       providerId: p.id,
       name: p.name,
       models: listProviderModelInfos(p.id as ProviderId).map(withContext),
+      enabledModelIds: saved?.enabledModelIds ?? undefined,
       hasKey: !!saved,
       keyHint: saved?.keyHint,
       baseURL: saved?.baseURL ?? null,
@@ -158,7 +163,8 @@ export function saveProviderKey(input: {
   baseURL?: string;
   runnerToken?: string;
   models?: string[];
-  defaultModel?: string;
+  enabledModelIds?: string[];
+  defaultModel?: string | null;
   enabled?: boolean;
 }): void {
   const existing = getProviderKey(input.providerId);
@@ -166,6 +172,9 @@ export function saveProviderKey(input: {
   const baseURL = input.baseURL?.trim();
   const runnerToken = input.runnerToken?.trim();
   const models = input.models
+    ?.map((m) => m.trim())
+    .filter((m) => m.length > 0);
+  const enabledModelIds = input.enabledModelIds
     ?.map((m) => m.trim())
     .filter((m) => m.length > 0);
   if (existing) {
@@ -188,7 +197,13 @@ export function saveProviderKey(input: {
           }
         : {}),
       ...(input.models !== undefined ? { models: models ?? [] } : {}),
-      defaultModel: input.defaultModel ?? existing.defaultModel,
+      ...(input.enabledModelIds !== undefined
+        ? { enabledModelIds: enabledModelIds ?? [] }
+        : {}),
+      defaultModel:
+        input.defaultModel !== undefined
+          ? input.defaultModel
+          : existing.defaultModel,
       enabled: input.enabled ?? existing.enabled,
       updatedAt: now,
     });
@@ -200,6 +215,7 @@ export function saveProviderKey(input: {
       runnerToken: runnerToken || null,
       runnerTokenHint: runnerToken ? maskApiKey(runnerToken) : null,
       models: models ?? [],
+      enabledModelIds: enabledModelIds ?? null,
       defaultModel: input.defaultModel ?? null,
       enabled: input.enabled ?? true,
       keyHint: maskApiKey(input.apiKey),
@@ -218,6 +234,9 @@ interface OpenRouterModelsResponse {
     name?: string;
     description?: string;
     created?: number;
+    context_length?: number;
+    max_output_tokens?: number;
+    max_completion_tokens?: number;
     pricing?: { prompt?: string; completion?: string };
     supported_parameters?: string[];
     architecture?: {
@@ -231,6 +250,8 @@ export interface OpenRouterCatalogModel {
   name: string;
   description?: string;
   createdAtMs?: number;
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
   inputUsdPer1M?: number;
   outputUsdPer1M?: number;
   inputModalities: string[];
@@ -246,6 +267,12 @@ export interface OpenRouterCatalogModel {
   supportsReasoningEffort: boolean;
   supportsTemperature: boolean;
   supportsMaxTokens: boolean;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 export type ProviderCatalogModel = OpenRouterCatalogModel;
@@ -284,6 +311,10 @@ function normalizeOpenRouterInputModalities(modalities?: string[]): Set<string> 
 export function buildOpenRouterCatalogModel(
   entry: NonNullable<OpenRouterModelsResponse["data"]>[number] & { id: string }
 ): OpenRouterCatalogModel {
+  const record = entry as Record<string, unknown>;
+  const maxCompletionTokens =
+    positiveInteger(record.max_output_tokens) ??
+    positiveInteger(record.max_completion_tokens);
   const inputModalities = [...(entry.architecture?.input_modalities ?? [])];
   const modalitySet = normalizeOpenRouterInputModalities(inputModalities);
   const supportedParameters = [...(entry.supported_parameters ?? [])];
@@ -298,6 +329,8 @@ export function buildOpenRouterCatalogModel(
     name: entry.name?.trim() || entry.id,
     description: entry.description?.trim() || undefined,
     createdAtMs,
+    contextWindowTokens: positiveInteger(record.context_length),
+    maxOutputTokens: maxCompletionTokens,
     inputUsdPer1M,
     outputUsdPer1M,
     inputModalities,
@@ -343,6 +376,8 @@ function basicCatalogModel(
   options: {
     description?: string;
     createdAtMs?: number;
+    contextWindowTokens?: number;
+    maxOutputTokens?: number;
     inputUsdPer1M?: number;
     outputUsdPer1M?: number;
     image?: boolean;
@@ -354,6 +389,8 @@ function basicCatalogModel(
     name,
     description: options.description,
     createdAtMs: options.createdAtMs,
+    contextWindowTokens: options.contextWindowTokens,
+    maxOutputTokens: options.maxOutputTokens,
     inputUsdPer1M: options.inputUsdPer1M,
     outputUsdPer1M: options.outputUsdPer1M,
     inputModalities: options.image ? ["text", "image"] : ["text"],
@@ -415,9 +452,25 @@ async function fetchOpenAICompatibleModelCatalog(
   }).models.list();
   return page.data
     .filter((model) => typeof model.id === "string" && model.id.length > 0)
-    .map((model) => basicCatalogModel(model.id, model.id, {
-      createdAtMs: Number.isFinite(model.created) ? model.created * 1_000 : undefined,
-    }))
+    .map((model) => {
+      const record = model as unknown as Record<string, unknown>;
+      const contextWindowTokens =
+        positiveInteger(record.context_window) ??
+        positiveInteger(record.context_length) ??
+        positiveInteger(record.max_context_tokens) ??
+        positiveInteger(record.max_input_tokens) ??
+        positiveInteger(record.input_token_limit) ??
+        positiveInteger(record.token_limit);
+      const maxOutputTokens =
+        positiveInteger(record.max_output_tokens) ??
+        positiveInteger(record.max_completion_tokens) ??
+        positiveInteger(record.output_token_limit);
+      return basicCatalogModel(model.id, model.id, {
+        createdAtMs: Number.isFinite(model.created) ? model.created * 1_000 : undefined,
+        contextWindowTokens,
+        maxOutputTokens,
+      });
+    })
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -606,6 +659,9 @@ export async function fetchProviderModelCatalog(input: {
   if (input.providerId === "openai") {
     return fetchOpenAICompatibleModelCatalog(apiKey);
   }
+  if (input.providerId === DEEPSEEK_PROVIDER_ID) {
+    return fetchOpenAICompatibleModelCatalog(apiKey, DEEPSEEK_BASE_URL);
+  }
   throw new Error(`Live model discovery is not supported for ${input.providerId}`);
 }
 
@@ -619,6 +675,18 @@ function discoveryMetadataFromCatalogModel(
     document: model.supportsDocumentInput,
     audio: model.supportsAudioInput,
     video: model.supportsVideoInput,
+    ...(model.contextWindowTokens !== undefined
+      ? { contextWindowTokens: model.contextWindowTokens }
+      : {}),
+    ...(model.maxOutputTokens !== undefined
+      ? { maxOutputTokens: model.maxOutputTokens }
+      : {}),
+    ...(model.inputUsdPer1M !== undefined
+      ? { inputUsdPer1M: model.inputUsdPer1M }
+      : {}),
+    ...(model.outputUsdPer1M !== undefined
+      ? { outputUsdPer1M: model.outputUsdPer1M }
+      : {}),
     apiParameters: {
       toolChoice: model.supportsToolChoice,
       structuredOutputs: model.supportsStructuredOutputs,

@@ -39,6 +39,48 @@ check(
   unknownKnownProvider
 );
 
+const discoveredOpenAI = resolveModelContextProfile(
+  "gpt-6.1-sol",
+  "openai",
+  undefined,
+  {
+    "openai:gpt-6.1-sol": {
+      contextWindowTokens: 1_050_000,
+      maxOutputTokens: 128_000,
+    },
+  },
+);
+check(
+  "discovered context metadata overrides provider default for uncatalogued OpenAI models",
+  discoveredOpenAI.contextWindowTokens === 1_050_000 &&
+    discoveredOpenAI.maxOutputTokens === 128_000 &&
+    discoveredOpenAI.buildOutputReserveTokens === 128_000 &&
+    discoveredOpenAI.effectiveBuildInputCeilingTokens === 922_000 &&
+    discoveredOpenAI.source === "discovered",
+  discoveredOpenAI,
+);
+
+const discoveredOpenRouter = resolveModelContextProfile(
+  "xiaomi/mimo-v2.6-pro",
+  "openrouter",
+  undefined,
+  {
+    "openrouter:xiaomi/mimo-v2.6-pro": {
+      contextWindowTokens: 262_144,
+      maxOutputTokens: 16_384,
+    },
+  },
+);
+check(
+  "discovered context metadata overrides provider default for uncatalogued OpenRouter models",
+  discoveredOpenRouter.contextWindowTokens === 262_144 &&
+    discoveredOpenRouter.maxOutputTokens === 16_384 &&
+    discoveredOpenRouter.buildOutputReserveTokens === 16_384 &&
+    discoveredOpenRouter.effectiveBuildInputCeilingTokens === 245_760 &&
+    discoveredOpenRouter.source === "discovered",
+  discoveredOpenRouter,
+);
+
 const unknownProvider = resolveModelContextProfile("anything", "unlisted");
 check(
   "unknown provider resolves to safe default profile",

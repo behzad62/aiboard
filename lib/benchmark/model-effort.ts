@@ -154,6 +154,9 @@ export function supportedBenchmarkReasoningEfforts(
       ? ["default", "max"]
       : BENCHMARK_REASONING_EFFORTS.slice();
   }
+  if (providerId === "deepseek") {
+    return BENCHMARK_REASONING_EFFORTS.slice();
+  }
   if (providerId === "anthropic" || providerId === "foundry") {
     return anthropicEfforts(providerModel);
   }

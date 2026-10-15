@@ -3,6 +3,7 @@ export type ModelBuildRole = "architect" | "worker" | "reviewer" | "summary";
 
 export type ModelContextProfileSource =
   | "registry"
+  | "discovered"
   | "provider-default"
   | "default"
   | "override";
@@ -31,6 +32,16 @@ export interface ModelContextProfileOverride {
   recommendedBuildRoles?: ModelBuildRole[] | null;
   updatedAt?: string;
 }
+
+export interface DiscoveredModelContextMetadata {
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
+}
+
+export type DiscoveredModelContextMap = Record<
+  string,
+  DiscoveredModelContextMetadata | undefined
+>;
 
 export type ModelContextOverrides = Record<string, ModelContextProfileOverride>;
 
@@ -72,6 +83,14 @@ export const PROVIDER_DEFAULT_CONTEXT_PROFILES: Record<
     longContextQuality: "good",
     promptCaching: true,
     recommendedBuildRoles: [...ALL_BUILD_ROLES],
+  },
+  deepseek: {
+    contextWindowTokens: 64_000,
+    maxOutputTokens: 8_192,
+    buildOutputReserveTokens: 8_192,
+    longContextQuality: "ok",
+    promptCaching: false,
+    recommendedBuildRoles: ["worker", "reviewer", "summary"],
   },
   chatgpt: {
     contextWindowTokens: 128_000,
@@ -638,16 +657,38 @@ function resolveOverride(
 export function resolveModelContextProfile(
   modelId: string,
   providerId: string,
-  overrides?: ModelContextOverrides
+  overrides?: ModelContextOverrides,
+  discoveredModelContext?: DiscoveredModelContextMap
 ): ModelContextProfile {
   const normalizedProviderId = providerId.trim();
   const normalizedModelId = modelId.trim();
   const key = fullModelId(normalizedProviderId, normalizedModelId);
   const registry = MODEL_CONTEXT_PROFILES[key];
+  const discovered = discoveredModelContext?.[key];
   const providerDefault = PROVIDER_DEFAULT_CONTEXT_PROFILES[normalizedProviderId];
-  const base = registry ?? providerDefault ?? DEFAULT_MODEL_CONTEXT_PROFILE;
+  const discoveredBase = (() => {
+    if (!discovered) return null;
+    const contextWindowTokens = finiteInteger(discovered.contextWindowTokens);
+    const maxOutputTokens = finiteInteger(discovered.maxOutputTokens);
+    if (contextWindowTokens == null && maxOutputTokens == null) return null;
+    const fallback = providerDefault ?? DEFAULT_MODEL_CONTEXT_PROFILE;
+    return {
+      ...fallback,
+      ...(contextWindowTokens != null ? { contextWindowTokens } : {}),
+      ...(maxOutputTokens != null
+        ? {
+            maxOutputTokens,
+            buildOutputReserveTokens: maxOutputTokens,
+          }
+        : {}),
+    } satisfies StaticModelContextProfile;
+  })();
+  const base =
+    registry ?? discoveredBase ?? providerDefault ?? DEFAULT_MODEL_CONTEXT_PROFILE;
   const baseSource: ModelContextProfileSource = registry
     ? "registry"
+    : discoveredBase
+      ? "discovered"
     : providerDefault
       ? "provider-default"
       : "default";

@@ -490,9 +490,14 @@ export function createNativeProviderConfig(
   priority: number,
   reasoningEffort?: string | null
 ): NativeProviderConfig {
+  const settings = getUserSettings();
   const { providerId, model } = parseModelId(runtimeId);
   const pricing = nativePricingMicros(
-    getModelPricing(runtimeId, getUserSettings().modelPricingOverrides)
+    getModelPricing(
+      runtimeId,
+      settings.modelPricingOverrides,
+      settings.discoveredModelMetadata,
+    )
   );
   if (providerId === "custom") {
     const custom = getCustomModelById(model);
@@ -655,6 +660,7 @@ export function resolveNativeProviderTransport(
   }
   const resolvedBaseUrl = baseUrl ?? ({
     openai: "https://api.openai.com/v1",
+    deepseek: "https://api.deepseek.com",
     openrouter: "https://openrouter.ai/api/v1",
     xai: "https://api.x.ai/v1",
   } as Record<string, string>)[providerId];

@@ -80,6 +80,23 @@ export const MODEL_CATALOG: CatalogModel[] = [
     capabilities: { image: true, document: true, audio: false, video: false },
   },
 
+  // DeepSeek — https://api-docs.deepseek.com/
+  {
+    id: "deepseek-chat",
+    name: "DeepSeek Chat",
+    providerId: "deepseek",
+    description: "General-purpose DeepSeek model via the native API",
+    capabilities: { image: false, document: false, audio: false, video: false },
+    validationCandidate: true,
+  },
+  {
+    id: "deepseek-reasoner",
+    name: "DeepSeek Reasoner",
+    providerId: "deepseek",
+    description: "Reasoning-focused DeepSeek model for complex analysis tasks",
+    capabilities: { image: false, document: false, audio: false, video: false },
+  },
+
   // ChatGPT account-backed models - served through the local account-provider
   // runner, but represented as normal provider catalog entries in the app.
   {

@@ -175,7 +175,7 @@ export function openAICompatibleNativeToolField(
 ): Record<string, unknown> {
   if (
     !tools?.length ||
-    !["openai", "openrouter", "custom", "nvidia"].includes(providerId)
+    !["openai", "deepseek", "openrouter", "custom", "nvidia"].includes(providerId)
   ) {
     return {};
   }
@@ -344,7 +344,7 @@ export async function* streamOpenAICompatibleChat(
   // `reasoning.effort` shape across model families like Gemini and MiniMax,
   // which avoids structured-output routing failures when require_parameters is on.
   const reasoningValue =
-    providerId === "openai"
+    providerId === "openai" || providerId === "deepseek"
       ? openAIReasoningEffort(params.reasoningEffort ?? "default", params.model)
       : providerId === "openrouter"
         ? openRouterReasoningEffort(

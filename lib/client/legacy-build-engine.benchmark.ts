@@ -4367,7 +4367,11 @@ export async function runBuildDiscussion(
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
     });
-    const pricing = getModelPricing(model.modelId, settings.modelPricingOverrides);
+    const pricing = getModelPricing(
+      model.modelId,
+      settings.modelPricingOverrides,
+      settings.discoveredModelMetadata,
+    );
     const estimatedUsd = pricing
       ? estimatedUsdForTokens({
           inputTokens: usage.inputTokens,

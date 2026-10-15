@@ -957,7 +957,8 @@ function estimateCertifiedModelUsd(input: {
     input.pricing === undefined
       ? getModelPricing(
           input.fullModelId,
-          getUserSettings().modelPricingOverrides
+          getUserSettings().modelPricingOverrides,
+          getUserSettings().discoveredModelMetadata,
         )
       : input.pricing;
   if (!pricing) return null;

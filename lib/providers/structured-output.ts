@@ -9,6 +9,7 @@ export function structuredOutputCallFeatures(
 
 const OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_PROVIDERS = new Set([
   "openai",
+  "deepseek",
   "openrouter",
   "nvidia",
 ]);

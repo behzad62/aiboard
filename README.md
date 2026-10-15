@@ -69,6 +69,8 @@ Runner V2 prints a local URL and a new control token. Paste both into Build setu
 
 Execution safety, capability selection, cleanup, OCI configuration, and platform limitations are documented in the [Runner V2 execution safety guide](docs/runner-v2/guide.md), with separate [architecture](docs/runner-v2/architecture.md) and [security](docs/runner-v2/security.md) notes.
 
+The proposed [Unified Cloud↔Desktop and Agent-Harness implementation plan](docs/plans/aiboard-unified-cloud-desktop-agent-platform-2026-10-15.md) covers simplified installation, pluggable coding harnesses, bidirectional MCP, remote device access, and optional GUI control. It is a roadmap, not implemented functionality.
+
 Guarded access requires approval for destructive or external effects. Full access allows configured agents to perform destructive operations, writes outside the project, credential changes, pushes/PRs, deployments, and other external actions without per-action approval. Final project handoff always pauses for the user in both profiles.
 
 If the project is not a Git repository, Runner V2 creates a safe local repository and baseline without requiring a global Git identity. When the Architect finishes, choose either:

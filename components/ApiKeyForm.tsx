@@ -82,6 +82,7 @@ export interface ProviderConfig {
   providerId: string;
   name: string;
   models: ModelInfo[];
+  enabledModelIds?: string[];
   hasKey: boolean;
   keyHint?: string | null;
   baseURL?: string | null;
@@ -155,6 +156,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [runnerToken, setRunnerToken] = useState("");
   const [modelIdsText, setModelIdsText] = useState((provider.modelIds ?? []).join("\n"));
   const [defaultModel, setDefaultModel] = useState(provider.defaultModel ?? provider.models[0]?.id ?? "");
+  const [enabledModelIds, setEnabledModelIds] = useState<string[]>(
+    provider.enabledModelIds !== undefined
+      ? provider.enabledModelIds
+      : provider.models.map((model) => model.id),
+  );
   const [enabled, setEnabled] = useState(provider.enabled);
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -207,6 +213,21 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         ).values()
       )
     : provider.models;
+  const selectableModelIds = new Set(selectableModels.map((model) => model.id));
+
+  useEffect(() => {
+    const configured = provider.enabledModelIds;
+    const nextEnabled = configured !== undefined
+      ? configured.filter((id) => selectableModelIds.has(id))
+      : selectableModels.map((model) => model.id);
+    setEnabledModelIds(nextEnabled);
+  }, [provider.enabledModelIds, selectableModels.length, modelIdsText, provider.providerId]);
+
+  useEffect(() => {
+    setEnabledModelIds((prev) =>
+      prev.filter((id) => selectableModelIds.has(id))
+    );
+  }, [modelIdsText, provider.providerId, selectableModels.length]);
 
   useEffect(() => {
     setDefaultModel(provider.defaultModel ?? provider.models[0]?.id ?? "");
@@ -348,6 +369,12 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       const nextDefault = selectableModels.some((model) => model.id === defaultModel)
         ? defaultModel
         : selectableModels[0]?.id;
+      const enabledSelection = enabledModelIds.filter((id) =>
+        selectableModelIds.has(id),
+      );
+      const defaultForSave = enabledSelection.includes(nextDefault)
+        ? nextDefault
+        : enabledSelection[0] ?? null;
       saveProviderKey({
         providerId: provider.providerId,
         apiKey: apiKey || undefined,
@@ -356,7 +383,8 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           ? runnerToken.trim() || undefined
           : undefined,
         models: modelIdsField ? parsedModelIds : undefined,
-        defaultModel: nextDefault,
+        enabledModelIds: enabledSelection,
+        defaultModel: defaultForSave,
         enabled,
       });
       let savedMessage = "Saved successfully";
@@ -931,6 +959,57 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
             ))}
           </SelectContent>
         </Select>
+        <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium">Enabled models</p>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  setEnabledModelIds(selectableModels.map((model) => model.id))
+                }
+              >
+                Enable all
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setEnabledModelIds([])}
+              >
+                Disable all
+              </Button>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Only enabled models appear in selectors across the app for this provider.
+          </p>
+          <div className="max-h-44 space-y-2 overflow-auto pr-1">
+            {selectableModels.map((model) => {
+              const checked = enabledModelIds.includes(model.id);
+              return (
+                <label
+                  key={model.id}
+                  className="flex items-center justify-between gap-3 rounded-md border bg-background px-2 py-1.5 text-sm"
+                >
+                  <span className="min-w-0 truncate">{model.name}</span>
+                  <Switch
+                    checked={checked}
+                    onCheckedChange={(value) =>
+                      setEnabledModelIds((prev) =>
+                        value
+                          ? [...new Set([...prev, model.id])]
+                          : prev.filter((id) => id !== model.id)
+                      )
+                    }
+                  />
+                </label>
+              );
+            })}
+          </div>
+        </div>
         <ProviderCapabilityTable
           rows={capabilityRows}
           loading={capabilityLoading}

@@ -48,6 +48,7 @@ interface ProviderConfig {
   providerId: string;
   name: string;
   models: ModelInfo[];
+  enabledModelIds?: string[];
   hasKey: boolean;
   keyHint?: string | null;
   baseURL?: string | null;
@@ -68,6 +69,12 @@ interface SettingsData {
     defaultStyleNote?: string;
     defaultReasoningEffort?: ReasoningEffort;
     modelPricingOverrides?: Record<string, ModelPricingOverride>;
+    discoveredModelMetadata?: Record<string, {
+      inputUsdPer1M?: number;
+      outputUsdPer1M?: number;
+      updatedAt: string;
+      source: "openrouter-models" | "provider-models";
+    }>;
     modelContextOverrides?: ModelContextOverrides;
     modelCapabilityProfiles?: Record<string, ModelCapabilityProbeProfile>;
     openAIConnectionMode?: "api" | "subscription";
@@ -135,22 +142,32 @@ export default function SettingsPage() {
 
   const enabledModels = effectiveProviders
     .filter((p) => p.hasKey && p.enabled)
-    .flatMap((p) =>
-      p.models.map((m) => ({
+    .flatMap((p) => {
+      const enabledSet =
+        p.enabledModelIds !== undefined ? new Set(p.enabledModelIds) : null;
+      const visibleModels = enabledSet
+        ? p.models.filter((model) => enabledSet.has(model.id))
+        : p.models;
+      return visibleModels.map((m) => ({
         fullId: `${p.providerId}:${m.id}`,
         name: m.name,
         providerName: p.name,
-      }))
-    );
+      }));
+    });
   const validatedModels = effectiveProviders
     .filter((p) => p.hasKey && p.lastValidationSucceeded)
-    .flatMap((p) =>
-      p.models.map((m) => ({
+    .flatMap((p) => {
+      const enabledSet =
+        p.enabledModelIds !== undefined ? new Set(p.enabledModelIds) : null;
+      const visibleModels = enabledSet
+        ? p.models.filter((model) => enabledSet.has(model.id))
+        : p.models;
+      return visibleModels.map((m) => ({
         fullId: `${p.providerId}:${m.id}`,
         name: m.name,
         providerName: p.name,
-      }))
-    );
+      }));
+    });
   const configuredProviders = effectiveProviders.filter((provider) => provider.hasKey);
   const enabledProviders = configuredProviders.filter((provider) => provider.enabled);
   const validatedProviders = configuredProviders.filter(
@@ -347,6 +364,7 @@ export default function SettingsPage() {
           <PricingSettings
             providers={effectiveProviders}
             overrides={data?.settings.modelPricingOverrides}
+            discoveredMetadata={data?.settings.discoveredModelMetadata}
             contextOverrides={data?.settings.modelContextOverrides}
             onSaved={load}
           />

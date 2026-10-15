@@ -662,7 +662,8 @@ function DiscussionPageInner() {
               try {
                 pricing = getModelPricing(
                   event.modelId,
-                  loadDashboard().settings.modelPricingOverrides
+                  loadDashboard().settings.modelPricingOverrides,
+                  loadDashboard().settings.discoveredModelMetadata,
                 );
               } catch {
                 pricing = null;

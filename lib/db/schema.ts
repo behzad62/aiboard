@@ -338,6 +338,10 @@ export interface UserSettings {
       document: boolean;
       audio: boolean;
       video: boolean;
+      contextWindowTokens?: number;
+      maxOutputTokens?: number;
+      inputUsdPer1M?: number;
+      outputUsdPer1M?: number;
       apiParameters?: {
         toolChoice?: boolean;
         structuredOutputs?: boolean;
@@ -378,6 +382,8 @@ export interface ProviderKey {
    * with a fixed catalog.
    */
   models?: string[] | null;
+  /** Optional per-provider model visibility list. Empty means no models visible. */
+  enabledModelIds?: string[] | null;
   defaultModel: string | null;
   enabled: boolean;
   keyHint: string | null;

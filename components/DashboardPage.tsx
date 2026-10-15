@@ -54,6 +54,7 @@ import type { RunnerSelection } from "@/components/RunnerSetup";
 import { getRequiredCapabilityTypes } from "@/lib/attachments/classify";
 import { supportsInputTypes } from "@/lib/providers/capabilities";
 import {
+  type DiscoveredModelPricingMetadata,
   getModelPricing,
   type ModelPricingOverride,
 } from "@/lib/providers/pricing";
@@ -94,6 +95,7 @@ interface DashboardData {
     defaultBuildTimeLimitMinutes?: number;
     defaultBuildAlwaysRequireIndependentVerifier?: boolean;
     modelPricingOverrides?: Record<string, ModelPricingOverride>;
+    discoveredModelMetadata?: Record<string, DiscoveredModelPricingMetadata>;
   };
   defaultSelectedModelIds: string[];
   enabledModels: Array<ModelInfo & { fullId: string }>;
@@ -294,7 +296,11 @@ export default function DashboardPage() {
     runModelIds.length > 0
       ? estimateDiscussionCostUsd(
           runModelIds.map((id) =>
-            getModelPricing(id, data?.settings.modelPricingOverrides)
+            getModelPricing(
+              id,
+              data?.settings.modelPricingOverrides,
+              data?.settings.discoveredModelMetadata,
+            )
           ),
           effectiveEffort,
           mode
@@ -326,7 +332,11 @@ export default function DashboardPage() {
     }, runtimeIds.map((runtimeId) => {
       const { providerId } = parseModelId(runtimeId);
       const hasApiPricing = Boolean(
-        getModelPricing(runtimeId, data?.settings.modelPricingOverrides)
+        getModelPricing(
+          runtimeId,
+          data?.settings.modelPricingOverrides,
+          data?.settings.discoveredModelMetadata,
+        )
       );
       const billingBasis = nativeProviderBillingBasis({
         hasApiPricing,
@@ -347,6 +357,7 @@ export default function DashboardPage() {
     buildBudgetUsd,
     buildTimeLimitMinutes,
     data?.settings.modelPricingOverrides,
+    data?.settings.discoveredModelMetadata,
   ]);
   // Only genuine blockers — no nagging about how the topic is phrased.
   const blockerHint =

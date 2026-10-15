@@ -2,7 +2,11 @@
 import { getAllProviders } from "../lib/client/providers";
 import { MODEL_CATALOG } from "../lib/providers/catalog";
 import { googleSamplingConfig } from "../lib/providers/google";
-import { collectGoogleModelCatalog } from "../lib/client/settings-api";
+import {
+  buildOpenRouterCatalogModel,
+  collectGoogleModelCatalog,
+} from "../lib/client/settings-api";
+import { getModelPricing } from "../lib/providers/pricing";
 import { readFile } from "node:fs/promises";
 import {
   getProviderDefinition,
@@ -66,6 +70,7 @@ check(
 );
 const discoverable = [
   "openai",
+  "deepseek",
   "anthropic",
   "google",
   "openrouter",
@@ -100,6 +105,40 @@ check(
   "Meta ships Muse Spark fallback while allowing live additions",
   metaCatalog.some((model) => model.id === "muse-spark-1.3"),
   metaCatalog.map((model) => model.id)
+);
+
+const openRouterModel = buildOpenRouterCatalogModel({
+  id: "xiaomi/mimo-v2.6-pro",
+  name: "Xiaomi MiMo V2.6 Pro",
+  context_length: 262_144,
+  max_output_tokens: 16_384,
+  architecture: { input_modalities: ["text"] },
+  supported_parameters: ["temperature", "max_tokens"],
+});
+check(
+  "OpenRouter model discovery keeps published context and output token limits",
+  openRouterModel.contextWindowTokens === 262_144 &&
+    openRouterModel.maxOutputTokens === 16_384,
+  openRouterModel
+);
+const discoveredPricing = getModelPricing(
+  "openrouter:xiaomi/mimo-v2.6-pro",
+  undefined,
+  {
+    "openrouter:xiaomi/mimo-v2.6-pro": {
+      inputUsdPer1M: 0.66,
+      outputUsdPer1M: 1.99,
+      source: "openrouter-models",
+      updatedAt: "2026-10-15T00:00:00.000Z",
+    },
+  },
+);
+check(
+  "discovered model pricing is used when no built-in pricing exists",
+  discoveredPricing?.inputUsdPer1M === 0.66 &&
+    discoveredPricing?.outputUsdPer1M === 1.99 &&
+    discoveredPricing?.sourceLabel === "OpenRouter live catalog pricing",
+  discoveredPricing,
 );
 
 if (failures === 0) console.log("PASS");

@@ -1,6 +1,7 @@
 
 export const PROVIDER_IDS = [
   "openai",
+  "deepseek",
   "anthropic",
   "foundry",
   "google",
@@ -101,6 +102,28 @@ export const PROVIDER_DEFINITIONS = {
       promptCachingLabel: "Prompt caching enabled",
       promptCachingNote:
         "The app requests OpenAI prompt caching with 24h retention and a cache key derived from the stable prompt prefix. Cache hits still require exact shared prefixes and typically begin once prompts reach 1024+ tokens.",
+    },
+  },
+  deepseek: {
+    id: "deepseek",
+    name: "DeepSeek",
+    modelSource: "catalog",
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "deepseek-v4",
+      suggestedValue: "deepseek-v4",
+      hint: "Browse the live DeepSeek model catalog or add a model id manually.",
+    },
+    reasoningEffort: true,
+    maxTokens: true,
+    runtimeBehavior: {
+      temperatureLabel: "Temperature is sent",
+      temperatureNote:
+        "The effort-level temperature is forwarded to DeepSeek's OpenAI-compatible chat-completions API.",
+      promptCachingLabel: "Provider-dependent",
+      promptCachingNote:
+        "Prompt caching, rate limits, and context behavior are controlled by DeepSeek for the selected model.",
     },
   },
   anthropic: {

@@ -9,6 +9,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import {
+  type DiscoveredModelPricingMetadata,
   getModelPricing,
   type ModelPricingOverride,
 } from "@/lib/providers/pricing";
@@ -27,6 +28,7 @@ interface ProviderModels {
 interface PricingSettingsProps {
   providers: ProviderModels[];
   overrides?: Record<string, ModelPricingOverride>;
+  discoveredMetadata?: Record<string, DiscoveredModelPricingMetadata>;
   contextOverrides?: ModelContextOverrides;
   onSaved: () => Promise<void> | void;
 }
@@ -34,6 +36,7 @@ interface PricingSettingsProps {
 export function PricingSettings({
   providers,
   overrides,
+  discoveredMetadata,
   contextOverrides,
   onSaved,
 }: PricingSettingsProps) {
@@ -79,7 +82,7 @@ export function PricingSettings({
                   </p>
                   <ModelPricingEditor
                     fullModelId={fullId}
-                    pricing={getModelPricing(fullId, overrides)}
+                    pricing={getModelPricing(fullId, overrides, discoveredMetadata)}
                     onSaved={onSaved}
                     title="Pricing"
                   />
