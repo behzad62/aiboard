@@ -1042,13 +1042,73 @@ test("restart executes a persisted pending tool call before another model turn",
   );
 });
 
+test("an invalid lifecycle batch is rejected without execution and corrected in-loop", async () => {
+  let reads = 0;
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content", () => reads++));
+  registry.register(submitTool());
+  const invalidBatch = (suffix: string) => ({
+    blocks: [
+      { type: "tool_call" as const, callId: `invalid_submit_${suffix}`, name: "submit_task", arguments: { changeSetId: "must_not_execute" } },
+      { type: "tool_call" as const, callId: `invalid_read_${suffix}`, name: "read_file", arguments: {} },
+    ],
+    stopReason: "tool_calls" as const,
+  });
+  const model = new ScriptedModel([
+    invalidBatch("1"),
+    {
+      blocks: [{ type: "tool_call", callId: "valid_submit", name: "submit_task", arguments: { changeSetId: "changeset_after_protocol_repair" } }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({ model, registry, context: context(), initialMessages });
+  assert.equal(result.status, "submitted");
+  assert.equal(reads, 0);
+  assert.equal(model.requests.length, 2);
+  assert.deepEqual(
+    model.requests[1].messages
+      .filter((message) => message.role === "tool")
+      .map((message) =>
+        typeof message.content === "object" && !Array.isArray(message.content)
+          ? [message.content.callId, message.content.error?.code]
+          : []
+      ),
+    [
+      ["invalid_submit_1", "invalid_lifecycle_batch"],
+      ["invalid_read_1", "invalid_lifecycle_batch"],
+    ]
+  );
+
+  const repeated = await runAgentLoop({
+    model: new ScriptedModel([invalidBatch("a"), invalidBatch("b"), invalidBatch("c")]),
+    registry,
+    context: context(),
+    initialMessages,
+  });
+  assert.equal(repeated.status, "suspended");
+  assert.equal(repeated.reason, "protocol_error");
+  if (repeated.status === "suspended") assert.equal(repeated.errorCode, "invalid_lifecycle_batch");
+  assert.equal(reads, 0);
+});
+
 test("an invalid lifecycle batch is durably rejected before resume", async () => {
   let reads = 0;
   const registry = new ToolRegistry();
   registry.register(textTool("read_file", "content", () => reads++));
   registry.register(submitTool());
+  const invalid = {
+    blocks: [
+      { type: "tool_call" as const, callId: "invalid_submit", name: "submit_task", arguments: { changeSetId: "must_not_execute" } },
+      { type: "tool_call" as const, callId: "invalid_read", name: "read_file", arguments: {} },
+    ],
+    stopReason: "tool_calls" as const,
+  };
+  const exhausted = (suffix: string) => ({
+    ...invalid,
+    blocks: invalid.blocks.map((block) => ({ ...block, callId: `${block.callId}_${suffix}` })),
+  });
   const first = await runAgentLoop({
-    model: new ScriptedModel([{
+    model: new ScriptedModel([exhausted("x"), exhausted("y"), {
       blocks: [
         {
           type: "tool_call",
@@ -1084,6 +1144,10 @@ test("an invalid lifecycle batch is durably rejected before resume", async () =>
           : []
       ),
     [
+      ["invalid_submit_x", "invalid_lifecycle_batch"],
+      ["invalid_read_x", "invalid_lifecycle_batch"],
+      ["invalid_submit_y", "invalid_lifecycle_batch"],
+      ["invalid_read_y", "invalid_lifecycle_batch"],
       ["invalid_submit", "invalid_lifecycle_batch"],
       ["invalid_read", "invalid_lifecycle_batch"],
     ]

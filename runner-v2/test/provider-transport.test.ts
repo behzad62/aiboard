@@ -1087,7 +1087,7 @@ test("Google transport maps function declarations, function responses, calls, an
           finishReason: "STOP",
           content: { role: "model", parts: [
             { text: "Inspecting." },
-            { functionCall: { name: "fs_read", args: { path: "package.json" }, id: "call_4" } },
+            { functionCall: { name: "fs_read", args: { path: "package.json" }, id: "call_4" }, thoughtSignature: "sig_4" },
           ] },
         }],
         usageMetadata: { promptTokenCount: 41, candidatesTokenCount: 11 },
@@ -1098,6 +1098,14 @@ test("Google transport maps function declarations, function responses, calls, an
     sessionId: "session_google",
     messages: [
       { id: "s", role: "system", content: "Use the repository." },
+      {
+        id: "a",
+        role: "assistant",
+        content: [
+          { type: "tool_call", callId: "prior_google", name: "fs.read", arguments: {}, thoughtSignature: "sig_prior" },
+          { type: "tool_call", callId: "legacy_google", name: "fs.read", arguments: {} },
+        ],
+      },
       {
         id: "t",
         role: "tool",
@@ -1112,7 +1120,7 @@ test("Google transport maps function declarations, function responses, calls, an
     tools: [{
       name: "fs.read",
       description: "Read a file",
-      inputSchema: { type: "object" },
+      inputSchema: { type: "object", additionalProperties: false, properties: { path: { type: "string" } } },
       readOnly: true,
       effect: "none",
     }],
@@ -1120,9 +1128,17 @@ test("Google transport maps function declarations, function responses, calls, an
   assert.equal(captured?.url, "https://generativelanguage.example/v1beta/models/gemini-code:generateContent?key=google-secret");
   const body = JSON.parse(String(captured?.init?.body)) as {
     systemInstruction: { parts: Array<{ text: string }> };
-    contents: Array<{ parts: Array<{ functionResponse?: unknown }> }>;
-    tools: Array<{ functionDeclarations: Array<{ name: string }> }>;
+    contents: Array<{ parts: Array<{ functionResponse?: unknown; functionCall?: unknown; thoughtSignature?: string }> }>;
+    tools: Array<{ functionDeclarations: Array<{ name: string; parameters?: unknown; parametersJsonSchema?: unknown }> }>;
   };
+  assert.equal(body.tools[0].functionDeclarations[0].parameters, undefined, "OpenAPI-subset parameters reject additionalProperties");
+  assert.deepEqual(body.tools[0].functionDeclarations[0].parametersJsonSchema, {
+    type: "object", additionalProperties: false, properties: { path: { type: "string" } },
+  });
+  assert.deepEqual(
+    body.contents.flatMap((content) => content.parts.filter((part) => part.functionCall).map((part) => part.thoughtSignature)),
+    ["sig_prior", "skip_thought_signature_validator"]
+  );
   assert.equal(body.systemInstruction.parts[0].text, "Use the repository.");
   assert.equal(body.contents.some((content) => content.parts.some((part) => part.functionResponse)), true);
   assert.equal(body.tools[0].functionDeclarations.length, 1);
@@ -1134,6 +1150,7 @@ test("Google transport maps function declarations, function responses, calls, an
     callId: "call_4",
     name: "fs.read",
     arguments: { path: "package.json" },
+    thoughtSignature: "sig_4",
   });
   assert.deepEqual(turn.usage, {
     inputTokens: 41,

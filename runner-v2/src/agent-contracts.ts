@@ -30,6 +30,8 @@ export interface ToolCallBlock {
   callId: string;
   name: string;
   arguments: unknown;
+  /** Opaque provider continuation token (Gemini `thoughtSignature`) echoed back on the next request. */
+  thoughtSignature?: string;
 }
 
 export type AssistantBlock = TextBlock | ToolCallBlock;

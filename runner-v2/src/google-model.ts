@@ -17,6 +17,8 @@ import {
 } from "./provider-model-utils.js";
 import { geminiThinkingConfig } from "./reasoning-effort.js";
 
+const GEMINI_SIGNATURE_BYPASS = "skip_thought_signature_validator";
+
 export interface GoogleModelOptions {
   baseUrl?: string;
   apiKey: string;
@@ -32,7 +34,7 @@ interface GoogleResponse {
     content?: {
       parts?: Array<
         | { text?: string }
-        | { functionCall?: { id?: string; name?: string; args?: unknown } }
+        | { functionCall?: { id?: string; name?: string; args?: unknown }; thoughtSignature?: string }
       >;
     };
   }>;
@@ -101,6 +103,7 @@ export class GoogleModel implements AgentModel {
           callId: part.functionCall.id ?? `tool_${index + 1}`,
           name: toolNames.nativeFor(part.functionCall.name),
           arguments: part.functionCall.args ?? {},
+          ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
         });
       }
     }
@@ -165,6 +168,9 @@ function toGoogleContent(
               name: toolNames.wireFor(block.name),
               args: block.arguments,
             },
+            // Gemini 3+ rejects a replayed function call without its thought signature. History that
+            // predates signature capture uses Google's documented validator bypass token.
+            thoughtSignature: block.thoughtSignature ?? GEMINI_SIGNATURE_BYPASS,
           }
     ),
   };
@@ -177,6 +183,8 @@ function toGoogleTool(
   return {
     name: toolNames.wireFor(tool.name),
     description: tool.description,
-    parameters: tool.inputSchema,
+    // `parameters` accepts only Google's OpenAPI subset (no additionalProperties, etc.) and rejects
+    // the runner's strict tool schemas; `parametersJsonSchema` takes standard JSON Schema as-is.
+    parametersJsonSchema: tool.inputSchema,
   };
 }

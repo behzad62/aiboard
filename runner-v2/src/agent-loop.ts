@@ -196,6 +196,7 @@ export async function runAgentLoop(
     readOnlyStall.suspendTurns <= readOnlyStall.warnTurns
   )) throw new Error("Read-only stall limits are invalid.");
   const initialTurns = messages.filter((message) => message.role === "assistant").length;
+  let lifecycleBatchCorrections = 0;
   const finalTurn = initialTurns + maxTurns;
 
   const pendingCalls = messages.flatMap((message) =>
@@ -370,6 +371,10 @@ export async function runAgentLoop(
           nextId
         );
         if (checkpointError) return checkpointError;
+        // Nothing in the batch executed and the rejection is durable, so let the model correct the
+        // batch in-loop instead of pausing the whole run for a manual resume. Repeated misuse still
+        // fails closed.
+        if (++lifecycleBatchCorrections <= MAX_LIFECYCLE_BATCH_CORRECTIONS) continue;
       }
       return suspended(
         "protocol_error",
@@ -408,6 +413,8 @@ export async function runAgentLoop(
   }
   return suspended("turn_limit", finalTurn, messages);
 }
+
+const MAX_LIFECYCLE_BATCH_CORRECTIONS = 2;
 
 function isInvalidLifecycleBatch(error: unknown): error is AgentProtocolError {
   return error instanceof AgentProtocolError && error.code === "invalid_lifecycle_batch";
