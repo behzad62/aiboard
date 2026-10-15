@@ -21,6 +21,7 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { runnerRunStateSegment } from "../src/run-state-identity.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
+import { finishOwnedFixture } from "./support/owned-fixture-teardown.js";
 
 function sourceBytes(text: string): Uint8Array { return new Uint8Array(Buffer.from(text, "utf8")); }
 function sourceInput(text: string, sections?: ApprovedSourceInputV1["sections"]): ApprovedSourceInputV1 { return { version: 1, approval: "approved_spec", bytesBase64: Buffer.from(text).toString("base64"), mediaType: "text/plain", encoding: "utf-8", ...(sections !== undefined ? { sections } : {}) }; }
@@ -126,6 +127,38 @@ function journeyLastToolValue(request: AgentModelRequest): Record<string, unknow
   return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
 }
 
+/** Failure-only fixture diagnostics; never evidence or a product verdict. */
+function e3DiagnosticValue(value: unknown): unknown {
+  try {
+    const text = JSON.stringify(value);
+    if (text === undefined) return null;
+    if (Buffer.byteLength(text) > 512 * 1024) return { incomplete: true, reason: "diagnostic_size_cap" };
+    return JSON.parse(text) as unknown;
+  } catch { return { incomplete: true, reason: "diagnostic_serialization_failed" }; }
+}
+function e3DiagnosticError(error: unknown): unknown {
+  if (error instanceof AggregateError) return { name: error.name, message: error.message, errors: error.errors.map(e3DiagnosticError) };
+  if (error instanceof Error) return { name: error.name, message: error.message, stack: error.stack, cause: e3DiagnosticValue(error.cause) };
+  return e3DiagnosticValue(error);
+}
+function e3LastActualTool(request: AgentModelRequest): unknown {
+  const tool = [...request.messages].reverse().find(message => message.role === "tool");
+  return e3DiagnosticValue(tool?.content);
+}
+async function finishE3DiagnosticCase(input: {
+  root: string; mode: "clean" | "unreferenced"; bodyFailed: boolean; bodyError?: unknown;
+  beforeCleanup: unknown; closers: readonly { name: string; close: () => void | Promise<void> }[];
+}): Promise<void> {
+  await finishOwnedFixture({
+    bodyFailed: input.bodyFailed, bodyError: input.bodyError, closers: input.closers,
+    remove: () => { if (!input.bodyFailed) rmSync(input.root, { recursive: true, force: true }); },
+    report: failures => writeFileSync(join(input.root, `e3-failure-${input.mode}.json`), JSON.stringify({
+      qualification: "UNQUALIFIED_FAILURE_DIAGNOSTIC", root: input.root, mode: input.mode,
+      beforeCleanup: input.beforeCleanup, failures: failures.map(failure => ({ phase: failure.phase, error: e3DiagnosticError(failure.error) })),
+    }, null, 2)),
+  });
+}
+
 function e3ReadText(request: AgentModelRequest, path: string): string | undefined {
   for (const message of request.messages) {
     if (message.role !== "tool") continue;
@@ -222,6 +255,7 @@ function e3ValidationScope(mode: JourneyMode): { changed: string[]; verified: st
 class E3JourneyWorker implements AgentModel {
   constructor(private readonly mode: JourneyMode, private readonly failFirst = false) {}
   readonly requests: AgentModelRequest[] = [];
+  lastMissingEvidenceTool?: unknown;
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
     this.requests.push(request);
     if (this.failFirst && this.requests.length > 2) throw Object.assign(new Error("E3 synthetic provider authentication failure"), { status: 403 });
@@ -236,6 +270,10 @@ class E3JourneyWorker implements AgentModel {
     const evidenceTurn = paired ? 4 : this.mode === "unreferenced" ? 3 : 2;
     if (toolCount === evidenceTurn) return journeyCall("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
     const record = journeyLastToolValue(request)!;
+    if ((this.mode === "clean" || this.mode === "unreferenced") && (!record || typeof record.fact !== "object" || record.fact === null)) {
+      this.lastMissingEvidenceTool = e3LastActualTool(request);
+      throw new Error("E3 fixture could not submit: the last actual tool did not return command evidence JSON.", { cause: this.lastMissingEvidenceTool });
+    }
     const fact = record.fact as { stdoutArtifactHash: string };
     return journeyCall("submit_task", {
       summary: "Product value and real tests pass.",
@@ -345,8 +383,12 @@ describe("E3 product journey", { concurrency: 2 }, () => {
       const supervisor = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")), { clock: () => E3_CLOCK });
       let server: ControlServer | undefined; let factory: FixtureNativeBuildFactory | undefined; let manager: NativeBuildManager | undefined;
       let runtime: { step: () => Promise<{ status: string; action?: string }>; projection: () => SchedulerProjection } | undefined;
+      const diagnosticCase = mode === "clean" || mode === "unreferenced";
+      let bodyFailed = false; let bodyError: unknown;
+      let diagnosticWorkers: { workerA: E3JourneyWorker; workerB: E3JourneyWorker } | undefined;
       try {
         const workerA = new E3JourneyWorker(mode, mode === "failover"); const workerB = new E3JourneyWorker(mode); const reviewer = new E3JourneyReviewer(mode);
+        diagnosticWorkers = { workerA, workerB };
         const architect = new E3JourneyArchitect(() => runtime!.projection(), e3JourneyScenario(E3_RUN), mode);
         factory = new FixtureNativeBuildFactory({ projectRoot: project, stateDirectory: state,
           providerConfigs: { load: () => [e3Provider("arch:architect", 1), e3Provider("workA:workerA", 2), e3Provider("workB:workerB", 3), e3Provider("rev:reviewer", 4)], save: () => undefined, close: () => undefined }, executionHost, baselineFor: () => baseline.revision,
@@ -398,8 +440,21 @@ describe("E3 product journey", { concurrency: 2 }, () => {
         try { assert.deepEqual(reopened.readRun(E3_RUN), events); } finally { reopened.close(); evidence.close(); }
         assert.equal((await runGit({ cwd: project, args: ["rev-parse", "HEAD"] })).stdout.trim(), baseline.revision);
       } catch (error) {
-        writeFileSync(join(tmpdir(), `codex-e3-fixture-debug-${mode}.json`), JSON.stringify({ root, projection: runtime?.projection(), events: manager?.events(E3_RUN).slice(-25) }, null, 2)); throw error;
-      } finally { await server?.close(); supervisor.close(); await manager?.close(); await factory?.close(); await executionHost.close(); rmSync(root, { recursive: true, force: true }); }
+        if (diagnosticCase) { bodyFailed = true; bodyError = error; }
+        else { writeFileSync(join(tmpdir(), `codex-e3-fixture-debug-${mode}.json`), JSON.stringify({ root, projection: runtime?.projection(), events: manager?.events(E3_RUN).slice(-25) }, null, 2)); throw error; }
+      } finally {
+        if (diagnosticCase) {
+          let beforeCleanup: unknown;
+          try { beforeCleanup = e3DiagnosticValue({ projection: runtime?.projection(), events: manager?.events(E3_RUN).slice(-25),
+            workerA: diagnosticWorkers?.workerA.lastMissingEvidenceTool, workerB: diagnosticWorkers?.workerB.lastMissingEvidenceTool }); }
+          catch (error) { beforeCleanup = { incomplete: true, error: e3DiagnosticError(error) }; }
+          await finishE3DiagnosticCase({ root, mode, bodyFailed, bodyError, beforeCleanup, closers: [
+            { name: "server", close: async () => { await server?.close(); } }, { name: "supervisor", close: () => supervisor.close() },
+            { name: "manager", close: async () => { await manager?.close(); } }, { name: "factory", close: async () => { await factory?.close(); } },
+            { name: "executionHost", close: () => executionHost.close() },
+          ] });
+        } else { await server?.close(); supervisor.close(); await manager?.close(); await factory?.close(); await executionHost.close(); rmSync(root, { recursive: true, force: true }); }
+      }
     });
   }
 });
