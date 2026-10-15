@@ -1,5 +1,12 @@
 # runner-v2-p6-6 — EXECUTION
 
+## 2026-10-15 — T8 merged locally; REL-1 prepared, deployment not started
+
+The owner now authorizes merging T8 into main and preparing REL-1, superseding the earlier T8-only no-merge restriction. Local integration code merge is `d88f1e9aa5362841ab8f53963ddafb999f07e973` (parents previous main `5e5e71c882fb8fe972232819e2270d03f1e2063f` and accepted T8 `a750ef6cc4efe990b25c7fac3dd992f2745798e8`). T8/Gate G remain accepted in their recorded scope. Main-only features/account runner/legal changes are preserved. Three generated ZIP conflicts were resolved from merged source: executable members retain accepted T8 bytes, with current main legal/package metadata. Account ZIP is unchanged from main. Dependency versions are unchanged; merged app TypeScript exited 0. Independent bounded merge-resolution ACCEPT `675c0b196b58a4f2318b10548f79a1d53174d0bc39c5d2f62a66b0300513c39c` pins tree `4614cd49189ca3d7bdd43c5ffe44957bb597ee46`. No accepted T8 test suite or hosted CI was replayed.
+
+[REL-1 runbook](../runner-v2/rel-1-runbook.md) pins the code merge, the sealed local `rel1-ready-20261015` tag, deployment workflow/build/export checks and last recorded successful production rollback `5e5e71c8` (run38587699717). The execution-ledger link resolves from `docs/plans` as `../runner-v2/rel-1-runbook.md`. Exact release SHA and evidence are in `D:/tmp/rel1-20261015-merge-preparation/ready.json`. Preparation after the merge changes documentation only. **REL-1 remains NOT STARTED; push and production deployment are held.** A push to main automatically deploys; only the separate owner-authorized release action should perform it. T8 historical test/source/resource limits remain unchanged. Older status sections below describe their original checkpoint.
+
+
 ## 2026-10-15 — final segmented T8 reconciliation
 
 **T8 and Gate G: ACCEPTED. REL-1: NOT STARTED.** The user's explicit no-passed-test-replay instruction supersedes the earlier single-green-stock-invocation requirement. Older sections below are historical. No merge or deployment is authorized.
