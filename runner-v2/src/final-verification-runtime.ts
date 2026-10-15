@@ -1,4 +1,10 @@
+import { commandReuseMetadata } from "./command-evidence-reuse.js";
+import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
+import type { TempRecordSink } from "./cleanup-ownership.js";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join, relative, resolve } from "node:path";
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
   BrowserConsoleEvent,
@@ -23,6 +29,7 @@ import type {
   EvidenceStore,
 } from "./evidence-store.js";
 import { unavailableGitRunner } from "./git-command.js";
+import { hasTestSelectionFlag, isDirectNodeTestCommand } from "./flaky-rerun.js";
 import type { GitRunner } from "./git-repository.js";
 import {
   outputFor,
@@ -38,6 +45,7 @@ import {
   cloneFinalVerificationExecutionProfile,
   type FinalVerificationDependencyProvisioning,
   type FinalVerificationExecutionProfile,
+  type FinalVerificationReportDescriptor,
 } from "./final-verification-profile.js";
 import type { FinalVerificationPortLease } from "./final-verification-port-authority.js";
 import {
@@ -67,6 +75,12 @@ export interface FinalVerificationCommand {
   executable: string;
   args: string[];
   timeoutMs?: number;
+  /**
+   * T6a (real counts): explicit child-environment overrides for this command
+   * (an `undefined` value removes the name). Passed to the audited executor,
+   * which still applies its forbidden-name policy.
+   */
+  environment?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface FinalVerificationManagedProcessInput {
@@ -167,6 +181,26 @@ export interface FinalVerificationRuntimeOptions {
   maximumTimeoutMs?: number;
   validatePortLease?: (lease: FinalVerificationPortLease) => void | Promise<void>;
   execution?: OneShotCommandExecutor;
+  /**
+   * T6b repair (B2): the ambient NODE_OPTIONS the audited executor passes
+   * to children (wired by the factory from its ambient snapshot, mirroring
+   * the T6a delivery boundary). The reporter's own flags are appended to
+   * it; this module never reads the ambient process environment itself.
+   */
+  ambientNodeOptions?: string;
+  /**
+   * T6b repair (R2-B4): the OA-14 flaky rerun of package `run test`
+   * commands. The failing-test pattern is added to the node --test
+   * NODE_OPTIONS (npm forwards the environment to the script), so the
+   * rerun report must show at least one real selected test.
+   */
+  testNamePattern?: string;
+  /**
+   * T6b repair (R2-B6, OA-17): durable creation records for the
+   * runner-owned junit report files this runtime writes into the
+   * verification workspace; the temp search later removes them.
+   */
+  tempRecorders?: Pick<TempRecordSink, "recorded">;
 }
 
 export interface FinalVerificationRunInput {
@@ -193,6 +227,15 @@ export interface FinalVerificationCommandFact extends CommandEvidenceFact {
   readinessSatisfied?: boolean;
   cleanupRequested?: boolean;
   cleanupSucceeded?: boolean;
+  /** Machine-readable test-report identities used for OA-14 rerun selection. */
+  report?: {
+    readonly failingTestIds?: readonly string[];
+    /** Real counts from the rerun report: executed and failed test
+     * totals. The OA-14 verdict requires executed >= 1 with zero failed
+     * and the named ids absent from the rerun failures. */
+    readonly executed?: number;
+    readonly failed?: number;
+  };
 }
 
 export interface FinalVerificationBrowserSnapshotFact extends BrowserSnapshotEvidenceFact {
@@ -341,6 +384,9 @@ export class FinalVerificationRuntime {
   private readonly validatePortLease?: (lease: FinalVerificationPortLease) => void | Promise<void>;
   private readonly execution?: OneShotCommandExecutor;
   private readonly git: GitRunner;
+  private readonly ambientNodeOptions?: string;
+  private readonly testNamePattern?: string;
+  private readonly tempRecorders?: Pick<TempRecordSink, "recorded">;
   private runOrdinal = 0;
 
   constructor(options: FinalVerificationRuntimeOptions) {
@@ -349,6 +395,9 @@ export class FinalVerificationRuntime {
       throw new Error("Final verification taskId is required.");
     }
     this.git = options.git ?? unavailableGitRunner;
+    this.ambientNodeOptions = options.ambientNodeOptions;
+    this.testNamePattern = options.testNamePattern;
+    this.tempRecorders = options.tempRecorders;
     this.workspaceManager = options.workspaceManager;
     this.artifacts = options.artifacts;
     this.evidenceStore = options.evidenceStore;
@@ -435,6 +484,8 @@ export class FinalVerificationRuntime {
           runtimeSmoke: execution.runtimeSmoke,
           browser: execution.browser,
           provisioning: execution.provisioning,
+      reports: execution.reports,
+      inventoryIncomplete: execution.inventoryIncomplete,
           workspace,
           generationId,
           runOrdinal,
@@ -489,6 +540,8 @@ export class FinalVerificationRuntime {
       runtimeSmoke: execution.runtimeSmoke,
       browser: execution.browser,
       provisioning: execution.provisioning,
+      reports: execution.reports,
+      inventoryIncomplete: execution.inventoryIncomplete,
       workspace,
       generationId,
       runOrdinal,
@@ -539,6 +592,8 @@ export class FinalVerificationRuntime {
     runtimeSmoke: FinalVerificationRuntimeSmokeInput | undefined;
     browser: FinalVerificationBrowserInput | undefined;
     provisioning: FinalVerificationDependencyProvisioning | undefined;
+    reports: FinalVerificationReportDescriptor[] | undefined;
+    inventoryIncomplete: boolean | undefined;
     workspace: VerificationWorkspace;
     generationId: string;
     runOrdinal: number;
@@ -557,6 +612,15 @@ export class FinalVerificationRuntime {
       issues: [] as string[],
     };
     if (check.status === "not_applicable") {
+      // F2: inspection uncertainty precedes absence-based applicability.
+      // An incomplete inventory cannot prove no family applies, so an
+      // absence-based not-applicable build/tests category fails closed.
+      // Non-executable categories carry no marker-absence claim and keep
+      // their floor.
+      if (input.inventoryIncomplete === true && EXECUTABLE_CATEGORIES.has(check.category)) {
+        base.issues.push(`Required category ${check.category} was inspected with an incomplete file inventory; marker absence proves nothing.`);
+        return { ...base, green: false };
+      }
       if (input.commands !== undefined && input.commands.length > 0) {
         base.issues.push(`Not-applicable category ${check.category} supplied executable commands.`);
         return { ...base, green: false };
@@ -607,10 +671,129 @@ export class FinalVerificationRuntime {
 
     for (const [index, command] of input.commands.entries()) {
       validateCommand(command, check.category, index, this.maximumTimeoutMs);
+      // T6b repair (B2): direct node --test commands report through a
+      // runner-owned junit file named for this exact run, so a stale file
+      // from another run can never be mistaken for this run report.
+      const reportFileName = junitReportFileName(input.generationId, check.category, index, input.runOrdinal);
+      let runCommand = command;
+      let junitDestination: string | undefined;
+      let familyReport: { destination: string; format: "junit" | "trx"; runner: string } | undefined;
+      let familyReportSet: { kind: "maven-surefire-reports"; runner: string; format: "junit" | "trx" } | undefined;
+      let familyReportSetBefore: Map<string, { size: number; mtimeMs: number }> | undefined;
+      let junitFiltered = false;
+      let directJunit = false;
+      if (executableCategory === "tests" && isDirectNodeTestCommand(command)) {
+        junitDestination = join(input.workspace.path, reportFileName);
+        junitFiltered = hasTestSelectionFlag(command.args);
+        directJunit = true;
+      }
+      // Node reporter planning keeps its NODE_OPTIONS gate below; the
+      // V3 language-family wiring after it runs independently of it.
+      if (executableCategory === "tests" && !junitDestination) {
+        // A caller that already sets NODE_OPTIONS (the T6a delivery
+        // boundary plans its own report) keeps its reporter and report path.
+        // T6b repair (R2-B4): the production tests command is the package
+        // `run test` script. The T6a planner models a node --test script and
+        // adds the reporter through NODE_OPTIONS (npm forwards it), so the
+        // run records real failing ids and counts from this run's report.
+        // Loaded on use: delivery-execution imports this module.
+        // A caller that already sets NODE_OPTIONS keeps its own reporter;
+        // only plan the Node report when the runner flags can reach it.
+        const nodeReportEligible = !Object.hasOwn(command.environment ?? {}, "NODE_OPTIONS");
+        const { planTestReport } = await import("./delivery-execution.js");
+        const plan = planTestReport({
+          checkoutPath: input.workspace.path,
+          command,
+          reportName: reportFileName.replace(/^\.aiboard-report-/, "").replace(/\.xml$/, ""),
+          ambientNodeOptions: nodeOptionsWithTestNamePattern(this.ambientNodeOptions, this.testNamePattern),
+        });
+        if (nodeReportEligible && plan.runner === "node --test" && plan.command && plan.reportPath) {
+          runCommand = plan.command;
+          junitDestination = resolve(input.workspace.path, plan.reportPath);
+          junitFiltered = plan.filtered === true;
+        }
+        // V3 (AR-R26): detected non-package.json families report through
+        // their own wired flags, independent of Node reporter handling.
+        // The trusted descriptor must agree with the plan, or the run
+        // fails closed instead of reading a foreign file or minting
+        // counts for an unsupported or ambiguous runner.
+        {
+          const { planLanguageTestReport, languageReportFormat } = await import("./language-execution-profile.js");
+          const language = planLanguageTestReport({
+            checkoutPath: input.workspace.path,
+            command: { label: command.label, executable: command.executable, args: [...command.args] },
+            reportName: reportFileName.replace(/^\.aiboard-report-/, "").replace(/\.xml$/, ""),
+          });
+          if (language === undefined) {
+            const orphan = input.reports?.find((entry) => entry.commandLabel === command.label);
+            if (orphan) {
+              base.issues.push(`tests command ${command.label} carries a trusted report descriptor but matches no language report plan; refusing to guess its report.`);
+            }
+          } else if (!language.format || (!language.reportPath && !language.reportSet)) {
+            base.issues.push(`tests command ${command.label} has no usable machine-readable report: ${language.unsupported ?? "the language test runner has no wired report."}.`);
+          } else if (languageReportFormat(language.runner) !== language.format) {
+            base.issues.push(`tests command ${command.label} report plan disagrees with the trusted execution profile.`);
+          } else {
+            const descriptor = input.reports?.find((entry) => entry.commandLabel === command.label);
+            if (!descriptor) {
+              base.issues.push(`tests command ${command.label} plans a ${language.runner} report but the trusted execution profile carries no report descriptor; refusing to mint counts.`);
+            } else if (descriptor.runner !== language.runner || descriptor.format !== language.format) {
+              base.issues.push(`tests command ${command.label} report plan disagrees with the trusted execution profile.`);
+            } else if (language.reportSet) {
+              familyReportSet = { kind: language.reportSet.kind, runner: language.runner, format: language.format };
+            } else if (language.reportPath) {
+              if (language.command) {
+                runCommand = {
+                  label: command.label,
+                  executable: language.command.executable,
+                  args: [...language.command.args],
+                  ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
+                  ...(command.environment ? { environment: { ...command.environment } } : {}),
+                };
+              }
+              familyReport = { destination: resolve(input.workspace.path, language.reportPath), format: language.format, runner: language.runner };
+            }
+          }
+        }
+      }
+      if (junitDestination) {
+        try {
+          this.tempRecorders?.recorded({ path: junitDestination, kind: "file", createdAt: this.clock() });
+        } catch { /* bookkeeping never breaks verification */ }
+      }
+      if (familyReport) {
+        try {
+          this.tempRecorders?.recorded({ path: familyReport.destination, kind: "file", createdAt: this.clock() });
+        } catch { /* bookkeeping never breaks verification */ }
+        if (existsSync(familyReport.destination)) {
+          base.issues.push(`tests command ${command.label} report path already exists before this run; refusing to read a report this run did not write.`);
+          familyReport = undefined;
+          runCommand = command;
+        }
+      }
+      if (familyReportSet) {
+        const { scanMavenSurefireReportFiles } = await import("./language-execution-profile.js");
+        try {
+          const snapshot = await scanMavenSurefireReportFiles({ checkoutPath: input.workspace.path });
+          if (snapshot.incomplete) {
+            base.issues.push(`tests command ${command.label} report-set inventory is incomplete before this run; refusing to collect reports.`);
+            familyReportSet = undefined;
+          } else {
+            familyReportSetBefore = snapshot.snapshot;
+          }
+        } catch {
+          base.issues.push(`tests command ${command.label} report-set inventory is unavailable before this run; refusing to collect reports.`);
+          familyReportSet = undefined;
+        }
+      }
+      if (input.inventoryIncomplete) {
+        base.issues.push(`Required category ${check.category} was inspected with an incomplete file inventory; marker absence proves nothing.`);
+      }
       const startState = await repositoryState(input.workspace.path, this.git);
+      const workingTreeIdentity = await workingTreeForRunner(this.git, input.workspace.path);
       const startedAt = this.clock();
       const execution = await executeCommand(
-        command,
+        runCommand,
         input.workspace.path,
         input.signal,
         this.defaultTimeoutMs,
@@ -623,8 +806,61 @@ export class FinalVerificationRuntime {
           taskId: this.taskId,
           callId: `${input.generationId}:${check.category}:${index}:${input.runOrdinal}`,
         },
+        directJunit && junitDestination ? { destination: junitDestination, ambientNodeOptions: this.ambientNodeOptions } : undefined,
       );
       const finishedAt = this.clock();
+      const junitReport = junitDestination
+        ? await readJUnitTestReport(junitDestination, input.workspace.path, junitFiltered)
+        : undefined;
+      const familyReportReading = familyReport
+        ? await readLanguageTestReportFile({
+          checkoutPath: input.workspace.path,
+          destination: familyReport.destination,
+          format: familyReport.format,
+          artifacts: this.artifacts,
+        })
+        : undefined;
+      const familyReportSetReading = familyReportSet && familyReportSetBefore
+        ? await readLanguageTestReportSet({
+          checkoutPath: input.workspace.path,
+          before: familyReportSetBefore,
+          artifacts: this.artifacts,
+        })
+        : undefined;
+      const familySetFactReport = familyReportSetReading?.reading
+        ? {
+          failingTestIds: [] as string[],
+          executed: familyReportSetReading.reading.executed,
+          failed: familyReportSetReading.reading.failed,
+          ...(familyReportSetReading.artifactHash ? { artifactHash: familyReportSetReading.artifactHash } : {}),
+        }
+        : undefined;
+      const familyFactReport = familyReportReading?.reading
+        ? {
+          failingTestIds: [] as string[],
+          executed: familyReportReading.reading.executed,
+          failed: familyReportReading.reading.failed,
+          ...(familyReportReading.artifactHash ? { artifactHash: familyReportReading.artifactHash } : {}),
+        }
+        : familySetFactReport;
+      if (familyReport && execution.exitCode === 0) {
+        if (!familyReportReading?.reading) {
+          base.issues.push(`tests command ${command.label} planned a ${familyReport.format} report but this run produced no readable report at the runner-owned path.`);
+        } else if (familyReportReading.reading.executed < 1) {
+          base.issues.push(`tests command ${command.label} report shows zero executed tests; at least one executed test is required.`);
+        } else if (familyReportReading.reading.failed > 0) {
+          base.issues.push(`tests command ${command.label} report shows ${familyReportReading.reading.failed} failed tests; report failures prevent a green run.`);
+        }
+      }
+      if (familyReportSet && execution.exitCode === 0) {
+        if (!familyReportSetReading?.reading) {
+          base.issues.push(`tests command ${command.label} planned a ${familyReportSet.format} report set but this run produced no readable fresh reports at the runner-owned paths.`);
+        } else if (familyReportSetReading.reading.executed < 1) {
+          base.issues.push(`tests command ${command.label} report set shows zero executed tests; at least one executed test is required.`);
+        } else if (familyReportSetReading.reading.failed > 0) {
+          base.issues.push(`tests command ${command.label} report set shows ${familyReportSetReading.reading.failed} failed tests; report failures prevent a green run.`);
+        }
+      }
       const endState = await repositoryState(input.workspace.path, this.git);
       const [stdoutArtifact, stderrArtifact] = await Promise.all([
         artifactForFinalOutput(this.artifacts, execution, "stdout", `${check.category} ${command.label} stdout`),
@@ -633,6 +869,9 @@ export class FinalVerificationRuntime {
       const executionErrorCode = stableExecutionErrorCode(execution.startError);
       const fact: FinalVerificationCommandFact = {
         kind: "command",
+        workingTreeIdentity: settleWorkingTreeIdentity(workingTreeIdentity, await workingTreeForRunner(this.git, input.workspace.path)),
+        childEnvironmentIdentity: execution.routed?.childEnvironmentIdentity ?? unknownChildEnvironment(),
+        ...(execution.routed?.childEnvironmentAudit ? {childEnvironmentAudit: execution.routed.childEnvironmentAudit} : {}),
         category: executableCategory,
         label: command.label,
         executable: command.executable,
@@ -661,6 +900,10 @@ export class FinalVerificationRuntime {
         targetRevision: input.workspace.targetRevision,
         startState,
         endState,
+        ...(junitReport ? { report: junitReport } : {}),
+        ...(familyFactReport ? { report: familyFactReport } : {}),
+        ...(execution.routed ? commandReuseMetadata(execution.routed) : {}),
+        ...(execution.routed?.reuseSource?.fact.kind === "command" && "report" in execution.routed.reuseSource.fact ? {report: (execution.routed.reuseSource.fact as FinalVerificationCommandFact).report} : {}),
       };
       base.facts.push(fact);
 
@@ -770,6 +1013,7 @@ export class FinalVerificationRuntime {
     }
     validateRuntimeSmoke(smoke, this.maximumTimeoutMs);
 
+    const workingTreeIdentity = await workingTreeForRunner(this.git, input.workspace.path);
     const startedAt = this.clock();
     const startState = await repositoryState(input.workspace.path, this.git);
     let observation: FinalVerificationManagedProcessObservation | undefined;
@@ -839,6 +1083,8 @@ export class FinalVerificationRuntime {
     );
     const fact: FinalVerificationCommandFact = {
       kind: "command",
+      workingTreeIdentity: settleWorkingTreeIdentity(workingTreeIdentity, await workingTreeForRunner(this.git, input.workspace.path)),
+      childEnvironmentIdentity: unknownChildEnvironment(),
       category: "runtime_smoke",
       label: smoke.label,
       executable: smoke.executable,
@@ -1349,6 +1595,8 @@ function authoritativeExecutionInput(
 ): {
   commands: FinalVerificationExecutionProfile["commands"];
   provisioning?: FinalVerificationDependencyProvisioning;
+  reports?: FinalVerificationReportDescriptor[];
+  inventoryIncomplete?: boolean;
   runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
   browser?: FinalVerificationBrowserInput;
 } {
@@ -1369,6 +1617,12 @@ function authoritativeExecutionInput(
   }
   return {
     commands: cloneFinalVerificationExecutionProfile(input.executionProfile).commands,
+    ...(input.executionProfile.reports
+      ? { reports: input.executionProfile.reports.map((report) => ({ ...report })) }
+      : {}),
+    ...(input.executionProfile.inventoryIncomplete !== undefined
+      ? { inventoryIncomplete: input.executionProfile.inventoryIncomplete }
+      : {}),
     ...(input.executionProfile.provisioning
       ? { provisioning: cloneFinalVerificationExecutionProfile(input.executionProfile).provisioning }
       : {}),
@@ -1385,6 +1639,20 @@ function authoritativeExecutionInput(
   };
 }
 
+/** Key-order independent; a removal (`undefined`) differs from an absent name. */
+function sameEnvironment(
+  left: Readonly<Record<string, string | undefined>> | undefined,
+  right: Readonly<Record<string, string | undefined>> | undefined,
+): boolean {
+  const entries = (value: Readonly<Record<string, string | undefined>> | undefined) =>
+    Object.entries(value ?? {})
+      .map(([name, entry]) => `${name}\u0000${entry === undefined ? "\u0001removed" : `=${entry}`}`)
+      .sort();
+  const leftEntries = entries(left);
+  const rightEntries = entries(right);
+  return leftEntries.length === rightEntries.length && leftEntries.every((entry, index) => entry === rightEntries[index]);
+}
+
 function sameCommands(
   left: readonly FinalVerificationCommand[] | undefined,
   right: readonly FinalVerificationCommand[] | undefined,
@@ -1393,7 +1661,8 @@ function sameCommands(
   return left.length === right.length && left.every((command, index) => {
     const expected = right[index]!;
     return command.label === expected.label && command.executable === expected.executable &&
-      command.timeoutMs === expected.timeoutMs && sameStringArray(command.args, expected.args);
+      command.timeoutMs === expected.timeoutMs && sameStringArray(command.args, expected.args) &&
+      sameEnvironment(command.environment, expected.environment);
   });
 }
 
@@ -1474,8 +1743,190 @@ async function repositoryState(cwd: string, execute: GitRunner): Promise<Reposit
   return { revision, status: status.stdout };
 }
 
-async function executeCommand(
+/** T6b repair (B2): runner-owned junit report name for one exact command run. */
+export function junitReportFileName(generationId: string, category: string, index: number, runOrdinal: number): string {
+  const key = `${generationId}-${category}-${index}-${runOrdinal}`.replace(/[^A-Za-z0-9_-]+/g, "_");
+  return `.aiboard-report-fv-${key}.xml`;
+}
+
+/**
+ * T6b repair (B2/N1): child environment for final-verification commands.
+ * NODE_TEST_CONTEXT is always stripped (it would make node --test exit 0
+ * with a failing file); direct node --test commands additionally report
+ * through a runner-owned junit file (T6a reporter flags, forward slashes:
+ * NODE_OPTIONS unescapes backslashes, so a Windows path would corrupt).
+ * Commands that already select a reporter keep their own options and produce no report.
+ */
+function junitEnvironment(
   command: FinalVerificationCommand,
+  junit: { destination: string; ambientNodeOptions?: string } | undefined,
+): Record<string, string | undefined> {
+  const explicitEnvironment: Record<string, string | undefined> = {
+    NODE_TEST_CONTEXT: undefined,
+    ...command.environment,
+  };
+  if (!junit) return explicitEnvironment;
+  const effectiveNodeOptions = explicitEnvironment.NODE_OPTIONS ?? junit.ambientNodeOptions ?? "";
+  if (effectiveNodeOptions.includes("--test-reporter")) return explicitEnvironment;
+  return {
+    ...explicitEnvironment,
+    NODE_OPTIONS: `${effectiveNodeOptions} --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination="${junit.destination.replace(/\\/g, "/")}"`.trim(),
+  };
+}
+
+interface JUnitTestReport {
+  readonly failingTestIds: string[];
+  readonly executed: number;
+  readonly failed: number;
+  /** V3: immutable capture of the family report bytes that were read. */
+  readonly artifactHash?: string;
+}
+
+/**
+ * T6b repair (R2-B4): the owner real-counts reading of one node junit
+ * report, through the reviewed T6a parser (nodeJunitOutcome): file-level
+ * synthetic entries, skipped tests, and suites never count as executed.
+ * Executed = real passed + failed; a filtered run with no real test yields
+ * executed 0, which the OA-14 verdict never treats as a clean rerun.
+ */
+/**
+ * V3 (AR-R26): the owner real-counts reading of one wired language-family
+ * report, through the conservative T5 JUnit/TRX readers. Anything missing,
+ * malformed, truncated, contradictory, or zero-test yields no reading, so
+ * the caller fails closed instead of minting counts. A readable report is
+ * captured into the immutable artifact store.
+ */
+async function readLanguageTestReportFile(input: {
+  checkoutPath: string;
+  destination: string;
+  format: "junit" | "trx";
+  artifacts: ArtifactStore;
+}): Promise<{ reading?: { executed: number; failed: number }; artifactHash?: string }> {
+  // Loaded on use: delivery-execution imports this module.
+  const { outcomeFromReportReading, readBoundedReportBytes, readJUnitReport, readTrxReport } = await import("./test-report-readers.js");
+  let bytes: Buffer;
+  try {
+    bytes = readBoundedReportBytes({ checkoutPath: input.checkoutPath, reportPath: relative(input.checkoutPath, input.destination) });
+  } catch {
+    return {};
+  }
+  const xml = bytes.toString("utf8");
+  const parsed = input.format === "junit" ? readJUnitReport(xml) : readTrxReport(xml);
+  const outcome = outcomeFromReportReading(parsed);
+  let stored: { hash: string };
+  try {
+    stored = await input.artifacts.put(bytes, "application/xml", `final verification test report ${input.destination}`);
+  } catch {
+    return {};
+  }
+  // Malformed bounded bytes stay archived without granting counts.
+  if (parsed.status !== "ok" || outcome.outcome === "unknown") return {};
+  return {
+    reading: { executed: outcome.counts.passed + outcome.counts.failed, failed: outcome.counts.failed },
+    artifactHash: stored.hash,
+  };
+}
+
+/**
+ * V3 (AR-R26): the owner real-counts reading of one invocation-owned
+ * Maven Surefire fresh report set. Only files new or changed since the
+ * pre-run snapshot are collected, each through the shared bounded
+ * confined reader and the existing JUnit reader, then aggregated. A
+ * stale, missing, oversized, symlinked, malformed, or incomplete set
+ * yields no reading, so the caller fails closed instead of minting
+ * counts. The exact aggregated bytes are archived immutably.
+ */
+async function readLanguageTestReportSet(input: {
+  checkoutPath: string;
+  before: ReadonlyMap<string, { size: number; mtimeMs: number }>;
+  artifacts: ArtifactStore;
+}): Promise<{ reading?: { executed: number; failed: number }; artifactHash?: string }> {
+  const { scanMavenSurefireReportFiles } = await import("./language-execution-profile.js");
+  const { aggregateJUnitReportSet, outcomeFromReportReading, readBoundedReportBytes, readJUnitReport } = await import("./test-report-readers.js");
+  let scan: Awaited<ReturnType<typeof scanMavenSurefireReportFiles>>;
+  try {
+    scan = await scanMavenSurefireReportFiles({ checkoutPath: input.checkoutPath, before: input.before });
+  } catch {
+    return {};
+  }
+  if (scan.incomplete || scan.fresh.length === 0) return {};
+  const parts: Buffer[] = [];
+  const readings = [];
+  for (const reportPath of scan.fresh) {
+    let bytes: Buffer;
+    try {
+      bytes = readBoundedReportBytes({ checkoutPath: input.checkoutPath, reportPath });
+    } catch {
+      // An unusable member refuses ALL counts, but the bounded bytes
+      // already collected stay archived as safe diagnostics.
+      try {
+        if (parts.length > 0) {
+          await input.artifacts.put(Buffer.concat(parts), "application/xml", "final verification maven surefire report set");
+        }
+      } catch {
+        // Diagnostic preservation never masks the refusal.
+      }
+      return {};
+    }
+    parts.push(bytes);
+    readings.push(readJUnitReport(bytes.toString("utf8")));
+  }
+  const aggregate = aggregateJUnitReportSet(readings);
+  const outcome = outcomeFromReportReading(aggregate);
+  let stored: { hash: string };
+  try {
+    const separator = Buffer.from("\n", "utf8");
+    const joined: Buffer[] = [];
+    for (const part of parts) {
+      if (joined.length > 0) joined.push(separator);
+      joined.push(part);
+    }
+    stored = await input.artifacts.put(Buffer.concat(joined), "application/xml", "final verification maven surefire report set");
+  } catch {
+    return {};
+  }
+  // The exact bytes stay archived even when they grant no counts.
+  if (aggregate.status !== "ok" || outcome.outcome === "unknown") return {};
+  return {
+    reading: { executed: outcome.counts.passed + outcome.counts.failed, failed: outcome.counts.failed },
+    artifactHash: stored.hash,
+  };
+}
+
+async function readJUnitTestReport(
+  destination: string,
+  workspacePath: string,
+  filtered: boolean,
+): Promise<JUnitTestReport | undefined> {
+  let xml: string;
+  try {
+    xml = await readFile(destination, "utf8");
+  } catch {
+    return undefined;
+  }
+  // Loaded on use: delivery-execution imports this module.
+  const { nodeJunitOutcome } = await import("./delivery-execution.js");
+  const outcome = nodeJunitOutcome(xml, workspacePath, filtered);
+  if (!outcome.counts) return undefined;
+  return {
+    failingTestIds: [...(outcome.failingTestIds ?? [])],
+    executed: outcome.counts.passed + outcome.counts.failed,
+    failed: outcome.counts.failed,
+  };
+}
+
+/**
+ * T6b repair (R2-B4): NODE_OPTIONS for a narrowed package rerun. The
+ * pattern is double-quoted with backslashes and quotes escaped, because
+ * NODE_OPTIONS unescapes them.
+ */
+export function nodeOptionsWithTestNamePattern(ambient: string | undefined, pattern: string | undefined): string | undefined {
+  if (pattern === undefined) return ambient;
+  const quoted = pattern.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+  return `${ambient?.trim() ?? ""} --test-name-pattern="${quoted}"`.trim();
+}
+
+async function executeCommand(  command: FinalVerificationCommand,
   cwd: string,
   signal: AbortSignal | undefined,
   defaultTimeoutMs: number,
@@ -1488,6 +1939,7 @@ async function executeCommand(
     taskId: string;
     callId: string;
   },
+  junit?: { destination: string; ambientNodeOptions?: string },
 ): Promise<ProcessResult> {
   if (signal?.aborted) {
     return {
@@ -1522,6 +1974,13 @@ async function executeCommand(
       arguments: command.args,
       workingDirectory: cwd,
       timeoutMs,
+      // T6b repair (B2/N1): the reviewed harness never leaks its own
+      // test-runner context into the child. NODE_TEST_CONTEXT would make
+      // node --test exit 0 with a failing file, so it is always stripped.
+      // Direct node --test commands additionally report through a
+      // runner-owned junit file, so the run records the real failing
+      // test ids from this run report (mirrors the T6a reporter flags).
+      ...(junitEnvironment(command, junit) ? { explicitEnvironment: junitEnvironment(command, junit) } : {}),
       context: {
         runId: identity.runId,
         sessionId: identity.sessionId,

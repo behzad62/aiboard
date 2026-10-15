@@ -19,15 +19,32 @@ export interface UserGuidancePlanReconciledResolution {
   planReconciliation: PlanReconciliation;
 }
 
+/**
+ * T9 repair cycle 2 (B3-r2): acknowledgement for a new-policy run with no
+ * ready plan (planning state, or an answered/pre-triage new-policy run).
+ * There is no plan to prove unchanged and no ready plan to reconcile, so no
+ * evidence is needed and nothing changes: the guidance folds into the plan
+ * or answer still being drafted. The kernel accepts it only while the run
+ * has no ready plan; once a ready plan exists the evidence-backed
+ * `no_plan_change` / `plan_reconciled` rules apply unchanged. Legacy runs
+ * never accept it.
+ */
+export interface UserGuidanceFoldedIntoPlanningResolution {
+  type: "folded_into_planning";
+  rationale: string;
+}
+
 export type UserGuidanceAcknowledgementResolution =
   | UserGuidanceNoPlanChangeResolution
-  | UserGuidancePlanReconciledResolution;
+  | UserGuidancePlanReconciledResolution
+  | UserGuidanceFoldedIntoPlanningResolution;
 
 export type ParsedUserGuidanceAcknowledgementResolution =
   | UserGuidanceNoPlanChangeResolution
   | Omit<UserGuidancePlanReconciledResolution, "planReconciliation"> & {
     planReconciliation: unknown;
-  };
+  }
+  | UserGuidanceFoldedIntoPlanningResolution;
 
 export interface UserGuidanceAcknowledgement {
   guidanceId: string;
@@ -48,10 +65,16 @@ export type ArchitectActionReason =
   | { type: "acceptance_contract_upgrade_required" }
   | { type: "user_guidance_required"; guidanceId: string; version: number }
   | { type: "guidance_required"; requestId: string; taskId: string }
-  | { type: "review_required"; taskId: string; changeSetId: string }
+  | {
+      type: "review_required";
+      taskId: string;
+      changeSetId: string;
+      /** T6a: the completed deliverable review and what it leaves open (new-policy runs). */
+      delivery?: DeliveryReviewReasonSummary;
+    }
   | { type: "integration_approval_required"; taskId: string; changeSetId: string }
   | { type: "completion_decision_required"; runPolicy?: "plan_only" }
-  | { type: "final_verification_plan_required"; integrationRevision: string }
+  | { type: "final_verification_plan_required"; integrationRevision: string; planPrefill?: FinalVerificationPlanPrefill }
   | {
       type: "final_verification_review_required";
       taskId: string;
@@ -84,6 +107,15 @@ export type ArchitectActionReason =
   | { type: "task_failure_resolution_required"; taskId: string; attempt: number; failureReason: string }
   | { type: "integration_resolution_required"; taskId: string }
   | {
+      /** T6a: a post-integration boundary check failed or was unknown. */
+      type: "delivery_boundary_failed";
+      taskId: string;
+      boundaryId: string;
+      integrationRevision: string;
+      /** 1 for the first resolution; higher after planned repairs ended without a new revision. */
+      resolutionGeneration: number;
+    }
+  | {
       type: "plan_critique_resolution_required";
       critiqueId: string;
       planRevision: number;
@@ -101,6 +133,12 @@ export type ArchitectActionReason =
       /** CONTEXT_RECORDING_RETRY_LIMIT minus retry resolutions already used. */
       retriesRemaining?: number;
     };
+
+export interface DeliveryReviewReasonSummary {
+  reviewId: string;
+  openFindingIds: string[];
+  unverifiedClaimIds: string[];
+}
 
 export type ArchitectQuestionDecisionKind =
   | "authority_decision"
@@ -227,7 +265,31 @@ function parseAcknowledgementResolution(value: unknown): ParsedUserGuidanceAckno
       planReconciliation: resolution.planReconciliation,
     };
   }
+  if (type === "folded_into_planning") {
+    assertExactKeys(resolution, ["type", "rationale"]);
+    return { type, rationale: requiredText(resolution, "rationale") };
+  }
   throw new Error(`resolution type ${type} is invalid.`);
+}
+
+function parseDeliveryReasonSummary(value: unknown): DeliveryReviewReasonSummary {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Deliverable review reason summary is invalid.");
+  }
+  const summary = value as Record<string, unknown>;
+  assertExactKeys(summary, ["reviewId", "openFindingIds", "unverifiedClaimIds"]);
+  const ids = (key: string): string[] => {
+    const list = summary[key];
+    if (!Array.isArray(list) || list.some((item) => typeof item !== "string" || !item.trim())) {
+      throw new Error(`${key} must contain nonblank strings.`);
+    }
+    return [...list] as string[];
+  };
+  return {
+    reviewId: requiredText(summary, "reviewId"),
+    openFindingIds: ids("openFindingIds"),
+    unverifiedClaimIds: ids("unverifiedClaimIds"),
+  };
 }
 
 function requiredTextArray(payload: Record<string, unknown>, key: string): string[] {
@@ -291,6 +353,37 @@ function parseCheckpoint(value: unknown): ArchitectActionCheckpoint {
   };
 }
 
+/** W3: strict shape for the runner-owned final-verification plan prefill. */
+function parseFinalVerificationPlanPrefill(value: unknown): FinalVerificationPlanPrefill {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Final-verification plan prefill is invalid.");
+  }
+  const candidate = value as Record<string, unknown>;
+  assertExactKeys(candidate, ["targetRevision", "profileDigest", "required", "undetected", "detectedSignals"]);
+  const categories = (key: string): FinalVerificationPlanPrefill["required"] => {
+    const list = candidate[key];
+    if (!Array.isArray(list) || !list.every((entry): entry is (typeof FINAL_VERIFICATION_CATEGORIES)[number] => typeof entry === "string" && (FINAL_VERIFICATION_CATEGORIES as readonly string[]).includes(entry))) {
+      throw new Error(`Final-verification plan prefill ${key} is invalid.`);
+    }
+    return [...list];
+  };
+  const signals = candidate.detectedSignals;
+  if (!Array.isArray(signals) || !signals.every((entry) => typeof entry === "object" && entry !== null && !Array.isArray(entry) && typeof (entry as Record<string, unknown>).category === "string" && (FINAL_VERIFICATION_CATEGORIES as readonly string[]).includes((entry as Record<string, unknown>).category as string))) {
+    throw new Error("Final-verification plan prefill detectedSignals are invalid.");
+  }
+  const targetRevision = candidate.targetRevision;
+  const profileDigest = candidate.profileDigest;
+  if (typeof targetRevision !== "string" || !targetRevision) throw new Error("Final-verification plan prefill targetRevision is invalid.");
+  if (typeof profileDigest !== "string" || !/^[a-f0-9]{64}$/.test(profileDigest)) throw new Error("Final-verification plan prefill profileDigest is invalid.");
+  return {
+    targetRevision,
+    profileDigest,
+    required: categories("required"),
+    undetected: categories("undetected"),
+    detectedSignals: (signals as { category: (typeof FINAL_VERIFICATION_CATEGORIES)[number]; source?: string; detail?: string }[]).map((entry) => ({ ...entry })),
+  };
+}
+
 export function parseArchitectActionReason(value: unknown): ArchitectActionReason {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Architect action reason is invalid.");
@@ -310,7 +403,15 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
     case "guidance_required":
       exact(["requestId", "taskId"]);
       return { type, requestId: text("requestId"), taskId: text("taskId") };
-    case "review_required":
+    case "review_required": {
+      exact(["taskId", "changeSetId", "delivery"]);
+      return {
+        type,
+        taskId: text("taskId"),
+        changeSetId: text("changeSetId"),
+        ...(reason.delivery !== undefined ? { delivery: parseDeliveryReasonSummary(reason.delivery) } : {}),
+      };
+    }
     case "integration_approval_required":
       exact(["taskId", "changeSetId"]);
       return { type, taskId: text("taskId"), changeSetId: text("changeSetId") };
@@ -322,8 +423,12 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
       return { type, ...(reason.runPolicy === "plan_only" ? { runPolicy: "plan_only" as const } : {}) };
     }
     case "final_verification_plan_required":
-      exact(["integrationRevision"]);
-      return { type, integrationRevision: text("integrationRevision") };
+      exact(["integrationRevision", "planPrefill"]);
+      return {
+        type,
+        integrationRevision: text("integrationRevision"),
+        ...(reason.planPrefill === undefined ? {} : { planPrefill: parseFinalVerificationPlanPrefill(reason.planPrefill) }),
+      };
     case "final_verification_review_required":
       exact(["taskId", "generationId", "submissionId", "targetRevision"]);
       return {
@@ -393,6 +498,15 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
     case "integration_resolution_required":
       exact(["taskId"]);
       return { type, taskId: text("taskId") };
+    case "delivery_boundary_failed":
+      exact(["taskId", "boundaryId", "integrationRevision", "resolutionGeneration"]);
+      return {
+        type,
+        taskId: text("taskId"),
+        boundaryId: text("boundaryId"),
+        integrationRevision: text("integrationRevision"),
+        resolutionGeneration: requiredPositiveInteger(reason, "resolutionGeneration"),
+      };
     case "context_recording_decision_required": {
       exact(["purpose", "attempts", "reason", "noteSequence", "taskId", "attempt", "revision", "retriesRemaining"]);
       const taskId = reason.taskId === undefined ? undefined : text("taskId");
@@ -469,3 +583,4 @@ function parseRepairSource(value: unknown): Extract<
   throw new Error("Architect repair source is invalid.");
 }
 import type { PlanReconciliation } from "./task-contracts.js";
+import { FINAL_VERIFICATION_CATEGORIES, type FinalVerificationPlanPrefill } from "./final-verification-contracts.js";

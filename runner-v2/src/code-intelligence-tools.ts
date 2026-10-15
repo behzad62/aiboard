@@ -52,7 +52,7 @@ export function createCodeIntelligenceTools(
     ),
     readTool(
       "code.workspace_symbols",
-      "Search symbols through the configured language-intelligence provider",
+      "Search symbols through the configured language-intelligence provider. Returns unsupported_language for languages without a configured provider; use fs.search instead.",
       objectSchema({
         path: pathSchema(),
         query: { type: "string" },
@@ -71,7 +71,7 @@ export function createCodeIntelligenceTools(
     positionTool("code.references", "Find references to the symbol at a source position", options),
     readTool(
       "code.diagnostics",
-      "Return bounded diagnostics from the configured language-intelligence provider",
+      "Return bounded diagnostics from the configured language-intelligence provider. Returns unsupported_language for languages without a configured provider; use fs.search instead.",
       objectSchema({
         path: pathSchema(),
         limit: limitSchema(),

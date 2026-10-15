@@ -34,6 +34,24 @@ test("acceptance criteria require non-empty stable unique IDs and text", () => {
   );
 });
 
+test("acceptance criterion requirementId is optional, maps task-local criteria to run-level requirements, and rejects an empty value", () => {
+  assert.doesNotThrow(() =>
+    assertAcceptanceCriteria([{ id: "behavior", text: "legacy criterion, no requirement mapping" }]),
+  );
+  assert.doesNotThrow(() =>
+    assertAcceptanceCriteria([
+      { id: "behavior", text: "criterion mapped to a run-level requirement.", requirementId: "REQ-MANDATORY" },
+    ]),
+  );
+  assert.throws(
+    () =>
+      assertAcceptanceCriteria([
+        { id: "behavior", text: "criterion", requirementId: "" as unknown as string },
+      ]),
+    /requirementId must be a non-empty string/,
+  );
+});
+
 test("evidence links require exact criterion coverage and reject artifact-only links", () => {
   const complete: CriterionEvidenceLink[] = [
     {

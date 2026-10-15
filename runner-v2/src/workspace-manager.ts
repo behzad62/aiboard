@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, rmdir } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
 import { unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
@@ -42,6 +42,13 @@ export interface TaskWorkspaceOptions {
   baselineRevision?: string;
 }
 
+interface TaskWorkspaceOwner {
+  runId: string;
+  taskId: string;
+  workspaceId: string;
+  active: boolean;
+}
+
 export interface TaskCommit {
   runId: string;
   taskId: string;
@@ -67,6 +74,14 @@ export class WorkspaceManager {
   private readonly execute: GitRunner;
   private readonly beforeWorkspaceRootRemoval?: WorkspaceManagerOptions["beforeWorkspaceRootRemoval"];
   private operationQueue: Promise<void> = Promise.resolve();
+  /**
+   * T4 (EP11): exclusive worktree ownership — resolved worktree path to
+   * owning task id. No two writers share one worktree; defense in depth
+   * behind the scheduler claim gate, which refuses the second writer
+   * before a workspace is even allocated.
+   */
+  private readonly ownershipPath: string;
+  private readonly workspaceOwners = new Map<string, TaskWorkspaceOwner>();
 
   constructor(options: WorkspaceManagerOptions) {
     this.repositoryRoot = resolve(options.repositoryRoot);
@@ -78,6 +93,11 @@ export class WorkspaceManager {
       this.runSegment
     );
     this.baselineRevision = options.baselineRevision;
+    this.ownershipPath = resolve(
+      options.stateDirectory,
+      "workspace-owners",
+      `${this.runSegment}.json`,
+    );
     this.execute = options.execute ?? unavailableGitRunner;
     this.beforeWorkspaceRootRemoval = options.beforeWorkspaceRootRemoval;
   }
@@ -92,9 +112,18 @@ export class WorkspaceManager {
         options.workspaceId ?? taskId,
         options.baselineRevision ?? this.baselineRevision
       );
+      await this.loadWorkspaceOwners();
+      const ownedBy = this.workspaceOwners.get(descriptor.path);
+      if (ownedBy && ownedBy.taskId !== taskId) {
+        throw new Error(
+          `Workspace ${descriptor.path} is already owned by task ${ownedBy.taskId}; ` +
+          `no two writers share one worktree.`,
+        );
+      }
       await mkdir(this.workspaceRoot, { recursive: true });
       if (await pathExists(descriptor.path)) {
         await this.assertOwnedWorkspace(descriptor);
+        await this.setWorkspaceTaskOwner(descriptor, taskId);
         return descriptor;
       }
 
@@ -121,11 +150,17 @@ export class WorkspaceManager {
           descriptor.baselineRevision,
         ]);
       }
-      await this.assertOwnedWorkspace(descriptor);
+      await this.assertOwnedWorkspace(descriptor, true);
+      await this.setWorkspaceTaskOwner(descriptor, taskId);
       return descriptor;
     });
   }
 
+  /**
+   * T4: releases the exclusive worktree ownership held by a task. Called
+   * when a task no longer writes (integrated, cancelled, or fenced after
+   * failure). Unknown task ids are ignored.
+   */
   async commitTask(taskId: string, summary: string): Promise<TaskCommit> {
     return await this.serialized(async () => {
       const workspace = await this.ensureWorkspace(taskId);
@@ -135,14 +170,15 @@ export class WorkspaceManager {
 
   async commitWorkspace(
     workspace: TaskWorkspace,
-    summary: string
+    summary: string,
+    inspectCandidate?: (revision: string) => Promise<void>,
   ): Promise<TaskCommit> {
     return await this.serialized(async () => {
       if (workspace.runId !== this.runId) {
         throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
       }
       await this.assertOwnedWorkspace(workspace);
-      return await this.commitWorkspaceUnlocked(workspace, summary);
+      return await this.commitWorkspaceUnlocked(workspace, summary, inspectCandidate);
     });
   }
 
@@ -164,10 +200,12 @@ export class WorkspaceManager {
         ) {
           throw new Error(`Task branch ${branch} has unexpected ownership metadata.`);
         }
+        await this.loadWorkspaceOwners();
+        const owner = this.workspaceOwners.get(this.ownedWorkspacePath(workspaceSegment));
         const workspace: TaskWorkspace = {
           runId: this.runId,
-          taskId: workspaceSegment,
-          workspaceId: workspaceSegment,
+          taskId: owner?.taskId ?? workspaceSegment,
+          workspaceId: owner?.workspaceId ?? workspaceSegment,
           path: this.ownedWorkspacePath(workspaceSegment),
           branch,
           baselineRevision: this.baselineRevision,
@@ -282,13 +320,24 @@ export class WorkspaceManager {
         await this.beforeWorkspaceRootRemoval?.(this.workspaceRoot);
         await rmdir(this.workspaceRoot);
       }
+      this.workspaceOwners.clear();
+      if (await pathExists(this.ownershipPath)) {
+        await writeFile(this.ownershipPath, "{}\n", "utf8");
+      }
     });
   }
 
   private async commitWorkspaceUnlocked(
     workspace: TaskWorkspace,
-    summary: string
+    summary: string,
+    inspectCandidate?: (revision: string) => Promise<void>,
   ): Promise<TaskCommit> {
+      if (inspectCandidate) {
+        for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
+          const metadata = (await this.git(workspace.path, ["rev-parse", "--git-path", name])).stdout.trim();
+          if (await pathExists(resolve(workspace.path, metadata))) throw new Error("Guarded submission requires a settled Git operation.");
+        }
+      }
       const status = await this.git(workspace.path, [
         "status",
         "--porcelain=v1",
@@ -297,6 +346,8 @@ export class WorkspaceManager {
       ]);
       if (status.stdout.length === 0) {
         const head = await this.head(workspace.path);
+        await inspectCandidate?.(head);
+        if (inspectCandidate) await this.assertGuardedParent(workspace, head);
         if (head === workspace.baselineRevision) {
           throw new NoTaskChangesError(workspace.taskId);
         }
@@ -312,6 +363,8 @@ export class WorkspaceManager {
       );
       if (staged.exitCode === 0) {
         const head = await this.head(workspace.path);
+        await inspectCandidate?.(head);
+        if (inspectCandidate) await this.assertGuardedParent(workspace, head);
         if (head === workspace.baselineRevision) {
           throw new NoTaskChangesError(workspace.taskId);
         }
@@ -319,6 +372,21 @@ export class WorkspaceManager {
       }
       if (staged.exitCode !== 1) {
         throw new Error(`Could not inspect staged task changes: ${staged.stderr}`);
+      }
+      if (inspectCandidate) {
+        // The guard and commit consume the same immutable tree, even if the
+        // index changes while the asynchronous inspection is in progress.
+        const previousHead = await this.head(workspace.path);
+        const tree = (await this.git(workspace.path, ["write-tree"])).stdout.trim();
+        if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(previousHead) || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(tree)) throw new Error("Guarded task tree identity is invalid.");
+        await inspectCandidate(tree);
+        await this.assertGuardedParent(workspace, previousHead);
+        const committed = await this.execute({ cwd: workspace.path,
+          args: ["commit-tree", tree, "-p", previousHead, "-m", subject, "-m", `AIBoard-Run: ${this.runId}\nAIBoard-Task: ${workspace.taskId}`], env: RUNNER_IDENTITY });
+        if (committed.exitCode !== 0 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(committed.stdout.trim())) throw new Error("Guarded task commit could not be created.");
+        const revision = committed.stdout.trim();
+        await this.git(workspace.path, ["update-ref", workspace.branch, revision, previousHead]);
+        return await this.taskCommit(workspace, revision);
       }
       await this.execute({
         cwd: workspace.path,
@@ -332,6 +400,13 @@ export class WorkspaceManager {
         env: RUNNER_IDENTITY,
       });
       return await this.taskCommit(workspace, await this.head(workspace.path));
+  }
+
+  private async assertGuardedParent(workspace: TaskWorkspace, previousHead: string): Promise<void> {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(previousHead)) throw new Error("Guarded task parent identity is invalid.");
+    await this.assertOwnedWorkspace(workspace);
+    if ((await this.head(workspace.path)) !== previousHead) throw new Error("Guarded task parent changed during inspection.");
+    await this.git(workspace.path, ["merge-base", "--is-ancestor", workspace.baselineRevision, previousHead]);
   }
 
   private async ensureWorkspace(taskId: string): Promise<TaskWorkspace> {
@@ -374,7 +449,61 @@ export class WorkspaceManager {
     return path;
   }
 
-  private async assertOwnedWorkspace(workspace: TaskWorkspace): Promise<void> {
+  private async loadWorkspaceOwners(): Promise<void> {
+    const serialized = await readFile(this.ownershipPath, "utf8").catch(() => "{}");
+    const value = JSON.parse(serialized) as Record<string, TaskWorkspaceOwner>;
+    this.workspaceOwners.clear();
+    for (const [path, owner] of Object.entries(value)) {
+      this.workspaceOwners.set(path, owner);
+    }
+  }
+
+  private async saveWorkspaceOwners(): Promise<void> {
+    await mkdir(resolve(this.ownershipPath, ".."), { recursive: true });
+    const value = Object.fromEntries(this.workspaceOwners);
+    const temporary = `${this.ownershipPath}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await rename(temporary, this.ownershipPath);
+  }
+
+  private async setWorkspaceTaskOwner(
+    workspace: TaskWorkspace,
+    taskId: string,
+  ): Promise<void> {
+    await this.loadWorkspaceOwners();
+    const existing = this.workspaceOwners.get(workspace.path);
+    if (existing && existing.taskId !== taskId) {
+      throw new Error(
+        `Workspace ${workspace.path} is owned by task ${existing.taskId}; no two writers share one worktree.`,
+      );
+    }
+    this.workspaceOwners.set(workspace.path, {
+      runId: this.runId,
+      taskId,
+      workspaceId: workspace.workspaceId,
+      active: true,
+    });
+    await this.saveWorkspaceOwners();
+  }
+
+  private async assertWorkspaceTaskOwner(
+    workspace: TaskWorkspace,
+    taskId: string,
+  ): Promise<void> {
+    await this.loadWorkspaceOwners();
+    const owner = this.workspaceOwners.get(workspace.path);
+    if (!owner) return;
+    if (owner.taskId !== taskId || owner.runId !== this.runId) {
+      throw new Error(
+        `Workspace ${workspace.path} is owned by task ${owner.taskId}; no two writers share one worktree.`,
+      );
+    }
+  }
+
+  private async assertOwnedWorkspace(
+    workspace: TaskWorkspace,
+    allowUnownedCreation = false,
+  ): Promise<void> {
     const [root, branch, ancestry] = await Promise.all([
       this.git(workspace.path, ["rev-parse", "--show-toplevel"]),
       this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"]),
@@ -384,6 +513,9 @@ export class WorkspaceManager {
         true
       ),
     ]);
+    if (!allowUnownedCreation) {
+      await this.assertWorkspaceTaskOwner(workspace, workspace.taskId);
+    }
     if (resolve(root.stdout.trim()) !== workspace.path) {
       throw new Error(`Path ${workspace.path} is not the expected task worktree.`);
     }

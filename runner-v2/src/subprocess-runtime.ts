@@ -149,6 +149,10 @@ class GrantVault {
   }
 }
 export interface SubprocessInvocation {
+  /** Private trusted observation of the exact prepared launch environment. */
+  readonly assertReuseAuthority?: () => void;
+  readonly reusePreparedEnvironment?: (environment: Readonly<Record<string, string>>, executionContext: {requiredLifecycleScope: string; implementationDigest: string; configDigest: string}) => Promise<{reused_from: string; process: GenericProcessResult} | undefined>;
+  readonly onPreparedEnvironment?: (environment: Readonly<Record<string, string>>) => void | Promise<void>;
   /** Invocation-local observer, never durable/replayed; callback failure is a
    * normal observed-effect failure and cannot certify partial output. */
   readonly onOutput?: (stream: OutputStream, bytes: Uint8Array) => void;
@@ -363,6 +367,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       return Promise.reject(error);
     }
     if (!claim.won) {
+      if (claim.record.state === "reused") return Promise.reject(new Error("This no-launch reuse invocation is already settled; inspect its durable evidence provenance."));
       if (claim.record.state === "cleanup_blocked" && claim.record.backendBinding)
         return this.recoverBlockedRetry(claim.record);
       if (claim.record.result)
@@ -643,6 +648,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     let preparedEnvironment;
     try {
       preparedEnvironment = this.options.environments.prepare({
+        workingDirectory: request.intent.workingDirectory,
         ambient: request.ambientEnvironment,
         explicitOverrides: request.explicitEnvironment,
         runId: request.intent.runId,
@@ -662,6 +668,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       removedNames: [...preparedEnvironment.audit.removedNames],
       explicitSafeNames: [...preparedEnvironment.audit.explicitSafeNames],
       grantedNames: [...preparedEnvironment.audit.grantedNames],
+      scrubDecisions: preparedEnvironment.audit.decisions.map((decision) => ({...decision})),
     };
     record = this.current(record.invocationId);
     record = this.mutate({
@@ -699,12 +706,23 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         { cause: error },
       );
     }
+    const reuseMarker = Symbol("no-launch-evidence-reuse");
     const stopPromise = this.stopTrigger(request);
     const launchPromise = this.fencedEffect(record.invocationId, (fence) =>
       this.options.environments.withChildEnvironment(
         preparedEnvironment.capability,
-        (environment) =>
-          selected.backend.launch(
+        async (environment) => {
+          const reuse = await request.reusePreparedEnvironment?.(environment, {requiredLifecycleScope: request.intent.requiredLifecycleScope, implementationDigest: selected.implementationDigest, configDigest: selected.configDigest});
+          request.assertReuseAuthority?.();
+          if (request.reusePreparedEnvironment && (request.signal?.aborted || (request.deadline && this.options.clock.now().getTime() >= request.deadline.getTime()) || (grant.expiresAt && this.options.clock.now().getTime() >= Date.parse(grant.expiresAt)))) throw new Error("Reuse lookup lost authority before launch.");
+          if (reuse) return {marker: reuseMarker, reuse};
+          await request.onPreparedEnvironment?.(environment);
+          if (request.reusePreparedEnvironment) {
+            request.assertReuseAuthority?.();
+            this.assertFence(record.invocationId, fence);
+            if (request.signal?.aborted || this.current(record.invocationId).stopIntent || (request.deadline && this.options.clock.now().getTime() >= request.deadline.getTime()) || (grant.expiresAt && this.options.clock.now().getTime() >= Date.parse(grant.expiresAt))) throw new Error("Exact reuse/execution authority lost before backend launch.");
+          }
+          return await selected.backend.launch(
             deepFreeze({
               intent: request.intent,
               grant,
@@ -712,7 +730,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
               outputOwnerId: record.outputOwnerId,
               fence,
             }),
-          ),
+          );
+        },
       ),
     );
     let rawLaunch: unknown;
@@ -741,10 +760,34 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         { cause: error },
       );
     }
+    const isReuse = (value: unknown): value is {marker: symbol; reuse: {reused_from: string; process: GenericProcessResult}} => typeof value === "object" && value !== null && (value as {marker?: unknown}).marker === reuseMarker;
+    if (first.kind === "launch" && isReuse(first.value)) {
+      try {
+        const live = () => {
+          request.assertReuseAuthority?.();
+          this.assertFence(record.invocationId, this.fence(record.invocationId));
+          if (request.signal?.aborted || this.current(record.invocationId).stopIntent || (request.deadline && this.options.clock.now().getTime() >= request.deadline.getTime()) || (grant.expiresAt && this.options.clock.now().getTime() >= Date.parse(grant.expiresAt))) throw new Error("Reuse authority expired or was cancelled.");
+        };
+        live();
+        await this.cleanupOutput(record, output);
+        live();
+        record = this.current(record.invocationId);
+        this.mutate({type: "record_reuse", invocationId: record.invocationId, expectedRevision: record.revision, at: this.now(), reused_from: first.value.reuse.reused_from});
+        live();
+        return first.value.reuse.process;
+      } catch (error) {
+        if (this.current(record.invocationId).state === "launching") await this.failBeforeLaunch(record, output, "Reuse refused before launch: authority or output settlement failed.");
+        throw error;
+      }
+    }
     if (first.kind === "stop") {
       record = this.requestStopLatest(record.invocationId, first.stop.reason);
       try {
         rawLaunch = await launchPromise;
+        if (isReuse(rawLaunch)) {
+          await this.failBeforeLaunch(record, output, "Cancelled or expired before no-launch reuse could settle.");
+          return resultFromRecord(this.current(record.invocationId));
+        }
       } catch (error) {
         const blocked = recoverableLaunchBlocker(error);
         if (blocked)
@@ -2160,6 +2203,9 @@ function snapshotInvocation(value: unknown): SnapshotInvocation {
       "explicitEnvironment",
       "credentialGrantId",
       "onOutput",
+      "assertReuseAuthority",
+      "reusePreparedEnvironment",
+      "onPreparedEnvironment",
       "signal",
       "deadline",
     ]),
@@ -2186,6 +2232,12 @@ function snapshotInvocation(value: unknown): SnapshotInvocation {
     o.credentialGrantId === undefined
       ? undefined
       : safeText(o.credentialGrantId, "credentialGrantId");
+  const assertReuseAuthority = o.assertReuseAuthority;
+  if (assertReuseAuthority !== undefined && typeof assertReuseAuthority !== "function") throw new Error("Invocation reuse authority callback is invalid.");
+  const reusePreparedEnvironment = o.reusePreparedEnvironment;
+  if (reusePreparedEnvironment !== undefined && typeof reusePreparedEnvironment !== "function") throw new Error("Invocation reuse callback is invalid.");
+  const onPreparedEnvironment = o.onPreparedEnvironment;
+  if (onPreparedEnvironment !== undefined && typeof onPreparedEnvironment !== "function") throw new Error("Invocation environment observer is invalid.");
   const onOutput = o.onOutput;
   if (onOutput !== undefined && typeof onOutput !== "function") throw new Error("Invocation output observer is invalid.");
   const signal = o.signal === undefined ? undefined : o.signal;
@@ -2203,6 +2255,9 @@ function snapshotInvocation(value: unknown): SnapshotInvocation {
     ambientEnvironment,
     ...(explicitEnvironment ? { explicitEnvironment } : {}),
     ...(credentialGrantId ? { credentialGrantId } : {}),
+    ...(assertReuseAuthority ? {assertReuseAuthority: assertReuseAuthority as NonNullable<SubprocessInvocation["assertReuseAuthority"]>} : {}),
+    ...(reusePreparedEnvironment ? {reusePreparedEnvironment: reusePreparedEnvironment as NonNullable<SubprocessInvocation["reusePreparedEnvironment"]>} : {}),
+    ...(onPreparedEnvironment ? {onPreparedEnvironment: onPreparedEnvironment as NonNullable<SubprocessInvocation["onPreparedEnvironment"]>} : {}),
     ...(onOutput ? { onOutput: onOutput as NonNullable<SubprocessInvocation["onOutput"]> } : {}),
     ...(signal ? { signal } : {}),
     ...(deadline ? { deadline: new Date(deadline) } : {}),

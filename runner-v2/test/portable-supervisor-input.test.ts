@@ -60,8 +60,8 @@ test("portable supervisor settles a synchronous input exception as failed withou
 test("portable supervisor observes input stream errors without fabricating terminal ownership", async () => {
   const { EventEmitter } = await import("node:events");
   const source = await readFile(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
-  const start = source.indexOf('installOutput("stdout", child.stdout, stdoutPath);');
-  const end = source.indexOf('if (config.platform === "windows")', start);
+  const start = source.indexOf('child.stdin?.on("error", () => {});');
+  const end = source.indexOf('if (!child.pid)', start);
   assert.ok(start >= 0 && end > start);
   const child = Object.assign(new EventEmitter(), { stdin: new EventEmitter(), stdout: new EventEmitter(), stderr: new EventEmitter() });
   let failures = 0, anchorExits = 0;

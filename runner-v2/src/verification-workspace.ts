@@ -37,6 +37,8 @@ export interface VerificationWorkspaceManagerOptions {
   /** Separates a second worktree for the same run and kind, such as the baseline pass. */
   workspaceSuffix?: string;
   execute?: GitRunner;
+  /** Explicit docs-v2 authority. Validate target -> physical HEAD using durable kernel receipts. */
+  validateCanonicalState?: (input: { targetRevision: string; canonicalRevision: string }) => Promise<void>;
 }
 
 export interface VerificationWorkspace {
@@ -80,6 +82,7 @@ export class VerificationWorkspaceManager {
   private readonly integrationRevision?: string;
   private readonly integrationManager?: { readonly revision: string };
   private readonly execute: GitRunner;
+  private readonly validateCanonicalState?: VerificationWorkspaceManagerOptions["validateCanonicalState"];
   private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(options: VerificationWorkspaceManagerOptions) {
@@ -106,6 +109,7 @@ export class VerificationWorkspaceManager {
     this.integrationRevision = options.integrationRevision;
     this.integrationManager = options.integrationManager;
     this.execute = options.execute ?? unavailableGitRunner;
+    this.validateCanonicalState = options.validateCanonicalState;
   }
 
   get path(): string {
@@ -149,6 +153,8 @@ export class VerificationWorkspaceManager {
 
       const canonicalBefore = await this.readCanonicalState();
       this.assertCanonicalClean(canonicalBefore);
+      await this.validateCanonicalState?.({ targetRevision: revision, canonicalRevision: canonicalBefore.revision });
+      await this.assertCanonicalStateUnchanged(canonicalBefore);
       await this.assertRevisionExists(revision);
       await mkdir(this.workspaceRoot, { recursive: true });
       await this.assertStateContainment();
@@ -505,11 +511,19 @@ export class VerificationWorkspaceManager {
       }
     }
     if (options.requireCanonicalState) {
-      const canonical = await this.readCanonicalState();
-      if (canonical.revision !== metadata.canonicalRevision) {
-        throw new Error("Canonical checkout revision changed after verification workspace creation.");
-      }
-      this.assertCanonicalClean(canonical);
+      await this.assertCanonicalCheckoutAllowed(metadata);
+    }
+  }
+
+  /** Legacy keeps its exact physical fence; docs-v2 requires explicit durable authority. */
+  private async assertCanonicalCheckoutAllowed(metadata: VerificationWorkspaceMetadata): Promise<void> {
+    const canonical = await this.readCanonicalState();
+    this.assertCanonicalClean(canonical);
+    if (this.validateCanonicalState) {
+      await this.validateCanonicalState({ targetRevision: metadata.targetRevision, canonicalRevision: canonical.revision });
+      await this.assertCanonicalStateUnchanged(canonical);
+    } else if (canonical.revision !== metadata.canonicalRevision) {
+      throw new Error("Canonical checkout revision changed after verification workspace creation.");
     }
   }
 

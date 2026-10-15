@@ -602,14 +602,12 @@ test("Architect provider failure pauses for user-selected handoff before plannin
     assert.equal(primary.requests.length, 6);
     assert.equal(fallback.requests.length, 0, "Architect replacement is never automatic");
 
-    scheduler.append({
-      runId: "run_1",
-      type: "architect.handoff_selected",
-      occurredAt: "2026-07-12T00:00:00.000Z",
-      actor: { role: "user", id: "local-user" },
-      idempotencyKey: "handoff:selected",
-      payload: { runtimeId: "fallback:architect" },
-    });
+    // T7b: a selection answer must name the exact displayed pending
+    // requirement sequence. The fixture answers through the real control,
+    // reading the displayed offer like the UI does.
+    const displayed = runtime.projection().runtime.architect.handoff?.requiredSequence;
+    assert.ok(Number.isSafeInteger(displayed), "the handoff offer displays its requirement sequence");
+    runtime.selectArchitectHandoff("fallback:architect", "handoff:selected", displayed);
     const second = await runtime.step();
     assert.equal(second.status, "progressed");
     projection = runtime.projection();

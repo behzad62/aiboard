@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 
-import type { FinalVerificationDetectedSignal } from "./final-verification-contracts.js";
+import { FINAL_VERIFICATION_CATEGORIES, VALIDATION_TIERS, type FinalVerificationDetectedSignal, type FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
+import { PROJECT_VALIDATION_CONFIG_PATH, parseProjectValidationConfig, parseValidationBudgetMs, type ProjectValidationTierCommand, type ProjectValidationTiers } from "./project-validation-config.js";
+import { detectLanguageFamilies, languageReportDescriptors, listLanguageInventoryFiles } from "./language-execution-profile.js";
 import { assertFinalVerificationBrowserPolicy } from "./final-verification-browser-policy.js";
 import type {
   FinalVerificationBrowserInput,
@@ -26,6 +28,14 @@ export interface FinalVerificationDependencyProvisioning {
   command: FinalVerificationCommand;
 }
 
+export interface FinalVerificationReportDescriptor {
+  /** Exact label of the `commands.tests` entry this report belongs to. */
+  commandLabel: string;
+  /** Wired test runner identity; must match the report plan at runtime. */
+  runner: "pytest" | "dotnet test" | "ctest" | "maven test";
+  format: "junit" | "trx";
+}
+
 export interface FinalVerificationExecutionProfile {
   version: 1;
   targetRevision: string;
@@ -35,10 +45,20 @@ export interface FinalVerificationExecutionProfile {
     build?: FinalVerificationCommand[];
     tests?: FinalVerificationCommand[];
   };
+  /**
+   * V3 (AR-R26): trusted report descriptors for detected non-package.json
+   * tests commands. Additive: absent on older profiles, preserved by
+   * clone/validator/digest/archive, consumed by the runtime.
+   */
+  reports?: FinalVerificationReportDescriptor[];
+  /** V3: true when the bounded file walk hit a cap or error, so marker absence proves nothing. Consumers fail closed. */
+  inventoryIncomplete?: boolean;
   provisioning?: FinalVerificationDependencyProvisioning;
   portLease?: FinalVerificationPortLease;
   runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
   browser?: FinalVerificationBrowserInput;
+  tiers?: ProjectValidationTiers;
+  validationBudgetMs?: number;
 }
 
 interface FinalVerificationProfileArchive {
@@ -181,6 +201,23 @@ export class FinalVerificationProfileAuthority {
   }
 }
 
+/**
+ * W3: build the runner-owned plan prefill from the authoritative execution
+ * profile. Every detected category is already required; non-detected
+ * categories carry no invented rationale or inspection.
+ */
+export function buildFinalVerificationPlanPrefill(runId: string, profile: FinalVerificationExecutionProfile): FinalVerificationPlanPrefill {
+  const digest = finalVerificationProfileDigest(runId, profile);
+  const detected = new Set(profile.detectedSignals.map((signal) => signal.category));
+  return {
+    targetRevision: profile.targetRevision,
+    profileDigest: digest,
+    required: FINAL_VERIFICATION_CATEGORIES.filter((category) => detected.has(category)),
+    undetected: FINAL_VERIFICATION_CATEGORIES.filter((category) => !detected.has(category)),
+    detectedSignals: profile.detectedSignals.map((signal) => ({ ...signal })),
+  };
+}
+
 export function finalVerificationProfileDigest(
   runId: string,
   profile: FinalVerificationExecutionProfile,
@@ -243,6 +280,67 @@ export async function inspectFinalVerificationExecutionProfile(options: {
     commands.tests = [{ label: "package tests", executable: packageManager.executable, args: [...packageManager.args, "run", "test"] }];
   }
 
+  const profileInspectedPaths: string[] = manifest
+    ? ["package.json", ...(packageExecution.lockfile ? [packageExecution.lockfile] : [])]
+    : [];
+  const profileReports: FinalVerificationReportDescriptor[] = [];
+  let languageInventoryIncomplete = false;
+  // V3 (AR-R26): non-package.json families fill only categories the
+  // package manifest did not already claim. Each family signal agrees
+  // with its exact commands; nothing detected stays a clean inventory.
+  if (!commands.build || !commands.tests) {
+    const languageInventory = await listLanguageInventoryFiles({
+      repositoryRoot,
+      readdir: async (path) => (await readdir(path, { withFileTypes: true }))
+        .map((entry) => ({ name: entry.name, isDirectory: entry.isDirectory(), isSymbolicLink: entry.isSymbolicLink() })),
+    });
+    const contents = new Map<string, string>();
+    const unavailableContents: string[] = [];
+    for (const file of languageInventory.files) {
+      const base = file.slice(file.lastIndexOf("/") + 1).toLowerCase();
+      // V3 F5: the .NET single-result qualification reads the relevant
+      // property closure (the test project, automatically imported
+      // Directory.Build files, and transitively imported property files),
+      // so those contents participate in the same bounded/unreadable rules.
+      if (!/\.(?:cs|fs|vb)proj$/.test(base) && base !== "cmakelists.txt" && base !== "pyproject.toml" &&
+        base !== "directory.build.props" && base !== "directory.build.targets" && !/\.(?:props|targets)$/.test(base)) continue;
+      if (contents.size >= 40) {
+        unavailableContents.push(file);
+        continue;
+      }
+      try {
+        const text = await readFile(join(repositoryRoot, ...file.split("/")), "utf8");
+        if (text.length <= 131072) {
+          contents.set(file, text);
+        } else {
+          unavailableContents.push(file);
+        }
+      } catch {
+        unavailableContents.push(file);
+      }
+    }
+    const detections = detectLanguageFamilies({ files: languageInventory.files, readFile: (path) => contents.get(path), unreadable: unavailableContents });
+    languageInventoryIncomplete = languageInventory.incomplete;
+    const inspected = new Set<string>();
+    for (const detection of detections) {
+      if (!commands.build && detection.build) {
+        detectedSignals.push({ category: "build", source: detection.source, detail: detection.detail });
+        commands.build = detection.build.map((command) => ({ label: command.label, executable: command.executable, args: [...command.args] }));
+        inspected.add(detection.source);
+      }
+      if (!commands.tests && detection.tests) {
+        detectedSignals.push({ category: "tests", source: detection.source, detail: detection.detail });
+        commands.tests = [{ label: detection.tests.label, executable: detection.tests.executable, args: [...detection.tests.args] }];
+        inspected.add(detection.source);
+        const projectArg = detection.tests.args[1];
+        if (typeof projectArg === "string" && !projectArg.startsWith("-")) inspected.add(projectArg);
+        profileReports.push(...languageReportDescriptors([detection]));
+      }
+    }
+    for (const path of [...inspected].sort()) {
+      if (!profileInspectedPaths.includes(path)) profileInspectedPaths.push(path);
+    }
+  }
   const serverPortLease = serverSignal(scripts, dependencies)
     ? await (options.reservePort?.() ?? reserveUnownedPort(options.targetRevision))
     : undefined;
@@ -253,16 +351,22 @@ export async function inspectFinalVerificationExecutionProfile(options: {
     detectedSignals.push({ category: "runtime_smoke", source: `package.json#scripts.${server.script}`, detail: scripts[server.script]! });
     detectedSignals.push({ category: "browser", source: "package.json and browser application signals", detail: `Serve the integrated UI with ${server.script}.` });
   }
+  const projectConfig = await readProjectValidationConfig(repositoryRoot);
+  if (projectConfig && !profileInspectedPaths.includes(PROJECT_VALIDATION_CONFIG_PATH)) {
+    profileInspectedPaths.push(PROJECT_VALIDATION_CONFIG_PATH);
+  }
   const profile: FinalVerificationExecutionProfile = {
     version: 1,
     targetRevision: options.targetRevision,
-    inspectedPaths: manifest
-      ? ["package.json", ...(packageExecution.lockfile ? [packageExecution.lockfile] : [])]
-      : [],
+    inspectedPaths: profileInspectedPaths,
     detectedSignals,
     commands,
+    ...(profileReports.length > 0 ? { reports: profileReports } : {}),
+    ...(languageInventoryIncomplete ? { inventoryIncomplete: true as const } : {}),
     ...(packageExecution.provisioning ? { provisioning: packageExecution.provisioning } : {}),
     ...(serverPortLease ? { portLease: serverPortLease } : {}),
+    ...(projectConfig?.tiers ? { tiers: cloneProjectTiers(projectConfig.tiers) } : {}),
+    ...(projectConfig?.validationBudgetMs !== undefined ? { validationBudgetMs: projectConfig.validationBudgetMs } : {}),
     ...(server ? {
       runtimeSmoke: server.smoke,
       browser: {
@@ -300,9 +404,13 @@ export function cloneFinalVerificationExecutionProfile(
         command: cloneCommand(profile.provisioning.command),
       },
     } : {}),
+    ...(profile.reports ? { reports: profile.reports.map((report) => ({ ...report })) } : {}),
+    ...(profile.inventoryIncomplete !== undefined ? { inventoryIncomplete: profile.inventoryIncomplete } : {}),
     ...(profile.portLease ? { portLease: { ...profile.portLease } } : {}),
     ...(profile.runtimeSmoke ? { runtimeSmoke: cloneSmoke(profile.runtimeSmoke) } : {}),
     ...(profile.browser ? { browser: cloneBrowser(profile.browser) } : {}),
+    ...(profile.tiers ? { tiers: cloneTiers(profile.tiers) } : {}),
+    ...(profile.validationBudgetMs !== undefined ? { validationBudgetMs: profile.validationBudgetMs } : {}),
   };
 }
 
@@ -323,6 +431,20 @@ export function assertFinalVerificationExecutionProfile(
   if (profile.provisioning !== undefined && !validProvisioning(profile.provisioning)) {
     throw new Error("Final verification dependency provisioning profile is invalid.");
   }
+  if (profile.reports !== undefined) {
+    if (!Array.isArray(profile.reports) || profile.reports.some((report) => !validReportDescriptor(report))) {
+      throw new Error("Final verification execution report descriptors are invalid.");
+    }
+    const labels = new Set((profile.commands.tests ?? []).map((command) => command.label));
+    for (const report of profile.reports) {
+      if (!labels.has(report.commandLabel)) {
+        throw new Error("Final verification execution report descriptor names an unknown tests command.");
+      }
+    }
+  }
+  if (profile.inventoryIncomplete !== undefined && profile.inventoryIncomplete !== true) {
+    throw new Error("Final verification execution inventory completeness flag is invalid.");
+  }
   if (profile.portLease !== undefined && !validPortLease(profile.portLease, targetRevision)) {
     throw new Error("Final verification port lease profile is invalid.");
   }
@@ -332,6 +454,16 @@ export function assertFinalVerificationExecutionProfile(
     assertFinalVerificationBrowserPolicy(profile.browser.policy);
   }
   const detected = new Set(profile.detectedSignals.map((signal) => signal.category));
+  if (profile.tiers !== undefined && !validTiers(profile.tiers)) {
+    throw new Error("Final verification execution tier map is invalid.");
+  }
+  if (profile.validationBudgetMs !== undefined) {
+    try {
+      parseValidationBudgetMs(profile.validationBudgetMs);
+    } catch {
+      throw new Error("Final verification execution validation budget is invalid.");
+    }
+  }
   if (detected.has("build") !== Boolean(profile.commands.build?.length)) throw new Error("Build signal and exact commands disagree.");
   if (detected.has("tests") !== Boolean(profile.commands.tests?.length)) throw new Error("Test signal and exact commands disagree.");
   if (detected.has("runtime_smoke") !== Boolean(profile.runtimeSmoke)) throw new Error("Runtime signal and exact smoke spec disagree.");
@@ -362,10 +494,12 @@ function npmInvocation(environment: Readonly<Record<string, string | undefined>>
     return { executable: process.execPath, args: [resolve(npmCli)] };
   }
   const bundled = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-  if (!existsSync(bundled)) throw new Error("Declared npm package manager is unavailable to Runner V2.");
+  const posixInstalled = join(dirname(process.execPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+  const resolved = existsSync(bundled) ? bundled : existsSync(posixInstalled) ? posixInstalled : undefined;
+  if (!resolved) throw new Error("Declared npm package manager is unavailable to Runner V2.");
   return {
     executable: process.execPath,
-    args: [bundled],
+    args: [resolved],
   };
 }
 
@@ -528,6 +662,40 @@ function serverSignal(scripts: Record<string, string>, dependencies: Record<stri
   return Boolean((scripts.preview && dependencies.vite) || (scripts.start && dependencies.next));
 }
 
+async function readProjectValidationConfig(repositoryRoot: string): Promise<import("./project-validation-config.js").ProjectValidationConfig | undefined> {
+  let text: string;
+  try {
+    text = await readFile(join(repositoryRoot, PROJECT_VALIDATION_CONFIG_PATH), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is not valid JSON.`, { cause: error });
+  }
+  try {
+    return parseProjectValidationConfig(parsed);
+  } catch (error) {
+    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is malformed: ${error instanceof Error ? error.message : String(error)}.`, { cause: error });
+  }
+}
+function cloneProjectTiers(tiers: import("./project-validation-config.js").ProjectValidationTiers): ProjectValidationTiers {
+  const clone: ProjectValidationTiers = {};
+  for (const tier of VALIDATION_TIERS) {
+    const commands = tiers[tier];
+    if (commands) clone[tier] = commands.map((command) => ({
+      label: command.label,
+      executable: command.executable,
+      args: [...command.args],
+      ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
+      ...(command.environment ? { environment: { ...command.environment } } : {}),
+    }));
+  }
+  return clone;
+}
 function recordOfStrings(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
@@ -540,13 +708,46 @@ function validSignal(value: unknown): value is FinalVerificationDetectedSignal {
     (signal.source === undefined || (typeof signal.source === "string" && signal.source.trim().length > 0)) &&
     (signal.detail === undefined || (typeof signal.detail === "string" && signal.detail.trim().length > 0));
 }
+function validTiers(value: unknown): value is ProjectValidationTiers {
+  try {
+    const parsed = parseProjectValidationConfig({ version: 1, tiers: value });
+    return parsed.tiers !== undefined && Object.keys(parsed.tiers).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * IV-3 (F1): convert strict config tier commands to runtime commands.
+ * Config env values are strings only (no removals); the spread preserves
+ * that without inventing `undefined` removal semantics.
+ */
+export function projectTierCommandsToRuntimeCommands(
+  commands: readonly ProjectValidationTierCommand[],
+): FinalVerificationCommand[] {
+  return commands.map((command) => ({
+    label: command.label,
+    executable: command.executable,
+    args: [...command.args],
+    ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
+    ...(command.environment ? { environment: { ...command.environment } } : {}),
+  }));
+}
 function validCommand(value: unknown): value is FinalVerificationCommand {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const command = value as Record<string, unknown>;
   return typeof command.label === "string" && command.label.trim().length > 0 &&
     typeof command.executable === "string" && command.executable.trim().length > 0 &&
     Array.isArray(command.args) && command.args.every((arg) => typeof arg === "string") &&
-    (command.timeoutMs === undefined || (Number.isSafeInteger(command.timeoutMs) && (command.timeoutMs as number) > 0));
+    (command.timeoutMs === undefined || (Number.isSafeInteger(command.timeoutMs) && (command.timeoutMs as number) > 0)) &&
+    validCommandEnvironment(command.environment);
+}
+/** T6a: an optional map of environment names to strings, or `undefined` for a removal. */
+function validCommandEnvironment(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.entries(value as Record<string, unknown>).every(([name, entry]) =>
+    /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && (entry === undefined || typeof entry === "string"));
 }
 function validSmoke(value: unknown): value is FinalVerificationRuntimeSmokeInput {
   if (!validCommand(value)) return false;
@@ -567,6 +768,15 @@ function validBrowser(value: unknown): value is FinalVerificationBrowserInput {
   return browser.policy !== undefined &&
     (browser.server === undefined || validSmoke(browser.server));
 }
+function validReportDescriptor(value: unknown): value is FinalVerificationReportDescriptor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Record<string, unknown>;
+  return typeof report.commandLabel === "string" && report.commandLabel.trim().length > 0 &&
+    ((report.runner === "pytest" && report.format === "junit") ||
+      (report.runner === "dotnet test" && report.format === "trx") ||
+      (report.runner === "ctest" && report.format === "junit") ||
+      (report.runner === "maven test" && report.format === "junit"));
+}
 function validProvisioning(value: unknown): value is FinalVerificationDependencyProvisioning {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const provisioning = value as Record<string, unknown>;
@@ -582,7 +792,25 @@ function validPortLease(value: unknown, targetRevision: string): value is FinalV
     (lease.port as number) >= 1_024 && (lease.port as number) <= 65_535 &&
     typeof lease.leaseId === "string" && Boolean(lease.leaseId.trim());
 }
-function cloneCommand(command: FinalVerificationCommand): FinalVerificationCommand { return { ...command, args: [...command.args] }; }
+function cloneTiers(tiers: ProjectValidationTiers): ProjectValidationTiers {
+  const clone: ProjectValidationTiers = {};
+  for (const tier of VALIDATION_TIERS) {
+    const commands = tiers[tier];
+    if (commands) {
+      clone[tier] = commands.map((command) => ({
+        label: command.label,
+        executable: command.executable,
+        args: [...command.args],
+        ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
+        ...(command.environment ? { environment: { ...command.environment } } : {}),
+      }));
+    }
+  }
+  return clone;
+}
+function cloneCommand(command: FinalVerificationCommand): FinalVerificationCommand {
+  return { ...command, args: [...command.args], ...(command.environment ? { environment: { ...command.environment } } : {}) };
+}
 function cloneSmoke(smoke: FinalVerificationRuntimeSmokeInput): FinalVerificationRuntimeSmokeInput {
   return { ...smoke, args: [...smoke.args], readiness: { ...smoke.readiness } };
 }
@@ -614,6 +842,268 @@ function safeSegment(value: string): string {
 }
 
 function fileExists(path: string): boolean { return existsSync(path); }
+/** Splits a shell script on `&&` only; any other separator outside quotes is reported. Twin of delivery-execution.ts (importing back would cycle); iv2-selected-scope.test.ts asserts parity. */
+export function splitAndChain(script: string): { segments: string[] } | { separator: string } {
+  const segments: string[] = [];
+  let current = "";
+  let quote: string | undefined;
+  for (let index = 0; index < script.length; index += 1) {
+    const char = script[index]!;
+    if (quote) {
+      if (char === quote) quote = undefined;
+      current += char;
+      continue;
+    }
+    if (char === "'" || char === "\"") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    const pair = script.slice(index, index + 2);
+    if (pair === "&&") {
+      segments.push(current.trim());
+      current = "";
+      index += 1;
+      continue;
+    }
+    if (pair === "||") return { separator: "||" };
+    if (char === "|" || char === "&" || char === ";" || char === "\n") {
+      return { separator: char === "\n" ? "newline" : char };
+    }
+    current += char;
+  }
+  segments.push(current.trim());
+  return { segments: segments.filter(Boolean) };
+}
+
+// ---------------------------------------------------------------------------
+// IV-2 (CD-23/EP16): safe selective test commands
+// ---------------------------------------------------------------------------
+
+/**
+ * Test-runner families whose argv selects test FILES by appended relative
+ * path. `node --test <paths>` and `pytest <paths>` run exactly the named
+ * files; every other family Runner V2 understands selects differently
+ * (dotnet by project/filter, ctest by `-R` name regex, maven by `-Dtest`
+ * class, mocha/jest/vitest through config-shaped argv the runner cannot
+ * prove), so only these two families are ever selectable here.
+ */
+export type SelectableTestRunnerFamily = "node-test" | "pytest";
+
+export interface SelectedTestsCommandInput {
+  /** Workspace root holding package.json (package-script shapes are proven against its test script). */
+  checkoutPath: string;
+  /** The planned FULL tests command (report wiring already applied by the report planner). */
+  command: FinalVerificationCommand;
+  /** Selected test paths (relative posix paths from computeAffectedTests). */
+  selectedTests: readonly string[];
+  /** Script-shell rules differ (cmd.exe does not treat `'` as a quote). */
+  platform?: NodeJS.Platform;
+}
+
+export type SelectedTestsCommandResult =
+  | { selectable: true; command: FinalVerificationCommand; runnerFamily: SelectableTestRunnerFamily }
+  | { selectable: false; reason: string };
+
+function selectedExecutableName(executable: string): string {
+  const normalized = executable.replaceAll("\\", "/");
+  const base = normalized.slice(normalized.lastIndexOf("/") + 1).toLowerCase();
+  return base.endsWith(".exe") || base.endsWith(".cmd") || base.endsWith(".bat")
+    ? base.slice(0, base.lastIndexOf("."))
+    : base;
+}
+
+function isSafeSelectedTestPath(path: string): boolean {
+  if (typeof path !== "string" || path.trim() === "" || path.includes("\0")) return false;
+  // The path is forwarded verbatim as argv to node/pytest or through the
+  // package script to the runner; a leading `-` would parse as a flag, not
+  // a test path. Fail safe to the whole script instead of reinterpreting it.
+  if (path.startsWith("-")) return false;
+  // Relative only: no posix root, no drive letter, no UNC/backslash root.
+  if (/^([A-Za-z]:)?[\\/]/.test(path) || path.startsWith("/")) return false;
+  return !path.split(/[\\/]/).includes("..");
+}
+
+/**
+ * Derive the command that runs exactly `selectedTests` from the planned
+ * full tests command. Pure shape proof: the project test script (for
+ * package invocations) or the direct command must be a BARE runner
+ * invocation with no positional patterns, filters, or extra flags — extra
+ * argv could already select tests (appending would broaden, not narrow) or
+ * change path resolution (a `cd` chain). Anything unproven returns
+ * `selectable: false` and the caller runs the whole test script (fail safe).
+ *
+ * Report instrumentation is preserved: derivation only appends path argv to
+ * the already report-wired command (the node `--test` reporter travels in
+ * NODE_OPTIONS, the pytest `--junitxml` flag stays in place), the label is
+ * unchanged so the trusted-descriptor gate still applies, and inputs are
+ * never mutated. Callers must run the result through the same
+ * FinalVerificationRuntime path so evidence identity and reuse apply.
+ */
+export function deriveSelectedTestsCommand(
+  input: SelectedTestsCommandInput,
+): SelectedTestsCommandResult {
+  if (input.selectedTests.length === 0) {
+    return { selectable: false, reason: "No selected tests to execute." };
+  }
+  for (const test of input.selectedTests) {
+    if (!isSafeSelectedTestPath(test)) {
+      return { selectable: false, reason: `Selected test ${JSON.stringify(test)} is not a safe workspace-relative path.` };
+    }
+  }
+  const args = input.command.args;
+  const runIndex = args.lastIndexOf("run");
+  if (runIndex >= 0 && args[runIndex + 1] === "test") {
+    // F1: `run test` inside argv never proves a package-manager invocation
+    // on its own. Only the profile's own shape — node launching a supported
+    // npm/pnpm/yarn CLI — may take the package-script path; every other
+    // executable fails safe to the whole script.
+    if (selectedExecutableName(input.command.executable) !== "node" || !isSupportedPackageManagerCli(args[0])) {
+      return { selectable: false, reason: `The test command ${JSON.stringify(input.command.executable)} is not a supported npm/pnpm/yarn invocation the runner can narrow by file path.` };
+    }
+    return deriveSelectedPackageCommand(input, runIndex);
+  }
+  return deriveSelectedDirectCommand(input);
+}
+
+/**
+ * F1: the CLI entry points `packageManagerInvocation` actually launches
+ * (bundled npm-cli.js, an active npm/pnpm/yarn CLI, or a corepack
+ * pnpm/yarn entry). Anything else carrying `run test` is unknown and
+ * fails safe to the whole script.
+ */
+function isSupportedPackageManagerCli(entry: unknown): boolean {
+  if (typeof entry !== "string") return false;
+  const normalized = entry.replaceAll("\\", "/");
+  const base = normalized.slice(normalized.lastIndexOf("/") + 1).toLowerCase();
+  return base === "npm-cli.js" ||
+    base === "pnpm" || base === "pnpm.js" || base === "pnpm.cjs" ||
+    base === "yarn" || base === "yarn.js" || base === "yarn.cjs";
+}
+
+function deriveSelectedPackageCommand(
+  input: SelectedTestsCommandInput,
+  runIndex: number,
+): SelectedTestsCommandResult {
+  let manifest: { scripts?: Record<string, unknown> } = {};
+  try {
+    manifest = JSON.parse(readFileSync(join(input.checkoutPath, "package.json"), "utf8")) as typeof manifest;
+  } catch {
+    return { selectable: false, reason: "The project has no readable package.json test script." };
+  }
+  const script = typeof manifest.scripts?.test === "string" ? manifest.scripts.test : "";
+  if (!script.trim()) {
+    return { selectable: false, reason: "The project has no package test script to narrow." };
+  }
+  // Same unmodeled-shell rule as the report planner: substitution,
+  // escapes, comments, negation, grouping, redirection, and (on Windows)
+  // `'` could hide a failing command or change path resolution.
+  const platform = input.platform ?? process.platform;
+  const unmodeled = /[$`\\#!()<>^%]/.exec(script) ?? (platform === "win32" ? /'/.exec(script) : null);
+  if (unmodeled) {
+    return { selectable: false, reason: `The test script uses the shell character "${unmodeled[0]}", which the runner cannot model safely.` };
+  }
+  const split = splitAndChain(script);
+  if ("separator" in split) {
+    return { selectable: false, reason: `The test script joins commands with "${split.separator}", which can hide a failing command.` };
+  }
+  // A forwarded path lands at the END of the script string, so only a
+  // single-segment script provably delivers it to the test runner (a `cd`
+  // or env-changing earlier segment would resolve it elsewhere).
+  if (split.segments.length !== 1) {
+    return { selectable: false, reason: "Only single-command test scripts are safely selectable." };
+  }
+  const tokens = split.segments[0]!.split(/\s+/).filter(Boolean);
+  const head = tokens[0] === "npx" ? tokens.slice(1) : tokens;
+  const family = bareSelectableFamily(head);
+  if (!family) {
+    return { selectable: false, reason: `The test command "${split.segments[0]}" is not a bare node --test or pytest invocation the runner can narrow by file path.` };
+  }
+  // npm needs `--` to forward arguments to the script; pnpm and yarn forward directly.
+  const managerText = [input.command.executable, ...input.command.args].join(" ").toLowerCase();
+  const afterTest = input.command.args.slice(runIndex + 2);
+  const needsSeparator = !/pnpm|yarn/.test(managerText) && !afterTest.includes("--");
+  return {
+    selectable: true,
+    command: {
+      ...input.command,
+      args: [...input.command.args, ...(needsSeparator ? ["--"] : []), ...input.selectedTests],
+    },
+    runnerFamily: family,
+  };
+}
+
+/** A bare runner invocation: the verb plus its required test flag, and nothing else. */
+function bareSelectableFamily(head: string[]): SelectableTestRunnerFamily | undefined {
+  if (head.length === 2 && /^(node(\.exe)?|tsx(\.exe|\.cmd)?)$/i.test(head[0] ?? "") && head[1] === "--test") {
+    return "node-test";
+  }
+  if (head.length === 1 && head[0] === "pytest") return "pytest";
+  if (head.length === 3 && (head[0] ?? "").startsWith("python") && head[1] === "-m" && head[2] === "pytest") {
+    return "pytest";
+  }
+  return undefined;
+}
+
+function deriveSelectedDirectCommand(
+  input: SelectedTestsCommandInput,
+): SelectedTestsCommandResult {
+  const name = selectedExecutableName(input.command.executable);
+  const args = input.command.args;
+  if (name === "node" || name === "tsx") {
+    if (args.length !== 1 || args[0] !== "--test") {
+      return { selectable: false, reason: "Only a bare node --test invocation is safely selectable." };
+    }
+    return {
+      selectable: true,
+      command: { ...input.command, args: [...args, ...input.selectedTests] },
+      runnerFamily: "node-test",
+    };
+  }
+  if (name === "pytest" || name === "python" || name === "python3" || name === "py") {
+    let rest = args;
+    if (name !== "pytest") {
+      if (!(args[0] === "-m" && args[1] === "pytest")) {
+        return { selectable: false, reason: "Only a bare python -m pytest invocation is safely selectable." };
+      }
+      rest = args.slice(2);
+    }
+    // Only the runner's own --junitxml report flag may already be present;
+    // any other argv (filters, deselects, config, positional patterns) could
+    // already select tests, so appending would broaden, not narrow.
+    for (let index = 0; index < rest.length; index += 1) {
+      const token = rest[index]!;
+      if (token === "--junitxml") {
+        if (typeof rest[index + 1] !== "string" || rest[index + 1]!.trim() === "") {
+          return { selectable: false, reason: "pytest carries an empty --junitxml flag." };
+        }
+        index += 1;
+      } else if (token.startsWith("--junitxml=")) {
+        if (token.slice("--junitxml=".length).trim() === "") {
+          return { selectable: false, reason: "pytest carries an empty --junitxml flag." };
+        }
+      } else {
+        return { selectable: false, reason: `pytest carries ${JSON.stringify(token)}, which selection cannot prove safe.` };
+      }
+    }
+    return {
+      selectable: true,
+      command: { ...input.command, args: [...args, ...input.selectedTests] },
+      runnerFamily: "pytest",
+    };
+  }
+  if (name === "dotnet") {
+    return { selectable: false, reason: "dotnet test selects by project/filter, not by test file path." };
+  }
+  if (name === "ctest") {
+    return { selectable: false, reason: "ctest selects by test-name regex (-R), not by file path; positional args would retarget the build directory." };
+  }
+  if (name === "mvn") {
+    return { selectable: false, reason: "maven test selects by class (-Dtest), not by file path." };
+  }
+  return { selectable: false, reason: `The test command ${JSON.stringify(input.command.executable)} has no safe file-path selection.` };
+}
+
 function isMissingArchiveError(error: unknown): boolean {
   return error instanceof Error && /profile archive is missing/i.test(error.message);
 }

@@ -26,6 +26,15 @@ import {
 } from "./change-set.js";
 import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
+import {
+  DEFAULT_VALIDATION_BUDGET_MS,
+  parseValidationBudgetMs,
+} from "./project-validation-config.js";
+import {
+  cloneValidationBudgetSummary,
+  parseValidationBudgetJustification,
+  summarizeValidationBudget,
+} from "./validation-budget.js";
 import { evidenceFactArtifactHashes, type EvidenceStore } from "./evidence-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createOpenRouterApplyPatchTool } from "./openrouter-apply-patch-tool.js";
@@ -69,6 +78,9 @@ import type {
   WorkspaceManager,
 } from "./workspace-manager.js";
 import { NoTaskChangesError } from "./workspace-manager.js";
+import { captureSubmissionScopeIdentity } from "./submission-scope-capture.js";
+import { inspectSubmissionTree } from "./submission-guard-git.js";
+import { requireGitRunner } from "./git-command.js";
 import {
   createSubmitTaskTool,
   createWorkerLifecycleTools,
@@ -104,6 +116,7 @@ export interface RunWorkerTaskOptions {
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
+  validationBudgetMs?: number;
   capabilityRegistry?: CapabilityRegistry;
   language?: LanguageIntelligenceProvider;
   allowedCommands?: readonly string[];
@@ -239,6 +252,7 @@ export async function runWorkerTask(
     for (const tool of createEvidenceTools({
       git: options.git,
       store: options.evidenceStore,
+      ...(options.budgetLedger ? { validationAccounting: { ledger: options.budgetLedger, runId: options.runId } } : {}),
       artifacts: options.artifacts,
       taskId: options.taskId,
       ...(options.execution ? { execution: options.execution } : {}),
@@ -304,11 +318,20 @@ export async function runWorkerTask(
     language,
   })) registerStaticWorkerTool(broker, tool);
 
+  // IV-1: the trusted scheduler decides whether this run's worker path
+  // requires a validationScope report. Never inferred from model input.
+  const requireValidationScope =
+    schedulerState(options)?.validationScopePolicyVersion === 1;
   let producedChangeSet: ChangeSet | undefined;
+  const validationBudgetMs = options.validationBudgetMs === undefined
+    ? DEFAULT_VALIDATION_BUDGET_MS
+    : parseValidationBudgetMs(options.validationBudgetMs);
   broker.register(createSubmitTaskTool(async ({
     summary,
     unresolvedConcerns,
     criterionEvidenceLinks,
+    validationScope,
+    validationBudgetJustification,
   }) => {
     if (
       schedulerState(options)?.acceptanceContractStatus ===
@@ -317,6 +340,26 @@ export async function runWorkerTask(
       throw new Error(
         "Task submission is blocked until the Architect upgrades the acceptance contract."
       );
+    }
+    if (requireValidationScope && validationScope === undefined) {
+      throw new Error(
+        "Task submission requires a validationScope report on this run."
+      );
+    }
+    const validationBudget = options.budgetLedger
+      ? summarizeValidationBudget(options.budgetLedger, {
+          runId: options.runId,
+          taskId: options.taskId,
+          budgetMs: validationBudgetMs,
+        })
+      : undefined;
+    if (validationBudget?.overBudget) {
+      if (validationBudgetJustification === undefined) {
+        throw new Error(
+          "Task submission requires a validation-budget justification: measured validation time exceeds the advisory budget."
+        );
+      }
+      parseValidationBudgetJustification(validationBudgetJustification);
     }
     const evidenceRecords = options.evidenceStore
       ? acceptanceCriteria
@@ -341,11 +384,20 @@ export async function runWorkerTask(
         "Task submission requires durable evidence; record command or browser facts first."
       );
     }
+    const currentSubmissionProjection = schedulerState(options);
+    const scopeIdentity = currentSubmissionProjection ? captureSubmissionScopeIdentity(currentSubmissionProjection, {
+      runId: options.runId, taskId: options.taskId, attempt: attempt ?? 0, workerId: options.actorId, sessionId: options.sessionId,
+      workspacePath: options.workspace.path, baselineRevision: options.workspace.baselineRevision,
+    }) : undefined;
     let commit: TaskCommit;
     try {
       commit = await options.workspaceManager.commitWorkspace(
         options.workspace,
-        summary
+        summary,
+        scopeIdentity ? async (candidateRevision) => {
+          await inspectSubmissionTree({ git: requireGitRunner(options.git?.lifecycle("inspection").run), workspacePath: options.workspace.path,
+            baselineRevision: options.workspace.baselineRevision, candidateRevision, claim: scopeIdentity.claim });
+        } : undefined,
       );
     } catch (error) {
       if (!(error instanceof NoTaskChangesError)) throw error;
@@ -359,6 +411,18 @@ export async function runWorkerTask(
       };
     }
     producedChangeSet = await createChangeSet({
+      ...(validationScope ? { validationScope } : {}),
+      ...(validationBudget?.overBudget && validationBudgetJustification !== undefined
+        ? {
+            validationBudget: {
+              summary: cloneValidationBudgetSummary(validationBudget),
+              justification: parseValidationBudgetJustification(validationBudgetJustification),
+            },
+          }
+        : {}),
+      ...(currentSubmissionProjection?.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1, executeBytes: options.git?.lifecycle("inspection").runBytes } : {}),
+      ...(schedulerState(options)?.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
+      ...(scopeIdentity ? { submissionScopeIdentity: scopeIdentity } : {}),
       execute: options.git?.lifecycle("inspection").run,
       workspacePath: options.workspace.path,
       taskCommit: commit,
@@ -388,7 +452,7 @@ export async function runWorkerTask(
       unresolvedConcerns,
     });
     return producedChangeSet;
-  }, { requireCriterionEvidenceLinks: acceptanceCriteria !== undefined }));
+  }, { requireCriterionEvidenceLinks: acceptanceCriteria !== undefined, requireValidationScope }));
   for (const tool of options.toolSurfaceProbe ?? []) broker.register(tool);
   assertRoleToolSurface(
     "worker",

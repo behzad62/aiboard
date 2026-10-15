@@ -8,9 +8,17 @@ export interface AcceptanceCriterion {
   id: string;
   /** Human-readable requirement text; the kernel never interprets its meaning. */
   text: string;
+  /**
+   * Evidence-gated planning (P6.6 T1): explicit run-level requirement this
+   * task-local criterion contributes to (planning-contracts.ts SourceRequirement.id).
+   * Optional — absent on every legacy criterion, which stays valid.
+   */
+  requirementId?: string;
 }
 
 export interface CriterionEvidenceLink {
+  /** Kernel-generated at submission; model values are always overwritten. */
+  freshness?: { status: "current" | "stale" | "unknown"; submittedTreeId?: string; evidenceTreeId?: string; reason?: string };
   criterionId: string;
   evidenceId: string;
   artifactHashes: string[];
@@ -27,6 +35,8 @@ export interface AcceptedEvidenceFailure {
 }
 
 export interface CriterionReviewVerdict {
+  /** W3 (AR-R29): required exactly when the verdict deviates from the runner prefill. */
+  overrideReason?: string;
   criterionId: string;
   verdict: CriterionReviewVerdictValue;
   rationale: string;
@@ -147,6 +157,12 @@ export function validateAcceptanceCriteria(
     }
     if (id !== id.trim()) {
       issues.push(`Acceptance criterion ${id} must use a trimmed stable id.`);
+    }
+    if (
+      criterion.requirementId !== undefined &&
+      (typeof criterion.requirementId !== "string" || !criterion.requirementId.trim())
+    ) {
+      issues.push(`Acceptance criterion ${id} requirementId must be a non-empty string when present.`);
     }
     if (seen.has(id)) {
       duplicateCriterionIds.push(id);

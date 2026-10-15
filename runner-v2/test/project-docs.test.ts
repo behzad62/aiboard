@@ -28,10 +28,15 @@ import {
   DOCS_UPDATE_SENTENCE,
   PROJECT_DOC_MAX_BYTES,
   PROJECT_DOCS_ROOT,
+  V2_AGENTS_SECTION_BODY,
+  V2_CLAUDE_POINTER_LINE,
   agentsMarkedSectionSatisfies,
+  agentsMarkedSectionSatisfiesV2,
   claudePointerSatisfies,
+  claudePointerSatisfiesV2,
   projectDocRequestId,
   spliceMarkedArchitectSection,
+  spliceMarkedArchitectSectionBytes,
   validateProjectDocPath,
   type ProjectDocPathRefusal,
 } from "../src/project-docs.js";
@@ -730,3 +735,87 @@ async function invoke(
     ...(workspacePath ? { workspacePath } : {}),
   });
 }
+
+
+test("C2b: the v2 entry lines splice byte-for-byte and satisfy only the v2 checks", () => {
+  assert.ok(V2_AGENTS_SECTION_BODY.includes("Read docs/project/STATE.md first"));
+  assert.equal(V2_CLAUDE_POINTER_LINE, "@AGENTS.md");
+  // Pre-existing content outside the markers survives byte-for-byte.
+  const surrounding = `alpha\n${AGENTS_SECTION_START}\nold body\n${AGENTS_SECTION_END}\nomega`;
+  const spliced = spliceMarkedArchitectSection(surrounding, V2_AGENTS_SECTION_BODY);
+  assert.equal(
+    spliced,
+    `alpha\n${AGENTS_SECTION_START}\n${V2_AGENTS_SECTION_BODY}\n${AGENTS_SECTION_END}\nomega`,
+  );
+  assert.equal(agentsMarkedSectionSatisfiesV2(spliced), true);
+  // A missing file is created with just the section.
+  assert.equal(
+    spliceMarkedArchitectSection("", V2_AGENTS_SECTION_BODY),
+    `${AGENTS_SECTION_START}\n${V2_AGENTS_SECTION_BODY}\n${AGENTS_SECTION_END}\n`,
+  );
+  const claude = spliceMarkedArchitectSection("# Claude\nkeep me\n", V2_CLAUDE_POINTER_LINE);
+  assert.ok(claude.startsWith("# Claude\nkeep me\n"));
+  assert.equal(claudePointerSatisfiesV2(claude), true);
+  // The v1 text and checks are unchanged: v2 content fails the v1 checks.
+  assert.equal(agentsMarkedSectionSatisfies(spliced), false);
+  assert.equal(claudePointerSatisfies(claude), false);
+  assert.equal(agentsMarkedSectionSatisfiesV2("no markers here"), false);
+  assert.equal(claudePointerSatisfiesV2("no markers here"), false);
+});
+
+test("marked-section byte splice keeps outside bytes and matches EOL (C2b repair m3)", () => {
+  // Probe J shape: Latin-1 bytes, no markers. Outside bytes survive exactly.
+  const latin1 = Buffer.from([0x23, 0x20, 0x52, 0xe9, 0x67, 0x6c, 0x65, 0x73, 0x0a]);
+  const appended = spliceMarkedArchitectSectionBytes(latin1, V2_AGENTS_SECTION_BODY);
+  assert.ok(appended.subarray(0, latin1.length).equals(latin1), "bytes outside the markers are kept exactly");
+  assert.ok(appended.includes(V2_AGENTS_SECTION_BODY));
+  assert.equal(appended.includes(Buffer.from([0x0d])), false, "no CR introduced into an LF file");
+  // A CRLF file without markers takes a CRLF section: no mixed endings.
+  const crlf = Buffer.from("alpha\r\nomega\r\n", "latin1");
+  const splicedCrlf = spliceMarkedArchitectSectionBytes(crlf, "body");
+  assert.deepEqual(
+    splicedCrlf,
+    Buffer.from(`alpha\r\nomega\r\n${AGENTS_SECTION_START}\r\nbody\r\n${AGENTS_SECTION_END}\r\n`),
+  );
+  // Markers present with non-UTF-8 outside: only the section is replaced.
+  const marked = Buffer.concat([latin1, Buffer.from(`${AGENTS_SECTION_START}\nold\n${AGENTS_SECTION_END}\n`)]);
+  const replaced = spliceMarkedArchitectSectionBytes(marked, "new");
+  assert.ok(replaced.subarray(0, latin1.length).equals(latin1));
+  assert.ok(replaced.includes("new"));
+  assert.equal(replaced.includes("old\n"), false);
+  // A missing file is created with just the section.
+  assert.deepEqual(
+    spliceMarkedArchitectSectionBytes(null, "b"),
+    Buffer.from(`${AGENTS_SECTION_START}\nb\n${AGENTS_SECTION_END}\n`),
+  );
+});
+
+test("byte splice normalizes a multi-line body to the file's EOL (C2b repair N-5/probe J)", () => {
+  // Probe J shape: a CRLF file with a multi-line body (the v1 Architect
+  // body). No lone LF may survive in the spliced file.
+  const crlfFile = Buffer.from(
+    `head\r\n${AGENTS_SECTION_START}\r\nold\r\nline2\r\n${AGENTS_SECTION_END}\r\ntail\r\n`,
+    "latin1",
+  );
+  const spliced = spliceMarkedArchitectSectionBytes(crlfFile, "new\nbody\nlines");
+  assert.ok(spliced.includes("new\r\nbody\r\nlines"), "the multi-line body takes the file's CRLF");
+  for (let index = 0; index < spliced.length; index += 1) {
+    if (spliced[index] === 0x0a) {
+      assert.equal(spliced[index - 1], 0x0d, `no lone LF at byte ${index}`);
+    }
+  }
+  assert.ok(spliced.subarray(0, 6).equals(Buffer.from("head\r\n", "latin1")), "outside bytes are kept exactly");
+  // An LF file keeps LF bodies untouched.
+  const lfFile = Buffer.from(`head\n${AGENTS_SECTION_START}\nold\n${AGENTS_SECTION_END}\ntail\n`, "latin1");
+  const splicedLf = spliceMarkedArchitectSectionBytes(lfFile, "new\nbody");
+  assert.ok(splicedLf.includes("new\nbody"));
+  assert.equal(splicedLf.includes(Buffer.from([0x0d])), false, "no CR introduced into an LF file");
+  // A CRLF file without markers takes a CRLF multi-line section too.
+  const appended = spliceMarkedArchitectSectionBytes(Buffer.from("alpha\r\nomega\r\n", "latin1"), "one\ntwo");
+  assert.ok(appended.includes("one\r\ntwo"));
+  for (let index = 0; index < appended.length; index += 1) {
+    if (appended[index] === 0x0a) {
+      assert.equal(appended[index - 1], 0x0d, `no lone LF at byte ${index}`);
+    }
+  }
+});

@@ -1,3 +1,8 @@
+import { assertCurrentConsumedExecutionGrantClaims } from "./execution-grants.js";
+import { commandReuseKey, findReusableCommand, type CommandExecutionSnapshot } from "./command-evidence-reuse.js";
+import type { EvidenceRecord, EvidenceStore } from "./evidence-store.js";
+import type { WorkingTreeIdentity } from "./command-evidence-identity.js";
+import { fingerprintChildEnvironment, unknownChildEnvironment, type ChildEnvironmentIdentity } from "./command-evidence-identity.js";
 import type { ToolExecutionContext } from "./agent-contracts.js";
 import {
   freezeExecutionLifecycleRequirements,
@@ -96,6 +101,10 @@ export function createBoundedProcessOutputFactory(input: {
 }
 
 export interface OneShotCommandResult {
+  readonly executionSnapshot?: CommandExecutionSnapshot;
+  readonly reuseSource?: EvidenceRecord;
+  readonly childEnvironmentIdentity?: ChildEnvironmentIdentity;
+  readonly childEnvironmentAudit?: import("./child-environment.js").ChildEnvironmentAudit;
   readonly capturedOutput?: Readonly<{ stdout: Uint8Array; stderr: Uint8Array; complete: boolean }>;
   readonly process: GenericProcessResult;
   readonly enforcement:
@@ -112,7 +121,16 @@ export interface OneShotCommandExecutor {
   execute(request: OneShotCommandRequest): Promise<OneShotCommandResult>;
 }
 
+export interface CommandEvidenceReuseAuthority { store: EvidenceStore; artifacts: ArtifactStore; captureTree: (cwd: string, request: OneShotCommandRequest) => Promise<WorkingTreeIdentity> }
+const REUSE_AUTHORITIES = new WeakMap<OneShotCommandExecutor, Map<string, CommandEvidenceReuseAuthority>>();
+/** Trusted native composition; never available to model arguments. */
+export function bindCommandEvidenceReuse(executor: OneShotCommandExecutor, runId: string, authority: CommandEvidenceReuseAuthority): void {
+  let runs = REUSE_AUTHORITIES.get(executor);
+  if (!runs) {runs = new Map(); REUSE_AUTHORITIES.set(executor, runs);}
+  runs.set(runId, authority);
+}
 export interface RuntimeBackedOneShotCommandExecutorOptions {
+  readonly evidenceReuse?: CommandEvidenceReuseAuthority;
   readonly runtime: SubprocessRuntime;
   readonly runtimeGrants: ExecutionGrantController;
   readonly executionGrants: ExecutionGrantAuthority;
@@ -127,8 +145,9 @@ export function createRuntimeBackedOneShotCommandExecutor(
   options: RuntimeBackedOneShotCommandExecutorOptions,
 ): OneShotCommandExecutor {
   const clock = options.clock ?? (() => new Date());
-  return Object.freeze({
+  const executor: OneShotCommandExecutor = Object.freeze({
     async execute(request: OneShotCommandRequest): Promise<OneShotCommandResult> {
+      const evidenceReuse = options.evidenceReuse ?? REUSE_AUTHORITIES.get(executor)?.get(request.context.runId);
       const capture = request.captureOutputBytes === undefined ? undefined : boundedLiveOutput(request.captureOutputBytes);
       let opaqueGrant = request.context.executionGrant;
       let internalGrant = false;
@@ -184,30 +203,17 @@ export function createRuntimeBackedOneShotCommandExecutor(
       let selection: ExecutionIsolationSelection | undefined;
       let process: GenericProcessResult | undefined;
       let runtimeGrantIssued = false;
+      let effectiveEnvironment: Readonly<Record<string, string>> = {};
+      let reuseSource: EvidenceRecord | undefined;
+      let reuseKey: string | undefined;
+      let childEnvironmentAudit: import("./child-environment.js").ChildEnvironmentAudit | undefined;
       try {
-        if (options.permissionProfile === "full") {
-          selection = await options.isolation.acquire({
-            permissionProfile: options.permissionProfile,
-            intent: originalIntent,
-            grant: claims,
-          });
-        } else {
-          const prepared = options.environments.prepare({
-            ambient: options.ambientEnvironment,
-            explicitOverrides: request.explicitEnvironment,
-            runId: originalIntent.runId,
-            invocationId,
-          });
-          selection = await options.environments.withChildEnvironment(
-            prepared.capability,
-            async (environment) => await options.isolation.acquire({
-              permissionProfile: options.permissionProfile,
-              intent: originalIntent,
-              grant: claims,
-              environment,
-            }),
-          );
-        }
+        const prepared = options.environments.prepare({ workingDirectory: request.workingDirectory, ambient: options.ambientEnvironment, explicitOverrides: request.explicitEnvironment, runId: originalIntent.runId, invocationId });
+        childEnvironmentAudit = prepared.audit;
+        effectiveEnvironment = options.environments.withChildEnvironment(prepared.capability, (environment) => environment);
+        selection = await options.isolation.acquire({
+          permissionProfile: options.permissionProfile, intent: originalIntent, grant: claims, environment: effectiveEnvironment,
+        });
         const launchIntent = await options.isolation.prepareExecution(
           selection,
           originalIntent,
@@ -221,21 +227,45 @@ export function createRuntimeBackedOneShotCommandExecutor(
           access: claims.access,
         });
         runtimeGrantIssued = true;
+        let childEnvironmentIdentity = selection.enforcement === "write_confinement_exact_grant" ? await fingerprintChildEnvironment({ environment: effectiveEnvironment, executable: request.executable, cwd: request.workingDirectory,
+          ...(selection.enforcement === "write_confinement_exact_grant" ? {provider: {providerId: selection.providerId, implementationDigest: selection.implementationDigest, ...(selection.lease.immutableImageId ? {immutableImageId: selection.lease.immutableImageId} : {})}} : {}) }) : unknownChildEnvironment();
         process = await options.runtime.invoke({
+          ...(selection.enforcement === "unconfined_explicit_full" && evidenceReuse && request.captureOutputBytes === undefined && ["run_evidence_command", "final-verification.command"].includes(request.context.toolName) ? {
+            assertReuseAuthority: () => assertCurrentConsumedExecutionGrantClaims(claims),
+            reusePreparedEnvironment: async (environment: Readonly<Record<string, string>>, executionContext: {requiredLifecycleScope: string; implementationDigest: string; configDigest: string}) => {
+              assertCurrentConsumedExecutionGrantClaims(claims);
+              const reuse = evidenceReuse!;
+              childEnvironmentIdentity = await fingerprintChildEnvironment({environment, executable: launchIntent.executable, cwd: launchIntent.workingDirectory});
+              const tree = await reuse.captureTree(launchIntent.workingDirectory, request);
+              reuseKey = commandReuseKey({...request, executable: launchIntent.executable, arguments: launchIntent.arguments, workingDirectory: launchIntent.workingDirectory}, tree, childEnvironmentIdentity, executionContext);
+              if (!reuseKey) return undefined;
+              const source = await findReusableCommand(reuse.store, reuse.artifacts, request.context.runId, reuseKey);
+              assertCurrentConsumedExecutionGrantClaims(claims);
+              const settledTree = await reuse.captureTree(launchIntent.workingDirectory, request);
+              if (!source || settledTree.status !== "known" || tree.status !== "known" || settledTree.treeId !== tree.treeId) return undefined;
+              reuseSource = source;
+              return {reused_from: source.id, process: structuredClone((source.fact as import("./evidence-store.js").CommandEvidenceFact).executionSnapshot!.process)};
+            },
+          } : {}),
           intent: launchIntent,
           ...(capture ? { onOutput: capture.write } : {}),
           grantId: claims.grantId,
           ambientEnvironment: options.permissionProfile === "full"
             ? options.ambientEnvironment
             : {},
-          ...(options.permissionProfile === "full" && request.explicitEnvironment
-            ? { explicitEnvironment: request.explicitEnvironment }
-            : {}),
+          ...(options.permissionProfile === "full" && request.explicitEnvironment ? {explicitEnvironment: request.explicitEnvironment} : {}),
+          ...(selection.enforcement === "unconfined_explicit_full" ? {onPreparedEnvironment: async (environment: Readonly<Record<string, string>>) => {
+            childEnvironmentIdentity = await fingerprintChildEnvironment({environment, executable: launchIntent.executable, cwd: launchIntent.workingDirectory});
+          }} : {}),
           ...(request.context.signal ? { signal: request.context.signal } : {}),
           deadline: new Date(clock().getTime() + request.timeoutMs),
         });
         return {
           process,
+          childEnvironmentIdentity,
+          childEnvironmentAudit,
+          ...(reuseKey ? {executionSnapshot: {key: reuseKey, process: structuredClone(process)}} : {}),
+          ...(reuseSource ? {reuseSource} : {}),
           ...(capture ? { capturedOutput: capture.result(process) } : {}),
           enforcement: selection.enforcement,
           disclosure: selection.disclosure,
@@ -256,6 +286,7 @@ export function createRuntimeBackedOneShotCommandExecutor(
       }
     },
   });
+  return executor;
 }
 
 export function outputFor(

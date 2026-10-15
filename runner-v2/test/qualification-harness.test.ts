@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +13,74 @@ import {
 } from "./support/qualification-harness.js";
 
 const probe = new URL("./support/qualification-harness-probe.ts", import.meta.url);
+
+test("qualification diagnostics retain a bounded runtime database and WAL without widening unrelated capture", () => {
+  const root = evidenceRoot();
+  let database: DatabaseSync | undefined;
+  let copied: DatabaseSync | undefined;
+  try {
+    const fixture = join(root, "fixture");
+    const state = join(fixture, "state", "builds", "owned-run");
+    mkdirSync(state, { recursive: true });
+    const databasePath = join(state, "subprocess-runtime.sqlite");
+    database = new DatabaseSync(databasePath);
+    database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE facts (value BLOB)");
+    const payload = Buffer.alloc(3 * 1024 * 1024, 42);
+    database.prepare("INSERT INTO facts VALUES (?)").run(payload);
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    database.prepare("INSERT INTO facts VALUES (?)").run(payload);
+    assert.ok(readFileSync(databasePath).length > 2 * 1024 * 1024);
+    assert.ok(readFileSync(`${databasePath}-wal`).length > 2 * 1024 * 1024);
+    writeFileSync(join(state, "unrelated.sqlite"), payload);
+    const oversized = join(root, "oversized");
+    const oversizedState = join(oversized, "state", "builds", "owned-run");
+    mkdirSync(oversizedState, { recursive: true });
+    writeFileSync(join(oversizedState, "subprocess-runtime.sqlite"), Buffer.alloc(9 * 1024 * 1024));
+    // Simulate a live WAL/database growing after its metadata was sampled.
+    const originalStat = fs.statSync;
+    let capture: string;
+    try {
+      fs.statSync = ((...args: Parameters<typeof fs.statSync>) => {
+        const observed = Reflect.apply(originalStat, fs, args);
+        return String(args[0]) === join(oversizedState, "subprocess-runtime.sqlite")
+          ? { ...observed, size: 4 * 1024 * 1024 } : observed;
+      }) as typeof fs.statSync;
+      syncBuiltinESMExports();
+      capture = writeQualificationDiagnostics({ evidenceRoot: join(root, "evidence"), scenario: "bounded-runtime-db", fixtureRoots: [fixture, oversized] });
+    } finally {
+      fs.statSync = originalStat;
+      syncBuiltinESMExports();
+    }
+    const main = findNamedFile(capture, "subprocess-runtime.sqlite");
+    const wal = findNamedFile(capture, "subprocess-runtime.sqlite-wal");
+    assert.ok(main, "runtime database within the bounded evidence allowance must be retained");
+    assert.ok(wal, "the associated runtime WAL must also be retained");
+    assert.deepEqual(readFileSync(main), readFileSync(databasePath));
+    assert.deepEqual(readFileSync(wal), readFileSync(`${databasePath}-wal`));
+    assert.ok(findNamedFile(capture, "unrelated.sqlite.omitted.txt"), "unrelated files keep their original bound");
+    assert.ok(findNamedFile(capture, "subprocess-runtime.sqlite.omitted.txt"), "runtime evidence remains finitely bounded");
+    const outside = join(root, "outside-role");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "subprocess-runtime.sqlite"), payload);
+    const outsideCapture = writeQualificationDiagnostics({ evidenceRoot: join(root, "evidence"), scenario: "outside-runtime-role", fixtureRoots: [outside] });
+    assert.equal(findNamedFile(outsideCapture, "subprocess-runtime.sqlite"), undefined, "the filename alone never widens capture outside the owned build-state role");
+    assert.ok(findNamedFile(outsideCapture, "subprocess-runtime.sqlite.omitted.txt"));
+    // SQLite itself needs a short pathname on Windows; preserve captured files.
+    const readRoot = join(root, "read");
+    mkdirSync(readRoot);
+    const readPath = join(readRoot, "subprocess-runtime.sqlite");
+    copyFileSync(main, readPath);
+    copyFileSync(wal, `${readPath}-wal`);
+    const shm = findNamedFile(capture, "subprocess-runtime.sqlite-shm");
+    if (shm) copyFileSync(shm, `${readPath}-shm`);
+    copied = new DatabaseSync(readPath, { readOnly: true });
+    assert.equal(copied.prepare("SELECT count(*) AS count FROM facts").get()!.count, 2, "both main database and WAL facts survive capture");
+  } finally {
+    copied?.close();
+    database?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function evidenceRoot(): string {
   return mkdtempSync(join(tmpdir(), "runner-v2-qualification-harness-test-"));

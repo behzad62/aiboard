@@ -1,3 +1,5 @@
+import { commandReuseMetadata } from "./command-evidence-reuse.js";
+import { unknownWorkingTree, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 
@@ -7,7 +9,7 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
-import type { CommandEvidenceFact, EvidenceStore } from "./evidence-store.js";
+import type { CommandEvidenceFact, EvidenceStore, ExtendedEvidenceStore } from "./evidence-store.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type { GitRunner } from "./git-repository.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
@@ -15,6 +17,8 @@ import {
   outputFor,
   type OneShotCommandExecutor,
 } from "./one-shot-command-executor.js";
+import type { BudgetLedger } from "./budget-ledger.js";
+import { recordValidationEvidenceSegment } from "./validation-budget.js";
 
 interface RunEvidenceInput {
   label: string;
@@ -24,6 +28,10 @@ interface RunEvidenceInput {
   timeoutMs: number;
 }
 
+export interface EvidenceValidationAccounting {
+  ledger: BudgetLedger;
+  runId: string;
+}
 export interface EvidenceToolsOptions {
   git?: RunGitExecutionContext;
   store: EvidenceStore;
@@ -36,10 +44,83 @@ export interface EvidenceToolsOptions {
   allowedCommands?: readonly string[];
   attempt?: number;
   execution?: OneShotCommandExecutor;
+  validationAccounting?: EvidenceValidationAccounting;
 }
 
 export function createEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
   return [runEvidenceTool(options), inspectEvidenceTool(options)];
+}
+
+/**
+ * T5 (P6.6): inspect tools for durable validation observations and
+ * applicability decisions. Separate from createEvidenceTools so the existing
+ * two-tool surface (and its tests) stays byte-identical; later tasks wire
+ * these into role surfaces. Both tools are read-only with no verdict.
+ */
+export function createValidationEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
+  return [inspectObservationsTool(options), inspectApplicabilityTool(options)];
+}
+
+function extendedStore(store: EvidenceStore): ExtendedEvidenceStore | undefined {
+  const candidate = store as Partial<ExtendedEvidenceStore>;
+  return typeof candidate.recordObservation === "function" &&
+    typeof candidate.listObservations === "function" &&
+    typeof candidate.recordApplicability === "function" &&
+    typeof candidate.listApplicability === "function"
+    ? (candidate as ExtendedEvidenceStore)
+    : undefined;
+}
+
+function inspectObservationsTool(options: EvidenceToolsOptions): NativeTool<Record<string, never>> {
+  return {
+    definition: {
+      name: "inspect_validation_observations",
+      description: "Inspect durable validation observations (outcomes/counts/snapshots); no semantic verdict is provided",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      readOnly: true,
+      effect: "none",
+    },
+    validate: (input) => {
+      if (typeof input !== "object" || input === null || Array.isArray(input)) {
+        return { ok: false, issues: ["arguments must be an object"] };
+      }
+      return { ok: true, value: {} };
+    },
+    execute: async (_input, context) => {
+      const store = extendedStore(options.store);
+      if (!store) return failure("validation_store_unavailable", "This evidence store does not support validation observations.");
+      return {
+        content: [{ type: "json", value: store.listObservations({ runId: context.runId }) }],
+        isError: false,
+      };
+    },
+  };
+}
+
+function inspectApplicabilityTool(options: EvidenceToolsOptions): NativeTool<Record<string, never>> {
+  return {
+    definition: {
+      name: "inspect_applicability_decisions",
+      description: "Inspect durable evidence applicability decisions (reusable/invalidated); no semantic verdict is provided",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      readOnly: true,
+      effect: "none",
+    },
+    validate: (input) => {
+      if (typeof input !== "object" || input === null || Array.isArray(input)) {
+        return { ok: false, issues: ["arguments must be an object"] };
+      }
+      return { ok: true, value: {} };
+    },
+    execute: async (_input, context) => {
+      const store = extendedStore(options.store);
+      if (!store) return failure("validation_store_unavailable", "This evidence store does not support applicability decisions.");
+      return {
+        content: [{ type: "json", value: store.listApplicability({ runId: context.runId }) }],
+        isError: false,
+      };
+    },
+  };
 }
 
 function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceInput> {
@@ -49,15 +130,15 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
   return {
     definition: {
       name: "run_evidence_command",
-      description: "Run an argument-array command and record exit/output/revision facts without a verdict",
+      description: "Run one executable without a shell and record its exit code and output as durable evidence (no verdict). `command` is the executable (e.g. `dotnet`, `python`, `cmake`, `cargo`, `npm`); `args` is the argument list; pipes, `&&` and redirection are not interpreted. `cwd` is relative to the workspace. Output is stored as artifacts: read them with artifact.read. Cite the returned evidence ID.",
       inputSchema: {
         type: "object",
         properties: {
-          label: { type: "string", minLength: 1 },
-          command: { type: "string", minLength: 1 },
-          args: { type: "array", items: { type: "string" } },
-          cwd: { type: "string" },
-          timeoutMs: { type: "integer", minimum: 1, maximum: maximumTimeoutMs },
+          label: { type: "string", minLength: 1, description: "Short human label for this check, shown in evidence summaries." },
+          command: { type: "string", minLength: 1, description: "One executable name or path; no shell, no argument string." },
+          args: { type: "array", items: { type: "string" }, description: "Argument list passed verbatim; pipes and redirection are not interpreted." },
+          cwd: { type: "string", description: "Working directory relative to the workspace." },
+          timeoutMs: { type: "integer", minimum: 1, maximum: maximumTimeoutMs, description: "Timeout in milliseconds." },
         },
         required: ["label", "command", "args"],
         additionalProperties: false,
@@ -82,6 +163,7 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
       try {
         const cwd = await containedDirectory(context.workspacePath, input.cwd);
         const startedAt = clock();
+        const commandTree = await options.git?.workingTreeForCall?.(context, cwd) ?? unknownWorkingTree();
         const revision = options.git ? await gitRevision(cwd, options.git.forCall(context).run) : undefined;
         if (!options.execution || !context.callId) {
           return failure(
@@ -105,9 +187,23 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
             ...(context.signal ? { signal: context.signal } : {}),
           },
         };
+        const validationStart = clock();
         const execution = options.git
           ? await options.git.executeForCall(context, commandRequest)
           : await options.execution.execute(commandRequest);
+        const validationFinish = clock();
+        if (options.validationAccounting && !execution.reuseSource && context.callId) {
+          recordValidationEvidenceSegment(options.validationAccounting.ledger, {
+            runId: options.validationAccounting.runId,
+            taskId: options.taskId,
+            sessionId: context.sessionId,
+            callId: context.callId,
+            startedAt: validationStart,
+            finishedAt: validationFinish,
+          });
+        }
+        const postTree = await options.git?.workingTreeForCall?.(context, cwd) ?? unknownWorkingTree();
+        const workingTreeIdentity = settleWorkingTreeIdentity(commandTree, postTree);
         const finishedAt = clock();
         const stdoutOutput = outputFor(execution.process, "stdout");
         const stderrOutput = outputFor(execution.process, "stderr");
@@ -117,6 +213,9 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
         ]);
         const fact: CommandEvidenceFact = {
           kind: "command",
+          workingTreeIdentity,
+          childEnvironmentIdentity: execution.childEnvironmentIdentity ?? unknownChildEnvironment(),
+          ...(execution.childEnvironmentAudit ? {childEnvironmentAudit: execution.childEnvironmentAudit} : {}),
           label: input.label,
           command: input.command,
           args: [...input.args],
@@ -137,6 +236,7 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           stdoutArtifactHash: stdout.hash,
           stderrArtifactHash: stderr.hash,
           ...(revision ? { repositoryRevision: revision } : {}),
+          ...commandReuseMetadata(execution),
         };
         const record = options.store.record({
           runId: context.runId,
@@ -171,14 +271,17 @@ function stableExecutionErrorCode(error: unknown): string | undefined {
   ]).has(code) ? code : undefined;
 }
 
-function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId?: string }> {
+function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId?: string; evidenceId?: string }> {
   return {
     definition: {
       name: "inspect_evidence",
-      description: "Inspect immutable command and browser evidence facts; no semantic verdict is provided",
+      description: "Inspect immutable command and browser evidence facts; no semantic verdict is provided. Without evidenceId, returns the task list; with evidenceId, returns only that exact record in the same JSON array shape. Prefer evidenceId when the full list would exceed the inline output bound.",
       inputSchema: {
         type: "object",
-        properties: { taskId: { type: "string", minLength: 1 } },
+        properties: {
+          taskId: { type: "string", minLength: 1 },
+          evidenceId: { type: "string", minLength: 1, description: "Optional singular evidence ID to read exactly; scoped to this run and the requested task." },
+        },
         additionalProperties: false,
       },
       readOnly: true,
@@ -188,23 +291,51 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
       if (typeof input !== "object" || input === null || Array.isArray(input)) {
         return { ok: false, issues: ["arguments must be an object"] };
       }
-      const taskId = (input as { taskId?: unknown }).taskId;
-      return taskId === undefined || (typeof taskId === "string" && taskId.trim())
-        ? { ok: true, value: taskId ? { taskId } as { taskId: string } : {} }
-        : { ok: false, issues: ["taskId must be a non-empty string"] };
-    },
-    execute: async (input, context) => ({
-      content: [
-        {
-          type: "json",
-          value: options.store.list({
-            runId: context.runId,
-            taskId: input.taskId ?? options.taskId,
-          }),
+      const record = input as Record<string, unknown>;
+      for (const key of Object.keys(record)) {
+        if (key !== "taskId" && key !== "evidenceId") {
+          return { ok: false, issues: [`unknown argument: ${key}`] };
+        }
+      }
+      const taskId = record.taskId;
+      const evidenceId = record.evidenceId;
+      if (taskId !== undefined && (typeof taskId !== "string" || !taskId.trim())) {
+        return { ok: false, issues: ["taskId must be a non-empty string"] };
+      }
+      if (evidenceId !== undefined && (typeof evidenceId !== "string" || !evidenceId.trim())) {
+        return { ok: false, issues: ["evidenceId must be a non-empty string"] };
+      }
+      return {
+        ok: true,
+        value: {
+          ...(taskId !== undefined ? { taskId: taskId as string } : {}),
+          ...(evidenceId !== undefined ? { evidenceId: evidenceId as string } : {}),
         },
-      ],
-      isError: false,
-    }),
+      };
+    },
+    execute: async (input, context) => {
+      const taskId = input.taskId ?? options.taskId;
+      if (input.evidenceId === undefined) {
+        return {
+          content: [
+            {
+              type: "json",
+              value: options.store.list({ runId: context.runId, taskId }),
+            },
+          ],
+          isError: false,
+        };
+      }
+      const found = options.store.getByIds({ runId: context.runId, taskId, ids: [input.evidenceId] });
+      const record = found.find((candidate) => candidate.id === input.evidenceId && candidate.runId === context.runId && candidate.taskId === taskId);
+      if (!record) {
+        return failure("evidence_not_found", "No evidence with that ID exists for this run and task.");
+      }
+      return {
+        content: [{ type: "json", value: [record] }],
+        isError: false,
+      };
+    },
   };
 }
 

@@ -118,6 +118,12 @@ export default function DashboardPage() {
   const [styleNote, setStyleNote] = useState("");
   const [reasoningEffort, setReasoningEffort] =
     useState<ReasoningEffort>("default");
+  const [planningOptions, setPlanningOptions] = useState({
+    answerReview: false,
+    evidenceGatedPlanning: false,
+    specCopy: true,
+    handoffFiles: "commit" as "commit" | "export_only",
+  });
   const [buildRunPolicy, setBuildRunPolicy] =
     useState<BuildRunPolicy>(DEFAULT_BUILD_RUN_POLICY);
   const [buildSkillMode, setBuildSkillMode] =
@@ -348,6 +354,10 @@ export default function DashboardPage() {
         runnerUrl: mode === "build" ? runner?.url ?? null : null,
         runnerToken: mode === "build" ? runner?.token ?? null : null,
         runnerAccess: mode === "build" ? runner?.access ?? null : null,
+        buildAnswerReview: mode === "build" ? planningOptions.answerReview : undefined,
+        buildEvidenceGatedPlanning: mode === "build" ? planningOptions.evidenceGatedPlanning : undefined,
+        buildSpecCopy: mode === "build" ? planningOptions.specCopy : undefined,
+        buildHandoffFiles: mode === "build" ? planningOptions.handoffFiles : undefined,
         buildRunPolicy: mode === "build" ? buildRunPolicy : undefined,
         buildSkillMode: mode === "build" ? buildSkillMode : undefined,
         buildBudgetUsd: mode === "build" ? buildBudgetUsd : undefined,
@@ -477,6 +487,7 @@ export default function DashboardPage() {
             {mode === "build" ? (
               <BuildRunPolicyControl
                 value={{
+                  ...planningOptions,
                   runPolicy: buildRunPolicy,
                   skillMode: buildSkillMode,
                   budgetUsd: buildBudgetUsd,
@@ -485,6 +496,7 @@ export default function DashboardPage() {
                     buildAlwaysRequireIndependentVerifier,
                 }}
                 onChange={(next) => {
+                  setPlanningOptions({ answerReview: next.answerReview ?? false, evidenceGatedPlanning: next.evidenceGatedPlanning ?? false, specCopy: next.specCopy ?? true, handoffFiles: next.handoffFiles ?? "commit" });
                   setBuildRunPolicy(next.runPolicy);
                   setBuildSkillMode(next.skillMode);
                   setBuildBudgetUsd(next.budgetUsd);

@@ -1,0 +1,41 @@
+{
+  "schema": "aiboard-windows-birth-helper-provenance-v1",
+  "source": "helper-live.cs",
+  "sourceSha256": "05e35d52f59eee05427c2f09d28a9aa233439d39e342aad55e553710c832dd38",
+  "binary": "native/win-x64/helper.exe",
+  "binarySha256": "ce317a9f8694c2f5b4c99ceb6062bd893cd34fad78310015991d317c48543750",
+  "target": "Windows x64 CLR4 / net40 BCL / winexe",
+  "sdk": "10.0.400",
+  "compilerSha256": "871b364c39c0d0285756956ba485e9c4959acea3a7b14aadd60d6452e4c1efc6",
+  "compilerFlags": [
+    "/noconfig",
+    "/nostdlib+",
+    "/target:winexe",
+    "/platform:x64",
+    "/langversion:5",
+    "/deterministic+",
+    "/optimize+",
+    "/debug-",
+    "/warn:4",
+    "/warnaserror+",
+    "/utf8output"
+  ],
+  "pathMap": "source directory -> /src",
+  "sourceFileName": "helper-live.cs",
+  "outputFileName": "helper.exe",
+  "referencePackage": {
+    "name": "Microsoft.NETFramework.ReferenceAssemblies.net40",
+    "version": "1.0.3",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.netframework.referenceassemblies.net40/1.0.3/microsoft.netframework.referenceassemblies.net40.1.0.3.nupkg",
+    "sha256": "54d6e20a1b61caf79395d6d71d091265e81f5a5705ac4ae52af45ca143c3c694"
+  },
+  "references": {
+    "mscorlib.dll": "f7a62c9392d6762f5b46c76149173e2f265d6ad05aae54290ff40573ab32190e",
+    "System.dll": "b6dc62e2437b39f48b5c3368e0d14f86cf00fbf0c76d2685026aafca7e9b50f7",
+    "System.Core.dll": "152e1f68ef7c982795faa5a68b1f087750b05bcbac2603442a3b23bac43e69c3",
+    "System.Security.dll": "04b55b823989644b7eff74cc708a3c204cf3bed60b6518a8209549acafcdfee3"
+  },
+  "qualifiedBuildPlanSha256": "076b8a6d9ec95894bd5e5a4c2d765b68a05a98a2b972f1f5f2e58cc80bcc03f6",
+  "qualifiedBuildReviewSha256": "0f558101a4a70eeb1a359cce0bdcd5f3bb4cc9e1d64d5aaf67b0737f34e85ac0",
+  "reproducibility": "Cross-host/source-path reproduction remains unqualified"
+}

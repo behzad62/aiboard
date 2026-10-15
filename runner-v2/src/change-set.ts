@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { captureEncodingSubmission, type EncodingSubmissionRecord } from "./encoding-safety.js";
+import type { GitBinaryRunner } from "./git-command.js";
+import { captureReviewSignals, type ReviewSignalsRecord } from "./review-integrity.js";
 
 import type { ArtifactStore } from "./artifact-store.js";
 import {
@@ -11,6 +14,10 @@ import type { EvidenceRecord } from "./evidence-store.js";
 import { requireGitRunner } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import type { TaskCommit } from "./workspace-manager.js";
+import { inspectSubmissionTree } from "./submission-guard-git.js";
+import { bindSubmissionScope, type SubmissionScopeIdentity, type SubmissionScopeRecord } from "./submission-scope-contracts.js";
+import { cloneValidationScope, parseValidationScope, type ValidationScope } from "./validation-scope.js";
+import { cloneValidationBudgetSubmission, parseValidationBudgetSubmission, type ValidationBudgetSubmission } from "./validation-budget.js";
 
 export interface ExternalEffectReference {
   kind: string;
@@ -19,6 +26,12 @@ export interface ExternalEffectReference {
 }
 
 export interface ChangeSet {
+  encodingSubmission?: EncodingSubmissionRecord;
+  reviewSignals?: ReviewSignalsRecord;
+  submissionScope?: SubmissionScopeRecord;
+  /** IV-1: the worker's validation-scope report (a claim, not evidence). Absent on legacy submissions. */
+  validationScope?: ValidationScope;
+  validationBudget?: ValidationBudgetSubmission;
   id: string;
   runId: string;
   taskId: string;
@@ -39,6 +52,13 @@ export interface ChangeSet {
 }
 
 export interface CreateChangeSetOptions {
+  encodingSafetyPolicyVersion?: 1;
+  executeBytes?: GitBinaryRunner;
+  reviewIntegrityPolicyVersion?: 1;
+  submissionScopeIdentity?: SubmissionScopeIdentity;
+  /** IV-1: validated with the canonical parser when present; absent on legacy submissions. */
+  validationScope?: unknown;
+  validationBudget?: unknown;
   execute?: GitRunner;
   workspacePath: string;
   taskCommit: TaskCommit;
@@ -64,6 +84,15 @@ export async function createChangeSet(
   options: CreateChangeSetOptions
 ): Promise<ChangeSet> {
   const commit = options.taskCommit;
+  // IV-1: the worker's scope report rides the immutable submission when the
+  // caller supplies one (the new-policy worker path always does). Legacy
+  // callers omit it. Canonical validation here, never duplicated.
+  const validationBudget = options.validationBudget !== undefined
+    ? parseValidationBudgetSubmission(options.validationBudget)
+    : undefined;
+  const validationScope = options.validationScope !== undefined
+    ? parseValidationScope(options.validationScope)
+    : undefined;
   const hasCriteria = options.acceptanceCriteria !== undefined;
   let criterionEvidenceLinks: CriterionEvidenceLink[] | undefined;
   if (hasCriteria) {
@@ -91,6 +120,24 @@ export async function createChangeSet(
         : {}),
     });
   }
+  if (criterionEvidenceLinks) {
+    let submittedTreeId: string | undefined;
+    try {
+      const result = await requireGitRunner(options.execute)({cwd: options.workspacePath, args: ["rev-parse", "--verify", `${commit.revision}^{tree}`]});
+      if (result.exitCode === 0 && /^[a-f0-9]{40,64}$/.test(result.stdout.trim())) submittedTreeId = result.stdout.trim();
+    } catch { /* Unknown identities never imply freshness. */ }
+    criterionEvidenceLinks = criterionEvidenceLinks.map((link) => {
+      const record = options.evidenceRecords?.find((entry) => entry.id === link.evidenceId);
+      if (record?.fact.kind !== "command" || record.fact.workingTreeIdentity === undefined) {
+        const {freshness: _untrusted, ...legacy} = link; void _untrusted; return legacy;
+      }
+      const identity = record.fact.workingTreeIdentity;
+      const evidenceTreeId = identity.status === "known" ? identity.treeId : identity.capturedTreeId;
+      const status = evidenceTreeId && submittedTreeId ? evidenceTreeId === submittedTreeId ? identity.status === "known" ? "current" : "unknown" : "stale" : "unknown";
+      return {...link, freshness: {status, ...(submittedTreeId ? {submittedTreeId} : {}), ...(evidenceTreeId ? {evidenceTreeId} : {}),
+        ...(status === "stale" ? {reason: "taken before later edits"} : status === "unknown" ? {reason: "working-tree identity unavailable"} : {})}};
+    });
+  }
   const evidence = hasCriteria
     ? unique(criterionEvidenceLinks!.flatMap((link) => link.artifactHashes))
     : unique(options.evidenceArtifactHashes ?? []);
@@ -107,18 +154,28 @@ export async function createChangeSet(
     if (effect.artifactHash) assertArtifactHash(effect.artifactHash);
   }
 
+  let submissionFileInventory: Array<{ path: string; added: boolean }> = [];
+  const submissionScope = options.submissionScopeIdentity
+    ? bindSubmissionScope(options.submissionScopeIdentity,
+      `changeset_${createHash("sha256").update(`${commit.runId}\0${commit.taskId}\0${commit.revision}`).digest("hex")}`,
+      commit.revision, await inspectSubmissionTree({ git: requireGitRunner(options.execute), workspacePath: options.workspacePath,
+        baselineRevision: commit.baselineRevision, candidateRevision: commit.revision, claim: options.submissionScopeIdentity.claim,
+        captureInventory: (files) => { submissionFileInventory = files; } }), submissionFileInventory)
+    : undefined;
   const diff = await requireGitRunner(options.execute)({
     cwd: options.workspacePath,
     args: [
       "diff",
       "--binary",
       "--full-index",
+      ...(submissionScope ? ["--no-ext-diff", "--no-textconv", "--no-color", "--no-renames"] : []),
       commit.baselineRevision,
       commit.revision,
       "--",
     ],
     maxOutputBytes: 64 * 1024 * 1024,
   });
+  if (submissionScope && diff.exitCode !== 0) throw new Error("Submission diff capture failed.");
   const artifact = await options.artifacts.put(
     Buffer.from(diff.stdout),
     "text/x-diff",
@@ -128,6 +185,11 @@ export async function createChangeSet(
     .update(`${commit.runId}\0${commit.taskId}\0${commit.revision}`)
     .digest("hex")}`;
   return {
+    ...(options.encodingSafetyPolicyVersion === 1 ? { encodingSubmission: await captureEncodingSubmission({ git: requireGitRunner(options.execute), gitBytes: requireGitRunner(options.executeBytes), workspacePath: options.workspacePath, runId: commit.runId, taskId: commit.taskId, baselineRevision: commit.baselineRevision, taskRevision: commit.revision }) } : {}),
+    ...(options.reviewIntegrityPolicyVersion === 1 ? { reviewSignals: await captureReviewSignals({ git: requireGitRunner(options.execute), workspacePath: options.workspacePath, runId: commit.runId, taskId: commit.taskId, baselineRevision: commit.baselineRevision, taskRevision: commit.revision }) } : {}),
+    ...(submissionScope ? { submissionScope } : {}),
+    ...(validationScope ? { validationScope: cloneValidationScope(validationScope) } : {}),
+    ...(validationBudget ? { validationBudget: cloneValidationBudgetSubmission(validationBudget) } : {}),
     id,
     runId: commit.runId,
     taskId: commit.taskId,

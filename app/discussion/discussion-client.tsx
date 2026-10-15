@@ -155,6 +155,7 @@ import {
   type CommandRunView,
   type WrittenFileView,
 } from "@/components/BuildTaskBoard";
+import { NativePlanningPanel } from "@/components/NativePlanningPanel";
 import {
   RepoWorkflowPanel,
   type RepoStatusView,
@@ -278,10 +279,12 @@ function DiscussionPageInner() {
   const [buildToolReviewReport, setBuildToolReviewReport] =
     useState<BuildToolReviewReport | null>(null);
   const [architectHandoff, setArchitectHandoff] = useState<{
+    requiredSequence?: number;
     reason: string;
     candidateRuntimeIds: string[];
   } | null>(null);
   const [verifierSelection, setVerifierSelection] = useState<{
+    requiredSequence?: number;
     reason: string;
     requiredCapabilities: string[];
     candidateRuntimeIds: string[];
@@ -570,13 +573,13 @@ function DiscussionPageInner() {
           break;
         case "architect_handoff_required":
           setArchitectHandoff({
-            reason: event.reason,
+            requiredSequence: event.requiredSequence,            reason: event.reason,
             candidateRuntimeIds: [...event.candidateRuntimeIds],
           });
           break;
         case "verifier_selection_required":
           setVerifierSelection({
-            reason: event.reason,
+            requiredSequence: event.requiredSequence,            reason: event.reason,
             requiredCapabilities: [...event.requiredCapabilities],
             candidateRuntimeIds: [...event.candidateRuntimeIds],
           });
@@ -1327,7 +1330,8 @@ function DiscussionPageInner() {
         { url: discussion.runnerUrl, token: discussion.runnerToken },
         discussion.nativeBuildRunId,
         runtimeId,
-        `architect-handoff:${discussion.nativeBuildRunId}:${runtimeId}`
+        `architect-handoff:${discussion.nativeBuildRunId}:${runtimeId}`,
+        fetch, undefined, architectHandoff?.requiredSequence
       );
       setArchitectHandoff(null);
       await handleResume();
@@ -1352,6 +1356,7 @@ function DiscussionPageInner() {
         discussion.nativeBuildRunId,
         runtimeId,
         `verifier-handoff:${discussion.nativeBuildRunId}:${runtimeId}`,
+        fetch, undefined, verifierSelection?.requiredSequence,
       );
       setNativeProjection(projection);
       setVerifierSelection(null);
@@ -2244,6 +2249,11 @@ function DiscussionPageInner() {
         </div>
       )}
 
+      {discussion.mode === "build" && (
+        <NativePlanningPanel projection={nativeProjection} usage={nativeObservability?.budget}
+          connection={discussion.runnerUrl && discussion.runnerToken ? { url: discussion.runnerUrl, token: discussion.runnerToken } : undefined}
+          onProjection={(updated) => setNativeProjection((current) => current?.runId === updated.runId && current.lastSequence > updated.lastSequence ? current : updated)} />
+      )}
       {discussion.mode === "build" && (
         <RunnerV2ObservabilityPanel
           snapshot={nativeObservability}

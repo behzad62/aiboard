@@ -239,7 +239,7 @@ test("Windows semantic probes exclude unrelated ambient credentials from the enc
 
 test("live Windows portable probes actively attest duplex, argv boundaries, and birth-tagged tree behavior", { timeout: 60_000 }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows semantic fixtures require Windows."); return; }
-  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
+  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), registerCleanup: (cleanup) => { t.after(cleanup); } });
   const portableDuplex = await active.portableDuplex();
   const windowsBatchArgv = await active.windowsBatchArgv();
   const exactTreeBirth = await active.exactTreeBirth();
@@ -276,10 +276,10 @@ test("a timed-out live duplex probe tears down its channel, process, and owned r
   const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("aiboard-windows-semantic-duplex-")));
   const startedAt = Date.now();
   const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
-  const bounded = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 50, cleanupDeadlineMs: 15_000 });
+  const bounded = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 50, cleanupDeadlineMs: 15_000, registerCleanup: (cleanup) => { t.after(cleanup); } });
   await assert.rejects(bounded.portableDuplex(), /timed out/i);
   assert.ok(Date.now() - startedAt < 1_000, "the positive operation deadline must bound prewarming and startup");
-  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 0 });
+  const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment, deadlineMs: 0, registerCleanup: (cleanup) => { t.after(cleanup); } });
   await assert.rejects(active.portableDuplex(), /timed out/i);
   await new Promise((resolve) => setTimeout(resolve, 100));
   const after = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("aiboard-windows-semantic-duplex-")));
@@ -539,23 +539,19 @@ test("semantic cleanup detects executable and embedded strict base64 root refere
       commandLine: `node --payload=ABCDE${Buffer.from(JSON.stringify({ retainedRoot: root })).toString("base64url")}XYZAB`,
     })],
     ["standard-base64", (root) => {
-      let encoded = "";
-      for (let value = 0; value < 256 && !/[+/]/.test(encoded); value += 1)
-        encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: String.fromCharCode(value) })).toString("base64");
+      // Six question-mark bytes contain an aligned 0x3f triplet for every
+      // root-length residue, guaranteeing '/' independently of the temp path.
+      const encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: "??????" })).toString("base64");
       assert.match(encoded, /[+/]/, "fixture must exercise the standard-base64 alphabet");
       return { executable: "C:\\safe.exe", commandLine: `node --payload=${encoded}` };
     }],
     ["standard-base64-mixed-wrapper", (root) => {
-      let encoded = "";
-      for (let value = 0; value < 256 && !/[+/]/.test(encoded); value += 1)
-        encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: String.fromCharCode(value) })).toString("base64");
+      const encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: "??????" })).toString("base64");
       assert.match(encoded, /[+/]/, "fixture must exercise the standard-base64 alphabet");
       return { executable: "C:\\safe.exe", commandLine: `node --payload=_${encoded}-` };
     }],
     ["base64url-mixed-wrapper", (root) => {
-      let encoded = "";
-      for (let value = 0; value < 256 && !/[-_]/.test(encoded); value += 1)
-        encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: String.fromCharCode(value) })).toString("base64url");
+      const encoded = Buffer.from(JSON.stringify({ retainedRoot: root, marker: "??????" })).toString("base64url");
       assert.match(encoded, /[-_]/, "fixture must exercise the base64url alphabet");
       return { executable: "C:\\safe.exe", commandLine: `node --payload=+${encoded}/` };
     }],

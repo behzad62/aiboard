@@ -1,3 +1,4 @@
+import { bindWorkingTreeCapture, captureWorkingTreeIdentity, type WorkingTreeIdentity } from "./command-evidence-identity.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
@@ -5,7 +6,7 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } fr
 import type { ToolExecutionContext } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { PermissionProfile } from "./contracts.js";
-import { createExecutionCommandGrantScope, type ExecutionCommandGrantScope,
+import { assertCurrentConsumedExecutionGrantClaims, registerConsumedExecutionGrantRevoker, createExecutionCommandGrantScope, type ExecutionCommandGrantScope,
   type ExecutionGrantAuthority, type ExecutionGrantBinding, type OpaqueExecutionGrant } from "./execution-grants.js";
 import type { GitCommandOptions } from "./git-command.js";
 import { createRuntimeGitCommandRunner, type GitCommandAuthorization, type GitCommandRunner } from "./git-runtime-runner.js";
@@ -23,6 +24,8 @@ export interface RunGitExecutionContext {
   current(): GitCommandRunner;
   executeForCall(context: ToolExecutionContext, request: Omit<OneShotCommandRequest, "context">): Promise<OneShotCommandResult>;
   forCall(context: ToolExecutionContext): GitCommandRunner;
+  workingTreeForCurrentCall?(cwd: string): Promise<WorkingTreeIdentity | undefined>;
+  workingTreeForCall?(context: ToolExecutionContext, cwd: string): Promise<WorkingTreeIdentity>;
   lifecycle(purpose: GitLifecyclePurpose): GitCommandRunner;
 }
 
@@ -59,11 +62,18 @@ export function createRunGitExecutionContext(input: RunGitExecutionContextOption
   const roots = gitWorkingRootsForRun(input.projectRoot, input.stateDirectory, input.runId);
   const calls = new WeakMap<object, CallScope>();
   const activeCall = new AsyncLocalStorage<ToolExecutionContext>();
-  const runner = (authorize: (options: Readonly<GitCommandOptions>) => Promise<GitCommandAuthorization>) => createRuntimeGitCommandRunner({
+  const runner = (authorize: (options: Readonly<GitCommandOptions>) => Promise<GitCommandAuthorization>) => {
+    const result = createRuntimeGitCommandRunner({
     runId: input.runId, executable: input.executable ?? "git", timeoutMs: input.timeoutMs ?? 30_000,
     execution: input.execution, artifacts: input.artifacts, authorize,
     ...(input.observe ? { observe: input.observe } : {}),
-  });
+    });
+    bindWorkingTreeCapture(result.run, async (cwd) => {
+      const root = await canonicalDeclaredRoot(roots[roots.length - 1]!);
+      return await captureWorkingTreeIdentity(cwd, root, result.run);
+    });
+    return result;
+  };
   const ownedCallFor = (context: ToolExecutionContext): CallScope => {
       input.assertOpen();
       if (context.runId !== input.runId || !context.callId?.trim() || !context.toolName?.trim() || !context.executionGrant) {
@@ -95,9 +105,56 @@ export function createRunGitExecutionContext(input: RunGitExecutionContextOption
     const ownedCall = ownedCallFor(context);
     return runner((options) => authorizeCall(ownedCall, options.cwd));
   };
+  const authorizeOwnedIdentity = async (options: Readonly<GitCommandOptions>, validation: GitCommandAuthorization): Promise<GitCommandAuthorization> => {
+    input.assertOpen();
+    const parent = input.executionGrants.consume(validation.context.executionGrant!, {...validation.context, permissionProfile: input.permissionProfile});
+    assertCurrentConsumedExecutionGrantClaims(parent);
+    if (!["rev-parse", "read-tree", "add", "write-tree"].includes(options.args[0]!)) throw new Error("Identity command is outside its bounded mechanics.");
+    const directory = await ownedDirectory(options.cwd, await Promise.all(roots.map(canonicalDeclaredRoot)));
+    const indexRoot = await canonicalDeclaredRoot(roots[roots.length - 1]!);
+    const index = options.env?.GIT_INDEX_FILE;
+    if (options.args[0] !== "rev-parse" && (typeof index !== "string" || !contained(indexRoot, resolve(index)))) throw new Error("Identity index is outside this run root.");
+    const binding: ExecutionGrantBinding = { runId: input.runId, sessionId: "run-git:identity", actor: { role: "runner_internal", id: "git:identity" }, toolName: "runner.git.identity", callId: `git-identity-${randomUUID()}`, permissionProfile: input.permissionProfile };
+    const grant = await input.executionGrants.issue({ ...binding, workspacePath: directory, access: [{path: directory, mode: "write"}, {path: indexRoot, mode: "write"}], externalApproved: true, destructiveApproved: false, networkApproved: false, credentialNames: [], expiresNoLaterThan: parent.expiresAt, signal: validation.context.signal });
+    let registration: Awaited<ReturnType<typeof registerConsumedExecutionGrantRevoker>> | undefined;
+    try {
+      registration = await registerConsumedExecutionGrantRevoker(parent, async () => {await input.executionGrants.revoke(grant, "cancelled");});
+      if (!registration.registered) throw new Error("Identity parent grant was revoked.");
+      assertCurrentConsumedExecutionGrantClaims(parent); input.assertOpen();
+      return {workingDirectory: directory, context: {...binding, executionGrant: grant, signal: validation.context.signal}, release: async () => {
+        await input.executionGrants.revoke(grant, "completed");
+        await validation.release();
+        registration!.dispose();
+      }};
+    } catch (error) {
+      await input.executionGrants.revoke(grant, "cleanup");
+      await validation.release();
+      registration?.dispose();
+      throw error;
+    }
+  };
+  const captureForCall = async (context: ToolExecutionContext, cwd: string) => {
+    const call = ownedCallFor(context);
+    const execute = runner(async (options) => {
+      const validation = await authorizeCall(call, options.cwd);
+      try {return await authorizeOwnedIdentity(options, validation);}
+      catch(error) {await validation.release();throw error;}
+    });
+    const root = await canonicalDeclaredRoot(roots[roots.length - 1]!);
+    return await captureWorkingTreeIdentity(cwd, root, execute.run);
+  };
   return Object.freeze({
+    async workingTreeForCurrentCall(cwd: string) {
+      const context = activeCall.getStore();
+      return context ? await captureForCall(context, cwd) : undefined;
+    },
     permissionProfile: input.permissionProfile,
     forCall,
+    async workingTreeForCall(context: ToolExecutionContext, cwd: string) {
+      // Recheck the original call grant for each mechanical command. The private
+      // index uses a distinct run-owned grant, never extra model write authority.
+      return await captureForCall(context, cwd);
+    },
     withCall<T>(context: ToolExecutionContext, operation: () => Promise<T>): Promise<T> {
       // Run-local async context: concurrent workers cannot overwrite a global
       // current runner. It retains the original nonserializable call grant.
@@ -182,8 +239,24 @@ export function gitWorkingRootsForRun(projectRoot: string, stateDirectory: strin
     join(resolve(stateDirectory), "integration", segment(40, "item")),
     join(resolve(stateDirectory), "verification-workspaces", segment(12, "run")),
     join(resolve(stateDirectory), "verifier-workspaces", segment(12, "run")),
+    // T6a: the deliverable-review and integrated-boundary checkouts
+    // (VerificationWorkspaceManager suffixes "delivery-review"/"delivery-boundary").
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("delivery-review")}`),
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("delivery-boundary")}`),
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("test-integrity-baseline")}`),
+    // The independent-verifier baseline expectations checkout and the
+    // architect-commands checkout use the same suffixed layout; without
+    // their exact roots every post-snapshot verifier run is refused.
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("baseline")}`),
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("architect-commands")}`),
     join(resolve(stateDirectory), "git-baselines", segment(40, "run")),
   ]);
+}
+
+/** Mirrors verification-workspace.ts safeName for a workspace suffix. */
+function suffixSegment(suffix: string): string {
+  const readable = suffix.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 12) || "run";
+  return `${readable}-${createHash("sha256").update(suffix).digest("hex").slice(0, 10)}`;
 }
 
 async function ownedDirectory(path: string, roots: readonly string[]): Promise<string> {

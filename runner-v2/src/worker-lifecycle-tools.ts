@@ -10,7 +10,17 @@ import {
 } from "./scheduler-store.js";
 import type { ChangeSet } from "./change-set.js";
 import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
+import {
+  cloneValidationScope,
+  parseValidationScope,
+  validationScopeJsonSchema,
+  type ValidationScope,
+} from "./validation-scope.js";
 import { REPLAN_REASONS, type ReplanReason } from "./task-contracts.js";
+import {
+  VALIDATION_BUDGET_JUSTIFICATION_MAX_LENGTH,
+  parseValidationBudgetJustification,
+} from "./validation-budget.js";
 
 export interface WorkerLifecycleToolsOptions {
   store: SchedulerStore;
@@ -22,13 +32,15 @@ interface AskArchitectInput {
   requestId: string;
   question: string;
   blocking: boolean;
-  evidenceSequence: number;
+  /** T10 (M10): optional; the runner fills its current sequence when omitted. */
+  evidenceSequence?: number;
 }
 
 interface ChallengeGuidanceInput {
   requestId: string;
   expectedVersion: number;
-  evidenceSequence: number;
+  /** T10 (M10): optional; the runner fills its current sequence when omitted. */
+  evidenceSequence?: number;
   reason: string;
 }
 
@@ -37,8 +49,20 @@ interface RequestReplanInput {
   reason: ReplanReason;
   summary: string;
   proposedChange: string;
-  evidenceSequence: number;
+  /** T10 (M10): optional; the runner fills its current sequence when omitted. */
+  evidenceSequence?: number;
 }
+
+/** T10 (M10): the latest durable scheduler sequence, for omitted inputs. */
+function currentSchedulerSequence(store: SchedulerStore, runId: string): number {
+  const events = store.readRun(runId);
+  if (events.length === 0) return 0;
+  return rebuildSchedulerProjection(events).lastSequence;
+}
+
+/** T10 (M10): model-facing description for the sequence input. */
+const EVIDENCE_SEQUENCE_DESCRIPTION =
+  "Latest scheduler sequence you have seen (0 if none); omit it and the runner uses its current sequence.";
 
 export function createWorkerLifecycleTools(
   options: WorkerLifecycleToolsOptions
@@ -53,14 +77,16 @@ export function createWorkerLifecycleTools(
 
 export function createSubmitTaskTool(
   submit: (input: SubmitTaskInput) => Promise<ChangeSet>,
-  options: { requireCriterionEvidenceLinks?: boolean } = {}
+  options: { requireCriterionEvidenceLinks?: boolean; requireValidationScope?: boolean } = {}
 ): NativeTool<SubmitTaskInput> {
   const requireCriterionEvidenceLinks = options.requireCriterionEvidenceLinks === true;
+  // IV-1: set explicitly by worker-runtime from trusted scheduler state, never from model input.
+  const requireValidationScope = options.requireValidationScope === true;
   return {
     definition: {
       name: "submit_task",
       description:
-        "Declare the task ready for Architect review, commit the workspace, and submit a typed change set. Do not use for a blocked state or while fresh evidence shows a known acceptance failure; use ask_architect instead.",
+        "Declare the task ready for Architect review, commit the workspace, and submit a typed change set (you do not need to call git.commit first). Do not use for a blocked state or while fresh evidence shows a known acceptance failure; use ask_architect instead.",
       inputSchema: {
         type: "object",
         properties: {
@@ -74,6 +100,8 @@ export function createSubmitTaskTool(
             maxItems: 100,
             items: { type: "string", minLength: 1, maxLength: 2_000 },
           },
+          ...(requireValidationScope ? { validationScope: validationScopeJsonSchema() } : {}),
+          validationBudgetJustification: { type: "string", minLength: 1, maxLength: VALIDATION_BUDGET_JUSTIFICATION_MAX_LENGTH },
           criterionEvidenceLinks: {
             type: "array",
             minItems: requireCriterionEvidenceLinks ? 1 : 0,
@@ -81,8 +109,8 @@ export function createSubmitTaskTool(
           },
         },
         required: requireCriterionEvidenceLinks
-          ? ["summary", "readiness", "criterionEvidenceLinks"]
-          : ["summary", "readiness"],
+          ? ["summary", "readiness", "criterionEvidenceLinks", ...(requireValidationScope ? ["validationScope"] : [])]
+          : ["summary", "readiness", ...(requireValidationScope ? ["validationScope"] : [])],
         additionalProperties: false,
       },
       readOnly: false,
@@ -90,13 +118,15 @@ export function createSubmitTaskTool(
       lifecycle: true,
     },
     validate: (input) =>
-      validateSubmit(input, requireCriterionEvidenceLinks),
+      validateSubmit(input, requireCriterionEvidenceLinks, requireValidationScope),
     assessAccess: () => ({
       capability: "task.submit",
       paths: [{ path: ".", access: "write" }],
     }),
     execute: async (input) => {
       const changeSet = await submit({
+        ...(input.validationScope ? { validationScope: cloneValidationScope(input.validationScope) } : {}),
+        ...(input.validationBudgetJustification !== undefined ? { validationBudgetJustification: input.validationBudgetJustification } : {}),
         summary: input.summary.trim(),
         readiness: input.readiness,
         unresolvedConcerns: input.unresolvedConcerns.map((item) => item.trim()),
@@ -119,11 +149,15 @@ export interface SubmitTaskInput {
   readiness: "ready_for_architect_review";
   unresolvedConcerns: string[];
   criterionEvidenceLinks: CriterionEvidenceLink[];
+  /** IV-1: present exactly when the run requires it and the input validated. */
+  validationScope?: ValidationScope;
+  validationBudgetJustification?: string;
 }
 
 function validateSubmit(
   input: unknown,
-  requireCriterionEvidenceLinks = false
+  requireCriterionEvidenceLinks = false,
+  requireValidationScope = false
 ): ValidationResult<SubmitTaskInput> {
   if (!isRecord(input) || !nonEmpty(input.summary)) {
     return invalid("summary must be a non-empty string");
@@ -141,6 +175,18 @@ function validateSubmit(
       (item) => typeof item !== "string" || !item.trim() || item.length > 2_000
     )
   ) return invalid("unresolvedConcerns must contain at most 100 non-empty strings");
+  let validationBudgetJustification: string | undefined;
+  if (input.validationBudgetJustification !== undefined) {
+    try {
+      validationBudgetJustification = parseValidationBudgetJustification(input.validationBudgetJustification);
+    } catch (error) {
+      return invalid(error instanceof Error ? error.message : String(error));
+    }
+  }
+  const validationScope = parseSubmitValidationScope(input, requireValidationScope);
+  if (!validationScope.ok) {
+    return invalid(validationScope.issue);
+  }
   const criterionEvidenceLinks = parseCriterionEvidenceLinks(
     input.criterionEvidenceLinks,
     requireCriterionEvidenceLinks
@@ -156,9 +202,35 @@ function validateSubmit(
       summary: input.summary,
       readiness: input.readiness,
       unresolvedConcerns: (concerns as string[]).map((item) => item.trim()),
+      ...(validationScope.value !== undefined ? { validationScope: validationScope.value } : {}),
+      ...(validationBudgetJustification !== undefined ? { validationBudgetJustification } : {}),
       criterionEvidenceLinks,
     },
   };
+}
+
+function parseSubmitValidationScope(
+  input: Record<string, unknown>,
+  required: boolean
+): { ok: true; value: ValidationScope | undefined } | { ok: false; issue: string } {
+  const present = input.validationScope !== undefined;
+  if (!present) {
+    return required
+      ? {
+          ok: false,
+          issue:
+            "validationScope is required: report changed surfaces, verified behavior, tests run with counts, and what was not run with reasons",
+        }
+      : { ok: true, value: undefined };
+  }
+  if (!required) {
+    return { ok: false, issue: "validationScope is not accepted on this run" };
+  }
+  try {
+    return { ok: true, value: parseValidationScope(input.validationScope) };
+  } catch (error) {
+    return { ok: false, issue: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function criterionEvidenceLinkSchema(): Record<string, unknown> {
@@ -229,9 +301,9 @@ function askArchitectTool(
           requestId: { type: "string" },
           question: { type: "string" },
           blocking: { type: "boolean" },
-          evidenceSequence: { type: "integer", minimum: 0 },
+          evidenceSequence: { type: "integer", minimum: 0, description: EVIDENCE_SEQUENCE_DESCRIPTION },
         },
-        required: ["requestId", "question", "blocking", "evidenceSequence"],
+        required: ["requestId", "question", "blocking"],
         additionalProperties: false,
       },
       readOnly: false,
@@ -247,13 +319,14 @@ function askArchitectTool(
         context.runId,
         input.requestId
       );
+      const evidenceSequence = input.evidenceSequence ?? currentSchedulerSequence(store, context.runId);
       const result = append(store, {
         runId: context.runId,
         type: "guidance.requested",
         occurredAt: clock(),
         actor: { role: "worker", id: context.actor.id },
         idempotencyKey: `guidance:${requestId}`,
-        payload: { ...input, requestId, taskId },
+        payload: { ...input, evidenceSequence, requestId, taskId },
       });
       if (result.isError || !input.blocking) return result;
       return {
@@ -285,9 +358,9 @@ function requestReplanTool(
           reason: { type: "string", enum: [...REPLAN_REASONS] },
           summary: { type: "string", minLength: 1, maxLength: 4_000 },
           proposedChange: { type: "string", minLength: 1, maxLength: 4_000 },
-          evidenceSequence: { type: "integer", minimum: 0 },
+          evidenceSequence: { type: "integer", minimum: 0, description: EVIDENCE_SEQUENCE_DESCRIPTION },
         },
-        required: ["requestId", "reason", "summary", "proposedChange", "evidenceSequence"],
+        required: ["requestId", "reason", "summary", "proposedChange"],
         additionalProperties: false,
       },
       readOnly: false,
@@ -310,7 +383,7 @@ function requestReplanTool(
           taskId,
           question: `Replan requested (${input.reason}): ${input.summary}\nProposed change: ${input.proposedChange}`,
           blocking: true,
-          evidenceSequence: input.evidenceSequence,
+          evidenceSequence: input.evidenceSequence ?? currentSchedulerSequence(store, context.runId),
           kind: "replan",
           replan: {
             reason: input.reason,
@@ -332,8 +405,8 @@ function validateReplan(input: unknown): ValidationResult<RequestReplanInput> {
     !REPLAN_REASONS.includes(input.reason as ReplanReason) ||
     !nonEmpty(input.summary) ||
     !nonEmpty(input.proposedChange) ||
-    !nonNegativeInteger(input.evidenceSequence)
-  ) return invalid("requestId, reason, summary, proposedChange, and evidenceSequence are required.");
+    (input.evidenceSequence !== undefined && !nonNegativeInteger(input.evidenceSequence))
+  ) return invalid("requestId, reason, summary, and proposedChange are required; evidenceSequence must be a non-negative integer when given.");
   return { ok: true, value: input as unknown as RequestReplanInput };
 }
 
@@ -369,10 +442,10 @@ function challengeGuidanceTool(
         properties: {
           requestId: { type: "string" },
           expectedVersion: { type: "integer", minimum: 1 },
-          evidenceSequence: { type: "integer", minimum: 0 },
+          evidenceSequence: { type: "integer", minimum: 0, description: EVIDENCE_SEQUENCE_DESCRIPTION },
           reason: { type: "string" },
         },
-        required: ["requestId", "expectedVersion", "evidenceSequence", "reason"],
+        required: ["requestId", "expectedVersion", "reason"],
         additionalProperties: false,
       },
       readOnly: false,
@@ -385,13 +458,14 @@ function challengeGuidanceTool(
       if (denied) return denied;
       const current = store.readRun(context.runId);
       if (current.length === 0) return failure("unknown_run", `Unknown run ${context.runId}.`);
+      const evidenceSequence = input.evidenceSequence ?? rebuildSchedulerProjection(current).lastSequence;
       const result = append(store, {
         runId: context.runId,
         type: "guidance.challenged",
         occurredAt: clock(),
         actor: { role: "worker", id: context.actor.id },
-        idempotencyKey: `guidance-challenge:${input.requestId}:${input.expectedVersion}:${input.evidenceSequence}`,
-        payload: { ...input, taskId },
+        idempotencyKey: `guidance-challenge:${input.requestId}:${input.expectedVersion}:${evidenceSequence}`,
+        payload: { ...input, evidenceSequence, taskId },
       });
       if (result.isError) return result;
       return {
@@ -412,8 +486,8 @@ function validateAsk(input: unknown): ValidationResult<AskArchitectInput> {
     !nonEmpty(input.requestId) ||
     !nonEmpty(input.question) ||
     typeof input.blocking !== "boolean" ||
-    !nonNegativeInteger(input.evidenceSequence)
-  ) return invalid("requestId, question, blocking, and evidenceSequence are required.");
+    (input.evidenceSequence !== undefined && !nonNegativeInteger(input.evidenceSequence))
+  ) return invalid("requestId, question, and blocking are required; evidenceSequence must be a non-negative integer when given.");
   return {
     ok: true,
     value: {
@@ -430,9 +504,9 @@ function validateChallenge(input: unknown): ValidationResult<ChallengeGuidanceIn
   if (
     !nonEmpty(input.requestId) ||
     !positiveInteger(input.expectedVersion) ||
-    !nonNegativeInteger(input.evidenceSequence) ||
+    (input.evidenceSequence !== undefined && !nonNegativeInteger(input.evidenceSequence)) ||
     !nonEmpty(input.reason)
-  ) return invalid("requestId, expectedVersion, evidenceSequence, and reason are required.");
+  ) return invalid("requestId, expectedVersion, and reason are required; evidenceSequence must be a non-negative integer when given.");
   return { ok: true, value: input as unknown as ChallengeGuidanceInput };
 }
 

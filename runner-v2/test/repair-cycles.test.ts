@@ -434,7 +434,7 @@ test("a fresh runtime records repair policy before any plan exists", () => {
       { repairPlanLimit: 4 },
     );
     const projection = runtime.projection();
-    assert.deepEqual(projection.repairCycles, { limit: 4, used: 0, extensions: 0 });
+    assert.deepEqual(projection.repairCycles, { limit: 4, used: 0, extensions: 0, explicitLimit: true });
     assert.equal(
       store.readRun(RUN_ID).some((item) => item.type === "repair.policy_configured"),
       true,

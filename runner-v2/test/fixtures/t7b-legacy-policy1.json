@@ -1,0 +1,2419 @@
+{
+  "acceptedSourceCommit": "e9b5a79b9dec371b7395121a203dac1fdd1969ef",
+  "baselineSourceSha256": "39e0b5c18c46d9e8a78c19a6aeff93ce566331ce9d631d1045a817e5fd06641b",
+  "events": [
+    {
+      "eventId": "legacy-event-1",
+      "runId": "run_t7b_controls",
+      "sequence": 1,
+      "type": "project_docs.policy_configured",
+      "occurredAt": "2026-10-02T00:00:01.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "project-docs-policy",
+      "payload": {
+        "version": 2
+      }
+    },
+    {
+      "eventId": "legacy-event-2",
+      "runId": "run_t7b_controls",
+      "sequence": 2,
+      "type": "run.initialized",
+      "occurredAt": "2026-10-02T00:00:02.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "run-initialized",
+      "payload": {
+        "objective": "Deliver the value module."
+      }
+    },
+    {
+      "eventId": "legacy-event-3",
+      "runId": "run_t7b_controls",
+      "sequence": 3,
+      "type": "planning.policy_configured",
+      "occurredAt": "2026-10-02T00:00:03.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "planning-policy",
+      "payload": {
+        "version": 1
+      }
+    },
+    {
+      "eventId": "legacy-event-4",
+      "runId": "run_t7b_controls",
+      "sequence": 4,
+      "type": "run.policy_configured",
+      "occurredAt": "2026-10-02T00:00:04.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "run-policy-configured",
+      "payload": {
+        "runPolicy": "finish",
+        "specCopy": true,
+        "handoffFiles": "commit"
+      }
+    },
+    {
+      "eventId": "legacy-event-5",
+      "runId": "run_t7b_controls",
+      "sequence": 5,
+      "type": "repair.policy_configured",
+      "occurredAt": "2026-10-02T00:00:05.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "repair-policy",
+      "payload": {
+        "repairPlanLimit": 3,
+        "explicit": false
+      }
+    },
+    {
+      "eventId": "legacy-event-6",
+      "runId": "run_t7b_controls",
+      "sequence": 6,
+      "type": "plan_critique.policy_configured",
+      "occurredAt": "2026-10-02T00:00:06.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "plan-critique-policy",
+      "payload": {
+        "mode": "off"
+      }
+    },
+    {
+      "eventId": "legacy-event-7",
+      "runId": "run_t7b_controls",
+      "sequence": 7,
+      "type": "planning.source_registered",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "user",
+        "id": "local-user"
+      },
+      "idempotencyKey": "initial-owner-source",
+      "payload": {
+        "manifest": {
+          "manifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+          "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+          "artifactDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+          "byteLength": 155,
+          "mediaType": "text/plain",
+          "encoding": "utf-8",
+          "sections": [
+            {
+              "id": "s1",
+              "startByte": 0,
+              "endByte": 66,
+              "digest": "fab1172503fe7554a936527a6f4a334050c791e6185458ad931204233f97476d"
+            },
+            {
+              "id": "s2",
+              "startByte": 66,
+              "endByte": 155,
+              "digest": "3ff2e728d95d34208f26732782cf9a73c5d0b493bfb6cbf6036f6f2f6df4ab96"
+            }
+          ],
+          "authority": "user:local-user",
+          "createdAt": "2026-10-02T00:00:00.000Z"
+        }
+      }
+    },
+    {
+      "eventId": "legacy-event-8",
+      "runId": "run_t7b_controls",
+      "sequence": 8,
+      "type": "request.triaged",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "architect_1"
+      },
+      "idempotencyKey": "triage",
+      "payload": {
+        "decision": "build",
+        "rationale": "The fixture is a change request."
+      }
+    },
+    {
+      "eventId": "legacy-event-9",
+      "runId": "run_t7b_controls",
+      "sequence": 9,
+      "type": "planning.ledger_persisted",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "architect_1"
+      },
+      "idempotencyKey": "ledger",
+      "payload": {
+        "id": "ledger",
+        "requirements": [
+          {
+            "id": "REQ-1",
+            "reference": {
+              "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+              "sectionIds": [
+                "s1",
+                "s2"
+              ]
+            },
+            "purpose": "Export the value 2.",
+            "observableOutcome": "The value module exports 2.",
+            "obligationKind": "mandatory",
+            "applicability": {
+              "status": "applicable"
+            },
+            "accountablePhaseId": "P1",
+            "contributingTaskIds": [
+              "T1"
+            ],
+            "acceptanceConditions": [
+              {
+                "id": "REQ-1-ac1",
+                "description": "value is 2.",
+                "responsibleGateId": "P1-exit",
+                "requiredEvidenceKinds": [
+                  "command"
+                ]
+              }
+            ]
+          }
+        ],
+        "phases": [
+          {
+            "id": "P1",
+            "purpose": "Deliver the value module.",
+            "requirementIds": [
+              "REQ-1"
+            ],
+            "scope": {
+              "includes": [
+                "src/value.mjs"
+              ],
+              "excludes": [
+                "docs/project/STATE.md"
+              ]
+            },
+            "entryConditions": [
+              "Plan ready."
+            ],
+            "contributingTaskIds": [
+              "T1"
+            ],
+            "exitCriteria": [
+              "The value module is accepted."
+            ],
+            "requiredCombinedValidation": [
+              "tests"
+            ],
+            "exitUnlocks": [
+              "final verification"
+            ]
+          }
+        ],
+        "nonNormativeSections": []
+      }
+    },
+    {
+      "eventId": "legacy-event-10",
+      "runId": "run_t7b_controls",
+      "sequence": 10,
+      "type": "planning.source_section_read",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "architect_1"
+      },
+      "idempotencyKey": "planning-sourceread:manifest-516397e5b0796d5f8e57a028c72822b1:s1",
+      "payload": {
+        "manifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+        "manifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+        "sectionId": "s1",
+        "sectionDigest": "fab1172503fe7554a936527a6f4a334050c791e6185458ad931204233f97476d",
+        "readAt": "2026-10-02T00:00:00.000Z"
+      }
+    },
+    {
+      "eventId": "legacy-event-11",
+      "runId": "run_t7b_controls",
+      "sequence": 11,
+      "type": "planning.source_section_read",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "architect_1"
+      },
+      "idempotencyKey": "planning-sourceread:manifest-516397e5b0796d5f8e57a028c72822b1:s2",
+      "payload": {
+        "manifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+        "manifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+        "sectionId": "s2",
+        "sectionDigest": "3ff2e728d95d34208f26732782cf9a73c5d0b493bfb6cbf6036f6f2f6df4ab96",
+        "readAt": "2026-10-02T00:00:00.000Z"
+      }
+    },
+    {
+      "eventId": "legacy-event-12",
+      "runId": "run_t7b_controls",
+      "sequence": 12,
+      "type": "planning.plan_drafted",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "architect_1"
+      },
+      "idempotencyKey": "draft",
+      "payload": {
+        "revision": {
+          "revisionId": "revision_t7b",
+          "runId": "run_t7b_controls",
+          "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+          "sourceManifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+          "requirements": [
+            {
+              "id": "REQ-1",
+              "reference": {
+                "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                "sectionIds": [
+                  "s1",
+                  "s2"
+                ]
+              },
+              "purpose": "Export the value 2.",
+              "observableOutcome": "The value module exports 2.",
+              "obligationKind": "mandatory",
+              "applicability": {
+                "status": "applicable"
+              },
+              "accountablePhaseId": "P1",
+              "contributingTaskIds": [
+                "T1"
+              ],
+              "acceptanceConditions": [
+                {
+                  "id": "REQ-1-ac1",
+                  "description": "value is 2.",
+                  "responsibleGateId": "P1-exit",
+                  "requiredEvidenceKinds": [
+                    "command"
+                  ]
+                }
+              ]
+            }
+          ],
+          "tasks": [
+            {
+              "id": "T1",
+              "lineage": [],
+              "accountablePhaseId": "P1",
+              "requirementIds": [
+                "REQ-1"
+              ],
+              "outcome": {
+                "user": "Create src/value.mjs exporting value = 2.",
+                "system": "The value module exports 2."
+              },
+              "scope": {
+                "includes": [
+                  "src/value.mjs"
+                ],
+                "excludes": [
+                  "test/value.test.mjs"
+                ]
+              },
+              "writableSurfaces": [
+                "src/value.mjs"
+              ],
+              "forbiddenSurfaces": [
+                "test/value.test.mjs"
+              ],
+              "dependencies": [],
+              "requiredBase": "accepted plan revision revision_t7b",
+              "inputs": [
+                "accepted plan revision"
+              ],
+              "outputs": [
+                "src/value.mjs"
+              ],
+              "steps": [
+                "Write the module.",
+                "Run the tests."
+              ],
+              "acceptance": {
+                "criteria": [
+                  {
+                    "id": "c1",
+                    "text": "src/value.mjs exports value = 2 and the tests pass."
+                  }
+                ],
+                "definitionOfDone": "Tests pass."
+              },
+              "validation": {
+                "targetedRationale": "The value test.",
+                "affectedScopeRationale": "The module only."
+              },
+              "negativeProofApplicability": {
+                "applicable": false,
+                "rationale": "A new module has no prior-incorrect case."
+              },
+              "reviewCriteria": [
+                "Independent review confirms the value."
+              ],
+              "integrationChecks": [
+                "Post-integration tests."
+              ],
+              "cleanup": {
+                "cleanup": "None.",
+                "recovery": "Retry.",
+                "rollback": "Revert."
+              },
+              "requirementCriteriaMap": [
+                {
+                  "taskLocalCriterionId": "c1",
+                  "requirementId": "REQ-1"
+                }
+              ]
+            }
+          ],
+          "phases": [
+            {
+              "id": "P1",
+              "purpose": "Deliver the value module.",
+              "requirementIds": [
+                "REQ-1"
+              ],
+              "scope": {
+                "includes": [
+                  "src/value.mjs"
+                ],
+                "excludes": [
+                  "docs/project/STATE.md"
+                ]
+              },
+              "entryConditions": [
+                "Plan ready."
+              ],
+              "contributingTaskIds": [
+                "T1"
+              ],
+              "exitCriteria": [
+                "The value module is accepted."
+              ],
+              "requiredCombinedValidation": [
+                "tests"
+              ],
+              "exitUnlocks": [
+                "final verification"
+              ]
+            }
+          ],
+          "workflowPolicyVersion": 1,
+          "planningDecisions": [],
+          "validationObligations": [
+            "tests"
+          ],
+          "createdAt": "2026-10-02T00:00:00.000Z",
+          "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678"
+        },
+        "expectedRevisionId": null,
+        "expectedDigest": null
+      }
+    },
+    {
+      "eventId": "legacy-event-13",
+      "runId": "run_t7b_controls",
+      "sequence": 13,
+      "type": "planning.coverage_review_requested",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "architect_1"
+      },
+      "idempotencyKey": "planning-coverage-request:coverage-cheap",
+      "payload": {
+        "reviewId": "coverage-cheap",
+        "planRevisionId": "revision_t7b",
+        "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+        "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+        "requestedAt": "2026-10-02T00:00:00.000Z"
+      }
+    },
+    {
+      "eventId": "legacy-event-14",
+      "runId": "run_t7b_controls",
+      "sequence": 14,
+      "type": "planning.coverage_obligations_recorded",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "verifier",
+        "id": "reviewer"
+      },
+      "idempotencyKey": "coverage:obligations:coverage-cheap",
+      "payload": {
+        "reviewId": "coverage-cheap",
+        "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+        "sourceManifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+        "obligations": [
+          {
+            "id": "obl",
+            "requirementId": "REQ-1",
+            "description": "Export value 2.",
+            "recordedBeforePlanOrDiffProvided": true,
+            "recordedAt": "2026-10-02T00:00:00.000Z"
+          }
+        ],
+        "sectionCoverage": [
+          {
+            "sectionId": "s1",
+            "obligationIds": [
+              "obl"
+            ]
+          },
+          {
+            "sectionId": "s2",
+            "obligationIds": [
+              "obl"
+            ]
+          }
+        ],
+        "recordedAt": "2026-10-02T00:00:00.000Z"
+      }
+    },
+    {
+      "eventId": "legacy-event-15",
+      "runId": "run_t7b_controls",
+      "sequence": 15,
+      "type": "planning.coverage_plan_delivered",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "coverage-review-runtime"
+      },
+      "idempotencyKey": "coverage:plan-delivered:coverage-cheap",
+      "payload": {
+        "reviewId": "coverage-cheap",
+        "planRevisionId": "revision_t7b",
+        "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+        "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+        "deliveredAt": "2026-10-02T00:00:00.000Z"
+      }
+    },
+    {
+      "eventId": "legacy-event-16",
+      "runId": "run_t7b_controls",
+      "sequence": 16,
+      "type": "planning.coverage_review_recorded",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "verifier",
+        "id": "reviewer"
+      },
+      "idempotencyKey": "coverage:coverage-cheap",
+      "payload": {
+        "review": {
+          "id": "coverage-cheap",
+          "runId": "run_t7b_controls",
+          "reviewerRuntimeId": "rev:reviewer",
+          "independence": "distinct_model",
+          "sourceReadManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+          "planRevisionId": "revision_t7b",
+          "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+          "derivedObligations": [
+            {
+              "id": "obl",
+              "requirementId": "REQ-1",
+              "description": "Export value 2.",
+              "recordedBeforePlanOrDiffProvided": true,
+              "recordedAt": "2026-10-02T00:00:00.000Z"
+            }
+          ],
+          "obligationVerdicts": [
+            {
+              "obligationId": "obl",
+              "verdict": "covered",
+              "severity": "advisory",
+              "rationale": "T1 covers the source.",
+              "evidenceRefs": [
+                "ledger:REQ-1"
+              ]
+            }
+          ],
+          "findings": [],
+          "recordedAt": "2026-10-02T00:00:00.000Z"
+        }
+      }
+    },
+    {
+      "eventId": "legacy-event-17",
+      "runId": "run_t7b_controls",
+      "sequence": 17,
+      "type": "planning.plan_ready",
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "runner"
+      },
+      "idempotencyKey": "ready:coverage-cheap",
+      "payload": {
+        "hostCapabilities": {
+          "independentReviewerSelection": {
+            "status": "enforced",
+            "evidence": "runtime-router.ts:178-220 selectVerifier computes distinct-model exclusion, falls back to fresh_context."
+          },
+          "worktreeIsolation": {
+            "status": "enforced",
+            "evidence": "workspace-manager.ts:85-127 createTaskWorkspace runs git worktree add per task; ownership via worktree-state.ts."
+          },
+          "atomicAssignmentClaims": {
+            "status": "procedural",
+            "evidence": "task-scheduler.ts:69-139 is single-process in-memory serialization; no cross-process lock/lease/fencing token found."
+          },
+          "maxWorkersCeiling": {
+            "status": "unavailable",
+            "evidence": "Zero occurrences of MAX_WORKERS in runner-v2/src; maxConcurrency accepts any positive integer today (T4 adds the ceiling)."
+          },
+          "taskAttemptCeiling": {
+            "status": "enforced",
+            "evidence": "build-runtime.ts:299 maxTaskAttempts defaults to 2."
+          },
+          "runLevelRepairCeiling": {
+            "status": "enforced",
+            "evidence": "scheduler-store.ts:493 DEFAULT_REPAIR_PLAN_LIMIT = 3; repairCyclesExhausted() l.648."
+          },
+          "issueLevelRepairCeiling": {
+            "status": "unavailable",
+            "evidence": "No issue/root-cause-keyed repair-cycle structure found alongside RepairCyclesProjection (T6 adds it)."
+          },
+          "directEventReplayValidators": {
+            "status": "enforced",
+            "evidence": "scheduler-store.ts:1735 reduceSchedulerEvent is used for both live append and replay (l.1231)."
+          },
+          "stateTransitionGates": {
+            "status": "enforced",
+            "evidence": "scheduler-store.ts:863-966 architectActionReasonIsApplicable is an exhaustive switch over architect-action reasons."
+          },
+          "nonExecutingLaunchChips": {
+            "status": "unavailable",
+            "evidence": "Grepped launch.?chip|chip.?prep repo-wide (excluding .worktrees): zero matches."
+          },
+          "nodeRuntimePolicy": {
+            "status": "enforced",
+            "evidence": "node-version.ts:2,5,20-38 SUPPORTED_NODE_LTS_LINES=[24]; package.json engines >=24.0.0 <25."
+          },
+          "docsFolderCompletionGate": {
+            "status": "enforced",
+            "evidence": "scheduler-store.ts:982,1001,1168 call projectDocumentationReadiness (defined l.1188)."
+          },
+          "readerDisposableCommandExecution": {
+            "status": "procedural",
+            "evidence": "evidence-tools.ts:51 run_evidence_command exists and is granted to architect:inspection; disposable-copy semantics not independently confirmed by T1a."
+          },
+          "recordedAt": "2026-09-23T00:00:00.000Z"
+        }
+      }
+    },
+    {
+      "runId": "run_t7b_controls",
+      "eventId": "legacy-event-18",
+      "sequence": 18,
+      "type": "task.transitioned",
+      "payload": {
+        "taskId": "T1",
+        "status": "assigned",
+        "attempt": 1,
+        "patch": {
+          "assignedWorkerId": "legacy-worker",
+          "attempt": 1,
+          "workspacePath": "C:/legacy/task"
+        }
+      },
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "legacy-runner"
+      },
+      "idempotencyKey": "legacy-18"
+    },
+    {
+      "runId": "run_t7b_controls",
+      "eventId": "legacy-event-19",
+      "sequence": 19,
+      "type": "task.transitioned",
+      "payload": {
+        "taskId": "T1",
+        "status": "running",
+        "attempt": 1,
+        "patch": {}
+      },
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "worker",
+        "id": "legacy-worker"
+      },
+      "idempotencyKey": "legacy-19"
+    },
+    {
+      "runId": "run_t7b_controls",
+      "eventId": "legacy-event-20",
+      "sequence": 20,
+      "type": "verifier.policy_configured",
+      "payload": {
+        "mode": "risk_based",
+        "candidateRuntimeIds": [
+          "rev:reviewer"
+        ],
+        "alwaysRequireIndependentVerifier": false
+      },
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "legacy-runner"
+      },
+      "idempotencyKey": "legacy-20"
+    },
+    {
+      "runId": "run_t7b_controls",
+      "eventId": "legacy-event-21",
+      "sequence": 21,
+      "type": "verifier.selection_required",
+      "payload": {
+        "reason": "Historical selection pending.",
+        "requiredCapabilities": [
+          "code"
+        ],
+        "candidateRuntimeIds": [
+          "rev:reviewer"
+        ]
+      },
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "legacy-runner"
+      },
+      "idempotencyKey": "legacy-21"
+    },
+    {
+      "runId": "run_t7b_controls",
+      "eventId": "legacy-event-22",
+      "sequence": 22,
+      "type": "architect.handoff_required",
+      "payload": {
+        "reason": "Historical Architect handoff pending.",
+        "requiredCapabilities": [
+          "code"
+        ],
+        "candidateRuntimeIds": [
+          "arch:replacement"
+        ]
+      },
+      "occurredAt": "2026-10-02T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "legacy-runner"
+      },
+      "idempotencyKey": "legacy-22"
+    }
+  ],
+  "checkpoints": [
+    {
+      "sequence": 19,
+      "projection": {
+        "runId": "run_t7b_controls",
+        "status": "running",
+        "acceptanceContractStatus": "current",
+        "acceptanceUpgradeRequiredEventRecorded": false,
+        "planRevision": 1,
+        "tasks": {
+          "T1": {
+            "id": "T1",
+            "objective": "Create src/value.mjs exporting value = 2.",
+            "dependencies": [],
+            "status": "running",
+            "requiredCapabilities": [],
+            "acceptanceCriteria": [
+              {
+                "id": "c1",
+                "text": "src/value.mjs exports value = 2 and the tests pass."
+              }
+            ],
+            "acceptanceCriteriaVersion": 1,
+            "contractRef": {
+              "revisionId": "revision_t7b",
+              "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+              "taskId": "T1"
+            },
+            "attempt": 1,
+            "assignedWorkerId": "legacy-worker",
+            "workspacePath": "C:/legacy/task"
+          }
+        },
+        "guidance": {},
+        "userGuidance": {},
+        "userGuidanceVersion": 0,
+        "architectQuestions": {},
+        "architectQuestionVersion": 0,
+        "reviews": {},
+        "submissionHistory": {},
+        "reviewHistory": {},
+        "runtime": {
+          "providerHealth": {},
+          "workerAssignments": {},
+          "architect": {}
+        },
+        "lastSequence": 19,
+        "projectDocsPolicyVersion": 2,
+        "initialObjective": "Deliver the value module.",
+        "planningPolicyVersion": 1,
+        "runPolicy": "finish",
+        "specCopy": true,
+        "handoffFiles": "commit",
+        "repairCycles": {
+          "limit": 3,
+          "used": 0,
+          "extensions": 0,
+          "explicitLimit": false
+        },
+        "planCritique": {
+          "policy": {
+            "mode": "off"
+          },
+          "history": []
+        },
+        "planning": {
+          "source": {
+            "currentManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+            "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+            "artifactDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+            "manifestHistoryIds": [
+              "manifest-516397e5b0796d5f8e57a028c72822b1"
+            ],
+            "manifestsById": {
+              "manifest-516397e5b0796d5f8e57a028c72822b1": {
+                "manifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+                "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                "artifactDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+                "byteLength": 155,
+                "mediaType": "text/plain",
+                "encoding": "utf-8",
+                "sections": [
+                  {
+                    "id": "s1",
+                    "startByte": 0,
+                    "endByte": 66,
+                    "digest": "fab1172503fe7554a936527a6f4a334050c791e6185458ad931204233f97476d"
+                  },
+                  {
+                    "id": "s2",
+                    "startByte": 66,
+                    "endByte": 155,
+                    "digest": "3ff2e728d95d34208f26732782cf9a73c5d0b493bfb6cbf6036f6f2f6df4ab96"
+                  }
+                ],
+                "authority": "user:local-user",
+                "createdAt": "2026-10-02T00:00:00.000Z"
+              }
+            }
+          },
+          "checkpoints": [],
+          "sourceReadIndex": {
+            "manifest-516397e5b0796d5f8e57a028c72822b1": {
+              "s1": "fab1172503fe7554a936527a6f4a334050c791e6185458ad931204233f97476d",
+              "s2": "3ff2e728d95d34208f26732782cf9a73c5d0b493bfb6cbf6036f6f2f6df4ab96"
+            }
+          },
+          "assignments": {},
+          "validations": {},
+          "observationSequence": 0,
+          "observationOrderByObservationId": {},
+          "acceptances": {},
+          "readiness": "ready",
+          "coverageReviewHistory": [],
+          "coverageRequests": {
+            "coverage-cheap": {
+              "reviewId": "coverage-cheap",
+              "planRevisionId": "revision_t7b",
+              "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+              "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+              "requestedAt": "2026-10-02T00:00:00.000Z",
+              "requestedSequence": 13
+            }
+          },
+          "coverageObligations": {
+            "coverage-cheap": {
+              "reviewId": "coverage-cheap",
+              "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+              "sourceManifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+              "obligations": [
+                {
+                  "id": "obl",
+                  "requirementId": "REQ-1",
+                  "description": "Export value 2.",
+                  "recordedBeforePlanOrDiffProvided": true,
+                  "recordedAt": "2026-10-02T00:00:00.000Z"
+                }
+              ],
+              "sectionCoverage": [
+                {
+                  "sectionId": "s1",
+                  "obligationIds": [
+                    "obl"
+                  ]
+                },
+                {
+                  "sectionId": "s2",
+                  "obligationIds": [
+                    "obl"
+                  ]
+                }
+              ],
+              "recordedAt": "2026-10-02T00:00:00.000Z"
+            }
+          },
+          "coveragePlanDelivered": {
+            "coverage-cheap": {
+              "reviewId": "coverage-cheap",
+              "planRevisionId": "revision_t7b",
+              "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+              "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+              "deliveredAt": "2026-10-02T00:00:00.000Z"
+            }
+          },
+          "coverageCorrectionViews": {},
+          "coveragePriorFindingsReleased": {},
+          "coveragePriorFindingChecks": {},
+          "coverageSuspended": {},
+          "coverageRetiredFindings": {},
+          "resume": {
+            "coveredSourceSectionIds": [
+              "s1",
+              "s2"
+            ],
+            "remainingSourceSectionIds": [],
+            "completedPlanningContractIds": [
+              "requirement-ledger",
+              "revision_t7b"
+            ],
+            "outstandingWork": [],
+            "nextAction": "The plan is ready."
+          },
+          "references": {
+            "coverage-cheap": {
+              "kind": "review",
+              "id": "coverage-cheap"
+            }
+          },
+          "ledger": {
+            "id": "ledger",
+            "requirements": [
+              {
+                "id": "REQ-1",
+                "reference": {
+                  "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                  "sectionIds": [
+                    "s1",
+                    "s2"
+                  ]
+                },
+                "purpose": "Export the value 2.",
+                "observableOutcome": "The value module exports 2.",
+                "obligationKind": "mandatory",
+                "applicability": {
+                  "status": "applicable"
+                },
+                "accountablePhaseId": "P1",
+                "contributingTaskIds": [
+                  "T1"
+                ],
+                "acceptanceConditions": [
+                  {
+                    "id": "REQ-1-ac1",
+                    "description": "value is 2.",
+                    "responsibleGateId": "P1-exit",
+                    "requiredEvidenceKinds": [
+                      "command"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "phases": [
+              {
+                "id": "P1",
+                "purpose": "Deliver the value module.",
+                "requirementIds": [
+                  "REQ-1"
+                ],
+                "scope": {
+                  "includes": [
+                    "src/value.mjs"
+                  ],
+                  "excludes": [
+                    "docs/project/STATE.md"
+                  ]
+                },
+                "entryConditions": [
+                  "Plan ready."
+                ],
+                "contributingTaskIds": [
+                  "T1"
+                ],
+                "exitCriteria": [
+                  "The value module is accepted."
+                ],
+                "requiredCombinedValidation": [
+                  "tests"
+                ],
+                "exitUnlocks": [
+                  "final verification"
+                ]
+              }
+            ]
+          },
+          "plan": {
+            "currentRevisionId": "revision_t7b",
+            "currentDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+            "revisionHistoryIds": [
+              "revision_t7b"
+            ],
+            "revisionsById": {
+              "revision_t7b": {
+                "revisionId": "revision_t7b",
+                "runId": "run_t7b_controls",
+                "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+                "sourceManifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+                "requirements": [
+                  {
+                    "id": "REQ-1",
+                    "reference": {
+                      "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                      "sectionIds": [
+                        "s1",
+                        "s2"
+                      ]
+                    },
+                    "purpose": "Export the value 2.",
+                    "observableOutcome": "The value module exports 2.",
+                    "obligationKind": "mandatory",
+                    "applicability": {
+                      "status": "applicable"
+                    },
+                    "accountablePhaseId": "P1",
+                    "contributingTaskIds": [
+                      "T1"
+                    ],
+                    "acceptanceConditions": [
+                      {
+                        "id": "REQ-1-ac1",
+                        "description": "value is 2.",
+                        "responsibleGateId": "P1-exit",
+                        "requiredEvidenceKinds": [
+                          "command"
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "tasks": [
+                  {
+                    "id": "T1",
+                    "lineage": [],
+                    "accountablePhaseId": "P1",
+                    "requirementIds": [
+                      "REQ-1"
+                    ],
+                    "outcome": {
+                      "user": "Create src/value.mjs exporting value = 2.",
+                      "system": "The value module exports 2."
+                    },
+                    "scope": {
+                      "includes": [
+                        "src/value.mjs"
+                      ],
+                      "excludes": [
+                        "test/value.test.mjs"
+                      ]
+                    },
+                    "writableSurfaces": [
+                      "src/value.mjs"
+                    ],
+                    "forbiddenSurfaces": [
+                      "test/value.test.mjs"
+                    ],
+                    "dependencies": [],
+                    "requiredBase": "accepted plan revision revision_t7b",
+                    "inputs": [
+                      "accepted plan revision"
+                    ],
+                    "outputs": [
+                      "src/value.mjs"
+                    ],
+                    "steps": [
+                      "Write the module.",
+                      "Run the tests."
+                    ],
+                    "acceptance": {
+                      "criteria": [
+                        {
+                          "id": "c1",
+                          "text": "src/value.mjs exports value = 2 and the tests pass."
+                        }
+                      ],
+                      "definitionOfDone": "Tests pass."
+                    },
+                    "validation": {
+                      "targetedRationale": "The value test.",
+                      "affectedScopeRationale": "The module only."
+                    },
+                    "negativeProofApplicability": {
+                      "applicable": false,
+                      "rationale": "A new module has no prior-incorrect case."
+                    },
+                    "reviewCriteria": [
+                      "Independent review confirms the value."
+                    ],
+                    "integrationChecks": [
+                      "Post-integration tests."
+                    ],
+                    "cleanup": {
+                      "cleanup": "None.",
+                      "recovery": "Retry.",
+                      "rollback": "Revert."
+                    },
+                    "requirementCriteriaMap": [
+                      {
+                        "taskLocalCriterionId": "c1",
+                        "requirementId": "REQ-1"
+                      }
+                    ]
+                  }
+                ],
+                "phases": [
+                  {
+                    "id": "P1",
+                    "purpose": "Deliver the value module.",
+                    "requirementIds": [
+                      "REQ-1"
+                    ],
+                    "scope": {
+                      "includes": [
+                        "src/value.mjs"
+                      ],
+                      "excludes": [
+                        "docs/project/STATE.md"
+                      ]
+                    },
+                    "entryConditions": [
+                      "Plan ready."
+                    ],
+                    "contributingTaskIds": [
+                      "T1"
+                    ],
+                    "exitCriteria": [
+                      "The value module is accepted."
+                    ],
+                    "requiredCombinedValidation": [
+                      "tests"
+                    ],
+                    "exitUnlocks": [
+                      "final verification"
+                    ]
+                  }
+                ],
+                "workflowPolicyVersion": 1,
+                "planningDecisions": [],
+                "validationObligations": [
+                  "tests"
+                ],
+                "createdAt": "2026-10-02T00:00:00.000Z",
+                "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678"
+              }
+            }
+          },
+          "lastPlanningTurnSequence": 12,
+          "coverageReview": {
+            "id": "coverage-cheap",
+            "runId": "run_t7b_controls",
+            "reviewerRuntimeId": "rev:reviewer",
+            "independence": "distinct_model",
+            "sourceReadManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+            "planRevisionId": "revision_t7b",
+            "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+            "derivedObligations": [
+              {
+                "id": "obl",
+                "requirementId": "REQ-1",
+                "description": "Export value 2.",
+                "recordedBeforePlanOrDiffProvided": true,
+                "recordedAt": "2026-10-02T00:00:00.000Z"
+              }
+            ],
+            "obligationVerdicts": [
+              {
+                "obligationId": "obl",
+                "verdict": "covered",
+                "severity": "advisory",
+                "rationale": "T1 covers the source.",
+                "evidenceRefs": [
+                  "ledger:REQ-1"
+                ]
+              }
+            ],
+            "findings": [],
+            "recordedAt": "2026-10-02T00:00:00.000Z"
+          },
+          "hostCapabilities": {
+            "independentReviewerSelection": {
+              "status": "enforced",
+              "evidence": "runtime-router.ts:178-220 selectVerifier computes distinct-model exclusion, falls back to fresh_context."
+            },
+            "worktreeIsolation": {
+              "status": "enforced",
+              "evidence": "workspace-manager.ts:85-127 createTaskWorkspace runs git worktree add per task; ownership via worktree-state.ts."
+            },
+            "atomicAssignmentClaims": {
+              "status": "procedural",
+              "evidence": "task-scheduler.ts:69-139 is single-process in-memory serialization; no cross-process lock/lease/fencing token found."
+            },
+            "maxWorkersCeiling": {
+              "status": "unavailable",
+              "evidence": "Zero occurrences of MAX_WORKERS in runner-v2/src; maxConcurrency accepts any positive integer today (T4 adds the ceiling)."
+            },
+            "taskAttemptCeiling": {
+              "status": "enforced",
+              "evidence": "build-runtime.ts:299 maxTaskAttempts defaults to 2."
+            },
+            "runLevelRepairCeiling": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:493 DEFAULT_REPAIR_PLAN_LIMIT = 3; repairCyclesExhausted() l.648."
+            },
+            "issueLevelRepairCeiling": {
+              "status": "unavailable",
+              "evidence": "No issue/root-cause-keyed repair-cycle structure found alongside RepairCyclesProjection (T6 adds it)."
+            },
+            "directEventReplayValidators": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:1735 reduceSchedulerEvent is used for both live append and replay (l.1231)."
+            },
+            "stateTransitionGates": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:863-966 architectActionReasonIsApplicable is an exhaustive switch over architect-action reasons."
+            },
+            "nonExecutingLaunchChips": {
+              "status": "unavailable",
+              "evidence": "Grepped launch.?chip|chip.?prep repo-wide (excluding .worktrees): zero matches."
+            },
+            "nodeRuntimePolicy": {
+              "status": "enforced",
+              "evidence": "node-version.ts:2,5,20-38 SUPPORTED_NODE_LTS_LINES=[24]; package.json engines >=24.0.0 <25."
+            },
+            "docsFolderCompletionGate": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:982,1001,1168 call projectDocumentationReadiness (defined l.1188)."
+            },
+            "readerDisposableCommandExecution": {
+              "status": "procedural",
+              "evidence": "evidence-tools.ts:51 run_evidence_command exists and is granted to architect:inspection; disposable-copy semantics not independently confirmed by T1a."
+            },
+            "recordedAt": "2026-09-23T00:00:00.000Z"
+          }
+        },
+        "planningTriageDecision": "build",
+        "requestTriage": {
+          "decision": "build",
+          "rationale": "The fixture is a change request.",
+          "decidedAt": "2026-10-02T00:00:00.000Z",
+          "sequence": 8,
+          "conversions": []
+        },
+        "lastArchitectActionEvent": {
+          "sequence": 8,
+          "type": "request.triaged",
+          "actor": {
+            "role": "architect",
+            "id": "architect_1"
+          },
+          "payload": {
+            "decision": "build",
+            "rationale": "The fixture is a change request."
+          }
+        },
+        "readyPlanTaskBindings": {
+          "T1": {
+            "revisionId": "revision_t7b",
+            "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+            "contractId": "T1"
+          }
+        }
+      },
+      "undefinedPaths": [
+        [
+          "planning",
+          "coverageUnavailable"
+        ]
+      ]
+    },
+    {
+      "sequence": 21,
+      "projection": {
+        "runId": "run_t7b_controls",
+        "status": "paused",
+        "acceptanceContractStatus": "current",
+        "acceptanceUpgradeRequiredEventRecorded": false,
+        "planRevision": 1,
+        "tasks": {
+          "T1": {
+            "id": "T1",
+            "objective": "Create src/value.mjs exporting value = 2.",
+            "dependencies": [],
+            "status": "running",
+            "requiredCapabilities": [],
+            "acceptanceCriteria": [
+              {
+                "id": "c1",
+                "text": "src/value.mjs exports value = 2 and the tests pass."
+              }
+            ],
+            "acceptanceCriteriaVersion": 1,
+            "contractRef": {
+              "revisionId": "revision_t7b",
+              "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+              "taskId": "T1"
+            },
+            "attempt": 1,
+            "assignedWorkerId": "legacy-worker",
+            "workspacePath": "C:/legacy/task"
+          }
+        },
+        "guidance": {},
+        "userGuidance": {},
+        "userGuidanceVersion": 0,
+        "architectQuestions": {},
+        "architectQuestionVersion": 0,
+        "reviews": {},
+        "submissionHistory": {},
+        "reviewHistory": {},
+        "runtime": {
+          "providerHealth": {},
+          "workerAssignments": {},
+          "architect": {}
+        },
+        "lastSequence": 21,
+        "projectDocsPolicyVersion": 2,
+        "initialObjective": "Deliver the value module.",
+        "planningPolicyVersion": 1,
+        "runPolicy": "finish",
+        "specCopy": true,
+        "handoffFiles": "commit",
+        "repairCycles": {
+          "limit": 3,
+          "used": 0,
+          "extensions": 0,
+          "explicitLimit": false
+        },
+        "planCritique": {
+          "policy": {
+            "mode": "off"
+          },
+          "history": []
+        },
+        "planning": {
+          "source": {
+            "currentManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+            "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+            "artifactDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+            "manifestHistoryIds": [
+              "manifest-516397e5b0796d5f8e57a028c72822b1"
+            ],
+            "manifestsById": {
+              "manifest-516397e5b0796d5f8e57a028c72822b1": {
+                "manifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+                "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                "artifactDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+                "byteLength": 155,
+                "mediaType": "text/plain",
+                "encoding": "utf-8",
+                "sections": [
+                  {
+                    "id": "s1",
+                    "startByte": 0,
+                    "endByte": 66,
+                    "digest": "fab1172503fe7554a936527a6f4a334050c791e6185458ad931204233f97476d"
+                  },
+                  {
+                    "id": "s2",
+                    "startByte": 66,
+                    "endByte": 155,
+                    "digest": "3ff2e728d95d34208f26732782cf9a73c5d0b493bfb6cbf6036f6f2f6df4ab96"
+                  }
+                ],
+                "authority": "user:local-user",
+                "createdAt": "2026-10-02T00:00:00.000Z"
+              }
+            }
+          },
+          "checkpoints": [],
+          "sourceReadIndex": {
+            "manifest-516397e5b0796d5f8e57a028c72822b1": {
+              "s1": "fab1172503fe7554a936527a6f4a334050c791e6185458ad931204233f97476d",
+              "s2": "3ff2e728d95d34208f26732782cf9a73c5d0b493bfb6cbf6036f6f2f6df4ab96"
+            }
+          },
+          "assignments": {},
+          "validations": {},
+          "observationSequence": 0,
+          "observationOrderByObservationId": {},
+          "acceptances": {},
+          "readiness": "ready",
+          "coverageReviewHistory": [],
+          "coverageRequests": {
+            "coverage-cheap": {
+              "reviewId": "coverage-cheap",
+              "planRevisionId": "revision_t7b",
+              "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+              "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+              "requestedAt": "2026-10-02T00:00:00.000Z",
+              "requestedSequence": 13
+            }
+          },
+          "coverageObligations": {
+            "coverage-cheap": {
+              "reviewId": "coverage-cheap",
+              "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+              "sourceManifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+              "obligations": [
+                {
+                  "id": "obl",
+                  "requirementId": "REQ-1",
+                  "description": "Export value 2.",
+                  "recordedBeforePlanOrDiffProvided": true,
+                  "recordedAt": "2026-10-02T00:00:00.000Z"
+                }
+              ],
+              "sectionCoverage": [
+                {
+                  "sectionId": "s1",
+                  "obligationIds": [
+                    "obl"
+                  ]
+                },
+                {
+                  "sectionId": "s2",
+                  "obligationIds": [
+                    "obl"
+                  ]
+                }
+              ],
+              "recordedAt": "2026-10-02T00:00:00.000Z"
+            }
+          },
+          "coveragePlanDelivered": {
+            "coverage-cheap": {
+              "reviewId": "coverage-cheap",
+              "planRevisionId": "revision_t7b",
+              "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+              "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+              "deliveredAt": "2026-10-02T00:00:00.000Z"
+            }
+          },
+          "coverageCorrectionViews": {},
+          "coveragePriorFindingsReleased": {},
+          "coveragePriorFindingChecks": {},
+          "coverageSuspended": {},
+          "coverageRetiredFindings": {},
+          "resume": {
+            "coveredSourceSectionIds": [
+              "s1",
+              "s2"
+            ],
+            "remainingSourceSectionIds": [],
+            "completedPlanningContractIds": [
+              "requirement-ledger",
+              "revision_t7b"
+            ],
+            "outstandingWork": [],
+            "nextAction": "The plan is ready."
+          },
+          "references": {
+            "coverage-cheap": {
+              "kind": "review",
+              "id": "coverage-cheap"
+            }
+          },
+          "ledger": {
+            "id": "ledger",
+            "requirements": [
+              {
+                "id": "REQ-1",
+                "reference": {
+                  "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                  "sectionIds": [
+                    "s1",
+                    "s2"
+                  ]
+                },
+                "purpose": "Export the value 2.",
+                "observableOutcome": "The value module exports 2.",
+                "obligationKind": "mandatory",
+                "applicability": {
+                  "status": "applicable"
+                },
+                "accountablePhaseId": "P1",
+                "contributingTaskIds": [
+                  "T1"
+                ],
+                "acceptanceConditions": [
+                  {
+                    "id": "REQ-1-ac1",
+                    "description": "value is 2.",
+                    "responsibleGateId": "P1-exit",
+                    "requiredEvidenceKinds": [
+                      "command"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "phases": [
+              {
+                "id": "P1",
+                "purpose": "Deliver the value module.",
+                "requirementIds": [
+                  "REQ-1"
+                ],
+                "scope": {
+                  "includes": [
+                    "src/value.mjs"
+                  ],
+                  "excludes": [
+                    "docs/project/STATE.md"
+                  ]
+                },
+                "entryConditions": [
+                  "Plan ready."
+                ],
+                "contributingTaskIds": [
+                  "T1"
+                ],
+                "exitCriteria": [
+                  "The value module is accepted."
+                ],
+                "requiredCombinedValidation": [
+                  "tests"
+                ],
+                "exitUnlocks": [
+                  "final verification"
+                ]
+              }
+            ]
+          },
+          "plan": {
+            "currentRevisionId": "revision_t7b",
+            "currentDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+            "revisionHistoryIds": [
+              "revision_t7b"
+            ],
+            "revisionsById": {
+              "revision_t7b": {
+                "revisionId": "revision_t7b",
+                "runId": "run_t7b_controls",
+                "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+                "sourceManifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+                "requirements": [
+                  {
+                    "id": "REQ-1",
+                    "reference": {
+                      "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                      "sectionIds": [
+                        "s1",
+                        "s2"
+                      ]
+                    },
+                    "purpose": "Export the value 2.",
+                    "observableOutcome": "The value module exports 2.",
+                    "obligationKind": "mandatory",
+                    "applicability": {
+                      "status": "applicable"
+                    },
+                    "accountablePhaseId": "P1",
+                    "contributingTaskIds": [
+                      "T1"
+                    ],
+                    "acceptanceConditions": [
+                      {
+                        "id": "REQ-1-ac1",
+                        "description": "value is 2.",
+                        "responsibleGateId": "P1-exit",
+                        "requiredEvidenceKinds": [
+                          "command"
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "tasks": [
+                  {
+                    "id": "T1",
+                    "lineage": [],
+                    "accountablePhaseId": "P1",
+                    "requirementIds": [
+                      "REQ-1"
+                    ],
+                    "outcome": {
+                      "user": "Create src/value.mjs exporting value = 2.",
+                      "system": "The value module exports 2."
+                    },
+                    "scope": {
+                      "includes": [
+                        "src/value.mjs"
+                      ],
+                      "excludes": [
+                        "test/value.test.mjs"
+                      ]
+                    },
+                    "writableSurfaces": [
+                      "src/value.mjs"
+                    ],
+                    "forbiddenSurfaces": [
+                      "test/value.test.mjs"
+                    ],
+                    "dependencies": [],
+                    "requiredBase": "accepted plan revision revision_t7b",
+                    "inputs": [
+                      "accepted plan revision"
+                    ],
+                    "outputs": [
+                      "src/value.mjs"
+                    ],
+                    "steps": [
+                      "Write the module.",
+                      "Run the tests."
+                    ],
+                    "acceptance": {
+                      "criteria": [
+                        {
+                          "id": "c1",
+                          "text": "src/value.mjs exports value = 2 and the tests pass."
+                        }
+                      ],
+                      "definitionOfDone": "Tests pass."
+                    },
+                    "validation": {
+                      "targetedRationale": "The value test.",
+                      "affectedScopeRationale": "The module only."
+                    },
+                    "negativeProofApplicability": {
+                      "applicable": false,
+                      "rationale": "A new module has no prior-incorrect case."
+                    },
+                    "reviewCriteria": [
+                      "Independent review confirms the value."
+                    ],
+                    "integrationChecks": [
+                      "Post-integration tests."
+                    ],
+                    "cleanup": {
+                      "cleanup": "None.",
+                      "recovery": "Retry.",
+                      "rollback": "Revert."
+                    },
+                    "requirementCriteriaMap": [
+                      {
+                        "taskLocalCriterionId": "c1",
+                        "requirementId": "REQ-1"
+                      }
+                    ]
+                  }
+                ],
+                "phases": [
+                  {
+                    "id": "P1",
+                    "purpose": "Deliver the value module.",
+                    "requirementIds": [
+                      "REQ-1"
+                    ],
+                    "scope": {
+                      "includes": [
+                        "src/value.mjs"
+                      ],
+                      "excludes": [
+                        "docs/project/STATE.md"
+                      ]
+                    },
+                    "entryConditions": [
+                      "Plan ready."
+                    ],
+                    "contributingTaskIds": [
+                      "T1"
+                    ],
+                    "exitCriteria": [
+                      "The value module is accepted."
+                    ],
+                    "requiredCombinedValidation": [
+                      "tests"
+                    ],
+                    "exitUnlocks": [
+                      "final verification"
+                    ]
+                  }
+                ],
+                "workflowPolicyVersion": 1,
+                "planningDecisions": [],
+                "validationObligations": [
+                  "tests"
+                ],
+                "createdAt": "2026-10-02T00:00:00.000Z",
+                "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678"
+              }
+            }
+          },
+          "lastPlanningTurnSequence": 12,
+          "coverageReview": {
+            "id": "coverage-cheap",
+            "runId": "run_t7b_controls",
+            "reviewerRuntimeId": "rev:reviewer",
+            "independence": "distinct_model",
+            "sourceReadManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+            "planRevisionId": "revision_t7b",
+            "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+            "derivedObligations": [
+              {
+                "id": "obl",
+                "requirementId": "REQ-1",
+                "description": "Export value 2.",
+                "recordedBeforePlanOrDiffProvided": true,
+                "recordedAt": "2026-10-02T00:00:00.000Z"
+              }
+            ],
+            "obligationVerdicts": [
+              {
+                "obligationId": "obl",
+                "verdict": "covered",
+                "severity": "advisory",
+                "rationale": "T1 covers the source.",
+                "evidenceRefs": [
+                  "ledger:REQ-1"
+                ]
+              }
+            ],
+            "findings": [],
+            "recordedAt": "2026-10-02T00:00:00.000Z"
+          },
+          "hostCapabilities": {
+            "independentReviewerSelection": {
+              "status": "enforced",
+              "evidence": "runtime-router.ts:178-220 selectVerifier computes distinct-model exclusion, falls back to fresh_context."
+            },
+            "worktreeIsolation": {
+              "status": "enforced",
+              "evidence": "workspace-manager.ts:85-127 createTaskWorkspace runs git worktree add per task; ownership via worktree-state.ts."
+            },
+            "atomicAssignmentClaims": {
+              "status": "procedural",
+              "evidence": "task-scheduler.ts:69-139 is single-process in-memory serialization; no cross-process lock/lease/fencing token found."
+            },
+            "maxWorkersCeiling": {
+              "status": "unavailable",
+              "evidence": "Zero occurrences of MAX_WORKERS in runner-v2/src; maxConcurrency accepts any positive integer today (T4 adds the ceiling)."
+            },
+            "taskAttemptCeiling": {
+              "status": "enforced",
+              "evidence": "build-runtime.ts:299 maxTaskAttempts defaults to 2."
+            },
+            "runLevelRepairCeiling": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:493 DEFAULT_REPAIR_PLAN_LIMIT = 3; repairCyclesExhausted() l.648."
+            },
+            "issueLevelRepairCeiling": {
+              "status": "unavailable",
+              "evidence": "No issue/root-cause-keyed repair-cycle structure found alongside RepairCyclesProjection (T6 adds it)."
+            },
+            "directEventReplayValidators": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:1735 reduceSchedulerEvent is used for both live append and replay (l.1231)."
+            },
+            "stateTransitionGates": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:863-966 architectActionReasonIsApplicable is an exhaustive switch over architect-action reasons."
+            },
+            "nonExecutingLaunchChips": {
+              "status": "unavailable",
+              "evidence": "Grepped launch.?chip|chip.?prep repo-wide (excluding .worktrees): zero matches."
+            },
+            "nodeRuntimePolicy": {
+              "status": "enforced",
+              "evidence": "node-version.ts:2,5,20-38 SUPPORTED_NODE_LTS_LINES=[24]; package.json engines >=24.0.0 <25."
+            },
+            "docsFolderCompletionGate": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:982,1001,1168 call projectDocumentationReadiness (defined l.1188)."
+            },
+            "readerDisposableCommandExecution": {
+              "status": "procedural",
+              "evidence": "evidence-tools.ts:51 run_evidence_command exists and is granted to architect:inspection; disposable-copy semantics not independently confirmed by T1a."
+            },
+            "recordedAt": "2026-09-23T00:00:00.000Z"
+          }
+        },
+        "planningTriageDecision": "build",
+        "requestTriage": {
+          "decision": "build",
+          "rationale": "The fixture is a change request.",
+          "decidedAt": "2026-10-02T00:00:00.000Z",
+          "sequence": 8,
+          "conversions": []
+        },
+        "lastArchitectActionEvent": {
+          "sequence": 8,
+          "type": "request.triaged",
+          "actor": {
+            "role": "architect",
+            "id": "architect_1"
+          },
+          "payload": {
+            "decision": "build",
+            "rationale": "The fixture is a change request."
+          }
+        },
+        "readyPlanTaskBindings": {
+          "T1": {
+            "revisionId": "revision_t7b",
+            "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+            "contractId": "T1"
+          }
+        },
+        "verifierPolicy": {
+          "mode": "risk_based",
+          "candidateRuntimeIds": [
+            "rev:reviewer"
+          ],
+          "alwaysRequireIndependentVerifier": false,
+          "twoPass": false
+        },
+        "verifierSelection": {
+          "status": "required",
+          "reason": "Historical selection pending.",
+          "requiredCapabilities": [
+            "code"
+          ],
+          "candidateRuntimeIds": [
+            "rev:reviewer"
+          ]
+        },
+        "stopTransitions": [
+          {
+            "sequence": 21,
+            "type": "verifier.selection_required",
+            "status": "paused",
+            "ownerInitiated": false,
+            "triage": "build",
+            "handoffFiles": "commit"
+          }
+        ]
+      },
+      "undefinedPaths": [
+        [
+          "planning",
+          "coverageUnavailable"
+        ]
+      ]
+    },
+    {
+      "sequence": 22,
+      "projection": {
+        "runId": "run_t7b_controls",
+        "status": "paused",
+        "acceptanceContractStatus": "current",
+        "acceptanceUpgradeRequiredEventRecorded": false,
+        "planRevision": 1,
+        "tasks": {
+          "T1": {
+            "id": "T1",
+            "objective": "Create src/value.mjs exporting value = 2.",
+            "dependencies": [],
+            "status": "running",
+            "requiredCapabilities": [],
+            "acceptanceCriteria": [
+              {
+                "id": "c1",
+                "text": "src/value.mjs exports value = 2 and the tests pass."
+              }
+            ],
+            "acceptanceCriteriaVersion": 1,
+            "contractRef": {
+              "revisionId": "revision_t7b",
+              "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+              "taskId": "T1"
+            },
+            "attempt": 1,
+            "assignedWorkerId": "legacy-worker",
+            "workspacePath": "C:/legacy/task"
+          }
+        },
+        "guidance": {},
+        "userGuidance": {},
+        "userGuidanceVersion": 0,
+        "architectQuestions": {},
+        "architectQuestionVersion": 0,
+        "reviews": {},
+        "submissionHistory": {},
+        "reviewHistory": {},
+        "runtime": {
+          "providerHealth": {},
+          "workerAssignments": {},
+          "architect": {
+            "handoff": {
+              "reason": "Historical Architect handoff pending.",
+              "requiredCapabilities": [
+                "code"
+              ],
+              "candidateRuntimeIds": [
+                "arch:replacement"
+              ]
+            }
+          }
+        },
+        "lastSequence": 22,
+        "projectDocsPolicyVersion": 2,
+        "initialObjective": "Deliver the value module.",
+        "planningPolicyVersion": 1,
+        "runPolicy": "finish",
+        "specCopy": true,
+        "handoffFiles": "commit",
+        "repairCycles": {
+          "limit": 3,
+          "used": 0,
+          "extensions": 0,
+          "explicitLimit": false
+        },
+        "planCritique": {
+          "policy": {
+            "mode": "off"
+          },
+          "history": []
+        },
+        "planning": {
+          "source": {
+            "currentManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+            "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+            "artifactDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+            "manifestHistoryIds": [
+              "manifest-516397e5b0796d5f8e57a028c72822b1"
+            ],
+            "manifestsById": {
+              "manifest-516397e5b0796d5f8e57a028c72822b1": {
+                "manifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+                "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                "artifactDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+                "byteLength": 155,
+                "mediaType": "text/plain",
+                "encoding": "utf-8",
+                "sections": [
+                  {
+                    "id": "s1",
+                    "startByte": 0,
+                    "endByte": 66,
+                    "digest": "fab1172503fe7554a936527a6f4a334050c791e6185458ad931204233f97476d"
+                  },
+                  {
+                    "id": "s2",
+                    "startByte": 66,
+                    "endByte": 155,
+                    "digest": "3ff2e728d95d34208f26732782cf9a73c5d0b493bfb6cbf6036f6f2f6df4ab96"
+                  }
+                ],
+                "authority": "user:local-user",
+                "createdAt": "2026-10-02T00:00:00.000Z"
+              }
+            }
+          },
+          "checkpoints": [],
+          "sourceReadIndex": {
+            "manifest-516397e5b0796d5f8e57a028c72822b1": {
+              "s1": "fab1172503fe7554a936527a6f4a334050c791e6185458ad931204233f97476d",
+              "s2": "3ff2e728d95d34208f26732782cf9a73c5d0b493bfb6cbf6036f6f2f6df4ab96"
+            }
+          },
+          "assignments": {},
+          "validations": {},
+          "observationSequence": 0,
+          "observationOrderByObservationId": {},
+          "acceptances": {},
+          "readiness": "ready",
+          "coverageReviewHistory": [],
+          "coverageRequests": {
+            "coverage-cheap": {
+              "reviewId": "coverage-cheap",
+              "planRevisionId": "revision_t7b",
+              "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+              "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+              "requestedAt": "2026-10-02T00:00:00.000Z",
+              "requestedSequence": 13
+            }
+          },
+          "coverageObligations": {
+            "coverage-cheap": {
+              "reviewId": "coverage-cheap",
+              "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+              "sourceManifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+              "obligations": [
+                {
+                  "id": "obl",
+                  "requirementId": "REQ-1",
+                  "description": "Export value 2.",
+                  "recordedBeforePlanOrDiffProvided": true,
+                  "recordedAt": "2026-10-02T00:00:00.000Z"
+                }
+              ],
+              "sectionCoverage": [
+                {
+                  "sectionId": "s1",
+                  "obligationIds": [
+                    "obl"
+                  ]
+                },
+                {
+                  "sectionId": "s2",
+                  "obligationIds": [
+                    "obl"
+                  ]
+                }
+              ],
+              "recordedAt": "2026-10-02T00:00:00.000Z"
+            }
+          },
+          "coveragePlanDelivered": {
+            "coverage-cheap": {
+              "reviewId": "coverage-cheap",
+              "planRevisionId": "revision_t7b",
+              "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+              "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+              "deliveredAt": "2026-10-02T00:00:00.000Z"
+            }
+          },
+          "coverageCorrectionViews": {},
+          "coveragePriorFindingsReleased": {},
+          "coveragePriorFindingChecks": {},
+          "coverageSuspended": {},
+          "coverageRetiredFindings": {},
+          "resume": {
+            "coveredSourceSectionIds": [
+              "s1",
+              "s2"
+            ],
+            "remainingSourceSectionIds": [],
+            "completedPlanningContractIds": [
+              "requirement-ledger",
+              "revision_t7b"
+            ],
+            "outstandingWork": [],
+            "nextAction": "The plan is ready."
+          },
+          "references": {
+            "coverage-cheap": {
+              "kind": "review",
+              "id": "coverage-cheap"
+            }
+          },
+          "ledger": {
+            "id": "ledger",
+            "requirements": [
+              {
+                "id": "REQ-1",
+                "reference": {
+                  "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                  "sectionIds": [
+                    "s1",
+                    "s2"
+                  ]
+                },
+                "purpose": "Export the value 2.",
+                "observableOutcome": "The value module exports 2.",
+                "obligationKind": "mandatory",
+                "applicability": {
+                  "status": "applicable"
+                },
+                "accountablePhaseId": "P1",
+                "contributingTaskIds": [
+                  "T1"
+                ],
+                "acceptanceConditions": [
+                  {
+                    "id": "REQ-1-ac1",
+                    "description": "value is 2.",
+                    "responsibleGateId": "P1-exit",
+                    "requiredEvidenceKinds": [
+                      "command"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "phases": [
+              {
+                "id": "P1",
+                "purpose": "Deliver the value module.",
+                "requirementIds": [
+                  "REQ-1"
+                ],
+                "scope": {
+                  "includes": [
+                    "src/value.mjs"
+                  ],
+                  "excludes": [
+                    "docs/project/STATE.md"
+                  ]
+                },
+                "entryConditions": [
+                  "Plan ready."
+                ],
+                "contributingTaskIds": [
+                  "T1"
+                ],
+                "exitCriteria": [
+                  "The value module is accepted."
+                ],
+                "requiredCombinedValidation": [
+                  "tests"
+                ],
+                "exitUnlocks": [
+                  "final verification"
+                ]
+              }
+            ]
+          },
+          "plan": {
+            "currentRevisionId": "revision_t7b",
+            "currentDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+            "revisionHistoryIds": [
+              "revision_t7b"
+            ],
+            "revisionsById": {
+              "revision_t7b": {
+                "revisionId": "revision_t7b",
+                "runId": "run_t7b_controls",
+                "sourceManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+                "sourceManifestDigest": "25189f59beb8283da552a6091b2075b652cee8923297d72c95acf33b35f529eb",
+                "requirements": [
+                  {
+                    "id": "REQ-1",
+                    "reference": {
+                      "sourceId": "src-bb7179124c6869a912d455e275406f3b",
+                      "sectionIds": [
+                        "s1",
+                        "s2"
+                      ]
+                    },
+                    "purpose": "Export the value 2.",
+                    "observableOutcome": "The value module exports 2.",
+                    "obligationKind": "mandatory",
+                    "applicability": {
+                      "status": "applicable"
+                    },
+                    "accountablePhaseId": "P1",
+                    "contributingTaskIds": [
+                      "T1"
+                    ],
+                    "acceptanceConditions": [
+                      {
+                        "id": "REQ-1-ac1",
+                        "description": "value is 2.",
+                        "responsibleGateId": "P1-exit",
+                        "requiredEvidenceKinds": [
+                          "command"
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "tasks": [
+                  {
+                    "id": "T1",
+                    "lineage": [],
+                    "accountablePhaseId": "P1",
+                    "requirementIds": [
+                      "REQ-1"
+                    ],
+                    "outcome": {
+                      "user": "Create src/value.mjs exporting value = 2.",
+                      "system": "The value module exports 2."
+                    },
+                    "scope": {
+                      "includes": [
+                        "src/value.mjs"
+                      ],
+                      "excludes": [
+                        "test/value.test.mjs"
+                      ]
+                    },
+                    "writableSurfaces": [
+                      "src/value.mjs"
+                    ],
+                    "forbiddenSurfaces": [
+                      "test/value.test.mjs"
+                    ],
+                    "dependencies": [],
+                    "requiredBase": "accepted plan revision revision_t7b",
+                    "inputs": [
+                      "accepted plan revision"
+                    ],
+                    "outputs": [
+                      "src/value.mjs"
+                    ],
+                    "steps": [
+                      "Write the module.",
+                      "Run the tests."
+                    ],
+                    "acceptance": {
+                      "criteria": [
+                        {
+                          "id": "c1",
+                          "text": "src/value.mjs exports value = 2 and the tests pass."
+                        }
+                      ],
+                      "definitionOfDone": "Tests pass."
+                    },
+                    "validation": {
+                      "targetedRationale": "The value test.",
+                      "affectedScopeRationale": "The module only."
+                    },
+                    "negativeProofApplicability": {
+                      "applicable": false,
+                      "rationale": "A new module has no prior-incorrect case."
+                    },
+                    "reviewCriteria": [
+                      "Independent review confirms the value."
+                    ],
+                    "integrationChecks": [
+                      "Post-integration tests."
+                    ],
+                    "cleanup": {
+                      "cleanup": "None.",
+                      "recovery": "Retry.",
+                      "rollback": "Revert."
+                    },
+                    "requirementCriteriaMap": [
+                      {
+                        "taskLocalCriterionId": "c1",
+                        "requirementId": "REQ-1"
+                      }
+                    ]
+                  }
+                ],
+                "phases": [
+                  {
+                    "id": "P1",
+                    "purpose": "Deliver the value module.",
+                    "requirementIds": [
+                      "REQ-1"
+                    ],
+                    "scope": {
+                      "includes": [
+                        "src/value.mjs"
+                      ],
+                      "excludes": [
+                        "docs/project/STATE.md"
+                      ]
+                    },
+                    "entryConditions": [
+                      "Plan ready."
+                    ],
+                    "contributingTaskIds": [
+                      "T1"
+                    ],
+                    "exitCriteria": [
+                      "The value module is accepted."
+                    ],
+                    "requiredCombinedValidation": [
+                      "tests"
+                    ],
+                    "exitUnlocks": [
+                      "final verification"
+                    ]
+                  }
+                ],
+                "workflowPolicyVersion": 1,
+                "planningDecisions": [],
+                "validationObligations": [
+                  "tests"
+                ],
+                "createdAt": "2026-10-02T00:00:00.000Z",
+                "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678"
+              }
+            }
+          },
+          "lastPlanningTurnSequence": 12,
+          "coverageReview": {
+            "id": "coverage-cheap",
+            "runId": "run_t7b_controls",
+            "reviewerRuntimeId": "rev:reviewer",
+            "independence": "distinct_model",
+            "sourceReadManifestId": "manifest-516397e5b0796d5f8e57a028c72822b1",
+            "planRevisionId": "revision_t7b",
+            "planRevisionDigest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+            "derivedObligations": [
+              {
+                "id": "obl",
+                "requirementId": "REQ-1",
+                "description": "Export value 2.",
+                "recordedBeforePlanOrDiffProvided": true,
+                "recordedAt": "2026-10-02T00:00:00.000Z"
+              }
+            ],
+            "obligationVerdicts": [
+              {
+                "obligationId": "obl",
+                "verdict": "covered",
+                "severity": "advisory",
+                "rationale": "T1 covers the source.",
+                "evidenceRefs": [
+                  "ledger:REQ-1"
+                ]
+              }
+            ],
+            "findings": [],
+            "recordedAt": "2026-10-02T00:00:00.000Z"
+          },
+          "hostCapabilities": {
+            "independentReviewerSelection": {
+              "status": "enforced",
+              "evidence": "runtime-router.ts:178-220 selectVerifier computes distinct-model exclusion, falls back to fresh_context."
+            },
+            "worktreeIsolation": {
+              "status": "enforced",
+              "evidence": "workspace-manager.ts:85-127 createTaskWorkspace runs git worktree add per task; ownership via worktree-state.ts."
+            },
+            "atomicAssignmentClaims": {
+              "status": "procedural",
+              "evidence": "task-scheduler.ts:69-139 is single-process in-memory serialization; no cross-process lock/lease/fencing token found."
+            },
+            "maxWorkersCeiling": {
+              "status": "unavailable",
+              "evidence": "Zero occurrences of MAX_WORKERS in runner-v2/src; maxConcurrency accepts any positive integer today (T4 adds the ceiling)."
+            },
+            "taskAttemptCeiling": {
+              "status": "enforced",
+              "evidence": "build-runtime.ts:299 maxTaskAttempts defaults to 2."
+            },
+            "runLevelRepairCeiling": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:493 DEFAULT_REPAIR_PLAN_LIMIT = 3; repairCyclesExhausted() l.648."
+            },
+            "issueLevelRepairCeiling": {
+              "status": "unavailable",
+              "evidence": "No issue/root-cause-keyed repair-cycle structure found alongside RepairCyclesProjection (T6 adds it)."
+            },
+            "directEventReplayValidators": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:1735 reduceSchedulerEvent is used for both live append and replay (l.1231)."
+            },
+            "stateTransitionGates": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:863-966 architectActionReasonIsApplicable is an exhaustive switch over architect-action reasons."
+            },
+            "nonExecutingLaunchChips": {
+              "status": "unavailable",
+              "evidence": "Grepped launch.?chip|chip.?prep repo-wide (excluding .worktrees): zero matches."
+            },
+            "nodeRuntimePolicy": {
+              "status": "enforced",
+              "evidence": "node-version.ts:2,5,20-38 SUPPORTED_NODE_LTS_LINES=[24]; package.json engines >=24.0.0 <25."
+            },
+            "docsFolderCompletionGate": {
+              "status": "enforced",
+              "evidence": "scheduler-store.ts:982,1001,1168 call projectDocumentationReadiness (defined l.1188)."
+            },
+            "readerDisposableCommandExecution": {
+              "status": "procedural",
+              "evidence": "evidence-tools.ts:51 run_evidence_command exists and is granted to architect:inspection; disposable-copy semantics not independently confirmed by T1a."
+            },
+            "recordedAt": "2026-09-23T00:00:00.000Z"
+          }
+        },
+        "planningTriageDecision": "build",
+        "requestTriage": {
+          "decision": "build",
+          "rationale": "The fixture is a change request.",
+          "decidedAt": "2026-10-02T00:00:00.000Z",
+          "sequence": 8,
+          "conversions": []
+        },
+        "lastArchitectActionEvent": {
+          "sequence": 8,
+          "type": "request.triaged",
+          "actor": {
+            "role": "architect",
+            "id": "architect_1"
+          },
+          "payload": {
+            "decision": "build",
+            "rationale": "The fixture is a change request."
+          }
+        },
+        "readyPlanTaskBindings": {
+          "T1": {
+            "revisionId": "revision_t7b",
+            "digest": "74e0776a14b1cc5f705663def7ebc044c8dffbd18cfe5bfec97fcd5733f9b678",
+            "contractId": "T1"
+          }
+        },
+        "verifierPolicy": {
+          "mode": "risk_based",
+          "candidateRuntimeIds": [
+            "rev:reviewer"
+          ],
+          "alwaysRequireIndependentVerifier": false,
+          "twoPass": false
+        },
+        "verifierSelection": {
+          "status": "required",
+          "reason": "Historical selection pending.",
+          "requiredCapabilities": [
+            "code"
+          ],
+          "candidateRuntimeIds": [
+            "rev:reviewer"
+          ]
+        },
+        "stopTransitions": [
+          {
+            "sequence": 21,
+            "type": "verifier.selection_required",
+            "status": "paused",
+            "ownerInitiated": false,
+            "triage": "build",
+            "handoffFiles": "commit"
+          },
+          {
+            "sequence": 22,
+            "type": "architect.handoff_required",
+            "status": "paused",
+            "ownerInitiated": false,
+            "triage": "build",
+            "handoffFiles": "commit"
+          }
+        ]
+      },
+      "undefinedPaths": [
+        [
+          "planning",
+          "coverageUnavailable"
+        ]
+      ]
+    }
+  ]
+}

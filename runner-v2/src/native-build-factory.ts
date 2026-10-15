@@ -1,15 +1,21 @@
+import { workingTreeForRunner } from "./command-evidence-identity.js";
+import { projectPlanningReadiness, buildPlanningExportDocument } from "./planning-controls.js";
+import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
+import { testIntegrityPinDigest, testIntegrityProfileFindings } from "./test-integrity.js";
+import { explicitStartBlocked } from "./scheduler-store.js";
 import { createExecutionHostLspTransportFactory, cleanupRecoveredLspTransports } from "./execution-host-lsp-transport.js";
 import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
 import type { LspTransportFactory } from "./lsp-transport.js";
 import type { McpDiscoveryResult } from "./runner-internal-execution-context.js";
-import { requireGitRunner } from "./git-command.js";
+import { requireGitRunner, unavailableGitRunner } from "./git-command.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import { createHash, randomBytes } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { statSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { createSchedulerTempRecorders, decideRecordedTempCleanup, filterRecordsForOwner, recordTempCreation, searchOwnedProcesses, type LeftoverCleanupRecord, type TempCreationRecord } from "./cleanup-ownership.js";
 import { homedir, tmpdir } from "node:os";
-import { basename, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,13 +28,29 @@ import {
   type ModelCostBasisSnapshot,
 } from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
+import {
+  createDeliveryBoundaryDriver,
+  createDeliveryDepthRunner,
+  createDeliveryWorkspaceSlot,
+  currentWorkerAuthor,
+  loadDeliverableReviewInputs,
+  submitTaskSummary,
+  type DurableSubmission,
+} from "./delivery-execution.js";
+import { NativeDeliverableReviewRuntime, type DeliverableReviewInputs } from "./native-deliverable-review.js";
+import type { ExecutionTaskContract } from "./planning-contracts.js";
+import type { BuildTask, TaskContractRef } from "./task-contracts.js";
+import type { MutationFileSystem } from "./mutation-probe.js";
 import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
 import { CapabilityRegistry } from "./capability-registry.js";
 import {
   BuildRuntime,
   type FinalVerificationCheckDriver,
+  type FlakyIsolationDriver,
   type IndependentVerifierDriver,
   type IntegrationRuntimeDriver,
+  type DeliveryBoundaryDriver,
+  type DeliveryReviewDriver,
   type PlanCriticDriver,
 } from "./build-runtime.js";
 import type { AgentSessionProjection } from "./agent-session-store.js";
@@ -43,14 +65,35 @@ import {
   projectExecutionSafetyObservability,
   projectFinalVerificationObservability,
   projectIndependentVerifierObservability,
+  projectPlanningObservability,
 } from "./build-observability.js";
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
-import { cloneBuildSpec, type NativeBuildSpec } from "./build-spec.js";
+import { cloneBuildSpec, validateBuildSpec, type NativeBuildSpec } from "./build-spec.js";
+import {
+  assertManifestMatchesBytes,
+  computeArtifactDigest,
+  type ApprovedSourceManifest,
+} from "./source-manifest.js";
+import {
+  approvedSourceApprover,
+  buildApprovedSourceManifest,
+  ensurePlanningProvisioningPrefix,
+  registerApprovedSource,
+  validateApprovedSourceInput,
+  validateProvisioningPrepareOptions,
+  verifyPreparedApprovedSource,
+  type ProvisioningPrepareOptions,
+  type ValidatedApprovedSource,
+} from "./native-planning-provisioner.js";
 import { IntegrationManager } from "./integration-manager.js";
-import { FinalVerificationRuntime } from "./final-verification-runtime.js";
+import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
+import { flakyRerunPattern, isPackageRunTestCommand, judgeFlakyRerun, narrowNodeTestCommand } from "./flaky-rerun.js";
+import { topDefectClasses } from "./defect-history.js";
 import {
   finalVerificationProfileDigest,
+  inspectFinalVerificationExecutionProfile,
   FinalVerificationProfileAuthority,
+  projectTierCommandsToRuntimeCommands,
 } from "./final-verification-profile.js";
 import { FinalVerificationPortAuthority } from "./final-verification-port-authority.js";
 import {
@@ -75,6 +118,17 @@ import {
   type NativeModelUsageRuntime,
 } from "./model-usage-projection.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
+import {
+  buildCoverageHostCapabilities,
+  NativeCoverageReviewRuntime,
+  SchedulerCoverageReviewAuthority,
+  type CoverageReviewDriver,
+} from "./planning-review.js";
+import {
+  NativeAnswerReviewRuntime,
+  SchedulerAnswerReviewAuthority,
+  type AnswerReviewDriver,
+} from "./request-triage.js";
 import {
   NativePlanCriticRuntime,
   type NativePlanCritiqueRequest,
@@ -138,7 +192,11 @@ import { runnerProviderRetryDeadlineMs } from "./provider-call-retry.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
 import { isSensitiveKey } from "./sensitive-redaction.js";
 import {
+  readyPlanIdentity,
   rebuildSchedulerProjection,
+  repairParentContractId,
+  resolveTaskContractReference,
+  taskPlanMembership,
   type SchedulerEvent,
   type SchedulerProjection,
   type BuildRiskAssessmentProjection,
@@ -154,6 +212,8 @@ import type {
 } from "./historical-read-provenance.js";
 import { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "./sqlite-budget-ledger.js";
+import { isRunValidationBudgetScope } from "./validation-budget.js";
+import { readValidationBudgetMsAtRevision } from "./project-validation-config.js";
 import { SqliteEvidenceStore } from "./sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "./sqlite-project-memory.js";
 import { rebuildProjectMemories } from "./project-memory.js";
@@ -165,6 +225,7 @@ import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.js";
 import { WorkspaceManager } from "./workspace-manager.js";
 import { VerificationWorkspaceManager } from "./verification-workspace.js";
+import { verifyHandoffSnapshotDigest } from "./handoff-snapshot.js";
 import { createChildEnvironmentFactory } from "./child-environment.js";
 import {
   createExecutionGrantAuthority,
@@ -185,6 +246,8 @@ import {
 import { createPosixProcessBackend } from "./posix-process-backend.js";
 import { probeProcessHostSemantics, selectWindowsProcessBackendKinds, type ProcessHostSemanticFacts } from "./process-host-semantic-probes.js";
 import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "./windows-process-backend.js";
+import { NativeOwnedProcessBackend } from "./native-process-backend.js";
+import { assertSubprocessCleanupSettled } from "./inspection-cleanup.js";
 import { createWindowsProcessSemanticProbeSource } from "./windows-process-semantic-probes.js";
 import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
 import {
@@ -195,6 +258,7 @@ import {
 } from "./process-recovery.js";
 import {
   createBoundedProcessOutputFactory,
+  bindCommandEvidenceReuse,
   createRuntimeBackedOneShotCommandExecutor,
   type OneShotCommandExecutor,
 } from "./one-shot-command-executor.js";
@@ -206,6 +270,7 @@ export type NativeBuildRuntimeResourceStage =
   | "capabilities"
   | "execution_isolation"
   | "subprocess_runtime"
+  | "process_inspection"
   | "evidence_store"
   | "scheduler_store"
   | "session_store"
@@ -321,6 +386,33 @@ export const NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE = Object.freeze([
   "tempRoots",
 ] as const);
 
+/**
+ * T7b: the current event-registered source manifest for a run whose saved
+ * spec carries no initial source â€” the latest `planning.source_registered`
+ * or `planning.source_amended` payload. Undefined when no source was ever
+ * registered. Read-only; the spec store keeps no mutable copy.
+ */
+function currentEventRegisteredSourceManifest(
+  events: readonly SchedulerEvent[],
+): ApprovedSourceManifest | undefined {
+  let current: ApprovedSourceManifest | undefined;
+  for (const event of events) {
+    if (
+      event.type !== "planning.source_registered" &&
+      event.type !== "planning.source_amended"
+    ) {
+      continue;
+    }
+    const manifest = (event.payload as { manifest?: unknown }).manifest as
+      | ApprovedSourceManifest
+      | undefined;
+    if (manifest !== undefined) current = manifest;
+  }
+  return current;
+}
+
+const NATIVE_BUILD_ARCHITECT_ACTOR_ID = "architect_1";
+
 export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
   private readonly artifactReachability: ArtifactReachabilityGuard;
@@ -346,10 +438,26 @@ export class NativeBuildFactory {
     );
   }
 
-  async prepareSpec(spec: NativeBuildSpec): Promise<NativeBuildSpec> {
+  async prepareSpec(
+    spec: NativeBuildSpec,
+    options?: ProvisioningPrepareOptions,
+  ): Promise<NativeBuildSpec> {
     if (this.closed) throw new Error("Native Build factory is closed.");
+    validateProvisioningPrepareOptions(options);
+    let validated: ValidatedApprovedSource | undefined;
+    if (options?.approvedSourceInput !== undefined) {
+      if (spec.planningPolicy?.version !== 1) {
+        throw new Error("An approved source requires explicit planningPolicy version 1 opt-in; refusing to change the run default.");
+      }
+      if (spec.approvedSource !== undefined) {
+        throw new Error(
+          "Specify either raw approved-source bytes or a prepared approvedSource manifest, not both.",
+        );
+      }
+      validated = validateApprovedSourceInput(options.approvedSourceInput);
+    }
     const config = this.capabilitiesConfig();
-    return {
+    const prepared = {
       ...cloneBuildSpec(spec),
       capabilityContract: await createRunnerCapabilityContractSnapshot(
         config,
@@ -357,6 +465,17 @@ export class NativeBuildFactory {
         { commandSearchDirectory: this.options.projectRoot, environment: this.options.executionHost?.filteredEnvironmentSource() ?? {} },
       ),
     };
+    if (validated === undefined) return prepared;
+    const artifactDigest = computeArtifactDigest(validated.bytes);
+    await this.artifacts.put(validated.bytes, validated.mediaType, `approved-source:${spec.runId}`);
+    const manifest = buildApprovedSourceManifest({
+      runId: spec.runId,
+      validated,
+      artifactDigest,
+      ...(options?.approvedBy !== undefined ? { approvedBy: options.approvedBy } : {}),
+      createdAt: spec.createdAt,
+    });
+    return { ...prepared, approvedSource: manifest };
   }
 
   async validateRecoveryCapabilityContract(spec: NativeBuildSpec): Promise<void> {
@@ -371,6 +490,7 @@ export class NativeBuildFactory {
   async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
     if (this.closed) throw new Error("Native Build factory is closed.");
     await this.closeIncompleteConstructionResources();
+    validateBuildSpec(spec);
     if (!spec.capabilityContract) {
       throw new Error("Native Build runtime requires a Runner-prepared capability contract.");
     }
@@ -570,8 +690,118 @@ export class NativeBuildFactory {
     });
     constructionResources.add("scheduler_store", () => schedulerStore.close(), true);
     await this.options.runtimeConstructionHooks?.afterAcquire?.("scheduler_store");
+    // T7a: early explicit-policy/source provisioning — immediately after
+    // opening scheduler storage and before any factory consumer reads
+    // planning/docs policy or creates run integration/context resources.
+    // Legacy specs (no planningPolicy) pass through untouched.
+    if (spec.approvedSource !== undefined) {
+      if (spec.planningPolicy?.version !== 1) {
+        throw new Error(
+          "Build spec approvedSource requires explicit planningPolicy version 1 opt-in.",
+        );
+      }
+      let storedBytes: Uint8Array;
+      try {
+        storedBytes = await this.artifacts.get(spec.approvedSource.artifactDigest);
+      } catch (error) {
+        throw new Error(
+          `Approved source artifact ${spec.approvedSource.artifactDigest} is not provisioned for ${spec.runId}.`,
+          { cause: error },
+        );
+      }
+      verifyPreparedApprovedSource({
+        runId: spec.runId,
+        manifest: spec.approvedSource,
+        storedBytes,
+        createdAt: spec.createdAt,
+      });
+    }
+    ensurePlanningProvisioningPrefix(schedulerStore, spec);
+    if (spec.planningPolicy?.version === 1) {
+      // Lane-B guards activate only during fresh explicit-policy
+      // construction, immediately after the T7a prefix (sequences 4-5),
+      // before source registration. A log carrying run history beyond
+      // the bare construction stamps is a recovery and is never
+      // restamped: historical shape is preserved, and the
+      // pending-guidance/open-question gates (which correctly deny
+      // mid-log advancement) are never tripped by factory creation. The
+      // bare-prefix-plus-evidence shape covers a crash between the two
+      // stamps; anything longer is real history.
+      const constructionEvents = schedulerStore.readRun(spec.runId);
+      const barePrefix = constructionEvents.length === 3;
+      const barePrefixPlusEvidence =
+        constructionEvents.length === 4 &&
+        constructionEvents[3]?.type === "run.evidence_policy_activated";
+      if (barePrefix || barePrefixPlusEvidence) {
+        if (rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).evidenceContentPolicyVersion !== 1) {
+          schedulerStore.append({runId: spec.runId, type: "run.evidence_policy_activated", actor: {role: "runner", id: "build-runtime"}, occurredAt: new Date().toISOString(), idempotencyKey: "evidence-content-policy:v1", payload: {version: 1}});
+        }
+        const integrityInitialization = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).testIntegrity;
+        if (integrityInitialization && integrityInitialization.initialRevision === undefined) {
+          schedulerStore.append({ runId: spec.runId, type: "delivery.test_integrity_initialized", occurredAt: spec.createdAt,
+            actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "test-integrity-initial-revision:v1",
+            payload: { revision: baselineRevision, architectActorId: NATIVE_BUILD_ARCHITECT_ACTOR_ID } });
+        }
+      }
+    } else if (schedulerStore.readRun(spec.runId).length === 0) {
+      // Fresh legacy run (no planningPolicy): initialize legitimately
+      // before any factory consumer reads the projection, mirroring
+      // BuildRuntime's legacy order (docs policy v1, then
+      // run.initialized carrying the spec objective).
+      // BuildRuntime.initializeRun runs later and reuses these durable
+      // records. Recovered legacy logs are never restamped, and the
+      // downgrade guard above still refuses a legacy spec against a
+      // recorded new-policy prefix.
+      schedulerStore.append({ runId: spec.runId, type: "project_docs.policy_configured", occurredAt: spec.createdAt,
+        actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "project-docs-policy", payload: { version: 1 } });
+      schedulerStore.append({ runId: spec.runId, type: "run.initialized", occurredAt: spec.createdAt,
+        actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "run-initialized",
+        payload: { objective: spec.objective } });
+    }
+    if (spec.approvedSource !== undefined) {
+      registerApprovedSource(
+        schedulerStore,
+        spec.runId,
+        spec.approvedSource,
+        approvedSourceApprover(spec.approvedSource),
+      );
+    }
+    // Authenticated, saved per-run user intent. Before model calls, once only;
+    // a later durable opt-out remains authoritative through restart.
+    if (spec.answerReview === true) {
+      const approvalKey = `${spec.idempotencyKey}:answer-review-opt-in`;
+      if (!schedulerStore.readRun(spec.runId).some((event) => event.idempotencyKey === approvalKey)) {
+        schedulerStore.append({ runId: spec.runId, type: "answer.review_opted_in", occurredAt: spec.createdAt,
+          actor: { role: "user", id: "local-user" }, idempotencyKey: approvalKey, payload: {} });
+      }
+    }
     const schedulerEvents = schedulerStore.readRun(spec.runId);
+    // T7b: a saved spec without an initial source may still carry a later
+    // owner-registered current source in its durable events (post-creation
+    // approval or amendment). Verify those bytes exist and match before any
+    // consumer reads them; no mutable current-source state is duplicated
+    // into the spec store. Missing or drifted bytes fail closed here.
+    if (spec.planningPolicy?.version === 1) {
+      const currentManifest = currentEventRegisteredSourceManifest(schedulerEvents);
+      if (currentManifest !== undefined) {
+        let storedBytes: Uint8Array;
+        try {
+          storedBytes = await this.artifacts.get(currentManifest.artifactDigest);
+        } catch (error) {
+          throw new Error(
+            `Registered source artifact ${currentManifest.artifactDigest} is not provisioned for ${spec.runId}.`,
+            { cause: error },
+          );
+        }
+        assertManifestMatchesBytes(currentManifest, storedBytes);
+      }
+    }
     initializationStage = "session_store";
+    // T6b repair (OA-17): Runner-private durable creation records for
+    // this run, keyed to the real run and project ids. The temp-path
+    // search below reads these same records, so writers and the search
+    // always agree on keys.
+    const tempRecorders = createSchedulerTempRecorders(schedulerStore, { runId: spec.runId, projectId: spec.projectId }, () => new Date().toISOString());
     const sessions = new SqliteAgentSessionStore(
       join(runRoot, "sessions.sqlite"),
       this.artifacts,
@@ -593,7 +823,9 @@ export class NativeBuildFactory {
     initializationStage = "budget_ledger";
     const budgetLedger = new SqliteBudgetLedger(join(runRoot, "budget.sqlite"), {
       limitsFor: (scopeId) => {
-        if (scopeId !== spec.runId) throw new Error(`Unknown budget scope ${scopeId}.`);
+        if (scopeId === spec.runId) return { ...spec.budgetLimits };
+        if (isRunValidationBudgetScope(scopeId, spec.runId)) return {};
+        throw new Error(`Unknown budget scope ${scopeId}.`);
         return { ...spec.budgetLimits };
       },
     });
@@ -626,13 +858,31 @@ export class NativeBuildFactory {
     constructionResources.add("integration_workspace", () => integrationManager.cleanup());
     await integrationManager.initialize();
     await this.options.runtimeConstructionHooks?.afterAcquire?.("integration_workspace");
+    const docsV2 = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).projectDocsPolicyVersion === 2;
+    const snapshotVerificationOptions = docsV2 ? {
+      validateCanonicalState: async (input: { targetRevision: string; canonicalRevision: string }) =>
+        validateKernelSnapshotVerificationAdvance({
+          ...input,
+          projection: rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)),
+          integrationManager,
+          execute: requireGitRunner(gitContext).lifecycle("verification").run,
+        }),
+    } : {};
+    const verificationRevisionSource = docsV2 ? {
+      get revision(): string {
+        const revision = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).integrationRevision;
+        if (!revision) throw new Error("Final verification requires the authoritative canonical revision.");
+        return revision;
+      },
+    } : integrationManager;
     initializationStage = "verification_workspace";
     const verificationWorkspace = new VerificationWorkspaceManager({
       execute: requireGitRunner(gitContext).lifecycle("verification").run,
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
-      integrationManager,
+      integrationManager: verificationRevisionSource,
+      ...snapshotVerificationOptions,
     });
     constructionResources.add("verification_workspace", () => verificationWorkspace.cleanup());
     await this.options.runtimeConstructionHooks?.afterAcquire?.("verification_workspace");
@@ -642,25 +892,51 @@ export class NativeBuildFactory {
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
-      integrationManager,
+      ...(!docsV2 ? { integrationManager } : {}),
       kind: "independent-verifier",
+      ...snapshotVerificationOptions,
     });
+    // Every caller pins the exact scheduler-derived target revision, so no
+    // live-tip default: after a kernel snapshot the tip is a snapshot, not
+    // the verified target, and resolving it would strand the check.
     const architectCommandWorkspace = new VerificationWorkspaceManager({
       execute: requireGitRunner(gitContext).lifecycle("verification").run,
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
-      integrationManager,
+      ...(!docsV2 ? { integrationManager } : {}),
       kind: "independent-verifier",
       workspaceSuffix: "architect-commands",
     });
+    const deliveryWorkspaceFor = (suffix: string) => (targetRevision?: string) => new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
+      repositoryRoot: integrationManager.path,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      kind: "independent-verifier",
+      workspaceSuffix: suffix,
+      // Pinned to the exact task or integration revision under check.
+      ...(targetRevision ? { targetRevision } : { integrationManager }),
+    });
+    const deliveryReviewWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-review"));
+    const deliveryBoundaryWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-boundary"));
+    const testIntegrityBaselineWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("test-integrity-baseline"));
     constructionResources.add(
       "independent_verifier_workspace",
       async () => {
         try {
           await verifierWorkspace.cleanup();
         } finally {
-          await architectCommandWorkspace.cleanup();
+          try {
+            await architectCommandWorkspace.cleanup();
+          } finally {
+            try {
+              await deliveryReviewWorkspace.cleanup();
+            } finally {
+              try { await deliveryBoundaryWorkspace.cleanup(); }
+              finally { await testIntegrityBaselineWorkspace.cleanup(); }
+            }
+          }
         }
       },
     );
@@ -671,7 +947,7 @@ export class NativeBuildFactory {
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
-      integrationManager,
+      ...(!docsV2 ? { integrationManager } : {}),
       kind: "independent-verifier",
       workspaceSuffix: "baseline",
     });
@@ -680,6 +956,17 @@ export class NativeBuildFactory {
       () => verifierBaselineWorkspace.cleanup(),
     );
     await this.options.runtimeConstructionHooks?.afterAcquire?.("independent_verifier_baseline_workspace");
+    // T6b repair (R3 N-6): the disposable verification checkouts are
+    // creation-recorded here at creation time — not at the first cleanup
+    // search — so a crash before the first search still leaves an
+    // owner-visible record. Retained: their own manager removes them; the
+    // policy-gated search only reads these records. Bookkeeping never
+    // breaks creation (and re-creation is an idempotent no-op).
+    for (const workspacePath of nativeBuildCleanupRoots(this.options.stateDirectory, spec.runId)) {
+      try {
+        tempRecorders.recorded({ path: workspacePath, ownerRunId: spec.runId, kind: "directory", createdAt: new Date().toISOString(), retained: true });
+      } catch { /* bookkeeping never breaks workspace creation */ }
+    }
     if (
       schedulerEvents.length > 0 &&
       rebuildSchedulerProjection(schedulerEvents).verifier?.current?.status ===
@@ -742,14 +1029,25 @@ export class NativeBuildFactory {
       ? await (this.windowsProcessFactsPromise ??= probeProcessHostSemantics({
           ...createWindowsProcessSemanticProbeSource({
             ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+            registerCleanup: (cleanup) => { constructionResources.add("process_inspection", cleanup, true); },
           }),
           activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
         }))
       : undefined;
-    const windowsPortableBackend = process.platform === "win32" && windowsFacts
+    const windowsBackendKinds = new Set(windowsFacts ? selectWindowsProcessBackendKinds(windowsFacts) : []);
+    const windowsPortableBackend = process.platform === "win32" && windowsFacts && windowsBackendKinds.has("portable")
       ? createWindowsProcessBackend({ stateDirectory: join(runRoot, "process-backend"), jobObjects: "unavailable", semanticFacts: windowsFacts })
       : undefined;
-    const windowsBackendKinds = new Set(windowsFacts ? selectWindowsProcessBackendKinds(windowsFacts) : []);
+    let subprocessWorkloadsSettled = true;
+    if (windowsPortableBackend instanceof NativeOwnedProcessBackend) {
+      windowsPortableBackend.registerInspectionCleanup(cleanup => {
+        constructionResources.add("process_inspection", async () => {
+          if (!subprocessWorkloadsSettled) throw new Error("Subprocess cleanup must settle before inspection retirement.");
+          await cleanup(Date.now() + 5_000);
+        }, true);
+      });
+      await windowsPortableBackend.prepareInspection(Date.now() + 30_000);
+    }
     const processBackends = process.platform === "win32"
       ? [
           ...(windowsBackendKinds.has("job") ? [{
@@ -805,6 +1103,15 @@ export class NativeBuildFactory {
         artifacts: this.artifacts,
       }),
     });
+    subprocessWorkloadsSettled = false;
+    // Register immediately: startup reconciliation and grant construction may fail.
+    constructionResources.add("subprocess_runtime", async () => {
+      await executionGrants?.revokeAll("cleanup");
+      await subprocessKernel.runtime.reconcileStartup();
+      assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore);
+      subprocessKernel.readOnlyStore.close();
+      subprocessWorkloadsSettled = true;
+    }, true);
     await subprocessKernel.runtime.reconcileStartup();
     executionGrants = createExecutionGrantAuthority();
     commandExecution = createRuntimeBackedOneShotCommandExecutor({
@@ -824,13 +1131,16 @@ export class NativeBuildFactory {
       permissionProfile: spec.permissionProfile,
       workspacePath: this.options.projectRoot,
     });
-    constructionResources.add("subprocess_runtime", async () => {
-      await executionGrants.revokeAll("cleanup");
-      await subprocessKernel.runtime.reconcileStartup();
-      subprocessKernel.readOnlyStore.close();
-    }, true);
     }
     await this.options.runtimeConstructionHooks?.afterAcquire?.("subprocess_runtime");
+    bindCommandEvidenceReuse(commandExecution, spec.runId, {store: evidenceStore, artifacts: this.artifacts,
+      captureTree: async (cwd, request) => {
+        const captured = await gitContext?.workingTreeForCurrentCall?.(cwd);
+        if (captured) return captured;
+        // Model commands without their original call scope cannot borrow lifecycle authority.
+        if (!request.context.runnerInternal) return {status: "unknown", reason: "capture_unavailable"};
+        return await workingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd);
+      }});
     const initialHealth = providerHealthFromSchedulerEvents(
       schedulerStore.readRun(spec.runId)
     );
@@ -866,6 +1176,8 @@ export class NativeBuildFactory {
       git: gitContext,
       schedulerStore,
       router: workerRouter,
+      validationBudgetMsForTask: async ({ baselineRevision, workspacePath }) =>
+        readValidationBudgetMsAtRevision({ git: requireGitRunner(gitContext).lifecycle("inspection").run, cwd: workspacePath, revision: baselineRevision }),
       health,
       candidates: workerCandidates,
       models,
@@ -892,6 +1204,7 @@ export class NativeBuildFactory {
       executionGrants,
       contextManifests,
       recordContextPackText: spec.contextRecording === "full",
+      defectClassesFor: () => topDefectClasses(this.liveMemoryStore().defectClasses(spec.projectId)),
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -943,7 +1256,34 @@ export class NativeBuildFactory {
         create: (targetRevision: string) => architectCommandWorkspace.create(targetRevision),
         cleanup: () => architectCommandWorkspace.cleanup(),
       },
+      // T9 (EP41): answer-path command base revision — the integration
+      // baseline, since answered runs have no integration revision yet.
+      answerCommandRevision: integrationManager.revision,
       execution: commandExecution,
+      // C4 (AR-R11): live base-snapshot read for docs-v2 triage/planning
+      // turns. The revision is captured HERE, at each eligible context —
+      // never at factory construction — through the audited Git read path
+      // with case guards. No user-tree or unbound-HEAD read: only the
+      // immutable blob at the manager's current revision. A missing or
+      // unreadable blob reports null content at its revision (honestly
+      // unavailable); a read failure reports no snapshot at all.
+      readBaseSnapshot: async () => {
+        let revision: string;
+        try {
+          revision = integrationManager.revision;
+        } catch {
+          return undefined;
+        }
+        try {
+          const stored = await integrationManager.readHandoffSnapshotFile({
+            commit: revision,
+            path: "docs/project/STATE.md",
+          });
+          return { revision, content: stored.content };
+        } catch {
+          return undefined;
+        }
+      },
     });
     const verifierWorkspaceProvider = {
       workspaceKind: "independent-verifier" as const,
@@ -1096,6 +1436,389 @@ export class NativeBuildFactory {
         };
       },
     };
+    // T3b: the independent source-coverage reviewer. Reuses the verifier
+    // candidate pool (the OA-3 selector picks a distinct model when one
+    // exists), the shared sessions/artifacts/evidence/manifests, and the
+    // project root for read-only inspection. Source bytes still come from the
+    // artifact store by digest until T7 provisions the planning source reader.
+    const nativeCoverageReview = new NativeCoverageReviewRuntime({
+      git: gitContext,
+      executionGrants,
+      router: verifierRouter,
+      candidates,
+      models,
+      coverageRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      projectRoot: this.options.projectRoot,
+      authority: new SchedulerCoverageReviewAuthority(schedulerStore),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+    });
+    const coverageReviewDriver: CoverageReviewDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      review: async (input) => {
+        const result = await nativeCoverageReview.review({
+          ...input,
+          providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+            spec.budgetLimits.maxActiveMs,
+            budgetLedger.snapshot(spec.runId).effective.activeMs,
+            Date.now(),
+          ),
+        });
+        if (
+          (result.status === "reviewed" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find(
+            (item) => item.runtimeId === result.runtimeId,
+          );
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `coverage:${result.runtimeId}`,
+            );
+          }
+        }
+        return result;
+      },
+    };
+    // T9 (OA-5): the opt-in independent answer review, a sibling of the
+    // coverage reviewer with the same model/router/session/budget wiring.
+    // The BuildRuntime consults it only for triage-`answer` runs with a
+    // recorded user opt-in and no verdict yet.
+    const nativeAnswerReview = new NativeAnswerReviewRuntime({
+      git: gitContext,
+      executionGrants,
+      router: verifierRouter,
+      candidates,
+      models,
+      answerRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      projectRoot: this.options.projectRoot,
+      authority: new SchedulerAnswerReviewAuthority(schedulerStore),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+    });
+    const answerReviewDriver: AnswerReviewDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      review: async (input) => {
+        const result = await nativeAnswerReview.review({
+          ...input,
+          providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+            spec.budgetLimits.maxActiveMs,
+            budgetLedger.snapshot(spec.runId).effective.activeMs,
+            Date.now(),
+          ),
+        });
+        if (
+          (result.status === "reviewed" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find(
+            (item) => item.runtimeId === result.runtimeId,
+          );
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `answer:${result.runtimeId}`,
+            );
+          }
+        }
+        return result;
+      },
+    };
+    // T6a: the mandatory deliverable reviewer (a sibling of the coverage and
+    // answer reviewers with the same router/session/budget wiring) and the
+    // post-integration boundary checks. Reviewer inputs are read from durable
+    // state only (session change set, diff artifact, submit_task summary);
+    // commands run through FinalVerificationRuntime and the audited executor
+    // in disposable checkouts (independent-verifier kind).
+    // C5 (AR-R16): the authoritative accepted contract for review inputs,
+    // resolved from durable state only. The CURRENT ready revision is the
+    // only authority: an invalid, stale, dropped or mismatched reference
+    // fails closed before any provider call — there is no historical
+    // fallback on the live readiness path (resolveTaskContractAtRef stays
+    // available for historical operations only). The exact current ref
+    // rides with the contract so the reviewer renders pinned identity.
+    const resolveReviewContract = (projection: SchedulerProjection, task: BuildTask): { contract: ExecutionTaskContract; ref: TaskContractRef } => {
+      const resolution = resolveTaskContractReference(projection, task.id);
+      if (resolution.status === "current") return { contract: resolution.contract, ref: resolution.ref };
+      throw new Error(
+        `Deliverable review inputs unavailable: task ${task.id} has no current accepted contract (resolution: ${resolution.status}).`,
+      );
+    };
+    const durableSubmission = async (projection: SchedulerProjection, taskId: string): Promise<DurableSubmission> => {
+      const task = projection.tasks[taskId];
+      if (!task) throw new Error(`Unknown task ${taskId}.`);
+      const author = currentWorkerAuthor(projection, task);
+      if (!author) throw new Error(`Task ${taskId} has no recorded author runtime.`);
+      const session = await sessions.load(resolveWorkerSessionId(
+        spec.runId,
+        task.id,
+        task.attempt,
+        task.assignedWorkerId ?? standardWorkerId(task.id, task.attempt),
+        projection.runtime.workerAssignments[`${task.id}:${task.attempt}`]?.sessionId,
+      ));
+      if (!session.changeSet || session.changeSet.id !== task.changeSetId) {
+        throw new Error(`Submitted change set ${task.changeSetId} is unavailable.`);
+      }
+      const summary = submitTaskSummary(session.checkpoint?.messages ?? []);
+      if (!summary) throw new Error(`Task ${taskId} submit_task summary is not in its durable session.`);
+      return { changeSet: session.changeSet, summary, authorRuntimeId: author };
+    };
+    // W1 (AR-R27): cheap authority subset for the reuse decision — the
+    // baseline guard, the current contract and the durable submission
+    // bytes, but no candidate-pin workspace. The full loader below adds
+    // the test-integrity pin only when a real review actually proceeds.
+    const peekDeliverableReviewInputs = async (input: { task: BuildTask; projection: SchedulerProjection }): Promise<DeliverableReviewInputs> => {
+      await deliveryBoundaryDriver.captureInitialBaseline?.(input.task.id);
+      const resolved = resolveReviewContract(input.projection, input.task);
+      return loadDeliverableReviewInputs({
+        task: input.task,
+        submission: await durableSubmission(input.projection, input.task.id),
+        artifacts: this.artifacts,
+        contract: resolved.contract,
+        contractRef: resolved.ref,
+        evidenceStore,
+      });
+    };
+    const deliveryGit = requireGitRunner(gitContext).lifecycle("verification").run;
+    // The same ambient source the audited executor uses for children, so the
+    // project's own NODE_OPTIONS is kept when the reporter flags are added.
+    const deliveryNodeOptions = () => {
+      const source = this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment();
+      // Windows environment names are case-insensitive.
+      const name = Object.keys(source).find((key) => key.toUpperCase() === "NODE_OPTIONS");
+      return name ? source[name] : undefined;
+    };
+    const nativeDeliverableReview = new NativeDeliverableReviewRuntime({
+      store: schedulerStore,
+      architectRuntimeId: spec.architectRuntimeId,
+      git: gitContext,
+      executionGrants,
+      execution: commandExecution,
+      permissionProfile: spec.permissionProfile,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      router: verifierRouter,
+      candidates,
+      models,
+      reviewerRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      loadInputs: async ({ task, projection }) => {
+        const inputs = await peekDeliverableReviewInputs({ task, projection });
+        const resolved = resolveReviewContract(projection, task);
+        const fresh = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
+        if (fresh.testIntegrity?.baseline) {
+          const baseline = fresh.testIntegrity.baseline;
+          const candidateWorkspace = await deliveryReviewWorkspace.create(inputs.taskRevision);
+          const candidatePin = await (async () => {
+            try {
+              const candidateProfile = await inspectFinalVerificationExecutionProfile({ repositoryRoot: candidateWorkspace.path, targetRevision: inputs.taskRevision, execute: deliveryGit });
+              return await inspectTestIntegrityPin({ git: deliveryGit, repositoryRoot: candidateWorkspace.path,
+                revision: inputs.taskRevision, commands: candidateProfile.commands.tests ?? [] });
+            } finally { await deliveryReviewWorkspace.cleanup(); }
+          })();
+          inputs.testIntegrityReference = { planRevisionId: resolved.ref.revisionId, planDigest: resolved.ref.digest,
+            baselinePinDigest: baseline.pinDigest, candidatePinDigest: testIntegrityPinDigest(candidatePin),
+            baselineKind: baseline.kind, ...(baseline.kind === "executed_report" ? { baselineExecuted: baseline.executed } : {}), baselineRevision: baseline.pin.revision,
+            findings: testIntegrityProfileFindings(baseline.pin, candidatePin) };
+        }
+        return inputs;
+      },
+      peekInputs: async ({ task, projection }) => peekDeliverableReviewInputs({ task, projection }),
+      // W1 (F6): actual Git trees through the audited verification
+      // runner. Read-only rev-parse in the project checkout; any failure
+      // yields undefined (conservative reuse miss, never a label).
+      resolveTrees: async ({ baselineRevision, taskRevision }) => {
+        const treeOf = async (revision: string): Promise<string | undefined> => {
+          try {
+            const result = await deliveryGit({ cwd: this.options.projectRoot, args: ["rev-parse", `${revision}^{tree}`] });
+            if (result.exitCode !== 0) return undefined;
+            const tree = result.stdout.trim();
+            return /^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(tree) ? tree : undefined;
+          } catch {
+            return undefined;
+          }
+        };
+        const [baseTree, headTree] = await Promise.all([treeOf(baselineRevision), treeOf(taskRevision)]);
+        if (!baseTree || !headTree) return undefined;
+        return { baseTree, headTree };
+      },
+      // W2 (AR-R28): actual fix-delta diff between two Git trees through
+      // the audited verification runner. Read-only diff in the project
+      // checkout; file lists arrive NUL-delimited with exact path
+      // identity (no quoting, no source prefixes). Any failure yields
+      // undefined: the review runtime then records the explicit
+      // conservative fallback, never a manufactured label.
+      resolveFixDelta: async ({ priorBaseTree, priorHeadTree, headTree }) => {
+        const namesOf = async (from: string, to: string): Promise<string[] | undefined> => {
+          try {
+            const result = await deliveryGit({ cwd: this.options.projectRoot, args: ["diff", "-z", "--name-only", from, to, "--"] });
+            if (result.exitCode !== 0) return undefined;
+            // No trimming: NUL-delimited entries carry exact identity,
+            // including leading or trailing spaces.
+            return result.stdout.split("\0").filter((entry) => entry.length > 0);
+          } catch {
+            return undefined;
+          }
+        };
+        const textOf = async (from: string, to: string): Promise<string | undefined> => {
+          try {
+            const result = await deliveryGit({ cwd: this.options.projectRoot, args: ["diff", from, to, "--"] });
+            if (result.exitCode !== 0) return undefined;
+            return result.stdout;
+          } catch {
+            return undefined;
+          }
+        };
+        const [deltaFiles, deltaText] = await Promise.all([
+          namesOf(priorHeadTree, headTree),
+          textOf(priorHeadTree, headTree),
+        ]);
+        if (!deltaFiles || deltaText === undefined || !deltaText.trim()) {
+          // An empty fix diff carries no correction hunks: without byte
+          // proof of a change there is no delta to review.
+          if (deltaFiles && deltaFiles.length === 0 && deltaText !== undefined) {
+            const priorReviewed = priorBaseTree ? await namesOf(priorBaseTree, priorHeadTree) : undefined;
+            return { deltaFiles: [], deltaText: "", priorReviewed: priorReviewed ?? [] };
+          }
+          return undefined;
+        }
+        const priorReviewed = priorBaseTree ? await namesOf(priorBaseTree, priorHeadTree) : undefined;
+        return { deltaFiles, deltaText, priorReviewed: priorReviewed ?? [] };
+      },
+      workspace: {
+        create: async (taskRevision) => ({ path: (await deliveryReviewWorkspace.create(taskRevision)).path }),
+        cleanup: () => deliveryReviewWorkspace.cleanup(),
+      },
+      depth: createDeliveryDepthRunner({
+        runId: spec.runId,
+        git: deliveryGit,
+        artifacts: this.artifacts,
+        evidenceStore,
+        execution: commandExecution,
+        reviewWorkspace: deliveryReviewWorkspace,
+        probeFileSystem: deliveryProbeFileSystem,
+        ambientNodeOptions: deliveryNodeOptions,
+      }),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+      defectClassesFor: () => topDefectClasses(this.liveMemoryStore().defectClasses(spec.projectId)),
+      // T6b repair (EP50): the review runtime builds the OA-16
+      // track-record snapshot for the T5 change-risk author tier from
+      // these per-model outcomes.
+      defectRecorder: { projectId: spec.projectId, store: this.liveMemoryStore(), modelOutcomes: (projectId: string, runId?: string) => this.liveMemoryStore().modelReviewOutcomes(projectId, runId) },
+    });
+    const deliveryReviewDriver: DeliveryReviewDriver = {
+      review: async (input) => {
+        const result = await nativeDeliverableReview.review(input);
+        if (
+          (result.status === "reviewed" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find((item) => item.runtimeId === result.runtimeId);
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `delivery:${result.runtimeId}`,
+            );
+          }
+        }
+        return result;
+      },
+    };
+    const deliveryBoundaryDriver: DeliveryBoundaryDriver = createDeliveryBoundaryDriver({
+      runId: spec.runId,
+      git: deliveryGit,
+      artifacts: this.artifacts,
+      evidenceStore,
+      execution: commandExecution,
+      boundaryWorkspace: deliveryBoundaryWorkspace,
+      validationAccounting: { ledger: budgetLedger },
+      ambientNodeOptions: deliveryNodeOptions,
+      testIntegrity: {
+        projection: () => rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)),
+        baselineWorkspace: testIntegrityBaselineWorkspace,
+        recordBaseline: (taskId, baseline) => {
+          schedulerStore.append({ runId: spec.runId, type: "delivery.test_integrity_baseline_recorded", occurredAt: new Date().toISOString(),
+            actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "test-integrity-initial-report:v1",
+            payload: { taskId, ...baseline } });
+        },
+      },
+      changedFilesFor: async (taskId) => {
+        const projection = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
+        return [...(await durableSubmission(projection, taskId)).changeSet.changedPaths];
+      },
+    });
+    // C3c: kernel-derived trusted run-level requirement ids for the
+    // integration trailer. Resolves the CURRENT accepted ready plan plus
+    // the matching readyPlanTaskBinding revision/digest and contract id
+    // (taskPlanMembership); repair tasks resolve through their recorded
+    // parent contract. Missing/stale binding or contract fails closed —
+    // an unmapped repair never invents ids, and the trailer never falls
+    // back to task-local criterion ids, worker ChangeSet fields, or model
+    // summary text.
+    const trustedIntegrationRequirementIds = (
+      projection: SchedulerProjection,
+      taskId: string,
+    ): string[] => {
+      const ready = readyPlanIdentity(projection);
+      const binding = projection.readyPlanTaskBindings?.[taskId];
+      if (
+        !ready ||
+        !binding ||
+        binding.revisionId !== ready.revisionId ||
+        binding.digest !== ready.digest
+      ) {
+        throw new Error(
+          `Task ${taskId} is not bound to the current ready plan revision; integration refuses a stale binding.`
+        );
+      }
+      const task = projection.tasks[taskId];
+      const membership = taskPlanMembership(projection, taskId);
+      const contractId = membership.contractId ??
+        (task?.kind === "verification_repair" && task
+          ? repairParentContractId(projection, task)
+          : undefined);
+      const revision = projection.planning?.plan?.revisionsById[projection.planning.plan.currentRevisionId];
+      const contract = revision?.tasks.find((candidate) => candidate.id === contractId);
+      const requirementIds = (contract?.requirementIds ?? []).filter((id) => id.trim().length > 0);
+      if (!contract || requirementIds.length === 0) {
+        throw new Error(
+          `Task ${taskId} has no trusted ready-plan contract requirement ids; unmapped repair never invents ids.`
+        );
+      }
+      return [...requirementIds];
+    };
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {
         const projection = rebuildSchedulerProjection(
@@ -1114,7 +1837,13 @@ export class NativeBuildFactory {
         if (!session.changeSet || session.changeSet.id !== changeSetId) {
           throw new Error(`Submitted change set ${changeSetId} is unavailable.`);
         }
-        const result = await integrationManager.integrate(session.changeSet);
+        const policyOptions = projection.planningPolicyVersion === 1
+          ? {
+              planningPolicyVersion: 1 as const,
+              requirementIds: trustedIntegrationRequirementIds(projection, taskId),
+            }
+          : undefined;
+        const result = await integrationManager.integrate(session.changeSet, policyOptions);
         return result.status === "integrated"
           ? { status: "integrated", integrationRevision: result.integrationRevision }
           : {
@@ -1124,19 +1853,62 @@ export class NativeBuildFactory {
             };
       },
     };
+    // T6b repair (B2): the same ambient source the audited executor uses
+    // for children, so the project's own NODE_OPTIONS is kept when the
+    // reporter flags are added (mirrors the T6a delivery boundary).
+    const ambientNodeOptions = (): string | undefined => {
+      const source = this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment();
+      // Windows environment names are case-insensitive.
+      const name = Object.keys(source).find((key) => key.toUpperCase() === "NODE_OPTIONS");
+      return name ? source[name] : undefined;
+    };
+    // T6b repair (R2-B6): new-policy runs record the runner-owned junit
+    // report files (OA-17); legacy runs keep P6.5 behavior.
+    const policyTempRecorders = (): { tempRecorders?: typeof tempRecorders } =>
+      rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).planningPolicyVersion === 1 ? { tempRecorders } : {};
+    // C3c/F1: the scheduler-canonical integration revision (the accepted
+    // task revision), never the live physical tip: kernel stop snapshots
+    // advance the tip without changing the canonical revision, so checks
+    // must compare against the canonical value to stay exact.
+    const canonicalIntegrationRevision = (): string =>
+      rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).integrationRevision ?? "";
+    const assertCurrentVerificationGeneration = (input: { generationId: string; targetRevision: string }): void => {
+      if (!docsV2) return;
+      const projection = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
+      const generation = projection.finalVerification?.current;
+      if (!projection.integrationRevision || projection.integrationRevision !== input.targetRevision ||
+          generation?.generationId !== input.generationId || generation.targetRevision !== input.targetRevision) {
+        throw new Error("Final verification generation does not match the authoritative canonical revision.");
+      }
+    };
     const finalVerificationDriver: FinalVerificationCheckDriver = {
       executeCheck: async (input) => {
+        // C3c/F1: pin the workspace to the scheduler-authorized generation
+        // target. The shared manager resolves the live physical tip, which
+        // kernel snapshots advance mid-verification; remaining checks must
+        // still execute on the exact canonical revision.
+        assertCurrentVerificationGeneration(input);
+        const generationWorkspace = docsV2 ? new VerificationWorkspaceManager({
+          execute: requireGitRunner(gitContext).lifecycle("verification").run,
+          repositoryRoot: integrationManager.path,
+          stateDirectory: this.options.stateDirectory,
+          runId: spec.runId,
+          targetRevision: input.targetRevision,
+          ...snapshotVerificationOptions,
+        }) : verificationWorkspace;
         const verification = new FinalVerificationRuntime({
           git: requireGitRunner(gitContext).lifecycle("verification").run,
-          workspaceManager: verificationWorkspace,
+          workspaceManager: generationWorkspace,
           artifacts: this.artifacts,
           evidenceStore,
           runId: input.runId,
           taskId: input.taskId,
           attempt: input.attempt,
           generationId: input.generationId,
+          ambientNodeOptions: ambientNodeOptions(),
+          ...policyTempRecorders(),
           checkCategory: input.category,
-          currentIntegrationRevision: () => integrationManager.revision,
+          currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return docsV2 ? canonicalIntegrationRevision() : integrationManager.revision; },
           managedProcessService: this.liveManagedProcesses(),
           managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
           browserBackend: this.browserBackend,
@@ -1147,12 +1919,16 @@ export class NativeBuildFactory {
           ),
           execution: commandExecution,
         });
+        const releaseTier = input.category === "tests" ? input.executionProfile?.tiers?.release : undefined;
+        const effectiveProfile = releaseTier?.length
+          ? { ...input.executionProfile, commands: { ...input.executionProfile.commands, tests: projectTierCommandsToRuntimeCommands(releaseTier) }, reports: undefined }
+          : input.executionProfile;
         const result = await verification.runCategory(
           {
             plan: input.plan,
-            executionProfile: input.executionProfile,
-            ...(input.executionProfile?.commands
-              ? { commands: input.executionProfile.commands }
+            executionProfile: effectiveProfile,
+            ...(effectiveProfile?.commands
+              ? { commands: effectiveProfile.commands }
               : {}),
             ...(input.executionProfile?.runtimeSmoke
               ? { runtimeSmoke: input.executionProfile.runtimeSmoke }
@@ -1172,13 +1948,125 @@ export class NativeBuildFactory {
         };
       },
     };
+    // T6b (OA-14): the production failing-test rerun. Only the tests
+    // category with directly invoked node --test commands can be narrowed
+    // mechanically; anything else reports unsupported with its reason, and
+    // the pump charges the cycle instead of claiming an unperformed rerun.
+    const flakyIsolation: FlakyIsolationDriver = {
+      rerunFailingTests: async (input) => {
+        if (input.category !== "tests") {
+          return { status: "unsupported", note: `Flaky rerun supports only the tests category, not ${input.category}.` };
+        }
+        const releaseTier = input.executionProfile?.tiers?.release;
+        const commands = releaseTier?.length ? projectTierCommandsToRuntimeCommands(releaseTier) : input.executionProfile.commands?.tests;
+        if (!commands || commands.length === 0) {
+          return { status: "unsupported", note: "Flaky rerun requires recorded tests commands." };
+        }
+        const narrowed: FinalVerificationCommand[] = [];
+        let testNamePattern: string | undefined;
+        for (const command of commands) {
+          const filtered = narrowNodeTestCommand(command, input.failingTestIds);
+          if (filtered) {
+            narrowed.push(filtered);
+            continue;
+          }
+          // T6b repair (R2-B4): the package `run test` command is narrowed
+          // through its node --test NODE_OPTIONS (see FinalVerificationRuntime).
+          if (isPackageRunTestCommand(command)) {
+            narrowed.push(command);
+            testNamePattern = flakyRerunPattern(input.failingTestIds);
+            continue;
+          }
+          return { status: "unsupported", note: `Flaky rerun cannot filter ${command.label}: only node --test commands (direct or the package test script) support failing-test selection.` };
+        }
+        assertCurrentVerificationGeneration(input);
+        const rerunVerification = new FinalVerificationRuntime({
+          git: requireGitRunner(gitContext).lifecycle("verification").run,
+          workspaceManager: docsV2 ? new VerificationWorkspaceManager({
+            execute: requireGitRunner(gitContext).lifecycle("verification").run,
+            repositoryRoot: integrationManager.path,
+            stateDirectory: this.options.stateDirectory,
+            runId: spec.runId,
+            targetRevision: input.targetRevision,
+            ...snapshotVerificationOptions,
+          }) : verificationWorkspace,
+          artifacts: this.artifacts,
+          evidenceStore,
+          runId: input.runId,
+          taskId: input.taskId,
+          attempt: input.attempt,
+          generationId: `${input.generationId}:flaky-rerun`,
+          ambientNodeOptions: ambientNodeOptions(),
+          ...(testNamePattern !== undefined ? { testNamePattern } : {}),
+          ...policyTempRecorders(),
+          checkCategory: "tests",
+          currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return docsV2 ? canonicalIntegrationRevision() : integrationManager.revision; },
+          managedProcessService: this.liveManagedProcesses(),
+          managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
+          browserBackend: this.browserBackend,
+          validatePortLease: async (lease) => await finalVerificationPorts.validate(
+            lease,
+            spec.runId,
+            input.targetRevision,
+          ),
+          execution: commandExecution,
+        });
+        const result = await rerunVerification.runCategory(
+          {
+            plan: input.plan,
+            executionProfile: { ...input.executionProfile, commands: { ...input.executionProfile.commands, tests: narrowed } },
+            commands: { ...input.executionProfile.commands, tests: narrowed },
+            ...(input.signal ? { signal: input.signal } : {}),
+          },
+          "tests",
+        );
+        // T6b repair (B2): the owner real-counts verdict (see judgeFlakyRerun).
+        // Flaky requires THIS rerun's report to show the named tests executed
+        // and passed; anything else is a consistent failure or not performed.
+        // (A green exit with no matching tests is not flaky.)
+        const rerunReports = result.check.facts.flatMap((fact) => fact.kind === "command" && fact.report ? [fact.report] : []);
+        const verdict = judgeFlakyRerun({ checkGreen: result.check.green, reports: rerunReports, failingTestIds: [...input.failingTestIds] });
+        if (result.check.green && verdict.flaky) {
+          return {
+            status: "rerun",
+            green: true,
+            evidenceIds: [...result.check.evidenceIds],
+            note: verdict.note,
+          };
+        }
+        if (result.check.green) {
+          return {
+            status: "rerun",
+            green: false,
+            evidenceIds: [...result.check.evidenceIds],
+            note: verdict.note,
+          };
+        }
+        return {
+          status: "rerun",
+          green: false,
+          evidenceIds: [...result.check.evidenceIds],
+          note: verdict.note,
+        };
+      },
+    };
     const runtime = new BuildRuntime({
+      architectId: NATIVE_BUILD_ARCHITECT_ACTOR_ID,
       runId: spec.runId,
       initialObjective: spec.objective,
       runPolicy: spec.runPolicy,
+      // T7b: the stable saved-spec clock for post-creation source approval.
+      specCreatedAt: spec.createdAt,
+      // C2b (CD-5): per-run handoff file options from the spec; recorded
+      // durably in `run.policy_configured` by the runtime.
+      specCopy: spec.specCopy ?? true,
+      handoffFiles: spec.handoffFiles ?? "commit",
       store: schedulerStore,
       workerDriver,
       architectDriver,
+      // C3b (AR-R09): the stop-notes one-shot runs on the run's actual
+      // Architect runtime (same models, ledger and manifests as turns).
+      stopNotes: architectDriver,
       integrationDriver,
       finalVerificationDriver,
       finalVerificationCleanupDriver: {
@@ -1211,13 +2099,69 @@ export class NativeBuildFactory {
       },
       independentVerifier,
       planCritic: planCriticDriver,
+      coverageReview: coverageReviewDriver,
+      answerReview: answerReviewDriver,
+      deliveryReview: deliveryReviewDriver,
+      architectReadLedger: ledger,
+      deliveryBoundary: deliveryBoundaryDriver,
+      planningHostCapabilities: () => buildCoverageHostCapabilities({
+        coverageCandidateRuntimeIds: spec.verifierRuntimeIds,
+        recordedAt: new Date().toISOString(),
+      }),
+      // T7a: the kernel-approved source bytes for planning reads, verified
+      // against the manifest digest on every read (drift fails closed).
+      planningSourceReader: async (manifest) => {
+        const bytes = await this.artifacts.get(manifest.artifactDigest);
+        assertManifestMatchesBytes(manifest, bytes);
+        return new Uint8Array(bytes);
+      },
+      ...(spec.planningPolicy !== undefined
+        ? { planningPolicy: { version: spec.planningPolicy.version } }
+        : {}),
       repairPlanLimit: spec.repairPlanLimit,
+      projectId: spec.projectId,
+      flakyIsolation,
+      cleanupAfterAttempt: async (context) => {
+        // T6b repair (N-6): the attempt path scopes the process search to
+        // the attempt's sessions; verification phase boundaries keep the
+        // run-wide search because no worker attempt is active there.
+        const processes = await searchOwnedProcesses(
+          this.liveManagedProcesses(),
+          spec.runId,
+          context.sessionIds === undefined ? undefined : { sessionIds: context.sessionIds },
+        );
+        // T6b repair (R3 N-6): the disposable verification checkouts were
+        // creation-recorded when the build was created (above); the search
+        // here only reads records. Retained: git worktrees are removed only
+        // by their own manager, which owns workspace + metadata together.
+        const cleanupRoots = nativeBuildCleanupRoots(this.options.stateDirectory, spec.runId);
+        const tempPaths = await searchRunnerOwnedTempLeftovers({
+          records: Object.values(rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).tempRecords ?? {}),
+          ownerRunId: spec.runId,
+          ownerProjectId: spec.projectId,
+          runnerRoots: cleanupRoots,
+          excludedRoots: [this.options.projectRoot],
+          cleared: (path) => tempRecorders.cleared(path),
+        });
+        return { processes, tempPaths };
+      },
+      reviewOutcomeRecorder: {
+        projectId: spec.projectId,
+        record: (outcome) => this.liveMemoryStore().recordModelReviewOutcome({ projectId: spec.projectId, ...outcome }),
+      },
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {
           workspaceId: `${task.id}:attempt:${attempt}`,
           baselineRevision: integrationManager.revision,
         });
+        // T6b repair (OA-17): task workspaces stay live for the whole run
+        // under their own manager lifecycle, so they are recorded retained
+        // for owner visibility and are never deletion candidates while
+        // workers run. Bookkeeping never breaks workspace creation.
+        try {
+          tempRecorders.recorded({ path: workspace.path, ownerRunId: spec.runId, kind: "directory", createdAt: new Date().toISOString(), retained: true });
+        } catch { /* bookkeeping never breaks workspace creation */ }
         return {
           path: workspace.path,
           workspaceId: workspace.workspaceId,
@@ -1243,6 +2187,19 @@ export class NativeBuildFactory {
       artifacts: this.artifacts,
       projectDocs: {
         commit: (input) => integrationManager.commitProjectDocuments(input),
+        commitHandoffSnapshot: (input) => integrationManager.commitHandoffSnapshot(input),
+        readHandoffSnapshotFile: (input) => integrationManager.readHandoffSnapshotFile(input),
+        readIntegrationTipFile: (input) => integrationManager.readIntegrationTipFile(input),
+        findTrackedFileWithDigest: (input) => integrationManager.findTrackedFileWithDigest(input),
+        // C2b repair B1-R: the withdrawn-stop reconciliation lookup and the
+        // baseline revision are production-wired (both required on the
+        // port, so dropping one is a type error, never a silent skip).
+        findHandoffSnapshotCommit: (input) => integrationManager.findHandoffSnapshotCommit(input),
+        readIntegrationBaselineRevision: () => integrationManager.readIntegrationBaselineRevision(),
+        // C2c (NF-1 residual): the pre-render spec stageability check is
+        // production-wired (required on the port, so dropping it is a type
+        // error, never a silently wrong `spec:` line).
+        canStageSpecPath: (input) => integrationManager.canStageSpecPath(input),
         relateRevision: (input) => integrationManager.relateToDocumentTip(input),
       },
     });
@@ -1355,6 +2312,7 @@ export class NativeBuildFactory {
           independentVerifier:
             projectIndependentVerifierObservability(schedulerProjection),
           contextManifestCount: contextManifests.listRun(spec.runId).length,
+          planning: projectPlanningObservability(schedulerProjection),
         };
       },
       contextManifests: () => contextManifests.listRun(spec.runId),
@@ -1732,6 +2690,19 @@ export class NativeBuildFactory {
         id: spec.runId,
         projection,
         events: (afterSequence = 0) => readEvents(afterSequence),
+        planningReadiness: () => {
+          const current = projection();
+          return projectPlanningReadiness({ runId: spec.runId, projection: current, explicitStartAuthorized: current.planning?.readiness === "ready" && explicitStartBlocked(current) === undefined });
+        },
+        planningExport: () => {
+          const current = projection();
+          return buildPlanningExportDocument({ runId: spec.runId, projection: current,
+            readiness: projectPlanningReadiness({ runId: spec.runId, projection: current, explicitStartAuthorized: current.planning?.readiness === "ready" && explicitStartBlocked(current) === undefined }),
+            exportedAt: new Date().toISOString() });
+        },
+        registerPlanningSource: async () => readOnlyError(),
+        amendPlanningSource: async () => readOnlyError(),
+        authorizeExplicitPlanStart: async () => readOnlyError(),
         step: async () => readOnlyError(),
         runUntilBlocked: async () => readOnlyError(),
         pause: () => readOnlyError(),
@@ -1924,6 +2895,12 @@ export class NativeBuildFactory {
       } catch (error) {
         failures.push(error);
       }
+      // Incomplete construction still owns these shared prerequisites. In
+      // particular, a workspace retry may need the same managed service and
+      // provider configuration; do not retire them on a failed close pass.
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Could not close native Build factory resources.");
+      }
       if (this.memoryStore) {
         try {
           this.memoryStore.close();
@@ -2044,10 +3021,20 @@ class NativeBuildResourceCleanupStack {
 
   private async closeEntries(mode: NativeBuildResourceCleanupMode): Promise<void> {
     const failures: unknown[] = [];
-    for (const entry of [...this.entries].reverse()) {
+    const ordered = [
+      ...this.entries.filter(entry => entry.stage !== "process_inspection").reverse(),
+      ...this.entries.filter(entry => entry.stage === "process_inspection").reverse(),
+    ];
+    for (const entry of ordered) {
       if (mode === "handle" && !entry.closeOnHandle) continue;
       if (mode === "failure" ? entry.completedOnFailure : entry.completedOnHandle) continue;
       try {
+        if (entry.stage === "execution_host_binding" && failures.length > 0) {
+          throw new Error("Execution-host binding is retained while dependent cleanup remains incomplete.");
+        }
+        if (entry.stage === "process_inspection" && failures.length > 0) {
+          throw new Error("Process inspection is retained while dependent cleanup remains incomplete.");
+        }
         await this.hooks?.beforeCleanup?.(entry.stage);
         await entry.cleanup();
         if (mode === "failure") {
@@ -2668,11 +3655,18 @@ export function buildNativeVerifierInspectionRequest(input: {
   const changes = acceptedChangeSessions(input.projection, input.sessions)
     .map((session) => {
       const changeSet = session.changeSet!;
+      // The session actor id is the worker assignment id (worker_Task_Attempt),
+      // never a provider runtime: resolve the recorded assignment runtime so
+      // verifier selection can exclude the author's model. The actor id
+      // remains as fallback, which selection still rejects loudly when unknown.
+      const assignment = Object.values(input.projection.runtime.workerAssignments).find(
+        (candidate) => candidate.sessionId === session.sessionId,
+      );
       return {
         taskId: changeSet.taskId,
         attempt: input.projection.tasks[changeSet.taskId]?.attempt ?? 1,
         changeSetId: changeSet.id,
-        authorRuntimeId: session.actor.id,
+        authorRuntimeId: assignment?.runtimeId ?? session.actor.id,
         baselineRevision: changeSet.baselineRevision,
         taskRevision: changeSet.taskRevision,
         changedPaths: [...changeSet.changedPaths],
@@ -3241,11 +4235,95 @@ function historicalSkillMetadata(value: unknown, index: number): SkillMetadata {
  * sidecars beside the opened file. Historical reads therefore open a private
  * copy outside Runner state, including WAL-visible committed content.
  */
+/**
+ * T6b repair (OA-17): backstop search over Runner-private scheduler
+ * creation records. Deletes only a path whose record this run wrote itself
+ * AND that is still under a runner-owned root and outside the workspace /
+ * project tree. Symlinks and junctions are observed with lstat and never
+ * followed; anything unproven is retained and reported (probe F).
+ */
+export async function searchRunnerOwnedTempLeftovers(input: {
+  records: readonly TempCreationRecord[];
+  ownerRunId: string;
+  ownerProjectId: string;
+  runnerRoots: readonly string[];
+  excludedRoots: readonly string[];
+  cleared: (path: string) => void;
+}): Promise<LeftoverCleanupRecord[]> {
+  const findings: LeftoverCleanupRecord[] = [];
+  const expected = { ownerRunId: input.ownerRunId, ownerProjectId: input.ownerProjectId };
+  for (const record of filterRecordsForOwner(input.records, expected)) {
+    let observation: { exists: boolean; isSymbolicLink: boolean; kindMatches: boolean };
+    try {
+      const entry = await lstat(record.path);
+      observation = { exists: true, isSymbolicLink: entry.isSymbolicLink(), kindMatches: record.kind === "file" ? entry.isFile() : entry.isDirectory() };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        observation = { exists: false, isSymbolicLink: false, kindMatches: true };
+      } else {
+        findings.push({ path: record.path, ownership: "proven", action: "retained", reason: `Recorded path could not be inspected (${(error as Error).message}); retained and reported.` });
+        continue;
+      }
+    }
+    const decision = decideRecordedTempCleanup(record, expected, input.runnerRoots, observation, input.excludedRoots);
+    if (decision.ownership === "proven" && decision.action === "cleaned") {
+      if (observation.exists) {
+        try {
+          await rm(record.path, { recursive: true, force: true });
+        } catch (error) {
+          findings.push({ path: record.path, ownership: "proven", action: "retained", reason: `Owned leftover could not be removed (${(error as Error).message}); retained and reported.` });
+          continue;
+        }
+      }
+      try { input.cleared(record.path); } catch { /* bookkeeping only */ }
+    }
+    findings.push(decision);
+  }
+  return findings;
+}
+
+/**
+ * T6b repair (R2-B6): the exact runner-owned roots the OA-17 temp search
+ * may delete under. Each is one disposable workspace this run's factory
+ * creates under Runner state (verification, independent verifier,
+ * Architect command copy, delivery review/boundary checkouts, verifier
+ * baseline). The system temp directory, the Runner state directory, and
+ * the run root are never roots: a record pointing anywhere else in them
+ * (a user folder, credentials) is retained, never deleted.
+ */
+export function nativeBuildCleanupRoots(stateDirectory: string, runId: string): string[] {
+  // This helper only reads `.path` (pure path math, never git): the owner
+  // is explicitly the unavailable runner, so a stray execution fails
+  // closed instead of running ownerless.
+  const at = (workspaceSuffix?: string, kind?: "independent-verifier") => new VerificationWorkspaceManager({
+    execute: unavailableGitRunner,
+    repositoryRoot: stateDirectory,
+    stateDirectory,
+    runId,
+    ...(kind ? { kind } : {}),
+    ...(workspaceSuffix ? { workspaceSuffix } : {}),
+  }).path;
+  return [
+    at(),
+    at(undefined, "independent-verifier"),
+    at("architect-commands", "independent-verifier"),
+    at("delivery-review", "independent-verifier"),
+    at("delivery-boundary", "independent-verifier"),
+    at("test-integrity-baseline", "independent-verifier"),
+    at("baseline", "independent-verifier"),
+  ];
+}
+
 async function materializeHistoricalSqliteSnapshot(source: string): Promise<{
   directory: string;
   databasePath: string;
 }> {
   const directory = await mkdtemp(join(tmpdir(), "aiboard-historical-sqlite-"));
+  // T6b repair (OA-17): historical snapshots are tracked in the in-memory
+  // ownership list at the call site and removed by closeHistoricalResources
+  // with retry; the creation is validated here and never written to a
+  // shared registry, so executed workloads cannot forge ownership.
+  recordTempCreation({ path: directory, ownerRunId: "historical-read", ownerProjectId: "runner-state", createdAt: new Date().toISOString(), kind: "directory" });
   const databasePath = join(directory, basename(source));
   try {
     await copyFile(source, databasePath);
@@ -3341,4 +4419,66 @@ function assertHistoricalTerminalState(value: unknown): asserts value is Histori
   if (value !== "completed" && value !== "failed" && value !== "stopped") {
     throw new Error("Historical Build requires an authoritative terminal RunSupervisor state.");
   }
+}
+
+/**
+ * T6a: the OA-11 probe's file system on the disposable review checkout. The
+ * probe applies each mutant there and restores the original bytes; this file
+ * is the filesystem-mutation owner for those writes.
+ */
+function deliveryProbeFileSystem(workspacePath: string): MutationFileSystem {
+  return {
+    // The probe reads originals by project-relative path.
+    readFile: (path) => readFileSync(isAbsolute(path) ? path : join(workspacePath, path), "utf8"),
+    writeFile: (path, content) => writeFileSync(path, content, "utf8"),
+    createDisposableCopy: () => workspacePath,
+    cleanupDisposableCopy: () => undefined,
+    join: (root, path) => join(root, path),
+  };
+}
+
+
+/** Verify the exact linear kernel snapshot chain against durable, tree-bound receipts. */
+export async function validateKernelSnapshotVerificationAdvance(input: {
+  targetRevision: string;
+  canonicalRevision: string;
+  projection: SchedulerProjection;
+  integrationManager: IntegrationManager;
+  execute: import("./git-repository.js").GitRunner;
+}): Promise<void> {
+  const { projection, integrationManager, targetRevision, canonicalRevision } = input;
+  const refuse = (): never => { throw new Error("Canonical checkout revision changed without exact kernel snapshot authority."); };
+  // N6: before the first landing no integration revision is recorded, so the
+  // durably recorded creation baseline (delivery.test_integrity_initialized,
+  // stamped before verification exists) anchors the requested target instead.
+  // Authority comes only from durable records, never from the request.
+  const authoritativeRevision = projection.integrationRevision ?? projection.testIntegrity?.initialRevision;
+  if (projection.projectDocsPolicyVersion !== 2 || authoritativeRevision === undefined || authoritativeRevision !== targetRevision) refuse();
+  if (canonicalRevision === targetRevision) return;
+  const ancestor = await input.execute({ cwd: integrationManager.path, args: ["merge-base", "--is-ancestor", targetRevision, canonicalRevision], allowFailure: true });
+  if (ancestor.exitCode !== 0) refuse();
+  const history = await input.execute({ cwd: integrationManager.path, args: ["log", "--reverse", "--format=%H%x00%P%x00", `${targetRevision}..${canonicalRevision}`] });
+  const fields = history.stdout.split("\0");
+  let parent = targetRevision;
+  let count = 0;
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const commit = fields[index]!.trim();
+    if (!commit) continue;
+    const parents = fields[index + 1]!.trim();
+    const matches = (projection.projectDocs?.snapshots ?? []).filter((record) => record.commit === commit);
+    if (matches.length !== 1 || parents !== parent || matches[0]!.parent !== parent) refuse();
+    const receipt = matches[0]!;
+    let audited = await integrationManager.findHandoffSnapshotCommit({ snapshotKey: `stop-snapshot:${receipt.stopSequence}` });
+    if (!audited || audited.commit !== commit) audited = await integrationManager.findHandoffSnapshotCommit({ snapshotKey: `handoff-snapshot:${receipt.stopSequence}` });
+    if (!audited || audited.commit !== commit || audited.parent !== parent) refuse();
+    const stored = await integrationManager.readHandoffSnapshotFile({ commit, path: "docs/project/STATE.md" });
+    if (JSON.stringify([...stored.paths].sort()) !== JSON.stringify([...receipt.paths].sort())) refuse();
+    if (receipt.bodyDigest) {
+      if (!stored.content || !verifyHandoffSnapshotDigest(stored.content) ||
+          !stored.content.split(/\r?\n/)[0]!.endsWith(`body_sha256: ${receipt.bodyDigest}`)) refuse();
+    } else if (!receipt.stateSkippedReason) refuse();
+    parent = commit;
+    count += 1;
+  }
+  if (count === 0 || parent !== canonicalRevision) refuse();
 }

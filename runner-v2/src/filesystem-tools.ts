@@ -1,8 +1,9 @@
 import { languageInvocation } from "./language-intelligence.js";
+import { preserveUtf8Bom } from "./encoding-safety.js";
 import { createHash } from "node:crypto";
 import { fencedWrite, fencedPatch, fencedMove, fencedDelete, filesystemMutationFailure,
   FilesystemMutationError, isFilesystemMutation } from "./filesystem-mutation-fence.js";
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
@@ -33,6 +34,42 @@ type Input = Record<string, unknown>;
 const MAX_READ_LINES = 500;
 const MAX_READ_RANGE_BYTES = 6 * 1024;
 const MAX_PATCH_EDITS = 50;
+
+/** T10 (M9): model-facing search contract: literal match, skipped outputs. */
+export const FS_SEARCH_DESCRIPTION =
+  "Search text files under `path` (literal, case-insensitive by default; set regex/caseSensitive to change). Git-ignored, generated, and build-output paths are skipped, but tracked source files are still searched; narrow `path` for large repos.";
+
+/** T10 (M9): model-facing list contract: ignored paths skipped, plus name-based build-output skips without repository metadata. */
+export const FS_LIST_DESCRIPTION =
+  "List workspace files. Git-ignored paths are skipped; without repository metadata, build-output directories (bin, obj, build, target, dist, out, .venv, venv, __pycache__) are skipped too.";
+
+/** T10 (M9): directory names treated as build output in every language. */
+export const BUILD_OUTPUT_DIR_NAMES: ReadonlySet<string> = new Set([
+  ".git",
+  "node_modules",
+  "bin",
+  "obj",
+  "out",
+  "dist",
+  "build",
+  "target",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+  ".tox",
+]);
+
+/**
+ * T10 (M9): true when any path segment is a build-output directory.
+ * Compared case-insensitively (`Obj`, `Build`); a mere prefix such as
+ * `build-notes.md` is not a match.
+ */
+export function isBuildOutputPath(path: string): boolean {
+  return path
+    .split("/")
+    .some((segment) => BUILD_OUTPUT_DIR_NAMES.has(segment.toLowerCase()));
+}
 
 export function createFilesystemTools(
   options: FilesystemToolsOptions = {}
@@ -68,6 +105,9 @@ export function createFilesystemTools(
       execute: async (input, context) => {
         const path = toolPath(context, input.path as string);
         if (matchesPolicyPath(context, path, options.hiddenPaths)) {
+          return hiddenPathError(context, path);
+        }
+        if (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths)) {
           return hiddenPathError(context, path);
         }
         const bytes = await readFile(path);
@@ -190,6 +230,9 @@ export function createFilesystemTools(
         if (matchesPolicyPath(context, path, options.hiddenPaths)) {
           return hiddenPathError(context, path);
         }
+        if (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths)) {
+          return hiddenPathError(context, path);
+        }
         const details = await lstat(path);
         return {
           content: [
@@ -211,7 +254,7 @@ export function createFilesystemTools(
       },
     },
     {
-      definition: definition("fs.list", "List workspace files", true, "none"),
+      definition: definition("fs.list", FS_LIST_DESCRIPTION, true, "none"),
       validate: objectWithString("path"),
       assessAccess: (input) => pathAccess(input, "read"),
       execute: async (input, context) => {
@@ -238,15 +281,15 @@ export function createFilesystemTools(
             return true;
           }, context.signal);
         }
-        const visibleEntries = entries.filter(
-          (entry) => !matchesNormalizedPolicyPath(entry.path, options.hiddenPaths)
-        );
+        const visibleEntries = hasPolicyPaths(options.hiddenPaths)
+          ? await filterHiddenListEntries(context, entries, options.hiddenPaths)
+          : entries;
         visibleEntries.sort((left, right) => left.path.localeCompare(right.path));
         return { content: [json({ entries: visibleEntries, truncated: entries.length >= maxEntries })], isError: false };
       },
     },
     {
-      definition: definition("fs.search", "Search text files", true, "none"),
+      definition: definition("fs.search", FS_SEARCH_DESCRIPTION, true, "none"),
       validate: objectWithStrings("path", "pattern"),
       assessAccess: (input) => pathAccess(input, "read"),
       execute: async (input, context) => {
@@ -267,9 +310,14 @@ export function createFilesystemTools(
           return error("invalid_pattern", cause instanceof Error ? cause.message : "Invalid pattern.");
         }
         const matches: Array<{ path: string; line: number; column: number; text: string }> = [];
+        let searchWorkspaceCanonical: string | null | undefined;
+        if (hasPolicyPaths(options.hiddenPaths) && context.workspacePath) {
+          searchWorkspaceCanonical = await canonicalOrNull(context.workspacePath);
+        }
         const searchFile = async (path: string): Promise<boolean> => {
           if (matches.length >= limit) return false;
           if (matchesPolicyPath(context, path, options.hiddenPaths)) return true;
+          if (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths, searchWorkspaceCanonical)) return true;
           const bytes = await readFile(path);
           if (!isUtf8Text(bytes)) return true;
           const lines = decodeText(bytes).split(/\r?\n/);
@@ -334,7 +382,10 @@ export function createFilesystemTools(
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
-          const bytes = fencedWrite(context, path, Buffer.from(input.content as string),
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, path, options.protectedPaths)) {
+            return protectedPathError(context, path);
+          }
+          const bytes = fencedWrite(context, path, (original) => preserveUtf8Bom(original, Buffer.from(input.content as string)),
             input.expectedSha256, input.createDirectories === true);
           return await successRevision(context, path, bytes, options.diagnostics);
         }),
@@ -352,6 +403,9 @@ export function createFilesystemTools(
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
+            return protectedPathError(context, path);
+          }
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
           const next = fencedPatch(context, path, input.expectedSha256, (bytes) => {
@@ -381,7 +435,7 @@ export function createFilesystemTools(
                 : edit.replace;
               nextText = nextText.replace(search, replacement);
             }
-            return Buffer.from(nextText);
+            return preserveUtf8Bom(bytes, Buffer.from(nextText));
           });
           return await successRevision(context, path, next, options.diagnostics);
         }),
@@ -406,6 +460,12 @@ export function createFilesystemTools(
           if (matchesPolicyPath(context, destination, options.protectedPaths)) {
             return protectedPathError(context, destination);
           }
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, source, options.protectedPaths)) {
+            return protectedPathError(context, source);
+          }
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, destination, options.protectedPaths)) {
+            return protectedPathError(context, destination);
+          }
           fencedMove(context, source, destination, input.createDirectories === true);
           return {
             content: [json({ source: displayPath(context, source), destination: displayPath(context, destination) })],
@@ -425,6 +485,9 @@ export function createFilesystemTools(
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
+            return protectedPathError(context, path);
+          }
+          if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
           fencedDelete(context, path, input.recursive === true);
@@ -570,6 +633,12 @@ function repositoryListEntries(
 }
 
 function entryIsSearchable(entry: RepositoryEntry, input: Input): boolean {
+  // T10 (M9): repository metadata decides for tracked entries — a tracked
+  // non-generated file under a build-output name (bin/obj/target) stays
+  // searchable and is governed only by the gitState/kind flags below.
+  // Name-based skips apply only without tracking proof; filesystem-only
+  // traversal (walk) keeps the conservative directory-name skips.
+  if (entry.gitState !== "tracked" && isBuildOutputPath(entry.path) && input.includeIgnored !== true) return false;
   if (entry.gitState === "ignored" && input.includeIgnored !== true) return false;
   if (entry.kind === "generated" && input.includeGenerated !== true) return false;
   if (entry.kind === "vendored" && input.includeVendored !== true) return false;
@@ -747,13 +816,19 @@ function matchesNormalizedPolicyPath(
   policyPaths: readonly string[] | undefined,
 ): boolean {
   const candidate = normalizePolicyPath(path);
+  const foldedCandidate = foldHostPath(candidate);
   return (policyPaths ?? []).some((policyPath) => {
     const protectedPath = normalizePolicyPath(policyPath);
-    if (!protectedPath.includes("/")) {
-      return candidate.split("/").includes(protectedPath);
+    const foldedProtected = foldHostPath(protectedPath);
+    if (!foldedProtected.includes("/")) {
+      return foldedCandidate.split("/").includes(foldedProtected);
     }
-    return candidate === protectedPath || candidate.startsWith(`${protectedPath}/`);
+    return foldedCandidate === foldedProtected || foldedCandidate.startsWith(`${foldedProtected}/`);
   });
+}
+
+function foldHostPath(path: string): string {
+  return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
 function matchesPolicyPath(
@@ -762,6 +837,65 @@ function matchesPolicyPath(
   policyPaths: readonly string[] | undefined,
 ): boolean {
   return matchesNormalizedPolicyPath(displayPath(context, path), policyPaths);
+}
+
+// Canonical target check for existing objects only. Lexical matching stays
+// first; this reuses it on the workspace-canonical display path so exact,
+// basename, and nested scopes are preserved. Missing (ENOENT) returns false
+// to keep missing/new-target behavior; other inspection failures throw.
+async function matchesCanonicalPolicyTarget(
+  context: ToolExecutionContext,
+  absolutePath: string,
+  policyPaths: readonly string[] | undefined,
+  workspaceCanonical?: string | null,
+): Promise<boolean> {
+  if (!hasPolicyPaths(policyPaths)) return false;
+  if (!context.workspacePath) return false;
+  const canonicalRoot = workspaceCanonical !== undefined
+    ? workspaceCanonical
+    : await canonicalOrNull(context.workspacePath);
+  if (canonicalRoot === null) return false;
+  const canonicalTargetPath = await canonicalOrNull(absolutePath);
+  if (canonicalTargetPath === null) return false;
+  if (!isWithin(canonicalRoot, canonicalTargetPath)) return false;
+  const canonicalDisplay = (relative(canonicalRoot, canonicalTargetPath) || ".").split(sep).join("/");
+  return matchesNormalizedPolicyPath(canonicalDisplay, policyPaths);
+}
+
+async function canonicalOrNull(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function hasPolicyPaths(policyPaths: readonly string[] | undefined): boolean {
+  return !!policyPaths && policyPaths.length > 0;
+}
+
+async function filterHiddenListEntries(
+  context: ToolExecutionContext,
+  entries: Array<{ path: string; type: string }>,
+  hiddenPaths: readonly string[] | undefined,
+): Promise<Array<{ path: string; type: string }>> {
+  if (!hasPolicyPaths(hiddenPaths)) return entries;
+  if (!context.workspacePath) {
+    return entries.filter((entry) => !matchesNormalizedPolicyPath(entry.path, hiddenPaths));
+  }
+  const canonicalRoot = await canonicalOrNull(context.workspacePath);
+  if (canonicalRoot === null) {
+    return entries.filter((entry) => !matchesNormalizedPolicyPath(entry.path, hiddenPaths));
+  }
+  const visible: Array<{ path: string; type: string }> = [];
+  for (const entry of entries) {
+    if (matchesNormalizedPolicyPath(entry.path, hiddenPaths)) continue;
+    const absolute = resolve(context.workspacePath, entry.path);
+    if (await matchesCanonicalPolicyTarget(context, absolute, hiddenPaths, canonicalRoot)) continue;
+    visible.push(entry);
+  }
+  return visible;
 }
 
 function hiddenPathError(
@@ -795,7 +929,7 @@ async function walk(
   const entries = await readdir(root, { withFileTypes: true });
   entries.sort((left, right) => left.name.localeCompare(right.name));
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    if (BUILD_OUTPUT_DIR_NAMES.has(entry.name.toLowerCase())) continue;
     const path = resolve(root, entry.name);
     const type = entry.isDirectory() ? "directory" : entry.isFile() ? "file" : entry.isSymbolicLink() ? "symlink" : "other";
     if (!(await visit(path, type))) return;

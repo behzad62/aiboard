@@ -174,7 +174,7 @@ async function main(): Promise<void> {
         const state = supervisor.getRun(spec.runId).state;
         return isTerminalRunState(state) ? state : undefined;
       },
-      prepareSpec: (spec) => buildFactory.prepareSpec(spec),
+      prepareSpec: (spec, options) => buildFactory.prepareSpec(spec, options),
       shouldRecoverSpec: (spec) =>
         !isTerminalRunState(supervisor.getRun(spec.runId).state),
       validateRecoveredSpec: async (spec) => {

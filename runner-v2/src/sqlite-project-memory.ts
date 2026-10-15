@@ -16,6 +16,7 @@ import type {
 import { rebuildProjectMemories } from "./project-memory.js";
 import type { AgentActor } from "./agent-contracts.js";
 import type { HistoricalReadProvenance } from "./historical-read-provenance.js";
+import { defectClassId, normalizeDefectClass, type DefectClassRecord, type DefectFindingRecorder, type ModelReviewOutcomeRecord, type RecordedDefectFinding } from "./defect-history.js";
 
 interface MemoryRow {
   sequence: number;
@@ -32,8 +33,21 @@ export interface SqliteProjectMemoryStoreOptions {
   /** Opens an existing durable memory log without schema or mutation authority. */
   readOnly?: boolean;
 }
+const MODEL_REVIEW_OUTCOMES_DDL = `
+  CREATE TABLE model_review_outcomes (
+    project_id TEXT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    accepted INTEGER NOT NULL DEFAULT 0,
+    defect_found INTEGER NOT NULL DEFAULT 0,
+    recorded_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (project_id, run_id, model_id, task_id)
+  );
+`;
 
-export class SqliteProjectMemoryStore implements ProjectMemoryStore {
+
+export class SqliteProjectMemoryStore implements ProjectMemoryStore, DefectFindingRecorder {
   private readonly database: DatabaseSync;
   private readonly readOnly: boolean;
 
@@ -60,7 +74,141 @@ export class SqliteProjectMemoryStore implements ProjectMemoryStore {
       );
       CREATE INDEX IF NOT EXISTS idx_project_memory_events
       ON project_memory_events(project_id, sequence);
+      CREATE TABLE IF NOT EXISTS defect_classes (
+        project_id TEXT NOT NULL,
+        class_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (project_id, class_id)
+      );
+      CREATE TABLE IF NOT EXISTS defect_class_sources (
+        project_id TEXT NOT NULL,
+        class_id TEXT NOT NULL,
+        review_id TEXT NOT NULL,
+        finding_id TEXT NOT NULL,
+        recorded_at TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (project_id, class_id, review_id, finding_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_defect_classes_project ON defect_classes(project_id, count DESC);
     `);
+    // T6b repair (N-4): plan task ids recur across runs, so the outcome
+    // key carries the run id. A pre-N4 table is rebuilt with the new key;
+    // its rows keep the legacy '' run bucket.
+    this.ensureModelReviewOutcomeRunColumn();
+  }
+
+  /**
+   * T6b (OA-15): one row per (class, review, finding) source; the class
+   * count is recomputed from its sources, so a retried tool call cannot
+   * double-count.
+   */
+  recordDefectFinding(input: RecordedDefectFinding): void {
+    this.assertWritable();
+    if (!input.projectId.trim() || !input.taskId.trim() || !input.reviewId.trim() || !input.findingId.trim()) {
+      throw new Error("Defect finding requires project, task, review and finding identity.");
+    }
+    const label = normalizeDefectClass(input.label);
+    const classId = defectClassId(input.projectId, label);
+    this.database.prepare(`
+      INSERT OR IGNORE INTO defect_class_sources (project_id, class_id, review_id, finding_id, recorded_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(input.projectId, classId, input.reviewId, input.findingId, input.recordedAt);
+    const sources = this.database.prepare(`
+      SELECT COUNT(*) AS sources FROM defect_class_sources WHERE project_id = ? AND class_id = ?
+    `).get(input.projectId, classId) as { sources: number };
+    this.database.prepare(`
+      INSERT INTO defect_classes (project_id, class_id, label, count, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, class_id) DO UPDATE SET
+        label = excluded.label, count = excluded.count, updated_at = excluded.updated_at
+    `).run(input.projectId, classId, label, sources.sources, input.recordedAt);
+  }
+
+  /**
+   * T6b repair (OA-16/B7, N-4): the per-model outcome for one reviewed task of one run,
+   * aggregated without erasing earlier rounds. defect_found is sticky:
+   * once any review round of the task found a defect, the outcome keeps
+   * counting it, while accepted/recorded_at follow the latest round.
+   */
+  recordModelReviewOutcome(input: {
+    readonly projectId: string;
+    readonly runId?: string;
+    readonly modelId: string;
+    readonly taskId: string;
+    readonly accepted: boolean;
+    readonly defectFound: boolean;
+    readonly recordedAt: string;
+  }): void {
+    this.assertWritable();
+    if (!input.projectId.trim() || !input.modelId.trim() || !input.taskId.trim()) {
+      throw new Error("Model review outcome requires project, model and task identity.");
+    }
+    this.database.prepare(`
+      INSERT INTO model_review_outcomes (project_id, run_id, model_id, task_id, accepted, defect_found, recorded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, run_id, model_id, task_id) DO UPDATE SET
+        accepted = excluded.accepted, defect_found = model_review_outcomes.defect_found | excluded.defect_found, recorded_at = excluded.recorded_at
+    `).run(input.projectId, input.runId ?? "", input.modelId, input.taskId, input.accepted ? 1 : 0, input.defectFound ? 1 : 0, input.recordedAt);
+  }
+
+  defectClasses(projectId: string): DefectClassRecord[] {
+    return this.database.prepare(`
+      SELECT project_id, class_id, label, count FROM defect_classes
+      WHERE project_id = ? ORDER BY count DESC, label ASC
+    `).all(projectId) as unknown as DefectClassRecord[];
+  }
+
+  modelReviewOutcomes(projectId: string, runId?: string): ModelReviewOutcomeRecord[] {
+    const scoped = runId === undefined ? "" : " AND run_id = ?";
+    const args = runId === undefined ? [projectId] : [projectId, runId];
+    return (this.database.prepare(`
+      SELECT project_id, run_id, model_id, task_id, accepted, defect_found, recorded_at
+      FROM model_review_outcomes WHERE project_id = ?${scoped}
+    `).all(...args) as Array<Record<string, unknown>>).map((row) => ({
+      projectId: row.project_id as string,
+      runId: (row.run_id as string) ?? "",
+      modelId: row.model_id as string,
+      taskId: row.task_id as string,
+      accepted: row.accepted === 1,
+      defectFound: row.defect_found === 1,
+      recordedAt: row.recorded_at as string,
+    }));
+  }
+
+  private hasColumn(tableName: string, columnName: string): boolean {
+    try {
+      return (
+        this.database
+          .prepare(`PRAGMA table_info(${tableName})`)
+          .all() as Array<{ name?: unknown }>
+      ).some((column) => column.name === columnName);
+    } catch {
+      return false;
+    }
+  }
+  private ensureModelReviewOutcomeRunColumn(): void {
+    if (!this.hasTable("model_review_outcomes")) {
+      this.database.exec(MODEL_REVIEW_OUTCOMES_DDL);
+      return;
+    }
+    if (this.hasColumn("model_review_outcomes", "run_id")) return;
+    // T6b repair (R3 N-2): the pre-N4 rebuild runs in one transaction,
+    // so a crash in the middle loses no rows.
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.exec("ALTER TABLE model_review_outcomes RENAME TO legacy_model_review_outcomes");
+      this.database.exec(MODEL_REVIEW_OUTCOMES_DDL);
+      this.database.exec(`INSERT INTO model_review_outcomes
+        (project_id, run_id, model_id, task_id, accepted, defect_found, recorded_at)
+        SELECT project_id, '', model_id, task_id, accepted, defect_found, recorded_at
+        FROM legacy_model_review_outcomes`);
+      this.database.exec("DROP TABLE legacy_model_review_outcomes");
+      this.database.exec("COMMIT");
+    } catch (error) {
+      try { this.database.exec("ROLLBACK"); } catch { /* rollback is best-effort */ }
+      throw error;
+    }
   }
 
   propose(input: ProposeProjectMemoryInput): ProjectMemoryEntry {

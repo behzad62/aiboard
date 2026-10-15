@@ -264,6 +264,62 @@ test("verifierTwoPass is an optional boolean that legacy recovery leaves unset",
   assert.equal(recovered.verifierTwoPass, undefined);
 });
 
+test("planningPolicy is an opt-in-only versioned field: absent stays legacy, unsupported versions are rejected, clone preserves it", () => {
+  const base = { ...validSpec, runPolicy: "finish" as const, budgetLimits: {} };
+
+  // Legacy: field absent entirely — every existing spec stays valid, unchanged.
+  assert.doesNotThrow(() => validateBuildSpec(base));
+  assert.equal(base.planningPolicy, undefined);
+  assert.equal(cloneBuildSpec(base).planningPolicy, undefined);
+
+  // Newly provisioned opt-in: a supported version validates and clones.
+  const opted = { ...base, planningPolicy: { version: 1 as const } };
+  assert.doesNotThrow(() => validateBuildSpec(opted));
+  const cloned = cloneBuildSpec(opted);
+  assert.deepEqual(cloned.planningPolicy, { version: 1 });
+  // Clone must not alias the source object.
+  (cloned.planningPolicy as { version: number }).version = 999;
+  assert.deepEqual(cloneBuildSpec(opted).planningPolicy, { version: 1 });
+
+  // An old reader (this build's PLANNING_POLICY_VERSIONS) rejects an
+  // unsupported/unrecognized new-policy version rather than guessing.
+  assert.throws(
+    () =>
+      validateBuildSpec({
+        ...base,
+        planningPolicy: { version: 2 as unknown as 1 },
+      }),
+    /planningPolicy version is unsupported/,
+  );
+
+  // M3: an unknown extra field is rejected explicitly rather than silently
+  // dropped by clone.
+  assert.throws(
+    () =>
+      validateBuildSpec({
+        ...base,
+        planningPolicy: { version: 1, extra: "unexpected" } as unknown as typeof opted.planningPolicy,
+      }),
+    /unknown fields/,
+  );
+
+  // Legacy recovery never retrofits the opt-in onto an old spec.
+  const recovered = recoverLegacyBuildSpec({
+    version: 1,
+    runId: "run_legacy_planning_policy",
+    projectId: "project_legacy_planning_policy",
+    objective: "Legacy objective",
+    architectRuntimeId: "openai:architect",
+    workerRuntimeIds: ["openai:worker"],
+    maxConcurrency: 1,
+    permissionProfile: "project",
+    budgetLimits: {},
+    createdAt: "2026-08-27T00:00:00.000Z",
+    idempotencyKey: "build-spec:run_legacy_planning_policy",
+  });
+  assert.equal(recovered.planningPolicy, undefined);
+});
+
 test("native Build specs recover exactly and idempotently", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-"));
   const database = join(root, "build-specs.sqlite");
@@ -299,6 +355,47 @@ test("native Build specs recover exactly and idempotently", () => {
 
     store = new SqliteBuildSpecStore(database);
     assert.deepEqual(store.get("run_1"), spec);
+    assert.deepEqual(store.list(), [spec]);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("I1: planningPolicy round-trips through the SQLite store exactly (save/close/reopen/get)", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-planning-policy-"));
+  const database = join(root, "build-specs.sqlite");
+  const spec = {
+    version: 2 as const,
+    runId: "run_planning_policy",
+    projectId: "project_planning_policy",
+    objective: "Evidence-gated planning opt-in.",
+    architectRuntimeId: "chatgpt:gpt-5.5",
+    workerRuntimeIds: ["chatgpt:gpt-5.4"],
+    verifierRuntimeIds: ["anthropic:claude-sonnet-4.5"],
+    alwaysRequireIndependentVerifier: false,
+    maxConcurrency: 1,
+    permissionProfile: "full" as const,
+    runPolicy: "finish" as const,
+    budgetLimits: {},
+    createdAt: "2026-09-23T00:00:00.000Z",
+    idempotencyKey: "build-spec:run_planning_policy",
+    planningPolicy: { version: 1 as const },
+  };
+  try {
+    let store = new SqliteBuildSpecStore(database);
+    const saved = store.save(spec);
+    assert.deepEqual(saved.planningPolicy, { version: 1 });
+    store.close();
+
+    // I1 (honest scope): this proves round-trip fidelity for a reader built
+    // from T1 onward (this same store implementation). It does NOT prove a
+    // pre-T1 reader rejects unsupported new-policy active data — see the
+    // module doc-comment and docs/runner-v2/evidence-gated-planning.md for
+    // that documented limitation.
+    store = new SqliteBuildSpecStore(database);
+    const reopened = store.get("run_planning_policy");
+    assert.deepEqual(reopened.planningPolicy, { version: 1 });
     assert.deepEqual(store.list(), [spec]);
     store.close();
   } finally {

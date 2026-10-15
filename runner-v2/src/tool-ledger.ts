@@ -1,4 +1,5 @@
 import type {
+  AgentActor,
   ToolAccessRequest,
   ToolCallBlock,
   ToolEffect,
@@ -25,6 +26,7 @@ export interface ToolLedgerEvent {
   extensionId?: string;
   effect?: ToolEffect;
   access?: ToolAccessRequest;
+  actor?: AgentActor;
   outsideWorkspace?: boolean;
 }
 
@@ -39,6 +41,7 @@ export interface BeginToolInvocation {
   replaySafe: boolean;
   effect: ToolEffect;
   access: ToolAccessRequest;
+  actor?: AgentActor;
   outsideWorkspace: boolean;
   occurredAt: string;
 }

@@ -762,11 +762,15 @@ test("unavailable independent verification creates a typed user-selection pause"
     const paused = await runtime.step();
     assert.equal(paused.status, "paused");
     assert.equal(paused.action, "verifier_selection_required");
+    const requirement = fixture.store.readRun(RUN_ID).findLast((event) => event.type === "verifier.selection_required");
+    assert.ok(requirement);
+    assert.equal(runtime.projection().verifierSelection?.requiredSequence, requirement.sequence);
     assert.deepEqual(runtime.projection().verifierSelection, {
       status: "required",
       reason: "no_independent_healthy_capability_match",
       requiredCapabilities: ["code"],
       candidateRuntimeIds: ["google:verifier", "fallback:verifier"],
+      requiredSequence: requirement.sequence,
     });
     assert.equal(runtime.projection().projectHandoff, undefined);
   } finally {
@@ -794,11 +798,15 @@ test("verifier budget exhaustion creates a typed user-selection pause", async ()
     const paused = await runtime.step();
     assert.equal(paused.status, "paused");
     assert.equal(paused.action, "verifier_selection_required");
+    const requirement = fixture.store.readRun(RUN_ID).findLast((event) => event.type === "verifier.selection_required");
+    assert.ok(requirement);
+    assert.equal(runtime.projection().verifierSelection?.requiredSequence, requirement.sequence);
     assert.deepEqual(runtime.projection().verifierSelection, {
       status: "required",
       reason: "budget_exhausted",
       requiredCapabilities: ["code"],
       candidateRuntimeIds: ["google:verifier", "fallback:verifier"],
+      requiredSequence: requirement.sequence,
     });
     assert.equal(runtime.projection().projectHandoff, undefined);
   } finally {
@@ -955,9 +963,15 @@ test("typed verifier selection resumes with the selected runtime", async () => {
       () => runtime.resume("forbidden-generic-resume"),
       /verifier selection/i,
     );
+    const offer = runtime.projection().verifierSelection;
+    assert.equal(offer?.status, "required");
+    const requirement = fixture.store.readRun(RUN_ID).findLast((event) => event.type === "verifier.selection_required");
+    assert.ok(requirement);
+    assert.equal(offer?.requiredSequence, requirement.sequence);
     const selected = runtime.selectVerifierRuntime(
       "fallback:verifier",
       "select:fallback",
+      requirement.sequence,
     );
     assert.equal(selected.status, "running");
     assert.equal((await runtime.step()).action, "verifier_verdict_submitted");

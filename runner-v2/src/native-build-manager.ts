@@ -12,7 +12,19 @@ import type {
   BuildControlPlane,
   UserGuidanceControlInput,
 } from "./build-runtime-registry.js";
-import type { BuildSpecStore, NativeBuildSpec } from "./build-spec.js";
+import { validateBuildSpec, type BuildSpecStore, type NativeBuildSpec } from "./build-spec.js";
+import {
+  stableProvisioningRequestsMatch,
+  type ApprovedSourceInputV1,
+  type ProvisioningPrepareOptions,
+} from "./native-planning-provisioner.js";
+import type {
+  ExplicitStartRequestV1,
+  PlanningExportDocument,
+  PlanningReadinessSnapshot,
+  ValidatedSourceAmendmentRequest,
+} from "./planning-controls.js";
+export type { ApprovedSourceInputV1 } from "./native-planning-provisioner.js";
 import type { NativeBuildUsageProjection } from "./model-usage-projection.js";
 import type {
   ProjectHandoffChoice,
@@ -21,7 +33,7 @@ import type {
   FinalVerificationGenerationProjection,
   SchedulerProjection,
 } from "./scheduler-store.js";
-import { assertBuildCompletionReady } from "./scheduler-store.js";
+import { assertProjectHandoffSelectionAccepted, handoffSnapshotAtCurrentStop } from "./scheduler-store.js";
 import type {
   IntegrationFileSnapshot,
   ProjectHandoffResult,
@@ -76,7 +88,10 @@ export interface NativeBuildManagerOptions {
   specs: BuildSpecStore;
   createRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
   /** Stamps runner-owned durable identity before a new Build spec is persisted. */
-  prepareSpec?(spec: NativeBuildSpec): Promise<NativeBuildSpec>;
+  prepareSpec?(
+    spec: NativeBuildSpec,
+    options?: ProvisioningPrepareOptions,
+  ): Promise<NativeBuildSpec>;
   /** Rejects a stored spec before recovery can construct its runtime or model clients. */
   validateRecoveredSpec?(spec: NativeBuildSpec): Promise<void>;
   /** Allows callers with an authoritative lifecycle store to omit settled runs from recovery. */
@@ -111,6 +126,17 @@ type NativeBuildHandleShutdownPhase =
 
 interface NativeBuildHandleShutdownState {
   phase: NativeBuildHandleShutdownPhase;
+}
+
+function readExistingBuildSpec(specs: BuildSpecStore, runId: string): NativeBuildSpec | undefined {
+  try {
+    return specs.get(runId);
+  } catch (error) {
+    if (error instanceof Error && error.message === `Unknown Build spec ${runId}.`) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 export class NativeBuildManager implements BuildControlPlane {
@@ -274,10 +300,39 @@ export class NativeBuildManager implements BuildControlPlane {
     return { failures: Object.freeze([...failures]) };
   }
 
-  async create(spec: NativeBuildSpec): Promise<SchedulerProjection> {
+  async create(
+    spec: NativeBuildSpec,
+    options?: ProvisioningPrepareOptions,
+  ): Promise<SchedulerProjection> {
     return await this.serialized(async () => {
+      validateBuildSpec(spec);
+      const existing = readExistingBuildSpec(this.options.specs, spec.runId);
+      if (existing) {
+        if (
+          !stableProvisioningRequestsMatch(existing, spec, options?.approvedSourceInput)
+        ) {
+          throw new Error(`Build spec idempotency conflict for ${spec.runId}.`);
+        }
+        const handle = await this.ensureRuntime(existing);
+        return handle.runtime.projection();
+      }
+      if (options?.approvedSourceInput !== undefined) {
+        if (spec.planningPolicy?.version !== 1) {
+          throw new Error(
+            "An approved source requires explicit planningPolicy version 1 opt-in; refusing to change the run default."
+          );
+        }
+        if (spec.approvedSource !== undefined) {
+          throw new Error(
+            "Specify either raw approved-source bytes or a prepared approvedSource manifest, not both."
+          );
+        }
+        if (!this.options.prepareSpec) {
+          throw new Error("Approved-source provisioning requires a spec preparation hook.");
+        }
+      }
       const prepared = this.options.prepareSpec
-        ? await this.options.prepareSpec(spec)
+        ? await this.options.prepareSpec(spec, options)
         : spec;
       const saved = this.options.specs.save(prepared);
       const handle = await this.ensureRuntime(saved);
@@ -300,7 +355,7 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async observability(runId: string): Promise<BuildObservabilitySnapshot> {
-    return await this.require(runId).observability();
+    return await this.withRuntimeActivity(async () => await this.require(runId).observability());
   }
 
   contextManifests(runId: string): import("./context-manifest-store.js").ContextManifest[] {
@@ -308,11 +363,11 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async transcript(runId: string, afterSequence = 0): Promise<BuildTranscriptPage> {
-    return await this.require(runId).transcript(afterSequence);
+    return await this.withRuntimeActivity(async () => await this.require(runId).transcript(afterSequence));
   }
 
   async files(runId: string): Promise<IntegrationFileSnapshot> {
-    return await this.require(runId).files();
+    return await this.withRuntimeActivity(async () => await this.require(runId).files());
   }
 
   events(runId: string, afterSequence = 0): SchedulerEvent[] {
@@ -354,8 +409,11 @@ export class NativeBuildManager implements BuildControlPlane {
     );
   }
 
+  private readonly activatedRuns = new Set<string>();
+
   activate(runId: string): void {
     this.assertOpen();
+    this.activatedRuns.add(runId);
     const handle = this.requireMutable(runId);
     if (this.pumps.has(runId)) return;
     const projection = handle.runtime.projection();
@@ -445,9 +503,18 @@ export class NativeBuildManager implements BuildControlPlane {
   ): Promise<SchedulerProjection> {
     const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () => {
-      const projection = handle.runtime.pause(reason, idempotencyKey);
+      // C3a repair cycle 2 (R2-1a): record the owner pause/cancel,
+      // then quiesce FIRST -- quiesceRun() stops the run's running
+      // command and browser, which is what ends an in-flight step.
+      // The snapshot call never waits for a step (the runtime returns
+      // at once while one is in flight; the step boundary takes the
+      // snapshot), so the pause never blocks on a long command or
+      // model call, on docs-v1 runs included. The call stays
+      // optional for older test doubles; it never throws.
+      handle.runtime.pause(reason, idempotencyKey);
       await handle.finalVerificationCleanup?.quiesceRun();
-      return projection;
+      await handle.runtime.commitStopSnapshotIfStopped?.();
+      return handle.runtime.projection();
     });
   }
 
@@ -471,11 +538,12 @@ export class NativeBuildManager implements BuildControlPlane {
   async selectArchitectHandoff(
     runId: string,
     runtimeId: string,
-    idempotencyKey: string
+    idempotencyKey: string,
+    requiredSequence?: number
   ): Promise<SchedulerProjection> {
     const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () =>
-      handle.runtime.selectArchitectHandoff(runtimeId, idempotencyKey)
+      handle.runtime.selectArchitectHandoff(runtimeId, idempotencyKey, requiredSequence)
     );
   }
 
@@ -483,13 +551,97 @@ export class NativeBuildManager implements BuildControlPlane {
     runId: string,
     runtimeId: string,
     idempotencyKey: string,
+    requiredSequence?: number,
   ): Promise<SchedulerProjection> {
     const handle = this.requireMutable(runId);
     const projection = await this.withRuntimeActivity(async () =>
-      handle.runtime.selectVerifierRuntime(runtimeId, idempotencyKey)
+      handle.runtime.selectVerifierRuntime(runtimeId, idempotencyKey, requiredSequence)
     );
     this.wake(runId);
     return projection;
+  }
+
+  /**
+   * T7b: bounded owner approval of the specification bytes for a source-free
+   * run. The saved spec is never rewritten; the kernel-derived manifest is
+   * recorded through the authoritative user event only.
+   */
+  async registerPlanningSource(
+    runId: string,
+    input: { approvedSource: ApprovedSourceInputV1; idempotencyKey: string },
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.registerPlanningSource(input)
+    );
+    // Semantic planning controls do not start a never-activated supervisor pump.
+    if (this.activatedRuns.has(runId)) this.wake(runId);
+    return projection;
+  }
+
+  /**
+   * T7b: bounded owner amendment of the approved source. The predecessor
+   * must be the exact current manifest; the saved initial source is never
+   * rewritten; bytes land content-addressed before the user event.
+   */
+  async amendPlanningSource(
+    runId: string,
+    request: ValidatedSourceAmendmentRequest,
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.amendPlanningSource(request)
+    );
+    // Semantic planning controls do not start a never-activated supervisor pump.
+    if (this.activatedRuns.has(runId)) this.wake(runId);
+    return projection;
+  }
+
+  /**
+   * T7b: semantic current-plan execution authorization. The named identities
+   * must equal the current ready identity; stale identities, drift, and
+   * unauthorized callers are refused before any worker or runtime effect.
+   */
+  async authorizeExplicitPlanStart(
+    runId: string,
+    request: ExplicitStartRequestV1,
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.authorizeExplicitPlanStart(request)
+    );
+    // Semantic planning controls do not start a never-activated supervisor pump.
+    if (this.activatedRuns.has(runId)) this.wake(runId);
+    return projection;
+  }
+
+  /**
+   * T7b: canonical plan-readiness snapshot. Read-only: works on historical
+   * terminals, appends nothing, dispatches nothing.
+   */
+  async setAnswerReview(runId: string, optedIn: boolean, idempotencyKey: string): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(() => handle.runtime.setAnswerReview(optedIn, idempotencyKey));
+    if (this.activatedRuns.has(runId)) this.wake(runId);
+    return projection;
+  }
+
+  planningReadiness(runId: string): PlanningReadinessSnapshot {
+    return this.require(runId).runtime.planningReadiness();
+  }
+
+  planningSchedule(runId: string): import("./planning-view-contracts.js").NativePlanningSchedule | undefined {
+    const handle = this.require(runId);
+    return handle.historical ? undefined : handle.runtime.planningSchedule();
+  }
+
+  /**
+   * T7b: on-demand planning export through the existing C1 renderer.
+   * Read-only: works on historical terminals, appends nothing, dispatches
+   * nothing, writes no project file.
+   */
+  planningExport(runId: string): PlanningExportDocument {
+    return this.require(runId).runtime.planningExport();
   }
 
   async extendRepairCycles(
@@ -567,7 +719,18 @@ export class NativeBuildManager implements BuildControlPlane {
       if (projection.projectHandoff?.status !== "requested") {
         throw new Error("Final project handoff is not awaiting user selection.");
       }
-      assertBuildCompletionReady(projection);
+      // C2b (N1): the manager pre-check IS the kernel acceptance -- the one
+      // shared predicate, called here BEFORE the handle can mutate the
+      // project and by the reducer when the selection is recorded. The
+      // revision is the one the selection will carry: the current-stop
+      // snapshot head when a snapshot was committed, else the canonical
+      // integration revision. A snapshot that does not continue the chain
+      // (probe G) is refused here, so the project is never mutated first
+      // and refused after.
+      assertProjectHandoffSelectionAccepted(
+        projection,
+        handoffSnapshotAtCurrentStop(projection)?.head ?? projection.integrationRevision,
+      );
       const result = await handle.projectHandoff(choice);
       const selected = handle.runtime.selectProjectHandoff(
         choice,
@@ -757,6 +920,9 @@ export class NativeBuildManager implements BuildControlPlane {
           await handle.finalVerificationCleanup?.quiesceRun();
         }
         result = { status: "paused", action: "no_mechanical_progress" };
+        // C3a repair cycle 1 (B-1): snapshot the pump's own pause. No
+        // step is in flight (runUntilBlocked returned); never throws.
+        await handle.runtime.commitStopSnapshotIfStopped?.();
       }
       if (
         result.status === "blocked" &&
@@ -771,6 +937,10 @@ export class NativeBuildManager implements BuildControlPlane {
       );
       result = finalized.result;
       compaction = finalized.compaction;
+      // C3a repair cycle 1 (B-1): snapshot any stop the steps left
+      // behind -- the recording-abort failure resolves in the pump, not
+      // in a step. Runs after finalization; never throws.
+      await handle.runtime.commitStopSnapshotIfStopped?.();
       this.options.onPumpResult?.(runId, result);
     } catch (error) {
       const projection = handle.runtime.projection();
@@ -785,6 +955,9 @@ export class NativeBuildManager implements BuildControlPlane {
       catch (quiesceError) {
         reported = new AggregateError([error, quiesceError], `Build ${runId} failed and could not quiesce owned resources.`);
       }
+      // C3a repair cycle 1 (B-1): snapshot the pump-error pause (or the
+      // step stop, when the pause never recorded). Never throws.
+      await handle.runtime.commitStopSnapshotIfStopped?.();
       this.options.onPumpError?.(runId, reported);
       this.options.onPumpResult?.(runId, {
         status: "paused",

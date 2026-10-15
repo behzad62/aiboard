@@ -424,6 +424,10 @@ export interface Discussion {
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
   buildAlwaysRequireIndependentVerifier?: boolean;
+  buildEvidenceGatedPlanning?: boolean;
+  buildAnswerReview?: boolean;
+  buildSpecCopy?: boolean;
+  buildHandoffFiles?: "commit" | "export_only";
   buildStopReason?: BuildStopReason | null;
   buildStoppedAt?: string | null;
   currentRound: number;

@@ -1326,8 +1326,8 @@ test("corrupt scheduler payload identifies the event", () => {
 test("runtime assignments, provider cooldown, and Architect handoff recover durably", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-runtime-"));
   const database = join(root, "scheduler.sqlite");
+  let store = new SqliteSchedulerStore(database);
   try {
-    let store = new SqliteSchedulerStore(database);
     store.append(event("run_1", "plan.created", "plan:1", {
       revision: 1,
       tasks: [{
@@ -1392,6 +1392,8 @@ test("runtime assignments, provider cooldown, and Architect handoff recover dura
       },
     });
     assert.equal(rebuildSchedulerProjection(store.readRun("run_1")).status, "paused");
+    const handoffRequired = store.readRun("run_1").findLast((event) => event.type === "architect.handoff_required");
+    assert.ok(handoffRequired);
     store.close();
 
     store = new SqliteSchedulerStore(database);
@@ -1401,7 +1403,7 @@ test("runtime assignments, provider cooldown, and Architect handoff recover dura
       occurredAt: "2026-07-12T00:00:03.000Z",
       actor: { role: "user", id: "local-user" },
       idempotencyKey: "architect-handoff:selected:1",
-      payload: { runtimeId: "anthropic:code" },
+      payload: { runtimeId: "anthropic:code", requiredSequence: handoffRequired.sequence },
     });
     const recovered = rebuildSchedulerProjection(store.readRun("run_1"));
     assert.equal(recovered.status, "running");
@@ -1409,8 +1411,8 @@ test("runtime assignments, provider cooldown, and Architect handoff recover dura
     assert.equal(recovered.runtime.providerHealth.openai.status, "cooldown");
     assert.equal(recovered.runtime.architect.runtimeId, "anthropic:code");
     assert.equal(recovered.runtime.architect.handoff, undefined);
-    store.close();
   } finally {
+    store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -1535,7 +1537,7 @@ test("projection records the most recently integrated revision", () => {
       taskId: "T1",
       status: "integrated",
       patch: { integrationRevision: "a".repeat(40) },
-    }));
+    }, { role: "runner", id: "integration-manager" }));
     assert.equal(
       rebuildSchedulerProjection(store.readRun("run_revision")).integrationRevision,
       "a".repeat(40)
@@ -1728,6 +1730,10 @@ test("completion and handoff are refused while a context recording note is unres
       }),
       message,
     );
+    // C2b repair m6: the structural checks (actor, requested) precede the
+    // shared acceptance rule, so a selection with no requested handoff is
+    // refused before the note is even reached. The note refusal on a
+    // requested selection is covered through the shared predicate.
     assert.throws(
       () => store.append({
         ...event("run_recording_completion", "project.handoff_selected", "selected-unresolved", {
@@ -1738,7 +1744,7 @@ test("completion and handoff are refused while a context recording note is unres
         }),
         actor: { role: "user", id: "local-user" },
       }),
-      message,
+      /Final project handoff is not awaiting user selection\./,
     );
     assert.equal(store.readRun("run_recording_completion").length, before);
     const projection = rebuildSchedulerProjection(store.readRun("run_recording_completion"));
@@ -1802,13 +1808,14 @@ function event(
   runId: string,
   type: NewSchedulerEvent["type"],
   idempotencyKey: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  actorOverride?: NewSchedulerEvent["actor"],
 ): NewSchedulerEvent {
   return {
     runId,
     type,
     occurredAt: "2026-07-12T00:00:00.000Z",
-    actor: {
+    actor: actorOverride ?? {
       role:
         type === "plan.created" || type === "plan.reconciled"
           ? "architect"

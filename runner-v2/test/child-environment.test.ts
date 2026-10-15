@@ -236,3 +236,37 @@ test("preserves reserved object-property environment names without adding enviro
     assert.equal(environment.prototype, "safe-prototype");
   });
 });
+
+test("strips Node test-runner coordination variables from ambient and explicit input", () => {
+  const runner = factory();
+  const prepared = runner.prepare({
+    ambient: {
+      PATH: "/bin",
+      NODE_TEST_CONTEXT: "child-v8",
+      NODE_TEST_WORKER_ID: "3",
+      NODE_OPTIONS: "--max-old-space-size=512",
+      SAFE_FLAG: "visible",
+      API_KEY: "SENTINEL_AMBIENT_KEY",
+    },
+    explicitOverrides: { node_test_context: "child-v8", NODE_OPTIONS: "--max-old-space-size=1024" },
+  });
+
+  assert.ok(prepared.audit.removedNames.includes("NODE_TEST_CONTEXT"));
+  assert.ok(prepared.audit.removedNames.includes("NODE_TEST_WORKER_ID"));
+  assert.ok(prepared.audit.removedNames.includes("API_KEY"));
+  assert.deepEqual(
+    prepared.audit.decisions.filter((decision) => decision.kind === "removed_ambient").map((decision) => decision.name).sort(),
+    ["API_KEY", "NODE_TEST_CONTEXT", "NODE_TEST_WORKER_ID"],
+  );
+  assert.ok(prepared.audit.decisions.some((decision) => decision.kind === "rejected_explicit" && decision.name === "node_test_context"));
+  assert.deepEqual(prepared.audit.explicitSafeNames, ["NODE_OPTIONS"]);
+  runner.withChildEnvironment(prepared.capability, (environment) => {
+    assert.equal(environment.NODE_TEST_CONTEXT, undefined);
+    assert.equal(environment.node_test_context, undefined);
+    assert.equal(environment.NODE_TEST_WORKER_ID, undefined);
+    assert.equal(environment.NODE_OPTIONS, "--max-old-space-size=1024");
+    assert.equal(environment.SAFE_FLAG, "visible");
+    assert.equal(environment.API_KEY, undefined);
+  });
+  assert.doesNotMatch(JSON.stringify(prepared), /SENTINEL_AMBIENT_KEY/);
+});

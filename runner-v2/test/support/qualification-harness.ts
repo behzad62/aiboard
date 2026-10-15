@@ -256,11 +256,24 @@ function walkCopySelected(
     if (!keep) continue;
     try {
       const size = statSync(from).size;
-      if (size > 2 * 1024 * 1024) {
+      // Failure-only copies of the run's durable lifecycle store must retain
+      // its main database and WAL together. These observed files exceed the
+      // generic 2 MiB bound; only this exact state/builds/run role gets 8 MiB.
+      // Copies remain passive/non-coherent and confer no cleanup authority.
+      const runtimeDatabase = relativeSegments.length === 3
+        && relativeSegments[0] === "state" && relativeSegments[1] === "builds"
+        && /^subprocess-runtime\.sqlite(?:-wal|-shm)?$/.test(base);
+      const captureLimit = (runtimeDatabase ? 8 : 2) * 1024 * 1024;
+      if (size > captureLimit) {
         writeFileSync(`${to}.omitted.txt`, `omitted large file bytes=${size}\n`);
         continue;
       }
-      writeFileSync(to, readFileSync(from));
+      const bytes = readFileSync(from);
+      if (bytes.byteLength > captureLimit) {
+        writeFileSync(`${to}.omitted.txt`, `omitted large file bytes=${bytes.byteLength}\n`);
+        continue;
+      }
+      writeFileSync(to, bytes);
     } catch (error) {
       writeFileSync(`${to}.read-failed.txt`, String(error));
     }

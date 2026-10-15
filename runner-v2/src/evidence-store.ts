@@ -1,8 +1,19 @@
 import type { AgentActor } from "./agent-contracts.js";
 import type { ProcessCleanupStatus } from "./execution-safety-contracts.js";
+import type {
+  EvidenceApplicabilityDecision,
+  ValidationObservation,
+} from "./planning-contracts.js";
 
 export interface CommandEvidenceFact {
   kind: "command";
+  /** V2: original native result and exact trusted launch tuple, absent historically. */
+  executionSnapshot?: import("./command-evidence-reuse.js").CommandExecutionSnapshot;
+  /** Original same-run observed evidence; this row represents no new execution. */
+  reused_from?: string;
+  workingTreeIdentity?: import("./command-evidence-identity.js").WorkingTreeIdentity;
+  childEnvironmentAudit?: import("./child-environment.js").ChildEnvironmentAudit;
+  childEnvironmentIdentity?: import("./command-evidence-identity.js").ChildEnvironmentIdentity;
   label: string;
   command: string;
   args: string[];
@@ -78,7 +89,10 @@ export function evidenceFactArtifactHashes(fact: EvidenceFact): string[] {
 export function evidenceFactSummary(fact: EvidenceFact): string {
   switch (fact.kind) {
     case "command":
-      return `${fact.command} exited ${fact.exitCode}`;
+      // T10 (M7): name the check (label), the argv, and the true outcome so
+      // the Architect can tell a test run from a lint run without
+      // re-inspection. Timeouts and signals are not "exited null".
+      return `${fact.label}: ${[fact.command, ...fact.args].join(" ").slice(0, 120)} → ${fact.timedOut ? "timed out" : fact.signal ? `signal ${fact.signal}` : `exit ${fact.exitCode}`}`;
     case "browser_snapshot":
       return `browser snapshot "${fact.title}" at ${fact.url}`;
     case "browser_screenshot":
@@ -129,4 +143,77 @@ export interface EvidenceStore {
   /** Resolve only the requested immutable IDs; missing IDs are omitted. */
   getByIds(input: GetEvidenceByIdsInput): EvidenceRecord[];
   close(): void;
+}
+
+// ---------------------------------------------------------------------------
+// T5 (P6.6): durable validation observations and applicability decisions.
+// Additive only: the EvidenceStore interface above is unchanged so every
+// existing fake/consumer keeps compiling and existing tests stay green.
+// New code requiring observation/applicability storage depends on
+// ExtendedEvidenceStore instead.
+// ---------------------------------------------------------------------------
+
+/**
+ * T5 acceptance-identity envelope: the fields acceptance needs after a
+ * restart that live alongside (not inside) T1's frozen ValidationObservation
+ * (capability fingerprint, dirty-content digest, artifact hashes, skip
+ * rationale). Config/dependency fingerprints and per-assertion lists already
+ * live inside the frozen observation.
+ */
+export interface ValidationObservationEnvelope {
+  capabilityFingerprint: string;
+  uncommittedContentDigest?: string;
+  artifactHashes: readonly string[];
+  skipRationale?: string;
+}
+
+export interface StoredValidationObservation extends Partial<ValidationObservationEnvelope> {
+  id: string;
+  runId: string;
+  observation: ValidationObservation;
+  createdAt: string;
+  idempotencyKey: string;
+}
+
+export interface RecordObservationInput extends Partial<ValidationObservationEnvelope> {
+  runId: string;
+  observation: ValidationObservation;
+  /** Required: acceptance re-runs from durable state after a restart. */
+  capabilityFingerprint: string;
+  /** Required: substituted-artifact checks need them after a restart. */
+  artifactHashes: readonly string[];
+  createdAt: string;
+  idempotencyKey: string;
+}
+
+export interface ListObservationsInput {
+  runId: string;
+  limit?: number;
+}
+
+export interface StoredApplicabilityDecision {
+  id: string;
+  runId: string;
+  decision: EvidenceApplicabilityDecision;
+  createdAt: string;
+  idempotencyKey: string;
+}
+
+export interface RecordApplicabilityInput {
+  runId: string;
+  decision: EvidenceApplicabilityDecision;
+  createdAt: string;
+  idempotencyKey: string;
+}
+
+export interface ListApplicabilityInput {
+  runId: string;
+  limit?: number;
+}
+
+export interface ExtendedEvidenceStore extends EvidenceStore {
+  recordObservation(input: RecordObservationInput): StoredValidationObservation;
+  listObservations(input: ListObservationsInput): StoredValidationObservation[];
+  recordApplicability(input: RecordApplicabilityInput): StoredApplicabilityDecision;
+  listApplicability(input: ListApplicabilityInput): StoredApplicabilityDecision[];
 }

@@ -6,6 +6,9 @@ import type {
   FinalVerificationCategory,
   FinalVerificationPlan,
 } from "./final-verification-contracts.js";
+import type { SubmissionScopeRecord } from "./submission-scope-contracts.js";
+import type { ValidationScope } from "./validation-scope.js";
+import type { ValidationBudgetSubmission } from "./validation-budget.js";
 
 export type TaskStatus =
   | "planned"
@@ -61,7 +64,39 @@ export interface VerifierRepairProvenance {
   evidenceIds: string[];
 }
 
+/**
+ * T6a: provenance of a repair task planned for a failed integrated-boundary
+ * check; it cites the integrated task it repairs.
+ */
+export interface DeliveryRepairProvenance {
+  sourceTaskId: string;
+  boundaryId: string;
+  integrationRevision: string;
+  evidenceIds: string[];
+}
+
+/**
+ * C5 (AR-R15/AR-R16): the authoritative accepted contract reference a
+ * scheduler task carries — the current ready plan revision, its digest and
+ * the contract id this task was bridged from. Stamped and refreshed by the
+ * kernel bridge (scheduler-store.ts); workers and reviewers resolve the
+ * compact semantic contract through it from durable state. Never
+ * model-authored: model prose copies are not authoritative. Absent only on
+ * legacy runs and pre-bridge tasks.
+ */
+export interface TaskContractRef {
+  readonly revisionId: string;
+  readonly digest: string;
+  readonly taskId: string;
+}
+
 export interface BuildTask {
+  reviewSignals?: import("./review-integrity.js").ReviewSignalsRecord;
+  encodingSubmission?: import("./encoding-safety.js").EncodingSubmissionRecord;
+  submissionScope?: SubmissionScopeRecord;
+  /** IV-1: the worker's durable validation-scope report for the current submission (a claim, not evidence). */
+  validationScope?: ValidationScope;
+  validationBudget?: ValidationBudgetSubmission;
   id: string;
   /** Legacy implementation tasks omit this field; final verification is explicit. */
   kind?: BuildTaskKind;
@@ -73,6 +108,8 @@ export interface BuildTask {
   acceptanceCriteria?: AcceptanceCriterion[];
   /** Monotonically versions the criterion set across plan revisions. */
   acceptanceCriteriaVersion?: number;
+  /** C5: the authoritative accepted contract reference (kernel-stamped). */
+  contractRef?: TaskContractRef;
   /** Immutable evidence mapping captured when the current attempt is submitted. */
   criterionEvidenceLinks?: CriterionEvidenceLink[];
   attempt: number;
@@ -96,6 +133,7 @@ export interface BuildTask {
   verificationReviewId?: string;
   verificationRepair?: VerificationRepairProvenance;
   verifierRepair?: VerifierRepairProvenance;
+  deliveryRepair?: DeliveryRepairProvenance;
 }
 
 export type FinalVerificationTask = Omit<

@@ -259,3 +259,118 @@ Token estimates assume about 4 characters per token.
    - Move reason-specific Architect lines into per-reason text, and add the missing reasons.
    - Send the verifier and critic invariants once each, with a pass-specific verifier authority (baseline, read-only, no commands in pass 1).
    - Roughly −500 tokens per Architect action and −150 to −260 per verifier or critic session. Removes the "finish with a summary" versus "call the verdict tool" contradiction.
+
+---
+
+## (d) T10 disposition (post-P6.6 re-check, 2026-10-06)
+
+T10 re-checked every deferred finding (M1, M3, M7-M12, L1-L8) against current
+post-P6.6 code and fixed every still-valid one. v1/legacy prompt bytes are
+frozen (C4 byte-identity holds: all three v1 packs pass); v2-scoped fixes
+ride docs-v2 runs only. "Fixed" rows are covered by
+`runner-v2/test/t10-prompt-hygiene.test.ts` (25 tests).
+
+| Finding | Verdict | Reason / evidence |
+|---|---|---|
+| M1 | fixed (v2) | `ARCHITECT_REASON_GUIDANCE` covers all 16 reasons, rendered in `architect-action` on docs-v2 turns; v2 system keeps 8 general lines + repair rules (497 tok vs 966/1013 v1). v1 system verified byte-identical to base for both planning variants. |
+| M3 | obsolete | C4 (AR-R11) replaced the v2 docs instructions with `ARCHITECT_PROJECT_DOC_WRITE_LINE` + base snapshot; the v1 text is frozen per AR-R11/C4 byte-identity. No T10 change; v2 write-line accuracy verified. |
+| M7 | fixed | `evidenceFactSummary` now renders `label: argv → exit N` / `signal S` / `timed out` (argv sliced to 120 chars). |
+| M8 | fixed | `run_evidence_command` description states the no-shell contract (one executable, verbatim args, workspace-relative cwd, `artifact.read`, cite the evidence ID); every field carries a description. |
+| M9 | fixed | `walk()` skips build-output dirs (bin, obj, out, dist, build, target, .venv, venv, `__pycache__`, .pytest_cache, .tox); repository-backed search preserves tracked non-generated files (governed only by gitState/kind flags) and skips only untracked build-output paths unless `includeIgnored`; fs descriptions state literal/case-insensitive matching, the exclusions, and that tracked source is still searched. Tracked files still list (existing `filesystem-tools` contract kept). C#, C++, Python fixture trees. |
+| M10 | fixed | `evidenceSequence` is optional + described on ask/replan/challenge and server-filled from the current scheduler sequence (explicit values preserved); worker system gains the `request_replan` line. `guidance-review` schema fixture updated to the new contract (pre-T8 shape change). |
+| M11 | fixed (v2) | `worker-capabilities` section (union of candidate capabilities) on docs-v2 Architect turns. Without `*`: `requiredCapabilities` must be chosen from it. With `*`: at least one worker is wildcard-capable (`RuntimeRouter.hasCapabilities` satisfies any concrete label), so the Architect uses descriptive concrete labels — never `*` itself; named capabilities ride as known vocabulary. Wildcard-only and wildcard+named tests added. |
+| M12 | fixed | `RUNNER_KERNEL_INVARIANTS_V2` (+untrusted-data line) for editing roles; `READER_KERNEL_INVARIANTS_V2` for readers; optional sections and flagged required sections (planning source, base snapshot, pending tool results) neutralize `## ` framing (zero-width space); MCP descriptions are `[MCP <server>]`-prefixed and capped at 512 chars. v1 invariants frozen. Required-section audit: no other tool/repo/fetched embedding unflagged — diff sections carry unified-diff bytes (line prefixes defeat line-start spoofing) and kernel structural JSON is newline-escaped by construction. |
+| L1 | fixed | Verifier, plan critic, coverage, answer, and deliverable contexts use the reader invariants (no editing rule). |
+| L2 | fixed (v2) | v2 description names the integration-branch commit, whole-file scope, handoff-only user tree, anti-journaling, and does-not-end-the-action. v1 text frozen (C4 pins it). |
+| L3 | fixed | `code.workspace_symbols` + `code.diagnostics` name `unsupported_language` and the `fs.search` fallback. |
+| L4 | fixed (v2) | The `final_verification_plan_required` per-reason guidance carries the `not_applicable` clause (v1 system line kept). |
+| L5 | fixed (v2) | The `completion_decision_required` guidance says to `list_memory_proposals` and promote durable, verified learnings before `complete_run`. |
+| L6 | fixed | `task-dependencies` section: each dependency's objective, status, and submitted summary from durable delivery records (missing data renders as not-yet-delivered, never invented). |
+| L7 | fixed | Compact JSON for worker/verifier/critic/coverage/deliverable/coverage-verdict sections; Architect task-graph/action/submission/prefill compact on v2, pretty on v1. Identity, digest, and comparison JSON untouched. |
+| L8 | fixed | `submit_task` says `(you do not need to call git.commit first)`. |
+
+AR-R30 outcomes beyond the findings table:
+
+- Fix re-review in both directions: the deliverable reviewer already had it
+  (W2); the coverage re-review verdict gained an explicit both-directions
+  line (each prior finding resolved/outstanding AND no over-correction or
+  regressed obligation).
+- Durable-state reviewer line (S3 L9): the findings pass (all tiers) gained
+  "A durable-state change needs a test through the real store across a
+  restart/replay; an in-memory-only check is not enough."
+- Reviewer treats durable runner evidence/state as authority: already
+  present, verified, no change — deliverable reviewer ("plan-contract
+  acceptance criteria are the source of truth; the worker's report is a
+  claim, not evidence"), coverage verdict (plan judged against recorded
+  obligations), verifier (immutable objective, criterion identities,
+  guidance, history, and facts are protected input).
+- Untrusted repo/tool/web/MCP labelling: M12 above.
+- Compact worker task contract with dependency summaries: C5 contract plus
+  the L6 section above.
+- Component/system-string estimates (ceil(bytes/4); NOT per-role manifests; v1 bytes unchanged):
+
+| Component | Before | After | Delta |
+|---|---|---|---|
+| kernel invariants v1 (frozen) | 98 | 98 | 0 |
+| kernel invariants v2 (editing roles) | — | 152 | +54 |
+| reader invariants v2 (verifier/critic/reviewers) | — | 131 | +33 |
+| docs instructions v1 / write line v2 | 559 / 63 | 559 / 63 | 0 |
+| verifier + critic + coverage derive/verdict systems | 156 / 191 / 274 / 180 / 247 | same | 0 |
+| coverage re-review verdict system | 347 | 393 | +46 |
+| worker system | 483 | 526 | +43 |
+| deliverable findings system (L9 line) | 307 | 338 | +31 |
+| deliverable verdict re-review system | 352 | 352 | 0 |
+| write_project_doc v2 description | 98 | 114 | +16 |
+| architect system v1 (legacy / planning-1) | 966 / 1013 | 966 / 1013 | 0 |
+| architect system v2 | — | 497 | −469/−516 |
+| per-reason guidance (one per v2 turn) | — | 39–185 | +~40–120 typical |
+
+- Per-role context-manifest token counts (P6.5.4 manifests; for T8's per-gate report).
+  `ContextManifest.estimatedTokens = pack.estimatedTokens = ceil(rendered UTF-8 bytes/4)`
+  (`context-assembler.ts` `estimateTokens`, stored verbatim by `toContextManifest` in
+  `context-manifest-store.ts`). Method: the same deterministic fixture inputs were built
+  with each tree's own public `build*Context` + `ContextAssembler`; the script asserts
+  `pack.byteLength == Buffer.byteLength(pack.text)` and `pack.estimatedTokens ==
+  ceil(bytes/4)` on every pack. BEFORE =
+  `D:\repos\ai-discussion-board\.worktrees\p66-phase-r3-exit` (accepted R3 base, no T10);
+  AFTER = `D:\repos\ai-discussion-board\.worktrees\p66-t10`. Limits
+  `{maxBytes: 65536, maxEstimatedTokens: 16384}`, no omissions. T10-only optional inputs
+  (`dependencySummaries`, `workerCapabilities`) ride the same semantic fixture; the base
+  builders ignore the unknown fields. No production code was changed for measurement.
+  Script/output only under `C:\Users\b_a_s\AppData\Local\Temp\p6-6`
+  (`t10-measure.mts`, `t10-before.json`, `t10-after.json`).
+
+| Role / builder (fixture) | Before tok (bytes) | After tok (bytes) | Delta tok (bytes) |
+|---|---|---|---|
+| worker `buildWorkerContext` (T2 + contract rev-12 + 1 guidance/instruction/skill/memory/evidence/history/pendingTool + 2 defect classes + 2 dependency summaries) | 794 (3176) | 876 (3502) | +82 (+326) |
+| architect `buildArchitectContext`, docs-v2 `plan_required` (seeded planning-v1/docs-v2 projection + baseSnapshot base-rev-aaa + workerCapabilities browser,code + 1 instruction/skill/memory/evidence/history) | 975 (3897) | 1110 (4440) | +135 (+543) |
+| verifier expectations `buildVerifierExpectationsContext` (2 criteria + 1 guidance + 1 risk) | 262 (1046) | 275 (1099) | +13 (+53) |
+| verifier verdict `buildVerifierContext` (2 criteria + 1 review/guidance/change + finalVerification + 1 expectation; stance on) | 573 (2289) | 556 (2223) | -17 (-66) |
+| plan critic `buildPlanCritiqueContext` (plan rev 3, 2 tasks + 1 risk + 1 guidance) | 279 (1114) | 280 (1119) | +1 (+5) |
+| coverage derive `buildCoverageDeriveContext` (manifest m1/s1, 2 sections + texts + 1 guidance) | 414 (1653) | 411 (1644) | -3 (-9) |
+| coverage verdict `buildCoverageVerdictContext` (2 obligations + 2-task plan + 1-req ledger, compact JSON + 1 guidance) | 219 (876) | 253 (1010) | +34 (+134) |
+| answer-review findings `buildAnswerReviewFindingsContext` (question + answer + 2 parts + 1 guidance) | 221 (883) | 255 (1017) | +34 (+134) |
+| answer-review verdict `buildAnswerReviewVerdictContext` (same + 1 own finding, compact JSON) | 228 (909) | 261 (1043) | +33 (+134) |
+
+  Notes: coverage-verdict and both answer-review rows move by the reader-invariants
+  swap alone (+134 bytes; +33 vs +34 tokens is ceil rounding). Verifier-verdict,
+  critic, and coverage-derive rows net near zero because compact-JSON savings (L7)
+  offset the invariants swap. Worker adds the `task-dependencies` section (L6) and
+  v2 invariants, partly offset by compaction. Architect adds v2 invariants,
+  `worker-capabilities` (M11), and per-reason guidance (M1), partly offset by
+  compaction. Deliverable reviewer (obligations/findings/verdict passes in
+  `native-deliverable-review.ts`) has no public `ContextPack` builder -- its sections
+  are assembled privately from full durable review state -- so no manifest number is
+  reported for it here rather than an invented one.
+
+- Claude Code AGENTS.md check (D-9): Claude Code 2.1.291 (`claude
+  --version`) was checked locally without a model call by piping `/context`
+  then `/exit` into the installed CLI. In an AGENTS-only scratch repo,
+  `/context` listed `AGENTS.md` as a Project memory file (101 tokens). In a
+  CLAUDE-only repo it listed `CLAUDE.md`; when both independent files were
+  present, `CLAUDE.md` took precedence and `AGENTS.md` was not listed. With
+  the actual v2 handoff shape - marked `AGENTS.md` plus `CLAUDE.md` containing
+  exactly `@AGENTS.md` - `/context` listed both `CLAUDE.md` and `AGENTS.md` as
+  Project memory files. This proves the generated v2 pointer causes the
+  installed Claude Code to load the AIBoard AGENTS instructions. The scratch
+  repos are outside the worktree and uncommitted; no API/model quota was used.

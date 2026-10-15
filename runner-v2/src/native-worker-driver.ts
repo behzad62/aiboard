@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { canonicalModelIdentity } from "./verifier-contracts.js";
 import type { AgentMessage, AgentModel } from "./agent-contracts.js";
 import type {
   AgentProviderRetryEvent,
@@ -39,7 +41,9 @@ import {
 } from "./provider-health.js";
 import type { RuntimeRouter, AgentRuntimeCandidate } from "./runtime-router.js";
 import type { SchedulerProjection, SchedulerStore } from "./scheduler-store.js";
-import { rebuildSchedulerProjection } from "./scheduler-store.js";
+import { rebuildSchedulerProjection, resolveTaskContractReference } from "./scheduler-store.js";
+import type { ExecutionTaskContract } from "./planning-contracts.js";
+import type { TaskContractRef } from "./task-contracts.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog, SkillDocument, SkillMetadata } from "./skill-catalog.js";
 import { rankSkillsForTask } from "./skill-routing.js";
@@ -77,6 +81,8 @@ export interface NativeWorkerDriverOptions {
   projectId: string;
   projectRoot: string;
   budgetLedger?: BudgetLedger;
+  validationBudgetMs?: number;
+  validationBudgetMsForTask?: (input: { taskId: string; baselineRevision: string; workspacePath: string }) => number | Promise<number>;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
@@ -96,6 +102,9 @@ export interface NativeWorkerDriverOptions {
   executionGrants?: ExecutionGrantAuthority;
   contextManifests?: ContextManifestStore;
   recordContextPackText?: boolean;
+  defectClasses?: readonly string[];
+  /** T6b repair (N-5): fresh top defect-class labels per worker turn; wins over defectClasses. */
+  defectClassesFor?: () => readonly string[];
 }
 
 export function buildWorkerSystemPrompt(criterionIds: readonly string[] = []): string {
@@ -110,8 +119,61 @@ export function buildWorkerSystemPrompt(criterionIds: readonly string[] = []): s
           `Submit one criterionEvidenceLinks entry for every acceptance criterion (${criterionIds.join(", ")}). Cite the durable evidence ID and only its recorded artifact hashes; the runner binds the mapping to this task attempt.`,
         ]
       : []),
+    "Verify by impact, narrowest first: run the new or changed tests first, then the owning test file or suite, then direct dependents and affected scope. Do not run the whole suite by default.",
+    "Widen beyond affected scope only for a failure, a shared or public contract change, or a reviewer-named risk.",
+    "Stay near the task's validation budget and justify anything broader in your submission.",
+    "Extend or parameterize existing tests before adding new test files where sensible.",
+    "Merging or deleting obsolete tests is allowed only with an explicit `behaviour proven in <test id or file>` statement naming where the behavior is still proven.",
+    "Your submit_task validationScope must truthfully report what changed, what was verified, the tests actually run with counts, and what was not run and why.",
     "Do not submit while your own fresh evidence still shows a known acceptance failure. Continue fixing it; if you are mechanically blocked or the intended resolution is unclear, use ask_architect instead of submitting a known-bad changeset.",
+    "If the task cannot be done within its objective (scope exceeded, requirement conflicts with the repository, missing dependency), call request_replan instead of improvising.",
   ].join("\n");
+}
+
+/**
+ * C5 (AR-R16/EP40): the concrete worker context caps. Applied by the
+ * assembler on both worker assembly paths (direct and extension) and
+ * recorded on every worker context manifest beside the pack digest, token
+ * count and limits of the actual request.
+ */
+export const NATIVE_WORKER_CONTEXT_LIMITS: ContextLimits = {
+  maxBytes: 256 * 1024,
+  maxEstimatedTokens: 64 * 1024,
+};
+
+/** C5: a new-policy worker whose accepted contract cannot be resolved from durable state. */
+export class WorkerContractUnavailableError extends Error {
+  constructor(readonly taskId: string, readonly resolution: string) {
+    super(`Worker for task ${taskId} has no current accepted contract (resolution: ${resolution}); refusing to run without the authoritative compact contract.`);
+    this.name = "WorkerContractUnavailableError";
+  }
+}
+
+/**
+ * C5 bridge: the authoritative accepted contract for a worker assignment,
+ * resolved from durable state (current ready revision, digest and task
+ * id). Legacy runs carry no plan contracts. Kernel repair tasks resolve
+ * through their parent contract. Anything else without a current contract
+ * fails closed.
+ */
+export function resolveWorkerTaskContract(
+  projection: SchedulerProjection,
+  taskId: string,
+): { readonly contract: ExecutionTaskContract; readonly ref: TaskContractRef } | undefined {
+  if (projection.planningPolicyVersion !== 1) return undefined;
+  const resolution = resolveTaskContractReference(projection, taskId);
+  if (resolution.status === "current") {
+    const task = projection.tasks[taskId];
+    if (resolution.ref.taskId === taskId) {
+      const criteria = (values: readonly { id: string; text: string }[]) => values.map(({ id, text }) => ({ id, text })).sort((left, right) => left.id.localeCompare(right.id));
+      if (!task || task.objective !== resolution.contract.outcome.user
+        || !isDeepStrictEqual(criteria(task.acceptanceCriteria ?? []), criteria(resolution.contract.acceptance.criteria))) {
+        throw new WorkerContractUnavailableError(taskId, "scheduler_contract_mismatch");
+      }
+    }
+    return { contract: resolution.contract, ref: resolution.ref };
+  }
+  throw new WorkerContractUnavailableError(taskId, resolution.status);
 }
 
 export class NativeWorkerDriver implements WorkerRuntimeDriver {
@@ -124,10 +186,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       options.candidates.map((candidate) => [candidate.runtimeId, candidate])
     );
     this.clock = options.clock ?? (() => new Date().toISOString());
-    this.contextLimits = options.contextLimits ?? {
-      maxBytes: 256 * 1024,
-      maxEstimatedTokens: 64 * 1024,
-    };
+    this.contextLimits = options.contextLimits ?? { ...NATIVE_WORKER_CONTEXT_LIMITS };
+  }
+
+  private resolveDefectClasses(): readonly string[] {
+    return this.options.defectClassesFor?.() ?? this.options.defectClasses ?? [];
   }
 
   async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
@@ -158,6 +221,19 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       if (!model || !candidate) {
         return { type: "paused", reason: `runtime_unavailable:${runtimeId}` };
       }
+      // C5: fail fast without the authoritative compact contract — the
+      // context assembly below resolves the same reference again.
+      try {
+        resolveWorkerTaskContract(
+          rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
+          assignment.task.id,
+        );
+      } catch (error) {
+        if (error instanceof WorkerContractUnavailableError) {
+          return { type: "paused", reason: `missing_task_contract:${error.resolution}` };
+        }
+        throw error;
+      }
       const workspace = await this.options.workspaceManager.createTaskWorkspace(
         assignment.task.id,
         {
@@ -168,6 +244,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             : {}),
         }
       );
+      const validationBudgetMs = this.options.validationBudgetMsForTask
+        ? await this.options.validationBudgetMsForTask({ taskId: assignment.task.id, baselineRevision: workspace.baselineRevision, workspacePath: workspace.path })
+        : this.options.validationBudgetMs;
       const context = await this.workerContext(
         assignment,
         workspace.path,
@@ -255,6 +334,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         ...(this.options.budgetLedger
           ? { budgetLedger: this.options.budgetLedger }
           : {}),
+        ...(validationBudgetMs !== undefined
+          ? { validationBudgetMs }
+          : {}),
         schedulerStore: this.options.schedulerStore,
         evidenceStore: this.options.evidenceStore,
         skillCatalog: this.options.skillCatalog,
@@ -326,6 +408,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         this.recordSuccess(assignment.runId, candidate.providerId);
         return {
           type: "submitted",
+          ...(result.changeSet?.reviewSignals ? { reviewSignals: structuredClone(result.changeSet.reviewSignals) } : {}),
+          ...(result.changeSet?.submissionScope ? { submissionScope: structuredClone(result.changeSet.submissionScope) } : {}),
+          ...(result.changeSet?.validationScope ? { validationScope: structuredClone(result.changeSet.validationScope) } : {}),
+          ...(result.changeSet?.validationBudget ? { validationBudget: structuredClone(result.changeSet.validationBudget) } : {}),
+          ...(result.changeSet?.encodingSubmission ? { encodingSubmission: structuredClone(result.changeSet.encodingSubmission) } : {}),
           changeSetId: result.loop.changeSetId,
           ...(result.changeSet?.criterionEvidenceLinks
             ? {
@@ -433,6 +520,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         attempt: assignment.attempt,
         runtimeId,
         sessionId,
+        ...(rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)).reviewIntegrityPolicyVersion === 1
+          ? { modelIdentity: canonicalModelIdentity(this.candidateById.get(runtimeId)!.modelId) } : {}),
       },
     });
   }
@@ -522,9 +611,27 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         summary: evidenceFactSummary(record.fact),
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
+    const defectClasses = this.resolveDefectClasses();
+    // C5: both assembly paths (direct below and the extension runtime)
+    // share this input, so both carry the authoritative compact contract.
+    const resolved = resolveWorkerTaskContract(projection, assignment.task.id);
+    // T10 (L6): resolve what each dependency is and what it delivered from
+    // durable state; missing data renders as not-yet-delivered, never invented.
+    const dependencySummaries = (projection.tasks[assignment.task.id]?.dependencies ?? []).map((id) => {
+      const dependency = projection.tasks[id];
+      const summary = projection.delivery?.reviews?.[id]?.summary;
+      return {
+        id,
+        objective: dependency?.objective ?? "(unknown task)",
+        status: dependency?.status ?? "unknown",
+        ...(summary !== undefined && summary.length > 0 ? { summary } : {}),
+      };
+    });
     const input = {
       limits: this.contextLimits,
       task: projection.tasks[assignment.task.id],
+      ...(resolved ? { contract: resolved.contract, contractRef: resolved.ref } : {}),
+      ...(dependencySummaries.length > 0 ? { dependencySummaries } : {}),
       guidance,
       instructions,
       skills,
@@ -532,6 +639,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       repositorySnapshot,
       evidence,
       recentHistory: [],
+      ...(defectClasses.length > 0 ? { defectClasses: [...defectClasses] } : {}),
     };
     if (!this.options.capabilityRegistry) {
       return { pack: buildWorkerContext(input), repositorySnapshot };

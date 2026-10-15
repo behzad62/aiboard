@@ -7,6 +7,7 @@ import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
+  ModelTurn,
   NativeTool,
   ToolCallBlock,
   ToolExecutionContext,
@@ -17,8 +18,12 @@ import {
   type AgentProviderRetryEvent,
 } from "./agent-loop.js";
 import {
+  ARCHITECT_BASE_SNAPSHOT_SECTION_ID,
+  architectBaseSnapshotEligible,
   buildArchitectContext,
+  buildArchitectSystemPrompt,
   architectContextSections,
+  type ArchitectBaseSnapshot,
   type ArchitectReviewSubmission,
   type PromptEvidence,
 } from "./agent-prompts.js";
@@ -38,8 +43,14 @@ import type {
   ArchitectActionReason,
   ArchitectActionRequest,
   ArchitectRuntimeDriver,
+  StopNotesOutcome,
+  StopNotesRequest,
 } from "./build-runtime.js";
 import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import { currentSubmissionReview, deriveReviewTaskPrefill, type ReviewTaskPrefill } from "./delivery-acceptance.js";
+import type { BuildTask } from "./task-contracts.js";
+import { agreedValidationScope } from "./validation-scope.js";
+import { HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH } from "./handoff-snapshot.js";
 import { recordContextPack, type ContextManifestStore } from "./context-manifest-store.js";
 import type { CapabilityRegistry } from "./capability-registry.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -59,8 +70,8 @@ import {
   type ProviderHealthRegistry,
 } from "./provider-health.js";
 import type { AgentRuntimeCandidate, RuntimeRouter } from "./runtime-router.js";
-import type { SchedulerStore } from "./scheduler-store.js";
-import { rebuildSchedulerProjection } from "./scheduler-store.js";
+import type { SchedulerProjection, SchedulerStore } from "./scheduler-store.js";
+import { isPlanningState, rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { rankSkillsForTask } from "./skill-routing.js";
@@ -135,13 +146,48 @@ export interface NativeArchitectRuntimeOptions {
   recordContextPackText?: boolean;
   /** Disposable copy for `run_evidence_command`. Absent means the tool is absent. */
   commandWorkspace?: ArchitectCommandWorkspaceProvider;
+  /**
+   * T9 (EP41): the base revision for Architect command execution on the
+   * answer path, where no integration revision exists yet. Production wires
+   * the integration baseline; without it answer turns list no command tool.
+   * Never used for plan_only runs (no execution there, before or after T9).
+   */
+  answerCommandRevision?: string;
   execution?: OneShotCommandExecutor;
+  /**
+   * C4 (AR-R11): live base-snapshot read for docs-v2 triage/planning turns.
+   * Evaluated for each eligible context (never captured at construction):
+   * the factory captures IntegrationManager.revision at call time and reads
+   * `docs/project/STATE.md` from that immutable commit through the audited
+   * Git path. Returns undefined when no snapshot is available; content null
+   * labels an honestly missing or unreadable blob at a known revision.
+   */
+  readBaseSnapshot?: () => Promise<{ revision: string; content: string | null } | undefined>;
 }
 
 export interface ArchitectCommandWorkspaceProvider {
   readonly workspaceKind: "independent-verifier";
   create(targetRevision: string): Promise<{ readonly path: string }>;
   cleanup(): Promise<void>;
+}
+
+/** W3 (AR-3): runner-owned prefilled disposition for new-policy confirm/override turns, else {}. */
+function architectDispositionPrefillSpread(
+  projection: SchedulerProjection,
+  task: BuildTask,
+): { dispositionPrefill?: ReviewTaskPrefill } {
+  if (projection.planningPolicyVersion !== 1) return {};
+  const prefill = deriveReviewTaskPrefill({
+    task: {
+      id: task.id,
+      attempt: task.attempt,
+      changeSetId: task.changeSetId,
+      acceptanceCriteria: task.acceptanceCriteria ?? [],
+      criterionEvidenceLinks: task.criterionEvidenceLinks,
+    },
+    review: currentSubmissionReview(projection.delivery, task),
+  });
+  return prefill ? { dispositionPrefill: prefill } : {};
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
@@ -211,27 +257,17 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       pack: context,
       recordedAt: this.clock(),
     });
+    // T10 (M1): the system prompt is built centrally so v1 keeps the exact
+    // legacy lines (T9 NOTE-1 included) while v2 carries only the general
+    // lines with per-reason guidance in the context section.
     let messages: AgentMessage[] = [
       {
         id: "architect-system",
         role: "system",
-        content: [
-          "You are the AIBoard Architect. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool.",
-          "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision.",
-          "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
-          "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.",
-          "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
-          "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",
-          "Do not invent replacement tasks or unrelated lifecycle operations merely to route around a kernel error.",
-          "When current evidence proves that a planned task is already satisfied or its assumptions are stale, reconcile the Architect-owned plan: cancel or revise that task and rewire its pending dependents. Do not require a fabricated code change merely because a task exists.",
-          "When a legacy in-flight run requires an acceptance-contract upgrade, record criteria for every non-cancelled task with upgrade_acceptance_contract before reviewing or completing work.",
-          "A satisfied criterion verdict may cite a command that did not exit 0 only with an explicit acceptedFailures entry naming that evidence ID and a rationale, for example an intentionally failing pre-fix test. Otherwise mark the criterion unsatisfied.",
-          "A guidance request of kind replan means the worker cannot complete the task within its objective. Either reconcile the plan with reconcile_plan (cancel or revise that task, add replacement tasks) or refuse with answer_guidance citing evidence; never leave a replan request open.",
-          "When final verification planning is requested, inspect the canonical repository state and use plan_final_verification with an explicit build, tests, runtime_smoke, and browser plan.",
-          "When final verification review is requested, inspect the exact current submission and persisted category evidence, then use review_final_verification with one semantic rationale per category plus an explicit low/high Architect risk declaration and rationale. Require repair when the evidence does not support approval, and declare high risk whenever semantic concerns exceed the kernel-observed paths and effects.",
-          "When final verification repairs are requested, use plan_verification_repairs to create narrowly scoped ordinary tasks whose provenance and acceptance criteria cover every failed category exactly once.",
-          "When plan critique resolution is requested, read every blocking finding, inspect the baseline repository where a finding cites files, then call resolve_plan_critique exactly once: reconcile the plan for findings you accept (cancel, revise, or add tasks in one planReconciliation) and reject the rest with evidence-based rationale.",
-        ].join("\n"),
+        content: buildArchitectSystemPrompt({
+          planningPolicyVersion: projection.planningPolicyVersion,
+          projectDocsPolicyVersion: projection.projectDocsPolicyVersion,
+        }),
       },
     ];
     if (this.options.sessions.events(sessionId).length === 0) {
@@ -244,6 +280,14 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     } else {
       const recovered = await this.options.sessions.load(sessionId);
       if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
+    }
+    // C4 (AR-R11): on docs-v2 runs, earlier context packs can carry snapshot
+    // text into later requests. The fresh pack below carries the snapshot
+    // exactly once on eligible turns and never otherwise, so stale
+    // snapshot-bearing packs are dropped here. Tool results, assistant turns
+    // and every other message survive untouched; v1 runs skip this entirely.
+    if (projection.projectDocsPolicyVersion === 2) {
+      messages = filterStaleBaseSnapshotPacks(messages);
     }
     const contextMessage: AgentMessage = {
       id: `context:${context.digest}`,
@@ -298,26 +342,42 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           tool.definition.readOnly === true && tool.definition.effect === "none",
       });
     }
-    const inspectionTools = this.options.runPolicy === "plan_only"
-      ? new PlanOnlyInspectionRuntime(extras)
-      : commandRevision
-        ? composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
-            () => this.openArchitectCommandCopy(commandRevision),
-            {
-              projectRoot: this.options.projectRoot,
-              permissionProfile: this.options.permissionProfile ?? "project",
-              artifacts: this.options.artifacts,
-              evidenceStore: this.options.evidenceStore,
-              clock: this.clock,
-              ...(this.options.git ? { git: this.options.git } : {}),
-              ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
-              ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
-              ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
-              ...(this.options.execution ? { execution: this.options.execution } : {}),
-              ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
-            },
-          ))
-        : extras;
+    // T3a (OA-7/EP41): a new-policy run in planning state — no ready plan and
+    // no triage `answer` — is refused Architect command execution at the tool
+    // boundary, not only in the prompt. Legacy runs behave as today.
+    let inspectionTools: AgentToolRuntime;
+    if (this.options.runPolicy === "plan_only") {
+      inspectionTools = new PlanOnlyInspectionRuntime(extras);
+    } else if (isPlanningState(projection)) {
+      inspectionTools = new PlanningStateInspectionRuntime(extras);
+    } else if (commandRevision) {
+      // T3a repair (N4): the command tool stays listed for the turn, but
+      // every invoke re-reads the projection — losing readiness mid-turn
+      // refuses run_evidence_command from that point on.
+      inspectionTools = new PlanningStateCommandGuard(
+        composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
+          () => this.openArchitectCommandCopy(commandRevision),
+          {
+            projectRoot: this.options.projectRoot,
+            permissionProfile: this.options.permissionProfile ?? "project",
+            artifacts: this.options.artifacts,
+            evidenceStore: this.options.evidenceStore,
+            clock: this.clock,
+            ...(this.options.git ? { git: this.options.git } : {}),
+            ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
+            ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+            ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+            ...(this.options.execution ? { execution: this.options.execution } : {}),
+            ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
+          },
+        )),
+        () => rebuildSchedulerProjection(
+          this.options.schedulerStore.readRun(request.runId),
+        ),
+      );
+    } else {
+      inspectionTools = extras;
+    }
     const layeredTools = new LayeredToolRuntime(request.tools, inspectionTools);
     const tools = this.options.budgetLedger
       ? new BudgetedToolRuntime({
@@ -424,6 +484,92 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
   }
 
   /**
+  /**
+   * C3b (AR-R09): one bounded Architect stop-notes call for an eligible
+   * stop. This is a single one-shot `complete()` on the run's Architect
+   * runtime model -- never a normal Architect turn: no loop, no tools, no
+   * session, no stop change. The cost records purpose `handoff_notes`
+   * (EP40) through the shared context manifest and the shared budgeted
+   * model; the caller persists the text as `handoff.notes_recorded` and
+   * renders it through C1. Never throws: every failure is a `{failed}`
+   * outcome so the stop snapshot still writes.
+   */
+  async requestStopNotes(input: StopNotesRequest): Promise<StopNotesOutcome> {
+    const projection = rebuildSchedulerProjection(
+      this.options.schedulerStore.readRun(input.runId)
+    );
+    const runtimeId = projection.runtime.architect.runtimeId ?? this.options.initialRuntimeId;
+    const candidate = this.candidateById.get(runtimeId);
+    const model = this.options.models.get(runtimeId);
+    if (!candidate || !model) {
+      return { status: "failed", reason: `no Architect runtime is available for stop notes (${boundStopNotesField(runtimeId, 100)})` };
+    }
+    const facts = buildStopNotesFacts({
+      runId: input.runId,
+      stopKind: input.stopKind,
+      reason: input.reason,
+      detail: input.detail,
+      taskCount: Object.keys(projection.tasks ?? {}).length,
+      planRevisionId: projection.planning?.plan?.currentRevisionId,
+    });
+    const limits = { maxBytes: 8192, maxEstimatedTokens: 2048 };
+    const pack = new ContextAssembler(limits).assemble([
+      { id: "stop-notes-facts", kind: "stop-notes", required: true, priority: 0, content: facts },
+    ]);
+    const sessionId = `architect-notes:${input.runId}:${input.stopSequence}`;
+    try {
+      await recordContextPack({
+        store: this.options.contextManifests,
+        artifacts: this.options.artifacts,
+        recordPackText: this.options.recordContextPackText,
+        runId: input.runId,
+        sessionId,
+        actor: { role: "architect", id: candidate.runtimeId },
+        role: "architect",
+        purpose: STOP_NOTES_CONTEXT_PURPOSE,
+        repositoryRevision: projection.integrationRevision,
+        limits,
+        pack,
+        recordedAt: this.clock(),
+      });
+    } catch (error) {
+      return { status: "failed", reason: `stop notes context recording failed (${boundStopNotesField(error instanceof Error ? error.message : String(error), 200)})` };
+    }
+    const runtimeModel = this.options.budgetLedger
+      ? new BudgetedAgentModel({
+          model,
+          ledger: this.options.budgetLedger,
+          scopeId: input.runId,
+          attribution: architectModelAttribution(candidate, sessionId),
+          outputTokenReserve: STOP_NOTES_OUTPUT_TOKEN_RESERVE,
+          estimateCostMicros: this.options.modelCostEstimators?.get(runtimeId),
+          costBasis: this.options.modelCostBases?.get(runtimeId),
+          clock: this.clock,
+        })
+      : model;
+    const messages = buildStopNotesMessages(facts);
+    let turn: ModelTurn;
+    try {
+      turn = await runtimeModel.complete({
+        sessionId,
+        messages,
+        tools: [],
+        toolChoice: "none",
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+    } catch (error) {
+      return { status: "failed", reason: `stop notes call failed (${boundStopNotesField(error instanceof Error ? error.message : String(error), 200)})` };
+    }
+    const notes = extractStopNotesText(turn);
+    if (!notes) {
+      return { status: "failed", reason: "the Architect returned no stop notes text" };
+    }
+    return { status: "noted", notes, runtimeId: candidate.runtimeId };
+  }
+
+  /**
+  }
+
    * review_required checks out the submission's taskRevision.
    * Every other reason checks out the integration revision.
    * A missing review revision is an error, never a fallback to integration.
@@ -432,7 +578,25 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     request: ArchitectActionRequest,
     projection: ReturnType<typeof rebuildSchedulerProjection>,
   ): Promise<string | undefined> {
-    if (request.reason.type !== "review_required") return projection.integrationRevision;
+    if (request.reason.type !== "review_required") {
+      if (projection.integrationRevision) return projection.integrationRevision;
+      // T9 (EP41 positive half): once triage is `answer` (not a planning
+      // state), command execution is admitted against the answer-path base
+      // revision — in a lazily created disposable copy only. Under `build`
+      // without a ready plan and under `clarify` the run is in planning
+      // state, so the inspection runtime refuses commands before this
+      // matters; plan_only never reaches execution (architectCommandRevision
+      // returns undefined there, before and after T9).
+      if (
+        projection.planningPolicyVersion === 1 &&
+        projection.planningTriageDecision === "answer"
+      ) {
+        return this.options.answerCommandRevision?.trim()
+          ? this.options.answerCommandRevision
+          : undefined;
+      }
+      return undefined;
+    }
     const submission = await loadArchitectReviewSubmission(
       this.options.sessions,
       request.runId,
@@ -565,7 +729,20 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     projection: ReturnType<typeof rebuildSchedulerProjection>
   ) {
     const reviewSubmission = await this.reviewSubmission(request, projection);
-    const projectDocsStateText = await this.loadCommittedStateText(request.runId, projection);
+    // C4 (AR-R11): docs v2 reads the existing STATE snapshot at the live base
+    // revision on eligible turns only; every other policy keeps the exact
+    // legacy artifact loader below. The v1 branch is frozen. The blob comes
+    // from the audited immutable read at the captured revision — inherited
+    // STATE or a later task integration — never the user's working tree, so
+    // no snapshot-event gate stands between the read and the prompt. A known
+    // revision with a missing blob renders its honest unavailable label.
+    const docsV2 = projection.projectDocsPolicyVersion === 2;
+    const baseSnapshot = docsV2 && architectBaseSnapshotEligible(request.reason, projection)
+      ? await this.loadBaseSnapshot()
+      : undefined;
+    const projectDocsStateText = docsV2
+      ? undefined
+      : await this.loadCommittedStateText(request.runId, projection);
     const [instructions, metadata] = await Promise.all([
       discoverProjectInstructions({ projectRoot: this.options.projectRoot }),
       this.options.skillCatalog.discover(),
@@ -614,18 +791,24 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
     const limits = this.contextLimits;
+    // T10 (M11): the configured worker capability vocabulary (union over
+    // candidates); rendered as a required section on docs-v2 turns only.
+    const workerCapabilities = [...new Set(this.options.candidates.flatMap((candidate) => candidate.capabilities))];
     const input = {
       limits,
       objective: this.options.objective,
       reason: request.reason,
       projection,
+      workerCapabilities,
       ...(reviewSubmission ? { reviewSubmission } : {}),
+      ...(request.reason.type === "final_verification_plan_required" && request.reason.planPrefill ? { finalVerificationPrefill: request.reason.planPrefill } : {}),
       instructions,
       skills,
       memories,
       evidence,
       recentHistory: [],
       ...(projectDocsStateText !== undefined ? { projectDocsStateText } : {}),
+      ...(baseSnapshot !== undefined ? { baseSnapshot } : {}),
     };
     if (!this.options.capabilityRegistry) return buildArchitectContext(input);
     return (await assembleContextWithExtensions({
@@ -648,6 +831,20 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       },
       artifacts: this.options.artifacts,
     })).pack;
+  }
+
+  /**
+   * C4 (AR-R11): read the docs-v2 base snapshot through the live factory
+   * callback. Undefined when no bridge is wired or the read fails; a null
+   * content labels an honestly missing or unreadable blob at its revision.
+   */
+  private async loadBaseSnapshot(): Promise<ArchitectBaseSnapshot | undefined> {
+    if (!this.options.readBaseSnapshot) return undefined;
+    try {
+      return await this.options.readBaseSnapshot();
+    } catch {
+      return undefined;
+    }
   }
 
   private async loadCommittedStateText(
@@ -711,6 +908,7 @@ export async function loadArchitectReviewSubmission(
   }
   return {
     taskId: task.id,
+    ...architectDispositionPrefillSpread(projection, task),
     attempt: task.attempt,
     changeSetId: changeSet.id,
     baselineRevision: changeSet.baselineRevision,
@@ -718,6 +916,13 @@ export async function loadArchitectReviewSubmission(
     changedPaths: [...changeSet.changedPaths],
     diffArtifactHash: changeSet.diffArtifactHash,
     evidenceArtifactHashes: [...changeSet.evidenceArtifactHashes],
+    // IV-1 (F3): the durable scope rides the current submission beside
+    // the prefill after bidirectional task/changeSet agreement, so the
+    // Architect sees what was and was not validated. Ordering is not
+    // authority; the scheduler-bound task copy stands after agreement.
+    ...(agreedValidationScope(task.validationScope, changeSet.validationScope)
+      ? { validationScope: agreedValidationScope(task.validationScope, changeSet.validationScope)! }
+      : {}),
     ...(changeSet.acceptanceCriteria
       ? { acceptanceCriteria: changeSet.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
       : {}),
@@ -735,6 +940,21 @@ export async function loadArchitectReviewSubmission(
   };
 }
 
+/**
+ * C4 (AR-R11): drop recovered user context packs that carry a docs-v2 base
+ * snapshot. Only `context:*` user messages whose text holds the snapshot
+ * section marker match; tool results, assistant turns, reminders and legacy
+ * packs are preserved untouched.
+ */
+function filterStaleBaseSnapshotPacks(messages: AgentMessage[]): AgentMessage[] {
+  return messages.filter((message) =>
+    message.role !== "user" ||
+    !message.id.startsWith("context:") ||
+    typeof message.content !== "string" ||
+    !message.content.includes(ARCHITECT_BASE_SNAPSHOT_SECTION_ID)
+  );
+}
+
 export function architectInspectionWorkspace(
   reason: ArchitectActionReason,
   projection: ReturnType<typeof rebuildSchedulerProjection>,
@@ -749,7 +969,9 @@ export function architectInspectionWorkspace(
     reason.type === "final_verification_review_required" ||
     reason.type === "final_verification_repair_plan_required" ||
     reason.type === "verifier_repair_plan_required" ||
-    reason.type === "plan_critique_resolution_required"
+    reason.type === "plan_critique_resolution_required" ||
+    // T6a: a failed boundary is judged on the integrated revision.
+    reason.type === "delivery_boundary_failed"
   ) {
     return canonicalProjectRoot?.trim() || projectRoot;
   }
@@ -771,6 +993,86 @@ export function prioritizedArchitectCapabilities(
     .filter((task) => task.id !== focusedTaskId)
     .flatMap((task) => task.requiredCapabilities);
   return [...new Set([...focused, ...broader])];
+}
+
+/**
+ * C3b (AR-R09, EP40): the context-manifest purpose every stop-notes model
+ * pass records. The token cost rides along through the shared budgeted
+ * model, exactly like every other Architect pass.
+ */
+export const STOP_NOTES_CONTEXT_PURPOSE = "handoff_notes";
+
+/**
+ * C3b: the budget reservation for one bounded stop-notes call. The notes
+ * cap is 2000 characters (about 500 tokens), so this reserve bounds the
+ * charge without starving the call.
+ */
+export const STOP_NOTES_OUTPUT_TOKEN_RESERVE = 2048;
+
+/** C3b: bound one untrusted stop-notes field to a single capped line. */
+export function boundStopNotesField(value: string, maxLength: number): string {
+  return value
+    .replace(/[\s\u0085]+/g, " ")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2028\u2029]/g, "")
+    .replace(/<!--/g, "&lt;!--")
+    .replace(/-->/g, "--&gt;")
+    .trim()
+    .slice(0, maxLength);
+}
+
+/** C3b: the bounded actual run facts one stop-notes call may see. */
+export function buildStopNotesFacts(input: {
+  runId: string;
+  stopKind: string;
+  reason?: string;
+  detail?: string;
+  taskCount: number;
+  planRevisionId?: string;
+}): string {
+  const lines = [
+    `Run ${boundStopNotesField(input.runId, 100)} stopped (${boundStopNotesField(input.stopKind, 20)}${input.reason !== undefined ? `, reason: ${boundStopNotesField(input.reason, 200)}` : ""}).`,
+  ];
+  if (input.detail !== undefined && input.detail.trim()) {
+    lines.push(`Detail: ${boundStopNotesField(input.detail, 200)}`);
+  }
+  lines.push(`Tasks recorded: ${Number.isSafeInteger(input.taskCount) && input.taskCount >= 0 ? input.taskCount : 0}.`);
+  if (input.planRevisionId !== undefined && input.planRevisionId.trim()) {
+    lines.push(`Plan revision: ${boundStopNotesField(input.planRevisionId, 100)}`);
+  }
+  return lines.join("\n");
+}
+
+/** C3b: the fixed short stop-notes prompt over bounded facts. No tools. */
+export function buildStopNotesMessages(facts: string): AgentMessage[] {
+  return [
+    {
+      id: "stop-notes-system",
+      role: "system",
+      content: "You are the AIBoard Architect writing stop notes for the next tool. In a few short lines record: notes for the next tool, what matters now, traps to avoid, and what to try next. Plain text only, no Markdown headings, no tool calls. Keep it under 1500 characters.",
+    },
+    {
+      id: "stop-notes-facts",
+      role: "user",
+      content: facts,
+    },
+  ];
+}
+
+/**
+ * C3b: the stop-notes text of one model turn: text blocks only, trimmed
+ * and capped at the C1 notes bound. Tool calls (none are offered) and
+ * non-text blocks never leak into the notes. Undefined when empty.
+ */
+export function extractStopNotesText(turn: ModelTurn): string | undefined {
+  const text = turn.blocks
+    .filter((block) => block.type === "text")
+    .map((block) => (block as { text: string }).text)
+    .join("\n")
+    .trim();
+  if (!text) return undefined;
+  return text.length > HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH
+    ? text.slice(0, HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH)
+    : text;
 }
 
 export function architectModelAttribution(
@@ -1089,6 +1391,91 @@ export class PlanOnlyInspectionRuntime implements AgentToolRuntime {
       },
     };
   }
+}
+
+/**
+ * T3a (OA-7/EP41): the inspection surface for a new-policy run in planning
+ * state. Full read-only inspection stays available; `run_evidence_command` is
+ * neither listed nor invokable — forged calls are refused with
+ * `planning_state_command_refused`, and no disposable copy is ever created.
+ */
+export class PlanningStateInspectionRuntime implements AgentToolRuntime {
+  constructor(private readonly runtime: AgentToolRuntime) {}
+
+  definitions() {
+    return this.runtime.definitions().filter(
+      (definition) => definition.name !== "run_evidence_command",
+    );
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return name !== "run_evidence_command" && this.runtime.isLifecycleTool(name);
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return name !== "run_evidence_command" && this.runtime.isReadOnlyTool(name);
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    this.runtime.assertUniqueCallIds(calls, seen);
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    if (call.name === "run_evidence_command") {
+      return planningStateCommandRefused(call);
+    }
+    return await this.runtime.invoke(call, context);
+  }
+}
+
+/**
+ * T3a repair (N4): per-invoke planning-state gate for Architect turns that
+ * started outside planning state. The command tool stays listed, but every
+ * `run_evidence_command` invoke re-reads the durable projection and is
+ * refused once the run has returned to planning state (e.g. readiness lost
+ * mid-turn). All other tools delegate untouched.
+ */
+export class PlanningStateCommandGuard implements AgentToolRuntime {
+  constructor(
+    private readonly runtime: AgentToolRuntime,
+    private readonly readProjection: () => SchedulerProjection,
+  ) {}
+
+  definitions() {
+    return this.runtime.definitions();
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return this.runtime.isLifecycleTool(name);
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return this.runtime.isReadOnlyTool(name);
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    this.runtime.assertUniqueCallIds(calls, seen);
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    if (call.name === "run_evidence_command" && isPlanningState(this.readProjection())) {
+      return planningStateCommandRefused(call);
+    }
+    return await this.runtime.invoke(call, context);
+  }
+}
+
+function planningStateCommandRefused(call: ToolCallBlock): ToolResult {
+  const message =
+    "Architect command execution is refused while the run is in planning state: " +
+    "no ready plan exists and the triage decision is not answer.";
+  return {
+    callId: call.callId,
+    toolName: call.name,
+    content: [{ type: "text", text: message }],
+    isError: true,
+    error: { code: "planning_state_command_refused", message },
+  };
 }
 
 class LayeredToolRuntime implements AgentToolRuntime {

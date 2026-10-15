@@ -471,8 +471,9 @@ export function durableBuildHandoffPanels(
   projection: NativeBuildProjection,
   runState?: NativeRunProjection["state"]
 ): {
-  architect: { reason: string; candidateRuntimeIds: string[] } | null;
+  architect: { requiredSequence?: number; reason: string; candidateRuntimeIds: string[] } | null;
   verifier: {
+    requiredSequence?: number;
     reason: string;
     requiredCapabilities: string[];
     candidateRuntimeIds: string[];
@@ -504,6 +505,7 @@ export function durableBuildHandoffPanels(
     return {
       architect: null,
       verifier: {
+        requiredSequence: verifierSelection.requiredSequence,
         reason: verifierSelection.reason,
         requiredCapabilities: [...verifierSelection.requiredCapabilities],
         candidateRuntimeIds: [...verifierSelection.candidateRuntimeIds],
@@ -515,6 +517,7 @@ export function durableBuildHandoffPanels(
   return {
     architect: architectHandoff
       ? {
+          requiredSequence: architectHandoff.requiredSequence,
           reason: architectHandoff.reason,
           candidateRuntimeIds: [...architectHandoff.candidateRuntimeIds],
         }

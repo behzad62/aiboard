@@ -1238,6 +1238,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
         body: JSON.stringify({
           runtimeId: "fallback:verifier",
           idempotencyKey: "verifier:fallback",
+          requiredSequence: 1,
         }),
       }),
     );

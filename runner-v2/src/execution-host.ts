@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, open, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { recordTempCreation, type TempRecordSink } from "./cleanup-ownership.js";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { ArtifactStore } from "./artifact-store.js";
@@ -32,6 +33,8 @@ import {
   createProcessBackendRegistry,
 } from "./process-backend.js";
 import { createPosixProcessBackend } from "./posix-process-backend.js";
+import { NativeOwnedProcessBackend } from "./native-process-backend.js";
+import { InspectionConstructionOwner, assertSubprocessCleanupSettled, assertStreamingCleanupSettled, awaitInspectionConstruction } from "./inspection-cleanup.js";
 import {
   probeProcessHostSemantics,
   selectWindowsProcessBackendKinds,
@@ -96,6 +99,21 @@ export interface ExecutionHostOptions {
     runId: string;
     point: "before_isolation_recovery";
   }>) => void | Promise<void>;
+  /**
+   * T6b repair (OA-17): durable creation-record sink. The factory wires
+   * this to Runner-private scheduler state; standalone hosts omit it and
+   * the transient root is still always removed below.
+   */
+  readonly tempRecorders?: {
+    readonly recorded: (record: {
+      readonly path: string;
+      readonly ownerRunId: string;
+      readonly kind: "directory" | "file";
+      readonly createdAt: string;
+      readonly retained?: boolean;
+    }) => void;
+    readonly cleared: (path: string) => void;
+  };
 }
 
 export interface ExecutionHostRunBindingInput {
@@ -149,6 +167,8 @@ export interface ExecutionHostRunBinding {
 
 export type ExecutionHostGitInspectionInput = Omit<ExecutionHostRunBindingInput, "capabilityContract"> & {
   readonly capabilityContract?: RunnerCapabilityContract;
+  /** T6b repair (OA-17): per-query durable record sink; falls back to host options. */
+  readonly tempRecorders?: TempRecordSink;
 };
 
 export interface ExecutionHost {
@@ -200,6 +220,8 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
   const bindings = new Map<string, ExecutionHostRunBinding | symbol>();
   const inspectionOperations = new Set<Promise<unknown>>();
   const inspectionOwners = new Set<() => Promise<void>>();
+  const bindingOperations = new Set<Promise<void>>();
+  const constructionOwners = new Map<InspectionConstructionOwner, string>();
   const reservation = Symbol("execution-host-binding-reservation");
   let closed = false;
   let closeComplete = false;
@@ -210,7 +232,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
   const resolveWindowsFacts = async (): Promise<ProcessHostSemanticFacts> => {
     if (options.processHostFacts) return options.processHostFacts;
     return await (windowsFactsPromise ??= probeProcessHostSemantics({
-      ...createWindowsProcessSemanticProbeSource({ ambientEnvironment }),
+      ...createWindowsProcessSemanticProbeSource({ ambientEnvironment, registerCleanup: (cleanup) => { inspectionOwners.add(cleanup); } }),
       activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
     }));
   };
@@ -228,8 +250,14 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
       }
       const digest = capabilityDigest(input.capabilityContract);
       bindings.set(runId, reservation);
+      const constructionOwner = new InspectionConstructionOwner();
+      constructionOwners.set(constructionOwner, runId);
+      let finishBinding!: () => void;
+      const completion = new Promise<void>((resolveCompletion) => { finishBinding = resolveCompletion; });
+      bindingOperations.add(completion);
       try {
         const binding = await createRunBinding({
+          constructionOwner,
           hostId,
           runId,
           projectRoot,
@@ -250,15 +278,23 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
             if (bindings.get(runId) === binding) bindings.delete(runId);
           },
         });
+        constructionOwners.delete(constructionOwner);
+        bindings.set(runId, binding);
         if (closed) {
           await binding.close();
           throw new Error("ExecutionHost closed while a run binding was being created.");
         }
-        bindings.set(runId, binding);
         return binding;
       } catch (error) {
-        if (bindings.get(runId) === reservation) bindings.delete(runId);
+        // Failed rollback stays reserved and creator-owned until host cleanup.
+        if (constructionOwner.isComplete()) {
+          constructionOwners.delete(constructionOwner);
+          if (bindings.get(runId) === reservation) bindings.delete(runId);
+        }
         throw error;
+      } finally {
+        finishBinding();
+        bindingOperations.delete(completion);
       }
     },
     withGitInspection<T>(input: ExecutionHostGitInspectionInput, inspect: (git: GitCommandRunner) => Promise<T>): Promise<T> {
@@ -275,15 +311,31 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         // historical databases and configured capability code are never reopened
         // for writes merely to display Git history.
         const root = await mkdtemp(join(tmpdir(), "aiboard-git-inspection-"));
+                // T6b repair (B1/B6): the identity rule applies only to run/session
+        // ids (validated above). The absolute project path is never run
+        // through safeSegment. Recording is validated synchronously and
+        // lives inside the operation so cleanup always runs: no crash,
+        // no leaked temp root.
+        let tempRecorded = false;
+        const tempSink = input.tempRecorders ?? options.tempRecorders;
+        try {
+          recordTempCreation({ path: root, ownerRunId: runId, ownerProjectId: runId, createdAt: new Date().toISOString(), kind: "directory" });
+          tempSink?.recorded({ path: root, ownerRunId: runId, kind: "directory", createdAt: new Date().toISOString() });
+          tempRecorded = tempSink !== undefined;
+        } catch {
+          tempRecorded = false;
+        }
         const queryProcesses = new ManagedProcessService({ stateDirectory: join(root, "managed"),
           platform: platform === "windows" ? "win32" : process.platform === "win32" ? "linux" : process.platform });
         const windowsJobHost = createWindowsJobProcessHost({ stateDirectory: join(root, "managed-job-host"),
           platform: platform === "windows" ? "win32" : "linux" });
         let binding: ExecutionHostRunBinding | undefined;
+        const constructionOwner = new InspectionConstructionOwner();
         let released = false;
         const cleanup = async () => {
           if (released) return;
           await binding?.close();
+          await constructionOwner.close();
           await queryProcesses.close();
           released = true;
           inspectionOwners.delete(cleanup);
@@ -291,14 +343,14 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         inspectionOwners.add(cleanup);
         let failed = false; let primary: unknown; let result: T | undefined;
         try {
-          binding = await createRunBinding({ hostId, runId, projectRoot, stateDirectory,
+          binding = await createRunBinding({ constructionOwner, hostId, runId, projectRoot, stateDirectory,
             runtimeRoot: join(root, "runtime"), permissionProfile: input.permissionProfile,
             capabilityContractDigest: digest, capabilitiesConfig: input.capabilitiesConfig,
             ambientEnvironment, artifacts: new ArtifactStore(join(root, "artifacts")), managedProcesses: queryProcesses, windowsJobHost, platform,
             resolveWindowsFacts: async () => {
               if (options.processHostFacts) return options.processHostFacts;
               return await (windowsFactsPromise ??= probeProcessHostSemantics({
-                ...createWindowsProcessSemanticProbeSource({ ambientEnvironment }),
+                ...createWindowsProcessSemanticProbeSource({ ambientEnvironment, registerCleanup: (cleanup) => { constructionOwner.addInspection(cleanup); } }),
                 activeJobCreateClose: async () => await windowsJobHost.probeActiveJobCreateClose(),
               }));
             }, onClosed: () => undefined });
@@ -307,8 +359,17 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         } catch (error) { failed = true; primary = error; }
         try { await cleanup(); }
         catch (error) { throw new AggregateError(failed ? [primary, error] : [error], `Historical Git query cleanup is unverified; retain ${root}.`); }
-        if (failed) throw primary;
+        if (failed) {
+          await rm(root, { recursive: true, force: true });
+          if (tempRecorded) {
+            try { (input.tempRecorders ?? options.tempRecorders)?.cleared(root); } catch { /* bookkeeping never breaks the query */ }
+          }
+          throw primary;
+        }
         await rm(root, { recursive: true });
+        if (tempRecorded) {
+          try { (input.tempRecorders ?? options.tempRecorders)?.cleared(root); } catch { /* bookkeeping never breaks the query */ }
+        }
         return result!;
       })();
       inspectionOperations.add(operation);
@@ -333,7 +394,18 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         // In-flight readers settle with their retained owners before the host
         // closes the shared environment/backend graph. Callback failure is not
         // cleanup failure; unresolved owners below retain their own blocker.
-        await Promise.allSettled([...inspectionOperations]);
+        await awaitInspectionConstruction(Promise.all([
+          Promise.allSettled([...inspectionOperations]),
+          Promise.all([...bindingOperations]),
+        ]), Date.now() + AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS);
+        for (const [owner, runId] of [...constructionOwners]) {
+          try {
+            await owner.close();
+            constructionOwners.delete(owner);
+            if (bindings.get(runId) === reservation) bindings.delete(runId);
+          }
+          catch (error) { failures.push(error); }
+        }
         for (const cleanup of [...inspectionOwners]) {
           try { await cleanup(); } catch (error) { failures.push(error); }
         }
@@ -370,6 +442,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
 }
 
 interface CreateRunBindingInput {
+  readonly constructionOwner: InspectionConstructionOwner;
   readonly runtimeRoot?: string;
   readonly hostId: string;
   readonly runId: string;
@@ -397,13 +470,13 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
   const runRoot = input.runtimeRoot ?? join(input.stateDirectory, "builds", runnerRunStateSegment(input.runId));
   await mkdir(runRoot, { recursive: true });
   const bindingId = `execution-binding-${randomUUID()}`;
-  const constructionCleanups: Array<() => void | Promise<void>> = [];
+  const constructionOwner = input.constructionOwner;
   try {
     const isolation = await createConfiguredOciIsolationSelector(
       input.capabilitiesConfig,
       join(runRoot, "execution-isolation"),
     );
-    constructionCleanups.push(async () => {
+    constructionOwner.add(async () => {
       const recovery = await isolation.recoverOwnedLeases();
       const blockers = recovery.flatMap((entry) => entry.blockers);
       if (blockers.length > 0) throw new Error(blockers.join(" "));
@@ -429,9 +502,13 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
         artifacts: input.artifacts,
       }),
     });
-    constructionCleanups.push(() => subprocessKernel.readOnlyStore.close());
+    constructionOwner.add(async () => {
+      await subprocessKernel.runtime.reconcileStartup();
+      assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore);
+      subprocessKernel.readOnlyStore.close();
+    });
     const executionGrants = createExecutionGrantAuthority();
-    constructionCleanups.push(async () => await executionGrants.revokeAll("cleanup"));
+    constructionOwner.add(async () => await executionGrants.revokeAll("cleanup"));
     const commandExecution = createRuntimeBackedOneShotCommandExecutor({
       runtime: subprocessKernel.runtime,
       runtimeGrants: subprocessKernel.grantsController,
@@ -455,12 +532,9 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       await loadOrCreateStateKey(join(runRoot, "streaming-sessions.key")),
       input.streamingStoreOptions ?? {},
     );
-    constructionCleanups.push(() => streamingKernel.store.close());
-    const sessionAuthority = createSessionAuthority({
-      grants: executionGrants,
-      sessions: streamingKernel,
-    });
-    const streamingGraph = createExecutionHostStreamingGraph({
+    let sessionAuthority: SessionAuthority | undefined;
+    let retainedStreamingGraph: ReturnType<typeof createExecutionHostStreamingGraph> | undefined;
+    const getStreamingGraph = () => retainedStreamingGraph ??= createExecutionHostStreamingGraph({
       permissionProfile: input.permissionProfile,
       ambientEnvironment: input.ambientEnvironment,
       environments: childEnvironments,
@@ -468,7 +542,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       registry: backendGraph.registry,
       channelBackends: backendGraph.channelBackends,
       kernel: streamingKernel,
-      sessions: sessionAuthority,
+      sessions: sessionAuthority ??= createSessionAuthority({ grants: executionGrants, sessions: streamingKernel }),
       output: createStreamingOutputOptions({
         runRoot,
         projectRoot: input.projectRoot,
@@ -476,6 +550,28 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
         overrides: input.streamingOutput,
       }),
     });
+    constructionOwner.add(async () => {
+      const runtime = getStreamingGraph().runtime;
+      const failures: unknown[] = [];
+      const recover = async () => {
+        const recovery = await runtime.reconcileStartup({ maxRecords: 1_024, timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS });
+        for (const entry of recovery.outcomes) if (entry.disposition !== "cleaned") failures.push(new Error(`Streaming launch ${entry.launchId} remains ${entry.disposition}.`));
+        for (const entry of recovery.sessionOutcomes) if (!["reattached", "cleanup_released"].includes(entry.disposition)) failures.push(new Error(`Streaming session ${entry.sessionId} remains ${entry.disposition}.`));
+        for (const entry of recovery.lateCleanupFailures) failures.push(new Error(`Streaming session ${entry.sessionId} cleanup remains ${entry.code}.`));
+      };
+      await recover();
+      for (const sessionId of streamingKernel.store.listSessionIds()) {
+        if (streamingKernel.store.readBySession(sessionId)?.state !== "released") {
+          try { await runtime.cleanupOwnedSession({ sessionId, timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS }); }
+          catch (error) { failures.push(error); }
+        }
+      }
+      await recover();
+      assertStreamingCleanupSettled(streamingKernel.store);
+      if (failures.length) throw new AggregateError(failures, "Streaming construction rollback remains unverified.");
+      streamingKernel.store.close();
+    });
+    const streamingGraph = getStreamingGraph();
     const streamingRuntime = streamingGraph.runtime;
     const streamingRecoveryRuntime = createStreamingProcessRecoveryRuntime({
       runtime: streamingRuntime,
@@ -514,7 +610,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       commandExecution,
       executionGrants,
       processRecoveryRuntime,
-      sessionAuthority,
+      sessionAuthority: sessionAuthority!,
       streamingRuntime,
       streamingState: Object.freeze({
         listSessionIds: () => streamingKernel.store.listSessionIds(),
@@ -574,6 +670,11 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
             }
           };
           if (!cleanupDutiesSettled) {
+            // PX-2c: retire the shared Job-host spare (if any) so run end
+            // leaves zero supervisor/Job-host processes behind. Best-effort:
+            // calls never depend on the spare, and a missing method (fakes)
+            // is skipped.
+            try { await input.windowsJobHost.retireSpare?.({ runId: input.runId }); } catch (error) { failures.push(error); }
             try { await input.managedProcesses.stopRun(input.runId); } catch (error) { failures.push(error); }
             try { await executionGrants.revokeAll("cleanup"); } catch (error) { failures.push(error); }
             try {
@@ -603,7 +704,10 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
                   streamingKernel.store.readBySession(record.sessionId)?.state === "released") continue;
               failures.push(new Error(`Streaming launch ${launchId} remains unreleased in ${record?.state ?? "missing"}.`));
             }
-            try { await subprocessKernel.runtime.reconcileStartup(); } catch (error) { failures.push(error); }
+            try {
+              await subprocessKernel.runtime.reconcileStartup();
+              assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore);
+            } catch (error) { failures.push(error); }
             try {
               await input.cleanupFault?.({
                 runId: input.runId,
@@ -618,6 +722,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
           if (failures.length > 0) {
             throw new AggregateError(failures, `ExecutionHost run ${input.runId} cleanup failed.`);
           }
+          await constructionOwner.closeInspections();
           if (!streamingStoreClosed) {
             try {
               streamingKernel.store.close();
@@ -648,15 +753,13 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
     managedRuntimeRegistration.detach = input.managedProcesses.registerRuntime(createExecutionHostManagedRuntime({
       run: binding, permissionProfile: input.permissionProfile, environment: input.ambientEnvironment,
     }));
+    constructionOwner.transfer();
     return binding;
   } catch (error) {
-    const cleanupFailures: unknown[] = [];
-    for (const cleanup of constructionCleanups.reverse()) {
-      try { await cleanup(); } catch (cleanupError) { cleanupFailures.push(cleanupError); }
-    }
-    if (cleanupFailures.length > 0) {
+    try { await constructionOwner.close(); }
+    catch (cleanupError) {
       throw new AggregateError(
-        [error, ...cleanupFailures],
+        [error, cleanupError],
         `ExecutionHost run ${input.runId} construction and rollback failed.`,
       );
     }
@@ -696,12 +799,18 @@ async function createRunBackendRegistry(
 
 async function createWindowsBackends(input: CreateRunBindingInput, runRoot: string) {
   const facts = await input.resolveWindowsFacts();
-  const portable = createWindowsProcessBackend({
+  const kinds = new Set(selectWindowsProcessBackendKinds(facts));
+  const portable = kinds.has("portable") ? createWindowsProcessBackend({
     stateDirectory: join(runRoot, "process-backend"),
     jobObjects: "unavailable",
     semanticFacts: facts,
-  });
-  const kinds = new Set(selectWindowsProcessBackendKinds(facts));
+  }) : undefined;
+  if (portable instanceof NativeOwnedProcessBackend) {
+    portable.registerInspectionCleanup(cleanup => {
+      input.constructionOwner.addInspection(() => cleanup(Date.now() + 5_000));
+    });
+    await portable.prepareInspection(Date.now() + 30_000);
+  }
   return [
     ...(kinds.has("job") ? [{
       stableAdapterId: "runner-windows-job-adapter-v1",
@@ -717,7 +826,7 @@ async function createWindowsBackends(input: CreateRunBindingInput, runRoot: stri
       stableAdapterId: "runner-windows-portable-adapter-v1",
       backendId: "runner-windows-supervisor-v1",
       codeIdentity: "runner-v2/windows-portable-process-backend@1",
-      backend: portable,
+      backend: portable!,
     }] : []),
   ];
 }

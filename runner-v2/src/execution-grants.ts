@@ -49,6 +49,8 @@ export interface ExecutionGrantAccessRequest {
 }
 
 export interface ExecutionGrantIssueRequest extends ExecutionGrantBinding {
+  /** Trusted composition may shorten authority, never extend the configured TTL. */
+  readonly expiresNoLaterThan?: string;
   readonly workspacePath: string;
   readonly access: readonly ExecutionGrantAccessRequest[];
   /** Names only; credential values never enter an execution grant. */
@@ -125,6 +127,12 @@ const CONSUMED_CLAIMS = new WeakMap<object, GrantRecord>();
 const AUTHORITIES = new WeakMap<ExecutionGrantAuthority, Readonly<{ identity: object; owned: Set<object> }>>();
 const FILESYSTEM_RESERVATIONS = new WeakSet<GrantRecord>();
 
+/** Reserved trusted native V4A adapter. Only this exact name may reserve a
+ * filesystem effect without being one of the four native fs tool names.
+ * No generic alias: any other non-fs name still fails closed.
+ */
+export const RESERVED_TRUSTED_NATIVE_PATCH_TOOL = "openrouter.apply_patch";
+
 /** One filesystem effect inside the original Broker call. This is NOT a new
  * grant or an isolation acquisition. Post-mutation diagnostics still consume
  * the original grant; filesystem effects cannot run after that consumption.
@@ -146,7 +154,7 @@ export function reserveExecutionGrantForFilesystemMutation(
     if (record.state !== "issued") throw grantError("grant_consumed");
   };
   assertCurrent();
-  if (!sameBinding(record.claims, binding) || !["fs.write", "fs.patch", "fs.move", "fs.delete"].includes(binding.toolName)) throw grantError("grant_mismatch");
+  if (!sameBinding(record.claims, binding) || !["fs.write", "fs.patch", "fs.move", "fs.delete", RESERVED_TRUSTED_NATIVE_PATCH_TOOL].includes(binding.toolName)) throw grantError("grant_mismatch");
   if (FILESYSTEM_RESERVATIONS.has(record)) throw grantError("grant_consumed");
   FILESYSTEM_RESERVATIONS.add(record);
   return Object.freeze({ workspacePath: record.claims.workspacePath, access: record.claims.access,
@@ -179,7 +187,9 @@ export function createExecutionGrantAuthority(
       await options.beforeIssueCommit?.();
       if (request.signal?.aborted || epoch !== issuanceEpoch) throw grantError("grant_revoked");
       const issued = clock();
-      const expires = new Date(issued.getTime() + ttlMs);
+      const limit = request.expiresNoLaterThan === undefined ? issued.getTime() + ttlMs : Date.parse(request.expiresNoLaterThan);
+      if (!Number.isFinite(limit) || limit <= issued.getTime()) throw grantError("grant_expired");
+      const expires = new Date(Math.min(issued.getTime() + ttlMs, limit));
       const claims = deepFreeze({
         ...binding,
         grantId: `execution-grant-${randomUUID()}`,

@@ -1,3 +1,4 @@
+import { resolveEvidenceContent } from "./evidence-content.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -14,6 +15,8 @@ import type {
 import {
   finalVerificationEventArtifactHashes,
   reduceSchedulerEvent,
+  explicitStartBlocked,
+  newPolicyTaskAdmissionBlocked,
   validateSchedulerEvidenceEvent,
 } from "./scheduler-store.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -126,6 +129,32 @@ export class SqliteSchedulerStore implements SchedulerStore {
         }
         this.database.exec("COMMIT");
         return event;
+      }
+      if (input.type === "architect.handoff_selected" || input.type === "verifier.selection_selected") {
+        const pending = input.type === "architect.handoff_selected" ? priorProjection?.runtime.architect.handoff !== undefined : priorProjection?.verifierSelection?.status === "required";
+        const type = input.type === "architect.handoff_selected" ? "architect.handoff_required" : "verifier.selection_required";
+        const sequence = priorEvents.findLast((event) => event.type === type)?.sequence;
+        if (!pending || input.payload.requiredSequence !== sequence || !Number.isSafeInteger(sequence)) throw new Error("Selection answer refused: exact current pending requirement sequence is required.");
+      }
+      // Live admission only: old assignment events still replay byte-for-byte.
+      // Reducer order first (existence, then semantic admission), owner start
+      // and source artifact verification only for an admissible task.
+      if (priorProjection?.planningPolicyVersion === 1 && input.type === "task.transitioned" &&
+          (input.payload.status === "assigned" || input.payload.status === "running")) {
+        const taskId = input.payload.taskId;
+        if (typeof taskId === "string") {
+          if (!priorProjection.tasks[taskId]) throw new Error(`Unknown task ${taskId}.`);
+          const admissionBlocked = newPolicyTaskAdmissionBlocked(priorProjection, taskId);
+          if (admissionBlocked) throw new Error(admissionBlocked);
+        }
+        const blocked = explicitStartBlocked(priorProjection);
+        if (blocked) throw new Error(blocked);
+        const source = priorProjection.planning?.source;
+        const manifest = source?.manifestsById[source.currentManifestId];
+        if (!manifest) throw new Error("Current planning source manifest is unavailable.");
+        if (!this.artifacts) throw new Error("Current planning source artifact authority unavailable.");
+        const record = this.artifacts.verifySync(manifest.artifactDigest);
+        if (record.byteLength !== manifest.byteLength) throw new Error("Current planning source artifact byte length drift.");
       }
       if (
         input.type === "user.guidance_submitted" &&
@@ -307,6 +336,14 @@ function validateSchedulerEvent(
   if (evidenceStore) {
     validateSchedulerEvidenceEvent(projection, event, evidenceStore);
   }
+  if (event.type === "repair.approach_decided" && event.payload.contentPolicyVersion !== undefined) {
+    if (!evidenceStore || !artifacts || !projection) throw new Error("Repair content policy requires authoritative stores.");
+    const issue = projection.repairIssues?.[String(event.payload.issueId)];
+    const ids = [...(event.payload.diagnosticSet as string[]), ...(event.payload.evidenceIds as string[]), ...(issue?.approaches.flatMap((entry) => [...entry.diagnosticSet, ...entry.evidenceIds, ...entry.failureEvidenceIds]) ?? [])];
+    const actual = resolveEvidenceContent(evidenceStore, artifacts, event.runId, ids);
+    const claimed = event.payload.evidenceContentDigests;
+    if (!claimed || typeof claimed !== "object" || Array.isArray(claimed) || Object.keys(actual).length !== Object.keys(claimed).length || Object.entries(actual).some(([id, digest]) => (claimed as Record<string, unknown>)[id] !== digest)) throw new Error("Forged or unresolved repair content authority.");
+  }
   const artifactHashes = finalVerificationEventArtifactHashes(event);
   if (artifactHashes.length > 0 && !artifacts) {
     throw new Error("An ArtifactStore is required for final-verification evidence artifacts.");
@@ -355,6 +392,17 @@ function requiresAuthoritativeEvidenceStore(
   event: SchedulerEvent,
 ): boolean {
   if (!projection) return false;
+  // T6a: command outcomes of deliverable reviews and boundary checks must
+  // resolve to durable evidence.
+  if (event.type === "repair.approach_decided" && event.payload.contentPolicyVersion !== undefined) return true;
+  if (event.type === "delivery.boundary_checked") return true;
+  if (event.type === "delivery.test_integrity_baseline_recorded") return true;
+  if (event.type === "delivery.findings_recorded") {
+    const depth = event.payload.depth;
+    return typeof depth === "object" && depth !== null && !Array.isArray(depth) &&
+      ((depth as Record<string, unknown>).affectedTests !== undefined ||
+        (depth as Record<string, unknown>).probe !== undefined);
+  }
   if (event.type === "user.guidance_acknowledged") {
     const resolution = event.payload.resolution;
     return typeof resolution === "object" &&

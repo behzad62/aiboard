@@ -228,6 +228,49 @@ test("included sections surface sourceDigest and artifactHash provenance", () =>
   assert.equal(pack.sections[3]?.sourceDigest, undefined);
 });
 
+test("Architect repair context shows each approach's failure-evidence ids", () => {
+  const pack = buildArchitectContext({
+    limits: { maxBytes: 8_000, maxEstimatedTokens: 4_000 },
+    objective: "Fix the failing tests.",
+    reason: { type: "final_verification_repair_plan_required" },
+    projection: {
+      status: "running",
+      planRevision: 1,
+      planningPolicyVersion: 1,
+      tasks: {},
+      guidance: {},
+      reviews: {},
+      repairIssues: {
+        "repair:tests": {
+          issueId: "repair:tests",
+          rootCause: "final-verification:tests",
+          used: 1,
+          limit: 3,
+          hypotheses: ["first remedy"],
+          outcomes: ["failed"],
+          approaches: [{
+            approachId: "a1",
+            repeat: false,
+            failed: true,
+            hypothesis: "first remedy",
+            diagnosticSet: ["d1"],
+            evidenceIds: ["d1"],
+            failureEvidenceIds: ["check-ev-1"],
+          }],
+        },
+      },
+    } as unknown as SchedulerProjection,
+    instructions: [],
+    skills: [],
+    memories: [],
+    evidence: [],
+    recentHistory: [],
+  });
+  const sectionIds = pack.sections.map((entry) => entry.id);
+  assert.ok(sectionIds.includes("repair-issues"), "the repair-issues section rides the Architect turn");
+  assert.match(pack.text, /failureEvidence=\[check-ev-1\]/);
+});
+
 test("same context inputs produce byte-identical packs", () => {
   const assembler = new ContextAssembler({ maxBytes: 1_000, maxEstimatedTokens: 1_000 });
   const sections = [

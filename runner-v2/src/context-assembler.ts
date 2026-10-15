@@ -13,6 +13,12 @@ export interface ContextSection {
   content: string;
   sourceDigest?: string;
   artifactHash?: string;
+  /**
+   * T10 (M12): neutralize spoofed `## ` framing inside this required
+   * section's content. Optional sections are always neutralized; required
+   * sections only when flagged, so legacy packs keep byte-identity.
+   */
+  escapeFraming?: boolean;
 }
 
 export interface IncludedContextSection {
@@ -153,9 +159,21 @@ function render(section: ContextSection): string {
     section.sourceDigest ? `source-sha256=${section.sourceDigest}` : "",
     section.artifactHash ? `artifact=${section.artifactHash}` : "",
   ].filter(Boolean);
+  const content = section.required && section.escapeFraming !== true
+    ? section.content
+    : neutralizeFraming(section.content);
   return `## ${section.kind.toUpperCase()}: ${section.id}${
     provenance.length > 0 ? ` [${provenance.join("; ")}]` : ""
-  }\n${section.content}`;
+  }\n${content}`;
+}
+
+/**
+ * T10 (M12): break `## ` at line starts inside untrusted section content so
+ * a repo file cannot spoof a context header. A zero-width space keeps the
+ * text readable while defeating exact-match confusion.
+ */
+export function neutralizeFraming(content: string): string {
+  return content.replace(/^## /gm, "##\u200B ");
 }
 
 function joinedLength(values: readonly string[]): number {

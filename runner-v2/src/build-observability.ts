@@ -1,3 +1,4 @@
+import { explicitStartBlocked } from "./scheduler-store.js";
 import { readFile, realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
@@ -309,10 +310,62 @@ export interface BuildObservabilitySnapshot {
   independentVerifier?: IndependentVerifierObservability;
   /** Count of recorded context manifests for this run. */
   contextManifestCount: number;
+  /**
+   * T7b: canonical planning readiness/source/start projection. Absent on
+   * runs that never opted into evidence-gated planning (no invented
+   * coverage) and on snapshots reduced before T7b.
+   */
+  planning?: PlanningObservability;
   /** Terminal-reader provenance so absent legacy stores are never shown as live empty state. */
   historical?: {
     terminalState: "completed" | "failed" | "stopped";
     provenance: HistoricalReadProvenanceBySurface;
+  };
+}
+
+export interface PlanningObservability {
+  optedIn: boolean;
+  readiness: "not_ready" | "ready";
+  planRevisionId?: string;
+  planDigest?: string;
+  sourceManifestId?: string;
+  sourceArtifactDigest?: string;
+  /** True while a ready plan waits for its explicit owner start. */
+  startRequired: boolean;
+  /** True while the current ready identity carries an owner authorization. */
+  startAuthorized: boolean;
+}
+
+/**
+ * T7b: canonical readiness/source/start projection from the actual
+ * scheduler projection. Legacy runs project nothing (absent, never
+ * invented); plan-only and answered runs never take a start.
+ */
+export function projectPlanningObservability(
+  projection: SchedulerProjection,
+): PlanningObservability | undefined {
+  if (projection.planningPolicyVersion !== 1) return undefined;
+  const planning = projection.planning;
+  const ready = planning?.readiness === "ready" && planning.plan !== undefined;
+  const executable = projection.runPolicy !== "plan_only" && projection.planningTriageDecision === "build";
+  const startAuthorized = ready && executable && explicitStartBlocked(projection) === undefined;
+  return {
+    optedIn: true,
+    readiness: ready ? "ready" : "not_ready",
+    ...(ready
+      ? {
+        planRevisionId: planning.plan!.currentRevisionId,
+        planDigest: planning.plan!.currentDigest,
+      }
+      : {}),
+    ...(planning
+      ? {
+        sourceManifestId: planning.source.currentManifestId,
+        sourceArtifactDigest: planning.source.artifactDigest,
+      }
+      : {}),
+    startRequired: ready && executable && !startAuthorized,
+    startAuthorized,
   };
 }
 
