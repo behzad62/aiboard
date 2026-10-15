@@ -314,22 +314,40 @@ export function createNativeBuildFileLoader(options: {
     runId: string,
     identity?: NativeBuildFileIdentity
   ) => Promise<NativeBuildFileSnapshot>;
+  /** The cached snapshot for this run/identity, without fetching. */
+  peek: (
+    runId: string,
+    identity?: NativeBuildFileIdentity
+  ) => NativeBuildFileSnapshot | undefined;
 } {
   let cached: { key: string; snapshot: NativeBuildFileSnapshot } | undefined;
+  // A file snapshot can take many seconds on a large repository; concurrent polls share one fetch.
+  const inFlight = new Map<string, Promise<NativeBuildFileSnapshot>>();
+  const keyFor = (runId: string, identity?: NativeBuildFileIdentity) => identity
+    ? `${runId}:${identity.source}:${identity.revision}`
+    : undefined;
+  const hit = (runId: string, requestedKey: string | undefined) =>
+    cached && (requestedKey ? cached.key === requestedKey : cached.key.startsWith(`${runId}:`))
+      ? cached.snapshot
+      : undefined;
   return {
+    peek: (runId, identity) => hit(runId, keyFor(runId, identity)),
     load: async (runId, identity) => {
-      const requestedKey = identity
-        ? `${runId}:${identity.source}:${identity.revision}`
-        : undefined;
-      if (cached && (requestedKey ? cached.key === requestedKey : cached.key.startsWith(`${runId}:`))) {
-        return cached.snapshot;
-      }
-      const snapshot = await options.load(runId, identity);
-      cached = {
-        key: `${runId}:${snapshot.source}:${snapshot.revision}`,
-        snapshot,
-      };
-      return snapshot;
+      const requestedKey = keyFor(runId, identity);
+      const cachedSnapshot = hit(runId, requestedKey);
+      if (cachedSnapshot) return cachedSnapshot;
+      const flightKey = requestedKey ?? `${runId}:*`;
+      const pending = inFlight.get(flightKey);
+      if (pending) return await pending;
+      const request = options.load(runId, identity).then((snapshot) => {
+        cached = {
+          key: `${runId}:${snapshot.source}:${snapshot.revision}`,
+          snapshot,
+        };
+        return snapshot;
+      }).finally(() => inFlight.delete(flightKey));
+      inFlight.set(flightKey, request);
+      return await request;
     },
   };
 }
@@ -412,12 +430,19 @@ export function createNativeBuildAttachmentController<
   cancelScheduled: (handle: unknown) => void;
   intervalMs: number;
   onError?: (error: unknown) => void;
+  /**
+   * Cheap change detector for a settled (paused/terminal) run, e.g. `${state}:${lastSequence}` from
+   * the run record. When it changes — a resume from another tab, the API, or runner recovery — the
+   * controller reloads instead of showing the stale paused snapshot until a manual refresh.
+   */
+  probe?: (runId: string) => Promise<string>;
 }): { start: () => Promise<void>; wake: () => void; cancel: () => void } {
   let cancelled = false;
   let scheduled: unknown;
   let savedRunId = options.initialSavedRunId;
   let observedRunId: string | undefined;
   let observedState: NativeRunProjection["state"] | undefined;
+  let observedProbe: string | undefined;
   let generation = 0;
 
   const schedule = (delayMs = options.intervalMs) => {
@@ -433,8 +458,12 @@ export function createNativeBuildAttachmentController<
       const settled = observedState !== undefined &&
         !["created", "running", "stopping"].includes(observedState);
       if (settled && observedRunId === runId) {
-        schedule();
-        return;
+        const probed = options.probe ? await options.probe(runId) : undefined;
+        if (cancelled || runGeneration !== generation) return;
+        if (probed === undefined || probed === observedProbe) {
+          schedule();
+          return;
+        }
       }
       const snapshot = await options.load(runId);
       if (cancelled || runGeneration !== generation) return;
@@ -442,6 +471,9 @@ export function createNativeBuildAttachmentController<
       observedRunId = runId;
       observedState = snapshot.runState;
       options.apply({ ...snapshot, runId });
+      const nowSettled = !["created", "running", "stopping"].includes(snapshot.runState);
+      observedProbe = nowSettled && options.probe ? await options.probe(runId) : undefined;
+      if (cancelled || runGeneration !== generation) return;
       schedule();
     } catch (error) {
       if (cancelled || runGeneration !== generation) return;

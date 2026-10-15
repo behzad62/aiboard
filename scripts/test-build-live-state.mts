@@ -538,6 +538,12 @@ await fileLoader.load("run_a", { source: "project", revision: "c".repeat(40) });
 assert.equal(fileFetches, 3, "a source change fetches files once");
 await fileLoader.load("run_b", { source: "integration", revision: "b".repeat(40) });
 assert.equal(fileFetches, 4, "a run switch invalidates the old file snapshot");
+assert.equal(fileLoader.peek("run_b", { source: "integration", revision: "b".repeat(40) })?.revision, "b".repeat(40));
+assert.equal(fileLoader.peek("run_b", { source: "integration", revision: "e".repeat(40) }), undefined, "peek never fetches");
+assert.equal(fileFetches, 4);
+const concurrentRevision = { source: "integration" as const, revision: "f".repeat(40) };
+await Promise.all([fileLoader.load("run_b", concurrentRevision), fileLoader.load("run_b", concurrentRevision)]);
+assert.equal(fileFetches, 5, "concurrent polls share one in-flight file fetch");
 
 assert.deepEqual(
   nativeBuildFileIdentity({
@@ -677,6 +683,38 @@ assert.deepEqual(
 );
 assert.equal(stableLoads, 3);
 stableController.cancel();
+
+const probeQueue: Array<() => Promise<void>> = [];
+let probeKey = "paused:10";
+let probeRunState: "paused" | "running" = "paused";
+let probeLoads = 0;
+const probeController = createNativeBuildAttachmentController({
+  initialSavedRunId: "run_probe",
+  resolveRunId: async () => "run_probe",
+  load: async () => {
+    probeLoads += 1;
+    return { runState: probeRunState };
+  },
+  apply: () => undefined,
+  schedule: (callback) => {
+    probeQueue.push(callback);
+    return callback;
+  },
+  cancelScheduled: () => undefined,
+  intervalMs: 1,
+  probe: async () => probeKey,
+});
+await probeController.start();
+assert.equal(probeLoads, 1);
+await probeQueue.shift()!();
+assert.equal(probeLoads, 1, "an unchanged paused probe does not reload");
+probeKey = "running:11";
+probeRunState = "running";
+await probeQueue.shift()!();
+assert.equal(probeLoads, 2, "an external resume of a paused run is picked up without a page reload");
+await probeQueue.shift()!();
+assert.equal(probeLoads, 3, "an active run keeps polling");
+probeController.cancel();
 
 const wakeRaceQueue: Array<() => Promise<void>> = [];
 let releaseOldResolution!: (runId: string) => void;

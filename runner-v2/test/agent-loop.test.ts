@@ -1327,6 +1327,37 @@ test("model working context compacts deterministically without deleting raw sess
   );
 });
 
+test("working-set compaction never orphans a tool result from its call", () => {
+  const messages: AgentMessage[] = [
+    { id: "system", role: "system", content: "Stable policy" },
+    { id: "intent", role: "user", content: "Build it" },
+  ];
+  for (let index = 0; index < 50; index += 1) {
+    messages.push({
+      id: `assistant-${index}`,
+      role: "assistant",
+      content: [{ type: "tool_call", callId: `call-${index}`, name: "fs.read", arguments: { path: `f${index}` } }],
+    });
+    messages.push({
+      id: `tool-${index}`,
+      role: "tool",
+      content: { callId: `call-${index}`, toolName: "fs.read", isError: false, content: [{ type: "text", text: "x" }] },
+    });
+  }
+  // 102 messages, retain 11: the naive cutoff lands on a tool result.
+  const compacted = compactAgentMessages(messages, { maxMessages: 30, maxBytes: 512 * 1024, retainRecent: 11 });
+  const issued = new Set<string>();
+  for (const message of compacted) {
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const block of message.content) if (block.type === "tool_call") issued.add(block.callId);
+    }
+    if (message.role === "tool") {
+      const callId = (message.content as { callId: string }).callId;
+      assert.equal(issued.has(callId), true, `tool result ${callId} keeps its assistant call`);
+    }
+  }
+});
+
 test("working context keeps only the newest runner-owned state and resume snapshots", () => {
   const messages: AgentMessage[] = [
     { id: "system", role: "system", content: "Stable policy" },

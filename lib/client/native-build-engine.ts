@@ -193,10 +193,10 @@ export async function runNativeBuildDiscussion(
     architectRuntimeId,
     reviewerRuntimeId
   );
-  await configureNativeProviders(
-    connection,
-    configuredRuntimeIds.map((runtimeId, index) =>
-      createNativeProviderConfig(
+  const providerConfigs: NativeProviderConfig[] = [];
+  for (const [index, runtimeId] of configuredRuntimeIds.entries()) {
+    try {
+      providerConfigs.push(createNativeProviderConfig(
         runtimeId,
         index,
         runtimeId === reviewerRuntimeId &&
@@ -204,9 +204,14 @@ export async function runNativeBuildDiscussion(
           discussion.buildReviewerReasoningEffort
           ? discussion.buildReviewerReasoningEffort
           : discussion.reasoningEffort
-      )
-    )
-  );
+      ));
+    } catch (error) {
+      // Attaching to an existing run: the runner already holds durable (merged) provider configs,
+      // so a browser without this key (another device, an observer tab) can still watch the run.
+      if (!runId) throw error;
+    }
+  }
+  if (providerConfigs.length > 0) await configureNativeProviders(connection, providerConfigs);
   if (!runId) {
     runId = nativeBuildProvisioningRunId(discussion.nativeBuildRunId);
     const objective = buildObjective(discussion);

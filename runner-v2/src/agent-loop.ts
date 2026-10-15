@@ -529,7 +529,10 @@ export function compactAgentMessages(
     Buffer.byteLength(JSON.stringify(currentMessages)) <= limits.maxBytes
   ) return currentMessages;
 
-  const cutoff = Math.max(0, currentMessages.length - limits.retainRecent);
+  let cutoff = Math.max(0, currentMessages.length - limits.retainRecent);
+  // Never split a tool result from the assistant turn that issued it: providers reject a tool output
+  // whose call was compacted away ("No tool call found for function call output").
+  while (cutoff > 0 && currentMessages[cutoff]?.role === "tool") cutoff -= 1;
   const protectedMessages = currentMessages
     .slice(0, cutoff)
     .filter((message) => message.role === "system" || message.role === "user");

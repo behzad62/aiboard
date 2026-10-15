@@ -1042,7 +1042,19 @@ function DiscussionPageInner() {
             getNativeBuildObservability(connection, runId),
             getNativeBuildTranscript(connection, runId, cursor),
           ]);
-        const files = await fileLoader.load(runId, nativeBuildFileIdentity(projection));
+        // Files are slow on large repositories (and can fail transiently); they must never hold back
+        // the run status. Use the cached snapshot now and apply a fresh one when it arrives.
+        const fileIdentity = nativeBuildFileIdentity(projection);
+        const files = fileLoader.peek(runId, fileIdentity);
+        if (!files) {
+          void fileLoader.load(runId, fileIdentity).then(
+            (snapshot) => {
+              if (nativeAttachmentControllerRef.current !== controller) return;
+              setNativeFiles((current) => reconcileNativeBuildFiles(current, runId, snapshot));
+            },
+            () => undefined
+          );
+        }
         return {
           runState: run.state,
           projection,
@@ -1175,12 +1187,16 @@ function DiscussionPageInner() {
         nativeTranscriptRef.current = nextTranscript;
         streamingRef.current.clear();
         setNativeTranscript(nextTranscript);
-        setNativeFiles((current) => reconcileNativeBuildFiles(current, runId, files));
+        if (files) setNativeFiles((current) => reconcileNativeBuildFiles(current, runId, files));
       },
       schedule: (callback, delayMs) =>
         window.setTimeout(() => void callback(), delayMs),
       cancelScheduled: (handle) => window.clearTimeout(handle as number),
       intervalMs: 2_000,
+      probe: async (runId) => {
+        const run = await getNativeRun(connection, runId);
+        return `${run.state}:${run.lastSequence}`;
+      },
     });
 
     nativeAttachmentControllerRef.current = controller;
