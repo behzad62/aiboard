@@ -1993,7 +1993,8 @@ function DiscussionPageInner() {
           Stop
         </Button>
       )}
-      {(status === "stopped" || status === "failed") && !streamConnected && (
+      {(status === "stopped" || status === "failed") && !streamConnected &&
+        !(discussion?.nativeBuildRunId && !nativeProjection) && (
         <>
           {/* An owner gate (plan/spec approval) is resolved in "Needs you"; Resume cannot pass it. */}
           {!nativeBuildPauseDescription(nativeProjection)?.waitingForOwner && <Button
@@ -2045,6 +2046,8 @@ function DiscussionPageInner() {
   if (discussion.mode === "build") {
     const steeringView = runnerSteeringLedgerView(nativeProjection);
     const pause = nativeBuildPauseDescription(nativeProjection);
+    // Until the first runner snapshot arrives, the saved discussion status may be stale.
+    const nativeLoading = Boolean(discussion.nativeBuildRunId && !nativeProjection);
     const nativeConnection = discussion.runnerUrl && discussion.runnerToken
       ? { url: discussion.runnerUrl, token: discussion.runnerToken }
       : undefined;
@@ -2311,7 +2314,7 @@ function DiscussionPageInner() {
             <p className="text-muted-foreground">{pause.detail}</p>
           </div>
         )}
-        {!pause && shouldShowBuildStopFallback({
+        {!pause && !nativeLoading && shouldShowBuildStopFallback({
           stopReason: discussion.buildStopReason,
           status,
           hasStopReport: Boolean(buildStopReport),
@@ -2486,11 +2489,11 @@ function DiscussionPageInner() {
     const fileCount = currentNativeFiles ? nativeArtifactFiles.length : legacyArtifactFiles.length;
     const filesView = (
       <div className="space-y-6">
-        {discussion.nativeBuildRunId && nativeFilesLoad && (
+        {discussion.nativeBuildRunId && (nativeFilesLoad || (!currentNativeFiles && !nativeProjection)) && (
           <LoadingNotice
             label={currentNativeFiles ? "Refreshing project files" : "Reading project files from the runner"}
-            detail={nativeFilesLoad.error ?? "Large repositories can take a while; the rest of the page keeps updating."}
-            since={nativeFilesLoad.since}
+            detail={nativeFilesLoad?.error ?? "Large repositories can take a while; the rest of the page keeps updating."}
+            since={nativeFilesLoad?.since ?? nativeAttach?.since}
           />
         )}
         {currentNativeFiles && (
@@ -2516,7 +2519,7 @@ function DiscussionPageInner() {
           commands={commandRuns}
           folderName={discussion.projectFolderName}
         />
-        {!currentNativeFiles && !nativeFilesLoad && legacyArtifactFiles.length === 0 && writtenFiles.length === 0 && commandRuns.length === 0 && (
+        {!currentNativeFiles && !nativeFilesLoad && !(discussion.nativeBuildRunId && !nativeProjection) && legacyArtifactFiles.length === 0 && writtenFiles.length === 0 && commandRuns.length === 0 && (
           <p className="text-sm text-muted-foreground">No files or commands yet.</p>
         )}
       </div>
@@ -2532,7 +2535,9 @@ function DiscussionPageInner() {
         statusPill={
           <StatusPill
             status={
-              pause?.waitingForOwner
+              nativeLoading
+                ? "connecting"
+                : pause?.waitingForOwner
                 ? "waiting_for_owner"
                 : pause
                   ? "paused"
@@ -3174,6 +3179,14 @@ function statusMeta(status: string): {
         text: "text-emerald-700 dark:text-emerald-300",
         dot: "bg-emerald-500",
         pulse: false,
+      };
+    case "connecting":
+      return {
+        label: "Connecting…",
+        bg: "bg-slate-500/12",
+        text: "text-slate-600 dark:text-slate-300",
+        dot: "bg-slate-400",
+        pulse: true,
       };
     case "waiting_for_owner":
       return {
