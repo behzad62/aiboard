@@ -22,15 +22,19 @@ import {
 } from "@/lib/benchmark/certified/decision-dashboard";
 import type { BenchmarkResultSet } from "@/lib/benchmark/types";
 import { useBenchmarkResultSetDeletion } from "@/components/benchmark/useBenchmarkResultSetDeletion";
+import { Button } from "@/components/ui/button";
 
 export function BenchmarkDecisionDashboard({
   certified,
   onRefresh,
   setMessage,
+  onStartRun,
 }: {
   certified: unknown;
   onRefresh: () => Promise<void>;
   setMessage: (message: string | null) => void;
+  /** Switches the page to the Run tab from the empty state. */
+  onStartRun?: () => void;
 }) {
   const [filters, setFilters] = useState<DecisionFilterState>(
     EMPTY_DECISION_FILTERS
@@ -70,6 +74,32 @@ export function BenchmarkDecisionDashboard({
     setMessage,
     promotableResultSetIds,
   });
+
+  if (allRows.length === 0 && !hasBenchmarkRawEvidence(certified)) {
+    return (
+      <section
+        aria-labelledby="benchmark-empty-heading"
+        className="glass rounded-2xl border px-6 py-12 text-center"
+      >
+        <h2
+          id="benchmark-empty-heading"
+          className="font-display text-2xl font-semibold tracking-tight"
+        >
+          No results yet
+        </h2>
+        <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
+          Run a preset to see which of your models handles tools most
+          reliably, whether a team beats its best member, and what each
+          success costs in tokens and time.
+        </p>
+        {onStartRun && (
+          <Button className="mt-6" onClick={onStartRun}>
+            Run a benchmark
+          </Button>
+        )}
+      </section>
+    );
+  }
 
   return (
     <div className="space-y-8">

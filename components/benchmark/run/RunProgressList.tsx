@@ -95,19 +95,14 @@ export function RunProgressList({
   onCancel: () => void;
 }) {
   if (rows.length === 0) {
+    if (!running) return null;
     return (
       <div className="space-y-2 rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground">
-        <p>
-          {running
-            ? "The certified run continues in this tab."
-            : "Run a preset above to see live progress here."}
-        </p>
-        {running && (
-          <Button variant="outline" size="sm" onClick={onCancel}>
-            <Square className="h-4 w-4" />
-            Cancel
-          </Button>
-        )}
+        <p>The certified run continues in this tab.</p>
+        <Button variant="outline" size="sm" onClick={onCancel}>
+          <Square className="h-4 w-4" />
+          Cancel
+        </Button>
       </div>
     );
   }

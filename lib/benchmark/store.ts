@@ -59,6 +59,10 @@ import {
 } from "../client/store";
 import type { ClientStore } from "../client/store";
 import { redactBenchmarkBundle } from "./redaction";
+import {
+  isRetiredBenchmarkResultSet,
+  listRetiredBenchmarkRunIds,
+} from "./retired";
 import { sanitizeBenchmarkDisplayText } from "./configuration-display";
 import {
   hasValidSnapshotMetricInvariants,
@@ -564,6 +568,46 @@ export async function deleteBenchmarkRunCascade(
   summary.artifacts += deleteBenchmarkArtifactsByRunId(runId);
   await deleteBenchmarkRunBlob(runId);
   await flush();
+  return summary;
+}
+
+export interface RetiredBenchmarkEvidence {
+  resultSetIds: string[];
+  runIds: string[];
+}
+
+/** Evidence from retired tracks (GameIQ, Fireworks) still held in storage. */
+export async function findRetiredBenchmarkEvidence(): Promise<RetiredBenchmarkEvidence> {
+  const [resultSets, runs, attempts, cases] = await Promise.all([
+    listBenchmarkResultSets(),
+    listBenchmarkRuns(),
+    listBenchmarkAttemptsV2(),
+    listBenchmarkCaseV2(),
+  ]);
+  return {
+    resultSetIds: resultSets
+      .filter((set) => set.status !== "pending" && isRetiredBenchmarkResultSet(set))
+      .map((set) => set.id),
+    runIds: listRetiredBenchmarkRunIds(runs, attempts, cases),
+  };
+}
+
+/**
+ * Deletes retired-track evidence through the normal cascades: result sets
+ * first (a blended Model IQ set takes its Tool Reliability attempts with it,
+ * since its score is no longer comparable), then any retired runs left over.
+ */
+export async function deleteRetiredBenchmarkEvidence(): Promise<BenchmarkDeleteSummary> {
+  const summary = createDeleteSummary();
+  const evidence = await findRetiredBenchmarkEvidence();
+  for (const resultSetId of evidence.resultSetIds) {
+    addDeleteSummary(summary, await deleteBenchmarkResultSetCascade(resultSetId));
+  }
+  const remainingRunIds = new Set(getBenchmarkRuns().map((run) => run.id));
+  for (const runId of evidence.runIds) {
+    if (!remainingRunIds.has(runId)) continue;
+    addDeleteSummary(summary, await deleteBenchmarkRunCascade(runId));
+  }
   return summary;
 }
 

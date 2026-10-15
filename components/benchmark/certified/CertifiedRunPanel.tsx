@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Play, RefreshCw, Square } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -311,13 +312,25 @@ export function CertifiedRunPanel({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Run a certified benchmark</CardTitle>
+          <CardTitle className="text-lg">Run a benchmark</CardTitle>
           <CardDescription>
-            Check the models you want to measure, then run a preset. Certified
-            scores come from current cases and deterministic verifiers.
+            Pick the models to measure, then run a preset. Scores come from
+            fixed cases and deterministic verifiers, using your own keys.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {models.length === 0 ? (
+            <div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+              No models are enabled yet.{" "}
+              <Link
+                href="/settings"
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                Connect a provider
+              </Link>{" "}
+              to run benchmarks.
+            </div>
+          ) : (
           <ModelChecklist
             models={models}
             selectedModelIds={soloModelIds}
@@ -325,8 +338,9 @@ export function CertifiedRunPanel({
             onChange={setSoloModelIds}
             onEffortChange={handleEffortChange}
           />
-          {focusedPresetHasTeamLeg && (
-            <div className="space-y-2 rounded-md border p-3">
+          )}
+          {focusedPresetHasTeamLeg && models.length > 0 && (
+            <div className="space-y-2 rounded-lg border bg-background/40 p-3">
               <div className="text-sm font-medium">Team composition</div>
               <p className="text-xs text-muted-foreground">
                 Used for the TeamIQ leg; the same role slots (architect /
@@ -387,16 +401,10 @@ export function CertifiedRunPanel({
               </Button>
             </div>
           )}
-          {models.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              Add and enable at least one provider key in Settings to run
-              certified model calls.
-            </p>
-          )}
         </CardContent>
       </Card>
 
-      <details className="rounded-md border">
+      <details className="glass rounded-xl border">
         <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium">
           Advanced: run a single suite or pack
         </summary>
@@ -701,24 +709,18 @@ function presetCardGates(input: {
   sharedTeamModelIds: string[];
   workBenchRunnerReady: boolean;
 }): Record<BenchmarkPreset["id"], PresetCardGate> {
+  // With no models at all the panel shows one empty state instead of a
+  // reason under every card.
   const noModels = input.models.length === 0;
-  const soloGate: PresetCardGate =
-    noModels || input.soloModelIds.length === 0
-      ? {
-          disabled: true,
-          reason: noModels
-            ? "Add and enable a provider model in Settings first."
-            : "Select at least one model in the checklist above.",
-        }
+  const soloGate: PresetCardGate = noModels
+    ? { disabled: true }
+    : input.soloModelIds.length === 0
+      ? { disabled: true, reason: "Select at least one model above." }
       : { disabled: false };
-  const teamGate: PresetCardGate =
-    noModels || input.sharedTeamModelIds.length === 0
-      ? {
-          disabled: true,
-          reason: noModels
-            ? "Add and enable a provider model in Settings first."
-            : "Select a team composition below.",
-        }
+  const teamGate: PresetCardGate = noModels
+    ? { disabled: true }
+    : input.sharedTeamModelIds.length === 0
+      ? { disabled: true, reason: "Choose a team composition." }
       : { disabled: false };
   const fullGate: PresetCardGate = soloGate.disabled
     ? soloGate

@@ -160,7 +160,7 @@ export function BuildLeaderboard() {
     <section className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold tracking-tight">Build Lab leaderboard</h2>
+          <h2 className="text-xl font-semibold tracking-tight">Live build leaderboard</h2>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
             Architect-reviewed quality, speed, and reliability accumulated from
             Build runs in this browser.
@@ -180,7 +180,7 @@ export function BuildLeaderboard() {
         <Card>
           <CardContent className="py-10 text-center">
             <p className="mx-auto max-w-xl text-sm text-muted-foreground">
-              No data yet. Run a Build discussion; each worker&apos;s approvals, fixes,
+              No builds yet. Start a build from the workspace; each worker&apos;s approvals, fixes,
               output speed, and provider availability accumulate here across builds.
             </p>
           </CardContent>

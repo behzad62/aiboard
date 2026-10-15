@@ -3,13 +3,6 @@
 import { Play, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   BENCHMARK_PRESETS,
   type BenchmarkPreset,
 } from "@/lib/benchmark/certified/run-presets";
@@ -22,13 +15,11 @@ export interface PresetCardGate {
   note?: string;
 }
 
-// Three preset cards (2026-07-17 benchmark UX overhaul, Task 4 Step 4): each
-// has its OWN Run button (no separate "select then run" step), and clicking
-// the card body focuses it — the panel shows the shared team builder only
-// while a team-leg preset is focused. Disabled-state reasons and the
-// WorkBench-runner note are computed by the panel (it owns the model
-// checklist / team selection / runner health this depends on) and passed in
-// as `gates` so this component stays presentational.
+// Three preset cards, each with its OWN Run button. Choosing a card (a radio,
+// so it is keyboard reachable without nesting buttons) focuses it — the panel
+// shows the shared team builder while a team-leg preset is focused, and the
+// bench-runner controls while Full is focused. Gates come from the panel,
+// which owns the checklist / team selection / runner health.
 export function PresetCards({
   busy,
   runningPresetId,
@@ -45,57 +36,62 @@ export function PresetCards({
   onRun: (preset: BenchmarkPreset) => void;
 }) {
   return (
-    <div className="grid gap-3 md:grid-cols-3">
+    <div
+      role="radiogroup"
+      aria-label="Benchmark preset"
+      className="grid gap-3 md:grid-cols-3"
+    >
       {BENCHMARK_PRESETS.map((preset) => {
         const gate = gates[preset.id];
         const focused = preset.id === focusedPresetId;
         const isRunningThis = busy && runningPresetId === preset.id;
         return (
-          <Card
+          <div
             key={preset.id}
-            role="button"
-            tabIndex={0}
-            aria-pressed={focused}
-            onClick={() => onFocus(preset.id)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onFocus(preset.id);
-              }
-            }}
-            className={`cursor-pointer transition-colors ${
-              focused ? "border-primary" : ""
+            className={`flex flex-col rounded-xl border p-4 transition-colors has-[input:focus-visible]:ring-2 has-[input:focus-visible]:ring-ring ${
+              focused
+                ? "border-primary bg-accent/50"
+                : "bg-background/40 hover:bg-accent/30"
             }`}
           >
-            <CardHeader>
-              <CardTitle className="text-base">{preset.title}</CardTitle>
-              <CardDescription>{preset.description}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
+            <label className="block flex-1 cursor-pointer">
+              <input
+                type="radio"
+                name="benchmark-preset"
+                className="sr-only"
+                checked={focused}
+                onChange={() => onFocus(preset.id)}
+              />
+              <span className="block text-sm font-semibold">{preset.title}</span>
+              <span className="mt-1 block text-sm text-muted-foreground">
+                {preset.description}
+              </span>
+            </label>
+            <div className="mt-4 space-y-2">
               {gate.note && (
                 <p className="text-xs text-muted-foreground">{gate.note}</p>
               )}
               <Button
                 className="w-full"
+                variant={focused ? "default" : "outline"}
                 disabled={gate.disabled || busy}
-                onClick={(event) => {
-                  event.stopPropagation();
+                onClick={() => {
                   onFocus(preset.id);
                   onRun(preset);
                 }}
               >
                 {isRunningThis ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
                 ) : (
-                  <Play className="h-4 w-4" />
+                  <Play className="h-4 w-4" aria-hidden="true" />
                 )}
                 Run {preset.title}
               </Button>
               {gate.disabled && gate.reason && (
                 <p className="text-xs text-muted-foreground">{gate.reason}</p>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         );
       })}
     </div>

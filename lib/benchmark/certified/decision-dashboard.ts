@@ -166,7 +166,7 @@ export function buildDecisionVerdicts(rows: DecisionRow[]): DecisionVerdict[] {
       (row) => row.toolReliabilityScore,
       (row) => row.toolReliabilitySamples,
       "reliability sample",
-      "Run Tool Reliability to compare structured and tool-call discipline."
+      "Run Tool Reliability to compare multi-turn tool-use discipline."
     ),
     verdict(
       "leanest",
