@@ -1460,8 +1460,6 @@ function DiscussionPageInner() {
       setNativeProjection(projection);
       setVerifierSelection(null);
       setError(null);
-      // Selecting only records the choice; like the Architect handoff, continue the run in one click.
-      await handleResume();
       nativeAttachmentControllerRef.current?.wake();
     } catch (selectionError) {
       setError(
