@@ -23,21 +23,15 @@ export default function NotFound() {
       <ul className="mt-8 space-y-2 text-muted-foreground">
         <li>
           <Link href="/" className={link}>
-            Start a discussion
+            Open the workspace
           </Link>{" "}
-          — the dashboard.
+          — start a chat or a build.
         </li>
         <li>
           <Link href="/about" className={link}>
             About AI Board
           </Link>{" "}
           — how the whole thing works.
-        </li>
-        <li>
-          <Link href="/games" className={link}>
-            Games
-          </Link>{" "}
-          — play against the models.
         </li>
         <li>
           <Link href="/settings" className={link}>

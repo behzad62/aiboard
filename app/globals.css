@@ -2,10 +2,9 @@
 @config "#tailwind-config";
 
 @layer base {
+  /* AI Board palette: cool blue-led neutrals with glass surfaces. Color
+     tokens are HSL triplets for Tailwind; glass tokens are full colors. */
   :root {
-    /* Light theme: a soft, cool "paper" base (not stark white) so white cards
-       lift off the page for depth. Text is a deep slate rather than near-black
-       to soften the contrast; borders carry a touch more definition. */
     --background: 213 38% 97%;
     --foreground: 222 45% 12%;
     --card: 0 0% 100%;
@@ -14,40 +13,79 @@
     --popover-foreground: 222 45% 12%;
     --primary: 221.2 83.2% 53.3%;
     --primary-foreground: 210 40% 98%;
-    --secondary: 214 32% 93.5%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 214 32% 93.5%;
-    --muted-foreground: 215.3 18% 42%;
-    --accent: 214 33% 92%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214 27% 87.5%;
-    --input: 214 27% 87.5%;
+    --secondary: 216 65% 95.5%;
+    --secondary-foreground: 222 47% 14%;
+    --muted: 216 65% 95.5%;
+    --muted-foreground: 215 22% 41%;
+    --accent: 219 82% 95%;
+    --accent-foreground: 224 76% 38%;
+    --destructive: 348 54% 46%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 156 67% 27%;
+    --success-soft: 147 44% 94%;
+    --warning: 37 89% 29%;
+    --warning-soft: 41 100% 94%;
+    --border: 215 49% 89%;
+    --input: 215 40% 85%;
     --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
+    --radius: 0.625rem;
+
+    --glass: rgb(255 255 255 / 0.56);
+    --glass-strong: rgb(255 255 255 / 0.8);
+    --glass-line: rgb(255 255 255 / 0.85);
+    --glass-edge: rgb(36 67 108 / 0.1);
+    --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.9);
+    --glass-blur: blur(20px) saturate(170%);
+    --shadow-soft: 0 4px 18px #24436c07, 0 1px 2px #24436c05;
+    --shadow-raised: 0 14px 44px #24436c18, 0 2px 7px #24436c0c;
+    --glow-blue: #3b82f62e;
+    --glow-cyan: #22d3ee1f;
+    --glow-amber: #f59e0b14;
   }
 
   .dark {
     --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
+    --card: 218 52% 14%;
     --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
+    --popover: 218 52% 13%;
     --popover-foreground: 210 40% 98%;
     --primary: 217.2 91.2% 59.8%;
     --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
+    --secondary: 218 60% 12%;
     --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --muted: 218 60% 12%;
+    --muted-foreground: 215 30% 72%;
+    --accent: 217 52% 21%;
+    --accent-foreground: 214 100% 80%;
+    --destructive: 348 100% 82%;
+    --destructive-foreground: 222.2 84% 4.9%;
+    --success: 156 63% 66%;
+    --success-soft: 172 47% 13%;
+    --warning: 39 82% 69%;
+    --warning-soft: 38 26% 15%;
+    --border: 216 40% 26%;
+    --input: 216 40% 30%;
+    --ring: 217.2 91.2% 59.8%;
+
+    --glass: rgb(17 31 55 / 0.5);
+    --glass-strong: rgb(14 26 47 / 0.82);
+    --glass-line: rgb(255 255 255 / 0.09);
+    --glass-edge: rgb(0 0 0 / 0.25);
+    --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.06);
+    --shadow-soft: 0 4px 20px #00000015, 0 1px 2px #00000018;
+    --shadow-raised: 0 18px 56px #00000040, 0 2px 8px #00000025;
+    --glow-blue: #2563eb40;
+    --glow-cyan: #0891b226;
+    --glow-amber: #f59e0b12;
+  }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    :root,
+    .dark {
+      --glass: hsl(var(--card));
+      --glass-strong: hsl(var(--card));
+    }
   }
 }
 
@@ -65,21 +103,42 @@
     min-height: 100%;
     background-repeat: no-repeat;
     background-attachment: fixed;
-  }
-
-  html:not(.dark) body {
-    /* Soft cool wash (slate-50 → slate-100) rather than a near-white overlay,
-       with subtle blue + amber corner glows that echo the dark theme. */
     background-image:
-      radial-gradient(circle at 0% 0%, rgba(59, 130, 246, 0.1), transparent 32%),
-      radial-gradient(circle at 100% 0%, rgba(245, 158, 11, 0.08), transparent 24%),
-      linear-gradient(180deg, hsl(210 40% 98.5%), hsl(214 33% 93.5%));
+      radial-gradient(circle at 18% 8%, var(--glow-blue), transparent 42%),
+      radial-gradient(circle at 88% 22%, var(--glow-cyan), transparent 38%),
+      radial-gradient(circle at 62% 96%, var(--glow-amber), transparent 40%);
   }
+}
 
-  .dark body {
-    background-image:
-      radial-gradient(circle at top left, rgba(59, 130, 246, 0.14), transparent 30%),
-      radial-gradient(circle at top right, rgba(245, 158, 11, 0.08), transparent 22%);
+@layer components {
+  /* One layer of glass per stack: a glass surface never holds another one —
+     nested containers use solid tints (bg-muted, bg-accent) instead. */
+  .glass {
+    background: var(--glass);
+    border-color: var(--glass-line);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow:
+      var(--glass-highlight),
+      0 0 0 1px var(--glass-edge),
+      var(--shadow-soft);
+  }
+  .glass-strong {
+    background: var(--glass-strong);
+    border-color: var(--glass-line);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow:
+      var(--glass-highlight),
+      0 0 0 1px var(--glass-edge),
+      var(--shadow-raised);
+  }
+  .glass-bar {
+    background: var(--glass);
+    border-color: var(--glass-line);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow: 0 1px 0 var(--glass-edge);
   }
 }
 

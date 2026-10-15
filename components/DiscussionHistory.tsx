@@ -33,7 +33,7 @@ export function DiscussionHistory({
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const remove = async (d: Discussion) => {
-    if (!window.confirm(`Delete this discussion?\n\n"${d.topic.slice(0, 100)}"`)) {
+    if (!window.confirm(`Delete this session?\n\n"${d.topic.slice(0, 100)}"`)) {
       return;
     }
     setDeletingId(d.id);
@@ -46,7 +46,11 @@ export function DiscussionHistory({
   };
 
   if (discussions.length === 0) {
-    return <p className="text-sm text-muted-foreground">No discussions yet.</p>;
+    return (
+      <p className="text-sm text-muted-foreground">
+        No sessions yet. Your chats and builds will appear here.
+      </p>
+    );
   }
 
   return (
@@ -54,12 +58,13 @@ export function DiscussionHistory({
       {discussions.map((d) => (
         <div
           key={d.id}
-          className="flex items-center justify-between gap-2 rounded-lg border p-4 transition-colors hover:bg-accent"
+          className="flex items-center justify-between gap-2 rounded-lg border bg-background/40 px-3 py-2.5 transition-colors hover:bg-accent"
         >
           <Link href={`/discussion?id=${d.id}`} className="min-w-0 flex-1">
-            <p className="truncate font-medium">{d.topic}</p>
+            <p className="truncate text-sm font-medium">{d.topic}</p>
             <p className="text-xs text-muted-foreground">
-              {formatDate(d.createdAt)} · {d.mode} · {d.effort}
+              {d.mode === "build" ? "Build" : `Chat · ${d.mode}`} ·{" "}
+              {formatDate(d.createdAt)}
             </p>
           </Link>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -68,8 +73,8 @@ export function DiscussionHistory({
               type="button"
               onClick={() => remove(d)}
               disabled={deletingId === d.id}
-              title="Delete discussion"
-              aria-label="Delete discussion"
+              title="Delete session"
+              aria-label="Delete session"
               className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
             >
               <Trash2 className="h-4 w-4" />

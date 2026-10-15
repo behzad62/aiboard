@@ -7,12 +7,11 @@ export const SITE_NAME = "AI Board";
 export const SITE_AUTHOR = "Behzad Shams";
 export const SITE_CONTACT_EMAIL = "mail@aiboard.me";
 export const SITE_GITHUB_URL = "https://github.com/behzad62/aiboard";
-export const SITE_TAGLINE =
-  "Multi-model AI discussions that synthesize the best answer";
+export const SITE_TAGLINE = "A local-first AI harness to chat and build with any model";
 // Kept under 160 characters so search results never truncate mid-sentence —
 // the local-first angle has to survive the cut.
 export const SITE_DESCRIPTION =
-  "Multi-model AI discussions in your browser: GPT, Claude and Gemini debate your question, then a judge model synthesizes the best answer. Local-first.";
+  "A local-first AI harness: chat with a panel of models and run multi-agent builds on your own repo with GPT, Claude, Gemini, or local models.";
 
 export const OG_IMAGE = "/og.png";
 const OG_IMAGE_WIDTH = 1200;

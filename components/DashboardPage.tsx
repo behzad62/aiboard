@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -77,7 +78,7 @@ import {
   selectedModelIdsForMode,
 } from "@/lib/client/build-capabilities";
 import type { ModelCapabilityProbeProfile } from "@/lib/providers/capability-probes";
-import { AlertTriangle, Sparkles } from "lucide-react";
+import { ArrowRight, ChevronDown, Hammer, MessagesSquare } from "lucide-react";
 
 interface DashboardData {
   discussions: Discussion[];
@@ -99,6 +100,15 @@ interface DashboardData {
   enabledModels: Array<ModelInfo & { fullId: string }>;
 }
 
+type ChatMode = Exclude<DiscussionMode, "build">;
+
+const CHAT_MODES: ChatMode[] = ["panel", "debate", "specialist"];
+const CHAT_MODE_LABELS: Record<ChatMode, string> = {
+  panel: "Panel",
+  debate: "Debate",
+  specialist: "Specialist + reviewers",
+};
+
 function formatUsd(n: number): string {
   return n < 0.01 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`;
 }
@@ -111,6 +121,8 @@ export default function DashboardPage() {
   const [runner, setRunner] = useState<RunnerSelection | null>(null);
   const [topic, setTopic] = useState("");
   const [mode, setMode] = useState<DiscussionMode>("panel");
+  // The chat style to return to when switching back from Build.
+  const [chatMode, setChatMode] = useState<ChatMode>("panel");
   const [effort, setEffort] = useState<EffortLevel>("medium");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [judgeModelId, setJudgeModelId] = useState<string>("");
@@ -168,6 +180,9 @@ export default function DashboardPage() {
         setData(d);
         setCapabilityProfiles(getCapabilityProfiles());
         setMode(d.settings.defaultMode);
+        if (d.settings.defaultMode !== "build") {
+          setChatMode(d.settings.defaultMode);
+        }
         setEffort(d.settings.defaultEffort);
         setVerbosity(d.settings.defaultVerbosity ?? "balanced");
         setStyleNote(d.settings.defaultStyleNote ?? "");
@@ -270,7 +285,6 @@ export default function DashboardPage() {
         )
       : null;
   const modeInfo = getModeInfo(mode);
-  const modeCards: DiscussionMode[] = ["panel", "debate", "specialist", "build"];
   const totalEnabledModels = data?.enabledModels.length ?? 0;
   const hasTopic = topic.trim().length > 0;
   const hasEnoughModels = hasEnoughParticipatingModels(
@@ -324,7 +338,7 @@ export default function DashboardPage() {
     totalEnabledModels === 0
       ? "Add API keys and enable providers in Settings."
       : mode === "build" && !runner
-        ? "Connect Runner V2 to start a Build."
+        ? "Connect Runner V2 below to start a build."
       : !hasEnoughModels
         ? participatingModelRequirementMessage(mode)
       : !hasJudge
@@ -332,7 +346,9 @@ export default function DashboardPage() {
           : buildBudgetEnforceabilityError
             ? buildBudgetEnforceabilityError
           : !hasTopic
-            ? "Enter a topic to begin."
+            ? mode === "build"
+              ? "Describe what to build."
+              : "Type a question to begin."
             : null;
   const canStart = !loading && !blockerHint;
 
@@ -404,87 +420,264 @@ export default function DashboardPage() {
     );
   }
 
+  const isBuild = mode === "build";
+  const leadModelId = judgeModelId || effectiveSelectedModels[0] || "";
+  const leadName =
+    data?.enabledModels.find((model) => model.fullId === leadModelId)?.name ??
+    "No model";
+  const modelCountLabel = `${effectiveSelectedModels.length} model${
+    effectiveSelectedModels.length === 1 ? "" : "s"
+  }`;
+  const optionsSummary = isBuild
+    ? `Architect ${leadName} · ${modelCountLabel} as workers · ${
+        buildBudgetUsd > 0 ? `$${buildBudgetUsd} budget` : "no budget cap"
+      }`
+    : `${modelCountLabel} · judge ${leadName} · ${effort} effort`;
+  const startLabel = loading
+    ? "Starting…"
+    : isBuild
+      ? "Start build"
+      : `Start chat${
+          effectiveSelectedModels.length > 0 ? ` · ${modelCountLabel}` : ""
+        }`;
+
   return (
-    <div className="grid gap-8 lg:grid-cols-5">
-      <div className="space-y-6 lg:col-span-3">
+    <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <section aria-labelledby="composer-title" className="min-w-0 space-y-4">
         <div>
-          <h2 className="font-display text-3xl font-semibold tracking-tight">
-            New Discussion
-          </h2>
-          <p className="mt-2 text-muted-foreground">
-            Ask a question and let multiple AI models discuss, debate, or build
-            together before delivering the best result.
+          <h1
+            id="composer-title"
+            className="font-display text-3xl font-semibold tracking-tight sm:text-4xl"
+          >
+            What are we working on?
+          </h1>
+          <p className="mt-2 max-w-2xl text-muted-foreground">
+            Chat with a panel of models, or hand a build to an architect and
+            its workers. Keys, sessions, and files stay on this device.
           </p>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              Topic
-            </CardTitle>
-            <CardDescription>
-              e.g. Compare Postgres vs. MongoDB for a booking app, or build a recipe manager web app
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="topic">Your question</Label>
-              <Textarea
-                id="topic"
-                placeholder="Describe what you want the AI panel to discuss and resolve..."
-                rows={5}
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-              />
-            </div>
+        <div className="glass rounded-2xl border p-4 sm:p-5">
+          <div
+            role="radiogroup"
+            aria-label="Session type"
+            className="inline-flex rounded-lg bg-muted p-1"
+          >
+            {(
+              [
+                { value: "chat", label: "Chat", icon: MessagesSquare },
+                { value: "build", label: "Build", icon: Hammer },
+              ] as const
+            ).map(({ value, label, icon: Icon }) => {
+              const checked = value === "build" ? isBuild : !isBuild;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={checked}
+                  onClick={() => setMode(value === "build" ? "build" : chatMode)}
+                  className={
+                    checked
+                      ? "inline-flex items-center gap-2 rounded-md bg-card px-4 py-1.5 text-sm font-medium text-foreground shadow-sm"
+                      : "inline-flex items-center gap-2 rounded-md px-4 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  }
+                >
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
 
-            <AttachmentPicker attachments={attachments} onChange={setAttachments} />
+          <Label htmlFor="topic" className="sr-only">
+            {isBuild ? "What should the team build?" : "What do you want to ask?"}
+          </Label>
+          <Textarea
+            id="topic"
+            rows={5}
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            placeholder={
+              isBuild
+                ? "Describe what to build, fix, or change in your project…"
+                : "Ask a question, compare options, or get a second opinion…"
+            }
+            className="mt-3 min-h-[132px] resize-y text-base"
+          />
 
-            <div className="space-y-3">
-              <Label>Discussion mode</Label>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {modeCards.map((candidateMode) => {
-                  const info = getModeInfo(candidateMode);
-                  const selected = mode === candidateMode;
+          {isBuild ? (
+            <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  aria-hidden="true"
+                  className="inline-block h-2.5 w-2.5 rotate-45 rounded-[2px] bg-primary"
+                />
+                Architect <strong className="font-medium text-foreground">{leadName}</strong>
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  aria-hidden="true"
+                  className="inline-block h-2.5 w-2.5 rounded-full bg-foreground/70"
+                />
+                Workers <strong className="font-medium text-foreground">{modelCountLabel}</strong>
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  aria-hidden="true"
+                  className="inline-block h-2.5 w-2.5 rounded-full border-2 border-success"
+                />
+                {buildAlwaysRequireIndependentVerifier
+                  ? "Independent verifier required"
+                  : "Verifier when available"}
+              </span>
+            </p>
+          ) : (
+            <div className="mt-3 space-y-2">
+              <div
+                role="radiogroup"
+                aria-label="Chat style"
+                className="flex flex-wrap gap-2"
+              >
+                {CHAT_MODES.map((candidate) => {
+                  const info = getModeInfo(candidate);
+                  const checked = mode === candidate;
                   return (
                     <button
-                      key={candidateMode}
+                      key={candidate}
                       type="button"
-                      onClick={() => setMode(candidateMode)}
+                      role="radio"
+                      aria-checked={checked}
+                      onClick={() => {
+                        setMode(candidate);
+                        setChatMode(candidate);
+                      }}
                       className={
-                        // flex-col keeps the content top-aligned — buttons
-                        // vertically center it when the grid stretches them.
-                        selected
-                          ? "flex flex-col items-start rounded-lg border border-primary bg-primary/5 p-4 text-left ring-2 ring-primary"
-                          : "flex flex-col items-start rounded-lg border border-border p-4 text-left transition-colors hover:bg-accent"
+                        checked
+                          ? "rounded-full border border-primary bg-accent px-3 py-1 text-sm font-medium text-accent-foreground"
+                          : "rounded-full border px-3 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                       }
                     >
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="font-medium">{info.label}</span>
-                      </div>
-                      <p className="mt-2 text-sm text-foreground/90">{info.summary}</p>
-                      <p className="mt-2 text-xs text-muted-foreground">{info.bestFor}</p>
+                      {CHAT_MODE_LABELS[candidate]}
+                      <span className="sr-only">: {info.summary}</span>
                     </button>
                   );
                 })}
               </div>
-              <div className="rounded-lg border bg-muted/30 p-4 text-sm">
-                <p className="font-medium">How {modeInfo.label} works</p>
-                <p className="mt-1 text-muted-foreground">{modeInfo.flow}</p>
-              </div>
+              <p className="text-sm text-muted-foreground">{modeInfo.summary}</p>
             </div>
+          )}
 
-            {mode === "build" && (
-              <>
-                <ProjectAccessSetup
-                  onFolderChange={setProjectFolderName}
-                  onRunnerChange={setRunner}
-                />
-              </>
+          <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground" role="status">
+              {totalEnabledModels === 0 && data ? (
+                <>
+                  No models yet.{" "}
+                  <Link
+                    href="/settings"
+                    className="font-medium text-foreground underline underline-offset-4"
+                  >
+                    Connect a provider
+                  </Link>{" "}
+                  to start.
+                </>
+              ) : blockerHint ??
+                (usdEstimate
+                  ? `Estimated cost ${
+                      usdEstimate.minUsd === usdEstimate.maxUsd
+                        ? formatUsd(usdEstimate.maxUsd)
+                        : `${formatUsd(usdEstimate.minUsd)}–${formatUsd(usdEstimate.maxUsd)}`
+                    }${
+                      usdEstimate.pricedModelCount < usdEstimate.totalModelCount
+                        ? ` (${usdEstimate.pricedModelCount}/${usdEstimate.totalModelCount} models priced)`
+                        : ""
+                    }`
+                  : costEstimate
+                    ? "No API cost on file for these models."
+                    : "Ready.")}
+            </p>
+            <Button
+              onClick={startDiscussion}
+              disabled={!canStart}
+              size="lg"
+              className="shrink-0"
+            >
+              {startLabel}
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </div>
+          {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
+        </div>
+
+        {isBuild && (
+          <div className="glass rounded-2xl border p-4 sm:p-5">
+            <ProjectAccessSetup
+              onFolderChange={setProjectFolderName}
+              onRunnerChange={setRunner}
+            />
+          </div>
+        )}
+
+        <details className="glass group rounded-2xl border">
+          <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 sm:px-5">
+            <span>
+              <span className="block text-sm font-medium">
+                Models &amp; options
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {optionsSummary}
+              </span>
+            </span>
+            <ChevronDown
+              className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </summary>
+          <div className="space-y-6 border-t px-4 py-5 sm:px-5">
+            <ModelSelector
+              models={modelsForSelector}
+              selected={visibleSelectedModels}
+              onChange={setSelectedModels}
+              requiredInputTypes={participantRequiredInputTypes}
+            />
+
+            {isBuild && buildCapabilityDecision.diagnostics.length > 0 && (
+              <div className="rounded-lg border border-warning/40 bg-warning-soft p-3 text-sm text-warning">
+                {buildCapabilityDecision.diagnostics.map((line) => (
+                  <p key={line}>{line}</p>
+                ))}
+              </div>
             )}
 
-            {mode === "build" ? (
+            {compatibleJudgeOptions.length > 0 && (
+              <div className="space-y-2">
+                <Label>
+                  {isBuild
+                    ? "Architect — plans tasks, reviews, and integrates"
+                    : "Judge — writes the final synthesis"}
+                </Label>
+                {isBuild && (
+                  <p className="text-xs text-muted-foreground">
+                    The models above are the workers. Pick your most capable
+                    model to lead them.
+                  </p>
+                )}
+                <Select value={judgeModelId} onValueChange={setJudgeModelId}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {compatibleJudgeOptions.map((model) => (
+                      <SelectItem key={model.fullId} value={model.fullId}>
+                        {model.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {isBuild ? (
               <BuildRunPolicyControl
                 value={{
                   ...planningOptions,
@@ -496,7 +689,12 @@ export default function DashboardPage() {
                     buildAlwaysRequireIndependentVerifier,
                 }}
                 onChange={(next) => {
-                  setPlanningOptions({ answerReview: next.answerReview ?? false, evidenceGatedPlanning: next.evidenceGatedPlanning ?? false, specCopy: next.specCopy ?? true, handoffFiles: next.handoffFiles ?? "commit" });
+                  setPlanningOptions({
+                    answerReview: next.answerReview ?? false,
+                    evidenceGatedPlanning: next.evidenceGatedPlanning ?? false,
+                    specCopy: next.specCopy ?? true,
+                    handoffFiles: next.handoffFiles ?? "commit",
+                  });
                   setBuildRunPolicy(next.runPolicy);
                   setBuildSkillMode(next.skillMode);
                   setBuildBudgetUsd(next.budgetUsd);
@@ -523,123 +721,41 @@ export default function DashboardPage() {
               onChange={setReasoningEffort}
             />
 
-            <ModelSelector
-              models={modelsForSelector}
-              selected={visibleSelectedModels}
-              onChange={setSelectedModels}
-              requiredInputTypes={participantRequiredInputTypes}
-            />
-
-            {mode === "build" && buildCapabilityDecision.diagnostics.length > 0 && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-                {buildCapabilityDecision.diagnostics.map((line) => (
-                  <p key={line}>{line}</p>
-                ))}
-              </div>
-            )}
-
-            {compatibleJudgeOptions.length > 0 && (
-              <div className="space-y-2">
-                <Label>
-                  {mode === "build"
-                    ? "Architect model (orchestrates: plans tasks, reviews & fixes)"
-                    : "Judge model (final synthesis)"}
-                </Label>
-                {mode === "build" && (
-                  <p className="text-xs text-muted-foreground">
-                    The participating models above are the workers that implement
-                    tasks. Pick your most capable model here to lead them.
-                  </p>
-                )}
-                <Select value={judgeModelId} onValueChange={setJudgeModelId}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {compatibleJudgeOptions.map((model) => {
-                      return (
-                        <SelectItem key={model.fullId} value={model.fullId}>
-                          {model.name}
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            <AttachmentPicker attachments={attachments} onChange={setAttachments} />
 
             {costEstimate && (
-              <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>
-                  {usdEstimate ? (
-                    <p>
-                      Estimated API cost: <strong>
-                        {usdEstimate.minUsd === usdEstimate.maxUsd
-                          ? formatUsd(usdEstimate.maxUsd)
-                          : `${formatUsd(usdEstimate.minUsd)}–${formatUsd(usdEstimate.maxUsd)}`}
-                      </strong>
-                      {usdEstimate.pricedModelCount <
-                        usdEstimate.totalModelCount &&
-                        ` (priced ${usdEstimate.pricedModelCount}/${usdEstimate.totalModelCount} models; local/custom excluded)`}
-                      .
-                    </p>
-                  ) : (
-                    <p>
-                      No API cost — the selected models have no pricing on file
-                      (local / custom endpoints).
-                    </p>
-                  )}
-                  <p className="mt-1 text-xs opacity-90">
-                    Rough estimate (~{costEstimate.label}). Prompt caching and
-                    early convergence usually lower it.
-                  </p>
-                </div>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Cost is a rough estimate (~{costEstimate.label}). Prompt caching
+                and early convergence usually lower it.
+              </p>
             )}
+          </div>
+        </details>
+      </section>
 
-            {error && <p className="text-sm text-destructive">{error}</p>}
-
-            <Button
-              onClick={startDiscussion}
-              disabled={!canStart}
-              className="w-full"
-              size="lg"
-            >
-              {loading ? "Starting..." : `Start Discussion${effectiveSelectedModels.length > 0 ? ` with ${effectiveSelectedModels.length} model${effectiveSelectedModels.length === 1 ? "" : "s"}` : ""}`}
-            </Button>
-            <p className="text-sm text-muted-foreground">
-              {canStart
-                ? "Live orchestration and diagnostics will appear on the discussion page."
-                : blockerHint}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="lg:col-span-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Discussions</CardTitle>
-            <CardDescription>Click to view live or completed results</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DiscussionHistory
-              discussions={data?.discussions ?? []}
-              onDeleted={(id) =>
-                setData((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        discussions: prev.discussions.filter((x) => x.id !== id),
-                      }
-                    : prev
-                )
-              }
-            />
-          </CardContent>
-        </Card>
-      </div>
+      <aside
+        aria-labelledby="recent-title"
+        className="glass self-start rounded-2xl border p-4 lg:sticky lg:top-20"
+      >
+        <h2 id="recent-title" className="text-sm font-semibold">
+          Recent sessions
+        </h2>
+        <div className="mt-3">
+          <DiscussionHistory
+            discussions={data?.discussions ?? []}
+            onDeleted={(id) =>
+              setData((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      discussions: prev.discussions.filter((x) => x.id !== id),
+                    }
+                  : prev
+              )
+            }
+          />
+        </div>
+      </aside>
     </div>
   );
 }
