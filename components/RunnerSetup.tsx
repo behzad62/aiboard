@@ -84,31 +84,47 @@ export function RunnerSetup({
   };
 
   return (
-    <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
-      <Label className="flex items-center gap-2">
-        <Terminal className="h-4 w-4" />
-        Connect Runner V2 (required for Build mode)
-      </Label>
-      <p className="text-sm text-muted-foreground">
-        The durable native agent kernel owns Git worktrees, tools, checkpoints,
-        provider failover, and recovery. It requires Git and a maintained Node.js
-        LTS release ({NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}); missing
-        prerequisites stop before any model call.
-      </p>
-      <Button asChild type="button" size="sm">
-        <a href="/aiboard-runner-v2.zip" download>
-          Download Runner V2
-        </a>
-      </Button>
-      <p className="text-xs text-muted-foreground">
-        Extract the ZIP, open a terminal in the extracted directory, then run:
-      </p>
-      <pre className="overflow-x-auto rounded bg-background/70 p-2 text-xs">
-        {"npm install\nnpm run setup:browser\nnpm start -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}
-      </pre>
-      <p className="text-xs text-muted-foreground">
-        Repository contributors can alternatively use <code>npm run runner:v2 -- --project ...</code> from the AI Board checkout.
-      </p>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Label className="flex items-center gap-2">
+          <Terminal className="h-4 w-4" aria-hidden="true" />
+          Runner V2
+        </Label>
+        <span className="text-xs text-muted-foreground">
+          Builds run on your machine, never in the browser.
+        </span>
+      </div>
+      <details
+        className="group rounded-lg border bg-muted/40 px-3 py-2 text-sm"
+        open={!initialSelection?.token}
+      >
+        <summary className="cursor-pointer select-none text-sm font-medium">
+          Set up Runner V2
+        </summary>
+        <div className="mt-2 space-y-2 pb-1">
+          <p className="text-muted-foreground">
+            The native agent kernel owns Git worktrees, tools, checkpoints,
+            provider failover, and recovery. It needs Git and a maintained
+            Node.js LTS release ({NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}).
+          </p>
+          <Button asChild type="button" size="sm">
+            <a href="/aiboard-runner-v2.zip" download>
+              Download Runner V2
+            </a>
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Extract the ZIP, open a terminal in that folder, then run:
+          </p>
+          <pre className="overflow-x-auto rounded-md bg-background/70 p-2 text-xs">
+            {"npm install\nnpm run setup:browser\nnpm start -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}
+          </pre>
+          <p className="text-xs text-muted-foreground">
+            Paste the URL and control token it prints below. Contributors can
+            run <code>npm run runner:v2 -- --project ...</code> from an AI
+            Board checkout instead.
+          </p>
+        </div>
+      </details>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
           <Label htmlFor="runner-v2-url" className="text-xs">Runner URL</Label>
@@ -167,8 +183,11 @@ export function RunnerSetup({
                   setAccess(option.value);
                   emit({ access: option.value });
                 }}
-                className={`rounded-md border p-3 text-left text-sm ${
-                  access === option.value ? "border-primary bg-primary/5" : "hover:bg-muted/50"
+                aria-pressed={access === option.value}
+                className={`rounded-md border p-3 text-left text-sm transition-colors ${
+                  access === option.value
+                    ? "border-primary bg-accent text-accent-foreground"
+                    : "hover:bg-accent/60"
                 }`}
               >
                 <span className="font-medium">{option.title}</span>

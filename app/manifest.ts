@@ -6,7 +6,7 @@ export const dynamic = "force-static";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: `${SITE_NAME} — Multi-Model AI Discussions`,
+    name: `${SITE_NAME} — AI harness for chat and build`,
     short_name: SITE_NAME,
     description: SITE_DESCRIPTION,
     start_url: "/",

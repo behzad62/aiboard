@@ -3,9 +3,6 @@ import type {
   BuildProblemCode,
   BuildProblemSeverity,
   BuildProblemSource,
-  GenericGameMatchRecord,
-  GameId,
-  GameParticipant,
   ModelBuildStat,
   ReasoningEffort,
 } from "@/lib/db/schema";
@@ -37,6 +34,8 @@ export type BenchmarkArtifactKind =
   | "log";
 export type BenchmarkMetricDirection = "higher" | "lower" | "neutral";
 
+// "gameiq" is retired: it stays in the union only so historical run files
+// still load. lib/benchmark/retired.ts keeps them out of every dashboard.
 export type BenchmarkTrack =
   | "workbench"
   | "gameiq"
@@ -106,7 +105,8 @@ export interface BenchmarkCase {
   description?: string;
   createdAt: string;
   updatedAt: string;
-  gameId?: GameId;
+  /** Retired Games-era field; kept readable for historical records. */
+  gameId?: string;
   discussionId?: string;
   sourceId?: string;
   promptHash?: string;
@@ -540,7 +540,7 @@ export interface BenchmarkModelCallTrace {
   runId?: string;
   caseId?: string;
   attemptId?: string;
-  // The GameIQ scenario id this call answered. Lets trace consumers map by
+  // The scenario id this call answered. Lets trace consumers map by
   // id instead of positional order — required once retries/concurrency
   // produce out-of-order or multiple traces per scenario.
   scenarioId?: string;
@@ -585,7 +585,8 @@ export interface BenchmarkReportBundleBase {
   failures: BenchmarkFailure[];
   traces: BenchmarkModelCallTrace[];
   sourceEvidence?: {
-    gameMatches: GenericGameMatchRecord[];
+    /** Retired Games-era evidence; ignored on import. */
+    gameMatches?: unknown[];
     buildCheckpoints: BuildCheckpoint[];
     buildStats: ModelBuildStat[];
   };
@@ -610,26 +611,4 @@ export interface BenchmarkReportBundleV2
     redactedSecrets: number;
     warnings: string[];
   };
-}
-
-export interface BenchmarkParticipantResult extends GameParticipant {
-  games: number;
-  wins: number;
-  losses: number;
-  draws: number;
-  completions: number;
-  legalActions: number;
-  invalidActions: number;
-  schemaValid: number;
-  schemaInvalid: number;
-  fallbackActions: number;
-  providerErrors: number;
-  latencyMs: number;
-  latencySamples: number;
-  estimatedUsd: number;
-  costSamples: number;
-  verifierPasses: number;
-  verifierFailures: number;
-  toolValid: number;
-  toolInvalid: number;
 }

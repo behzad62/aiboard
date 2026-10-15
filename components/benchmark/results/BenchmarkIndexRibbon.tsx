@@ -8,7 +8,6 @@ import {
 } from "@/lib/benchmark/certified/decision-dashboard";
 
 const TRACKS = [
-  { id: "gameiq", label: "GameIQ" },
   { id: "toolreliability", label: "Tool Reliability" },
   { id: "workbench", label: "WorkBench" },
   { id: "teamiq", label: "TeamIQ" },

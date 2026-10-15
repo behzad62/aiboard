@@ -52,6 +52,7 @@ import {
   type NativeBuildProjection,
 } from "./runner-v2";
 import { normalizeBuildTasksForResume } from "@/lib/orchestrator/build";
+import { chatTurns, nextChatRound } from "@/lib/orchestrator/chat";
 import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 
 export { runClientDiscussion as runDiscussion, stopDiscussion };
@@ -367,7 +368,38 @@ export interface DiscussionConfigInput {
 }
 
 export function minimumParticipatingModelsForMode(mode: DiscussionMode): number {
-  return mode === "build" ? 1 : 2;
+  return mode === "build" || mode === "chat" ? 1 : 2;
+}
+
+/**
+ * Adds the user's next message to a single-model chat and re-queues it; the
+ * page then runs the engine, which answers the newest unanswered turn.
+ */
+export function sendChatMessage(id: string, content: string): Discussion | undefined {
+  const text = content.trim();
+  if (!text) throw new Error("Type a message first.");
+  if (isDiscussionRunning(id)) {
+    throw new Error("Wait for the reply to finish, or stop it first.");
+  }
+  const discussion = getDiscussionById(id);
+  if (!discussion) throw new Error("Chat not found.");
+  if (discussion.mode !== "chat") {
+    throw new Error("Follow-up messages are only available in single-model chats.");
+  }
+  const modelIds = JSON.parse(discussion.modelIds) as string[];
+  const turns = chatTurns(discussion.topic, getMessagesForDiscussion(id));
+  const now = new Date().toISOString();
+  insertMessage({
+    id: uuidv4(),
+    discussionId: id,
+    round: nextChatRound(turns),
+    modelId: modelIds[0] ?? "user",
+    role: "user",
+    content: text,
+    createdAt: now,
+  });
+  updateDiscussion(id, { status: "pending", updatedAt: now });
+  return getDiscussionById(id);
 }
 
 export function hasEnoughParticipatingModels(
@@ -521,8 +553,12 @@ export interface CreateDiscussionInput {
 }
 
 export function createDiscussion(input: CreateDiscussionInput): { id: string } {
-  if (input.topic.trim().length < 10) {
-    throw new Error("Give the discussion a clearer topic (at least 10 characters).");
+  if (input.mode === "chat" ? !input.topic.trim() : input.topic.trim().length < 10) {
+    throw new Error(
+      input.mode === "chat"
+        ? "Type a message first."
+        : "Give the discussion a clearer topic (at least 10 characters)."
+    );
   }
   if (!hasEnoughParticipatingModels(input.mode, input.modelIds.length)) {
     throw new Error(participatingModelRequirementMessage(input.mode));

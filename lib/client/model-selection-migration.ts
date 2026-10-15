@@ -6,8 +6,6 @@ import {
   migrateProviderModelId,
 } from "@/lib/providers/model-id-migration";
 
-const RESUMABLE_GAME_STATUSES = new Set(["setup", "active", "paused"]);
-
 /**
  * Migrates only saved selections that can still drive a future model call.
  * Historical evidence and completed records intentionally retain their exact
@@ -89,16 +87,6 @@ export function migrateClientStoreModelSelections(
       | string
       | null
       | undefined;
-  }
-
-  for (const session of store.gameSessions) {
-    if (!RESUMABLE_GAME_STATUSES.has(session.status)) continue;
-    for (const participant of session.participants) {
-      if (participant.kind !== "ai") continue;
-      if (participant.modelId) {
-        participant.modelId = migrateFull(participant.modelId) as string;
-      }
-    }
   }
 
   return changed ? { store, changed: true } : { store: input, changed: false };

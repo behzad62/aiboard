@@ -37,7 +37,7 @@ function caseFor(id: string, canary: string): BenchmarkCaseV2 {
   return {
     id,
     schemaVersion: 2,
-    track: "gameiq",
+    track: "toolreliability",
     title: `Partial persistence ${id}`,
     description: "A deterministic GameIQ case for partial-persistence coverage.",
     difficulty: "easy",
@@ -116,7 +116,7 @@ function makeScoredAttempt(
     caseId,
     teamCompositionId,
     mode: "certified",
-    track: "gameiq",
+    track: "toolreliability",
     harnessProfile: context.harnessProfile,
     status: "passed",
     startedAt: context.startedAt,
@@ -148,8 +148,8 @@ await saveBenchmarkTeamComposition(team);
 
 const summary = await runCertifiedBenchmark({
   runId: "run-partial-persistence",
-  suiteId: "suite-gameiq",
-  track: "gameiq",
+  suiteId: "suite-toolreliability",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   caseIds: [caseA.id, caseB.id, caseC.id],
   teamCompositionIds: [team.id],

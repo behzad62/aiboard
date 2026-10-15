@@ -34,7 +34,7 @@ function resultSet(
       roles: [],
       tracks: [
         {
-          track: "gameiq",
+          track: "toolreliability",
           suiteId: "suite",
           caseManifest: [],
           maxTokens: 4096,
@@ -60,7 +60,7 @@ function attempt(resultSetId: string): BenchmarkAttemptV2 {
     caseId: "case",
     teamCompositionId: "team",
     mode: "certified",
-    track: "gameiq",
+    track: "toolreliability",
     harnessProfile: "raw-single-model",
     status: "passed",
     startedAt: "2026-07-29T08:00:00.000Z",
@@ -146,7 +146,7 @@ traceOnlySet.configuration.modelId =
   "C:\\Users\\someone\\models\\private-model";
 traceOnlySet.configuration.tracks = [
   {
-    track: "gameiq",
+    track: "toolreliability",
     suiteId: "suite-v2",
     caseManifest: [
       {
@@ -394,7 +394,7 @@ for (const label of [
   "Legacy evidence",
   "Physical calls",
   "Tokens",
-  "GameIQ",
+  "Tool Reliability",
 ]) {
   assert.ok(markup.includes(label), label);
 }

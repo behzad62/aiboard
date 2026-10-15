@@ -7,14 +7,14 @@ import type { ReasoningEffort } from "@/lib/db/schema";
 
 const TRACE_TEXT_LIMIT = 8_000;
 
-export interface GameAIDiagnosticLike {
+export interface ModelCallDiagnosticLike {
   attempt: number;
   type: "parse" | "illegal" | "request";
   message: string;
   rawResponse?: string;
 }
 
-export interface CreateGameModelCallTraceInput {
+export interface CreateModelCallTraceInput {
   modelId: string;
   providerId: string;
   participantId?: string;
@@ -42,14 +42,14 @@ export interface CreateGameModelCallTraceInput {
   estimatedUsd?: number | null;
   rawResponse?: string;
   parsedResponseJson?: string;
-  diagnostics?: GameAIDiagnosticLike[];
+  diagnostics?: ModelCallDiagnosticLike[];
   finalStatus?: BenchmarkModelCallTraceAttempt["status"];
   fallbackReason?: string;
   error?: string;
 }
 
-export function createGameModelCallTrace(
-  input: CreateGameModelCallTraceInput
+export function createModelCallTrace(
+  input: CreateModelCallTraceInput
 ): BenchmarkModelCallTrace {
   const retryHistory =
     input.diagnostics?.map(diagnosticToTraceAttempt) ?? [];
@@ -145,12 +145,12 @@ export async function recordBenchmarkModelCallTrace(
   try {
     await saveBenchmarkTrace(trace);
   } catch {
-    // Benchmark tracing must never break gameplay or Build execution.
+    // Benchmark tracing must never break a chat or Build execution.
   }
 }
 
 function diagnosticToTraceAttempt(
-  diagnostic: GameAIDiagnosticLike
+  diagnostic: ModelCallDiagnosticLike
 ): BenchmarkModelCallTraceAttempt {
   return {
     attempt: diagnostic.attempt,
@@ -163,7 +163,7 @@ function diagnosticToTraceAttempt(
 }
 
 function diagnosticStatus(
-  type: GameAIDiagnosticLike["type"]
+  type: ModelCallDiagnosticLike["type"]
 ): BenchmarkModelCallTraceAttempt["status"] {
   if (type === "parse") return "parse_error";
   if (type === "illegal") return "illegal";

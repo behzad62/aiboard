@@ -13,7 +13,6 @@ import { clearAllBenchmarkData } from "@/lib/benchmark/store";
 import { ClearBenchmarkDataDialog } from "@/components/benchmark/ClearBenchmarkDataDialog";
 import { BenchmarkReportActions } from "@/components/benchmark/BenchmarkReportActions";
 import { BenchmarkReportSummary } from "@/components/benchmark/BenchmarkReportSummary";
-import { BenchmarkSummaryStrip } from "@/components/benchmark/BenchmarkSummaryStrip";
 import { useBenchmarkDashboard } from "@/components/benchmark/useBenchmarkDashboard";
 import { useBenchmarkReportActions } from "@/components/benchmark/useBenchmarkReportActions";
 import {
@@ -21,18 +20,11 @@ import {
   promotableLatestResultSetIds,
 } from "@/components/benchmark/BenchmarkResultSetAudit";
 import { useBenchmarkResultSetDeletion } from "@/components/benchmark/useBenchmarkResultSetDeletion";
+import { RetiredEvidenceNotice } from "@/components/benchmark/RetiredEvidenceNotice";
 
 /**
  * Housekeeping view for the benchmark page's "Data" tab: run history counts,
- * export/import, and the danger zone. This used to be one of nine views this
- * component could render (overview / lab-evidence / per-track certified /
- * reports) — the others now live directly in BenchmarkPage.tsx (Run/Results)
- * or were retired with the 3-tab collapse. The head-to-head table and
- * capability radar chart this component used to render under "lab-evidence"
- * are unused here but intentionally NOT deleted (components/benchmark/
- * BenchmarkHeadToHeadTable.tsx, BenchmarkCharts.tsx,
- * CapabilityRadarChart.tsx) — the Results tab's Analysis section remounts
- * them with the same useBenchmarkDashboard data.
+ * export/import, and the danger zone.
  */
 export function BenchmarkLab() {
   const {
@@ -40,8 +32,6 @@ export function BenchmarkLab() {
     locked,
     loading,
     message,
-    suiteCount,
-    traceCount,
     reportCounts,
     resultSetAuditRows,
     corruptRunFileCount,
@@ -116,11 +106,7 @@ export function BenchmarkLab() {
             browser console for details.
           </div>
         )}
-        <BenchmarkSummaryStrip
-          dashboard={dashboard}
-          suiteCount={suiteCount}
-          traceCount={traceCount}
-        />
+        <RetiredEvidenceNotice onDeleted={refresh} setMessage={setMessage} />
         <BenchmarkResultSetAudit
           rows={resultSetAuditRows}
           deletingIds={resultSetDeletion.deletingIds}
@@ -130,7 +116,7 @@ export function BenchmarkLab() {
           }
         />
         <BenchmarkReportSummary counts={reportCounts} />
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3">
           <div className="text-sm">
             <p className="font-medium text-foreground">Danger zone</p>
             <p className="text-muted-foreground">

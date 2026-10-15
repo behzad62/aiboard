@@ -141,6 +141,7 @@ test("Recoverable Job Service pack exposes its exact public scope and readiness 
   page,
 }) => {
   await page.goto("/benchmark");
+  await page.getByRole("tab", { name: "Run" }).click();
   await page.getByText("Advanced: run a single suite or pack", { exact: true }).click();
 
   await page.getByRole("combobox", { name: "Track" }).click();

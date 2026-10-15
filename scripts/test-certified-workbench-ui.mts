@@ -505,7 +505,7 @@ const presetCardsSource = readFileSync(
   "components/benchmark/run/PresetCards.tsx",
   "utf8"
 );
-// The run-execution helpers (runSelected/runGameIqMultiModel + their pure
+// The run-execution helpers (runSelected + their pure
 // helpers) were extracted out of CertifiedRunPanel.tsx into run-execution.ts
 // (2026-07-17 benchmark UX overhaul, Task 4 Step 1) — the WorkBench
 // pack-batching evidence below now lives there, not in the panel.
@@ -566,7 +566,7 @@ check(
 // read off CertifiedRunPanel.tsx's source) was deleted in the 2026-07-17
 // benchmark UX overhaul Task 4 re-skin — the Advanced flow no longer renders
 // a phase timeline. The distinct-phase state machine itself lives on inside
-// run-execution.ts's runSelected/runGameIqMultiModel (setRunPhase still
+// run-execution.ts's runSelected (setRunPhase still
 // walks certifying -> running -> persisting -> done); this check now guards
 // THAT — the same regression it always guarded (a timeline/consumer that
 // collapses these into one shared boolean) would still be visible there.

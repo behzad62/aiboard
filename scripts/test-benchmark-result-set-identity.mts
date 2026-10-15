@@ -17,7 +17,7 @@ const soloConfig: BenchmarkResultConfiguration = {
   reasoningEffort: "medium",
   roles: [],
   tracks: [{
-    track: "gameiq",
+    track: "toolreliability",
     suiteId: "gameiq-v1",
     caseManifest: [{
       caseId: "case-1",

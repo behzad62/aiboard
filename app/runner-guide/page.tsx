@@ -65,7 +65,7 @@ export default function RunnerGuidePage() {
           evidence, and Git integration state recover before work continues.
         </p>
       </section>
-      <p><Link href="/" className="underline hover:text-foreground">Back to the dashboard</Link></p>
+      <p><Link href="/" className="underline hover:text-foreground">Back to the workspace</Link></p>
     </article>
   );
 }

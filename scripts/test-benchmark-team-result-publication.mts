@@ -64,7 +64,6 @@ try {
     modelId: models[0]!.modelId,
     teamModelIds: models.map((model) => model.modelId),
     teamIqStrategy: "panel",
-    fireworksPlayerCount: 2,
     includeSoloBaselines: true,
     workBenchModelIds: [],
     workBenchRoleMode: "solo",

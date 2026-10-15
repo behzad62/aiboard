@@ -9,7 +9,7 @@ import {
 import type { ReasoningEffort } from "@/lib/db/schema";
 import { ModelEffortSelect } from "./ModelEffortSelect";
 
-// Promoted from CertifiedRunPanel's GameIqModelChecklist (2026-07-17 benchmark
+// Promoted from CertifiedRunPanel's old per-track model checklist (2026-07-17 benchmark
 // UX overhaul, Task 4 Step 4) into the ONE model-selection widget used for
 // every preset on the Run tab. Selection persistence lives here (helpers
 // below) so any caller can read/write the same localStorage-backed list; the

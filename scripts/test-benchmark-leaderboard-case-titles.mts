@@ -3,7 +3,7 @@
  * Run: npx tsx scripts/test-benchmark-leaderboard-case-titles.mts
  *
  * A certified leaderboard row is a (team x tracks) aggregate. The TRACK column
- * alone ("GameIQ") does not say whether the row ran Chess or Battleship, so
+ * alone ("WorkBench") does not say which challenges the row ran, so
  * CertifiedRunScore now carries `caseTitles`: the row's case ids resolved to
  * their case-record titles, unique, in first-appearance order, falling back to
  * the raw id when no case record is present. These checks guard that contract at
@@ -120,26 +120,26 @@ function soloTeam(id: string, modelId: string): BenchmarkTeamComposition {
 // (1) Titles are resolved from case records, unique, and in first-appearance
 //     order. A repeated case (two attempts, same case) lists its title once.
 // ---------------------------------------------------------------------------
-const chess = certifiedCase(
-  "gameiq-chess-tactics-v1-01",
-  "gameiq",
-  "Certified GameIQ v1: Chess Tactics"
+const parserRepair = certifiedCase(
+  "workbench-parser-repair-01",
+  "workbench",
+  "Certified WorkBench v1: Parser Repair"
 );
-const battleship = certifiedCase(
-  "gameiq-battleship-v1-01",
-  "gameiq",
-  "Certified GameIQ v1: Battleship"
+const cacheEviction = certifiedCase(
+  "workbench-cache-eviction-01",
+  "workbench",
+  "Certified WorkBench v1: Cache Eviction"
 );
 const teamA = soloTeam("solo-a", "model:a");
 
 const rowsBasic = aggregateCompletedResultSetFixtures({
-  // Battleship appears first, then Chess, then Chess again (repeat).
+  // Cache eviction appears first, then parser repair twice (repeat).
   attempts: [
-    attempt("a1", teamA.id, "gameiq", battleship.id),
-    attempt("a2", teamA.id, "gameiq", chess.id),
-    attempt("a3", teamA.id, "gameiq", chess.id),
+    attempt("a1", teamA.id, "workbench", cacheEviction.id),
+    attempt("a2", teamA.id, "workbench", parserRepair.id),
+    attempt("a3", teamA.id, "workbench", parserRepair.id),
   ],
-  cases: [chess, battleship],
+  cases: [parserRepair, cacheEviction],
   teamCompositions: [teamA],
   verifierResults: [],
 });
@@ -150,17 +150,17 @@ check(
   rowA?.caseTitles
 );
 check(
-  "caseTitles are unique and in first-appearance order (battleship before chess, chess once)",
+  "caseTitles are unique and in first-appearance order (cache eviction before parser repair, once each)",
   JSON.stringify(rowA?.caseTitles) ===
     JSON.stringify([
-      "Certified GameIQ v1: Battleship",
-      "Certified GameIQ v1: Chess Tactics",
+      "Certified WorkBench v1: Cache Eviction",
+      "Certified WorkBench v1: Parser Repair",
     ]),
   rowA?.caseTitles
 );
 check(
   "full (unshortened) titles are kept in the data",
-  rowA?.caseTitles.every((t) => t.startsWith("Certified GameIQ v1:")) === true,
+  rowA?.caseTitles.every((t) => t.startsWith("Certified WorkBench v1:")) === true,
   rowA?.caseTitles
 );
 
@@ -170,11 +170,11 @@ check(
 const teamB = soloTeam("solo-b", "model:b");
 const rowsMissing = aggregateCompletedResultSetFixtures({
   attempts: [
-    attempt("b1", teamB.id, "gameiq", chess.id),
-    attempt("b2", teamB.id, "gameiq", "gameiq-orphan-case-99"),
+    attempt("b1", teamB.id, "workbench", parserRepair.id),
+    attempt("b2", teamB.id, "workbench", "workbench-orphan-case-99"),
   ],
-  // chess record present, orphan record absent.
-  cases: [chess],
+  // parserRepair record present, orphan record absent.
+  cases: [parserRepair],
   teamCompositions: [teamB],
   verifierResults: [],
 });
@@ -182,47 +182,48 @@ const rowB = rowsMissing.find((r) => r.teamCompositionId === teamB.id);
 check(
   "missing case record falls back to the raw case id",
   JSON.stringify(rowB?.caseTitles) ===
-    JSON.stringify(["Certified GameIQ v1: Chess Tactics", "gameiq-orphan-case-99"]),
+    JSON.stringify(["Certified WorkBench v1: Parser Repair", "workbench-orphan-case-99"]),
   rowB?.caseTitles
 );
 
 // ---------------------------------------------------------------------------
-// (3) A merged cross-track row unions its (deduped) case titles. The fireworks
-//     re-wrap drops the teamiq sample, so the surviving gameiq case supplies the
-//     title; a genuinely-distinct second track case adds its own title.
+// (3) A merged cross-track row unions its (deduped) case titles. The
+//     source-tagged re-wrap drops the teamiq sample, so the surviving
+//     toolreliability case supplies the title; a genuinely-distinct second
+//     track case adds its own title.
 // ---------------------------------------------------------------------------
-const fireworksGameiq = certifiedCase(
-  "gameiq-fireworks-basic-v1-01",
-  "gameiq",
-  "Certified GameIQ v1: Fireworks",
-  ["fireworks", "source:fw-scenario-42"]
+const sourcedTool = certifiedCase(
+  "toolrel-sourced-case-01",
+  "toolreliability",
+  "Certified ToolReliability v1: Stale Patch",
+  ["sourced", "source:teamiq-scenario-42"]
 );
-const fireworksTeamiq = certifiedCase(
-  "fw-scenario-42",
+const sourceTeamiq = certifiedCase(
+  "teamiq-scenario-42",
   "teamiq",
-  "Certified TeamIQ v1: Fireworks Coordination"
+  "Certified TeamIQ v1: Stale Patch Coordination"
 );
 const toolCase = certifiedCase(
-  "toolrel-current-json-schema-004",
-  "toolreliability",
-  "Certified ToolReliability v1: JSON Schema"
+  "workbench-parser-repair-02",
+  "workbench",
+  "Certified WorkBench v1: Parser Repair"
 );
 const teamC = soloTeam("solo-c", "model:c");
-const mergedCases = [fireworksGameiq, fireworksTeamiq, toolCase];
+const mergedCases = [sourcedTool, sourceTeamiq, toolCase];
 const mergedAttempts = [
-  // Same decision via two tracks (fireworks source-tag overlap) -> dedups to
-  // the gameiq sample; only the gameiq title should survive for that decision.
-  attempt("c-gameiq", teamC.id, "gameiq", fireworksGameiq.id),
-  attempt("c-teamiq", teamC.id, "teamiq", fireworksTeamiq.id),
-  // A genuinely distinct toolreliability case -> its title is added.
-  attempt("c-tool", teamC.id, "toolreliability", toolCase.id),
+  // Same decision via two tracks (source-tag overlap) -> dedups to the
+  // toolreliability sample; only its title should survive for that decision.
+  attempt("c-primary", teamC.id, "toolreliability", sourcedTool.id),
+  attempt("c-teamiq", teamC.id, "teamiq", sourceTeamiq.id),
+  // A genuinely distinct workbench case -> its title is added.
+  attempt("c-tool", teamC.id, "workbench", toolCase.id),
 ];
 
 // Unscoped evidence is audit-only and must not be cross-track deduplicated.
 const deduped = dedupeCrossTrackAttempts(mergedAttempts, mergedCases);
 check(
   "cross-track dedup preserves evidence without snapshot identity",
-  deduped.some((a) => a.id === "c-gameiq") &&
+  deduped.some((a) => a.id === "c-primary") &&
     deduped.some((a) => a.id === "c-teamiq") &&
     deduped.some((a) => a.id === "c-tool"),
   deduped.map((a) => a.id)
@@ -239,14 +240,14 @@ check(
   "merged cross-track row unions titles of its deduped decisions",
   JSON.stringify(rowC?.caseTitles) ===
     JSON.stringify([
-      "Certified GameIQ v1: Fireworks",
-      "Certified ToolReliability v1: JSON Schema",
+      "Certified ToolReliability v1: Stale Patch",
+      "Certified WorkBench v1: Parser Repair",
     ]),
   rowC?.caseTitles
 );
 check(
   "merged row does not list the dropped teamiq re-wrap title",
-  rowC?.caseTitles.includes("Certified TeamIQ v1: Fireworks Coordination") === false,
+  rowC?.caseTitles.includes("Certified TeamIQ v1: Stale Patch Coordination") === false,
   rowC?.caseTitles
 );
 
@@ -254,13 +255,13 @@ check(
 // (4) Two different case ids that resolve to the SAME title collapse to one
 //     entry (title-level dedup), still in first-appearance order.
 // ---------------------------------------------------------------------------
-const dupTitleA = certifiedCase("dup-a", "gameiq", "Shared Pack Name");
-const dupTitleB = certifiedCase("dup-b", "gameiq", "Shared Pack Name");
+const dupTitleA = certifiedCase("dup-a", "workbench", "Shared Pack Name");
+const dupTitleB = certifiedCase("dup-b", "workbench", "Shared Pack Name");
 const teamD = soloTeam("solo-d", "model:d");
 const rowsDupTitle = aggregateCompletedResultSetFixtures({
   attempts: [
-    attempt("d1", teamD.id, "gameiq", dupTitleA.id),
-    attempt("d2", teamD.id, "gameiq", dupTitleB.id),
+    attempt("d1", teamD.id, "workbench", dupTitleA.id),
+    attempt("d2", teamD.id, "workbench", dupTitleB.id),
   ],
   cases: [dupTitleA, dupTitleB],
   teamCompositions: [teamD],
@@ -284,11 +285,11 @@ check(
 // ---------------------------------------------------------------------------
 const teamE = soloTeam("solo-e", "model:e");
 const manyCases = Array.from({ length: 7 }, (_, i) =>
-  certifiedCase(`bundle-case-${i}`, "gameiq", `Bundle Case ${i}`)
+  certifiedCase(`bundle-case-${i}`, "workbench", `Bundle Case ${i}`)
 );
 const rowsMany = aggregateCompletedResultSetFixtures({
   attempts: manyCases.map((c, i) =>
-    attempt(`e${i}`, teamE.id, "gameiq", c.id)
+    attempt(`e${i}`, teamE.id, "workbench", c.id)
   ),
   cases: manyCases,
   teamCompositions: [teamE],

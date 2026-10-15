@@ -11,7 +11,7 @@ import {
 export const metadata = pageMetadata({
   title: "About",
   description:
-    "How AI Board works: panel, debate, specialist, and build modes; judge synthesis; and a local-first design where your API keys never leave your browser.",
+    "How AI Board works: multi-model chat with judge synthesis, multi-agent builds on Runner V2, a benchmark for your own models, and a local-first design.",
   path: "/about",
 });
 
@@ -26,17 +26,17 @@ const FAQ = [
   {
     question: "Which API keys do I need?",
     answer:
-      "At least one provider key (OpenAI, Anthropic, Google, or OpenRouter) — two or more models make discussions worthwhile. Local models via Ollama or LM Studio need no key at all.",
+      "At least one provider key or connected account. Chat compares two or more models; a build needs an architect and at least one worker, which can be the same model. Local models via Ollama or LM Studio need no key at all.",
   },
   {
     question: "Can I use it offline?",
     answer:
-      "The app loads as a static site, but discussions need network access to reach the AI providers — unless you use only local models on your own machine.",
+      "The app loads as a static site, but chats and builds need network access to reach the AI providers — unless you use only local models on your own machine.",
   },
   {
     question: "Can I use my ChatGPT subscription instead of an API key?",
     answer:
-      "Yes. Connect a ChatGPT Plus/Pro or GitHub Copilot account through the local account runner and its models appear alongside your API-key models — in discussions, in Build mode, and in the games. Rate limits and availability are governed by your provider account.",
+      "Yes. Connect a ChatGPT Plus/Pro or GitHub Copilot account through the local account runner and its models appear alongside your API-key models — in chat and in Build mode. Rate limits and availability are governed by your provider account.",
   },
 ];
 
@@ -49,56 +49,73 @@ export default function AboutPage() {
           About {SITE_NAME}
         </h1>
         <p className="mt-2 text-muted-foreground">
-          One question, several AI models, one synthesized best answer.
+          A local-first AI harness: chat and build with the models you choose,
+          from the providers you already use.
         </p>
       </header>
 
       <section className="space-y-3">
-        <h2 className="font-display text-xl font-semibold">What it does</h2>
+        <h2 className="font-display text-xl font-semibold">Chat</h2>
         <p>
-          The {SITE_NAME} orchestrates a structured discussion between multiple
-          AI models — OpenAI GPT, Anthropic Claude, Google Gemini, anything on
-          OpenRouter, or your own OpenAI-compatible endpoints such as Ollama
-          and LM Studio. You ask one question; the models answer, read each
-          other&apos;s responses, and critique and refine their positions over
-          several rounds. When the discussion converges (or the configured
-          effort level is reached), a judge model you choose reads the whole
-          transcript and writes a single, synthesized final answer with a
-          confidence score and any notable dissent.
+          Ask one question and several models work it out together. They
+          answer, read each other&apos;s responses, and refine or challenge
+          their positions over a few rounds. A judge model you pick then writes
+          one answer with a confidence score and any notable dissent.
+        </p>
+        <ul className="list-disc space-y-2 pl-6">
+          <li>
+            <strong>Panel</strong> — models build on each other toward a shared
+            answer.
+          </li>
+          <li>
+            <strong>Debate</strong> — models argue opposing positions so the
+            trade-offs come out.
+          </li>
+          <li>
+            <strong>Specialist + reviewers</strong> — one model drafts, the
+            others review and demand fixes.
+          </li>
+        </ul>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Build</h2>
+        <p>
+          Describe a change and a crew carries it out on your own repository.
+          An architect plans the work as tasks, workers implement them in
+          isolated Git worktrees, and an independent verifier checks the
+          evidence before anything is accepted. You approve the gates that
+          matter and choose how the finished work is handed back.
         </p>
         <p>
-          One strong model can be wrong with great confidence. Several models
-          that must defend their answers against each other catch more
-          mistakes, surface more perspectives, and produce a better-grounded
-          result than any single response.
+          Builds run on{" "}
+          <Link href="/runner-guide" className="underline hover:text-foreground">
+            Runner V2
+          </Link>
+          , a native agent kernel you start on your machine. It owns files,
+          Git, shell commands, checkpoints, and recovery — the browser never
+          executes project code.
         </p>
       </section>
 
       <section className="space-y-3">
-        <h2 className="font-display text-xl font-semibold">Discussion modes</h2>
-        <ul className="list-disc space-y-2 pl-6">
-          <li>
-            <strong>Collaborative panel</strong> — models work together,
-            building on each other&apos;s answers toward consensus.
-          </li>
-          <li>
-            <strong>Debate</strong> — models take opposing positions and argue
-            them, useful for decisions and trade-offs.
-          </li>
-          <li>
-            <strong>Specialist + reviewers</strong> — one model drafts the
-            answer while the others review and demand fixes.
-          </li>
-          <li>
-            <strong>Build mode</strong> — an architect model breaks a coding
-            task into work items and worker models implement them in parallel
-            waves. Files can be written to a real project folder on your
-            machine, downloaded as a zip, or applied through an optional local
-            runner that adds shell access, MCP tools, and a browser control
-            panel to pick the project folder, watch live activity, manage MCP
-            servers, and keep itself current with a signed self-update.
-          </li>
-        </ul>
+        <h2 className="font-display text-xl font-semibold">Any provider</h2>
+        <p>
+          OpenAI, Anthropic (direct or Azure Foundry), Google Gemini,
+          OpenRouter, xAI, Meta, NVIDIA NIM, and any OpenAI-compatible
+          endpoint such as Ollama or LM Studio. ChatGPT Plus/Pro and GitHub
+          Copilot accounts work too, through a small local account runner.
+          Mix them freely: a strong architect with inexpensive workers is a
+          common build crew.
+        </p>
+        <p>
+          The{" "}
+          <Link href="/benchmark" className="underline hover:text-foreground">
+            Benchmark
+          </Link>{" "}
+          measures which models and teams work best for you — tool use,
+          team lift, and real build tasks — using your own keys.
+        </p>
       </section>
 
       <section className="space-y-3">
@@ -106,13 +123,12 @@ export default function AboutPage() {
           Local-first and private by design
         </h2>
         <p>
-          There is no backend. The app is a static site; the orchestration
-          engine runs entirely in your browser tab and calls the AI providers
-          directly with the API keys you enter on the Settings page. Keys,
-          discussions, and attachments are stored in your browser (IndexedDB)
-          or in a local folder you pick — optionally encrypted with a
-          passphrase using AES-256-GCM. Nothing is ever uploaded to a server
-          of ours, because there isn&apos;t one.
+          There is no backend. The app is a static site that calls the AI
+          providers directly with the keys you enter in Settings. Keys,
+          sessions, and attachments stay in your browser (IndexedDB) or in a
+          local folder you pick, optionally encrypted with a passphrase using
+          AES-256-GCM. Nothing is uploaded to a server of ours, because there
+          isn&apos;t one.
         </p>
       </section>
 
@@ -128,14 +144,8 @@ export default function AboutPage() {
           stays in a file on your computer.
         </p>
         <p>
-          A connected account works everywhere the app uses models: discussions,
-          Build mode, and the{" "}
-          <Link href="/games" className="underline hover:text-foreground">
-            games
-          </Link>
-          . That last one is the fun part — you can play chess, Connect Four,
-          Battleship, Codenames, Fireworks, or Quoridor against GPT-5.5, or sit out and
-          watch two models play each other.
+          A connected account works everywhere the app uses models: chat,
+          builds, and the benchmark.
         </p>
         <p>
           This draws on your account&apos;s own entitlement, so rate limits,
@@ -215,39 +225,6 @@ export default function AboutPage() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="font-display text-xl font-semibold">Learn more</h2>
-        <p className="text-muted-foreground">
-          These short guides explain the main workflows without adding more
-          navigation to the app itself.
-        </p>
-        <ul className="list-disc space-y-2 pl-6">
-          <li>
-            <Link
-              href="/multi-model-ai-discussions"
-              className="underline hover:text-foreground"
-            >
-              Multi-model AI discussions
-            </Link>
-          </li>
-          <li>
-            <Link href="/ai-debate-tool" className="underline hover:text-foreground">
-              AI debate tool
-            </Link>
-          </li>
-          <li>
-            <Link href="/build-mode" className="underline hover:text-foreground">
-              Build mode for AI-assisted coding
-            </Link>
-          </li>
-          <li>
-            <Link href="/runner-guide" className="underline hover:text-foreground">
-              Runner V2 guide
-            </Link>
-          </li>
-        </ul>
-      </section>
-
-      <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">FAQ</h2>
         <dl className="space-y-4">
           {FAQ.map((entry) => (
@@ -261,7 +238,7 @@ export default function AboutPage() {
 
       <p>
         <Link href="/" className="underline hover:text-foreground">
-          Start a discussion
+          Open the workspace
         </Link>
       </p>
     </article>

@@ -75,7 +75,7 @@ interface SettingsData {
   };
 }
 
-const MODES: DiscussionMode[] = ["panel", "debate", "specialist", "build"];
+const MODES: DiscussionMode[] = ["chat", "panel", "debate", "specialist", "build"];
 
 const TAB_VALUES = ["providers", "tools", "capability-lab", "pricing", "defaults", "storage", "security"];
 
@@ -182,8 +182,8 @@ export default function SettingsPage() {
           Settings
         </h1>
         <p className="mt-2 text-muted-foreground">
-          Provider keys, model pricing, and the defaults used when you start a
-          new discussion. Everything is stored locally on your device.
+          Provider keys, tools, pricing, and the defaults for new chats and
+          builds. Everything is stored locally on your device.
         </p>
       </div>
 
@@ -216,8 +216,7 @@ export default function SettingsPage() {
               </div>
               <CardTitle className="text-xl">Provider health</CardTitle>
               <CardDescription>
-                You need at least two enabled models to run a multi-model
-                discussion cleanly.
+                A build needs one enabled model; a chat compares two or more.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -258,20 +257,20 @@ export default function SettingsPage() {
               </div>
 
               {setupReady ? (
-                <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50/80 p-4 text-sm text-emerald-950">
+                <div className="flex items-start gap-2 rounded-lg border border-success/40 bg-success-soft p-4 text-sm text-success">
                   <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>
-                    The app is ready to start discussions. Enabled switches save
+                    Ready for chats and builds. Enabled switches save
                     immediately; the Save button is only for key and
                     default-model changes.
                   </span>
                 </div>
               ) : (
-                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-950">
+                <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-soft p-4 text-sm text-warning">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>
-                    Add and enable at least two providers, then choose a default
-                    judge model in the Defaults tab.
+                    Add and enable models from at least one provider (two models
+                    for chat), then pick a default judge in the Defaults tab.
                   </span>
                 </div>
               )}
@@ -357,9 +356,9 @@ export default function SettingsPage() {
         <TabsContent value="defaults">
           <Card>
             <CardHeader>
-              <CardTitle>Discussion defaults</CardTitle>
+              <CardTitle>Chat defaults</CardTitle>
               <CardDescription>
-                Pre-fill these options when you start a new discussion.
+                Pre-fill these options when you start a new chat.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">

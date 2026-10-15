@@ -1,16 +1,8 @@
 import type { Metadata } from "next";
 import { Inter, Fraunces, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
-import {
-  BarChart3,
-  Coffee,
-  Code,
-  Gamepad2,
-  Info,
-  Mail,
-  MessageSquare,
-  Settings,
-} from "lucide-react";
+import { Code } from "lucide-react";
+import { AppNav } from "@/components/AppNav";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   SITE_CONTACT_EMAIL,
@@ -64,12 +56,7 @@ export const metadata: Metadata = {
   },
 };
 
-const navLink =
-  "inline-flex shrink-0 items-center gap-2 rounded-md px-2 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:px-3";
-const navIconBtn =
-  "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
-const navDivider = "mx-1.5 h-5 w-px shrink-0 bg-border";
-const navGroup = "flex shrink-0 items-center gap-1";
+const footerLink = "underline-offset-4 hover:text-foreground hover:underline";
 
 export default function RootLayout({
   children,
@@ -82,84 +69,70 @@ export default function RootLayout({
         className={`${inter.variable} ${fraunces.variable} ${jetbrainsMono.variable} ${inter.className}`}
       >
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        <div className="min-h-screen bg-background">
-          <header className="border-b bg-background">
-            <div className="mx-auto flex max-w-[100rem] flex-col gap-2 px-4 py-2 xl:min-h-14 xl:flex-row xl:items-center xl:justify-between">
-              <Link href="/" className="flex min-h-10 shrink-0 items-center gap-2 font-semibold">
-                <MessageSquare className="h-5 w-5 text-primary" />
+        <div className="flex min-h-screen flex-col">
+          <header className="glass-bar sticky top-0 z-40 border-b">
+            <div className="mx-auto flex h-14 w-full max-w-[100rem] items-center gap-2 px-4 sm:gap-4 sm:px-6">
+              <Link
+                href="/"
+                className="flex shrink-0 items-center gap-2.5 font-display text-xl font-semibold tracking-tight"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element -- static export; the SVG mark is tiny */}
+                <img
+                  src="/favicon.svg"
+                  width={28}
+                  height={28}
+                  alt=""
+                  aria-hidden="true"
+                  className="rounded-lg shadow-[0_3px_12px_#2563eb22]"
+                />
                 {SITE_NAME}
               </Link>
-              <nav className="-mx-2 flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto px-2 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:mx-0 xl:flex-1 xl:justify-end xl:overflow-visible xl:px-0 xl:pb-0">
-                <div className={`${navGroup} order-1 xl:order-2`}>
-                  {/* App */}
-                  <Link href="/games" className={navLink}>
-                    <Gamepad2 className="h-4 w-4" />
-                    Games
-                  </Link>
-                  <Link href="/benchmark" className={navLink}>
-                    <BarChart3 className="h-4 w-4" />
-                    Benchmark
-                  </Link>
-                  <Link href="/settings" className={navLink}>
-                    <Settings className="h-4 w-4" />
-                    Settings
-                  </Link>
-                </div>
-
-                <div className={`${navGroup} order-2 xl:order-3`}>
-                  <span className={navDivider} aria-hidden="true" />
-
-                  {/* Controls */}
-                  <a
-                    href={SITE_GITHUB_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="View source on GitHub"
-                    title="View source on GitHub"
-                    className={navIconBtn}
-                  >
-                    <Code className="h-4 w-4" />
-                    <span className="sr-only">View source on GitHub</span>
-                  </a>
-                  <ThemeToggle />
-                </div>
-
-                <div className={`${navGroup} order-3 xl:order-1`}>
-                  {/* Project */}
-                  <Link href="/about" className={navLink}>
-                    <Info className="h-4 w-4" />
-                    About
-                  </Link>
-                  <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={navLink}>
-                    <Mail className="h-4 w-4" />
-                    Contact
-                  </a>
-                  <a
-                    href="https://paypal.me/behzadashams"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={navLink}
-                  >
-                    <Coffee className="h-4 w-4" />
-                    Support this project
-                  </a>
-
-                  <span className={navDivider} aria-hidden="true" />
-                </div>
-              </nav>
+              <AppNav />
+              <div className="ml-auto flex shrink-0 items-center gap-1">
+                <a
+                  href={SITE_GITHUB_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="View source on GitHub"
+                  title="View source on GitHub"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <Code className="h-4 w-4" aria-hidden="true" />
+                </a>
+                <ThemeToggle />
+              </div>
             </div>
           </header>
-          <main className="mx-auto w-full px-4 py-8">{children}</main>
-          <footer className="border-t px-4 py-4 text-center text-xs text-muted-foreground">
-            © 2026 Behzad Shams · AI Board ·{" "}
-            <a
-              href={`${SITE_GITHUB_URL}/blob/main/LICENSE`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline hover:text-foreground"
-            >
-              Community Source License
-            </a>
+          <main className="mx-auto w-full flex-1 px-4 py-8 sm:px-6">{children}</main>
+          <footer className="px-4 py-6 text-xs text-muted-foreground">
+            <div className="mx-auto flex max-w-[100rem] flex-wrap items-center justify-center gap-x-4 gap-y-2">
+              <span>© 2026 Behzad Shams · {SITE_NAME}</span>
+              <Link href="/about" className={footerLink}>
+                About
+              </Link>
+              <Link href="/runner-guide" className={footerLink}>
+                Runner guide
+              </Link>
+              <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={footerLink}>
+                Contact
+              </a>
+              <a
+                href="https://paypal.me/behzadashams"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={footerLink}
+              >
+                Support this project
+              </a>
+              <a
+                href={`${SITE_GITHUB_URL}/blob/main/LICENSE`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={footerLink}
+              >
+                Community Source License
+              </a>
+            </div>
           </footer>
         </div>
       </body>

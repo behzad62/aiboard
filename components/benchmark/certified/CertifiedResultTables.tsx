@@ -41,7 +41,6 @@ import type { ReasoningEffort } from "@/lib/db/schema";
 export const TRACK_LABELS: Record<CertifiedTrackView, string> = {
   all: "Certified",
   workbench: "WorkBench",
-  gameiq: "GameIQ",
   teamiq: "TeamIQ",
   toolreliability: "Tool Reliability",
   harnessbench: "HarnessBench",
@@ -313,8 +312,8 @@ function LeaderboardSortSelector({
   );
 }
 
-// Trim the noisy shared prefix certified case titles carry ("Certified GameIQ
-// v1: Chess Tactics" -> "Chess Tactics") for a compact leaderboard cell. Only a
+// Trim the noisy shared prefix certified case titles carry ("Certified WorkBench
+// v1: Fix the parser" -> "Fix the parser") for a compact leaderboard cell. Only a
 // leading "Certified <track> <version>:" style prefix is stripped; titles
 // without that prefix (e.g. "ToolReliability current challenge pack") are left
 // as-is. Full titles remain in the data; this is display-only.

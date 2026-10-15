@@ -120,13 +120,13 @@ check(
     new Map([
       [
         "model-a\u0000medium",
-        comparableRow({ tracks: { gameiq: 0.9 } }),
+        comparableRow({ tracks: { harnessbench: 0.9 } }),
       ],
       [
         "model-b\u0000medium",
         comparableRow({
           modelVariantKeys: ["model-b\u0000medium"],
-          tracks: { gameiq: 0.8 },
+          tracks: { harnessbench: 0.8 },
         }),
       ],
     ])
@@ -332,9 +332,9 @@ check(
 const disjointLeaderboard = aggregateCompletedResultSetFixtures({
   attempts: [
     {
-      ...teamIqAttempt("disjoint-a-gameiq", soloGpt.id, 70, 0.8, 60_000),
-      caseId: "gameiq-a",
-      track: "gameiq",
+      ...teamIqAttempt("disjoint-a-tool", soloGpt.id, 70, 0.8, 60_000),
+      caseId: "case-a",
+      track: "toolreliability",
     },
     {
       ...teamIqAttempt(

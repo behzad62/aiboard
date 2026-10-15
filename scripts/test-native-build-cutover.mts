@@ -42,13 +42,16 @@ assert.match(nativeBuildEngine, /effectiveNativeBuildPolicy/);
 assert.match(nativeBuildEngine, /supportsNativeRunnerNodeVersion/);
 assert.doesNotMatch(nativeBuildEngine, /function buildBudgets/);
 assert.doesNotMatch(nativeBuildEngine, /24\.18\.0/);
+// Legacy browser-engine panels render only inside the Build workspace branch,
+// and only for runs that never had a Runner V2 run id.
+assert.match(discussionClient, /if \(discussion\.mode === "build"\) \{/);
 assert.match(
   discussionClient,
-  /discussion\.mode === "build" &&\s*!discussion\.nativeBuildRunId &&\s*buildToolReviewReport/
+  /!discussion\.nativeBuildRunId &&\s*buildToolReviewReport/
 );
 assert.match(
   discussionClient,
-  /discussion\.mode === "build" &&\s*!discussion\.nativeBuildRunId &&\s*buildStopReport/
+  /!discussion\.nativeBuildRunId &&\s*buildStopReport/
 );
 assert.doesNotMatch(workBenchAdapter, /import\([^)]*legacy-build-engine/);
 assert.doesNotMatch(certification, /legacy-build-engine/);

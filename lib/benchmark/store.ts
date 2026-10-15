@@ -59,6 +59,10 @@ import {
 } from "../client/store";
 import type { ClientStore } from "../client/store";
 import { redactBenchmarkBundle } from "./redaction";
+import {
+  isRetiredBenchmarkResultSet,
+  listRetiredBenchmarkRunIds,
+} from "./retired";
 import { sanitizeBenchmarkDisplayText } from "./configuration-display";
 import {
   hasValidSnapshotMetricInvariants,
@@ -564,6 +568,46 @@ export async function deleteBenchmarkRunCascade(
   summary.artifacts += deleteBenchmarkArtifactsByRunId(runId);
   await deleteBenchmarkRunBlob(runId);
   await flush();
+  return summary;
+}
+
+export interface RetiredBenchmarkEvidence {
+  resultSetIds: string[];
+  runIds: string[];
+}
+
+/** Evidence from retired tracks (GameIQ, Fireworks) still held in storage. */
+export async function findRetiredBenchmarkEvidence(): Promise<RetiredBenchmarkEvidence> {
+  const [resultSets, runs, attempts, cases] = await Promise.all([
+    listBenchmarkResultSets(),
+    listBenchmarkRuns(),
+    listBenchmarkAttemptsV2(),
+    listBenchmarkCaseV2(),
+  ]);
+  return {
+    resultSetIds: resultSets
+      .filter((set) => set.status !== "pending" && isRetiredBenchmarkResultSet(set))
+      .map((set) => set.id),
+    runIds: listRetiredBenchmarkRunIds(runs, attempts, cases),
+  };
+}
+
+/**
+ * Deletes retired-track evidence through the normal cascades: result sets
+ * first (a blended Model IQ set takes its Tool Reliability attempts with it,
+ * since its score is no longer comparable), then any retired runs left over.
+ */
+export async function deleteRetiredBenchmarkEvidence(): Promise<BenchmarkDeleteSummary> {
+  const summary = createDeleteSummary();
+  const evidence = await findRetiredBenchmarkEvidence();
+  for (const resultSetId of evidence.resultSetIds) {
+    addDeleteSummary(summary, await deleteBenchmarkResultSetCascade(resultSetId));
+  }
+  const remainingRunIds = new Set(getBenchmarkRuns().map((run) => run.id));
+  for (const runId of evidence.runIds) {
+    if (!remainingRunIds.has(runId)) continue;
+    addDeleteSummary(summary, await deleteBenchmarkRunCascade(runId));
+  }
   return summary;
 }
 
@@ -1182,12 +1226,6 @@ function validateBenchmarkReportBundleBase(
     ) {
       throw new Error("Invalid sourceEvidence in benchmark report bundle.");
     }
-    validateArrayWithStringKey(
-      "sourceEvidence.gameMatches",
-      bundle.sourceEvidence.gameMatches,
-      "id"
-    );
-    validateGameMatchRecords(bundle.sourceEvidence.gameMatches);
     validateArrayWithStringKey(
       "sourceEvidence.buildCheckpoints",
       bundle.sourceEvidence.buildCheckpoints,
@@ -1910,29 +1948,6 @@ function validateArrayWithStringKey(
   }
 }
 
-function validateGameMatchRecords(records: unknown[]): void {
-  for (const record of records) {
-    const item = record as Record<string, unknown>;
-    if (
-      typeof item.gameId !== "string" ||
-      typeof item.timestamp !== "string" ||
-      !Array.isArray(item.participants) ||
-      typeof item.resultJson !== "string" ||
-      typeof item.statsJson !== "string" ||
-      !isJsonObjectString(item.resultJson) ||
-      !isJsonObjectString(item.statsJson)
-    ) {
-      throw new Error("Invalid sourceEvidence.gameMatches record in benchmark report bundle.");
-    }
-
-    for (const participant of item.participants) {
-      if (!isValidGameParticipant(participant)) {
-        throw new Error("Invalid sourceEvidence.gameMatches participant in benchmark report bundle.");
-      }
-    }
-  }
-}
-
 function validateBuildCheckpointRecords(records: unknown[]): void {
   for (const record of records) {
     const item = record as Record<string, unknown>;
@@ -1991,18 +2006,6 @@ function validateModelBuildStatRecords(records: unknown[]): void {
       throw new Error("Invalid sourceEvidence.buildStats record in benchmark report bundle.");
     }
   }
-}
-
-function isValidGameParticipant(value: unknown): boolean {
-  if (!isPlainObject(value)) return false;
-  return (
-    typeof value.id === "string" &&
-    (value.kind === "human" || value.kind === "ai") &&
-    typeof value.label === "string" &&
-    (value.modelId === undefined || typeof value.modelId === "string") &&
-    (value.reasoningEffort === undefined ||
-      typeof value.reasoningEffort === "string")
-  );
 }
 
 function isBuildUsageWindow(value: unknown): boolean {

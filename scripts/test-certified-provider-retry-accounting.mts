@@ -13,8 +13,6 @@ import {
   createPendingBenchmarkResultSet,
   failBenchmarkResultSet,
 } from "../lib/benchmark/certified/result-set-publication";
-import { getGameIqScenarioPack } from "../lib/benchmark/gameiq";
-import { runCertifiedGameIq } from "../lib/benchmark/gameiq/certified-runner";
 import {
   STATEFUL_REFERENCE_TRANSCRIPTS,
   TOOL_RELIABILITY_CASES,
@@ -24,11 +22,6 @@ import {
   runCertifiedTeamIq,
   deriveTeamComposition,
 } from "../lib/benchmark/teamiq";
-import { runCertifiedFireworksTeamIq } from "../lib/benchmark/fireworks/certified-runner";
-import {
-  FIREWORKS_TACTICS_SCENARIOS,
-  fireworksCaseToBenchmarkCaseV2,
-} from "../lib/benchmark/fireworks/scenario-packs";
 import type {
   BenchmarkCaseV2,
   BenchmarkTeamComposition,
@@ -66,12 +59,7 @@ function caseRecord(id: string, track: BenchmarkTrack): BenchmarkCaseV2 {
     budget: { maxUsd: 10, maxModelCalls: 1_000 },
     scoring: {
       scoringVersion: "retry-accounting-v1",
-      primary:
-        track === "gameiq"
-          ? "game_iq"
-          : track === "toolreliability"
-            ? "tool_reliability"
-            : "team_lift",
+      primary: track === "toolreliability" ? "tool_reliability" : "team_lift",
     },
     contamination: {
       originalTask: true,
@@ -130,111 +118,6 @@ async function persistedAttempt(runId: string) {
 }
 
 __resetBenchmarkStoreForTests();
-
-// GameIQ: real scenario execution, first physical call fails, retry succeeds.
-{
-  const pack = getGameIqScenarioPack("connect-four");
-  assert.ok(pack);
-  const model: SelectedModel = {
-    modelId: "openai:retry-gameiq",
-    providerId: "openai",
-    displayName: "Retry GameIQ",
-  };
-  const team = soloTeam("team-retry-gameiq", model.modelId);
-  await saveBenchmarkCaseV2(caseRecord(pack.id, "gameiq"));
-  await saveBenchmarkTeamComposition(team);
-  let scenarioIndex = 0;
-  const flaky = flakyStream(() =>
-    JSON.stringify({
-      action: pack.scenarios[scenarioIndex++]?.expectedActions[0]?.action,
-    }),
-  );
-  await runCertifiedBenchmark({
-    runId: "run-retry-gameiq",
-    suiteId: "suite-retry-gameiq",
-    track: "gameiq",
-    harnessProfile: "raw-single-model",
-    caseIds: [pack.id],
-    teamCompositionIds: [team.id],
-    certification,
-    runner: (context) =>
-      runCertifiedGameIq({
-        context,
-        models: [model],
-        scenarioPackIds: [pack.id],
-        teamCompositionIds: [team.id],
-        teamCompositions: [team],
-        trials: 1,
-        retryDelaysMs: [0],
-        retryRuntime,
-        streamChat: flaky.stream,
-      }),
-  });
-  const attempt = await persistedAttempt("run-retry-gameiq");
-  assert.equal(attempt.modelCalls, flaky.calls());
-  assert.equal(attempt.traceIds.length, flaky.calls());
-  assert.equal(
-    attempt.inputTokens,
-    ((flaky.calls() * (flaky.calls() + 1)) / 2) * 10,
-  );
-  console.log("PASS GameIQ persists fail-then-success physical usage");
-}
-
-// GameIQ contains a terminal scenario failure and must still account for all
-// three exhausted physical attempts before continuing the remaining pack.
-{
-  const pack = getGameIqScenarioPack("connect-four");
-  assert.ok(pack);
-  const model: SelectedModel = {
-    modelId: "openai:retry-gameiq-terminal",
-    providerId: "openai",
-    displayName: "Retry GameIQ Terminal",
-  };
-  const team = soloTeam("team-retry-gameiq-terminal", model.modelId);
-  await saveBenchmarkTeamComposition(team);
-  let physicalCalls = 0;
-  await runCertifiedBenchmark({
-    runId: "run-retry-gameiq-terminal",
-    suiteId: "suite-retry-gameiq-terminal",
-    track: "gameiq",
-    harnessProfile: "raw-single-model",
-    caseIds: [pack.id],
-    teamCompositionIds: [team.id],
-    certification,
-    runner: (context) =>
-      runCertifiedGameIq({
-        context,
-        models: [model],
-        scenarioPackIds: [pack.id],
-        teamCompositionIds: [team.id],
-        teamCompositions: [team],
-        trials: 1,
-        retryDelaysMs: [0, 0],
-        retryRuntime,
-        streamChat: async function* (): AsyncIterable<StreamChunk> {
-          physicalCalls++;
-          yield { type: "usage", usage: { inputTokens: 5, outputTokens: 1 } };
-          if (physicalCalls <= 3) {
-            yield {
-              type: "error",
-              error: "temporary",
-              errorMetadata: { statusCode: 503 },
-            };
-            return;
-          }
-          yield { type: "token", content: "{}" };
-          yield { type: "done" };
-        },
-      }),
-  });
-  const attempt = await persistedAttempt("run-retry-gameiq-terminal");
-  assert.equal(attempt.modelCalls, physicalCalls);
-  assert.equal(attempt.traceIds.length, physicalCalls);
-  assert.equal(attempt.inputTokens, physicalCalls * 5);
-  console.log(
-    "PASS GameIQ terminal scenario exhaustion preserves physical usage",
-  );
-}
 
 // ToolReliability: real stateful environment execution.
 {
@@ -322,109 +205,6 @@ __resetBenchmarkStoreForTests();
   assert.equal(attempt.modelCalls, flaky.calls());
   assert.equal(attempt.traceIds.length, flaky.calls());
   console.log("PASS TeamIQ persists fail-then-success physical usage");
-}
-
-// Fireworks: real rules/scoring execution with one tactical scenario.
-{
-  const scenario = FIREWORKS_TACTICS_SCENARIOS[0]!;
-  const team = deriveTeamComposition({
-    name: "Retry Fireworks Duo",
-    roles: ["P1", "P2"].map((slot) => ({
-      role: "player",
-      slot,
-      modelId: `openai:retry-fireworks-${slot.toLowerCase()}`,
-      providerId: "openai",
-      displayName: `Retry Fireworks ${slot}`,
-      temperature: 0,
-    })),
-  });
-  const caseV2 = fireworksCaseToBenchmarkCaseV2(
-    "retry-fireworks-case",
-    "tactics",
-  );
-  await saveBenchmarkCaseV2(caseV2);
-  await saveBenchmarkTeamComposition(team);
-  const flaky = flakyStream(() => '{"action":"play","cardIndex":0}');
-  await runCertifiedBenchmark({
-    runId: "run-retry-fireworks",
-    suiteId: "suite-retry-fireworks",
-    track: "teamiq",
-    harnessProfile: "raw-single-model",
-    caseIds: [caseV2.id],
-    teamCompositionIds: [team.id],
-    certification,
-    runner: (context) =>
-      runCertifiedFireworksTeamIq({
-        context,
-        teamCompositions: [team],
-        cases: [scenario],
-        includeSoloBaselines: false,
-        retryDelaysMs: [0],
-        retryRuntime,
-        streamChat: flaky.stream,
-      }),
-  });
-  const attempt = await persistedAttempt("run-retry-fireworks");
-  assert.equal(attempt.modelCalls, flaky.calls());
-  assert.equal(attempt.traceIds.length, flaky.calls());
-  console.log("PASS Fireworks persists fail-then-success physical usage");
-}
-
-// Fireworks contains provider errors with a deterministic gameplay fallback;
-// terminal recovery still counts three model calls while applying one fallback.
-{
-  const scenario = FIREWORKS_TACTICS_SCENARIOS[0]!;
-  const team = deriveTeamComposition({
-    name: "Retry Fireworks Terminal",
-    roles: ["P1", "P2"].map((slot) => ({
-      role: "player",
-      slot,
-      modelId: `openai:retry-fireworks-terminal-${slot.toLowerCase()}`,
-      providerId: "openai",
-      displayName: `Retry Fireworks Terminal ${slot}`,
-      temperature: 0,
-    })),
-  });
-  const caseV2 = fireworksCaseToBenchmarkCaseV2(
-    "retry-fireworks-terminal-case",
-    "tactics",
-  );
-  await saveBenchmarkCaseV2(caseV2);
-  await saveBenchmarkTeamComposition(team);
-  let physicalCalls = 0;
-  await runCertifiedBenchmark({
-    runId: "run-retry-fireworks-terminal",
-    suiteId: "suite-retry-fireworks-terminal",
-    track: "teamiq",
-    harnessProfile: "raw-single-model",
-    caseIds: [caseV2.id],
-    teamCompositionIds: [team.id],
-    certification,
-    runner: (context) =>
-      runCertifiedFireworksTeamIq({
-        context,
-        teamCompositions: [team],
-        cases: [scenario],
-        includeSoloBaselines: false,
-        retryDelaysMs: [0, 0],
-        retryRuntime,
-        streamChat: async function* (): AsyncIterable<StreamChunk> {
-          physicalCalls++;
-          yield { type: "usage", usage: { inputTokens: 9, outputTokens: 1 } };
-          yield {
-            type: "error",
-            error: "temporary",
-            errorMetadata: { statusCode: 503 },
-          };
-        },
-      }),
-  });
-  const attempt = await persistedAttempt("run-retry-fireworks-terminal");
-  assert.equal(physicalCalls, 3);
-  assert.equal(attempt.modelCalls, 3);
-  assert.equal(attempt.traceIds.length, 3);
-  assert.equal(attempt.inputTokens, 27);
-  console.log("PASS Fireworks terminal exhaustion preserves physical usage");
 }
 
 // Terminal exhaustion: a failed, unpublished result set still owns all billed

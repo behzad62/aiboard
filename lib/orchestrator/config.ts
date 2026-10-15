@@ -207,11 +207,27 @@ function formatCompactNumber(value: number): string {
   return `${value}`;
 }
 
+/** Output budget for one single-model chat reply — headroom, not a length control. */
+export const CHAT_REPLY_MAX_TOKENS = 32_768;
+// Typical size of one chat reply, used only for usage estimates.
+const CHAT_TYPICAL_REPLY_TOKENS = 1_500;
+const CHAT_TYPICAL_PROMPT_TOKENS = 2_000;
+
 export function estimateDiscussionCost(
   modelCount: number,
   effort: EffortLevel,
   mode: DiscussionMode
 ): DiscussionUsageEstimate {
+  if (mode === "chat") {
+    return {
+      minCalls: 1,
+      maxCalls: 1,
+      minResponseTokens: CHAT_TYPICAL_REPLY_TOKENS,
+      maxResponseTokens: CHAT_TYPICAL_REPLY_TOKENS,
+      label: `1 model call per message, ~${formatCompactNumber(CHAT_TYPICAL_REPLY_TOKENS)} response tokens`,
+      note: "Each message re-sends the conversation so far, so longer chats cost more per turn.",
+    };
+  }
   const config = EFFORT_CONFIG[effort];
   const minRounds = getMinimumRounds(config);
   const maxRounds = config.maxRounds;
@@ -278,6 +294,19 @@ export function estimateDiscussionCostUsd(
 ): DiscussionCostEstimateUsd | null {
   const priced = modelPricings.filter((p): p is ModelPricing => p !== null);
   if (priced.length === 0) return null;
+  if (mode === "chat") {
+    const pricing = priced[0]!;
+    const usd =
+      (CHAT_TYPICAL_PROMPT_TOKENS * pricing.inputUsdPer1M +
+        CHAT_TYPICAL_REPLY_TOKENS * pricing.outputUsdPer1M) /
+      1_000_000;
+    return {
+      minUsd: usd,
+      maxUsd: usd,
+      pricedModelCount: 1,
+      totalModelCount: 1,
+    };
+  }
 
   const avgInput =
     priced.reduce((sum, p) => sum + p.inputUsdPer1M, 0) / priced.length;
@@ -312,6 +341,13 @@ export function estimateDiscussionCostUsd(
 
 export function getModeInfo(mode: DiscussionMode): DiscussionModeInfo {
   switch (mode) {
+    case "chat":
+      return {
+        label: "Single model",
+        summary: "A normal conversation with one model. Ask, follow up, refine.",
+        flow: "Each message goes to the model with the conversation so far; it streams one reply.",
+        bestFor: "Best for everyday questions, drafting, and back-and-forth work.",
+      };
     case "panel":
       return {
         label: "Collaborative Panel",

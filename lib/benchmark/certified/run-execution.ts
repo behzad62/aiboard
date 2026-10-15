@@ -1,14 +1,14 @@
 // Certified run execution — extracted VERBATIM from CertifiedRunPanel.tsx
 // (2026-07-17 benchmark UX overhaul, Task 4 Step 1). No behavior changes: the
-// two entry points (`runSelected`, `runGameIqMultiModel`) and their pure
+// entry point (`runSelected`) and its pure
 // helpers moved out of the component unchanged; component-local reads/setters
 // that they used as closures became explicit `ctx` fields instead. Several
 // helpers below are *shared* with CertifiedRunPanel.tsx's render code (e.g.
-// TRACK_OPTIONS, fireworksCasesForSuiteId, workBenchModelsForRun, DIRECT_MODEL_HARNESS) —
+// TRACK_OPTIONS, workBenchModelsForRun, DIRECT_MODEL_HARNESS) —
 // they live here as the single source of truth and the panel imports them back.
 "use client";
 
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import type { MutableRefObject } from "react";
 import {
   saveBenchmarkCaseV2,
   saveBenchmarkTeamComposition,
@@ -21,16 +21,7 @@ import type { BenchmarkAttemptV2 as BenchmarkAttempt } from "@/lib/benchmark/typ
 import { runCertifiedBenchmark } from "@/lib/benchmark/certified/run-engine";
 import { throwIfCertifiedRunAborted } from "@/lib/benchmark/certified/model-call";
 import { persistReturnedAttempts } from "@/lib/benchmark/certified/model-runner";
-import {
-  classifyGameIqModelRunOutcome,
-  gameIqBundlePackIds,
-  gameIqPackRunContext,
-  isGameIqBundleSuite,
-  listCertifiedSuiteOptions,
-  reidGameIqPackAttempt,
-  type CertifiedRunnableTrack,
-} from "@/lib/benchmark/certified/suite-options";
-import { isFireworksSuite } from "@/lib/benchmark/certified/ui-gates";
+import type { CertifiedRunnableTrack } from "@/lib/benchmark/certified/suite-options";
 import { runHarnessCertification } from "@/lib/benchmark/certified/certification";
 import type { CertifiedRunSummary } from "@/lib/benchmark/certified/run-status";
 import {
@@ -59,17 +50,6 @@ import {
   teamIqToolReliabilityWallClockSecondsForSuite,
   type TeamIqRoleAssignment,
 } from "@/lib/benchmark/teamiq";
-import {
-  fireworksCaseToBenchmarkCaseV2,
-  getFireworksRuntimeCasesForSuite,
-  type FireworksBenchmarkCase,
-  type FireworksBenchmarkSuite,
-} from "@/lib/benchmark/fireworks";
-import {
-  GAMEIQ_SCORING_VERSION,
-  listGameIqScenarioPacks,
-  runCertifiedGameIq,
-} from "@/lib/benchmark/gameiq";
 import {
   TOOL_RELIABILITY_CASES,
   TOOL_RELIABILITY_CASE_PACK_VERSION,
@@ -111,29 +91,19 @@ export const DIRECT_MODEL_HARNESS: HarnessProfile = "raw-single-model";
 export const TEAM_HARNESS: HarnessProfile = "aiboard-panel";
 const DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS = 120_000;
 
-// GameIQ runs every selected model as its own certified run. Each admitted
-// model fans out to four scenario calls, so two concurrent model runs bound
-// aggregate provider pressure to eight calls while queued models wait.
-export const MAX_PARALLEL_GAMEIQ_MODELS = 2;
-export const MAX_PARALLEL_GAMEIQ_SCENARIOS_PER_MODEL = 4;
-
 export type RunnableTrack = CertifiedRunnableTrack;
 export type TeamIqUiStrategy = Exclude<TeamIqStrategy, "solo">;
 export type CertifiedRunPhase = "idle" | "certifying" | "running" | "persisting" | "done";
 
 export const TRACK_OPTIONS: Array<{ id: RunnableTrack; label: string }> = [
-  { id: "gameiq", label: "GameIQ" },
   { id: "toolreliability", label: "Tool Reliability" },
   { id: "teamiq", label: "TeamIQ" },
   { id: "workbench", label: "WorkBench" },
 ];
 
-// "passed" = the run completed AND every pack attempt passed its verifier.
-// "partial" = completed but only some packs passed. "failed" = the run errored
-// OR completed with zero passing packs (the model's answers scored nothing).
-// Basing this on the actual attempt outcomes — not merely on the run
-// completing — keeps a model that scored 0 from showing a green "Passed".
-export type GameIqModelRunStatus =
+// Per-model progress inside a preset leg. "partial" is kept for legs whose
+// models finished with mixed outcomes.
+export type ModelRunStatus =
   | "queued"
   | "running"
   | "passed"
@@ -141,21 +111,7 @@ export type GameIqModelRunStatus =
   | "failed"
   | "cancelled";
 
-export interface GameIqModelRunState {
-  modelId: string;
-  displayName: string;
-  providerId: string;
-  status: GameIqModelRunStatus;
-  summary?: CertifiedRunSummary;
-  /** Packs whose attempt passed its verifier, out of packs scored. */
-  packsPassed?: number;
-  packsScored?: number;
-  /** Mean verified quality (0-100) across the model's pack attempts. */
-  avgQuality?: number;
-  error?: string;
-}
-
-// Shared "run in progress" plumbing both runSelected and runGameIqMultiModel
+// Shared "run in progress" plumbing runSelected and the preset legs
 // write to: the abort ref, run phase/message/summary state, and the
 // dashboard-refresh callback fired once persistence completes.
 export interface CertifiedRunActions {
@@ -208,7 +164,6 @@ export interface RunSelectedContext extends CertifiedRunActions {
   modelId: string;
   teamModelIds: string[];
   teamIqStrategy: TeamIqUiStrategy;
-  fireworksPlayerCount: 2 | 3;
   includeSoloBaselines: boolean;
   workBenchModelIds: string[];
   workBenchRoleMode: WorkBenchRoleMode;
@@ -231,7 +186,6 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     modelId,
     teamModelIds,
     teamIqStrategy,
-    fireworksPlayerCount,
     includeSoloBaselines,
     workBenchModelIds,
     workBenchRoleMode,
@@ -255,11 +209,6 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     onRetry,
   } = ctx;
   if (!suiteId) return;
-  if (selectedTrack === "gameiq") {
-    // GameIQ has its own multi-model entry point (runGameIqMultiModel);
-    // the single-model flow below never handles it.
-    return;
-  }
   const model = models.find((candidate) => candidate.modelId === modelId);
   const workBenchSelectedModels = workBenchModelsForRun(
     models,
@@ -318,10 +267,6 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             selectedModelIds: teamModelIds,
             strategy: teamIqStrategy,
             suiteId,
-            roleMode: isFireworksSuite(suiteId)
-              ? "fireworks_players"
-              : "default",
-            playerCount: fireworksPlayerCount,
             effortByModelId,
           })
         : [
@@ -348,7 +293,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
       selectedTrack === "teamiq"
         ? expandTeamIqTeamsBeforeExecution(
             initialTeams,
-            isFireworksSuite(suiteId) ? includeSoloBaselines : true,
+            true,
             suiteId,
             "teamiq"
           )
@@ -378,7 +323,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
               workBenchCaseToBenchmarkCaseV2(caseOption)
             )
           : []
-        : [caseForSelection(selectedTrack, suiteId, fireworksPlayerCount)];
+        : [caseForSelection(selectedTrack, suiteId)];
     for (const caseRecord of caseRecords) {
       throwIfCertifiedRunAborted(abortController.signal);
       await saveBenchmarkCaseV2(caseRecord);
@@ -476,7 +421,10 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
         return runCertifiedTeamIq({
           context,
           teamCompositions: teams,
-          task: teamIqTaskForSuite(suiteId, fireworksPlayerCount),
+          task: {
+            kind: "toolreliability",
+            casePack: teamIqToolReliabilityCasePackForSuite(suiteId),
+          },
           includeSoloBaselines: false,
           signal: options?.signal,
         });
@@ -514,428 +462,8 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
   }
 }
 
-export interface RunGameIqMultiModelContext extends CertifiedRunActions {
-  models: SelectedModel[];
-  gameIqModelIds: string[];
-  suiteId: string;
-  fireworksPlayerCount: 2 | 3;
-  certification: HarnessCertificationResult;
-  setGameIqModelRuns: Dispatch<SetStateAction<GameIqModelRunState[]>>;
-  effortByModelId: BenchmarkModelEffortMap;
-  executionId?: string;
-  runIdsByModelId?: Record<string, string>;
-  resultSetIdsByModelId?: Record<string, string>;
-}
-
-export async function runGameIqMultiModel(
-  ctx: RunGameIqMultiModelContext
-): Promise<void> {
-  const {
-    models,
-    gameIqModelIds,
-    suiteId,
-    fireworksPlayerCount,
-    certification,
-    runAbortRef,
-    setRunning,
-    setRunPhase,
-    setSummary,
-    setMessage,
-    setGameIqModelRuns,
-    effortByModelId,
-    signal,
-    onComplete,
-    executionId,
-    runIdsByModelId,
-    resultSetIdsByModelId,
-    onRetry,
-  } = ctx;
-  const selectedModels = gameIqModelIds
-    .map((id) => models.find((candidate) => candidate.modelId === id))
-    .filter((model): model is SelectedModel => Boolean(model));
-  if (selectedModels.length === 0) return;
-
-  function updateGameIqModelRun(
-    modelId: string,
-    patch: Partial<GameIqModelRunState>
-  ) {
-    setGameIqModelRuns((current) =>
-      current.map((run) =>
-        run.modelId === modelId ? { ...run, ...patch } : run
-      )
-    );
-  }
-
-  const { controller: abortController, unlink } = linkRunController(signal);
-  runAbortRef.current = abortController;
-  setRunning(true);
-  setRunPhase("certifying");
-  setSummary(null);
-  setMessage(null);
-  setGameIqModelRuns(
-    selectedModels.map((model) => ({
-      modelId: model.modelId,
-      displayName: model.displayName,
-      providerId: model.providerId,
-      status: "queued",
-    }))
-  );
-
-  // GameIQ expands the selected suite to its concrete pack ids: the "All
-  // GameIQ packs" bundle becomes one case (and one scored attempt) per pack,
-  // so leaderboard attribution stays per-pack; a single-pack selection stays
-  // a single case. The pack case ids are model-independent, so we build the
-  // shared cases once and reuse them for every selected model.
-  const gameIqPackIds = gameIqBundlePackIds(suiteId);
-  const caseRecords = gameIqPackIds.map((packId) =>
-    caseForSelection("gameiq", packId, fireworksPlayerCount)
-  );
-  const batchStamp = Date.now();
-  const execution =
-    executionId ??
-    `execution-gameiq-${batchStamp}-${Math.random().toString(16).slice(2, 10)}`;
-  const teamsByModelId = new Map(
-    selectedModels.map((model) => [
-      model.modelId,
-      deriveSoloTeamComposition({
-        modelId: model.modelId,
-        providerId: model.providerId,
-        displayName: model.displayName,
-        reasoningEffort: normalizeBenchmarkEffortForModel(
-          model,
-          effortByModelId[model.modelId]
-        ),
-        maxTokens: effectiveCertifiedTrackMaxTokens(
-          "gameiq",
-          suiteId
-        ) ?? undefined,
-      }),
-    ])
-  );
-  const plannedRunIds = Object.fromEntries(
-    selectedModels.map((model, index) => [
-      model.modelId,
-      runIdsByModelId?.[model.modelId] ??
-        `ui-gameiq-${batchStamp}-${slugForRunId(
-          model.providerId
-        )}-${slugForRunId(model.modelId)}-${index}`,
-    ])
-  );
-  const publicationByModelId = new Map<
-    string,
-    { ownership: ResultSetOwnershipMap; resultSetIds: string[] }
-  >();
-  const plannedPublicationIds = (): string[] =>
-    Array.from(publicationByModelId.values()).flatMap(
-      (publication) => publication.resultSetIds
-    );
-
-  try {
-    throwIfCertifiedRunAborted(abortController.signal);
-    await saveHarnessCertificationResult(certification);
-    throwIfCertifiedRunAborted(abortController.signal);
-    for (const caseRecord of caseRecords) {
-      throwIfCertifiedRunAborted(abortController.signal);
-      await saveBenchmarkCaseV2(caseRecord);
-      throwIfCertifiedRunAborted(abortController.signal);
-    }
-    for (const model of selectedModels) {
-      const team = teamsByModelId.get(model.modelId)!;
-      const existingResultSetId = resultSetIdsByModelId?.[model.modelId];
-      publicationByModelId.set(
-        model.modelId,
-        existingResultSetId
-          ? {
-              ownership: {
-                defaultResultSetId: existingResultSetId,
-                byTeamCompositionId: { [team.id]: existingResultSetId },
-              },
-              resultSetIds: [existingResultSetId],
-            }
-          : await planResultSetsForRun({
-              executionId: execution,
-              runId: plannedRunIds[model.modelId]!,
-              suiteId,
-              track: "gameiq",
-              teams: [team],
-              cases: caseRecords,
-            })
-      );
-    }
-    setRunPhase("running");
-
-    const runOneModel = async (
-      model: SelectedModel
-    ): Promise<GameIqModelRunState> => {
-      throwIfCertifiedRunAborted(abortController.signal);
-      updateGameIqModelRun(model.modelId, { status: "running" });
-      // Unique per model even if two runs start in the same millisecond: the
-      // batch index disambiguates the shared timestamp.
-      const runId = plannedRunIds[model.modelId]!;
-      const team = teamsByModelId.get(model.modelId)!;
-      const publication = publicationByModelId.get(model.modelId)!;
-      throwIfCertifiedRunAborted(abortController.signal);
-      await saveBenchmarkTeamComposition(team);
-      throwIfCertifiedRunAborted(abortController.signal);
-      // Capture this model's pack attempts from inside the runner so the
-      // per-model badge reflects the real scores, not just run completion.
-      let capturedAttempts: BenchmarkAttempt[] = [];
-      const result = await runCertifiedBenchmark({
-        runId,
-        suiteId,
-        track: "gameiq",
-        harnessProfile: DIRECT_MODEL_HARNESS,
-        caseIds: caseRecords.map((caseRecord) => caseRecord.id),
-        teamCompositionIds: [team.id],
-        modelBudget: certifiedRunBudgetForCases(caseRecords, {
-          maxModelCallMs: DEFAULT_CERTIFIED_MODEL_CALL_TIMEOUT_MS,
-        }),
-        certification,
-        signal: abortController.signal,
-        resultSetOwnership: publication.ownership,
-        reportRetry: (event) => {
-          const retryMessage = `${model.displayName}: temporary provider failure; retry ${event.retry}/${event.maxRetries} in ${Math.ceil(event.delayMs / 1_000)}s.`;
-          updateGameIqModelRun(model.modelId, {
-            error: retryMessage,
-          });
-          setMessage(retryMessage);
-          onRetry?.(event);
-        },
-        runner: async (context, options) => {
-          // Run each selected pack as its own attempt so the bundle produces
-          // one scored attempt per pack (distinct caseId + attempt id). The
-          // certified GameIQ runner keys its attempt/verifier ids off the run
-          // id alone, so a shared context would collide across packs; the
-          // per-pack wrapper below scopes the case id and re-ids the returned
-          // attempts and their verifiers by pack.
-          const attempts: BenchmarkAttempt[] = [];
-          for (const packId of gameIqPackIds) {
-            throwIfCertifiedRunAborted(options?.signal);
-            const packContext = gameIqPackRunContext(context, packId);
-            const packAttempts = await runCertifiedGameIq({
-              context: packContext,
-              models: [model],
-              scenarioPackIds: [packId],
-              teamCompositionIds: [team.id],
-              teamCompositions: [team],
-              trials: 1,
-              signal: options?.signal,
-              // Scenario calls are independent single calls; this per-model
-              // cap combines with the two-model cap above for eight calls.
-              concurrency: MAX_PARALLEL_GAMEIQ_SCENARIOS_PER_MODEL,
-            });
-            throwIfCertifiedRunAborted(options?.signal);
-            const reidd = packAttempts.map((attempt) =>
-              reidGameIqPackAttempt(attempt, packId)
-            );
-            // Persist immediately: a fatal/budget failure in a LATER pack
-            // must not void packs that already completed and verified
-            // (createFailedAttemptsForRunError in run-engine.ts skips
-            // already-recorded cases via its existingKeys check). Record
-            // against the OUTER context — reidGameIqPackAttempt already
-            // scopes the id/caseId/verifierResultId by pack, so no
-            // packContext is needed here.
-            throwIfCertifiedRunAborted(options?.signal);
-            await persistReturnedAttempts(context, reidd);
-            throwIfCertifiedRunAborted(options?.signal);
-            attempts.push(...reidd);
-            capturedAttempts = [...attempts];
-          }
-          // Already recorded incrementally above; returning attempts here
-          // too would double-record (harmless — recordAttempt is a
-          // Map-by-id and persistFailureForAttempt checks recordedFailureIds
-          // — but returning [] keeps the final persistReturnedAttempts a
-          // clean no-op).
-          return [];
-        },
-      });
-      await terminalizeRunPublication(
-        publication.resultSetIds,
-        result,
-        abortController.signal,
-        [runId]
-      );
-      throwIfCertifiedRunAborted(abortController.signal);
-      // runCertifiedBenchmark resolves (not rejects) on a failed run, folding
-      // the provider/budget error into the summary status; treat that as a
-      // failure for the batch tally too.
-      if (result.status !== "completed") {
-        // The run itself failed (fatal/budget error mid-run), but packs
-        // already recorded before the failure are preserved by the engine
-        // (see run-engine.ts's existingKeys skip). Surface those partial
-        // numbers on the row instead of a bare failure so the badge can
-        // read e.g. "failed (4/7 packs scored)".
-        const partialOutcome =
-          capturedAttempts.length > 0
-            ? classifyGameIqModelRunOutcome(false, capturedAttempts)
-            : undefined;
-        const baseError = result.error ?? "Run did not complete.";
-        const state: GameIqModelRunState = {
-          modelId: model.modelId,
-          displayName: model.displayName,
-          providerId: model.providerId,
-          status: "failed",
-          summary: result,
-          packsScored: partialOutcome?.packsScored,
-          packsPassed: partialOutcome?.packsPassed,
-          avgQuality: partialOutcome?.avgQuality,
-          error: partialOutcome
-            ? `${baseError} (${partialOutcome.packsPassed}/${partialOutcome.packsScored} packs scored before the failure)`
-            : baseError,
-        };
-        updateGameIqModelRun(model.modelId, state);
-        return state;
-      }
-      // Derive the real outcome from the pack attempts (a "failed_model"
-      // attempt completes the run but scored 0), not from run completion.
-      const outcome = classifyGameIqModelRunOutcome(true, capturedAttempts);
-      const state: GameIqModelRunState = {
-        modelId: model.modelId,
-        displayName: model.displayName,
-        providerId: model.providerId,
-        status: outcome.status,
-        summary: result,
-        packsScored: outcome.packsScored,
-        packsPassed: outcome.packsPassed,
-        avgQuality: outcome.avgQuality,
-        error:
-          outcome.status === "failed"
-            ? "The model completed the run but did not pass any pack (scored 0)."
-            : undefined,
-      };
-      updateGameIqModelRun(model.modelId, state);
-      return state;
-    };
-
-    // Promise.allSettled isolation: one model failing (provider error, budget,
-    // thrown runner) does not abort the others. A per-model throw still resolves
-    // to a "failed" row so the batch tally stays accurate.
-    const settled = await mapWithConcurrency(
-      selectedModels,
-      MAX_PARALLEL_GAMEIQ_MODELS,
-      async (model) => {
-        // A worker that just finished an active model can claim the next queued
-        // index after the shared batch was cancelled. Resolve that row before
-        // runOneModel marks it running or persists its team/run/attempt.
-        if (abortController.signal.aborted) {
-          const cancellationError = abortReasonMessage(abortController.signal);
-          const state: GameIqModelRunState = {
-            modelId: model.modelId,
-            displayName: model.displayName,
-            providerId: model.providerId,
-            status: "cancelled",
-            error: cancellationError,
-          };
-          updateGameIqModelRun(model.modelId, state);
-          return state;
-        }
-        try {
-          const state = await runOneModel(model);
-          if (!abortController.signal.aborted) return state;
-          const cancelledState: GameIqModelRunState = {
-            modelId: model.modelId,
-            displayName: model.displayName,
-            providerId: model.providerId,
-            status: "cancelled",
-            error: abortReasonMessage(abortController.signal),
-          };
-          updateGameIqModelRun(model.modelId, cancelledState);
-          return cancelledState;
-        } catch (error) {
-          const publication = publicationByModelId.get(model.modelId);
-          if (publication) {
-            for (const resultSetId of publication.resultSetIds) {
-              if (abortController.signal.aborted) {
-                await cancelBenchmarkResultSet(
-                  resultSetId,
-                  abortReasonMessage(abortController.signal)
-                );
-              } else {
-                await failBenchmarkResultSet(resultSetId, {
-                  kind: "infrastructure",
-                  code: "unpublished_infrastructure_failure",
-                  message: persistedExecutionErrorMessage(error),
-                });
-              }
-            }
-          }
-          const state: GameIqModelRunState = {
-            modelId: model.modelId,
-            displayName: model.displayName,
-            providerId: model.providerId,
-            status: abortController.signal.aborted ? "cancelled" : "failed",
-            error: abortController.signal.aborted
-              ? abortReasonMessage(abortController.signal)
-              : error instanceof Error
-                ? error.message
-                : String(error),
-          };
-          updateGameIqModelRun(model.modelId, state);
-          return state;
-        }
-      }
-    );
-    throwIfCertifiedRunAborted(abortController.signal);
-
-    const passed = settled.filter((run) => run.status === "passed").length;
-    const partial = settled.filter((run) => run.status === "partial").length;
-    const failed = settled.filter((run) => run.status === "failed").length;
-    const cancelled = settled.filter((run) => run.status === "cancelled").length;
-    const tally = [
-      `${passed} passed`,
-      ...(partial > 0 ? [`${partial} partial`] : []),
-      `${failed} failed`,
-      ...(cancelled > 0 ? [`${cancelled} cancelled`] : []),
-    ].join(", ");
-    setRunPhase("persisting");
-    setMessage(
-      `Ran ${settled.length} model${
-        settled.length === 1 ? "" : "s"
-      } on ${gameIqSuiteLabel(suiteId)}: ${tally}`
-    );
-    throwIfCertifiedRunAborted(abortController.signal);
-    await onComplete();
-    throwIfCertifiedRunAborted(abortController.signal);
-    setRunPhase("done");
-  } catch (error) {
-    await terminalizePendingResultSets({
-      resultSetIds: plannedPublicationIds(),
-      executionId: resultSetIdsByModelId ? undefined : execution,
-      signal: abortController.signal,
-    });
-    setRunPhase("idle");
-    if (abortController.signal.aborted) {
-      const cancellationError = abortReasonMessage(abortController.signal);
-      setGameIqModelRuns((current) =>
-        current.map((run) =>
-          run.status === "passed" ||
-          run.status === "partial" ||
-          run.status === "failed"
-            ? run
-            : {
-                ...run,
-                status: "cancelled",
-                error: cancellationError,
-              }
-        )
-      );
-      setMessage(cancellationError);
-    } else {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
-  } finally {
-    setRunning(false);
-    if (runAbortRef.current === abortController) {
-      runAbortRef.current = null;
-    }
-    unlink();
-  }
-}
-
 // Runs `mapper` over `items` with at most `limit` in flight at once, preserving
-// input order in the returned array. Used to cap how many GameIQ model runs open
-// their provider calls simultaneously (see MAX_PARALLEL_GAMEIQ_MODELS), and
-// reused by runPreset's solo legs for non-GameIQ tracks (ToolReliability).
+// input order in the returned array.
 export async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
@@ -959,17 +487,9 @@ function slugForRunId(value: string): string {
   return value.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "model";
 }
 
-function gameIqSuiteLabel(suiteId: string): string {
-  const option = listCertifiedSuiteOptions("gameiq").find(
-    (candidate) => candidate.id === suiteId
-  );
-  return option?.label ?? (isGameIqBundleSuite(suiteId) ? "all GameIQ packs" : suiteId);
-}
-
 export function caseForSelection(
   track: RunnableTrack,
-  suiteId: string,
-  fireworksPlayerCount: 2 | 3
+  suiteId: string
 ): BenchmarkCaseV2 {
   const timestamp = new Date().toISOString();
   if (track === "workbench") {
@@ -982,7 +502,7 @@ export function caseForSelection(
       track: "toolreliability",
       title: "ToolReliability current challenge pack",
       description:
-        "Current schema, tool-call, large-file patch, repair, and safety challenge pack (33 distinct cases).",
+        "Stateful multi-turn tool-use pack mined from real Build failures.",
       difficulty: "medium",
       tags: ["toolreliability"],
       caseVersion: TOOL_RELIABILITY_CASE_PACK_VERSION,
@@ -1001,13 +521,6 @@ export function caseForSelection(
     };
   }
   if (track === "teamiq") {
-    if (isFireworksSuite(suiteId)) {
-      return fireworksCaseToBenchmarkCaseV2(
-        suiteId,
-        fireworksSuiteForSuiteId(suiteId),
-        fireworksPlayerCount
-      );
-    }
     const allModes = isTeamIqToolReliabilityAllModesSuite(suiteId);
     return {
       id: suiteId,
@@ -1045,40 +558,7 @@ export function caseForSelection(
       },
     };
   }
-  const pack = listGameIqScenarioPacks().find((candidate) => candidate.id === suiteId) ?? null;
-  return {
-    id: suiteId,
-    schemaVersion: 2,
-    track: "gameiq",
-    title: pack?.label ?? suiteId,
-    description: "Certified GameIQ scenario pack.",
-    difficulty: pack?.certificationTier === "first-class" ? "medium" : "easy",
-    tags: ["gameiq", pack?.gameId ?? "unknown"],
-    caseVersion: "1.0.0",
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    prompt: {
-      userRequest: "Solve each GameIQ scenario.",
-      publicContext: JSON.stringify({
-        gameId: pack?.gameId ?? "connect-four",
-        scenarioPackId: suiteId,
-        scenarioCount: pack?.scenarios.length ?? 0,
-      }),
-    },
-    environment: { type: "browser", timeoutSeconds: 60, network: "none" },
-    verifier: { scorer: "game-engine" },
-    budget: { maxUsd: 5, maxWallClockSeconds: 600, maxModelCalls: 100 },
-    // Live constant, not a literal: this case record is PERSISTED via
-    // saveBenchmarkCaseV2 on every UI run and must agree with the attempt's
-    // scoringVersion stamp (same invariant as TEAMIQ_SCORING_VERSION in
-    // lib/benchmark/teamiq/certified-runner.ts).
-    scoring: { scoringVersion: GAMEIQ_SCORING_VERSION, primary: "game_iq" },
-    contamination: {
-      originalTask: true,
-      canary: "AIBENCH-UI-GAMEIQ",
-      referenceSolutionPrivate: true,
-    },
-  };
+  throw new Error(`Unsupported certified track: ${track}`);
 }
 
 function expandTeamIqTeamsBeforeExecution(
@@ -1372,36 +852,14 @@ function sumBudgetField(
   return found ? total : undefined;
 }
 
-function teamIqTaskForSuite(
-  suiteId: string,
-  fireworksPlayerCount: 2 | 3
-) {
-  if (isFireworksSuite(suiteId)) {
-    return {
-      kind: "fireworks" as const,
-      suite: fireworksSuiteForSuiteId(suiteId),
-      cases: fireworksCasesForSuiteId(suiteId, fireworksPlayerCount),
-    };
-  }
-  return {
-    kind: "toolreliability" as const,
-    casePack: teamIqToolReliabilityCasePackForSuite(suiteId),
-  };
-}
-
 export function teamIqCompositionsForRun(input: {
   models: SelectedModel[];
   selectedModelIds: string[];
   strategy: TeamIqUiStrategy;
   suiteId: string;
-  roleMode: "default" | "fireworks_players";
-  playerCount: 2 | 3;
   effortByModelId: BenchmarkModelEffortMap;
 }): BenchmarkTeamComposition[] {
-  if (
-    input.roleMode === "default" &&
-    isTeamIqToolReliabilityAllModesSuite(input.suiteId)
-  ) {
+  if (isTeamIqToolReliabilityAllModesSuite(input.suiteId)) {
     return createTeamIqToolBenchCompositionsFromSelection({
       models: input.models,
       selectedModelIds: input.selectedModelIds,
@@ -1413,14 +871,8 @@ export function teamIqCompositionsForRun(input: {
       models: input.models,
       selectedModelIds: input.selectedModelIds,
       strategy: input.strategy,
-      roleMode: input.roleMode,
-      playerCount: input.playerCount,
       effortByModelId: input.effortByModelId,
-      roleAssignments:
-        input.roleMode === "default" &&
-        !isTeamIqToolReliabilityAllModesSuite(input.suiteId)
-          ? roleAssignmentsForTeamIqSelection(input)
-          : undefined,
+      roleAssignments: roleAssignmentsForTeamIqSelection(input),
     }),
   ];
 }
@@ -1445,23 +897,6 @@ function roleAssignmentsForTeamIqSelection(input: {
 
 export function isTeamIqToolReliabilityAllModesSuite(suiteId: string): boolean {
   return suiteId === "teamiq-toolreliability-current-all-modes";
-}
-
-export function fireworksSuiteForSuiteId(suiteId: string): FireworksBenchmarkSuite {
-  if (suiteId.includes("-tactics-")) return "tactics";
-  if (suiteId.includes("-memory-")) return "memory";
-  if (suiteId.includes("-full-")) return "full";
-  return "mixed";
-}
-
-export function fireworksCasesForSuiteId(
-  suiteId: string,
-  playerCount: 2 | 3
-): FireworksBenchmarkCase[] {
-  return getFireworksRuntimeCasesForSuite(
-    fireworksSuiteForSuiteId(suiteId),
-    playerCount
-  );
 }
 
 export function trackLabel(track: RunnableTrack): string {
@@ -1536,8 +971,8 @@ export function workBenchRoleFor(
 // Preset orchestration (2026-07-17 benchmark UX overhaul, Task 4 Step 3).
 // runPreset SEQUENCES the existing per-track run functions above — it does
 // not add a new run engine. Each leg reuses runSelected (single model at a
-// time, looped with a concurrency cap for solo legs) or runGameIqMultiModel
-// (already a multi-model batch) exactly as the Advanced/old flow does; the
+// time, looped with a concurrency cap for solo legs) exactly as the Advanced
+// flow does; the
 // only new logic here is: iterate legs in order, skip legs whose `requires`
 // is unmet, and translate each leg's progress into PresetProgressEvents for
 // RunProgressList instead of the single-flow's runPhase/summary state.
@@ -1568,7 +1003,7 @@ export interface PresetModelProgress {
   leg: BenchmarkPresetLeg;
   modelId: string;
   displayName: string;
-  status: GameIqModelRunStatus;
+  status: ModelRunStatus;
   detail?: string;
 }
 
@@ -1607,157 +1042,8 @@ export interface RunPresetContext {
   workBenchRoleMode: WorkBenchRoleMode;
   workBenchRunnerUrl: string;
   workBenchRunnerToken: string;
-  fireworksPlayerCount: 2 | 3;
   signal: AbortSignal;
   onComplete: () => Promise<void>;
-}
-
-interface ModelIqPublicationPlan {
-  executionId: string;
-  gameRunIdsByModelId: Record<string, string>;
-  toolRunIdsByModelId: Record<string, string>;
-  resultSetIdsByModelId: Record<string, string>;
-}
-
-async function planModelIqPresetPublication(
-  preset: BenchmarkPreset,
-  ctx: RunPresetContext,
-  executionId: string
-): Promise<ModelIqPublicationPlan | undefined> {
-  const gameLeg = preset.legs.find(
-    (leg) => leg.mode === "solo" && leg.track === "gameiq"
-  );
-  const toolLeg = preset.legs.find(
-    (leg) => leg.mode === "solo" && leg.track === "toolreliability"
-  );
-  if (!gameLeg || !toolLeg) return undefined;
-  const models = ctx.soloModelIds
-    .map((id) => ctx.models.find((candidate) => candidate.modelId === id))
-    .filter((model): model is SelectedModel => Boolean(model));
-  if (models.length === 0) return undefined;
-
-  const gameCases = gameIqBundlePackIds(gameLeg.suiteId).map((packId) =>
-    caseForSelection("gameiq", packId, ctx.fireworksPlayerCount)
-  );
-  const toolCase = caseForSelection(
-    "toolreliability",
-    toolLeg.suiteId,
-    ctx.fireworksPlayerCount
-  );
-  for (const item of [...gameCases, toolCase]) {
-    await saveBenchmarkCaseV2(item);
-  }
-  const gameRunIdsByModelId: Record<string, string> = {};
-  const toolRunIdsByModelId: Record<string, string> = {};
-  const resultSetIdsByModelId: Record<string, string> = {};
-  for (const [index, model] of models.entries()) {
-    const team = deriveSoloTeamComposition({
-      modelId: model.modelId,
-      providerId: model.providerId,
-      displayName: model.displayName,
-      reasoningEffort: normalizeBenchmarkEffortForModel(
-        model,
-        ctx.effortByModelId[model.modelId]
-      ),
-      maxTokens:
-        effectiveCertifiedTrackMaxTokens("gameiq", gameLeg.suiteId) ??
-        undefined,
-    });
-    await saveBenchmarkTeamComposition(team);
-    const gameRunId = `ui-gameiq-${slugForRunId(executionId)}-${index}`;
-    const toolRunId = `ui-toolreliability-${slugForRunId(executionId)}-${index}`;
-    const resultSetId = `result-${slugForRunId(executionId)}-${slugForRunId(
-      model.modelId
-    )}-${index}`;
-    const tracks = [
-      {
-        track: "gameiq" as const,
-        suiteId: gameLeg.suiteId,
-        caseManifest: gameCases.map((item) => ({
-          caseId: item.id,
-          caseVersion: item.caseVersion,
-          scoringVersion: item.scoring.scoringVersion,
-        })),
-        maxTokens: effectiveCertifiedTrackMaxTokens(
-          "gameiq",
-          gameLeg.suiteId
-        ),
-      },
-      {
-        track: "toolreliability" as const,
-        suiteId: toolLeg.suiteId,
-        caseManifest: [{
-          caseId: toolCase.id,
-          caseVersion: toolCase.caseVersion,
-          scoringVersion: toolCase.scoring.scoringVersion,
-        }],
-        maxTokens: effectiveCertifiedTrackMaxTokens(
-          "toolreliability",
-          toolLeg.suiteId
-        ),
-      },
-    ];
-    const configuration = {
-      subjectKind: "model" as const,
-      displayName: model.displayName,
-      providerId: model.providerId,
-      modelId: model.modelId,
-      reasoningEffort: team.roles[0]?.reasoningEffort ?? "default",
-      roles: team.roles.map((role) => ({
-        role: role.role,
-        slot: role.slot,
-        providerId: role.providerId,
-        modelId: role.modelId,
-        reasoningEffort: role.reasoningEffort ?? "default",
-        maxTokens:
-          role.maxTokens ??
-          Math.max(
-            ...tracks
-              .map((track) => track.maxTokens)
-              .filter((value): value is number => value !== null)
-          ),
-      })),
-      tracks,
-    };
-    await createPendingBenchmarkResultSet({
-      id: resultSetId,
-      schemaVersion: 1,
-      executionId,
-      anchorRunId: gameRunId,
-      runIds: [gameRunId, toolRunId],
-      configurationKey: benchmarkResultConfigurationKey(configuration),
-      configuration,
-      expectedAttempts: [
-        ...gameCases.map((item) => ({
-          runId: gameRunId,
-          track: "gameiq" as const,
-          suiteId: gameLeg.suiteId,
-          caseId: item.id,
-          caseVersion: item.caseVersion,
-          scoringVersion: item.scoring.scoringVersion,
-          teamCompositionId: team.id,
-        })),
-        {
-          runId: toolRunId,
-          track: "toolreliability" as const,
-          suiteId: toolLeg.suiteId,
-          caseId: toolCase.id,
-          caseVersion: toolCase.caseVersion,
-          scoringVersion: toolCase.scoring.scoringVersion,
-          teamCompositionId: team.id,
-        },
-      ],
-    });
-    gameRunIdsByModelId[model.modelId] = gameRunId;
-    toolRunIdsByModelId[model.modelId] = toolRunId;
-    resultSetIdsByModelId[model.modelId] = resultSetId;
-  }
-  return {
-    executionId,
-    gameRunIdsByModelId,
-    toolRunIdsByModelId,
-    resultSetIdsByModelId,
-  };
 }
 
 export async function runPreset(
@@ -1765,23 +1051,9 @@ export async function runPreset(
   ctx: RunPresetContext,
   onProgress: (event: PresetProgressEvent) => void
 ): Promise<void> {
-  const presetExecutionId = `execution-modeliq-${Date.now()}-${Math.random()
+  const presetExecutionId = `execution-${preset.id}-${Date.now()}-${Math.random()
     .toString(16)
     .slice(2, 10)}`;
-  let modelIqPublication: ModelIqPublicationPlan | undefined;
-  try {
-    modelIqPublication = await planModelIqPresetPublication(
-      preset,
-      ctx,
-      presetExecutionId
-    );
-  } catch (error) {
-    await terminalizePendingResultSets({
-      executionId: presetExecutionId,
-      signal: ctx.signal,
-    });
-    throw error;
-  }
   for (let legIndex = 0; legIndex < preset.legs.length; legIndex++) {
     const leg = preset.legs[legIndex]!;
     if (ctx.signal.aborted) {
@@ -1823,7 +1095,6 @@ export async function runPreset(
               legIndex,
               ctx,
               onProgress,
-              modelIqPublication,
               presetExecutionId
             )
           : await runTeamLeg(
@@ -1844,31 +1115,6 @@ export async function runPreset(
           ? "Cancelled."
           : error instanceof Error ? error.message : String(error),
       });
-    }
-  }
-  if (modelIqPublication) {
-    const planned = await listBenchmarkResultSets();
-    for (const resultSetId of Object.values(
-      modelIqPublication.resultSetIdsByModelId
-    )) {
-      if (
-        planned.find((item) => item.id === resultSetId)?.status !== "pending"
-      ) {
-        continue;
-      }
-      if (ctx.signal.aborted) {
-        await cancelBenchmarkResultSet(
-          resultSetId,
-          abortReasonMessage(ctx.signal)
-        );
-      } else {
-        await failBenchmarkResultSet(resultSetId, {
-          kind: "infrastructure",
-          code: "unpublished_infrastructure_failure",
-          message:
-            "Preset exited before every expected benchmark attempt was publishable.",
-        });
-      }
     }
   }
   await ctx.onComplete();
@@ -1897,7 +1143,6 @@ async function runSoloLeg(
   legIndex: number,
   ctx: RunPresetContext,
   onProgress: (event: PresetProgressEvent) => void,
-  publication: ModelIqPublicationPlan | undefined,
   presetExecutionId: string
 ): Promise<PresetLegResult> {
   const selectedModels = ctx.soloModelIds
@@ -1907,71 +1152,9 @@ async function runSoloLeg(
     return { status: "skipped", detail: "No models selected." };
   }
 
-  if (leg.track === "gameiq") {
-    let latestRuns: GameIqModelRunState[] = [];
-    const setGameIqModelRuns: Dispatch<SetStateAction<GameIqModelRunState[]>> = (
-      updater
-    ) => {
-      latestRuns =
-        typeof updater === "function"
-          ? (updater as (prev: GameIqModelRunState[]) => GameIqModelRunState[])(
-              latestRuns
-            )
-          : updater;
-      for (const run of latestRuns) {
-        onProgress({
-          type: "model",
-          legIndex,
-          leg,
-          modelId: run.modelId,
-          displayName: run.displayName,
-          status: run.status,
-          detail: run.error,
-        });
-      }
-    };
-    await runGameIqMultiModel({
-      models: ctx.models,
-      gameIqModelIds: ctx.soloModelIds,
-      suiteId: leg.suiteId,
-      fireworksPlayerCount: ctx.fireworksPlayerCount,
-      certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
-      effortByModelId: ctx.effortByModelId,
-      signal: ctx.signal,
-      runAbortRef: { current: null },
-      setRunning: () => {},
-      setRunPhase: () => {},
-      setSummary: () => {},
-      onRetry: (event) => {
-        onProgress({
-          type: "retry",
-          legIndex,
-          leg,
-          modelId: event.modelId,
-          displayName:
-            ctx.models.find((candidate) => candidate.modelId === event.modelId)
-              ?.displayName ?? event.modelId,
-          resultSetId: event.resultSetId,
-          retry: event.retry,
-          maxRetries: event.maxRetries,
-          delayMs: event.delayMs,
-          detail: `${event.reason}; retry ${event.retry}/${event.maxRetries} in ${Math.ceil(event.delayMs / 1_000)}s.`,
-        });
-      },
-      setMessage: () => {},
-      setGameIqModelRuns,
-      onComplete: async () => {},
-      executionId: publication?.executionId ?? presetExecutionId,
-      runIdsByModelId: publication?.gameRunIdsByModelId,
-      resultSetIdsByModelId: publication?.resultSetIdsByModelId,
-    });
-    return { status: legStatusFromModelRuns(latestRuns) };
-  }
-
-  // Every other solo track (currently only ToolReliability) runs one model
-  // at a time via runSelected — there is no multi-model batch entry point
-  // for it the way GameIQ has — so loop with the same concurrency cap.
-  const modelStatuses = new Array<GameIqModelRunStatus>(selectedModels.length);
+  // Solo tracks (currently only ToolReliability) run one model at a time via
+  // runSelected, looped with a concurrency cap.
+  const modelStatuses = new Array<ModelRunStatus>(selectedModels.length);
   let cursor = 0;
   const worker = async () => {
     for (;;) {
@@ -1981,29 +1164,6 @@ async function runSoloLeg(
       cursor++;
       if (ctx.signal.aborted) return;
       const model = selectedModels[index]!;
-      const plannedResultSetId = publication?.resultSetIdsByModelId[model.modelId];
-      if (plannedResultSetId) {
-        const planned = (await listBenchmarkResultSets()).find(
-          (item) => item.id === plannedResultSetId
-        );
-        if (planned && planned.status !== "pending") {
-          modelStatuses[index] =
-            planned.status === "cancelled" ? "cancelled" : "failed";
-          onProgress({
-            type: "model",
-            legIndex,
-            leg,
-            modelId: model.modelId,
-            displayName: model.displayName,
-            status: modelStatuses[index]!,
-            detail:
-              planned.status === "cancelled"
-                ? "Cancelled."
-                : "Skipped after unpublished infrastructure failure.",
-          });
-          continue;
-        }
-      }
       onProgress({
         type: "model",
         legIndex,
@@ -2025,7 +1185,6 @@ async function runSoloLeg(
           modelId: model.modelId,
           teamModelIds: [],
           teamIqStrategy: ctx.teamIqStrategy,
-          fireworksPlayerCount: ctx.fireworksPlayerCount,
           includeSoloBaselines: true,
           workBenchModelIds: [],
           workBenchRoleMode: ctx.workBenchRoleMode,
@@ -2059,29 +1218,12 @@ async function runSoloLeg(
             });
           },
           onComplete: async () => {},
-          executionId: publication?.executionId ?? presetExecutionId,
-          runId: publication?.toolRunIdsByModelId[model.modelId],
-          resultSetOwnership: plannedResultSetId
-            ? {
-                defaultResultSetId: plannedResultSetId,
-                byTeamCompositionId: {
-                  [deriveSoloTeamComposition({
-                    modelId: model.modelId,
-                    providerId: model.providerId,
-                    displayName: model.displayName,
-                    reasoningEffort: normalizeBenchmarkEffortForModel(
-                      model,
-                      ctx.effortByModelId[model.modelId]
-                    ),
-                  }).id]: plannedResultSetId,
-                },
-              }
-            : undefined,
+          executionId: presetExecutionId,
         });
       } catch (error) {
         outcome.error = error instanceof Error ? error.message : String(error);
       }
-      const status: GameIqModelRunStatus =
+      const status: ModelRunStatus =
         ctx.signal.aborted
           ? "cancelled"
           : outcome.summary?.status === "completed"
@@ -2159,7 +1301,6 @@ async function runTeamLeg(
       modelId: "",
       teamModelIds: ctx.teamModelIds,
       teamIqStrategy: ctx.teamIqStrategy,
-      fireworksPlayerCount: ctx.fireworksPlayerCount,
       includeSoloBaselines: leg.includeSoloBaselines ?? true,
       workBenchModelIds: ctx.teamModelIds,
       workBenchRoleMode: ctx.workBenchRoleMode,
@@ -2210,13 +1351,8 @@ async function runTeamLeg(
   return { status, detail: status === "failed" ? outcome.error : undefined };
 }
 
-function legStatusFromModelRuns(runs: GameIqModelRunState[]): PresetLegStatus {
-  if (runs.length === 0) return "skipped";
-  return legStatusFromStatuses(runs.map((run) => run.status));
-}
-
 function legStatusFromStatuses(
-  statuses: GameIqModelRunStatus[]
+  statuses: ModelRunStatus[]
 ): PresetLegStatus {
   if (statuses.length === 0) return "skipped";
   if (statuses.every((status) => status === "cancelled")) return "skipped";

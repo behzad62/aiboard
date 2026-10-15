@@ -4,7 +4,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { CertifiedBenchmarkOverview } from "../components/benchmark/certified/CertifiedBenchmarkOverview";
 import type {
   BuildCheckpoint,
-  GenericGameMatchRecord,
   ModelBuildStat,
 } from "../lib/db/schema";
 import { buildBenchmarkDashboardData } from "../lib/benchmark/metrics";
@@ -21,7 +20,7 @@ import {
 } from "../lib/benchmark/store";
 import { formatBenchmarkMarkdownReport } from "../lib/benchmark/reports";
 import {
-  createGameModelCallTrace,
+  createModelCallTrace,
   recordBenchmarkModelCallTrace,
 } from "../lib/benchmark/model-call-traces";
 import type { BenchmarkCase, BenchmarkRun } from "../lib/benchmark/types";
@@ -47,35 +46,6 @@ async function expectReject(
   }
 }
 
-const match: GenericGameMatchRecord = {
-  id: "connect-four-match-1",
-  gameId: "connect-four",
-  timestamp: "2026-06-24T10:00:00.000Z",
-  participants: [
-    {
-      id: "red",
-      kind: "ai",
-      label: "Red",
-      modelId: "google:gemini-test",
-      reasoningEffort: "medium",
-    },
-    {
-      id: "yellow",
-      kind: "ai",
-      label: "Yellow",
-      modelId: "openai:gpt-test",
-      reasoningEffort: "low",
-    },
-  ],
-  resultJson: JSON.stringify({ result: "red", winner: "red", draw: false }),
-  statsJson: JSON.stringify({
-    moves: 12,
-    durationMs: 6000,
-    avgAiResponseMs: 500,
-    invalidResponses: 2,
-    fallbackMoves: 1,
-  }),
-};
 
 const buildStat: ModelBuildStat = {
   modelId: "google:gemini-test",
@@ -201,7 +171,7 @@ await saveBenchmarkFailure({
   message: "Bad JSON",
   createdAt: "2026-06-24T10:00:00.000Z",
 });
-const trace = createGameModelCallTrace({
+const trace = createModelCallTrace({
   modelId: "google:gemini-test",
   providerId: "google",
   participantId: "yellow",
@@ -228,7 +198,7 @@ const trace = createGameModelCallTrace({
   ],
   finalStatus: "parsed",
 });
-const terminalFailureTrace = createGameModelCallTrace({
+const terminalFailureTrace = createModelCallTrace({
   modelId: "google:gemini-test",
   providerId: "google",
   startedAt: "2026-06-24T10:00:00.000Z",
@@ -243,7 +213,6 @@ const terminalFailureTrace = createGameModelCallTrace({
 await recordBenchmarkModelCallTrace(trace);
 __replaceBenchmarkStoreForTests({
   ...__exportBenchmarkStoreForTests(),
-  gameMatchRecords: [match],
   buildCheckpoints: [checkpoint],
   modelStats: [buildStat],
 });
@@ -290,11 +259,6 @@ await importBenchmarkReportBundleV2(bundle);
 const importedCases = await listBenchmarkCases();
 const importedStore = __exportBenchmarkStoreForTests();
 check("bundle import restores case", importedCases.length === 1, importedCases);
-check(
-  "bundle import ignores game source evidence",
-  importedStore.gameMatchRecords.length === 0,
-  importedStore.gameMatchRecords
-);
 check(
   "bundle import ignores Build checkpoint source evidence",
   importedStore.buildCheckpoints.length === 0,
@@ -363,18 +327,6 @@ await expectReject(
     importBenchmarkReportBundleV2({
       ...bundle,
       cases: [{ ...benchmarkCase, id: 42 } as unknown as BenchmarkCase],
-    }),
-  /invalid/i
-);
-await expectReject(
-  "bundle import rejects malformed game match source evidence",
-  () =>
-    importBenchmarkReportBundleV2({
-      ...bundle,
-      sourceEvidence: {
-        ...bundle.sourceEvidence!,
-        gameMatches: [{ id: "bad-match" } as never],
-      },
     }),
   /invalid/i
 );

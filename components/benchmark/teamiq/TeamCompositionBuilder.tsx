@@ -12,14 +12,11 @@ import {
 } from "@/lib/benchmark/teamiq";
 
 type TeamIqUiStrategy = Exclude<TeamIqStrategy, "solo">;
-type TeamIqRoleMode = "default" | "fireworks_players";
 
 export function TeamCompositionBuilder({
   models,
   selectedModelIds,
   strategy,
-  roleMode = "default",
-  playerCount = 3,
   allModes = false,
   effortByModelId,
   onChange,
@@ -29,8 +26,6 @@ export function TeamCompositionBuilder({
   models: SelectedModel[];
   selectedModelIds: string[];
   strategy: TeamIqUiStrategy;
-  roleMode?: TeamIqRoleMode;
-  playerCount?: 2 | 3;
   allModes?: boolean;
   effortByModelId: BenchmarkModelEffortMap;
   onChange: (modelIds: string[]) => void;
@@ -44,12 +39,9 @@ export function TeamCompositionBuilder({
       </div>
     );
   }
-  const roleSlots =
-    roleMode === "fireworks_players"
-      ? teamIqRoleSlotsForStrategy(strategy, { roleMode, playerCount })
-      : allModes
-        ? allModePoolSlots()
-        : teamIqRoleSlotsForStrategy(strategy);
+  const roleSlots = allModes
+    ? allModePoolSlots()
+    : teamIqRoleSlotsForStrategy(strategy);
   const normalizedSelection = normalizeTeamIqModelSelectionForSlots({
     models,
     selectedModelIds,
@@ -59,10 +51,8 @@ export function TeamCompositionBuilder({
   return (
     <div className="space-y-2">
       <div className="grid gap-2 md:grid-cols-[220px_1fr]">
-        {roleMode === "fireworks_players" || allModes ? (
-          <StaticStrategyLabel
-            label={roleMode === "fireworks_players" ? "Fireworks players" : "All modes"}
-          />
+        {allModes ? (
+          <StaticStrategyLabel label="All modes" />
         ) : (
           <label className="space-y-1 text-sm">
             <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">

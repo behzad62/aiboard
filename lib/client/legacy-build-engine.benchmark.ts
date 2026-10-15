@@ -143,8 +143,8 @@ import {
 } from "./build-usage";
 import { getModelPricing } from "@/lib/providers/pricing";
 import {
-  createGameModelCallTrace,
-  type GameAIDiagnosticLike,
+  createModelCallTrace,
+  type ModelCallDiagnosticLike,
   recordBenchmarkModelCallTrace,
 } from "@/lib/benchmark/model-call-traces";
 import type {
@@ -4206,7 +4206,7 @@ export async function runBuildDiscussion(
     const tracePrompt = messages
       .map((message) => `${message.role}:\n${message.content}`)
       .join("\n\n");
-    const diagnostics: GameAIDiagnosticLike[] = [];
+    const diagnostics: ModelCallDiagnosticLike[] = [];
     emit({
       type: "message_start",
       messageId,
@@ -4318,7 +4318,7 @@ export async function runBuildDiscussion(
         providerId,
       });
       await recordBenchmarkModelCallTrace(
-        createGameModelCallTrace({
+        createModelCallTrace({
           modelId: model.modelId,
           providerId,
           ...buildBenchmarkTraceContext(benchmark),
@@ -4386,7 +4386,7 @@ export async function runBuildDiscussion(
             : undefined;
     const traceStatus = validation?.ok === false ? "parse_error" : "parsed";
     await recordBenchmarkModelCallTrace(
-      createGameModelCallTrace({
+      createModelCallTrace({
         modelId: model.modelId,
         providerId,
         ...buildBenchmarkTraceContext(benchmark),

@@ -1,16 +1,16 @@
 import {
-  createGameModelCallTrace,
-  type CreateGameModelCallTraceInput,
+  createModelCallTrace,
+  type CreateModelCallTraceInput,
 } from "@/lib/benchmark/model-call-traces";
 import type { BenchmarkModelCallTrace } from "@/lib/benchmark/types";
 import type { CertifiedRunContext } from "./run-context";
 
-export type CreateCertifiedModelCallTraceInput = CreateGameModelCallTraceInput;
+export type CreateCertifiedModelCallTraceInput = CreateModelCallTraceInput;
 
 export function createCertifiedModelCallTrace(
   input: CreateCertifiedModelCallTraceInput
 ): BenchmarkModelCallTrace {
-  return createGameModelCallTrace(input);
+  return createModelCallTrace(input);
 }
 
 export async function recordCertifiedModelCallTrace(

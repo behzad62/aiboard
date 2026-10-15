@@ -1,7 +1,6 @@
 import type { HarnessCertificationResult } from "@/lib/benchmark/types";
 
 export type CertifiedRunnableTrack =
-  | "gameiq"
   | "toolreliability"
   | "teamiq"
   | "workbench";
@@ -11,11 +10,9 @@ export interface CertifiedRunGateInput {
   running: boolean;
   selectedTrack: CertifiedRunnableTrack;
   modelId: string;
-  gameIqModelIds?: string[];
   teamModelIds: string[];
   workBenchModelIds?: string[];
   workBenchRoleMode?: "solo" | "architect_worker" | "architect_worker_reviewer";
-  fireworksPlayerCount?: 2 | 3;
   workBenchRunnerReady: boolean;
   certification: HarnessCertificationResult;
 }
@@ -37,23 +34,8 @@ export function getCertifiedRunGate(
 
   if (input.running) return blocked("A certified run is already in progress.");
   if (!input.suiteId) return blocked("Select a benchmark suite or case.");
-  if (input.selectedTrack === "gameiq") {
-    if ((input.gameIqModelIds?.length ?? 0) < 1) {
-      return blocked("Select at least one model");
-    }
-  } else if (input.selectedTrack === "teamiq") {
-    if (isFireworksSuite(input.suiteId)) {
-      const playerCount = input.fireworksPlayerCount ?? 2;
-      if (input.teamModelIds.length !== playerCount) {
-        return blocked(
-          playerCount === 3 && input.teamModelIds.length === 2
-            ? "Select one more model for 3-player Fireworks."
-            : playerCount === 3
-            ? "Select three models for 3-player Fireworks."
-            : "Select exactly two models for 2-player Fireworks."
-        );
-      }
-    } else if (input.teamModelIds.length < 1) {
+  if (input.selectedTrack === "teamiq") {
+    if (input.teamModelIds.length < 1) {
       return blocked("Select at least one model for TeamIQ.");
     }
   } else if (input.selectedTrack === "workbench") {
@@ -95,15 +77,4 @@ export function getCertifiedRunGate(
     reason: null,
     certification: input.certification,
   };
-}
-
-export function adjustFireworksPlayerSelectionForPlayerCount(
-  selectedModelIds: string[],
-  playerCount: 2 | 3
-): string[] {
-  return playerCount === 2 ? selectedModelIds.slice(0, 2) : selectedModelIds;
-}
-
-export function isFireworksSuite(suiteId: string): boolean {
-  return suiteId.startsWith("fireworks-teamiq-");
 }

@@ -4,7 +4,6 @@ import {
   buildCertifiedBenchmarkDashboardData,
   isScoredCertifiedAttempt,
 } from "../lib/benchmark/metrics";
-import { scoreGameIqAttempt } from "../lib/benchmark/scoring/gameiq";
 import { aggregateCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import { withCompletedResultSetFixtures } from "./benchmark-result-set-test-fixtures";
 import { scoreTeamLift } from "../lib/benchmark/scoring/teamiq";
@@ -12,7 +11,6 @@ import { scoreToolReliability } from "../lib/benchmark/scoring/toolreliability";
 import { scoreWorkBenchAttempt } from "../lib/benchmark/scoring/workbench";
 import type {
   BuildCheckpoint,
-  GenericGameMatchRecord,
   ModelBuildStat,
 } from "../lib/db/schema";
 import type {
@@ -96,27 +94,6 @@ check(
   { unknownCost, knownPerfectCost }
 );
 
-const gameIq = scoreGameIqAttempt({
-  outcomeScore: 1,
-  moveQuality: 1,
-  legalActionRate: 1,
-  structuredReliability: 1,
-  fallbackRate: 0,
-});
-check("perfect GameIQ scores 100", gameIq === 100, gameIq);
-const weightedGameIq = scoreGameIqAttempt({
-  outcomeScore: 0,
-  moveQuality: 1,
-  legalActionRate: 1,
-  structuredReliability: 1,
-  fallbackRate: 0.2,
-});
-check(
-  "GameIQ uses v0.3 plan weights (outcome 0.6 / quality 0.4; legality+structure are gates) and fallback multiplier",
-  weightedGameIq === 36,
-  weightedGameIq
-);
-
 const toolReliability = scoreToolReliability({
   schemaValidRate: 1,
   firstAttemptValidRate: 1,
@@ -138,10 +115,7 @@ const schemaOnlyReliability = scoreToolReliability({
 });
 check("ToolReliability uses plan weights", schemaOnlyReliability === 25, schemaOnlyReliability);
 
-const decisiveMatch = gameMatch("match-decisive", "red");
-const drawMatch = gameMatch("match-draw", "draw");
 const trendDashboard = buildBenchmarkDashboardData({
-  gameMatches: [decisiveMatch, drawMatch],
   buildStats: [],
   buildCheckpoints: [buildCheckpoint("trend-build", "2026-07-01T12:00:00.000Z", 10)],
   benchmarkRuns: [],
@@ -150,13 +124,12 @@ const trendDashboard = buildBenchmarkDashboardData({
   benchmarkFailures: [],
 });
 check(
-  "legacy game and build evidence does not create trend rows",
+  "legacy build evidence does not create trend rows",
   trendDashboard.trendRows.length === 0,
   trendDashboard.trendRows
 );
 
 const metricDashboard = buildBenchmarkDashboardData({
-  gameMatches: [],
   buildStats: [
     modelBuildStat({
       modelId: "model:quality-metric",
@@ -184,7 +157,6 @@ check(
 );
 
 const buildBadOutputDashboard = buildBenchmarkDashboardData({
-  gameMatches: [],
   buildStats: [
     modelBuildStat({
       modelId: "model:bad-output-only",
@@ -213,33 +185,8 @@ check(
   badOutputModel
 );
 
-const codenamesDashboard = buildBenchmarkDashboardData({
-  gameMatches: [codenamesMatch()],
-  buildStats: [],
-  buildCheckpoints: [],
-  benchmarkRuns: [],
-  benchmarkCases: [],
-  benchmarkMetricValues: [],
-  benchmarkFailures: [],
-});
-const redCodenamesModel = codenamesDashboard.models.find(
-  (model) => model.modelId === "model:red-team"
-);
-const codenamesHeadToHead = codenamesDashboard.headToHeadRows[0];
-check(
-  "legacy game matches do not create dashboard model scores",
-  redCodenamesModel === undefined,
-  redCodenamesModel
-);
-check(
-  "legacy game matches do not create head-to-head rows",
-  codenamesHeadToHead === undefined && codenamesDashboard.headToHeadRows.length === 0,
-  codenamesDashboard.headToHeadRows
-);
-
 const evidenceModelId = "model:evidence-cap";
 const evidenceDashboard = buildBenchmarkDashboardData({
-  gameMatches: [],
   buildStats: [],
   buildCheckpoints: Array.from({ length: 60 }, (_, index) =>
     buildCheckpoint(
@@ -638,84 +585,6 @@ if (failures === 0) {
 }
 
 process.exit(failures === 0 ? 0 : 1);
-
-function gameMatch(id: string, winner: "red" | "yellow" | "draw"): GenericGameMatchRecord {
-  return {
-    id,
-    gameId: "connect-four",
-    timestamp: "2026-07-01T12:00:00.000Z",
-    participants: [
-      {
-        id: "red",
-        kind: "ai",
-        label: "Red",
-        modelId: "model:red",
-        reasoningEffort: "medium",
-      },
-      {
-        id: "yellow",
-        kind: "ai",
-        label: "Yellow",
-        modelId: "model:yellow",
-        reasoningEffort: "medium",
-      },
-    ],
-    resultJson: JSON.stringify({
-      result: winner,
-      winner,
-      draw: winner === "draw",
-    }),
-    statsJson: JSON.stringify({
-      moves: 10,
-      durationMs: 5000,
-      avgAiResponseMs: 250,
-      invalidResponses: 0,
-      fallbackMoves: 0,
-    }),
-  };
-}
-
-function codenamesMatch(): GenericGameMatchRecord {
-  return {
-    id: "codenames-red-wins",
-    gameId: "codenames",
-    timestamp: "2026-07-01T13:00:00.000Z",
-    participants: [
-      {
-        id: "red-spymaster",
-        kind: "ai",
-        label: "Red Spymaster",
-        modelId: "model:red-team",
-      },
-      {
-        id: "red-operative",
-        kind: "ai",
-        label: "Red Operative",
-        modelId: "model:red-team",
-      },
-      {
-        id: "blue-spymaster",
-        kind: "ai",
-        label: "Blue Spymaster",
-        modelId: "model:blue-team",
-      },
-      {
-        id: "blue-operative",
-        kind: "ai",
-        label: "Blue Operative",
-        modelId: "model:blue-team",
-      },
-    ],
-    resultJson: JSON.stringify({ winner: "red", result: "red", draw: false }),
-    statsJson: JSON.stringify({
-      moves: 8,
-      durationMs: 8000,
-      avgAiResponseMs: 500,
-      invalidResponses: 0,
-      fallbackMoves: 0,
-    }),
-  };
-}
 
 function modelBuildStat(partial: Partial<ModelBuildStat> = {}): ModelBuildStat {
   return {

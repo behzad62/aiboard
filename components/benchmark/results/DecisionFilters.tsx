@@ -165,7 +165,6 @@ function option(value: string): { value: string; label: string } {
 }
 
 function formatOption(value: string): string {
-  if (value === "gameiq") return "GameIQ";
   if (value === "teamiq") return "TeamIQ";
   if (value === "workbench") return "WorkBench";
   if (value === "toolreliability") return "Tool Reliability";

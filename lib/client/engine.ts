@@ -49,9 +49,16 @@ import {
   type StructuredOutputFormat,
 } from "@/lib/providers/base";
 import {
+  CHAT_REPLY_MAX_TOKENS,
   clampJudgeMaxTokens,
   EFFORT_CONFIG,
 } from "@/lib/orchestrator/config";
+import {
+  buildChatMessages,
+  chatSystemPrompt,
+  chatTurns,
+  pendingChatRound,
+} from "@/lib/orchestrator/chat";
 import {
   assessJudgeOutput,
   extractJudgeResult,
@@ -76,8 +83,8 @@ import {
   type ResolvedTokenUsage,
 } from "./token-usage";
 import {
-  createGameModelCallTrace,
-  type GameAIDiagnosticLike,
+  createModelCallTrace,
+  type ModelCallDiagnosticLike,
   recordBenchmarkModelCallTrace,
 } from "@/lib/benchmark/model-call-traces";
 import {
@@ -720,7 +727,7 @@ export async function runDiscussion(
       const promptText = input.messages
         .map((message) => `${message.role}:\n${message.content}`)
         .join("\n\n");
-      const diagnostics: GameAIDiagnosticLike[] = [];
+      const diagnostics: ModelCallDiagnosticLike[] = [];
 
       try {
         const collected = await collectStreamWithUsage(
@@ -764,7 +771,7 @@ export async function runDiscussion(
         const traceStatus =
           validation?.ok === false ? "parse_error" : "parsed";
         await recordBenchmarkModelCallTrace(
-          createGameModelCallTrace({
+          createModelCallTrace({
             modelId: input.modelId,
             providerId: input.providerId,
             participantId: input.label,
@@ -795,7 +802,7 @@ export async function runDiscussion(
         return { output, usage, finishReason: collected.finishReason };
       } catch (error) {
         await recordBenchmarkModelCallTrace(
-          createGameModelCallTrace({
+          createModelCallTrace({
             modelId: input.modelId,
             providerId: input.providerId,
             participantId: input.label,
@@ -821,12 +828,6 @@ export async function runDiscussion(
       }
     };
 
-    emit({
-      type: "diagnostic",
-      phase: "initializing",
-      message: `Starting discussion with ${models.length} model${models.length === 1 ? "" : "s"}`,
-    });
-
     const attachmentIds: string[] = discussion.attachmentIds
       ? JSON.parse(discussion.attachmentIds)
       : [];
@@ -834,6 +835,125 @@ export async function runDiscussion(
     const inlineAttachmentText = buildAttachmentPromptSection(
       allAttachments.filter((a) => a.category === "text_inline")
     );
+
+    if (mode === "chat") {
+      const model = models[0];
+      if (!model) throw new Error("Choose a model for this chat.");
+      const turns = chatTurns(discussion.topic, getMessagesForDiscussion(discussionId));
+      const round = pendingChatRound(turns);
+      if (round === null) {
+        updateDiscussion(discussionId, {
+          status: "completed",
+          updatedAt: new Date().toISOString(),
+        });
+        emit({ type: "status", status: "completed" });
+        emit({ type: "complete" });
+        return;
+      }
+      updateDiscussion(discussionId, {
+        status: "running",
+        currentRound: round,
+        maxRounds: round,
+        updatedAt: new Date().toISOString(),
+      });
+      emit({ type: "status", status: "running", round, maxRounds: round });
+
+      const { providerId, model: rawModel } = parseModelId(model.modelId);
+      const profile = resolveClientModelContextProfile(model.modelId);
+      const maxTokens = clampJudgeMaxTokens(
+        CHAT_REPLY_MAX_TOKENS,
+        profile.maxOutputTokens
+      );
+      const { messages: chatMessages, droppedTurns } = buildChatMessages({
+        systemPrompt: chatSystemPrompt({
+          modelName: model.displayName,
+          verbosityInstruction,
+        }),
+        turns,
+        inlineAttachmentText,
+        contextWindowTokens: profile.contextWindowTokens,
+        maxOutputTokens: maxTokens,
+      });
+      if (droppedTurns > 0) {
+        emit({
+          type: "diagnostic",
+          phase: "model_connecting",
+          round,
+          message: `Omitted ${droppedTurns} earlier message${droppedTurns === 1 ? "" : "s"} to fit ${model.displayName}'s context window`,
+        });
+      }
+
+      const messageId = uuidv4();
+      emit({
+        type: "message_start",
+        messageId,
+        modelId: model.modelId,
+        modelName: model.displayName,
+        round,
+        role: "assistant",
+      });
+      emit({
+        type: "diagnostic",
+        phase: "model_streaming",
+        round,
+        modelId: model.modelId,
+        modelName: model.displayName,
+        providerId,
+        message: `${model.displayName} is replying`,
+      });
+      const label = `${model.displayName} chat turn ${round}`;
+      const { output, usage } = await runTracedModelCall({
+        modelId: model.modelId,
+        providerId,
+        rawModel,
+        label,
+        messages: chatMessages,
+        maxTokens,
+        temperature: 0.7,
+        reasoningEffort,
+        attachments: allAttachments,
+        onToken: (token) => emit({ type: "message_token", messageId, token }),
+        signal,
+      });
+      emitTokenUsage({
+        messageId,
+        modelId: model.modelId,
+        modelName: model.displayName,
+        providerId,
+        round,
+        label,
+        usage,
+      });
+      insertMessage({
+        id: messageId,
+        discussionId,
+        round,
+        modelId: model.modelId,
+        role: "assistant",
+        content: output,
+        createdAt: new Date().toISOString(),
+      });
+      emit({ type: "message_complete", messageId, content: output });
+      updateDiscussion(discussionId, {
+        status: "completed",
+        updatedAt: new Date().toISOString(),
+      });
+      emit({ type: "status", status: "completed", round, maxRounds: round });
+      emit({
+        type: "diagnostic",
+        phase: "finished",
+        round,
+        message: `${model.displayName} replied`,
+      });
+      emit({ type: "complete" });
+      return;
+    }
+
+    emit({
+      type: "diagnostic",
+      phase: "initializing",
+      message: `Starting discussion with ${models.length} model${models.length === 1 ? "" : "s"}`,
+    });
 
     updateDiscussion(discussionId, {
       status: "running",

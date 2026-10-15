@@ -57,8 +57,7 @@ export const DEFAULT_RETRY_DELAYS_MS: number[] = [...CERTIFIED_RETRY_DELAYS_MS];
 
 /**
  * Thrown by `callCertifiedModelOnce` for every non-budget failure, tagged
- * with a classification so the retry loop in `callCertifiedModel` (and
- * downstream containment logic in the GameIQ runner) can tell a transient
+ * with a classification so the retry loop in `callCertifiedModel` can tell a transient
  * transport blip from a fatal account/config problem without re-parsing the
  * message string. Its public message is a typed, secret-safe failure reason;
  * routing uses the structured classification and provider metadata.
@@ -126,9 +125,7 @@ export interface CallCertifiedModelInput {
   user: string;
   /**
    * Optional full multi-turn conversation. When set it is sent verbatim instead
-   * of the derived [system, user] pair (still one model call). Used by the
-   * Fireworks memory recall episodes; all other callers omit it and are
-   * unaffected.
+   * of the derived [system, user] pair (still one model call).
    */
   messages?: ChatMessage[];
   structuredOutput?: StructuredOutputFormat;
@@ -139,8 +136,8 @@ export interface CallCertifiedModelInput {
   participantId: string;
   caseId?: string;
   attemptId?: string;
-  // The GameIQ scenario id this call answers, threaded onto the recorded
-  // trace so trace consumers can map by id instead of positional order.
+  // Optional scenario id threaded onto the recorded trace so trace consumers
+  // can map by id instead of positional order.
   scenarioId?: string;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
   apiKey?: string;
@@ -622,9 +619,6 @@ async function callCertifiedModelOnce(
  * every attempt (failed + eventual success) in the trace store, not just the
  * final outcome. Each attempt's run-events carry a 1-based `attempt` marker
  * (in `details`) so the retried attempts are distinguishable in the event log.
- * Consumers that map traces positionally to scenarios (audit/replay scripts)
- * must be updated in Task B4 to key by scenarioId instead of assuming one
- * trace per scenario.
  */
 export async function callCertifiedModel(
   input: CallCertifiedModelInput

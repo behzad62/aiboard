@@ -4,8 +4,8 @@
  *
  * The same underlying decision can be scored into ONE merged (per-team)
  * leaderboard row twice via two tracks:
- *   (a) fireworks — a GameIQ fireworks scenario re-wraps a TeamIQ scenario and
- *       carries an explicit `source:<teamiq-id>` tag.
+ *   (a) source tag — a case re-wraps a TeamIQ scenario and carries an
+ *       explicit `source:<teamiq-id>` tag.
  *   (b) toolreliability — the TeamIQ ToolReliability suites run the SAME case
  *       ids as the dedicated solo ToolReliability track.
  * The merged row must count the shared decision once (keeping the richer,
@@ -122,28 +122,28 @@ function soloTeam(id: string, modelId: string): BenchmarkTeamComposition {
 }
 
 // ---------------------------------------------------------------------------
-// (a) fireworks source-tag overlap: gameiq case re-wraps teamiq scenario.
-// The gameiq case carries source:<teamiq-scenario-id>; the teamiq attempt
+// (a) source-tag overlap: a toolreliability case re-wraps a teamiq scenario.
+// The toolreliability case carries source:<teamiq-scenario-id>; the teamiq attempt
 // scores that same scenario id directly.
 // ---------------------------------------------------------------------------
-const gameiqFireworksCase = certifiedCase("gameiq-fireworks-basic-v1-01", "gameiq", [
-  "fireworks",
+const sourcedToolCase = certifiedCase("toolreliability-sourced-case-01", "toolreliability", [
+  "sourced",
   "solo-control",
   "source:fw-scenario-42",
 ]);
-const teamiqFireworksCase = certifiedCase("fw-scenario-42", "teamiq");
+const teamiqSourceCase = certifiedCase("fw-scenario-42", "teamiq");
 
 const teamX = soloTeam("solo-x", "model:x");
 const teamY = soloTeam("solo-y", "model:y");
 
-const cases = [gameiqFireworksCase, teamiqFireworksCase];
+const cases = [sourcedToolCase, teamiqSourceCase];
 
 const attempts: BenchmarkAttemptV2[] = [
   // Team X scores the SAME decision through both tracks.
-  attempt("x-gameiq", teamX.id, "gameiq", gameiqFireworksCase.id),
-  attempt("x-teamiq", teamX.id, "teamiq", teamiqFireworksCase.id),
-  // Team Y only ran the GameIQ track -> must be unaffected by de-dup.
-  attempt("y-gameiq", teamY.id, "gameiq", gameiqFireworksCase.id),
+  attempt("x-primary", teamX.id, "toolreliability", sourcedToolCase.id),
+  attempt("x-teamiq", teamX.id, "teamiq", teamiqSourceCase.id),
+  // Team Y only ran the primary track -> must be unaffected by de-dup.
+  attempt("y-primary", teamY.id, "toolreliability", sourcedToolCase.id),
 ];
 
 const dedup = dedupeCrossTrackAttempts(attempts, cases);
@@ -153,12 +153,12 @@ check(
   dedup.filter((a) => a.teamCompositionId === teamX.id)
 );
 check(
-  "de-dup keeps the track-primary (gameiq) sample over teamiq re-wrap",
-  dedup.some((a) => a.id === "x-gameiq") && !dedup.some((a) => a.id === "x-teamiq"),
+  "de-dup keeps the track-primary (toolreliability) sample over teamiq re-wrap",
+  dedup.some((a) => a.id === "x-primary") && !dedup.some((a) => a.id === "x-teamiq"),
   dedup.map((a) => a.id)
 );
 check(
-  "gameiq-only team is unaffected by de-dup",
+  "single-track team is unaffected by de-dup",
   dedup.filter((a) => a.teamCompositionId === teamY.id).length === 1,
   dedup.filter((a) => a.teamCompositionId === teamY.id)
 );
@@ -209,12 +209,12 @@ const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFix
   teamCompositions: [teamX, teamY],
   harnessCertifications: [],
 }));
-const gameiqTrackRow = dashboard.trackRows.find((r) => r.track === "gameiq");
+const sourcedTrackRow = dashboard.trackRows.find((r) => r.track === "toolreliability");
 const teamiqTrackRow = dashboard.trackRows.find((r) => r.track === "teamiq");
 check(
-  "per-track gameiq view still counts both gameiq attempts",
-  gameiqTrackRow?.attempts === 2,
-  gameiqTrackRow
+  "per-track toolreliability view still counts both sourced attempts",
+  sourcedTrackRow?.attempts === 2,
+  sourcedTrackRow
 );
 check(
   "per-track teamiq view does not resurrect the dropped duplicate",
@@ -252,7 +252,7 @@ check(
 // ---------------------------------------------------------------------------
 const crossTeam = dedupeCrossTrackAttempts(
   [
-    attempt("a", "team-1", "gameiq", "case-shared"),
+    attempt("a", "team-1", "toolreliability", "case-shared"),
     attempt("b", "team-2", "teamiq", "case-shared"),
   ],
   []
@@ -265,7 +265,7 @@ check(
 
 const distinctDecisions = dedupeCrossTrackAttempts(
   [
-    attempt("a", "team-1", "gameiq", "case-1"),
+    attempt("a", "team-1", "toolreliability", "case-1"),
     attempt("b", "team-1", "teamiq", "case-2"),
   ],
   []
@@ -279,7 +279,7 @@ check(
 // Attempts with no case id are always passed through (cannot resolve identity).
 const noCaseId = dedupeCrossTrackAttempts(
   [
-    attempt("a", "team-1", "gameiq", ""),
+    attempt("a", "team-1", "toolreliability", ""),
     attempt("b", "team-1", "teamiq", ""),
   ],
   []
@@ -318,8 +318,8 @@ check(
 // Cross-track winning track keeps ALL its repeats; losing track's are dropped.
 const winnerKeepsRepeats = dedupeCrossTrackAttempts(
   [
-    attempt("g1", "team-1", "gameiq", "case-multi"),
-    attempt("g2", "team-1", "gameiq", "case-multi"),
+    attempt("g1", "team-1", "toolreliability", "case-multi"),
+    attempt("g2", "team-1", "toolreliability", "case-multi"),
     attempt("t1", "team-1", "teamiq", "case-multi"),
   ],
   []
@@ -327,18 +327,18 @@ const winnerKeepsRepeats = dedupeCrossTrackAttempts(
 check(
   "winning track keeps all repeats; losing track's samples are dropped",
   winnerKeepsRepeats.length === 2 &&
-    winnerKeepsRepeats.every((a) => a.track === "gameiq"),
+    winnerKeepsRepeats.every((a) => a.track === "toolreliability"),
   winnerKeepsRepeats.map((a) => `${a.id}:${a.track}`)
 );
 
 // Summary de-dup denominator check with a mixed pass/fail so the deduped
 // denominator is observable: team X's teamiq sample FAILS but is dropped in
-// favor of the passing gameiq sample -> merged pass rate must be 1, not 0.5.
+// favor of the passing primary sample -> merged pass rate must be 1, not 0.5.
 const mixedAttempts: BenchmarkAttemptV2[] = [
-  attempt("m-gameiq", teamX.id, "gameiq", gameiqFireworksCase.id, {
+  attempt("m-primary", teamX.id, "toolreliability", sourcedToolCase.id, {
     status: "passed",
   }),
-  attempt("m-teamiq", teamX.id, "teamiq", teamiqFireworksCase.id, {
+  attempt("m-teamiq", teamX.id, "teamiq", teamiqSourceCase.id, {
     status: "failed_model",
     verifiedQuality: 0.1,
     efficiencyScore: 10,
@@ -357,7 +357,7 @@ check(
   mixedDashboard.summary.verifiedPassRate
 );
 check(
-  "summary quality uses the track-primary (gameiq) sample, not the average",
+  "summary quality uses the track-primary (toolreliability) sample, not the average",
   mixedDashboard.summary.averageVerifiedQuality === 0.9,
   mixedDashboard.summary.averageVerifiedQuality
 );

@@ -627,7 +627,6 @@ function formatDuration(milliseconds: number | null): string {
 }
 
 function trackLabel(track: string): string {
-  if (track === "gameiq") return "GameIQ";
   if (track === "teamiq") return "TeamIQ";
   if (track === "workbench") return "WorkBench";
   if (track === "toolreliability") return "Tool Reliability";

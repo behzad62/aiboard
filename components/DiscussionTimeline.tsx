@@ -17,6 +17,8 @@ export interface TimelineMessage {
   modelId: string;
   modelName: string;
   content: string;
+  /** Stored role ("user" / "assistant"); single-model chats render by it. */
+  role?: string;
   streaming?: boolean;
 }
 

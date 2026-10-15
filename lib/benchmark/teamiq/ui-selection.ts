@@ -11,8 +11,6 @@ export interface CreateTeamIqCompositionSelectionInput {
   models: SelectedModel[];
   selectedModelIds: string[];
   strategy?: Exclude<TeamIqStrategy, "solo">;
-  roleMode?: "default" | "fireworks_players";
-  playerCount?: 2 | 3;
   roleAssignments?: TeamIqRoleAssignment[];
   effortByModelId?: BenchmarkModelEffortMap;
 }
@@ -45,21 +43,10 @@ export function createTeamIqCompositionFromSelection(
   if (selectedModels.length < 1) {
     throw new Error("TeamIQ requires at least one selected model.");
   }
-  if (
-    input.roleMode === "fireworks_players" &&
-    selectedModels.length !== (input.playerCount ?? 3)
-  ) {
-    throw new Error(
-      `Fireworks ${input.playerCount ?? 3}-player runs require exactly ${input.playerCount ?? 3} selected models.`
-    );
-  }
 
   return deriveTeamComposition({
-    name:
-      input.roleMode === "fireworks_players"
-        ? `Fireworks players: ${modelNameList(selectedModels)}`
-        : teamNameForSelection(strategy, selectedModels),
-    strategy: input.roleMode === "fireworks_players" ? "panel" : strategy,
+    name: teamNameForSelection(strategy, selectedModels),
+    strategy,
     roles:
       input.roleAssignments && input.roleAssignments.length > 0
         ? rolesForAssignments(
@@ -67,40 +54,24 @@ export function createTeamIqCompositionFromSelection(
             input.roleAssignments,
             input.effortByModelId
           )
-        : input.roleMode === "fireworks_players"
-        ? rolesForFireworksPlayers(
-            selectedModels,
-            input.playerCount ?? 3,
-            input.effortByModelId
-          )
         : rolesForStrategy(strategy, selectedModels, input.effortByModelId),
   });
 }
 
 export function createTeamIqToolBenchCompositionsFromSelection(
-  input: Omit<CreateTeamIqCompositionSelectionInput, "roleMode" | "playerCount">
+  input: CreateTeamIqCompositionSelectionInput
 ) {
   return TEAMIQ_TOOL_BENCH_STRATEGIES.map((strategy) =>
     createTeamIqCompositionFromSelection({
       ...input,
       strategy,
-      roleMode: "default",
     })
   );
 }
 
 export function teamIqRoleSlotsForStrategy(
-  strategy: Exclude<TeamIqStrategy, "solo">,
-  options: { roleMode?: "default" | "fireworks_players"; playerCount?: 2 | 3 } = {}
+  strategy: Exclude<TeamIqStrategy, "solo">
 ): TeamIqRoleSlot[] {
-  if (options.roleMode === "fireworks_players") {
-    const playerCount = options.playerCount ?? 3;
-    return Array.from({ length: playerCount }, (_, index) => ({
-      role: "player",
-      slot: `P${index + 1}`,
-      label: `P${index + 1}`,
-    }));
-  }
   if (strategy === "panel") {
     return [0, 1, 2].map((index) => ({
       role: "specialist",
@@ -157,14 +128,6 @@ export function normalizeTeamIqModelSelectionForSlots(input: {
   }).filter(Boolean);
 }
 
-function maxModelsForSelection(
-  strategy: Exclude<TeamIqStrategy, "solo">,
-  input: CreateTeamIqCompositionSelectionInput
-): number {
-  if (input.roleMode === "fireworks_players") return input.playerCount ?? 3;
-  return maxModelsForStrategy(strategy);
-}
-
 function maxModelsForStrategy(strategy: Exclude<TeamIqStrategy, "solo">): number {
   return strategy === "architect_worker" ? 2 : 3;
 }
@@ -183,17 +146,7 @@ function selectedModelsForSelection(
   return input.selectedModelIds
     .map((modelId) => input.models.find((model) => model.modelId === modelId))
     .filter((model): model is SelectedModel => Boolean(model))
-    .slice(0, maxModelsForSelection(strategy, input));
-}
-
-function rolesForFireworksPlayers(
-  models: SelectedModel[],
-  playerCount: 2 | 3,
-  effortByModelId?: BenchmarkModelEffortMap
-): BenchmarkTeamCompositionRole[] {
-  return models.slice(0, playerCount).map((model, index) =>
-    roleFor("player", `P${index + 1}`, model, effortByModelId)
-  );
+    .slice(0, maxModelsForStrategy(strategy));
 }
 
 function rolesForStrategy(
