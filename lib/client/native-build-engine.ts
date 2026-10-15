@@ -28,6 +28,7 @@ import {
   getNativePermissions,
   getNativeRun,
   getNativeRunnerHealth,
+  registerNativePlanningSource,
   resolveNativeBuildRunId,
   type NativeBuildEvent,
   type NativeBuildProjection,
@@ -35,6 +36,7 @@ import {
   type NativeRunProjection,
   type NativeRunnerConnection,
 } from "./runner-v2";
+import { requestSpecificationSource } from "./native-planning-view";
 import {
   nativeBuildAttachmentIdentityPatch,
   nativeBuildTaskStatus,
@@ -246,6 +248,23 @@ export async function runNativeBuildDiscussion(
       discussion.id,
       nativeBuildAttachmentIdentityPatch(runId, new Date().toISOString())
     );
+    if (discussion.buildEvidenceGatedPlanning === true && !planningOptions) {
+      // The request the owner just submitted is the approved specification; without this the run
+      // would stop at once asking for a separately uploaded document.
+      emit({ type: "diagnostic", phase: "initializing", message: "Registering your request as the approved specification" });
+      try {
+        await registerNativePlanningSource(connection, runId, {
+          approvedSource: requestSpecificationSource(objective),
+          idempotencyKey: `source-approval:${runId}:request`,
+        });
+      } catch (error) {
+        emit({
+          type: "diagnostic",
+          phase: "initializing",
+          message: `Could not register the request as the specification (${error instanceof Error ? error.message : String(error)}); approve one in "Needs you".`,
+        });
+      }
+    }
   }
   const { run, build: initialProjection } =
     await loadNativeBuildAuthoritativeSnapshot({

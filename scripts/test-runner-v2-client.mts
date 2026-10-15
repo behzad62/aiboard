@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { requestSpecificationSource } from "../lib/client/native-planning-view";
 
 import {
   configureNativeProviders,
@@ -1163,4 +1164,13 @@ assert.equal(
   "run_a",
   "equal creation times resolve to the code-unit lexicographically greatest run id"
 );
+const requestSpec = requestSpecificationSource("  Build a launcher — zero flags ✓  ");
+assert.equal(requestSpec.approval, "approved_spec");
+assert.equal(requestSpec.mediaType, "text/markdown");
+assert.equal(
+  Buffer.from(requestSpec.bytesBase64, "base64").toString("utf8"),
+  "Build a launcher — zero flags ✓\n",
+  "the request is approved as exact trimmed UTF-8 bytes"
+);
+assert.throws(() => requestSpecificationSource("   "), /empty/);
 console.log("PASS runner-v2 client");

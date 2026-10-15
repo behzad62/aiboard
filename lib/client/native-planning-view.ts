@@ -1,4 +1,4 @@
-import type { ExplicitStartRequestV1, NativeBuildProjection, NativeBuildUsageProjection, NativeContextManifest, PlanningReadinessSnapshot } from "./runner-v2";
+import type { ApprovedSourceInputV1, ExplicitStartRequestV1, NativeBuildProjection, NativeBuildUsageProjection, NativeContextManifest, PlanningReadinessSnapshot } from "./runner-v2";
 import type { NativePlanningSchedule } from "../../runner-v2/src/planning-view-contracts";
 
 export function currentPlanningSchedule(projection: NativeBuildProjection, schedule?: NativePlanningSchedule | null): NativePlanningSchedule | undefined {
@@ -49,4 +49,18 @@ export function planningPassRows(manifests: readonly NativeContextManifest[], us
       tokenQuality: attributed && calls.every((call) => call.tokenSources?.inputTokens === "reported" && call.tokenSources?.outputTokens === "reported") ? "reported" : "estimated or mixed",
     };
   });
+}
+
+/**
+ * The owner's own Build request as an approved specification. Submitting the request is the
+ * approval, so evidence-gated planning needs no separate document upload.
+ */
+export function requestSpecificationSource(requestText: string): ApprovedSourceInputV1 {
+  const text = requestText.trim();
+  if (!text) throw new Error("The Build request is empty, so it cannot serve as the specification.");
+  const bytes = new TextEncoder().encode(`${text}\n`);
+  if (bytes.length > 512 * 1024) throw new Error("The Build request is longer than the 512 KiB specification limit.");
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return { version: 1, approval: "approved_spec", bytesBase64: btoa(binary), mediaType: "text/markdown", encoding: "utf-8" };
 }

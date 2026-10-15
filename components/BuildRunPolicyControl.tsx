@@ -199,7 +199,7 @@ export function BuildRunPolicyControl({
           <Label htmlFor="build-evidence-planning">Evidence-gated planning</Label>
           <Switch id="build-evidence-planning" checked={value.evidenceGatedPlanning === true} onCheckedChange={(checked) => onChange({ ...value, evidenceGatedPlanning: checked })} />
         </div>
-        <p className="text-xs text-muted-foreground">Approve a specification, inspect the independently reviewed plan, then explicitly start execution. Attaching a document does not enable this option.</p>
+        <p className="text-xs text-muted-foreground">Your request becomes the approved specification. The Architect maps it to requirements, an independent model reviews the plan, and workers start only after you approve the plan.</p>
         {planningOptionsLocked && <p className="text-xs">This run uses its saved planning policy and options. Start a new run to choose different options.</p>}
         {value.evidenceGatedPlanning && <>
           <div className="flex items-center justify-between gap-3">

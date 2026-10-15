@@ -147,6 +147,7 @@ import {
   getNativeBuildEvents,
   getNativeBuildFiles,
   getNativeBuildObservability,
+  registerNativePlanningSource,
   getNativeBuildTranscript,
   getNativeBuildUsage,
   getNativeRun,
@@ -168,7 +169,9 @@ import {
   type WrittenFileView,
 } from "@/components/BuildTaskBoard";
 import { NativePlanningPanel, NativePlanStartCard } from "@/components/NativePlanningPanel";
+import { LoadingNotice } from "@/components/build/LoadingNotice";
 import { selectNativeBuildRuntimes } from "@/lib/client/native-build-engine";
+import { requestSpecificationSource } from "@/lib/client/native-planning-view";
 import {
   RepoWorkflowPanel,
   type RepoStatusView,
@@ -284,6 +287,10 @@ function DiscussionPageInner() {
     useState<NativeBuildObservability | null>(null);
   const [nativeProjection, setNativeProjection] =
     useState<NativeBuildProjection | null>(null);
+  const [specificationBusy, setSpecificationBusy] = useState(false);
+  const [nativeAttach, setNativeAttach] = useState<{ since: number; error?: string } | null>(null);
+  const [nativeFilesLoad, setNativeFilesLoad] = useState<{ since: number; error?: string } | null>(null);
+  const [specificationError, setSpecificationError] = useState<string | null>(null);
   const [nativeTranscript, setNativeTranscript] =
     useState<NativeBuildTranscriptAttachment | null>(null);
   const [nativeFiles, setNativeFiles] =
@@ -1004,6 +1011,7 @@ function DiscussionPageInner() {
     let persistedStatus = discussion.status;
     let persistedPolicy = discussion.buildRunPolicy;
     let cachedObservability: { runId: string; at: number; value: NativeBuildObservability } | undefined;
+    setNativeAttach({ since: Date.now() });
     const fileLoader = createNativeBuildFileLoader({
       load: async (runId) => await getNativeBuildFiles(connection, runId),
     });
@@ -1058,12 +1066,20 @@ function DiscussionPageInner() {
         const fileIdentity = nativeBuildFileIdentity(projection);
         const files = fileLoader.peek(runId, fileIdentity);
         if (!files) {
+          setNativeFilesLoad((current) => current && !current.error ? current : { since: Date.now() });
           void fileLoader.load(runId, fileIdentity).then(
             (snapshot) => {
               if (nativeAttachmentControllerRef.current !== controller) return;
               setNativeFiles((current) => reconcileNativeBuildFiles(current, runId, snapshot));
+              setNativeFilesLoad(null);
             },
-            () => undefined
+            (error: unknown) => {
+              if (nativeAttachmentControllerRef.current !== controller) return;
+              setNativeFilesLoad({
+                since: Date.now(),
+                error: `${error instanceof Error ? error.message : String(error)} — retrying`,
+              });
+            }
           );
         }
         return {
@@ -1078,6 +1094,7 @@ function DiscussionPageInner() {
         };
       },
       apply: ({ runId, projection, usage, run, events, observability, transcript, files }) => {
+        setNativeAttach(null);
         if (runId !== persistedRunId || hasPendingProvenance) {
           const updatedAt = new Date().toISOString();
           const identityPatch = nativeBuildAttachmentIdentityPatch(runId, updatedAt);
@@ -1204,6 +1221,12 @@ function DiscussionPageInner() {
         window.setTimeout(() => void callback(), delayMs),
       cancelScheduled: (handle) => window.clearTimeout(handle as number),
       intervalMs: 2_000,
+      onError: (error) => {
+        setNativeAttach((current) => ({
+          since: current?.since ?? Date.now(),
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      },
       probe: async (runId) => {
         const run = await getNativeRun(connection, runId);
         return `${run.state}:${run.lastSequence}`;
@@ -2052,18 +2075,41 @@ function DiscussionPageInner() {
         id: "planning-source",
         node: (
           <DecisionCard
-            title="Approve the specification so the Architect can plan"
+            title="Confirm what the Architect should build"
             actions={
-              <Button size="sm" onClick={() => setBuildView({ kind: "overview" })}>
-                Open specification approval
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  disabled={!nativeConnection || specificationBusy}
+                  onClick={() => {
+                    if (!nativeConnection || !discussion.nativeBuildRunId) return;
+                    setSpecificationBusy(true);
+                    setSpecificationError(null);
+                    void registerNativePlanningSource(nativeConnection, discussion.nativeBuildRunId, {
+                      approvedSource: requestSpecificationSource(discussion.topic),
+                      idempotencyKey: `source-approval:${discussion.nativeBuildRunId}:request`,
+                    })
+                      .then((updated) => {
+                        acceptProjection(updated);
+                        nativeAttachmentControllerRef.current?.wake();
+                      })
+                      .catch((error: unknown) => setSpecificationError(error instanceof Error ? error.message : String(error)))
+                      .finally(() => setSpecificationBusy(false));
+                  }}
+                >
+                  {specificationBusy ? "Registering…" : "Use my Build request"}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setBuildView({ kind: "overview" })}>
+                  Use a different document
+                </Button>
+              </>
             }
           >
             <p>
-              In Overview, open <strong>Approve a specification</strong>, choose the document,
-              tick the approval box, then click <strong>Approve specification</strong>. The run
-              continues on its own after that.
+              This Build plans only from an approved specification. Your request is the natural
+              one: <span className="italic">&ldquo;{discussion.topic.length > 160 ? `${discussion.topic.slice(0, 160)}…` : discussion.topic}&rdquo;</span>
             </p>
+            {specificationError && <p role="alert" className="text-destructive">{specificationError}</p>}
           </DecisionCard>
         ),
       });
@@ -2380,6 +2426,15 @@ function DiscussionPageInner() {
 
     const overview = (
       <div className="space-y-6">
+        {discussion.nativeBuildRunId && !nativeProjection && (
+          <LoadingNotice
+            label="Loading the build from the runner"
+            detail={nativeAttach?.error
+              ? `Last attempt failed: ${nativeAttach.error}. Retrying every few seconds.`
+              : "Reading run status, plan, tasks, and usage."}
+            since={nativeAttach?.since}
+          />
+        )}
         {discussion.nativeBuildRunId && (
           <RunnerV2SteeringPanel projection={nativeProjection} section="ledger" />
         )}
@@ -2431,6 +2486,13 @@ function DiscussionPageInner() {
     const fileCount = currentNativeFiles ? nativeArtifactFiles.length : legacyArtifactFiles.length;
     const filesView = (
       <div className="space-y-6">
+        {discussion.nativeBuildRunId && nativeFilesLoad && (
+          <LoadingNotice
+            label={currentNativeFiles ? "Refreshing project files" : "Reading project files from the runner"}
+            detail={nativeFilesLoad.error ?? "Large repositories can take a while; the rest of the page keeps updating."}
+            since={nativeFilesLoad.since}
+          />
+        )}
         {currentNativeFiles && (
           <ArtifactPanel files={nativeArtifactFiles} snapshot={currentNativeFiles.snapshot} />
         )}
@@ -2454,7 +2516,7 @@ function DiscussionPageInner() {
           commands={commandRuns}
           folderName={discussion.projectFolderName}
         />
-        {!currentNativeFiles && legacyArtifactFiles.length === 0 && writtenFiles.length === 0 && commandRuns.length === 0 && (
+        {!currentNativeFiles && !nativeFilesLoad && legacyArtifactFiles.length === 0 && writtenFiles.length === 0 && commandRuns.length === 0 && (
           <p className="text-sm text-muted-foreground">No files or commands yet.</p>
         )}
       </div>

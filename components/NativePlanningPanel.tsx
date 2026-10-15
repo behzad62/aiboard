@@ -2,6 +2,7 @@
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { LoadingNotice } from "@/components/build/LoadingNotice";
 import { PlanningExportView } from "@/components/PlanningExportView";
 import type { PlanningExportDocument } from "@/lib/client/runner-v2";
 import { currentPlanningSchedule, displayedPlanStart, nativePlanningView, planningPassRows } from "@/lib/client/native-planning-view";
@@ -148,6 +149,7 @@ export function NativePlanStartCard({ projection, connection, onProjection }: { 
   const [readiness, setReadiness] = useState<PlanningReadinessSnapshot>();
   const [busy, setBusy] = useState(false), [message, setMessage] = useState("");
   const startKey = useRef(key("owner-start"));
+  const [loadingSince] = useState(() => Date.now());
   const connectionUrl = connection?.url, connectionToken = connection?.token;
   const planRevisionId = projection.planning?.plan?.currentRevisionId;
   useEffect(() => {
@@ -188,7 +190,7 @@ export function NativePlanStartCard({ projection, connection, onProjection }: { 
           .catch((error: unknown) => { startKey.current = key("owner-start"); setMessage(`${error instanceof Error ? error.message : "Start failed."} Refresh and try again.`); })
           .finally(() => setBusy(false));
       }}>{busy ? "Starting…" : "Start this plan"}</Button>
-      {!readiness && !message && <span className="text-xs text-muted-foreground">Checking plan readiness…</span>}
+      {!readiness && !message && <LoadingNotice compact label="Checking plan readiness" since={loadingSince} />}
       <span className="text-xs text-muted-foreground">Full requirements, phases, and source are in Overview → planning.</span>
     </div>
   </div>;
