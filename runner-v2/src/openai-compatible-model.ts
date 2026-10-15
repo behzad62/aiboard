@@ -17,6 +17,7 @@ import {
   serializedInputUsage,
   toolResultText,
 } from "./provider-model-utils.js";
+import { createHash } from "node:crypto";
 import { openAICompatibleReasoningFields } from "./reasoning-effort.js";
 import { ProviderTransportError } from "./account-runner-model.js";
 
@@ -239,6 +240,7 @@ export class OpenAICompatibleModel implements AgentModel {
           }
         : {}),
     });
+    if (process.env.AIBOARD_DEBUG_PROMPT_CACHE === "1") logPromptCacheShape(request.sessionId, body);
     const response = await fetchProviderJson<OpenAIResponsesResponse>(
       this.fetchImpl,
       joinEndpoint(this.options.baseUrl, "responses"),
@@ -471,4 +473,23 @@ function dedupeRunnerTools(tools: Array<Record<string, unknown>>): Array<Record<
     seen.add(key);
     return true;
   });
+}
+
+/**
+ * Opt-in prompt-cache diagnostics (AIBOARD_DEBUG_PROMPT_CACHE=1): per request, short hashes of the
+ * tool list and of every input item, never their content. Consecutive lines for one session show
+ * where the cacheable prefix first diverges.
+ */
+function logPromptCacheShape(sessionId: string, serializedBody: string): void {
+  try {
+    const parsed = JSON.parse(serializedBody) as { tools?: unknown; input?: unknown[]; reasoning?: unknown };
+    const short = (value: unknown) => createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex").slice(0, 8);
+    console.error(`[prompt-cache] ${JSON.stringify({
+      sessionId,
+      tools: short(parsed.tools),
+      toolCount: Array.isArray(parsed.tools) ? parsed.tools.length : 0,
+      reasoning: short(parsed.reasoning),
+      input: (parsed.input ?? []).map(short),
+    })}`);
+  } catch { /* diagnostics never affect the request */ }
 }

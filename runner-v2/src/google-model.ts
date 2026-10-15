@@ -11,6 +11,7 @@ import {
   createToolNameCodec,
   fetchProviderJson,
   joinEndpoint,
+  providerReportedTokenCount,
   serializedInputUsage,
   toolResultText,
   type ToolNameCodec,
@@ -38,7 +39,14 @@ interface GoogleResponse {
       >;
     };
   }>;
-  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    /** Thinking tokens; billed as output but not included in candidatesTokenCount. */
+    thoughtsTokenCount?: number;
+    /** Implicit/explicit context-cache hits; a subset of promptTokenCount. */
+    cachedContentTokenCount?: number;
+  };
 }
 
 export class GoogleModel implements AgentModel {
@@ -117,8 +125,11 @@ export class GoogleModel implements AgentModel {
       ...(response.responseId ? { providerRequestId: response.responseId } : {}),
       usage: {
         ...serializedInputUsage(body, response.usageMetadata?.promptTokenCount),
+        ...(providerReportedTokenCount(response.usageMetadata?.cachedContentTokenCount) !== undefined
+          ? { cachedInputTokens: providerReportedTokenCount(response.usageMetadata?.cachedContentTokenCount) }
+          : {}),
         ...(response.usageMetadata?.candidatesTokenCount !== undefined
-          ? { outputTokens: response.usageMetadata.candidatesTokenCount }
+          ? { outputTokens: response.usageMetadata.candidatesTokenCount + (providerReportedTokenCount(response.usageMetadata.thoughtsTokenCount) ?? 0) }
           : {}),
       },
     };

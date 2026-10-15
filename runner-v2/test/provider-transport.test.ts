@@ -1090,7 +1090,7 @@ test("Google transport maps function declarations, function responses, calls, an
             { functionCall: { name: "fs_read", args: { path: "package.json" }, id: "call_4" }, thoughtSignature: "sig_4" },
           ] },
         }],
-        usageMetadata: { promptTokenCount: 41, candidatesTokenCount: 11 },
+        usageMetadata: { promptTokenCount: 41, candidatesTokenCount: 11, thoughtsTokenCount: 30, cachedContentTokenCount: 20 },
       });
     },
   });
@@ -1155,8 +1155,9 @@ test("Google transport maps function declarations, function responses, calls, an
   assert.deepEqual(turn.usage, {
     inputTokens: 41,
     inputTokenSource: "reported",
-    outputTokens: 11,
-  });
+    cachedInputTokens: 20,
+    outputTokens: 41,
+  }, "thinking tokens are billed output; cache hits are reported");
 });
 
 test("native HTTP provider failures preserve routing metadata without leaking secrets", async () => {
