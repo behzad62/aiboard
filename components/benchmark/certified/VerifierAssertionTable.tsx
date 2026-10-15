@@ -4,7 +4,6 @@ import type {
   BenchmarkVerifierAssertionResult,
   BenchmarkVerifierResult,
 } from "@/lib/benchmark/types";
-import { listGameIqScenarios } from "@/lib/benchmark/gameiq/packs";
 
 export interface GroupedVerifierAssertion {
   key: string;
@@ -83,25 +82,10 @@ export function VerifierAssertionTable({
   );
 }
 
-const gameIqExpectedActionsByScenarioId = new Map(
-  listGameIqScenarios().map((scenario) => [scenario.id, scenario.expectedActions])
-);
-
 export function verifierAssertionDetailsForDisplay(
   assertion: BenchmarkVerifierAssertionResult
 ): string | undefined {
-  const expectedActions = gameIqExpectedActionsByScenarioId.get(assertion.id);
-  if (!expectedActions?.length) {
-    return assertion.details;
-  }
-  const expectedDetails = `Expected result\n${previewJsonForDisplay(expectedActions)}`;
-  if (!assertion.details) {
-    return expectedDetails;
-  }
-  if (assertion.details.includes("Expected result")) {
-    return assertion.details;
-  }
-  return `${assertion.details}\n\n${expectedDetails}`;
+  return assertion.details;
 }
 
 export function groupVerifierAssertions(
@@ -159,12 +143,4 @@ function simplifyAssertionText(value: string): string {
     .replace(/\s+#?\d+$/i, "")
     .replace(/\s*\(\d+\)$/i, "")
     .trim();
-}
-
-function previewJsonForDisplay(value: unknown): string {
-  const json = JSON.stringify(value);
-  const limit = 1_500;
-  return json.length <= limit
-    ? json
-    : `${json.slice(0, limit)}\n[truncated ${json.length - limit} chars]`;
 }

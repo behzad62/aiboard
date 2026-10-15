@@ -204,7 +204,7 @@ const responsiveRows: DecisionRow[] = [
     ...variantRow,
     id: "responsive-solo",
     label: "A deliberately long solo model identity that must wrap in full",
-    tracks: ["gameiq"],
+    tracks: ["toolreliability"],
     caseTitles: ["Solo evidence case"],
     attempts: 4,
     passed: 3,
@@ -217,7 +217,7 @@ const responsiveRows: DecisionRow[] = [
     speedPerPassMs: 2500,
     trackBreakdown: [
       {
-        track: "gameiq",
+        track: "toolreliability",
         attempts: 4,
         passed: 3,
         verifiedPassRate: 0.75,
@@ -456,7 +456,7 @@ const missingEvidenceProfileMarkup = renderToStaticMarkup(
       passRate: null,
       trackBreakdown: [
         {
-          track: "gameiq",
+          track: "toolreliability",
           attempts: 3,
           passed: null,
           verifiedPassRate: null,
@@ -520,7 +520,7 @@ const linkedFailureLowerBoundMarkup = renderToStaticMarkup(
       failureDetails: [
         {
           attemptId: "later-failed-attempt",
-          track: "gameiq",
+          track: "toolreliability",
           status: "failed_budget",
           code: "budget_exhausted",
           message: "Later attempt failed."
@@ -557,7 +557,7 @@ const authoritativeFailuresMarkup = renderToStaticMarkup(
       passRate: 1,
       failureDetails: [],
       latestAttemptsByTrack: {
-        gameiq: { id: "newer-pass", status: "passed", track: "gameiq" }
+        toolreliability: { id: "newer-pass", status: "passed", track: "toolreliability" }
       },
       failedAttemptCount: 2
     } as DecisionRow & { failedAttemptCount: number },
@@ -815,7 +815,7 @@ const chartRows: DecisionRow[] = [
     ...variantRow,
     id: "solo-alpha",
     label: "Alpha Model · Low",
-    tracks: ["gameiq"],
+    tracks: ["toolreliability"],
     attempts: 4,
     verifiedQuality: 0.61,
     overallScore: 0.84,

@@ -4,7 +4,7 @@ import { Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   TRACK_OPTIONS,
-  type GameIqModelRunStatus,
+  type ModelRunStatus,
   type PresetProgressEvent,
   type PresetLegStatus,
 } from "@/lib/benchmark/certified/run-execution";
@@ -13,7 +13,7 @@ import type { BenchmarkPresetLeg } from "@/lib/benchmark/certified/run-presets";
 export interface RunProgressModelRow {
   modelId: string;
   displayName: string;
-  status: GameIqModelRunStatus;
+  status: ModelRunStatus;
   detail?: string;
 }
 
@@ -80,9 +80,9 @@ export function applyPresetProgressEvent(
   return next;
 }
 
-// Generalized from CertifiedRunPanel's old GameIqModelRunProgress
+// Per-model progress rows for a preset leg
 // (2026-07-17 benchmark UX overhaul, Task 4 Step 4): one row per preset leg
-// (GameIQ / ToolReliability / TeamIQ / WorkBench), each optionally expanding
+// (ToolReliability / TeamIQ / WorkBench), each optionally expanding
 // into per-model rows for solo legs. Statuses: Queued/Running/Passed/
 // Partial/Failed/Skipped, matching runPreset's PresetProgressEvent stream.
 export function RunProgressList({
@@ -170,7 +170,7 @@ function trackLabel(track: BenchmarkPresetLeg["track"]): string {
 function StatusBadge({
   status,
 }: {
-  status: GameIqModelRunStatus | PresetLegStatus | "queued";
+  status: ModelRunStatus | PresetLegStatus | "queued";
 }) {
   const label =
     status === "queued"

@@ -20,14 +20,10 @@ const MIN_CONFIDENT_ATTEMPTS = 3;
 // Cross-track de-duplication.
 //
 // The same underlying decision can be scored into ONE merged (per-model /
-// per-team) leaderboard row twice through two different tracks:
-//   (a) fireworks — each GameIQ fireworks scenario is a re-wrap of a TeamIQ
-//       fireworks scenario and carries an explicit `source:<teamiq-id>` tag
-//       (see lib/benchmark/gameiq/fireworks.ts). The `gameiq` attempt and the
-//       `teamiq` attempt then describe the same decision.
-//   (b) toolreliability — the TeamIQ ToolReliability suites run the SAME case
-//       ids as the dedicated solo ToolReliability track, so a `teamiq` attempt
-//       and a `toolreliability` attempt can share the same underlying case id.
+// per-team) leaderboard row twice: the TeamIQ ToolReliability suites run the
+// SAME case ids as the dedicated solo ToolReliability track, so a `teamiq`
+// attempt and a `toolreliability` attempt can share the same underlying case
+// id. An explicit `source:<id>` case tag is honored the same way.
 //
 // When such attempts land in the SAME team group they must count once, not
 // twice. We key strictly on the explicit `source:` tag or the shared case id —
@@ -36,15 +32,13 @@ const MIN_CONFIDENT_ATTEMPTS = 3;
 // run through this helper.
 //
 // Track priority (higher wins the shared decision):
-//   toolreliability > gameiq > teamiq > workbench > harnessbench
+//   toolreliability > teamiq > workbench > harnessbench
 // Rationale: the dedicated solo ToolReliability track carries the full
-// tool-reliability scoring dimension the TeamIQ re-run lacks, and the GameIQ
-// fireworks pack carries full move-quality scoring the TeamIQ fireworks re-wrap
-// lacks — so in both real overlaps the TeamIQ re-wrap loses to the richer,
-// dedicated track. Ties (same priority) break deterministically by attempt id.
+// tool-reliability scoring dimension the TeamIQ re-run lacks, so the TeamIQ
+// re-wrap loses to it. Ties (same priority) break deterministically by
+// attempt id.
 const CROSS_TRACK_PRIORITY: Record<string, number> = {
   toolreliability: 5,
-  gameiq: 4,
   teamiq: 3,
   workbench: 2,
   harnessbench: 1,
@@ -58,8 +52,7 @@ function trackPriority(track: string | undefined): number {
 
 /**
  * Resolve an attempt to the id of the underlying decision it scores. Prefers an
- * explicit `source:<id>` tag on the attempt's case (the fireworks re-wrap
- * mechanism); otherwise falls back to the attempt's own case id (the shared
+ * explicit `source:<id>` tag on the attempt's case; otherwise falls back to the attempt's own case id (the shared
  * toolreliability case id). Never fuzzy-matches.
  */
 function underlyingDecisionId(

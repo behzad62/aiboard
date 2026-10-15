@@ -3,10 +3,6 @@ import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  listGameIqScenarioPacks,
-  stableGameIqScenarioPackDigest,
-} from "../lib/benchmark/gameiq/packs";
-import {
   TOOL_RELIABILITY_CASES,
   validateToolReliabilityCasePack,
 } from "../lib/benchmark/toolreliability/cases";
@@ -54,27 +50,6 @@ for (const path of [
   join(benchmarksRoot, "teamiq", "v0"),
 ]) {
   check(`legacy benchmark artifact is removed: ${path}`, !(await exists(path)));
-}
-
-const expectedGameIqCounts = new Map([
-  ["gameiq-v0.2-connect-four", 12],
-  ["gameiq-v0.2-chess", 12],
-  ["gameiq-v0.2-battleship", 15],
-  ["gameiq-fireworks-basic-v1", 20],
-  ["gameiq-fireworks-hard-v1", 40],
-  ["gameiq-fireworks-memory-v1", 30],
-]);
-for (const pack of listGameIqScenarioPacks()) {
-  check(
-    `${pack.id} has expected canonical scenario count`,
-    pack.scenarios.length === expectedGameIqCounts.get(pack.id),
-    { id: pack.id, gameId: pack.gameId, count: pack.scenarios.length }
-  );
-  check(
-    `${pack.id} has stable digest`,
-    stableGameIqScenarioPackDigest(pack).startsWith(`gameiq-v1:${pack.id}:`),
-    stableGameIqScenarioPackDigest(pack)
-  );
 }
 
 const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_CASES);

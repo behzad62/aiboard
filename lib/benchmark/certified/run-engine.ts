@@ -284,7 +284,6 @@ function createFailedAttemptsForRunError(input: {
       verifiedQuality: 0,
       jobSuccessScore: 0,
       efficiencyScore: 0,
-      ...(input.track === "gameiq" ? { gameIqScore: 0 } : {}),
       ...(input.track === "toolreliability" || input.track === "teamiq"
         ? { toolReliabilityScore: 0 }
         : {}),

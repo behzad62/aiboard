@@ -66,7 +66,7 @@ function makeTestContext(): PersistentCertifiedRunContext {
   return createCertifiedRunContext({
     runId: `run-certified-model-call-retry-${contextCounter}`,
     suiteId: "suite-model-call-retry",
-    track: "gameiq",
+    track: "toolreliability",
     harnessProfile: "raw-single-model",
     startedAt: new Date().toISOString(),
     caseIds: [`case-retry-${contextCounter}`],

@@ -39,14 +39,6 @@ export interface WorkBenchScore {
   toolReliability: number | null;
 }
 
-export interface GameIqScoreInput {
-  outcomeScore: number;
-  moveQuality: number;
-  legalActionRate: number;
-  structuredReliability: number;
-  fallbackRate: number;
-}
-
 export interface ToolReliabilityScoreInput {
   schemaValidRate: number | null;
   firstAttemptValidRate: number | null;
@@ -146,7 +138,7 @@ export interface CertifiedRunScore {
    * from `verifiedQuality`, which is the attempt-weighted mean across whatever
    * tracks the row ran. Equal weighting is deliberate: an attempt-weighted mean
    * lets a high-volume track (e.g. a 19-attempt WorkBench run) drown out a
-   * low-volume one (e.g. a 1-attempt GameIQ run), so a model that runs one big
+   * low-volume one (e.g. a 1-attempt run), so a model that runs one big
    * track would outrank a model judged fairly across several. Equal per-track
    * weighting judges breadth instead. Null when the row has no scored attempts
    * (no tracks to average). A single-track row's overallScore equals that

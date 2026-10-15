@@ -46,7 +46,7 @@ function attempt(
   id: string,
   teamCompositionId: string,
   verifiedQuality: number,
-  track: BenchmarkAttemptV2["track"] = "gameiq"
+  track: BenchmarkAttemptV2["track"] = "toolreliability"
 ): BenchmarkAttemptV2 {
   return {
     id,
@@ -122,12 +122,12 @@ const sameDecisionExplicitAttempt = {
     "same-decision-explicit",
     explicitDefault.id,
     0.8,
-    "gameiq"
+    "toolreliability"
   ),
   caseId: "same-default-decision",
 };
 const sameDecisionHighAttempt = {
-  ...attempt("same-decision-high", high.id, 0.9, "gameiq"),
+  ...attempt("same-decision-high", high.id, 0.9, "toolreliability"),
   caseId: "same-default-decision",
 };
 const sameDecisionRows = aggregateCompletedResultSetFixtures({

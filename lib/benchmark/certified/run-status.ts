@@ -26,8 +26,6 @@ export interface CertifiedRunSummary {
 
 export function benchmarkDomainForTrack(track: BenchmarkTrack): BenchmarkRun["domain"] {
   switch (track) {
-    case "gameiq":
-      return "game";
     case "workbench":
       return "build";
     case "teamiq":

@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test.describe("responsive tabs", () => {
   test("primary app navigation stays compact on mobile", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/games");
+    await page.goto("/benchmark");
 
     const metrics = await page.evaluate(() => {
       const header = document.querySelector("header");
@@ -20,7 +20,7 @@ test.describe("responsive tabs", () => {
         };
       };
 
-      const appLinkRects = ["Games", "Benchmark", "Settings"].map((label) => {
+      const appLinkRects = ["Benchmark", "Settings"].map((label) => {
         const link = Array.from(header.querySelectorAll("a")).find(
           (element) => element.textContent?.trim() === label
         );

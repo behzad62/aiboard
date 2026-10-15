@@ -36,7 +36,7 @@ import { clamp01, round } from "./types";
  * to being conditional on specific rate coincidences again. If a future
  * change genuinely needs non-uniform weights, bump a scoring version
  * (mirroring `TOOL_RELIABILITY_SCORING_VERSION` in runner.ts /
- * `GAMEIQ_SCORING_VERSION`'s pattern) instead of silently breaking replay.
+ * the shared scoring-version pattern) instead of silently breaking replay.
  */
 const TOOL_RELIABILITY_WEIGHTS = {
   schemaValidRate: 0.2,

@@ -2,11 +2,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  listGameIqScenarioPacks,
-  stableGameIqScenarioPackDigest,
-  validateGameIqScenario,
-} from "../lib/benchmark/gameiq";
-import {
   TOOL_RELIABILITY_CASE_CATEGORIES,
   TOOL_RELIABILITY_CASES,
   validateToolReliabilityCasePack,
@@ -33,47 +28,6 @@ for (const doc of [
   check(`bench doc exists: ${doc}`, existsSync(resolve(doc)));
 }
 
-const expectedGameIqCounts = new Map([
-  ["gameiq-v0.2-connect-four", 12],
-  ["gameiq-v0.2-chess", 12],
-  ["gameiq-v0.2-battleship", 15],
-  ["gameiq-fireworks-basic-v1", 20],
-  ["gameiq-fireworks-hard-v1", 40],
-  ["gameiq-fireworks-memory-v1", 30],
-]);
-const gamePacks = listGameIqScenarioPacks();
-const allScenarioIds = gamePacks.flatMap((pack) => pack.scenarios.map((scenario) => scenario.id));
-check("GameIQ scenario ids are globally unique", new Set(allScenarioIds).size === allScenarioIds.length, allScenarioIds);
-for (const pack of gamePacks) {
-  check(
-    `GameIQ ${pack.id} has required scenario count`,
-    pack.scenarios.length === expectedGameIqCounts.get(pack.id),
-    { actual: pack.scenarios.length, expected: expectedGameIqCounts.get(pack.id) }
-  );
-  const distinctScenarioTuples = new Set(
-    pack.scenarios.map((scenario) =>
-      JSON.stringify({
-        initialState: scenario.initialState,
-        expectedActions: scenario.expectedActions,
-      })
-    )
-  );
-  check(
-    `GameIQ ${pack.id} has no duplicate scenario tuples`,
-    distinctScenarioTuples.size === pack.scenarios.length,
-    { distinct: distinctScenarioTuples.size, scenarios: pack.scenarios.length }
-  );
-  check(
-    `GameIQ ${pack.id} digest is stable`,
-    stableGameIqScenarioPackDigest(pack) === stableGameIqScenarioPackDigest(pack),
-    stableGameIqScenarioPackDigest(pack)
-  );
-  for (const scenario of pack.scenarios) {
-    const validation = validateGameIqScenario(scenario);
-    check(`${scenario.id} validates`, validation.ok, validation);
-  }
-}
-
 const toolValidation = validateToolReliabilityCasePack(TOOL_RELIABILITY_CASES);
 check("ToolReliability pack validates", toolValidation.valid, toolValidation);
 // 8 = the mined `stateful` cases alone (2026-07-22 cut removed the 33
@@ -97,6 +51,9 @@ for (const legacyPath of [
   resolve("benchmarks", "fireworks", "v0.1", "full-games.json"),
   resolve("benchmarks", "fireworks", "v0.1", "memory.json"),
   resolve("benchmarks", "fireworks", "v0.1", "tactics.json"),
+  resolve("lib", "benchmark", "gameiq"),
+  resolve("lib", "benchmark", "fireworks"),
+  resolve("lib", "games"),
 ]) {
   check(`legacy benchmark artifact removed: ${legacyPath}`, !existsSync(legacyPath));
 }

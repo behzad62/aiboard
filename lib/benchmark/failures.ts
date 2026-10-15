@@ -152,9 +152,6 @@ const CODE_RULES: Record<string, FailureRule> = {
   forbidden_action: TOOL_USE_FAILURE,
   forbidden_command: TOOL_USE_FAILURE,
   unsafe_command: TOOL_USE_FAILURE,
-  fireworks_invalid_json: TOOL_USE_FAILURE,
-  fireworks_illegal_action: TOOL_USE_FAILURE,
-  fireworks_illegal_clue: TOOL_USE_FAILURE,
 
   verification_failed: VERIFIER_FAILURE,
   verification_repeated: VERIFIER_FAILURE,
@@ -168,13 +165,9 @@ const CODE_RULES: Record<string, FailureRule> = {
   truncated_output: MODEL_FAILURE,
   skill_evidence_missing: MODEL_FAILURE,
   browser_acceptance_missing: MODEL_FAILURE,
-  fireworks_bad_play: MODEL_FAILURE,
-  fireworks_critical_discard: MODEL_FAILURE,
-  fireworks_memory_contradiction: MODEL_FAILURE,
 
   budget_exhausted: BUDGET_FAILURE,
   budget_failed: BUDGET_FAILURE,
-  fireworks_budget_exceeded: BUDGET_FAILURE,
 
   provider_429_before_output: PROVIDER_FAILURE,
   provider_unavailable: PROVIDER_FAILURE,
@@ -184,7 +177,6 @@ const CODE_RULES: Record<string, FailureRule> = {
   provider_error_before_output: PROVIDER_FAILURE,
   provider_auth_failed: PROVIDER_FAILURE,
   provider_error: PROVIDER_FAILURE,
-  fireworks_provider_failure: PROVIDER_FAILURE,
 
   parser_bug: HARNESS_FAILURE,
   harness_parser_bug: HARNESS_FAILURE,
@@ -193,7 +185,6 @@ const CODE_RULES: Record<string, FailureRule> = {
   benchmark_bug: HARNESS_FAILURE,
   scoring_bug: HARNESS_FAILURE,
   invalid_harness: HARNESS_FAILURE,
-  fireworks_harness_error: HARNESS_FAILURE,
 
   runner_crash: ENVIRONMENT_FAILURE,
   docker_image_missing: ENVIRONMENT_FAILURE,
@@ -255,10 +246,7 @@ export function classifyCertifiedFailure(
   const text = `${input.message ?? ""}\n${input.details ?? ""}`.toLowerCase();
   const codeRule = CODE_RULES[normalizedCode];
   const sourceRule = classifyBySourceAndText(source, normalizedCode, text);
-  const rule =
-    isModelOutputParseFailure(normalizedCode) && codeRule
-      ? codeRule
-      : sourceRule ?? codeRule ?? fallbackRule(source, text);
+  const rule = sourceRule ?? codeRule ?? fallbackRule(source, text);
   const invalidRun = rule.invalidRun ?? INVALID_STATUSES.has(rule.status);
 
   return {
@@ -350,10 +338,6 @@ function normalizeFailureSource(
   if (normalized === "user") return "user";
   if (normalized === "verifier") return "verifier";
   return source;
-}
-
-function isModelOutputParseFailure(code: string): boolean {
-  return code === "fireworks_invalid_json" || code === "fireworks_illegal_action";
 }
 
 function classifyBySourceAndText(

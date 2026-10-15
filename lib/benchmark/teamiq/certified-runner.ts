@@ -42,22 +42,11 @@ import {
   isSoloTeamComposition,
 } from "./compositions";
 import { linkTeamLiftBaselines } from "./baselines";
-import {
-  runCertifiedFireworksTeamIq,
-  type FireworksBenchmarkCase,
-  type FireworksBenchmarkSuite,
-} from "@/lib/benchmark/fireworks";
 
-export type TeamIqCertifiedTask =
-  | {
-      kind: "toolreliability";
-      casePack: ToolReliabilityCase[];
-    }
-  | {
-      kind: "fireworks";
-      suite: FireworksBenchmarkSuite;
-      cases: FireworksBenchmarkCase[];
-    };
+export type TeamIqCertifiedTask = {
+  kind: "toolreliability";
+  casePack: ToolReliabilityCase[];
+};
 
 export interface RunCertifiedTeamIqInput {
   context: CertifiedRunContext;
@@ -89,21 +78,6 @@ const TEAMIQ_SCORING_VERSION = "teamiq-toolreliability-v2";
 export async function runCertifiedTeamIq(
   input: RunCertifiedTeamIqInput
 ): Promise<BenchmarkAttemptV2[]> {
-  if (input.task.kind === "fireworks") {
-    return runCertifiedFireworksTeamIq({
-      context: input.context,
-      teamCompositions: input.teamCompositions,
-      cases: input.task.cases,
-      includeSoloBaselines: input.includeSoloBaselines,
-      maxTokens: input.maxTokens,
-      streamChat: input.streamChat,
-      pricing: input.pricing,
-      signal: input.signal,
-      retryDelaysMs: input.retryDelaysMs,
-      retryRuntime: input.retryRuntime,
-    });
-  }
-
   if (input.task.casePack.length === 0) {
     throw new Error("Certified TeamIQ requires at least one task case.");
   }

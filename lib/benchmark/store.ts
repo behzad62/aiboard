@@ -1183,12 +1183,6 @@ function validateBenchmarkReportBundleBase(
       throw new Error("Invalid sourceEvidence in benchmark report bundle.");
     }
     validateArrayWithStringKey(
-      "sourceEvidence.gameMatches",
-      bundle.sourceEvidence.gameMatches,
-      "id"
-    );
-    validateGameMatchRecords(bundle.sourceEvidence.gameMatches);
-    validateArrayWithStringKey(
       "sourceEvidence.buildCheckpoints",
       bundle.sourceEvidence.buildCheckpoints,
       "discussionId"
@@ -1910,29 +1904,6 @@ function validateArrayWithStringKey(
   }
 }
 
-function validateGameMatchRecords(records: unknown[]): void {
-  for (const record of records) {
-    const item = record as Record<string, unknown>;
-    if (
-      typeof item.gameId !== "string" ||
-      typeof item.timestamp !== "string" ||
-      !Array.isArray(item.participants) ||
-      typeof item.resultJson !== "string" ||
-      typeof item.statsJson !== "string" ||
-      !isJsonObjectString(item.resultJson) ||
-      !isJsonObjectString(item.statsJson)
-    ) {
-      throw new Error("Invalid sourceEvidence.gameMatches record in benchmark report bundle.");
-    }
-
-    for (const participant of item.participants) {
-      if (!isValidGameParticipant(participant)) {
-        throw new Error("Invalid sourceEvidence.gameMatches participant in benchmark report bundle.");
-      }
-    }
-  }
-}
-
 function validateBuildCheckpointRecords(records: unknown[]): void {
   for (const record of records) {
     const item = record as Record<string, unknown>;
@@ -1991,18 +1962,6 @@ function validateModelBuildStatRecords(records: unknown[]): void {
       throw new Error("Invalid sourceEvidence.buildStats record in benchmark report bundle.");
     }
   }
-}
-
-function isValidGameParticipant(value: unknown): boolean {
-  if (!isPlainObject(value)) return false;
-  return (
-    typeof value.id === "string" &&
-    (value.kind === "human" || value.kind === "ai") &&
-    typeof value.label === "string" &&
-    (value.modelId === undefined || typeof value.modelId === "string") &&
-    (value.reasoningEffort === undefined ||
-      typeof value.reasoningEffort === "string")
-  );
 }
 
 function isBuildUsageWindow(value: unknown): boolean {

@@ -76,8 +76,8 @@ import {
   type ResolvedTokenUsage,
 } from "./token-usage";
 import {
-  createGameModelCallTrace,
-  type GameAIDiagnosticLike,
+  createModelCallTrace,
+  type ModelCallDiagnosticLike,
   recordBenchmarkModelCallTrace,
 } from "@/lib/benchmark/model-call-traces";
 import {
@@ -720,7 +720,7 @@ export async function runDiscussion(
       const promptText = input.messages
         .map((message) => `${message.role}:\n${message.content}`)
         .join("\n\n");
-      const diagnostics: GameAIDiagnosticLike[] = [];
+      const diagnostics: ModelCallDiagnosticLike[] = [];
 
       try {
         const collected = await collectStreamWithUsage(
@@ -764,7 +764,7 @@ export async function runDiscussion(
         const traceStatus =
           validation?.ok === false ? "parse_error" : "parsed";
         await recordBenchmarkModelCallTrace(
-          createGameModelCallTrace({
+          createModelCallTrace({
             modelId: input.modelId,
             providerId: input.providerId,
             participantId: input.label,
@@ -795,7 +795,7 @@ export async function runDiscussion(
         return { output, usage, finishReason: collected.finishReason };
       } catch (error) {
         await recordBenchmarkModelCallTrace(
-          createGameModelCallTrace({
+          createModelCallTrace({
             modelId: input.modelId,
             providerId: input.providerId,
             participantId: input.label,

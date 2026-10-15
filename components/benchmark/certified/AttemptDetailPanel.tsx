@@ -14,7 +14,6 @@ import {
   getBenchmarkTraces,
   getBenchmarkVerifierResults,
 } from "@/lib/client/store";
-import { FireworksBenchmarkSummary } from "@/components/benchmark/fireworks/FireworksBenchmarkSummary";
 import { formatNormalizedScore } from "@/components/benchmark/format";
 import { VerifierAssertionTable } from "./VerifierAssertionTable";
 import { VariantRosterBadges } from "@/components/benchmark/results/VariantRosterBadges";
@@ -253,17 +252,6 @@ export function AttemptDetailPanel({
             </div>
           </Section>
         ) : null}
-
-        {detail.artifacts.some((artifact) =>
-          artifact.id.endsWith(":fireworks-summary")
-        ) && (
-          <Section title="Fireworks TeamIQ">
-            <FireworksBenchmarkSummary
-              attempt={attempt}
-              artifacts={detail.artifacts}
-            />
-          </Section>
-        )}
 
         {detail.patchArtifacts.length > 0 && (
           <Section title="Patch diff">

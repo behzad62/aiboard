@@ -42,31 +42,6 @@ const fixture = {
   contextBlobs: [],
   buildMemories: [],
   customModels: [],
-  gameSessions: [
-    {
-      id: "active-session",
-      status: "active",
-      participants: [
-        { id: "ai", kind: "ai", label: "AI", modelId: "openai:gpt-5.6-pro" },
-      ],
-    },
-    {
-      id: "complete-session",
-      status: "complete",
-      participants: [
-        { id: "ai", kind: "ai", label: "AI", modelId: "openai:gpt-5.6-pro" },
-      ],
-    },
-  ],
-  gameMatchRecords: [
-    {
-      id: "match-1",
-      participants: [
-        { id: "ai", kind: "ai", label: "AI", modelId: "openai:gpt-5.6" },
-      ],
-    },
-  ],
-  gameStatsLegacyImportAttempted: false,
   benchmarkSuites: [],
   benchmarkRuns: [],
   benchmarkCases: [],
@@ -109,17 +84,7 @@ assert.deepEqual(JSON.parse(first.store.discussions[0]!.modelIds), [
 ]);
 assert.equal(first.store.discussions[0]?.judgeModelId, "openai:gpt-5.6-luna");
 assert.equal(first.store.discussions[0]?.reviewerModelId, "openai:gpt-5.6-terra");
-assert.equal(
-  first.store.gameSessions[0]?.participants[0]?.modelId,
-  "openai:gpt-5.6-sol"
-);
-assert.equal(
-  first.store.gameSessions[1]?.participants[0]?.modelId,
-  "openai:gpt-5.6-pro",
-  "completed game sessions are historical"
-);
 assert.deepEqual(first.store.messages, original.messages);
-assert.deepEqual(first.store.gameMatchRecords, original.gameMatchRecords);
 assert.deepEqual(first.store.benchmarkAttempts, original.benchmarkAttempts);
 assert.deepEqual(first.store.benchmarkTraces, original.benchmarkTraces);
 assert.deepEqual(

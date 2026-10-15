@@ -52,8 +52,7 @@ export interface RunCertifiedToolReliabilityInput {
 }
 
 /**
- * Stateful cases get the SAME 16384-token reasoning-headroom cap as GameIQ's
- * DEFAULT_GAMEIQ_MAX_TOKENS (gameiq/types.ts) — a multi-turn scripted-
+ * Stateful cases get a 16384-token reasoning-headroom cap — a multi-turn scripted-
  * environment case can legitimately need substantial reasoning before
  * emitting its action(s)/final answer, and a completion-token cap is never
  * meant to be a length control (see CLAUDE.md's ToolReliability

@@ -57,7 +57,7 @@ __resetBenchmarkStoreForTests();
 const context = createCertifiedRunContext({
   runId: "run-certified-model-call",
   suiteId: "suite-model-call",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   startedAt: "2026-06-28T08:30:00.000Z",
   caseIds: ["case-model-call"],
@@ -311,7 +311,7 @@ check(
 const preflightBudgetContext = createCertifiedRunContext({
   runId: "run-certified-model-call-budget-preflight",
   suiteId: "suite-model-call",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   startedAt: new Date().toISOString(),
   caseIds: ["case-budget-preflight"],
@@ -344,7 +344,7 @@ check("budget preflight does not call provider stream", !preflightStreamCalled, 
 const usdStreamingBudgetContext = createCertifiedRunContext({
   runId: "run-certified-model-call-budget-usd-streaming",
   suiteId: "suite-model-call",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   startedAt: new Date().toISOString(),
   caseIds: ["case-budget-usd-streaming"],
@@ -411,7 +411,7 @@ check(
 const postCallBudgetContext = createCertifiedRunContext({
   runId: "run-certified-model-call-budget-post",
   suiteId: "suite-model-call",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   startedAt: new Date().toISOString(),
   caseIds: ["case-budget-post"],
@@ -446,7 +446,7 @@ check(
 const failPathBudgetContext = createCertifiedRunContext({
   runId: "run-certified-model-call-budget-failpath",
   suiteId: "suite-model-call",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   startedAt: new Date().toISOString(),
   caseIds: ["case-budget-failpath"],
@@ -489,7 +489,7 @@ check(
 const wallClockContext = createCertifiedRunContext({
   runId: "run-certified-model-call-wallclock",
   suiteId: "suite-model-call",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   startedAt: new Date().toISOString(),
   caseIds: ["case-wallclock"],
@@ -534,7 +534,7 @@ check(
 const timeoutContext = createCertifiedRunContext({
   runId: "run-certified-model-call-timeout",
   suiteId: "suite-model-call",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   startedAt: new Date().toISOString(),
   caseIds: ["case-timeout"],
@@ -611,7 +611,7 @@ check(
 const parentAbortContext = createCertifiedRunContext({
   runId: "run-certified-model-call-parent-abort",
   suiteId: "suite-model-call",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   startedAt: new Date().toISOString(),
   caseIds: ["case-parent-abort"],

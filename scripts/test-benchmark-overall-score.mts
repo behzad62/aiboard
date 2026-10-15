@@ -158,7 +158,7 @@ const lopsidedAttempts: BenchmarkAttemptV2[] = [
   ...Array.from({ length: 19 }, (_, i) =>
     attempt(`wb-${i}`, lopsidedTeam.id, "workbench", 0.5)
   ),
-  attempt("gi-0", lopsidedTeam.id, "gameiq", 1.0),
+  attempt("gi-0", lopsidedTeam.id, "toolreliability", 1.0),
 ];
 const lopsidedRows = aggregateCompletedResultSetFixtures({
   attempts: lopsidedAttempts,
@@ -180,7 +180,7 @@ check(
 check(
   "trackBreakdown has one equal-weighted entry per track, sorted by track",
   lopsidedRow?.trackBreakdown.length === 2 &&
-    lopsidedRow.trackBreakdown[0]?.track === "gameiq" &&
+    lopsidedRow.trackBreakdown[0]?.track === "toolreliability" &&
     lopsidedRow.trackBreakdown[0]?.attempts === 1 &&
     lopsidedRow.trackBreakdown[0]?.passed === 1 &&
     lopsidedRow.trackBreakdown[0]?.verifiedPassRate === 1 &&
@@ -199,8 +199,8 @@ check(
 const singleTeam = soloTeam("solo-single", "prov:single");
 const singleRows = aggregateCompletedResultSetFixtures({
   attempts: [
-    attempt("s1", singleTeam.id, "gameiq", 0.8),
-    attempt("s2", singleTeam.id, "gameiq", 0.6, { status: "failed" }),
+    attempt("s1", singleTeam.id, "toolreliability", 0.8),
+    attempt("s2", singleTeam.id, "toolreliability", 0.6, { status: "failed" }),
   ],
   cases: [],
   teamCompositions: [singleTeam],
@@ -284,12 +284,12 @@ const teamB = soloTeam("solo-b", "prov:b");
 const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFixtures({
   caseV2: [
     certifiedCase("case-a-wb", "workbench"),
-    certifiedCase("case-a-gi", "gameiq"),
+    certifiedCase("case-a-gi", "toolreliability"),
     certifiedCase("case-b-wb", "workbench"),
   ],
   attemptsV2: [
     attempt("a-wb", teamA.id, "workbench", 0.6, { caseId: "case-a-wb" }),
-    attempt("a-gi", teamA.id, "gameiq", 1.0, { caseId: "case-a-gi" }),
+    attempt("a-gi", teamA.id, "toolreliability", 1.0, { caseId: "case-a-gi" }),
     attempt("b-wb1", teamB.id, "workbench", 0.7, { caseId: "case-b-wb" }),
     attempt("b-wb2", teamB.id, "workbench", 0.7, { caseId: "case-b-wb" }),
     attempt("b-wb3", teamB.id, "workbench", 0.7, { caseId: "case-b-wb" }),
@@ -334,7 +334,7 @@ check(
   rowA?.overallScore === 0.8 &&
     rowA?.trackBreakdown.length === 2 &&
     rowA.trackBreakdown.some(
-      (t) => t.track === "gameiq" && t.averageVerifiedQuality === 1
+      (t) => t.track === "toolreliability" && t.averageVerifiedQuality === 1
     ) &&
     rowA.trackBreakdown.some(
       (t) => t.track === "workbench" && t.averageVerifiedQuality === 0.6

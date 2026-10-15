@@ -46,25 +46,18 @@ import { runHarnessCertification } from "@/lib/benchmark/certified/certification
 import {
   listCertifiedSuiteOptions,
 } from "@/lib/benchmark/certified/suite-options";
-import {
-  adjustFireworksPlayerSelectionForPlayerCount,
-  getCertifiedRunGate,
-  isFireworksSuite,
-} from "@/lib/benchmark/certified/ui-gates";
+import { getCertifiedRunGate } from "@/lib/benchmark/certified/ui-gates";
 import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
 import type { CertifiedRunSummary } from "@/lib/benchmark/certified/run-status";
 import {
   DIRECT_MODEL_HARNESS,
   TEAM_HARNESS,
   TRACK_OPTIONS,
-  fireworksCasesForSuiteId,
   isTeamIqToolReliabilityAllModesSuite,
-  runGameIqMultiModel as runGameIqMultiModelExec,
   runPreset,
   runSelected as runSelectedTrack,
   workBenchModelsForRun,
   workBenchRoleFor,
-  type GameIqModelRunState,
   type PresetProgressEvent,
   type RunnableTrack,
   type TeamIqUiStrategy,
@@ -104,7 +97,7 @@ export function CertifiedRunPanel({
   setMessage: (message: string | null) => void;
 }) {
   const lockedTrack = track === "all" ? null : (track as RunnableTrack);
-  const initialTrack: RunnableTrack = lockedTrack ?? "gameiq";
+  const initialTrack: RunnableTrack = lockedTrack ?? "toolreliability";
 
   // --- Shared: which provider models exist, at all -------------------------
   const [models, setModels] = useState<SelectedModel[]>([]);
@@ -136,15 +129,13 @@ export function CertifiedRunPanel({
   // --- Advanced (old single-suite/pack flow) state — UNCHANGED behavior ----
   const [selectedTrack, setSelectedTrack] = useState<RunnableTrack>(initialTrack);
   const [modelId, setModelId] = useState("");
-  const [gameIqModelIds, setGameIqModelIds] = useState<string[]>([]);
   const [teamModelIds, setTeamModelIds] = useState<string[]>([]);
   const [workBenchRoleMode, setWorkBenchRoleMode] =
     useState<WorkBenchRoleMode>("solo");
   const [workBenchModelIds, setWorkBenchModelIds] = useState<string[]>([]);
   const [teamIqStrategy, setTeamIqStrategy] =
     useState<TeamIqUiStrategy>("architect_worker_reviewer");
-  const [fireworksPlayerCount, setFireworksPlayerCount] = useState<2 | 3>(2);
-  const [includeSoloBaselines, setIncludeSoloBaselines] = useState(true);
+  const includeSoloBaselines = true;
   const [suiteId, setSuiteId] = useState("");
   const [harnessProfile, setHarnessProfile] =
     useState<HarnessProfile>(DIRECT_MODEL_HARNESS);
@@ -159,9 +150,6 @@ export function CertifiedRunPanel({
   const [checkingWorkBenchRunner, setCheckingWorkBenchRunner] = useState(false);
   const [running, setRunning] = useState(false);
   const [summary, setSummary] = useState<CertifiedRunSummary | null>(null);
-  const [gameIqModelRuns, setGameIqModelRuns] = useState<GameIqModelRunState[]>(
-    []
-  );
   const runAbortRef = useRef<AbortController | null>(null);
   const tabRun = useSyncExternalStore(
     certifiedTabRunCoordinator.subscribe,
@@ -231,15 +219,6 @@ export function CertifiedRunPanel({
           )
         : enabled.slice(0, 3).map((model) => model.modelId)
     );
-    setGameIqModelIds((current) =>
-      current.length > 0
-        ? current.filter((gameIqModelId) =>
-            enabled.some((model) => model.modelId === gameIqModelId)
-          )
-        : enabled[0]
-          ? [enabled[0].modelId]
-          : []
-    );
     setTeamModelIds((current) =>
       current.length > 0
         ? current.filter((modelId) =>
@@ -290,13 +269,9 @@ export function CertifiedRunPanel({
     running: busy,
     selectedTrack,
     modelId,
-    gameIqModelIds,
     teamModelIds,
     workBenchModelIds,
     workBenchRoleMode,
-    fireworksPlayerCount: isFireworksSuite(suiteId)
-      ? fireworksPlayerCount
-      : undefined,
     workBenchRunnerReady:
       selectedTrack !== "workbench" ||
       Boolean(workBenchRunnerUrl.trim() && workBenchRunnerToken.trim()) &&
@@ -454,18 +429,7 @@ export function CertifiedRunPanel({
                   }
                   onChange={setSuiteId}
                 />
-                {selectedTrack === "gameiq" ? (
-                  <StaticField
-                    label="Models"
-                    value={
-                      gameIqModelIds.length >= 1
-                        ? `${gameIqModelIds.length} model${
-                            gameIqModelIds.length === 1 ? "" : "s"
-                          } selected`
-                        : "Select at least one model"
-                    }
-                  />
-                ) : selectedTrack === "teamiq" ? (
+                {selectedTrack === "teamiq" ? (
                   <StaticField
                     label="Models"
                     value={teamIqSelectionSummary({
@@ -473,7 +437,6 @@ export function CertifiedRunPanel({
                       selectedModelIds: teamModelIds,
                       suiteId,
                       strategy: teamIqStrategy,
-                      fireworksPlayerCount,
                     })}
                   />
                 ) : selectedTrack === "workbench" ? (
@@ -502,8 +465,7 @@ export function CertifiedRunPanel({
                   />
                 )}
               </div>
-              {selectedTrack !== "gameiq" &&
-                selectedTrack !== "teamiq" &&
+              {selectedTrack !== "teamiq" &&
                 selectedTrack !== "workbench" && (
                   <AdvancedModelEffortControl
                     models={models}
@@ -512,15 +474,6 @@ export function CertifiedRunPanel({
                     onEffortChange={handleEffortChange}
                   />
                 )}
-              {selectedTrack === "gameiq" && (
-                <ModelChecklist
-                  models={models}
-                  selectedModelIds={gameIqModelIds}
-                  effortByModelId={effortByModelId}
-                  onChange={setGameIqModelIds}
-                  onEffortChange={handleEffortChange}
-                />
-              )}
               {selectedTrack === "teamiq" && (
                 <div className="space-y-4">
                   <TeamCompositionBuilder
@@ -528,59 +481,11 @@ export function CertifiedRunPanel({
                     selectedModelIds={teamModelIds}
                     effortByModelId={effortByModelId}
                     strategy={teamIqStrategy}
-                    roleMode={
-                      isFireworksSuite(suiteId) ? "fireworks_players" : "default"
-                    }
-                    playerCount={fireworksPlayerCount}
                     allModes={isTeamIqToolReliabilityAllModesSuite(suiteId)}
                     onChange={setTeamModelIds}
                     onEffortChange={handleEffortChange}
                     onStrategyChange={setTeamIqStrategy}
                   />
-                  {isFireworksSuite(suiteId) && (
-                    <div className="grid gap-3 rounded-md border p-3 text-sm md:grid-cols-3">
-                      <label className="space-y-1">
-                        <span className="font-medium">Players</span>
-                        <select
-                          value={fireworksPlayerCount}
-                          onChange={(event) => {
-                            const nextPlayerCount = Number(event.target.value) as 2 | 3;
-                            setFireworksPlayerCount(nextPlayerCount);
-                            setTeamModelIds((current) =>
-                              adjustFireworksPlayerSelectionForPlayerCount(
-                                current,
-                                nextPlayerCount
-                              )
-                            );
-                          }}
-                          className="w-full rounded-md border bg-background px-3 py-2"
-                        >
-                          <option value={2}>2-player</option>
-                          <option value={3}>3-player</option>
-                        </select>
-                      </label>
-                      <label className="flex items-center gap-2 pt-6">
-                        <input
-                          type="checkbox"
-                          checked={includeSoloBaselines}
-                          onChange={(event) =>
-                            setIncludeSoloBaselines(event.target.checked)
-                          }
-                        />
-                        <span>Run solo self-play baselines</span>
-                      </label>
-                      <div className="pt-6 text-muted-foreground">
-                        {fireworksCaseCountForSuite(suiteId, fireworksPlayerCount)} Fireworks cases
-                      </div>
-                      <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground md:col-span-3">
-                        {fireworksPlayerAssignments(
-                          models,
-                          teamModelIds,
-                          fireworksPlayerCount
-                        ).join(" / ")}
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
               {selectedTrack === "workbench" && (
@@ -621,9 +526,6 @@ export function CertifiedRunPanel({
                   />
                 </div>
               )}
-              {selectedTrack === "gameiq" && (
-                <GameIqModelRunProgress runs={gameIqModelRuns} />
-              )}
               <div className="flex flex-wrap gap-2">
                 <Button disabled={!canRun || busy} onClick={runSelected}>
                   {tabRun.owner === "advanced" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
@@ -648,11 +550,7 @@ export function CertifiedRunPanel({
             </CardContent>
           </Card>
           <div className="space-y-4">
-            {selectedTrack === "gameiq" ? (
-              <GameIqModelRunSummaryPanel runs={gameIqModelRuns} models={models} />
-            ) : (
-              <AttemptDetailPanel summary={summary} />
-            )}
+            <AttemptDetailPanel summary={summary} />
           </div>
         </div>
       </details>
@@ -692,7 +590,6 @@ export function CertifiedRunPanel({
               ),
               workBenchRunnerUrl,
               workBenchRunnerToken,
-              fireworksPlayerCount: 2,
               signal,
               onComplete,
             },
@@ -715,38 +612,11 @@ export function CertifiedRunPanel({
     setMessage("Cancelling preset run...");
   }
 
-  // Dispatches to the extracted run-execution.ts implementations, mirroring
-  // the original combined entry point: gameiq always ran as a multi-model
-  // batch, every other track ran the single-selection flow. Kept as a thin
-  // wrapper (rather than inlining the dispatch at the button callsite) so the
-  // JSX above is untouched by the Step 1 extraction.
+  // Runs the Advanced single-suite selection through run-execution.ts.
   function runSelected() {
     certifiedTabRunCoordinator.tryStart("advanced", {}, async (signal) => {
       const executionId = `benchmark-execution-${crypto.randomUUID()}`;
       if (!suiteId) return;
-      if (selectedTrack === "gameiq") {
-        await runGameIqMultiModelExec({
-          models,
-          gameIqModelIds,
-          suiteId,
-          fireworksPlayerCount,
-          certification,
-          effortByModelId,
-          signal,
-          runAbortRef,
-          setRunning,
-          // The Advanced flow no longer renders a phase timeline (deleted with
-          // RunProgressTimeline); running/summary/message state still drives
-          // the button + AttemptDetailPanel.
-          setRunPhase: () => {},
-          setSummary,
-          setMessage,
-          setGameIqModelRuns,
-          onComplete,
-          executionId,
-        });
-        return;
-      }
       await runSelectedTrack({
         selectedTrack,
         suiteId,
@@ -754,7 +624,6 @@ export function CertifiedRunPanel({
         modelId,
         teamModelIds,
         teamIqStrategy,
-        fireworksPlayerCount,
         includeSoloBaselines,
         workBenchModelIds,
         workBenchRoleMode,
@@ -858,7 +727,7 @@ function presetCardGates(input: {
       : {
           disabled: false,
           note: input.workBenchRunnerReady
-            ? "Bench runner connected — all four legs will run."
+            ? "Bench runner connected — every leg will run."
             : "Bench runner offline — the WorkBench leg will be skipped.",
         };
   return {
@@ -873,12 +742,8 @@ function teamIqSelectionSummary(input: {
   selectedModelIds: string[];
   suiteId: string;
   strategy: TeamIqUiStrategy;
-  fireworksPlayerCount: 2 | 3;
 }): string {
   if (input.selectedModelIds.length < 1) return "Select at least one model";
-  if (isFireworksSuite(input.suiteId)) {
-    return `${input.selectedModelIds.length} / ${input.fireworksPlayerCount} Fireworks players selected`;
-  }
   const slotCount = isTeamIqToolReliabilityAllModesSuite(input.suiteId)
     ? 3
     : teamIqRoleSlotsForStrategy(input.strategy).length;
@@ -893,40 +758,14 @@ function teamIqSelectionSummary(input: {
   return `${normalized.length} role${normalized.length === 1 ? "" : "s"} assigned`;
 }
 
-function fireworksCaseCountForSuite(
-  suiteId: string,
-  playerCount: 2 | 3
-): number {
-  return fireworksCasesForSuiteId(suiteId, playerCount).length;
-}
-
-function fireworksPlayerAssignments(
-  models: SelectedModel[],
-  selectedModelIds: string[],
-  playerCount: 2 | 3
-): string[] {
-  return Array.from({ length: playerCount }, (_, index) => {
-    const modelId = selectedModelIds[index];
-    if (!modelId) return `P${index + 1} select model ${index + 1}`;
-    const model = models.find((candidate) => candidate.modelId === modelId);
-    return `P${index + 1} ${model?.displayName ?? modelId}`;
-  });
-}
-
 function executionModeCopy(track: RunnableTrack, harnessProfile: HarnessProfile): {
   title: string;
   description: string;
 } {
-  if (track === "gameiq") {
-    return {
-      title: "Direct model call",
-      description: "The model receives the game state and returns one structured move. No AI Board discussion layer is added.",
-    };
-  }
   if (track === "toolreliability") {
     return {
-      title: "Direct tool-use call",
-      description: "Each case is a direct schema/tool/patch prompt scored by deterministic validators.",
+      title: "Direct tool-use session",
+      description: "Each case is a scripted multi-turn tool session scored by deterministic verifiers.",
     };
   }
   if (track === "teamiq") {
@@ -990,133 +829,6 @@ export function AdvancedModelEffortControl({
         onChange={(effort) => onEffortChange(model.modelId, effort)}
       />
     </div>
-  );
-}
-
-export function GameIqModelRunProgress({ runs }: { runs: GameIqModelRunState[] }) {
-  if (runs.length === 0) {
-    return (
-      <div className="rounded-md border border-dashed px-3 py-3 text-sm text-muted-foreground">
-        Select models and start the run to see per-model progress here.
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-2">
-      {runs.map((run) => (
-        <div
-          key={run.modelId}
-          className="flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-sm"
-        >
-          <div className="min-w-0">
-            <div className="truncate font-medium">{run.displayName}</div>
-            <div className="truncate text-xs text-muted-foreground">
-              {run.providerId}
-            </div>
-            {(run.status === "failed" || run.status === "cancelled") && run.error && (
-              <div
-                className={`mt-1 text-xs leading-snug ${
-                  run.status === "failed"
-                    ? "text-destructive"
-                    : "text-muted-foreground"
-                }`}
-              >
-                {run.error}
-              </div>
-            )}
-          </div>
-          <GameIqModelStatusBadge run={run} />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function GameIqModelStatusBadge({ run }: { run: GameIqModelRunState }) {
-  const label =
-    run.status === "queued"
-      ? "Queued"
-      : run.status === "running"
-        ? "Running"
-        : run.status === "passed"
-          ? "Passed"
-          : run.status === "partial"
-            ? "Partial"
-            : run.status === "cancelled"
-              ? "Cancelled"
-              : "Failed";
-  const tone =
-    run.status === "passed"
-      ? "border-primary/40 bg-primary/10 text-primary"
-      : run.status === "partial"
-        ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-        : run.status === "failed"
-          ? "border-destructive/40 bg-destructive/10 text-destructive"
-          : run.status === "running"
-            ? "border-border bg-muted text-foreground"
-            : "border-border bg-muted/50 text-muted-foreground";
-  return (
-    <span
-      className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}
-    >
-      {label}
-    </span>
-  );
-}
-
-export function GameIqModelRunSummaryPanel({
-  runs,
-  models,
-}: {
-  runs: GameIqModelRunState[];
-  models: SelectedModel[];
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Per-model results</CardTitle>
-        <CardDescription>
-          Each selected model runs the GameIQ suite as its own certified run.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2 text-sm">
-        {runs.length === 0 ? (
-          <p className="text-muted-foreground">
-            {models.length === 0
-              ? "Enable a provider model in Settings to run GameIQ."
-              : "No run yet. Select models and start the benchmark."}
-          </p>
-        ) : (
-          runs.map((run) => (
-            <div key={run.modelId} className="rounded-md border px-3 py-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate font-medium">{run.displayName}</span>
-                <GameIqModelStatusBadge run={run} />
-              </div>
-              {run.packsScored !== undefined && run.packsScored > 0 && (
-                <div className="mt-1 text-xs text-muted-foreground">
-                  Avg quality {Math.round(run.avgQuality ?? 0)} · {run.packsPassed}
-                  /{run.packsScored} pack
-                  {run.packsScored === 1 ? "" : "s"} passed
-                </div>
-              )}
-              {(run.status === "failed" || run.status === "cancelled") &&
-                run.error && (
-                <div
-                  className={`mt-1 text-xs leading-snug ${
-                    run.status === "failed"
-                      ? "text-destructive"
-                      : "text-muted-foreground"
-                  }`}
-                >
-                  {run.error}
-                </div>
-                )}
-            </div>
-          ))
-        )}
-      </CardContent>
-    </Card>
   );
 }
 

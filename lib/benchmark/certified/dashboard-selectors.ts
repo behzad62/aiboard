@@ -25,7 +25,6 @@ import {
 export type CertifiedTrackView =
   | "all"
   | "workbench"
-  | "gameiq"
   | "teamiq"
   | "toolreliability"
   | "harnessbench";
@@ -881,7 +880,6 @@ export function normalizeTrack(
   if (!track) return undefined;
   const normalized = track.toLowerCase().replace(/[\s_-]/g, "");
   if (normalized === "workbench") return "workbench";
-  if (normalized === "game" || normalized === "gameiq") return "gameiq";
   if (normalized === "teamiq") return "teamiq";
   if (normalized === "toolreliability") return "toolreliability";
   if (normalized === "harnessbench") return "harnessbench";

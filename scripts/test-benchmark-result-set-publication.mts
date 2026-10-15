@@ -22,11 +22,10 @@ import {
 } from "../lib/benchmark/certified/result-set-publication";
 import {
   DIRECT_MODEL_HARNESS,
-  runGameIqMultiModel,
+  runSelected,
   runPreset,
   type PresetProgressEvent,
 } from "../lib/benchmark/certified/run-execution";
-import { getGameIqScenarioPackById } from "../lib/benchmark/gameiq";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import type { BenchmarkPreset } from "../lib/benchmark/certified/run-presets";
 import { upsertProviderKey } from "../lib/client/store";
@@ -202,8 +201,8 @@ async function saveEvidence(
 }
 
 await reset();
-const zeroExpected = expected("run-zero", "gameiq", "zero");
-await saveBenchmarkRun(run("run-zero", "gameiq"));
+const zeroExpected = expected("run-zero", "teamiq", "zero");
+await saveBenchmarkRun(run("run-zero", "teamiq"));
 const zeroSet = await createPendingBenchmarkResultSet({
   id: "zero",
   schemaVersion: 1,
@@ -294,9 +293,9 @@ for (const traceKind of ["model", "tool"] as const) {
 }
 
 await reset();
-const game = expected("run-game", "gameiq", "game");
+const game = expected("run-game", "teamiq", "game");
 const tool = expected("run-tool", "toolreliability", "tool");
-await saveBenchmarkRun(run("run-game", "gameiq"));
+await saveBenchmarkRun(run("run-game", "teamiq"));
 await saveBenchmarkRun({
   ...run("run-tool", "toolreliability"),
   caseIds: [tool.caseId],
@@ -312,7 +311,7 @@ const modelIq = await createPendingBenchmarkResultSet({
   configuration: {
     ...configuration,
     tracks: [
-      { track: "gameiq", suiteId: "suite-gameiq", caseManifest: [], maxTokens: null },
+      { track: "teamiq", suiteId: "suite-teamiq", caseManifest: [], maxTokens: null },
       { track: "toolreliability", suiteId: "suite-toolreliability", caseManifest: [], maxTokens: null },
     ],
   },
@@ -330,12 +329,12 @@ assert.equal(
   "completed"
 );
 
-// A settled GameIQ leg may defer only the explicitly unstarted Tool
+// A settled TeamIQ leg may defer only the explicitly unstarted Tool
 // Reliability run. Corrupt current-leg evidence must fail closed.
 await reset();
-const partialGame = expected("partial-game", "gameiq", "partial-game-case");
+const partialGame = expected("partial-game", "teamiq", "partial-game-case");
 const futureTool = expected("future-tool", "toolreliability", "future-tool-case");
-await saveBenchmarkRun(run(partialGame.runId, "gameiq"));
+await saveBenchmarkRun(run(partialGame.runId, "teamiq"));
 await saveBenchmarkRun(run(futureTool.runId, "toolreliability"));
 const partialSet = await createPendingBenchmarkResultSet({
   id: "partial-valid",
@@ -358,9 +357,9 @@ assert.equal(
 );
 
 await reset();
-const corruptGame = expected("corrupt-game", "gameiq", "corrupt-game-case");
+const corruptGame = expected("corrupt-game", "teamiq", "corrupt-game-case");
 const corruptFuture = expected("corrupt-tool", "toolreliability", "corrupt-tool-case");
-await saveBenchmarkRun(run(corruptGame.runId, "gameiq"));
+await saveBenchmarkRun(run(corruptGame.runId, "teamiq"));
 await saveBenchmarkRun(run(corruptFuture.runId, "toolreliability"));
 const corruptSet = await createPendingBenchmarkResultSet({
   id: "partial-corrupt",
@@ -388,9 +387,9 @@ await assert.rejects(
 
 // Exact ownership/run-suite/verifier associations fail closed.
 await reset();
-const alienExpected = expected("alien-run", "gameiq", "alien-case");
-await saveBenchmarkRun(run("anchor-run", "gameiq"));
-await saveBenchmarkRun(run(alienExpected.runId, "gameiq"));
+const alienExpected = expected("alien-run", "teamiq", "alien-case");
+await saveBenchmarkRun(run("anchor-run", "teamiq"));
+await saveBenchmarkRun(run(alienExpected.runId, "teamiq"));
 const alienSet = await createPendingBenchmarkResultSet({
   id: "alien",
   schemaVersion: 1,
@@ -408,9 +407,9 @@ await assert.rejects(
 );
 
 await reset();
-const wrongSuiteExpected = expected("wrong-suite-run", "gameiq", "wrong-suite-case");
+const wrongSuiteExpected = expected("wrong-suite-run", "teamiq", "wrong-suite-case");
 await saveBenchmarkRun({
-  ...run(wrongSuiteExpected.runId, "gameiq"),
+  ...run(wrongSuiteExpected.runId, "teamiq"),
   suiteId: "suite-other",
 });
 const wrongSuiteSet = await createPendingBenchmarkResultSet({
@@ -432,10 +431,10 @@ await assert.rejects(
 await reset();
 const wrongVerifierExpected = expected(
   "wrong-verifier-run",
-  "gameiq",
+  "teamiq",
   "wrong-verifier-case"
 );
-await saveBenchmarkRun(run(wrongVerifierExpected.runId, "gameiq"));
+await saveBenchmarkRun(run(wrongVerifierExpected.runId, "teamiq"));
 const wrongVerifierSet = await createPendingBenchmarkResultSet({
   id: "wrong-verifier",
   schemaVersion: 1,
@@ -462,8 +461,8 @@ await assert.rejects(
 
 await reset();
 for (const id of ["luna", "terra", "sol"]) {
-  await saveBenchmarkRun(run(`run-${id}`, "gameiq"));
-  const item = expected(`run-${id}`, "gameiq", `case-${id}`, `solo-${id}`);
+  await saveBenchmarkRun(run(`run-${id}`, "teamiq"));
+  const item = expected(`run-${id}`, "teamiq", `case-${id}`, `solo-${id}`);
   await createPendingBenchmarkResultSet({
     id,
     schemaVersion: 1,
@@ -495,7 +494,7 @@ assert.equal(
 );
 
 await reset();
-await saveBenchmarkRun(run("run-stale", "gameiq"));
+await saveBenchmarkRun(run("run-stale", "teamiq"));
 const staleResultSet = await createPendingBenchmarkResultSet({
   id: "stale",
   schemaVersion: 1,
@@ -548,15 +547,23 @@ openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
   yield { type: "done" };
 };
 try {
-  await runGameIqMultiModel({
+  await runSelected({
+    selectedTrack: "toolreliability",
+    suiteId: "toolreliability-current-pack",
     models: [{
       modelId: "openai:advanced-publication",
       providerId: "openai",
       displayName: "Advanced publication",
     }],
-    gameIqModelIds: ["openai:advanced-publication"],
-    suiteId: "gameiq-v0.2-connect-four",
-    fireworksPlayerCount: 2,
+    modelId: "openai:advanced-publication",
+    teamModelIds: [],
+    teamIqStrategy: "panel",
+    includeSoloBaselines: false,
+    workBenchModelIds: [],
+    workBenchRoleMode: "solo",
+    workBenchRunnerUrl: "",
+    workBenchRunnerToken: "",
+    effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
     certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
     effortByModelId: {},
     runAbortRef: { current: null },
@@ -564,7 +571,6 @@ try {
     setRunPhase: () => {},
     setSummary: () => {},
     setMessage: () => {},
-    setGameIqModelRuns: () => {},
     onComplete: async () => {},
   });
 } finally {
@@ -576,9 +582,9 @@ assert.deepEqual(
   ["completed"]
 );
 
-// Real Model IQ orchestration: a defect in the current GameIQ leg is an
-// unpublished-infrastructure failure, not an "incomplete future leg". It must
-// terminalize the subject and prevent the later paid Tool Reliability calls.
+// Real preset orchestration: a defect in the current leg is an
+// unpublished-infrastructure failure. It must terminalize the subject and
+// surface the failure on the model row.
 await reset();
 upsertProviderKey({
   providerId: "openai",
@@ -593,11 +599,6 @@ const modelIqPreset: BenchmarkPreset = {
   title: "Model IQ publication defect",
   description: "Publication validation containment fixture.",
   legs: [
-    {
-      track: "gameiq",
-      suiteId: "gameiq-v0.2-connect-four",
-      mode: "solo",
-    },
     {
       track: "toolreliability",
       suiteId: "toolreliability-current-pack",
@@ -615,7 +616,7 @@ openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
       (resultSet) => resultSet.status === "pending"
     );
     const currentExpected = pending?.expectedAttempts.find(
-      (item) => item.track === "gameiq"
+      (item) => item.track === "toolreliability"
     );
     assert.ok(pending);
     assert.ok(currentExpected);
@@ -645,10 +646,9 @@ try {
       effortByModelId: {},
       teamModelIds: [],
       teamIqStrategy: "panel",
-      workBenchRoleMode: "single",
+      workBenchRoleMode: "solo",
       workBenchRunnerUrl: "",
       workBenchRunnerToken: "",
-      fireworksPlayerCount: 2,
       signal: new AbortController().signal,
       onComplete: async () => {},
     },
@@ -657,33 +657,22 @@ try {
 } finally {
   openaiProvider.streamChat = originalStreamChat;
 }
-const connectFourPack = getGameIqScenarioPackById("gameiq-v0.2-connect-four");
-assert.ok(connectFourPack);
-assert.equal(modelIqProviderCalls, connectFourPack.scenarios.length);
+assert.ok(modelIqProviderCalls > 0);
 assert.equal((await listBenchmarkResultSets())[0]?.status, "failed");
-assert.ok(
-  modelIqProgress.some(
-    (event) =>
-      event.type === "model" &&
-      event.leg.track === "gameiq" &&
-      event.status === "failed" &&
-      event.detail?.includes("Unpublished infrastructure failure")
-  )
-);
 assert.ok(
   modelIqProgress.some(
     (event) =>
       event.type === "model" &&
       event.leg.track === "toolreliability" &&
       event.status === "failed" &&
-      event.detail?.includes("Skipped after unpublished infrastructure failure")
+      /duplicate attempts|Unpublished infrastructure failure/.test(event.detail ?? "")
   )
 );
 
 // Results/Data refresh owns stale reconciliation too, but must not interrupt a
 // live same-tab execution.
 await reset();
-await saveBenchmarkRun(run("dashboard-stale-run", "gameiq"));
+await saveBenchmarkRun(run("dashboard-stale-run", "teamiq"));
 const dashboardStale = await createPendingBenchmarkResultSet({
   id: "dashboard-stale",
   schemaVersion: 1,

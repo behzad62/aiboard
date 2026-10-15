@@ -217,38 +217,6 @@ check(
   swarmTeam
 );
 
-const fireworksTeam = createTeamIqCompositionFromSelection({
-  models,
-  selectedModelIds: models.map((model) => model.modelId),
-  roleMode: "fireworks_players",
-} as Parameters<typeof createTeamIqCompositionFromSelection>[0]);
-check(
-  "TeamIQ UI selection can create Fireworks player slots",
-  fireworksTeam.roles[0]?.role === "player" &&
-    fireworksTeam.roles[0]?.slot === "P1" &&
-    fireworksTeam.roles[1]?.role === "player" &&
-    fireworksTeam.roles[1]?.slot === "P2" &&
-    fireworksTeam.roles[2]?.role === "player" &&
-    fireworksTeam.roles[2]?.slot === "P3",
-  fireworksTeam
-);
-
-let underfilledFireworksRejected = false;
-try {
-  createTeamIqCompositionFromSelection({
-    models,
-    selectedModelIds: models.slice(0, 2).map((model) => model.modelId),
-    roleMode: "fireworks_players",
-    playerCount: 3,
-  } as Parameters<typeof createTeamIqCompositionFromSelection>[0]);
-} catch {
-  underfilledFireworksRejected = true;
-}
-check(
-  "TeamIQ UI selection rejects underfilled 3-player Fireworks teams",
-  underfilledFireworksRejected
-);
-
 const toolBenchTeams = createTeamIqToolBenchCompositionsFromSelection({
   models,
   selectedModelIds: models.slice(0, 2).map((model) => model.modelId),

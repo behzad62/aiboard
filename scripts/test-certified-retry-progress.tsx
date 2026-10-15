@@ -8,8 +8,7 @@ import {
 import { BENCHMARK_PRESETS } from "../lib/benchmark/certified/run-presets";
 import {
   DIRECT_MODEL_HARNESS,
-  runGameIqMultiModel,
-  type GameIqModelRunState
+  runSelected
 } from "../lib/benchmark/certified/run-execution";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import { __resetBenchmarkStoreForTests } from "../lib/benchmark/store";
@@ -70,8 +69,8 @@ console.log(
   "PASS retry progress updates rather than duplicates an existing row"
 );
 
-// Exercise the actual Advanced multi-model callback, not a copied formatter:
-// its retry notification must reach both the model row and the shared message.
+// Exercise the actual Advanced single-suite callback, not a copied formatter:
+// its retry notification must reach the shared message.
 async function checkAdvancedRetryProgress(): Promise<void> {
   __resetBenchmarkStoreForTests();
   __resetClientStoreForTests();
@@ -86,7 +85,6 @@ async function checkAdvancedRetryProgress(): Promise<void> {
   const originalStreamChat = openaiProvider.streamChat;
   let physicalCalls = 0;
   const messages: Array<string | null> = [];
-  let modelRuns: GameIqModelRunState[] = [];
   openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
     physicalCalls++;
     if (physicalCalls === 1) {
@@ -101,7 +99,9 @@ async function checkAdvancedRetryProgress(): Promise<void> {
     yield { type: "done" };
   };
   try {
-    await runGameIqMultiModel({
+    await runSelected({
+      selectedTrack: "toolreliability",
+      suiteId: "toolreliability-current-pack",
       models: [
         {
           modelId: "openai:retry-advanced",
@@ -109,9 +109,15 @@ async function checkAdvancedRetryProgress(): Promise<void> {
           displayName: "Retry Advanced"
         }
       ],
-      gameIqModelIds: ["openai:retry-advanced"],
-      suiteId: "gameiq-v0.2-connect-four",
-      fireworksPlayerCount: 2,
+      modelId: "openai:retry-advanced",
+      teamModelIds: [],
+      teamIqStrategy: "architect_worker_reviewer",
+      includeSoloBaselines: false,
+      workBenchModelIds: [],
+      workBenchRoleMode: "solo",
+      workBenchRunnerUrl: "",
+      workBenchRunnerToken: "",
+      effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
       certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
       effortByModelId: {},
       runAbortRef: { current: null },
@@ -119,10 +125,6 @@ async function checkAdvancedRetryProgress(): Promise<void> {
       setRunPhase: () => {},
       setSummary: () => {},
       setMessage: (message) => messages.push(message),
-      setGameIqModelRuns: (updater) => {
-        modelRuns =
-          typeof updater === "function" ? updater(modelRuns) : updater;
-      },
       onComplete: async () => {}
     });
   } finally {
@@ -136,9 +138,8 @@ async function checkAdvancedRetryProgress(): Promise<void> {
     )
   );
   assert.ok(physicalCalls > 1);
-  assert.equal(modelRuns.length, 1);
   console.log(
-    "PASS Advanced GameIQ retry reaches the live shared message path"
+    "PASS Advanced retry reaches the live shared message path"
   );
 }
 

@@ -1,12 +1,3 @@
-export type {
-  GameAIInteraction,
-  GameExport,
-  GameId,
-  GameParticipant,
-  GameSessionRecord,
-  GameSessionStatus,
-  GenericGameMatchRecord,
-} from "@/lib/games/core/types";
 import type {
   BuildSkillEvent,
   BuildSkillMode,

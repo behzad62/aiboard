@@ -14,8 +14,6 @@ import type {
   CustomModel,
   Discussion,
   FinalResult,
-  GameSessionRecord,
-  GenericGameMatchRecord,
   Message,
   ModelBuildStat,
   ProviderKey,
@@ -82,9 +80,6 @@ export interface ClientStore {
   buildCheckpoints: BuildCheckpoint[];
   contextBlobs: ContextBlob[];
   buildMemories: BuildMemoryRecord[];
-  gameSessions: GameSessionRecord[];
-  gameMatchRecords: GenericGameMatchRecord[];
-  gameStatsLegacyImportAttempted: boolean;
   benchmarkSuites: BenchmarkSuite[];
   benchmarkRuns: BenchmarkRun[];
   benchmarkResultSets: BenchmarkResultSet[];
@@ -166,9 +161,6 @@ const DEFAULT_STORE: ClientStore = {
   buildCheckpoints: [],
   contextBlobs: [],
   buildMemories: [],
-  gameSessions: [],
-  gameMatchRecords: [],
-  gameStatsLegacyImportAttempted: false,
   benchmarkSuites: [],
   benchmarkRuns: [],
   benchmarkResultSets: [],
@@ -210,8 +202,21 @@ const BENCHMARK_STORE_KEYS = [
 type BenchmarkStoreKey = (typeof BENCHMARK_STORE_KEYS)[number];
 type BenchmarkStoreFields = Pick<ClientStore, BenchmarkStoreKey>;
 
+// Fields from the retired Games section. They are dropped on load so the next
+// persist no longer carries them.
+const RETIRED_STORE_FIELDS = [
+  "gameSessions",
+  "gameMatchRecords",
+  "gameStatsLegacyImportAttempted",
+] as const;
+
 function hydrateStore(data: Partial<ClientStore> = {}): ClientStore {
-  return { ...structuredClone(DEFAULT_STORE), ...data };
+  const hydrated: ClientStore & Record<string, unknown> = {
+    ...structuredClone(DEFAULT_STORE),
+    ...data,
+  };
+  for (const field of RETIRED_STORE_FIELDS) delete hydrated[field];
+  return hydrated;
 }
 
 function emptyBenchmarkStoreFields(): BenchmarkStoreFields {
@@ -1117,16 +1122,6 @@ export function listBuildMemories(projectKey: string): BuildMemoryRecord[] {
 export function listActiveBuildMemories(projectKey: string): BuildMemoryRecord[] {
   return listBuildMemories(projectKey).filter(isActiveBuildMemory);
 }
-export function getGameSessions(): GameSessionRecord[] {
-  const s = store();
-  s.gameSessions ??= [];
-  return s.gameSessions;
-}
-export function getGenericGameMatchRecords(): GenericGameMatchRecord[] {
-  const s = store();
-  s.gameMatchRecords ??= [];
-  return s.gameMatchRecords;
-}
 export function getBenchmarkSuites(): BenchmarkSuite[] {
   const s = store();
   s.benchmarkSuites ??= [];
@@ -1206,9 +1201,6 @@ export function getBenchmarkHarnessCertifications(): HarnessCertificationResult[
   const s = store();
   s.benchmarkHarnessCertifications ??= [];
   return s.benchmarkHarnessCertifications;
-}
-export function hasAttemptedGameStatsLegacyImport(): boolean {
-  return store().gameStatsLegacyImportAttempted ?? false;
 }
 export function getModelStats(): ModelBuildStat[] {
   return (store().modelStats ?? []).map(normalizeModelStat);
@@ -1386,22 +1378,6 @@ export function deleteBuildCheckpoint(discussionId: string): void {
   );
   schedulePersist();
 }
-export function upsertGameSession(record: GameSessionRecord): void {
-  const list = getGameSessions();
-  const i = list.findIndex((s) => s.id === record.id);
-  if (i >= 0) list[i] = record;
-  else list.push(record);
-  schedulePersist();
-}
-export function deleteGameSession(id: string): void {
-  const s = store();
-  s.gameSessions = (s.gameSessions ?? []).filter((session) => session.id !== id);
-  schedulePersist();
-}
-export function saveGenericGameMatchRecord(record: GenericGameMatchRecord): void {
-  getGenericGameMatchRecords().push(record);
-  schedulePersist();
-}
 function upsertById<T extends { id: string }>(records: T[], record: T): void {
   const i = records.findIndex((item) => item.id === record.id);
   if (i >= 0) records[i] = record;
@@ -1552,10 +1528,6 @@ export function deleteBenchmarkToolCallTracesByAttemptId(
     getBenchmarkToolCallTraces(),
     (record) => record.attemptId === attemptId
   );
-}
-export function markGameStatsLegacyImportAttempted(): void {
-  store().gameStatsLegacyImportAttempted = true;
-  schedulePersist();
 }
 /**
  * Wipe a discussion's run output (model messages, final result, persisted

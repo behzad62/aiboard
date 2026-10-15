@@ -51,7 +51,7 @@ function attempt(
     caseId: `case-${id}`,
     teamCompositionId: teamId,
     mode: "certified",
-    track: "gameiq",
+    track: "toolreliability",
     harnessProfile: "raw-single-model",
     status: "passed",
     startedAt: "2026-07-02T10:00:00.000Z",
@@ -83,14 +83,14 @@ const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFix
   attemptsV2: [
     // Priced model, higher quality, three attempts -> confident winner.
     attempt("p1", teamPriced.id, {
-      track: "gameiq",
+      track: "toolreliability",
       verifiedQuality: 0.9,
       costUsd: 0.02,
       inputTokens: 100,
       outputTokens: 50,
     }),
     attempt("p2", teamPriced.id, {
-      track: "gameiq",
+      track: "toolreliability",
       verifiedQuality: 0.9,
       costUsd: 0.02,
       inputTokens: 100,
@@ -105,7 +105,7 @@ const dashboard = buildCertifiedBenchmarkDashboardData(withCompletedResultSetFix
     }),
     // Token-only model (no pricing) -> efficiency axis must still work via tokens.
     attempt("t1", teamTokenOnly.id, {
-      track: "gameiq",
+      track: "toolreliability",
       verifiedQuality: 0.6,
       costUsd: null,
       inputTokens: 400,

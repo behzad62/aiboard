@@ -100,10 +100,10 @@ const rows: DecisionRow[] = [
   }),
   row("mini", {
     label: "GPT-5.4 Mini",
-    tracks: ["gameiq"],
+    tracks: ["toolreliability"],
     trackBreakdown: [
       {
-        track: "gameiq",
+        track: "toolreliability",
         attempts: 2,
         passed: 1,
         verifiedPassRate: 0.5,
@@ -159,7 +159,7 @@ check(
   "track and evidence filters compose",
   filterDecisionRows(rows, {
     ...allFilters,
-    track: "gameiq",
+    track: "toolreliability",
     evidence: "preliminary",
   }).map((item) => item.id).join(",") === "mini"
 );
@@ -282,14 +282,14 @@ const withFailureInput = {
     {
       ...row("legacy-default"),
       teamCompositionId: "legacy-default",
-      tracks: ["workbench", "gameiq"],
+      tracks: ["workbench", "toolreliability"],
     },
   ],
   overallLeaderboard: [
     {
       ...row("legacy-default"),
       teamCompositionId: "legacy-default",
-      tracks: ["workbench", "gameiq"],
+      tracks: ["workbench", "toolreliability"],
     },
   ],
 };
@@ -313,9 +313,9 @@ check(
 );
 check(
   "track scoping keeps only failure provenance from the selected track",
-  readLeaderboard(failureMetadata, "gameiq", "overall")[0]?.failureDetails
+  readLeaderboard(failureMetadata, "toolreliability", "overall")[0]?.failureDetails
     ?.length === 0,
-  readLeaderboard(failureMetadata, "gameiq", "overall")[0]
+  readLeaderboard(failureMetadata, "toolreliability", "overall")[0]
 );
 check(
   "legacy leaderboard rows default failure provenance to empty",
@@ -350,8 +350,8 @@ const mixedFailureMetadata = withCertifiedDeleteMetadata(
     },
     {
       ...failedBudgetAttempt,
-      id: "mixed-gameiq-failure",
-      track: "gameiq",
+      id: "mixed-toolreliability-failure",
+      track: "toolreliability",
       status: "failed_model",
       startedAt: "2026-07-26T00:02:00.000Z",
       failureIds: [],
@@ -373,19 +373,19 @@ const mixedWorkBenchRow = readLeaderboard(
   "workbench",
   "overall"
 )[0] as DecisionRow & { failedAttemptCount?: number | null };
-const mixedGameIqRow = readLeaderboard(
+const mixedToolRow = readLeaderboard(
   mixedFailureMetadata,
-  "gameiq",
+  "toolreliability",
   "overall"
 )[0] as DecisionRow & { failedAttemptCount?: number | null };
 check(
   "persisted attempt statuses expose exact failures including older excluded unlinked history",
   mixedAllRow?.failedAttemptCount === 3 &&
     mixedAllRow.failedAttemptCountByTrack?.workbench === 2 &&
-    mixedAllRow.failedAttemptCountByTrack?.gameiq === 1 &&
+    mixedAllRow.failedAttemptCountByTrack?.toolreliability === 1 &&
     mixedWorkBenchRow?.failedAttemptCount === 2 &&
-    mixedGameIqRow?.failedAttemptCount === 1,
-  { mixedAllRow, mixedWorkBenchRow, mixedGameIqRow }
+    mixedToolRow?.failedAttemptCount === 1,
+  { mixedAllRow, mixedWorkBenchRow, mixedToolRow }
 );
 
 const disjointSoloA = {
@@ -421,12 +421,12 @@ const disjointTeamComposition = {
 } as BenchmarkTeamComposition;
 const disjointAttempts = [
   {
-    id: "disjoint-a-gameiq",
+    id: "disjoint-a-tool",
     runId: "run-disjoint",
-    caseId: "gameiq-a",
+    caseId: "case-a",
     mode: "certified",
     teamCompositionId: disjointSoloA.id,
-    track: "gameiq",
+    track: "toolreliability",
     status: "passed",
     startedAt: "2026-07-26T00:00:00.000Z",
     verifiedQuality: 0.7,
@@ -640,7 +640,7 @@ check(
 );
 
 const multiTrack = row("multi-track", {
-  tracks: ["gameiq", "workbench"],
+  tracks: ["toolreliability", "workbench"],
   attempts: 10,
   passed: 8,
   verifiedQuality: 0.8,
@@ -650,7 +650,7 @@ const multiTrack = row("multi-track", {
   speedPerPassMs: 5_000,
   trackBreakdown: [
     {
-      track: "gameiq",
+      track: "toolreliability",
       attempts: 8,
       passed: 7,
       verifiedPassRate: 0.875,

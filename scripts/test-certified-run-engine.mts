@@ -57,9 +57,9 @@ async function expectReject(
 
 const now = "2026-06-28T08:00:00.000Z";
 const caseOne: BenchmarkCaseV2 = {
-  id: "gameiq-engine-case-1",
+  id: "engine-case-1",
   schemaVersion: 2,
-  track: "gameiq",
+  track: "toolreliability",
   title: "Engine case one",
   description: "A deterministic GameIQ case.",
   difficulty: "easy",
@@ -90,7 +90,7 @@ const caseOne: BenchmarkCaseV2 = {
   },
   scoring: {
     scoringVersion: "certified-v0.1",
-    primary: "game_iq",
+    primary: "tool_reliability",
   },
   contamination: {
     originalTask: true,
@@ -101,7 +101,7 @@ const caseOne: BenchmarkCaseV2 = {
 
 const caseTwo: BenchmarkCaseV2 = {
   ...caseOne,
-  id: "gameiq-engine-case-2",
+  id: "engine-case-2",
   title: "Engine case two",
   game: {
     gameId: "connect-four",
@@ -182,7 +182,7 @@ await expectReject(
     runCertifiedBenchmark({
       runId: "run-blocked-cert",
       suiteId: "suite-engine",
-      track: "gameiq",
+      track: "toolreliability",
       harnessProfile: "raw-single-model",
       caseIds: [caseOne.id],
       teamCompositionIds: [team.id],
@@ -202,7 +202,7 @@ await expectReject(
     runCertifiedBenchmark({
       runId: "run-missing-case",
       suiteId: "suite-engine",
-      track: "gameiq",
+      track: "toolreliability",
       harnessProfile: "raw-single-model",
       caseIds: ["missing-case"],
       teamCompositionIds: [team.id],
@@ -223,7 +223,7 @@ try {
   await runCertifiedBenchmark({
     runId: "run-certified-engine-aborted",
     suiteId: "suite-engine",
-    track: "gameiq",
+    track: "toolreliability",
     harnessProfile: "raw-single-model",
     caseIds: [caseOne.id],
     teamCompositionIds: [team.id],
@@ -271,7 +271,7 @@ const completedRunConfiguration: BenchmarkResultConfiguration = {
   })),
   tracks: [
     {
-      track: "gameiq",
+      track: "toolreliability",
       suiteId: "suite-engine",
       maxTokens: 512,
       caseManifest: [caseOne, caseTwo].map((item) => ({
@@ -293,7 +293,7 @@ await createPendingBenchmarkResultSet({
   configuration: completedRunConfiguration,
   expectedAttempts: [caseOne, caseTwo].map((item) => ({
     runId: "run-certified-engine",
-    track: "gameiq",
+    track: "toolreliability",
     suiteId: "suite-engine",
     caseId: item.id,
     caseVersion: item.caseVersion,
@@ -304,7 +304,7 @@ await createPendingBenchmarkResultSet({
 const summary = await runCertifiedBenchmark({
   runId: "run-certified-engine",
   suiteId: "suite-engine",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   caseIds: [caseOne.id, caseTwo.id],
   teamCompositionIds: [team.id],
@@ -382,7 +382,7 @@ const summary = await runCertifiedBenchmark({
       caseId: caseOne.id,
       teamCompositionId: team.id,
       mode: "certified",
-      track: "gameiq",
+      track: "toolreliability",
       harnessProfile: context.harnessProfile,
       status: "passed",
       startedAt: context.startedAt,
@@ -481,7 +481,7 @@ await saveBenchmarkTeamComposition(team);
 const failedWithoutFailureSummary = await runCertifiedBenchmark({
   runId: "run-certified-engine-generated-failure",
   suiteId: "suite-engine",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   caseIds: [caseOne.id],
   teamCompositionIds: [team.id],
@@ -493,7 +493,7 @@ const failedWithoutFailureSummary = await runCertifiedBenchmark({
       caseId: caseOne.id,
       teamCompositionId: team.id,
       mode: "certified",
-      track: "gameiq",
+      track: "toolreliability",
       harnessProfile: context.harnessProfile,
       status: "failed_verifier",
       startedAt: context.startedAt,
@@ -542,14 +542,14 @@ await saveBenchmarkTeamComposition(team);
 const providerCrashSummary = await runCertifiedBenchmark({
   runId: "run-certified-engine-provider-crash",
   suiteId: "suite-engine",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   caseIds: [caseOne.id],
   teamCompositionIds: [team.id],
   certification: passingCertification,
   runner: async (context) => {
     const attemptId =
-      `gameiq-attempt:${context.runId}:${team.id}:openai:gpt-engine`;
+      `engine-attempt:${context.runId}:${team.id}:openai:gpt-engine`;
     await context.registerAttemptOwner({
       attemptId,
       caseId: caseOne.id,
@@ -609,7 +609,7 @@ const persistedSecret = "sk-proj-run-engine-secret-1234567890";
 const secretCrashSummary = await runCertifiedBenchmark({
   runId: "run-certified-engine-secret-crash",
   suiteId: "suite-engine",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   caseIds: [caseOne.id],
   teamCompositionIds: [team.id],
@@ -656,14 +656,14 @@ await saveBenchmarkTeamComposition(teamTwo);
 const multiTeamCrash = await runCertifiedBenchmark({
   runId: "run-certified-engine-multi-team-crash",
   suiteId: "suite-engine",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   caseIds: [caseOne.id],
   teamCompositionIds: [team.id, teamTwo.id],
   certification: passingCertification,
   runner: async (context) => {
     const attemptId =
-      `gameiq-attempt:${context.runId}:${team.id}:openai:gpt-engine`;
+      `engine-attempt:${context.runId}:${team.id}:openai:gpt-engine`;
     await context.registerAttemptOwner({
       attemptId,
       caseId: caseOne.id,
@@ -739,7 +739,7 @@ const staleRun: BenchmarkRun = {
   caseIds: [caseOne.id],
   summaryJson: JSON.stringify({
     mode: "certified",
-    track: "gameiq",
+    track: "toolreliability",
     harnessProfile: "raw-single-model",
     teamCompositionIds: [team.id],
     modelBudget: { maxWallClockMs: 1_000 },

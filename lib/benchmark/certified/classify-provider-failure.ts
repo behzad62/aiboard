@@ -10,7 +10,7 @@ export type ProviderFailureClass = "transient" | "fatal" | "other";
 // Fatal patterns win over transient ones: a quota/billing 429 must not be
 // retried (every retry burns nothing but time — the account is out of funds),
 // while a rate-limit 429 or any 5xx/timeout usually clears on its own.
-// Fresh-run additions (2026-07 GameIQ reruns): OpenRouter's 402 ("This request
+// Fresh-run additions (2026-07 benchmark reruns): OpenRouter's 402 ("This request
 // requires more credits, or fewer max_tokens. You requested up to 16384
 // tokens, but can only afford 9914.", also seen without the leading "402")
 // killed the GLM/MiniMax runs while classifying "other" — it's an

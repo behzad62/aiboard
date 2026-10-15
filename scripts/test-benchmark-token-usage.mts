@@ -175,7 +175,7 @@ __resetBenchmarkStoreForTests();
 const ctx = createCertifiedRunContext({
   runId: "run-usage",
   suiteId: "suite-usage",
-  track: "gameiq",
+  track: "toolreliability",
   harnessProfile: "raw-single-model",
   startedAt: "2026-07-02T08:30:00.000Z",
   caseIds: ["case-usage"],
@@ -299,7 +299,7 @@ function attempt(
     caseId: `case-${id}`,
     teamCompositionId: teamId,
     mode: "certified",
-    track: "gameiq",
+    track: "toolreliability",
     harnessProfile: "raw-single-model",
     status: "passed",
     startedAt: "2026-07-02T10:00:00.000Z",
@@ -439,11 +439,11 @@ function attempt(
   // attempt-weighted 0.767, proving normalization.
   const rows = buildScopedModelIntelligenceRows({
     attempts: [
-      attempt("ig1", teamA.id, { track: "gameiq", verifiedQuality: 0.9 }),
-      attempt("ig2", teamA.id, { track: "gameiq", verifiedQuality: 0.9 }),
+      attempt("ig1", teamA.id, { track: "toolreliability", verifiedQuality: 0.9 }),
+      attempt("ig2", teamA.id, { track: "toolreliability", verifiedQuality: 0.9 }),
       attempt("it1", teamA.id, { track: "teamiq", verifiedQuality: 0.5 }),
       // A pair (non-solo) attempt must be ignored by the solo leaderboard.
-      attempt("ipair", teamPair.id, { track: "gameiq", verifiedQuality: 0.1 }),
+      attempt("ipair", teamPair.id, { track: "toolreliability", verifiedQuality: 0.1 }),
     ],
     cases: [],
     teamCompositions: [teamA, teamPair],
@@ -463,8 +463,8 @@ function attempt(
   check(
     "intelligence row exposes per-track breakdown",
     rowA?.tracks.length === 2 &&
-      rowA.tracks[0].track === "gameiq" &&
-      rowA.tracks[0].averageVerifiedQuality === 0.9,
+      rowA.tracks.find((track) => track.track === "toolreliability")
+        ?.averageVerifiedQuality === 0.9,
     rowA?.tracks
   );
   check(
@@ -477,7 +477,7 @@ function attempt(
 {
   const teamA = soloTeam("solo-a", "prov:a");
   const rows = buildScopedModelIntelligenceRows({
-    attempts: [attempt("p1", teamA.id, { track: "gameiq", verifiedQuality: 0.9 })],
+    attempts: [attempt("p1", teamA.id, { track: "toolreliability", verifiedQuality: 0.9 })],
     cases: [],
     teamCompositions: [teamA],
     verifierResults: [],
@@ -508,7 +508,7 @@ function attempt(
     environment: { type: "browser", timeoutSeconds: 60, network: "none" },
     verifier: { scorer: "game-engine" },
     budget: {},
-    scoring: { scoringVersion: "v", primary: "game_iq" },
+    scoring: { scoringVersion: "v", primary: "tool_reliability" },
     contamination: {
       originalTask: true,
       canary: "c",
@@ -518,7 +518,7 @@ function attempt(
   const gameiqCase: BenchmarkCaseV2 = {
     ...teamiqCase,
     id: "gi-case",
-    track: "gameiq",
+    track: "toolreliability",
     tags: ["source:tq-case"],
   };
   const rows = buildScopedModelIntelligenceRows({
@@ -530,7 +530,7 @@ function attempt(
         verifiedQuality: 0.6,
       }),
       attempt("gi1", teamA.id, {
-        track: "gameiq",
+        track: "toolreliability",
         caseId: "gi-case",
         resultSetId: "snapshot-cross-track",
         verifiedQuality: 0.9,

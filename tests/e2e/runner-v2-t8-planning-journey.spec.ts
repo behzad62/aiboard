@@ -422,9 +422,6 @@ async function seedBuildDiscussion(
       buildMemories: [],
       providerKeys: [],
       customModels: [],
-      gameSessions: [],
-      gameMatchRecords: [],
-      gameStatsLegacyImportAttempted: false,
       modelStats: [],
     };
     await new Promise<void>((resolve, reject) => {

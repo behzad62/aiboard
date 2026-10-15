@@ -497,7 +497,6 @@ export function DecisionTradeoffTooltip({
 }
 
 const TRACK_LABELS: Record<string, string> = {
-  gameiq: "GameIQ",
   harnessbench: "HarnessBench",
   teamiq: "TeamIQ",
   toolreliability: "Tool Reliability",

@@ -1,8 +1,22 @@
 /** Azure Foundry Anthropic-compatible reasoning payload checks (run: npx tsx scripts/test-foundry-reasoning-payload.mts) */
 import http from "node:http";
 import { foundryProvider } from "../lib/providers/foundry";
-import { buildConnectFourMoveResponseFormat } from "../lib/games/connect-four/ai";
 import type { ReasoningEffort } from "../lib/db/schema";
+import type { StructuredOutputFormat } from "../lib/providers/base";
+
+const PATCH_PLAN_FORMAT: StructuredOutputFormat = {
+  name: "patch_plan",
+  strict: false,
+  schema: {
+    type: "object",
+    properties: {
+      file: { type: "string", description: "Repository-relative file to edit." },
+      summary: { type: "string", description: "One-line change summary." },
+    },
+    required: ["file", "summary"],
+    additionalProperties: false,
+  },
+};
 
 let failures = 0;
 
@@ -72,10 +86,10 @@ async function captureFoundryBody(input: {
       baseURL: `http://127.0.0.1:${address.port}`,
       model: input.model,
       maxTokens: input.maxTokens,
-      messages: [{ role: "user", content: "Pick the strongest Connect Four move." }],
+      messages: [{ role: "user", content: "Plan the smallest patch for the failing test." }],
       reasoningEffort: input.reasoningEffort,
       ...(input.structuredOutput
-        ? { structuredOutput: buildConnectFourMoveResponseFormat() }
+        ? { structuredOutput: PATCH_PLAN_FORMAT }
         : {}),
     })) {
       if (chunk.type === "token") chunks.push(chunk.content);
@@ -154,7 +168,7 @@ check(
   JSON.stringify(opusOff.body.tool_choice) ===
     JSON.stringify({
       type: "tool",
-      name: "connect_four_move",
+      name: "patch_plan",
       disable_parallel_tool_use: true,
     }),
   opusOff

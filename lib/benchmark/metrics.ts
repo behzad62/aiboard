@@ -1,3 +1,4 @@
+import { withoutRetiredBenchmarkEvidence } from "@/lib/benchmark/retired";
 import type {
   BenchmarkCase,
   BenchmarkAttemptV2,
@@ -366,8 +367,9 @@ export function buildBenchmarkDashboardData(
 }
 
 export function buildCertifiedBenchmarkDashboardData(
-  rawInput: CertifiedBenchmarkDashboardInput
+  suppliedInput: CertifiedBenchmarkDashboardInput
 ): CertifiedBenchmarkDashboardData {
+  const rawInput = withoutRetiredBenchmarkEvidence(suppliedInput);
   const suppliedResultSets = rawInput.resultSets;
   const evidence = {
     runs: rawInput.runs,

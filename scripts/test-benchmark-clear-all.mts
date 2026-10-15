@@ -2,7 +2,7 @@
  *
  * Covers clearAllBenchmarkData(): every benchmark array (v1 + v2) empties,
  * adapter run ids empty, a post-clear rescan resurrects nothing, non-benchmark
- * stores (a game match record + a model stat) survive, a double clear is safe,
+ * stores (a model stat) survive, a double clear is safe,
  * and the returned counts match what was seeded.
  */
 import {
@@ -29,10 +29,8 @@ import {
   getBenchmarkTraces,
   getBenchmarkVerifierResults,
   getCorruptBenchmarkRunCount,
-  getGenericGameMatchRecords,
   getModelStats,
   rescanBenchmarkRunFiles,
-  saveGenericGameMatchRecord,
   upsertBenchmarkArtifact,
   upsertBenchmarkAttempt,
   upsertBenchmarkAttemptV2,
@@ -67,7 +65,6 @@ import type {
   BenchmarkVerifierResult,
   HarnessCertificationResult,
 } from "../lib/benchmark/types";
-import type { GenericGameMatchRecord } from "../lib/games/core/types";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail?: unknown): void {
@@ -330,16 +327,6 @@ function bundleJson(runId: string): string {
   return JSON.stringify(bundle);
 }
 
-// Non-benchmark records that MUST survive the clear.
-const gameMatch: GenericGameMatchRecord = {
-  id: "match-keep",
-  gameId: "chess",
-  timestamp: now,
-  participants: [],
-  resultJson: "{}",
-  statsJson: "{}",
-};
-
 // ── Seed ──────────────────────────────────────────────────────────────────────
 __resetClientStoreForTests();
 __enableBenchmarkRunBlobStorageForTests();
@@ -367,7 +354,6 @@ __setBenchmarkRunBlobRawForTests("run-a", bundleJson("run-a"));
 __setBenchmarkRunBlobRawForTests("run-b", bundleJson("run-b"));
 
 // Non-benchmark stores.
-saveGenericGameMatchRecord(gameMatch);
 accumulateModelStats({
   judgeModelId: "provider:judge",
   workers: [
@@ -407,7 +393,6 @@ const seededRecords =
 
 check("seed produced benchmark records", seededRecords > 0, { seededRecords });
 check("seed produced two run blob files", Object.keys(__getBenchmarkRunBlobsForTests()).length === 2);
-check("seed produced a game match record", getGenericGameMatchRecords().length === 1);
 check("seed produced a model stat", getModelStats().length === 1);
 
 // ── Clear ─────────────────────────────────────────────────────────────────────
@@ -455,11 +440,6 @@ check(
 );
 
 // ── Non-benchmark stores untouched ────────────────────────────────────────────
-check("game match record survives clear", getGenericGameMatchRecords().length === 1);
-check(
-  "game match record is the seeded one",
-  getGenericGameMatchRecords()[0]?.id === "match-keep"
-);
 check("model stat survives clear", getModelStats().length === 1);
 check(
   "model stat is the seeded worker",
@@ -470,7 +450,6 @@ check(
 const second = await clearAllBenchmarkData();
 check("double clear returns zero records", second.records === 0, second);
 check("double clear returns zero run files", second.runFiles === 0, second);
-check("double clear keeps game match record", getGenericGameMatchRecords().length === 1);
 check("double clear keeps model stat", getModelStats().length === 1);
 
 __clearClientStoreForTests();

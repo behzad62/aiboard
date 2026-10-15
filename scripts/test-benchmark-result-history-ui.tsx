@@ -23,7 +23,7 @@ function row(id: string, completedAt: string, score: number): DecisionRow {
     passRateDelta: null,
     historyCount: 0,
     label: "GPT-5.6 Luna",
-    tracks: ["gameiq", "toolreliability"],
+    tracks: ["teamiq", "toolreliability"],
     caseTitles: ["Case"],
     attempts: 2,
     passed: 1,
@@ -55,7 +55,7 @@ function row(id: string, completedAt: string, score: number): DecisionRow {
     reasoningEfforts: ["medium"],
     failureDetails: [],
     configurationDetails:
-      "account · account:gpt-5.6-luna · medium reasoning · max 4,096 tokens · GameIQ suite-v2 / case-a@case-v3 / score-v5",
+      "account · account:gpt-5.6-luna · medium reasoning · max 4,096 tokens · TeamIQ suite-v2 / case-a@case-v3 / score-v5",
   };
 }
 

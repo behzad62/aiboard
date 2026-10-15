@@ -18,7 +18,7 @@ const completedAt = "2026-07-29T10:00:00.000Z";
 const benchmarkCase: BenchmarkCaseV2 = {
   id: "history-case",
   schemaVersion: 2,
-  track: "gameiq",
+  track: "toolreliability",
   title: "History case",
   description: "One deterministic history case.",
   difficulty: "easy",
@@ -77,7 +77,7 @@ function configuration(team: BenchmarkTeamComposition): BenchmarkResultConfigura
       maxTokens: role.maxTokens ?? null,
     }],
     tracks: [{
-      track: "gameiq",
+      track: "toolreliability",
       suiteId: "history-suite",
       caseManifest: [{
         caseId: benchmarkCase.id,
@@ -103,7 +103,7 @@ function attempt(
     caseId: benchmarkCase.id,
     teamCompositionId,
     mode: "certified",
-    track: "gameiq",
+    track: "toolreliability",
     harnessProfile: "raw-single-model",
     status,
     startedAt: completedAt,
@@ -155,7 +155,7 @@ function runFor(resultSet: BenchmarkResultSet): BenchmarkRun {
     source: "import",
     modelIds: [],
     caseIds: [benchmarkCase.id],
-    summaryJson: JSON.stringify({ track: "gameiq" }),
+    summaryJson: JSON.stringify({ track: "toolreliability" }),
     metricValueIds: [],
     artifactIds: [],
     failureIds: [],
@@ -183,7 +183,7 @@ function resultSet(input: {
     configuration: config,
     expectedAttempts: [{
       runId: input.runId,
-      track: "gameiq",
+      track: "toolreliability",
       suiteId: "history-suite",
       caseId: benchmarkCase.id,
       caseVersion: benchmarkCase.caseVersion,
@@ -202,7 +202,7 @@ function resultSet(input: {
       verifiedQuality: input.overallScore,
       overallScore: input.overallScore,
       trackBreakdown: [{
-        track: "gameiq",
+        track: "toolreliability",
         attempts: 1,
         passed: 1,
         verifiedPassRate: input.passRate,
