@@ -1859,3 +1859,33 @@ test("plan start resumes a supervisor run left paused by the planning gate", asy
     supervisor.close();
   }
 });
+
+test("choosing a verifier resumes a supervisor run left paused by the selection gate", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-verifier-pick-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const activated: string[] = [];
+  const builds = {
+    projection: () => { throw new Error("Unknown build runtime run_pick"); },
+    activate: (runId: string) => { activated.push(runId); },
+    selectVerifierRuntime: () => ({ runId: "run_pick", status: "running", lastSequence: 80 }),
+  } as unknown as BuildControlPlane;
+  const server = new ControlServer({ supervisor, token, checkGit: async () => gitReady, bootstrapRun, builds });
+  const address = await server.start(0);
+  const call = (path: string, body: unknown) => fetch(`${address.url}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  try {
+    assert.equal((await call("/v2/runs", { runId: "run_pick", projectPath: join(directory, "project"), permissionProfile: "full", idempotencyKey: "create" })).status, 201);
+    assert.equal((await call("/v2/runs/run_pick/commands", { command: "start", idempotencyKey: "start" })).status, 200);
+    assert.equal((await call("/v2/runs/run_pick/commands", { command: "pause", idempotencyKey: "pause", reason: "native-build" })).status, 200);
+    const picked = await call("/v2/runs/run_pick/build/verifier-handoff", { runtimeId: "google:verifier", idempotencyKey: "pick", requiredSequence: 78 });
+    assert.equal(picked.status, 200, await picked.text());
+    assert.equal(supervisor.getRun("run_pick").state, "running");
+    assert.deepEqual(activated, ["run_pick"]);
+  } finally {
+    await server.close();
+    supervisor.close();
+  }
+});

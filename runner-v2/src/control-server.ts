@@ -705,12 +705,12 @@ export class ControlServer {
         sendJson(
           response,
           200,
-          await this.requireBuilds().selectVerifierRuntime(
+          await this.ownerPlanningControl(runId, async () => await this.requireBuilds().selectVerifierRuntime(
             runId,
             body.runtimeId,
             body.idempotencyKey,
             body.requiredSequence,
-          ),
+          )),
         );
         return;
       }
