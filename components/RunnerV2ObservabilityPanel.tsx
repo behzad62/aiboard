@@ -1005,8 +1005,11 @@ export function runnerUserFacingObservability(
 export function RunnerV2SteeringPanel({
   projection,
   onAnswerQuestion,
+  section = "all",
 }: {
   projection: NativeBuildProjection | null;
+  /** "question" renders only the open Architect question, "ledger" only the guidance history. */
+  section?: "all" | "question" | "ledger";
   onAnswerQuestion?: (
     questionId: string,
     version: number,
@@ -1015,7 +1018,8 @@ export function RunnerV2SteeringPanel({
   ) => Promise<void>;
 }) {
   const view = runnerSteeringLedgerView(projection);
-  const question = view.activeQuestion;
+  const question = section === "ledger" ? undefined : view.activeQuestion;
+  const guidance = section === "question" ? [] : view.guidance;
   const [answer, setAnswer] = useState("");
   const [answerPending, setAnswerPending] = useState(false);
   const [answerError, setAnswerError] = useState<string | null>(null);
@@ -1027,7 +1031,7 @@ export function RunnerV2SteeringPanel({
     setAnswerError(null);
   }, [question?.questionId, question?.version]);
 
-  if (view.guidance.length === 0 && !question) return null;
+  if (guidance.length === 0 && !question) return null;
 
   const submitAnswer = async () => {
     const trimmed = answer.trim();
@@ -1102,7 +1106,7 @@ export function RunnerV2SteeringPanel({
         </div>
       )}
 
-      {view.guidance.length > 0 && (
+      {guidance.length > 0 && (
         <div className="rounded-lg border bg-card px-4 py-3 shadow-sm">
           <div className="flex items-center gap-2">
             <MessageSquareText className="h-4 w-4 text-primary" />
@@ -1116,7 +1120,7 @@ export function RunnerV2SteeringPanel({
             </div>
           </div>
           <ol className="mt-3 space-y-3">
-            {view.guidance.map((item) => (
+            {guidance.map((item) => (
               <li key={item.guidanceId} className="rounded-md border bg-muted/10 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm leading-relaxed">{item.text}</p>

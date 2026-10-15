@@ -12,7 +12,7 @@ const configurationKey = () => fixture.resultSets[0]!.configurationKey;
 const benchmarkCase: BenchmarkCaseV2 = {
   id: "history-case",
   schemaVersion: 2,
-  track: "gameiq",
+  track: "toolreliability",
   title: "History interaction case",
   description: "Local browser-only result history fixture.",
   difficulty: "easy",
@@ -69,7 +69,7 @@ const attempts: BenchmarkAttemptV2[] = Array.from(
       caseId: benchmarkCase.id,
       teamCompositionId: team.id,
       mode: "certified",
-      track: "gameiq",
+      track: "toolreliability",
       harnessProfile: "raw-single-model",
       status: "passed",
       startedAt: completedAt,

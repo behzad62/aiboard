@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
 import { formatDate } from "@/lib/utils";
 import type { Discussion } from "@/lib/db/schema";
 import { Trash2 } from "lucide-react";
@@ -13,17 +12,17 @@ interface DiscussionHistoryProps {
   onDeleted?: (id: string) => void;
 }
 
-function statusVariant(status: string) {
-  switch (status) {
-    case "completed":
-      return "success" as const;
-    case "running":
-      return "warning" as const;
-    case "failed":
-      return "destructive" as const;
-    default:
-      return "secondary" as const;
-  }
+const STATUS_TONE: Record<string, string> = {
+  completed: "text-success",
+  failed: "text-destructive",
+  stopped: "text-warning",
+};
+
+function statusLabel(status: string): string {
+  if (status === "completed") return "Done";
+  if (status === "failed") return "Failed";
+  if (status === "stopped") return "Stopped";
+  return "Running";
 }
 
 export function DiscussionHistory({
@@ -54,32 +53,34 @@ export function DiscussionHistory({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="-mx-2 space-y-0.5">
       {discussions.map((d) => (
         <div
           key={d.id}
-          className="flex items-center justify-between gap-2 rounded-lg border bg-background/40 px-3 py-2.5 transition-colors hover:bg-accent"
+          className="group flex items-start gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-accent"
         >
           <Link href={`/discussion?id=${d.id}`} className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">{d.topic}</p>
-            <p className="text-xs text-muted-foreground">
-              {d.mode === "build" ? "Build" : `Chat · ${d.mode}`} ·{" "}
+            <p className="line-clamp-2 text-sm font-medium leading-snug">{d.topic}</p>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              <span className={STATUS_TONE[d.status] ?? "text-primary"}>
+                {statusLabel(d.status)}
+              </span>
+              {" · "}
+              {d.mode === "build" ? "Build" : `Chat · ${d.mode}`}
+              {" · "}
               {formatDate(d.createdAt)}
             </p>
           </Link>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <Badge variant={statusVariant(d.status)}>{d.status}</Badge>
-            <button
-              type="button"
-              onClick={() => remove(d)}
-              disabled={deletingId === d.id}
-              title="Delete session"
-              aria-label="Delete session"
-              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => remove(d)}
+            disabled={deletingId === d.id}
+            title="Delete session"
+            aria-label={`Delete session: ${d.topic.slice(0, 60)}`}
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-60 transition hover:bg-destructive/10 hover:text-destructive hover:opacity-100 focus-visible:opacity-100 disabled:opacity-50 group-hover:opacity-100"
+          >
+            <Trash2 className="h-4 w-4" aria-hidden="true" />
+          </button>
         </div>
       ))}
     </div>

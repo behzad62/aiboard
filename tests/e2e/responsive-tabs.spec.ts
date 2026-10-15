@@ -72,7 +72,7 @@ test.describe("responsive tabs", () => {
       };
     });
 
-    expect(metrics.tabCount).toBe(5);
+    expect(metrics.tabCount).toBe(7);
     expect(metrics.listHeight).toBeGreaterThan(40);
     expect(metrics.maxTabBottom).toBeLessThanOrEqual(metrics.listBottom + 1);
   });

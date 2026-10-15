@@ -1,4 +1,4 @@
-/** Build activity layout order check (run: npx tsx scripts/test-build-activity-layout.mts) */
+/** Build workspace layout contract (run: npx tsx scripts/test-build-activity-layout.mts) */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -7,29 +7,50 @@ const source = readFileSync(
   join(process.cwd(), "app", "discussion", "discussion-client.tsx"),
   "utf8"
 );
-
-const noteIndex = source.indexOf("Note to the Architect");
-const statsIndex = source.indexOf("<BuildRunStats");
-const handoffIndex = source.indexOf("The Architect has finished");
-const observabilityIndex = source.indexOf("<RunnerV2ObservabilityPanel");
-const budgetPanelIndex = source.indexOf("<BuildContextPanel");
-
-assert.notEqual(noteIndex, -1, "discussion page renders the Architect note panel");
-assert.notEqual(statsIndex, -1, "discussion page renders Build run stats");
-assert.notEqual(handoffIndex, -1, "discussion page renders the final project handoff");
-assert.notEqual(observabilityIndex, -1, "discussion page renders Runner V2 observability");
-assert.ok(
-  noteIndex < statsIndex,
-  "Architect note panel should render above Build run stats"
-);
-assert.ok(
-  statsIndex < handoffIndex && handoffIndex < observabilityIndex,
-  "Final project handoff should render after Build run stats and before Runner V2 observability"
-);
-assert.equal(
-  budgetPanelIndex,
-  -1,
-  "Build activity should not render the budget/context panel for now"
+const workspace = readFileSync(
+  join(process.cwd(), "components", "build", "BuildWorkspace.tsx"),
+  "utf8"
 );
 
-console.log("PASS build activity layout order");
+function slice(from: string, to: string): string {
+  const start = source.indexOf(from);
+  assert.notEqual(start, -1, `missing ${from}`);
+  const end = source.indexOf(to, start);
+  assert.notEqual(end, -1, `missing ${to} after ${from}`);
+  return source.slice(start, end);
+}
+
+assert.match(source, /<BuildWorkspace\b/, "Build sessions render the workspace layout");
+
+// Every owner gate is a dock decision, not a panel buried in the page.
+const gates = slice("const decisions: WorkspaceDecision[] = [];", "const banner = (");
+for (const id of [
+  "architect-question",
+  "command-approval",
+  "permission-",
+  "verifier-selection",
+  "architect-handoff",
+  "project-handoff",
+]) {
+  assert.ok(gates.includes(`id: "${id}`) || gates.includes(`id: \`${id}`), `${id} is a dock decision`);
+}
+assert.ok(gates.includes("The Architect has finished"), "final project handoff is a dock decision");
+
+// Guidance goes through the pinned composer.
+const composer = slice("const composer = (", "const overview = (");
+assert.ok(composer.includes("<BuildNoteDraftField"), "composer holds the guidance field");
+assert.ok(composer.includes("Send guidance"), "composer sends durable guidance");
+
+// Run-level progress lives in Overview; budget and stats in Run details.
+const overview = slice("const overview = (", "const fileCount =");
+assert.ok(overview.includes("<RunnerV2ObservabilityPanel"), "Overview shows build activity");
+assert.ok(overview.includes("<NativePlanningPanel"), "Overview shows planning");
+assert.ok(overview.includes('section="ledger"'), "Overview shows the steering ledger");
+const details = slice("details={", "\n      />");
+assert.ok(details.includes("<BuildRunStats"), "Run details show build stats");
+
+assert.equal(source.indexOf("<BuildContextPanel"), -1, "the budget/context panel stays retired");
+assert.ok(workspace.includes('aria-labelledby="needs-you-title"'), "dock labels the decisions it holds");
+assert.ok(workspace.includes('role="dialog"'), "Run details become a dialog sheet on narrow screens");
+
+console.log("PASS build workspace layout");

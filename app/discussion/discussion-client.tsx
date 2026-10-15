@@ -19,7 +19,16 @@ import { BuildNoteDraftField } from "@/components/BuildNoteDraftField";
 import {
   RunnerV2ObservabilityPanel,
   RunnerV2SteeringPanel,
+  runnerSteeringLedgerView,
 } from "@/components/RunnerV2ObservabilityPanel";
+import {
+  BuildWorkspace,
+  DecisionCard,
+  RoleGlyph,
+  type BuildView,
+  type WorkspaceDecision,
+  type WorkspaceTask,
+} from "@/components/build/BuildWorkspace";
 import {
   EMPTY_BUILD_CONTEXT_PANEL_STATE,
   reduceBuildContextPanelState,
@@ -57,7 +66,6 @@ import {
   Play,
   RotateCcw,
   Square,
-  StickyNote,
   X,
 } from "lucide-react";
 import type {
@@ -323,6 +331,7 @@ function DiscussionPageInner() {
     useState<FileSystemDirectoryHandle | null>(null);
   const [persistedFiles, setPersistedFiles] = useState<ExtractedFile[]>([]);
   const [activeTab, setActiveTab] = useState("activity");
+  const [buildView, setBuildView] = useState<BuildView>({ kind: "overview" });
   const notifiedRef = useRef(false);
   const streamingRef = useRef<Map<string, string>>(new Map());
   const nativeTranscriptRef = useRef<NativeBuildTranscriptAttachment | null>(null);
@@ -1772,6 +1781,31 @@ function DiscussionPageInner() {
   const activeModelNames = buildTranscriptMessages
     .filter((m) => m.streaming)
     .map((m) => m.modelName);
+  const workspaceTasks = useMemo<WorkspaceTask[]>(
+    () =>
+      buildTasks.map((task) => {
+        const native = nativeProjection?.tasks[task.id];
+        const runtimeId = task.worker
+          ? nativeProjection?.runtime.workerAssignments[task.worker]?.runtimeId
+          : undefined;
+        return {
+          id: task.id,
+          title: task.title,
+          status: task.status,
+          // Worker ids are runner-internal; show only the model behind one.
+          worker: runtimeId ? getModelDisplayName(runtimeId) : undefined,
+          kind: task.kind ?? native?.kind,
+          dependencies: native?.dependencies ?? [],
+          attempt: native?.attempt,
+          failureReason: native?.failureReason,
+          conflictPaths: native?.conflictPaths,
+          changeSetId: native?.changeSetId,
+          integrationRevision: native?.integrationRevision,
+          criteria: task.acceptanceCriteria ?? [],
+        };
+      }),
+    [buildTasks, nativeProjection]
+  );
   const latestDiagnostic = diagnostics[0];
   const isActive = !ACTIVE_STATUSES.has(status);
   const liveActivity =
@@ -1835,451 +1869,151 @@ function DiscussionPageInner() {
     );
   }
 
-  return (
-    <div className="mx-auto max-w-[100rem] pb-16 xl:grid xl:grid-cols-[380px_minmax(0,1fr)] xl:items-start xl:gap-6 xl:pb-0 2xl:grid-cols-[440px_minmax(0,1fr)]">
-      {/* ── Activity log — left sidebar on wide screens (always open) ── */}
-      <aside className="hidden xl:sticky xl:top-6 xl:block xl:self-start">
-        <DiscussionDiagnostics
-          entries={diagnostics}
-          connected={streamConnected}
-          active={isActive}
-          variant="sidebar"
-          roundLabel={discussion.mode === "build" ? "turn" : "round"}
-          showEntryTokenUsage={discussion.mode !== "build"}
-        />
-      </aside>
-
-      {/* ── Main column ─────────────────────────────────────────── */}
-      <div className="space-y-6">
-      {/* ── Hero ────────────────────────────────────────────────── */}
-      <header className="relative overflow-hidden rounded-2xl border bg-card shadow-sm">
-        <div
-          className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 via-violet-500 to-amber-500"
-          aria-hidden
-        />
-        <div className="p-6 sm:p-8">
-          <div className="flex items-start justify-between gap-4">
-            <Link
-              href="/"
-              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back to dashboard
-            </Link>
-            <div className="flex flex-wrap items-center gap-2">
-              {isActive && streamConnected && (
-                <Button variant="destructive" size="sm" onClick={handleStop}>
-                  <Square className="mr-1 h-3.5 w-3.5" />
-                  Stop
-                </Button>
-              )}
-              {(status === "stopped" || status === "failed") &&
-                !streamConnected && (
-                  <>
-                    <Button
-                      size="sm"
-                      onClick={handleResume}
-                      disabled={
-                        projectHandoff !== null ||
-                        architectHandoff !== null ||
-                        verifierSelection !== null
-                      }
-                      title="Continue from where the run failed — already-generated responses are kept"
-                    >
-                      <Play className="mr-1 h-3.5 w-3.5" />
-                      Resume
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleRestart}
-                      title="Start over from scratch — wipes the previous run's output"
-                    >
-                      <RotateCcw className="mr-1 h-3.5 w-3.5" />
-                      Restart
-                    </Button>
-                  </>
-                )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={requestNotificationPermission}
-              >
-                <Bell className="mr-1 h-4 w-4" />
-                Notify me
-              </Button>
-            </div>
-          </div>
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <StatusPill status={status} />
-            <MetaChip>{getModeLabel(discussion.mode)}</MetaChip>
-            <MetaChip>{discussion.effort} effort</MetaChip>
-            {convergenceScore != null && (
-              <MetaChip>Convergence {convergenceScore.toFixed(1)}/10</MetaChip>
-            )}
-            {discussion.mode === "build" && (
-              <RunnerChip
-                url={discussion.runnerUrl ?? null}
-                token={discussion.runnerToken ?? null}
-                isActive={isActive}
-                onManage={
-                  !isActive && !streamConnected
-                    ? () => {
-                        setActiveTab("settings");
-                      }
-                    : undefined
-                }
-              />
-            )}
-          </div>
-
-          {/* Topics range from a short question to a long build spec — scale
-              the size down as it gets longer so an essay-length prompt doesn't
-              dominate the page. */}
-          <h1
-            className={cnTopic(discussion.topic.length)}
-            title={discussion.topic}
+  const sessionActions = (
+    <>
+      {isActive && streamConnected && (
+        <Button variant="destructive" size="sm" onClick={handleStop}>
+          <Square className="h-3.5 w-3.5" aria-hidden="true" />
+          Stop
+        </Button>
+      )}
+      {(status === "stopped" || status === "failed") && !streamConnected && (
+        <>
+          <Button
+            size="sm"
+            onClick={handleResume}
+            disabled={
+              projectHandoff !== null ||
+              architectHandoff !== null ||
+              verifierSelection !== null
+            }
+            title="Continue from where the run stopped — already-generated work is kept"
           >
-            {discussion.topic}
-          </h1>
-
-          {(participantIds.length > 0 || leadChips.length > 0) && (
-            <div className="mt-6 flex flex-wrap items-center gap-2">
-              <span className="font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground">
-                {discussion.mode === "build" ? "Team" : "Panel"}
-              </span>
-              {leadChips.map((lead) => (
-                <span
-                  key={lead.modelId}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 py-1 pl-1 pr-2.5"
-                  title={`${lead.role}: ${modelNames[lead.modelId] ?? getModelDisplayName(lead.modelId)}`}
-                >
-                  <span
-                    className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-primary"
-                  >
-                    <Gavel className="h-3 w-3" />
-                  </span>
-                  <span className="text-xs font-medium">
-                    {modelNames[lead.modelId] ?? getModelDisplayName(lead.modelId)}
-                  </span>
-                  <span className="font-mono text-[0.6rem] uppercase tracking-wide text-muted-foreground">
-                    {lead.role}
-                  </span>
-                </span>
-              ))}
-              {participantIds.map((modelId) => {
-                const accent = accentFor(accentMap, modelId);
-                const isJudge = discussion.judgeModelId === modelId;
-                return (
-                  <span
-                    key={modelId}
-                    className="inline-flex items-center gap-1.5 rounded-full border bg-background/70 py-1 pl-1 pr-2.5"
-                    title={isJudge ? "Final judge" : undefined}
-                  >
-                    <span
-                      className={cnChip(accent.chipBg, accent.text)}
-                    >
-                      {modelMonogram(modelId)}
-                    </span>
-                    <span className="text-xs font-medium">
-                      {modelNames[modelId] ?? getModelDisplayName(modelId)}
-                    </span>
-                    {isJudge && (
-                      <Gavel className="h-3 w-3 text-muted-foreground" />
-                    )}
-                  </span>
-                );
-              })}
-            </div>
-          )}
-
-          {isActive && (
-            <div className="mt-6 space-y-2">
-              <div className="flex items-center justify-between gap-3 font-mono text-[0.7rem] text-muted-foreground">
-                <span>
-                  {discussion.mode === "build"
-                    ? currentRound > 0
-                      ? `Wave ${currentRound} / ${maxRounds}`
-                      : "Preparing…"
-                    : `Round ${Math.max(currentRound, 0)} / ${maxRounds}`}
-                </span>
-                <span className="inline-flex min-w-0 items-center gap-1.5">
-                  <span className="relative flex h-1.5 w-1.5 shrink-0">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
-                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
-                  </span>
-                  <span className="truncate">{liveActivity}</span>
-                </span>
-              </div>
-              <ProgressBar value={currentRound} max={maxRounds} />
-            </div>
-          )}
-        </div>
-      </header>
-
-      {error && (
-        <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-          {error}
-        </div>
+            <Play className="h-3.5 w-3.5" aria-hidden="true" />
+            Resume
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleRestart}
+            title="Start over from scratch — wipes the previous run's output"
+          >
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            Restart
+          </Button>
+        </>
       )}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9"
+        onClick={requestNotificationPermission}
+        aria-label="Notify me when it finishes"
+        title="Notify me when it finishes"
+      >
+        <Bell className="h-4 w-4" aria-hidden="true" />
+      </Button>
+    </>
+  );
 
-      {folderGrant === "needed" &&
-        status !== "completed" &&
-        status !== "failed" && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
-            <p className="text-amber-900 dark:text-amber-100">
-              This build writes into the folder{" "}
-              <strong>{folderHandle?.name}</strong>. The browser needs you to
-              re-grant access before the run can start.
-            </p>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={grantFolderAccess}>
-                Grant folder access
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setFolderGrant("ready")}
-              >
-                Continue without folder
-              </Button>
-            </div>
-          </div>
-        )}
+  const errorBanner = error ? (
+    <div role="alert" className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
+      {error}
+    </div>
+  ) : null;
 
-      {pendingApproval && (
-        <div className="rounded-xl border border-primary/40 bg-primary/5 p-4">
-          <p className="text-sm font-medium">The Architect wants to run a command</p>
-          {pendingApproval.reason && (
-            <p className="mt-1 text-sm text-muted-foreground">
-              {pendingApproval.reason}
-            </p>
-          )}
-          <pre className="mt-2 overflow-x-auto rounded bg-background/80 p-2 font-mono text-xs">
-            $ {pendingApproval.command}
-          </pre>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button size="sm" onClick={() => pendingApproval.resolve("allow")}>
-              Allow once
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => pendingApproval.resolve("allow-all")}
-            >
-              Allow all this run
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => pendingApproval.resolve("deny")}
-            >
-              Deny
-            </Button>
-          </div>
-        </div>
-      )}
+  const modelLabel = (modelId: string) =>
+    modelNames[modelId] ?? getModelDisplayName(modelId);
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-5">
-        <TabsList className="grid w-full max-w-md grid-cols-2">
-          <TabsTrigger value="activity">Activity</TabsTrigger>
-          <TabsTrigger value="settings">Session settings</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="activity" className="space-y-6">
-      {discussion.mode === "build" &&
-        !discussion.nativeBuildRunId &&
-        buildStopReport && (
-        <BuildStopReportPanel report={buildStopReport} />
-      )}
-
-      {discussion.mode === "build" &&
-        !discussion.nativeBuildRunId &&
-        buildToolReviewReport && (
-        <BuildToolReviewPanel report={buildToolReviewReport} />
-      )}
-
-      {discussion.mode === "build" && discussion.nativeBuildRunId && (
-        <RunnerV2SteeringPanel
-          projection={nativeProjection}
-          onAnswerQuestion={handleArchitectQuestionAnswer}
-        />
-      )}
-
-      {discussion.mode === "build" &&
-        status !== "loading" &&
-        status !== "locked" &&
-        status !== "not_found" && (
-          <div className="rounded-xl border bg-card p-4 shadow-sm">
-            <div className="flex items-center gap-2">
-              <StickyNote className="h-4 w-4 text-muted-foreground" />
-              <p className="text-sm font-medium">Note to the Architect</p>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {noteDeliveryMode === "native_active"
-                ? "Send durable text guidance to the current Runner V2 Build. The steering ledger shows when the Architect acknowledges it."
-                : noteDeliveryMode === "native_unknown"
-                  ? "Runner state is still loading. Sending checks the durable Build before choosing current-run guidance or a follow-up pass."
-                  : isActive
-                    ? "Picked up at the Architect's next planning or review step - use it to steer the build while it runs."
-                    : "The build is finished - sending a note starts a follow-up pass in which the Architect addresses it."}
-            </p>
-            {noteAttachmentNotice && (
-              <p className="mt-2 rounded-md border border-blue-300/70 bg-blue-50 px-3 py-2 text-xs text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
-                {noteAttachmentNotice}
-              </p>
-            )}
-            <div className="mt-2 space-y-2">
-              <div className="flex items-end gap-2">
-                <BuildNoteDraftField
-                  value={noteDraft}
-                  onChange={setNoteDraft}
-                  onSubmit={() => void submitNote()}
-                />
-                <Button
-                  size="sm"
-                  onClick={() => void submitNote()}
-                  disabled={
-                    noteSending || (
-                      !noteDraft.trim() &&
-                      (noteAttachmentNotice !== null || noteFiles.length === 0)
-                    )
-                  }
-                >
-                  {noteSending
-                    ? "Sending..."
-                    : noteDeliveryMode === "native_active" || noteDeliveryMode === "native_unknown"
-                      ? "Send guidance"
-                      : "Send note"}
+  if (discussion.mode === "build") {
+    const steeringView = runnerSteeringLedgerView(nativeProjection);
+    const decisions: WorkspaceDecision[] = [];
+    if (steeringView.activeQuestion) {
+      decisions.push({
+        id: "architect-question",
+        node: (
+          <RunnerV2SteeringPanel
+            projection={nativeProjection}
+            onAnswerQuestion={handleArchitectQuestionAnswer}
+            section="question"
+          />
+        ),
+      });
+    }
+    if (pendingApproval) {
+      decisions.push({
+        id: "command-approval",
+        node: (
+          <DecisionCard
+            title="The Architect wants to run a command"
+            tone="info"
+            actions={
+              <>
+                <Button size="sm" onClick={() => pendingApproval.resolve("allow")}>
+                  Allow once
                 </Button>
-              </div>
-              {!noteAttachmentNotice && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    ref={noteFileInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    onChange={(event) => {
-                      handleNoteFileSelection(event.currentTarget.files);
-                      event.currentTarget.value = "";
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => noteFileInputRef.current?.click()}
-                    disabled={noteSending}
-                  >
-                    <Paperclip className="h-4 w-4" />
-                    Attach files
-                  </Button>
-                  {noteFiles.map((file, index) => (
-                    <span
-                      key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
-                      className="inline-flex max-w-full items-center gap-2 rounded-full border bg-muted px-3 py-1 text-xs text-muted-foreground"
-                    >
-                      <span className="truncate">{file.name}</span>
-                      <button
-                        type="button"
-                        className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        onClick={() => removeNoteFile(index)}
-                        aria-label={`Remove ${file.name}`}
-                        disabled={noteSending}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-      {discussion.mode === "build" && (
-        <BuildRunStats
-          status={status}
-          policy={discussion.buildRunPolicy ?? "finish"}
-          budgetUsd={discussion.buildBudgetUsd ?? 0}
-          timeLimitMinutes={discussion.buildTimeLimitMinutes ?? 120}
-          stopReason={discussion.buildStopReason}
-          branch={repoWorkflow?.pushedBranch ?? repoStatus?.currentBranch ?? null}
-          prUrl={repoWorkflow?.prUrl ?? null}
-          usage={buildUsage}
-          projectHandoffRequested={Boolean(projectHandoff)}
-        />
-      )}
-
-      {discussion.mode === "build" && projectHandoff && (
-        <div className="space-y-3 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100">
-          <div>
-            <p className="font-medium">The Architect has finished — choose the final handoff</p>
-            <p className="mt-1 whitespace-pre-wrap text-xs opacity-80">
-              {projectHandoff.summary}
+                <Button size="sm" variant="outline" onClick={() => pendingApproval.resolve("allow-all")}>
+                  Allow all this run
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => pendingApproval.resolve("deny")}>
+                  Deny
+                </Button>
+              </>
+            }
+          >
+            {pendingApproval.reason && <p>{pendingApproval.reason}</p>}
+            <pre className="overflow-x-auto rounded-md bg-background/70 p-2 font-mono text-xs text-foreground">
+              $ {pendingApproval.command}
+            </pre>
+          </DecisionCard>
+        ),
+      });
+    }
+    for (const permission of nativePermissions) {
+      decisions.push({
+        id: `permission-${permission.requestId}`,
+        node: (
+          <DecisionCard
+            title="Runner permission required"
+            tone={permission.destructive || permission.credentialChange ? "danger" : "warn"}
+            actions={
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void handleNativePermission(permission.requestId, "approved")}
+                >
+                  Approve once
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleNativePermission(permission.requestId, "denied")}
+                >
+                  Deny
+                </Button>
+              </>
+            }
+          >
+            <p>
+              {permission.actor} requests <code>{permission.toolName}</code> ({permission.capability}).
+              {permission.outsideWorkspace ? " This accesses a path outside the project." : ""}
+              {permission.external ? " This affects an external system." : ""}
+              {permission.destructive ? " This operation is destructive." : ""}
+              {permission.credentialChange ? " This changes credentials." : ""}
             </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {projectHandoff.options.includes("keep_integration_branch") && (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void handleProjectHandoff("keep_integration_branch")}
-              >
-                Keep integration branch
-              </Button>
-            )}
-            {projectHandoff.options.includes("apply_to_project") && (
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void handleProjectHandoff("apply_to_project")}
-              >
-                Apply to project
-              </Button>
-            )}
-          </div>
-          <p className="text-xs opacity-75">
-            Applying first performs a Git dry run. If your project has conflicting local changes,
-            Runner V2 leaves it untouched and keeps this decision open.
-          </p>
-        </div>
-      )}
-
-      {discussion.mode === "build" && (
-        <NativePlanningPanel projection={nativeProjection} usage={nativeObservability?.budget}
-          connection={discussion.runnerUrl && discussion.runnerToken ? { url: discussion.runnerUrl, token: discussion.runnerToken } : undefined}
-          onProjection={(updated) => setNativeProjection((current) => current?.runId === updated.runId && current.lastSequence > updated.lastSequence ? current : updated)} />
-      )}
-      {discussion.mode === "build" && (
-        <RunnerV2ObservabilityPanel
-          snapshot={nativeObservability}
-          projection={nativeProjection}
-          onDownloadAudit={
-            discussion.nativeBuildRunId ? () => void downloadNativeAudit() : undefined
-          }
-          onExtendRepairCycles={
-            discussion.nativeBuildRunId ? handleExtendRepairCycles : undefined
-          }
-        />
-      )}
-
-      {discussion.mode === "build" && verifierSelection && (
-        <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-          <div>
-            <p className="font-medium">Choose an independent verifier to continue</p>
-            <p className="mt-1 text-xs opacity-80">{verifierSelection.reason}</p>
-            {verifierSelection.requiredCapabilities.length > 0 && (
-              <p className="mt-1 text-xs opacity-75">
-                Required capabilities: {verifierSelection.requiredCapabilities.join(", ")}
-              </p>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {verifierSelection.candidateRuntimeIds.map((runtimeId) => (
+          </DecisionCard>
+        ),
+      });
+    }
+    if (verifierSelection) {
+      decisions.push({
+        id: "verifier-selection",
+        node: (
+          <DecisionCard
+            title="Choose an independent verifier to continue"
+            actions={verifierSelection.candidateRuntimeIds.map((runtimeId) => (
               <Button
                 key={runtimeId}
                 type="button"
@@ -2290,21 +2024,27 @@ function DiscussionPageInner() {
                 {getModelDisplayName(runtimeId)}
               </Button>
             ))}
-          </div>
-          <p className="text-xs opacity-75">
-            The selected model must remain distinct from the Architect and every accepted change author.
-          </p>
-        </div>
-      )}
-
-      {discussion.mode === "build" && architectHandoff && (
-        <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-          <div>
-            <p className="font-medium">Select the Architect runtime to continue</p>
-            <p className="mt-1 text-xs opacity-80">{architectHandoff.reason}</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {architectHandoff.candidateRuntimeIds.map((runtimeId) => (
+          >
+            <p>{verifierSelection.reason}</p>
+            {verifierSelection.requiredCapabilities.length > 0 && (
+              <p className="text-xs">
+                Required capabilities: {verifierSelection.requiredCapabilities.join(", ")}
+              </p>
+            )}
+            <p className="text-xs">
+              It must differ from the Architect and every accepted change author.
+            </p>
+          </DecisionCard>
+        ),
+      });
+    }
+    if (architectHandoff) {
+      decisions.push({
+        id: "architect-handoff",
+        node: (
+          <DecisionCard
+            title="Select the Architect runtime to continue"
+            actions={architectHandoff.candidateRuntimeIds.map((runtimeId) => (
               <Button
                 key={runtimeId}
                 type="button"
@@ -2315,80 +2055,187 @@ function DiscussionPageInner() {
                 {getModelDisplayName(runtimeId)}
               </Button>
             ))}
-          </div>
-        </div>
-      )}
-
-      {discussion.mode === "build" && nativePermissions.map((permission) => (
-        <div
-          key={permission.requestId}
-          className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100"
-        >
-          <div>
-            <p className="font-medium">Runner permission required</p>
-            <p className="mt-1 text-xs opacity-80">
-              {permission.actor} requests <code>{permission.toolName}</code> ({permission.capability}).
-              {permission.outsideWorkspace ? " This accesses a path outside the project." : ""}
-              {permission.external ? " This affects an external system." : ""}
-              {permission.destructive ? " This operation is destructive." : ""}
-              {permission.credentialChange ? " This changes credentials." : ""}
+          >
+            <p>{architectHandoff.reason}</p>
+          </DecisionCard>
+        ),
+      });
+    }
+    if (projectHandoff) {
+      decisions.push({
+        id: "project-handoff",
+        node: (
+          <DecisionCard
+            title="The Architect has finished — choose the handoff"
+            tone="success"
+            actions={
+              <>
+                {projectHandoff.options.includes("apply_to_project") && (
+                  <Button type="button" size="sm" onClick={() => void handleProjectHandoff("apply_to_project")}>
+                    Apply to project
+                  </Button>
+                )}
+                {projectHandoff.options.includes("keep_integration_branch") && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleProjectHandoff("keep_integration_branch")}
+                  >
+                    Keep integration branch
+                  </Button>
+                )}
+              </>
+            }
+          >
+            <p className="whitespace-pre-wrap">{projectHandoff.summary}</p>
+            <p className="text-xs">
+              Applying first performs a Git dry run. If your project has conflicting
+              local changes, Runner V2 leaves it untouched and keeps this decision open.
             </p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => void handleNativePermission(permission.requestId, "approved")}
-            >
-              Approve once
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => void handleNativePermission(permission.requestId, "denied")}
-            >
-              Deny
-            </Button>
-          </div>
-        </div>
-      ))}
+          </DecisionCard>
+        ),
+      });
+    }
 
-      {discussion.mode === "build" &&
-        shouldShowBuildStopFallback({
+    const banner = (
+      <>
+        {errorBanner}
+        {folderGrant === "needed" && status !== "completed" && status !== "failed" && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning-soft p-4 text-sm">
+            <p>
+              This build writes into the folder <strong>{folderHandle?.name}</strong>. The
+              browser needs you to re-grant access before the run can start.
+            </p>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={grantFolderAccess}>
+                Grant folder access
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setFolderGrant("ready")}>
+                Continue without folder
+              </Button>
+            </div>
+          </div>
+        )}
+        {shouldShowBuildStopFallback({
           stopReason: discussion.buildStopReason,
           status,
           hasStopReport: Boolean(buildStopReport),
           hasArchitectHandoff: Boolean(architectHandoff),
           hasProjectHandoff: Boolean(projectHandoff),
         }) &&
-        discussion.buildStopReason && (
-          <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
-            {buildStopFallbackMessage(discussion.buildStopReason)}{" "}
-            Resume starts a fresh budget window and keeps the current checkpoint
-            (task graph, files, and repo/GitHub refs).
+          discussion.buildStopReason && (
+            <p className="rounded-xl border border-warning/40 bg-warning-soft px-4 py-3 text-sm">
+              {buildStopFallbackMessage(discussion.buildStopReason)} Resume starts a
+              fresh budget window and keeps the current checkpoint (task graph, files,
+              and repo/GitHub refs).
+            </p>
+          )}
+      </>
+    );
+
+    const composer = (
+      <form
+        className="glass-strong rounded-2xl border p-2 focus-within:ring-2 focus-within:ring-ring"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submitNote();
+        }}
+      >
+        {noteAttachmentNotice && (
+          <p className="mx-2 mt-1 rounded-md bg-accent/60 px-3 py-1.5 text-xs text-accent-foreground">
+            {noteAttachmentNotice}
           </p>
         )}
+        <div className="flex items-end gap-2">
+          <BuildNoteDraftField
+            compact
+            value={noteDraft}
+            onChange={setNoteDraft}
+            onSubmit={() => void submitNote()}
+          />
+          {!noteAttachmentNotice && (
+            <>
+              <input
+                ref={noteFileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  handleNoteFileSelection(event.currentTarget.files);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                onClick={() => noteFileInputRef.current?.click()}
+                disabled={noteSending}
+                aria-label="Attach files"
+                title="Attach files"
+              >
+                <Paperclip className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </>
+          )}
+          <Button
+            type="submit"
+            size="sm"
+            className="shrink-0"
+            disabled={
+              noteSending ||
+              (!noteDraft.trim() &&
+                (noteAttachmentNotice !== null || noteFiles.length === 0))
+            }
+          >
+            {noteSending
+              ? "Sending..."
+              : noteDeliveryMode === "native_active" || noteDeliveryMode === "native_unknown"
+                ? "Send guidance"
+                : "Send note"}
+          </Button>
+        </div>
+        {noteFiles.length > 0 && !noteAttachmentNotice && (
+          <div className="flex flex-wrap gap-2 px-2 pt-1">
+            {noteFiles.map((file, index) => (
+              <span
+                key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
+                className="inline-flex max-w-full items-center gap-2 rounded-full border bg-muted px-3 py-1 text-xs text-muted-foreground"
+              >
+                <span className="truncate">{file.name}</span>
+                <button
+                  type="button"
+                  className="rounded-full p-0.5 hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => removeNoteFile(index)}
+                  aria-label={`Remove ${file.name}`}
+                  disabled={noteSending}
+                >
+                  <X className="h-3 w-3" aria-hidden="true" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <p className="hidden px-2 pt-1 text-xs text-muted-foreground sm:block">
+          {noteDeliveryMode === "native_active"
+            ? "Durable guidance for this build. The steering ledger shows when the Architect acknowledges it."
+            : noteDeliveryMode === "native_unknown"
+              ? "Runner state is still loading — sending checks the build before choosing guidance or a follow-up pass."
+              : isActive
+                ? "Picked up at the Architect's next planning or review step."
+                : "The build is finished — a note starts a follow-up pass that addresses it."}
+        </p>
+      </form>
+    );
 
-      {discussion.mode === "build" && (
-        <BuildTaskBoard
-          tasks={buildTasks}
-          files={writtenFiles}
-          commands={commandRuns}
-          folderName={discussion.projectFolderName}
-          acceptanceContractStatus={nativeProjection?.acceptanceContractStatus}
-        />
-      )}
-
-      {discussion.mode === "build" && (
-        <RepoWorkflowPanel status={repoStatus} diff={repoDiff} workflow={repoWorkflow} />
-      )}
-
-      <DiscussionAttachments attachments={attachments} />
-
-      {/* ── Result first when ready ─────────────────────────────── */}
-      {finalResult && !hasNativeAttachment &&
-        (discussion.mode === "build" ? (
+    const overview = (
+      <div className="space-y-6">
+        {discussion.nativeBuildRunId && (
+          <RunnerV2SteeringPanel projection={nativeProjection} section="ledger" />
+        )}
+        {finalResult && !hasNativeAttachment && (
           <BuildResultCard
             answer={finalResult.answer}
             confidence={finalResult.confidence}
@@ -2396,77 +2243,127 @@ function DiscussionPageInner() {
             topic={discussion.topic}
             discussionId={discussion.id}
           />
-        ) : (
-          <FinalAnswerCard
-            answer={finalResult.answer}
-            confidence={finalResult.confidence}
-            dissent={finalResult.dissent}
-            topic={discussion.topic}
-          />
-        ))}
-
-      {/* ── Files from an unfinished build ──────────────────────────
-          No final result yet, the run isn't live, but earlier passes already
-          produced files. Surface them so they aren't stranded — download them,
-          or attach a runner in Session settings and Resume. */}
-      {discussion.mode === "build" && currentNativeFiles && (
-        <ArtifactPanel
-          files={nativeArtifactFiles}
-          snapshot={currentNativeFiles.snapshot}
+        )}
+        {!discussion.nativeBuildRunId && buildStopReport && (
+          <BuildStopReportPanel report={buildStopReport} />
+        )}
+        {!discussion.nativeBuildRunId && buildToolReviewReport && (
+          <BuildToolReviewPanel report={buildToolReviewReport} />
+        )}
+        <RunnerV2ObservabilityPanel
+          snapshot={nativeObservability}
+          projection={nativeProjection}
+          onDownloadAudit={
+            discussion.nativeBuildRunId ? () => void downloadNativeAudit() : undefined
+          }
+          onExtendRepairCycles={
+            discussion.nativeBuildRunId ? handleExtendRepairCycles : undefined
+          }
         />
-      )}
+        <NativePlanningPanel
+          projection={nativeProjection}
+          usage={nativeObservability?.budget}
+          connection={
+            discussion.runnerUrl && discussion.runnerToken
+              ? { url: discussion.runnerUrl, token: discussion.runnerToken }
+              : undefined
+          }
+          onProjection={(updated) =>
+            setNativeProjection((current) =>
+              current?.runId === updated.runId && current.lastSequence > updated.lastSequence
+                ? current
+                : updated
+            )
+          }
+        />
+        <DiscussionAttachments attachments={attachments} />
+      </div>
+    );
 
-      {discussion.mode === "build" &&
-        shouldShowLegacyBuildFileFallback({
+    const fileCount = currentNativeFiles ? nativeArtifactFiles.length : legacyArtifactFiles.length;
+    const filesView = (
+      <div className="space-y-6">
+        {currentNativeFiles && (
+          <ArtifactPanel files={nativeArtifactFiles} snapshot={currentNativeFiles.snapshot} />
+        )}
+        {shouldShowLegacyBuildFileFallback({
           hasNativeFiles: Boolean(currentNativeFiles),
           hasFinalResult: Boolean(finalResult),
           legacyFileCount: legacyArtifactFiles.length,
           streamConnected,
         }) && (
           <div className="space-y-3">
-            <p className="rounded-lg border border-dashed bg-card/50 px-4 py-3 text-sm text-muted-foreground">
-              Files produced so far — the build didn&apos;t finish. Download them
-              or attach a runner in Session settings and Resume.
+            <p className="rounded-xl border border-dashed px-4 py-3 text-sm text-muted-foreground">
+              Files produced so far — the build didn&apos;t finish. Download them, or
+              attach a runner in Session settings and Resume.
             </p>
             <ArtifactPanel files={legacyArtifactFiles} />
           </div>
         )}
-
-      {/* ── Transcript ──────────────────────────────────────────── */}
-      {discussion.mode === "build" ? (
-        <BuildTranscriptPanel
-          messages={buildTranscriptMessages}
-          accentMap={accentMap}
-          onDownload={downloadTranscript}
+        <BuildTaskBoard
+          tasks={[]}
+          files={writtenFiles}
+          commands={commandRuns}
+          folderName={discussion.projectFolderName}
         />
-      ) : (
-      <div className="space-y-5">
-        <div className="flex items-center gap-3">
-          <h2 className="font-mono text-[0.7rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-            {finalResult ? "Discussion transcript" : "Live discussion"}
-          </h2>
-          <span className="h-px flex-1 bg-gradient-to-r from-border to-transparent" />
-          {messages.length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={downloadTranscript}
-              title="Download the whole conversation as one Markdown file"
-            >
-              <Download className="mr-1 h-3.5 w-3.5" />
-              Download .md
-            </Button>
-          )}
-        </div>
-        <DiscussionTimeline
-          messages={messages}
-          accentMap={accentMap}
-        />
+        {!currentNativeFiles && legacyArtifactFiles.length === 0 && writtenFiles.length === 0 && commandRuns.length === 0 && (
+          <p className="text-sm text-muted-foreground">No files or commands yet.</p>
+        )}
       </div>
-      )}
-        </TabsContent>
+    );
 
-        <TabsContent value="settings">
+    const workerNames = participantIds.map(modelLabel);
+    return (
+      <BuildWorkspace
+        topic={discussion.topic}
+        statusPill={<StatusPill status={status} />}
+        crew={{
+          architect: discussion.judgeModelId ? modelLabel(discussion.judgeModelId) : undefined,
+          workers: workerNames,
+          verifiers: discussion.reviewerModelId ? [modelLabel(discussion.reviewerModelId)] : [],
+        }}
+        runnerChip={
+          <RunnerChip
+            url={discussion.runnerUrl ?? null}
+            token={discussion.runnerToken ?? null}
+            isActive={isActive}
+            onManage={
+              !isActive && !streamConnected
+                ? () => setBuildView({ kind: "settings" })
+                : undefined
+            }
+          />
+        }
+        actions={sessionActions}
+        live={isActive ? liveActivity : null}
+        banner={banner}
+        tasks={workspaceTasks}
+        view={buildView}
+        onViewChange={setBuildView}
+        overview={overview}
+        files={filesView}
+        fileCount={fileCount}
+        transcript={
+          <BuildTranscriptPanel
+            messages={buildTranscriptMessages}
+            accentMap={accentMap}
+            onDownload={downloadTranscript}
+          />
+        }
+        transcriptCount={buildTranscriptMessages.length}
+        activity={
+          <div className="space-y-6">
+            <DiscussionDiagnostics
+              entries={diagnostics}
+              connected={streamConnected}
+              active={isActive}
+              variant="sidebar"
+              roundLabel="turn"
+              showEntryTokenUsage={false}
+            />
+          </div>
+        }
+        settings={
           <DiscussionSessionSettings
             discussion={discussion}
             enabledModels={enabledModels}
@@ -2475,20 +2372,226 @@ function DiscussionPageInner() {
             onSave={handleSessionSettingsSave}
             onRunnerChange={handleRunnerChange}
           />
-        </TabsContent>
-      </Tabs>
+        }
+        decisions={decisions}
+        composer={composer}
+        details={
+          <>
+            <section aria-labelledby="details-crew-title" className="space-y-2 text-sm">
+              <h3 id="details-crew-title" className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                Crew
+              </h3>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+                <dt className="flex items-center gap-1.5 text-muted-foreground">
+                  <RoleGlyph role="architect" /> Architect
+                </dt>
+                <dd>{discussion.judgeModelId ? modelLabel(discussion.judgeModelId) : "—"}</dd>
+                <dt className="flex items-center gap-1.5 text-muted-foreground">
+                  <RoleGlyph role="worker" /> Workers
+                </dt>
+                <dd>{workerNames.length > 0 ? workerNames.join(", ") : "—"}</dd>
+                <dt className="flex items-center gap-1.5 text-muted-foreground">
+                  <RoleGlyph role="verifier" /> Verifier
+                </dt>
+                <dd>
+                  {discussion.reviewerModelId
+                    ? modelLabel(discussion.reviewerModelId)
+                    : discussion.buildAlwaysRequireIndependentVerifier
+                      ? "Independent model required"
+                      : "Chosen by the runner"}
+                </dd>
+              </dl>
+            </section>
+            <section aria-labelledby="details-runner-title" className="space-y-2 text-sm">
+              <h3 id="details-runner-title" className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                Runner
+              </h3>
+              <RunnerChip
+                url={discussion.runnerUrl ?? null}
+                token={discussion.runnerToken ?? null}
+                isActive={isActive}
+              />
+              {!isActive && !streamConnected && (
+                <button
+                  type="button"
+                  className="block text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                  onClick={() => setBuildView({ kind: "settings" })}
+                >
+                  Change runner in Session settings
+                </button>
+              )}
+            </section>
+            <BuildRunStats
+              status={status}
+              policy={discussion.buildRunPolicy ?? "finish"}
+              budgetUsd={discussion.buildBudgetUsd ?? 0}
+              timeLimitMinutes={discussion.buildTimeLimitMinutes ?? 120}
+              stopReason={discussion.buildStopReason}
+              branch={repoWorkflow?.pushedBranch ?? repoStatus?.currentBranch ?? null}
+              prUrl={repoWorkflow?.prUrl ?? null}
+              usage={buildUsage}
+              projectHandoffRequested={Boolean(projectHandoff)}
+            />
+            <RepoWorkflowPanel status={repoStatus} diff={repoDiff} workflow={repoWorkflow} />
+            {discussion.nativeBuildRunId && (
+              <Button variant="outline" size="sm" onClick={() => void downloadNativeAudit()}>
+                <Download className="h-4 w-4" aria-hidden="true" />
+                Download run audit
+              </Button>
+            )}
+          </>
+        }
+      />
+    );
+  }
 
+  return (
+    <div className="mx-auto grid max-w-[90rem] gap-6 pb-16 xl:grid-cols-[minmax(0,1fr)_360px] xl:items-start xl:pb-0">
+      <div className="min-w-0 space-y-6">
+        <header className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <Link
+              href="/"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              Workspace
+            </Link>
+            <div className="flex flex-wrap items-center justify-end gap-2">{sessionActions}</div>
+          </div>
+          <h1 className={cnTopic(discussion.topic.length)} title={discussion.topic}>
+            {discussion.topic}
+          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill status={status} />
+            <MetaChip>{getModeLabel(discussion.mode)}</MetaChip>
+            <MetaChip>{discussion.effort} effort</MetaChip>
+            {convergenceScore != null && (
+              <MetaChip>Convergence {convergenceScore.toFixed(1)}/10</MetaChip>
+            )}
+          </div>
+          {(participantIds.length > 0 || leadChips.length > 0) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {leadChips.map((lead) => (
+                <span
+                  key={lead.modelId}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-accent/60 py-1 pl-1 pr-2.5"
+                  title={`${lead.role}: ${modelLabel(lead.modelId)}`}
+                >
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-primary">
+                    <Gavel className="h-3 w-3" aria-hidden="true" />
+                  </span>
+                  <span className="text-xs font-medium">{modelLabel(lead.modelId)}</span>
+                  <span className="text-[0.65rem] uppercase tracking-wide text-muted-foreground">
+                    {lead.role}
+                  </span>
+                </span>
+              ))}
+              {participantIds.map((modelId) => {
+                const accent = accentFor(accentMap, modelId);
+                const isJudge = discussion.judgeModelId === modelId;
+                return (
+                  <span
+                    key={modelId}
+                    className="inline-flex items-center gap-1.5 rounded-full border bg-background/50 py-1 pl-1 pr-2.5"
+                    title={isJudge ? "Final judge" : undefined}
+                  >
+                    <span className={cnChip(accent.chipBg, accent.text)}>
+                      {modelMonogram(modelId)}
+                    </span>
+                    <span className="text-xs font-medium">{modelLabel(modelId)}</span>
+                    {isJudge && <Gavel className="h-3 w-3 text-muted-foreground" aria-label="Judge" />}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {isActive && (
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>Round {Math.max(currentRound, 0)} of {maxRounds}</span>
+                <span className="truncate" aria-live="polite">{liveActivity}</span>
+              </div>
+              <ProgressBar value={currentRound} max={maxRounds} />
+            </div>
+          )}
+        </header>
+
+        {errorBanner}
+
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-5">
+          <TabsList>
+            <TabsTrigger value="activity">Conversation</TabsTrigger>
+            <TabsTrigger value="settings">Session settings</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="activity" className="space-y-6">
+            {finalResult && (
+              <FinalAnswerCard
+                answer={finalResult.answer}
+                confidence={finalResult.confidence}
+                dissent={finalResult.dissent}
+                topic={discussion.topic}
+              />
+            )}
+            <DiscussionAttachments attachments={attachments} />
+            <section aria-labelledby="transcript-title" className="space-y-5">
+              <div className="flex items-center gap-3">
+                <h2
+                  id="transcript-title"
+                  className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground"
+                >
+                  {finalResult ? "Transcript" : "Live discussion"}
+                </h2>
+                <span className="h-px flex-1 bg-border" aria-hidden="true" />
+                {messages.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={downloadTranscript}
+                    title="Download the whole conversation as one Markdown file"
+                  >
+                    <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                    Download .md
+                  </Button>
+                )}
+              </div>
+              <DiscussionTimeline messages={messages} accentMap={accentMap} />
+            </section>
+          </TabsContent>
+
+          <TabsContent value="settings">
+            <DiscussionSessionSettings
+              discussion={discussion}
+              enabledModels={enabledModels}
+              attachments={attachments}
+              canEdit={!isActive && !streamConnected}
+              onSave={handleSessionSettingsSave}
+              onRunnerChange={handleRunnerChange}
+            />
+          </TabsContent>
+        </Tabs>
       </div>
 
-      {/* ── Activity log — fixed footer bar below xl (collapsed by default) ── */}
+      <aside aria-label="Activity log" className="hidden xl:sticky xl:top-20 xl:block xl:self-start">
+        <DiscussionDiagnostics
+          entries={diagnostics}
+          connected={streamConnected}
+          active={isActive}
+          variant="sidebar"
+          roundLabel="round"
+          showEntryTokenUsage
+        />
+      </aside>
+
       <div className="xl:hidden">
         <DiscussionDiagnostics
           entries={diagnostics}
           connected={streamConnected}
           active={isActive}
           variant="footer"
-          roundLabel={discussion.mode === "build" ? "turn" : "round"}
-          showEntryTokenUsage={discussion.mode !== "build"}
+          roundLabel="round"
+          showEntryTokenUsage
         />
       </div>
     </div>
