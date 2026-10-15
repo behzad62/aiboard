@@ -139,3 +139,56 @@ function PlanningControls({ projection, connection, usage, onProjection }: { pro
     </fieldset></details>}
   </section>;
 }
+
+/**
+ * Compact owner gate for the "Needs you" dock: the plan is ready and workers wait for an explicit
+ * start. Shows what will run and starts exactly the displayed plan identity.
+ */
+export function NativePlanStartCard({ projection, connection, onProjection }: { projection: NativeBuildProjection; connection?: NativeRunnerConnection; onProjection: (projection: NativeBuildProjection) => void }) {
+  const [readiness, setReadiness] = useState<PlanningReadinessSnapshot>();
+  const [busy, setBusy] = useState(false), [message, setMessage] = useState("");
+  const startKey = useRef(key("owner-start"));
+  const connectionUrl = connection?.url, connectionToken = connection?.token;
+  const planRevisionId = projection.planning?.plan?.currentRevisionId;
+  useEffect(() => {
+    setReadiness(undefined);
+    if (!connectionUrl || !connectionToken) return;
+    const abort = new AbortController();
+    void getNativePlanningReadiness({ url: connectionUrl, token: connectionToken }, projection.runId, fetch, abort.signal)
+      .then((current) => { if (!abort.signal.aborted) setReadiness(current); })
+      .catch((error: unknown) => { if (!abort.signal.aborted) setMessage(error instanceof Error ? error.message : "Plan readiness could not be loaded."); });
+    return () => abort.abort();
+  }, [projection.runId, planRevisionId, connectionUrl, connectionToken]);
+  const view = nativePlanningView(projection);
+  let start: ExplicitStartRequestV1 | undefined;
+  try { start = readiness ? displayedPlanStart(readiness, startKey.current) : undefined; } catch { start = undefined; }
+  const current = start && start.planRevisionId === planRevisionId;
+  const review = view.planning?.coverageReview;
+  const tasks = view.revision?.tasks ?? [];
+  return <div className="space-y-3 rounded-xl border border-warning/50 bg-warning-soft p-4 text-sm">
+    <div>
+      <p className="font-semibold">Approve the plan to start workers</p>
+      <p className="text-muted-foreground">
+        Plan {planRevisionId ?? "—"} · {tasks.length} task{tasks.length === 1 ? "" : "s"} · {view.requirements.length} requirements
+        {review ? ` · coverage reviewed by ${review.reviewerRuntimeId} (${review.independence.replaceAll("_", " ")})` : ""}
+      </p>
+    </div>
+    {tasks.length > 0 && <ol className="list-decimal space-y-1 pl-5">
+      {tasks.map((task) => <li key={task.id}>{task.outcome.user}{task.dependencies.length ? <span className="text-xs text-muted-foreground"> — after {task.dependencies.join(", ")}</span> : null}</li>)}
+    </ol>}
+    {readiness?.blockers.map((blocker) => <p key={blocker} className="text-amber-700 dark:text-amber-300">{blocker}</p>)}
+    {message && <p role="alert">{message}</p>}
+    <div className="flex flex-wrap items-center gap-3">
+      <Button size="sm" disabled={busy || !connection || !current} onClick={() => {
+        if (!start || !connection) return;
+        setBusy(true); setMessage("");
+        void startNativeReadyPlan(connection, projection.runId, start)
+          .then((updated) => onProjection(updated))
+          .catch((error: unknown) => { startKey.current = key("owner-start"); setMessage(`${error instanceof Error ? error.message : "Start failed."} Refresh and try again.`); })
+          .finally(() => setBusy(false));
+      }}>{busy ? "Starting…" : "Start this plan"}</Button>
+      {!readiness && !message && <span className="text-xs text-muted-foreground">Checking plan readiness…</span>}
+      <span className="text-xs text-muted-foreground">Full requirements, phases, and source are in Overview → planning.</span>
+    </div>
+  </div>;
+}

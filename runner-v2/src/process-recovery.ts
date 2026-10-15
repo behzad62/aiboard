@@ -48,7 +48,7 @@ export function createSubprocessProcessRecoveryRuntime(options: {
   readonly runtime: Pick<SubprocessRuntime, "recoverExceptional">;
   /** Shared kernel authority for current-owner or safely reclaimable exceptional records. */
   readonly canRecoverExceptional: (invocationId: string) => boolean;
-  readonly store: Pick<DurableProcessStore, "readByInvocation"> & Partial<Pick<DurableProcessStore, "listRowIds">>;
+  readonly store: Pick<DurableProcessStore, "readByInvocation"> & Partial<Pick<DurableProcessStore, "listRowIds" | "listRowRevisions">>;
   readonly kind?: "subprocess" | "streaming";
   readonly capabilities?: (record: DurableSubprocessRecord) => ExecutionSafetyCapabilities;
   readonly executionGrants: ExecutionGrantAuthority;
@@ -99,11 +99,36 @@ export function createSubprocessProcessRecoveryRuntime(options: {
       }) } : {}),
     }) as RecoveryTarget;
   };
+  // Observability lists every durable record on each poll. A record's integrity-verified content is
+  // fixed for a given revision, so reuse the inspected view until the revision changes; `owned` is
+  // live kernel authority and is always re-evaluated.
+  const inspected = new Map<string, { revision: number; target: RecoveryTarget }>();
+  const listInspected = (): readonly RecoveryTarget[] => {
+    const rows = options.store.listRowRevisions?.();
+    if (!rows) {
+      return (options.store.listRowIds?.() ?? []).flatMap(invocationId => {
+        const value = inspect(invocationId); return value ? [value] : [];
+      });
+    }
+    const seen = new Set<string>();
+    const targets = rows.flatMap(({ invocationId, revision }) => {
+      seen.add(invocationId);
+      const cached = inspected.get(invocationId);
+      if (cached && cached.revision === revision) {
+        const owned = options.canRecoverExceptional(invocationId);
+        return [owned === cached.target.owned ? cached.target : Object.freeze({ ...cached.target, owned }) as RecoveryTarget];
+      }
+      const value = inspect(invocationId);
+      if (!value) { inspected.delete(invocationId); return []; }
+      inspected.set(invocationId, { revision: value.scope.revision, target: value });
+      return [value];
+    });
+    for (const invocationId of inspected.keys()) if (!seen.has(invocationId)) inspected.delete(invocationId);
+    return targets;
+  };
   return Object.freeze({
     inspect,
-    list: () => Object.freeze((options.store.listRowIds?.() ?? []).flatMap(invocationId => {
-      const value = inspect(invocationId); return value ? [value] : [];
-    })),
+    list: () => Object.freeze(listInspected()),
     async execute(
       request: RecoveryAuditRecord,
       authority: RecoveryExecutionAuthority,

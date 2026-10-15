@@ -2296,7 +2296,7 @@ export class NativeBuildFactory {
           git: {
             integrationBranch: integrationManager.integrationBranch,
             integrationRevision: integrationManager.revision,
-            commits: await integrationManager.history(50),
+            commits: await cachedIntegrationHistory(integrationManager, 50),
           },
           capabilities: {
             extensions: runCapabilities.registry.manifests(),
@@ -4481,4 +4481,23 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
     count += 1;
   }
   if (count === 0 || parent !== canonicalRevision) refuse();
+}
+
+// Observability is polled every few seconds; `git log` is a supervised process (~1s on Windows), and
+// the history only changes when the integration revision moves.
+// Out-of-band ref moves (e.g. handoff snapshot commits) are picked up within the TTL.
+const INTEGRATION_HISTORY_TTL_MS = 30_000;
+const integrationHistoryCache = new WeakMap<object, { revision: string; at: number; commits: unknown }>();
+async function cachedIntegrationHistory<T>(
+  manager: { readonly revision: string; history(limit: number): Promise<T> },
+  limit: number
+): Promise<T> {
+  const cached = integrationHistoryCache.get(manager);
+  const revision = manager.revision;
+  if (cached && cached.revision === revision && Date.now() - cached.at < INTEGRATION_HISTORY_TTL_MS) {
+    return cached.commits as T;
+  }
+  const commits = await manager.history(limit);
+  integrationHistoryCache.set(manager, { revision, at: Date.now(), commits });
+  return commits;
 }

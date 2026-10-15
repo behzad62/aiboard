@@ -781,6 +781,22 @@ export function runnerUserFacingObservability(
       });
     }
     const exceptionalStates = new Set(["orphaned", "identity_mismatch", "backend_unavailable", "outcome_unknown"]);
+    // One summary instead of one card per process: a long run records thousands of runner-internal
+    // reads (Git snapshots, status probes) whose output is captured in memory but not spilled.
+    const incompleteOutput = executionSafety.processes.filter((process) =>
+      process.output.status === "lossy" || process.output.status === "truncated"
+    );
+    if (incompleteOutput.length > 0) {
+      const lostBytes = incompleteOutput.reduce((sum, process) => sum + ("lossyBytes" in process.output ? process.output.lossyBytes : 0), 0);
+      const examples = incompleteOutput.slice(-3).map((process) => process.logicalProcessId).join(", ");
+      problems.push({
+        key: "execution-safety:output",
+        title: incompleteOutput.length === 1
+          ? "Process output is incomplete"
+          : `${incompleteOutput.length} process outputs are incomplete`,
+        detail: `${lostBytes > 0 ? `${lostBytes.toLocaleString()} bytes were not durably kept. ` : ""}Captured output must not be treated as complete evidence. Latest: ${examples}.`,
+      });
+    }
     for (const process of executionSafety.processes) {
       const unavailableRequired = process.requiredCapabilities.filter((capability) =>
         process.capabilities[capability as keyof typeof process.capabilities] !== "enforced"
@@ -790,15 +806,6 @@ export function runnerUserFacingObservability(
           key: `execution-safety:capabilities:${process.invocationId}`,
           title: "Required execution capability is not enforced",
           detail: `${process.logicalProcessId}: ${unavailableRequired.join(", ")} is partial, unavailable, or unverified.`,
-        });
-      }
-      if (process.output.status === "lossy" || process.output.status === "truncated") {
-        problems.push({
-          key: `execution-safety:output:${process.invocationId}`,
-          title: "Process output is incomplete",
-          detail: process.output.status === "lossy"
-            ? `${process.logicalProcessId} lost ${process.output.lossyBytes} byte${process.output.lossyBytes === 1 ? "" : "s"} of output; captured output must not be treated as complete.`
-            : `${process.logicalProcessId} output was truncated; captured output must not be treated as complete.`,
         });
       }
       if (process.cleanup.state === "failed" || (exceptionalStates.has(process.lifecycleState) && process.cleanup.state === "pending")) {

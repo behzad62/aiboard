@@ -252,6 +252,53 @@ test("process recovery: subprocess adapter issues one exact native recovery gran
   }
 });
 
+test("process recovery: list reuses verified records until their revision changes, ownership stays live", () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "aiboard-recovery-list-cache-"));
+  const executionGrants = createExecutionGrantAuthority({ clock: () => now });
+  const records = new Map<string, { revision: number; state: string }>([
+    ["a", { revision: 1, state: "cleaned" }],
+    ["b", { revision: 4, state: "running" }],
+  ]);
+  let reads = 0; let owned = false;
+  const recordFor = (id: string) => {
+    const current = records.get(id);
+    if (!current) return undefined;
+    reads += 1;
+    return {
+      runId: "run", invocationId: id, logicalProcessId: `logical-${id}`, revision: current.revision, ownerId: "owner", fencingToken: 1,
+      leaseExpiresAt: now.toISOString(), state: current.state, pendingEffects: [], cleanup: { state: "pending" },
+      requiredCapabilities: [],
+    } as never;
+  };
+  try {
+    const runtime = createSubprocessProcessRecoveryRuntime({
+      runtime: { recoverExceptional: async () => { throw Error("must not execute"); } },
+      store: {
+        readByInvocation: recordFor,
+        listRowIds: () => [...records.keys()].sort(),
+        listRowRevisions: () => [...records.entries()].sort(([a], [b]) => a.localeCompare(b))
+          .map(([invocationId, value]) => ({ invocationId, revision: value.revision })),
+      },
+      canRecoverExceptional: () => owned,
+      executionGrants, permissionProfile: "full", workspacePath: root,
+    });
+    assert.deepEqual(runtime.list!().map((target) => target.scope.invocationId), ["a", "b"]);
+    assert.equal(reads, 2);
+    runtime.list!();
+    assert.equal(reads, 2, "unchanged revisions are not re-read or re-verified");
+    owned = true;
+    assert.deepEqual(runtime.list!().map((target) => target.owned), [true, true], "ownership is live kernel authority");
+    assert.equal(reads, 2);
+    records.set("b", { revision: 5, state: "cleaned" });
+    records.delete("a");
+    const next = runtime.list!();
+    assert.deepEqual(next.map((target) => [target.scope.invocationId, target.scope.state]), [["b", "cleaned"]]);
+    assert.equal(reads, 3, "a revision change re-reads exactly that record");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Task11.SPEC.closed-model-generator
 test("process recovery: model generator cannot author scope, target, call identity or expiry", async () => {
   const seen: unknown[] = [];

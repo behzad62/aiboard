@@ -436,6 +436,8 @@ export interface DurableProcessStore {
   readonly coordinationId: string;
   readByInvocation(invocationId: string): DurableSubprocessRecord | undefined;
   listRowIds(): string[];
+  /** Cheap change detector for read-only observers: every record id with its current revision. */
+  listRowRevisions?(): Array<{ invocationId: string; revision: number }>;
   close(): void;
 }
 export interface DurableProcessStoreKernel {
@@ -481,6 +483,7 @@ abstract class AuthorityStore implements DurableProcessStore {
     invocationId: string,
   ): DurableSubprocessRecord | undefined;
   abstract listRowIds(): string[];
+  abstract listRowRevisions(): Array<{ invocationId: string; revision: number }>;
   abstract close(): void;
 }
 
@@ -522,6 +525,11 @@ class InMemoryDurableProcessStore extends AuthorityStore {
   }
   listRowIds(): string[] {
     return [...this.records.keys()].sort();
+  }
+  listRowRevisions(): Array<{ invocationId: string; revision: number }> {
+    return [...this.records.values()]
+      .map((record) => ({ invocationId: record.invocationId, revision: record.revision }))
+      .sort((left, right) => left.invocationId.localeCompare(right.invocationId));
   }
   close(): void {}
 }
@@ -662,6 +670,15 @@ class SqliteDurableProcessStore extends AuthorityStore {
         .all() as unknown as Array<{ invocation_id: string }>
     ).map((row) => row.invocation_id);
   }
+  listRowRevisions(): Array<{ invocationId: string; revision: number }> {
+    return (
+      this.database
+        .prepare(
+          "SELECT invocation_id, revision FROM durable_processes ORDER BY invocation_id",
+        )
+        .all() as unknown as Array<{ invocation_id: string; revision: number }>
+    ).map((row) => ({ invocationId: row.invocation_id, revision: Number(row.revision) }));
+  }
   close(): void {
     this.database.close();
   }
@@ -716,6 +733,7 @@ function kernelFor(store: AuthorityStore): DurableProcessStoreKernel {
     coordinationId: store.coordinationId,
     readByInvocation: store.readByInvocation.bind(store),
     listRowIds: store.listRowIds.bind(store),
+    listRowRevisions: store.listRowRevisions.bind(store),
     close: store.close.bind(store),
   });
   const kernel = { store: publicStore };

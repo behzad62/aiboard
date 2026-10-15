@@ -30,6 +30,70 @@ export function applyDiscussionLiveStatus(
   };
 }
 
+export interface NativeBuildPauseDescription {
+  /** True when the run cannot continue until the owner acts (not just presses Resume). */
+  waitingForOwner: boolean;
+  title: string;
+  detail: string;
+}
+
+/** Plain-language explanation of why a native Build is paused, or null when it is not paused. */
+export function nativeBuildPauseDescription(
+  projection: Pick<NativeBuildProjection, "status" | "pauseReason"> | null | undefined
+): NativeBuildPauseDescription | null {
+  if (!projection || projection.status !== "paused") return null;
+  const reason = projection.pauseReason?.reason ?? "";
+  if (reason === "plan_start_required") {
+    return {
+      waitingForOwner: true,
+      title: "Waiting for you: approve the plan",
+      detail: "The Architect's plan passed its coverage review. Workers start only after you approve it.",
+    };
+  }
+  if (reason === "planning_source_missing") {
+    return {
+      waitingForOwner: true,
+      title: "Waiting for you: approve the specification",
+      detail: "This Build plans only from an approved specification. Approve the exact document in Overview to let the Architect plan.",
+    };
+  }
+  if (reason === "verifier.selection_required") {
+    return { waitingForOwner: true, title: "Waiting for you: choose a verifier", detail: "Pick an independent verifier below to continue." };
+  }
+  if (reason === "architect.handoff_required") {
+    return { waitingForOwner: true, title: "Waiting for you: choose the Architect", detail: "The Architect's model call failed. Pick a runtime below to continue." };
+  }
+  if (reason === "project_handoff_required" || reason.startsWith("project_handoff")) {
+    return { waitingForOwner: true, title: "Waiting for you: choose the handoff", detail: "The Build finished. Choose how to hand the result to your project." };
+  }
+  if (reason === "coverage_reviewer_unavailable") {
+    return {
+      waitingForOwner: false,
+      title: "Paused: the plan reviewer could not run",
+      detail: "The coverage reviewer failed repeatedly (see Activity). Resume retries the review.",
+    };
+  }
+  if (reason.startsWith("protocol_error")) {
+    return {
+      waitingForOwner: false,
+      title: "Paused: the Architect broke the tool protocol",
+      detail: "Nothing was executed. Resume lets the Architect see the error and retry.",
+    };
+  }
+  if (reason === "budget_exhausted" || reason === "time_limit_reached") {
+    return {
+      waitingForOwner: false,
+      title: reason === "budget_exhausted" ? "Paused: budget window used up" : "Paused: time limit reached",
+      detail: "Resume starts a fresh budget window from the saved checkpoint.",
+    };
+  }
+  return {
+    waitingForOwner: false,
+    title: "Paused",
+    detail: `${reason ? `Reason: ${reason.replaceAll("_", " ")}. ` : ""}Resume continues from the saved checkpoint (task graph, files, and refs).`,
+  };
+}
+
 export function buildStopFallbackMessage(reason: BuildStopReason): string {
   if (reason === "blocked") {
     return "Build paused at its durable checkpoint after a recoverable blocker.";

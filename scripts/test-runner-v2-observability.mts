@@ -426,7 +426,7 @@ assert.ok(safetyDiagnostics.some((item) => item.detail.includes("lossy")));
 assert.ok(safetyDiagnostics.some((item) => item.detail.includes("user decision")));
 assert.deepEqual(problemKeys(executionSafetySnapshot, projectionWithoutHandoff), [
   "execution-safety:full-bypass",
-  "execution-safety:output:invocation-1",
+  "execution-safety:output",
   "execution-safety:cleanup:invocation-1",
   "execution-safety:recovery:proposal-1",
 ]);

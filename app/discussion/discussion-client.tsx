@@ -120,6 +120,7 @@ import {
   durableBuildHandoffPanels,
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
+  nativeBuildPauseDescription,
   nativeBuildFileIdentity,
   nativeBuildRestorationPolicyPatch,
   nativeBuildTaskStatus,
@@ -166,7 +167,8 @@ import {
   type CommandRunView,
   type WrittenFileView,
 } from "@/components/BuildTaskBoard";
-import { NativePlanningPanel } from "@/components/NativePlanningPanel";
+import { NativePlanningPanel, NativePlanStartCard } from "@/components/NativePlanningPanel";
+import { selectNativeBuildRuntimes } from "@/lib/client/native-build-engine";
 import {
   RepoWorkflowPanel,
   type RepoStatusView,
@@ -1001,6 +1003,7 @@ function DiscussionPageInner() {
     let hasPendingProvenance = Boolean(initialRequestedAt);
     let persistedStatus = discussion.status;
     let persistedPolicy = discussion.buildRunPolicy;
+    let cachedObservability: { runId: string; at: number; value: NativeBuildObservability } | undefined;
     const fileLoader = createNativeBuildFileLoader({
       load: async (runId) => await getNativeBuildFiles(connection, runId),
     });
@@ -1033,13 +1036,21 @@ function DiscussionPageInner() {
         const cursor = nativeTranscriptRef.current?.runId === runId
           ? nativeTranscriptRef.current.cursor
           : 0;
+        // Observability is a large safety/audit snapshot; it does not need the 2s status cadence.
+        const reuseObservability = cachedObservability?.runId === runId &&
+          Date.now() - cachedObservability.at < OBSERVABILITY_REFRESH_MS;
         const [projection, usage, run, events, observability, transcript] =
           await Promise.all([
             getNativeBuild(connection, runId),
             getNativeBuildUsage(connection, runId),
             getNativeRun(connection, runId),
             getNativeBuildEvents(connection, runId, 0),
-            getNativeBuildObservability(connection, runId),
+            reuseObservability
+              ? Promise.resolve(cachedObservability!.value)
+              : getNativeBuildObservability(connection, runId).then((value) => {
+                  cachedObservability = { runId, at: Date.now(), value };
+                  return value;
+                }),
             getNativeBuildTranscript(connection, runId, cursor),
           ]);
         // Files are slow on large repositories (and can fail transiently); they must never hold back
@@ -2009,7 +2020,53 @@ function DiscussionPageInner() {
 
   if (discussion.mode === "build") {
     const steeringView = runnerSteeringLedgerView(nativeProjection);
+    const pause = nativeBuildPauseDescription(nativeProjection);
+    const nativeConnection = discussion.runnerUrl && discussion.runnerToken
+      ? { url: discussion.runnerUrl, token: discussion.runnerToken }
+      : undefined;
+    const acceptProjection = (updated: NativeBuildProjection) =>
+      setNativeProjection((current) =>
+        current?.runId === updated.runId && current.lastSequence > updated.lastSequence
+          ? current
+          : updated
+      );
     const decisions: WorkspaceDecision[] = [];
+    if (nativeProjection && pause && nativeProjection.pauseReason?.reason === "plan_start_required") {
+      decisions.push({
+        id: "plan-start",
+        node: (
+          <NativePlanStartCard
+            projection={nativeProjection}
+            connection={nativeConnection}
+            onProjection={(updated) => {
+              acceptProjection(updated);
+              nativeAttachmentControllerRef.current?.wake();
+            }}
+          />
+        ),
+      });
+    }
+    if (nativeProjection && pause && nativeProjection.pauseReason?.reason === "planning_source_missing") {
+      decisions.push({
+        id: "planning-source",
+        node: (
+          <DecisionCard
+            title="Approve the specification so the Architect can plan"
+            actions={
+              <Button size="sm" onClick={() => setBuildView({ kind: "overview" })}>
+                Open specification approval
+              </Button>
+            }
+          >
+            <p>
+              In Overview, open <strong>Approve a specification</strong>, choose the document,
+              tick the approval box, then click <strong>Approve specification</strong>. The run
+              continues on its own after that.
+            </p>
+          </DecisionCard>
+        ),
+      });
+    }
     if (steeringView.activeQuestion) {
       decisions.push({
         id: "architect-question",
@@ -2199,7 +2256,15 @@ function DiscussionPageInner() {
             </div>
           </div>
         )}
-        {shouldShowBuildStopFallback({
+        {pause && (
+          <div
+            className={`rounded-xl border px-4 py-3 text-sm ${pause.waitingForOwner ? "border-warning/50 bg-warning-soft" : "border-border bg-muted/50"}`}
+          >
+            <p className="font-semibold">{pause.title}</p>
+            <p className="text-muted-foreground">{pause.detail}</p>
+          </div>
+        )}
+        {!pause && shouldShowBuildStopFallback({
           stopReason: discussion.buildStopReason,
           status,
           hasStopReport: Boolean(buildStopReport),
@@ -2394,11 +2459,26 @@ function DiscussionPageInner() {
       </div>
     );
 
-    const workerNames = participantIds.map(modelLabel);
+    const workerNames = (discussion.nativeBuildRunId && discussion.judgeModelId
+      ? selectNativeBuildRuntimes(participantIds, discussion.judgeModelId, discussion.reviewerModelId ?? null).workerRuntimeIds
+      : participantIds
+    ).map(modelLabel);
     return (
       <BuildWorkspace
         topic={discussion.topic}
-        statusPill={<StatusPill status={status} />}
+        statusPill={
+          <StatusPill
+            status={
+              pause?.waitingForOwner
+                ? "waiting_for_owner"
+                : pause
+                  ? "paused"
+                  : status === "running"
+                    ? "building"
+                    : status
+            }
+          />
+        }
         crew={{
           architect: discussion.judgeModelId ? modelLabel(discussion.judgeModelId) : undefined,
           workers: workerNames,
@@ -3032,6 +3112,30 @@ function statusMeta(status: string): {
         dot: "bg-emerald-500",
         pulse: false,
       };
+    case "waiting_for_owner":
+      return {
+        label: "Waiting for you",
+        bg: "bg-amber-500/15",
+        text: "text-amber-700 dark:text-amber-300",
+        dot: "bg-amber-500",
+        pulse: true,
+      };
+    case "paused":
+      return {
+        label: "Paused",
+        bg: "bg-orange-500/12",
+        text: "text-orange-700 dark:text-orange-300",
+        dot: "bg-orange-500",
+        pulse: false,
+      };
+    case "building":
+      return {
+        label: "Building",
+        bg: "bg-sky-500/12",
+        text: "text-sky-700 dark:text-sky-300",
+        dot: "bg-sky-500",
+        pulse: true,
+      };
     case "stopped":
       return {
         label: "Stopped",
@@ -3082,6 +3186,8 @@ function statusMeta(status: string): {
       };
   }
 }
+
+const OBSERVABILITY_REFRESH_MS = 10_000;
 
 export default function DiscussionPage() {
   return (
