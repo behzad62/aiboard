@@ -9651,7 +9651,7 @@ function applyPlanReconciliation(
         )
       ) {
         throw new Error(
-          `Task ${update.taskId} contract dependencies change only through a new ready plan revision.`,
+          `Task ${update.taskId} contract dependencies change only through a new ready plan revision.${CONTRACT_CHANGE_GUIDANCE}`,
         );
       }
       if (
@@ -9659,7 +9659,7 @@ function applyPlanReconciliation(
         update.acceptanceCriteria !== undefined
       ) {
         throw new Error(
-          `Task ${update.taskId} contract fields change only through a new ready plan revision.`,
+          `Task ${update.taskId} contract fields change only through a new ready plan revision.${CONTRACT_CHANGE_GUIDANCE}`,
         );
       }
     }
@@ -11803,3 +11803,6 @@ export function handoffSnapshotRetryPending(projection: SchedulerProjection): bo
     (record) => record.stopSequence === stopSequence,
   );
 }
+
+const CONTRACT_CHANGE_GUIDANCE =
+  " Acceptance criteria, required capabilities and dependencies are fixed by the approved plan: revise only this task's objective here (action \"revise\" with objective), add new tasks, or reject the finding; changing the contract needs revise_planning_plan and a new owner start. Do not resend this change unchanged.";

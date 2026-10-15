@@ -1474,10 +1474,10 @@ export function assertContractTaskRevisionAllowed(input: {
 }): void {
   if (!input.contract) return;
   if (input.patch.dependencies !== undefined && JSON.stringify(input.patch.dependencies) !== JSON.stringify(input.contract.dependencies)) {
-    throw new Error(`Task ${input.taskId} contract dependencies change only through a new ready plan revision.`);
+    throw new Error(`Task ${input.taskId} contract dependencies change only through a new ready plan revision.${CONTRACT_CHANGE_GUIDANCE}`);
   }
   if (input.patch.acceptanceCriteria !== undefined || input.patch.requiredCapabilities !== undefined) {
-    throw new Error(`Task ${input.taskId} contract fields change only through a new ready plan revision.`);
+    throw new Error(`Task ${input.taskId} contract fields change only through a new ready plan revision.${CONTRACT_CHANGE_GUIDANCE}`);
   }
 }
 
@@ -1545,3 +1545,6 @@ function text(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${label} is required.`);
   return value;
 }
+
+const CONTRACT_CHANGE_GUIDANCE =
+  " Acceptance criteria, required capabilities and dependencies are fixed by the approved plan: revise only this task's objective here (action \"revise\" with objective), add new tasks, or reject the finding; changing the contract needs revise_planning_plan and a new owner start. Do not resend this change unchanged.";
