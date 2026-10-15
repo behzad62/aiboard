@@ -1,5 +1,19 @@
 # Runner V2 Task 12 — Durable Gate Status
 
+## 2026-10-15 — final segmented T8 reconciliation
+
+**T8 and Gate G: ACCEPTED. REL-1: NOT STARTED.** The user's explicit no-passed-test-replay instruction supersedes the earlier single-green-stock-invocation requirement. Older sections below are historical. No merge or deployment is authorized.
+
+Reviewed test/fixture/script repairs are committed as `98428bcc0814d059bd14aa4dcc790149bd0e5c84` on `codex/p66-t8`. A complete 60090-file/four-archive byte proof confirms this records the actual tested inputs; production, workflows, dependencies and archives are unchanged by this nine-path commit. It is not pushed, avoiding replay of accepted hosted CI.
+
+The original 364 modules are reconciled across the retained 48-module prefix, 79-module segment and completed final 237 modules, plus exact N4/E3/eight-leaf recoveries. The final root's genuine 3326-pass/eight-fail/nine-skip outcome stays failed; all eight failed leaves subsequently passed as six plus two. All twelve original follow-on scripts then passed, with genuine zero exit/close and full guards, retained as four plus two plus six stages. No passing script or callback was replayed. Runner TypeScript exited 0. Old interrupted/failed attempts and missing terminal/resource facts remain historical limitations, not a fabricated green invocation.
+
+Current A1 passed and retains 194 files/387 references, two source manifests, two twelve-blob snapshots, 35 ContextManifests and completed pinned derived verification. Nine genuine existing local host skips remain skips; scripted usage is not billing. Previously accepted hosted 26 scopes retain their afb source identity with reviewed repair applicability. Old semantic actors remain unresolved; no universal cleanup or PID-derived control claim is made.
+
+The [full acceptance record](../../.superpowers/sdd/2026-09-06-runner-v2-evidence-gated-planning/t8-final-acceptance.md) owns the obligation mapping, exact evidence hashes, host/resource limits and final review/parity disposition. The outcome index is `D:/tmp/t8-20261015-final-reconciliation-r1/final-index-draft.json` SHA256 `630143801f9727f70d18f29717dd3de8f949c153f179881a75a2473cc1ec6c7b`; the exact twelve-stage union is `chain-union.json` SHA256 `7d95ff1c74a1e44c3c717cc5470098fa85fc3b7834d80539b4d717dce1d6cec7`. Their preparation-time status fields remain historical. Independent final outcome/invariant/index review: `D:\tmp\t8-20261015-final-reconciliation-r1/final-independent-outcome-review.md`, SHA256 `6445f2c3efd08b9bc58868b6c6ebcd26ee116c7ec3fec0569dad58434cc99e72`, ACCEPT. Its objective final publication conditions are closed by the five-document-only commit and `D:\tmp\t8-20261015-final-reconciliation-r1/parity-docs-committed.json`; `D:\tmp\t8-20261015-final-reconciliation-r1/final-disposition.json` binds the actual final commit and proof hashes without a self-referential commit claim. The complete proof preserves tested execution, tests, workflows, installed graph and all four shipping archives. Historical draft index/preparer status fields remain historical. The hourly heartbeat is paused after verified completion is reported. REL-1 remains NOT STARTED. No merge or deployment occurred.
+
+
+
 ## 2026-10-15 — E3 failed-only cases passed; next 237 modules and 12 scripts pending
 
 The user explicitly forbids replaying passed tests. The original afb attempt retains its 618 reported passes, failure/interruption and failed afterguard; repaired N4 passed separately. The next efa attempt retained 845 individual passes and two E3 failures before its collector and launcher disappeared without exit/close/completion records. Its last heartbeat was 2026-10-14 22:50:59 UTC. A separate complete audit verified all 59992 frozen files and four archives unchanged; it does not replace missing native terminal/afterguard facts. The disappearance's cause and historical actor release remain unknown.
