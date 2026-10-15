@@ -410,6 +410,8 @@ export async function runAgentLoop(
       seenCallIds
     );
     if (stallResult) return stallResult;
+    const budgetResult = await remindTurnBudget(options, messages, turnNumber, finalTurn, maxTurns, seenCallIds);
+    if (budgetResult) return budgetResult;
   }
   return suspended("turn_limit", finalTurn, messages);
 }
@@ -567,6 +569,7 @@ function omitSupersededRunnerSnapshots(
     "worker-resume:",
     "progress-reminder:",
     "evidence-failure-reminder:",
+    "turn-budget-reminder:",
   ];
   const newest = new Map<string, number>();
   for (const [index, message] of messages.entries()) {
@@ -745,6 +748,40 @@ function toolResults(
   }
   return results;
 }
+
+/**
+ * Sessions that end at the turn limit lose all their work (a plan critic that read for 20 turns and
+ * never submitted). Warn shortly before the limit so the model concludes with its lifecycle tool.
+ */
+async function remindTurnBudget(
+  options: RunAgentLoopOptions,
+  messages: AgentMessage[],
+  turns: number,
+  finalTurn: number,
+  maxTurns: number,
+  seenCallIds: ReadonlySet<string>
+): Promise<AgentLoopResult | null> {
+  const remaining = finalTurn - turns;
+  if (maxTurns < TURN_BUDGET_MIN_TURNS || (remaining !== 3 && remaining !== 1)) return null;
+  const lifecycleTools = options.registry.definitions()
+    .map((tool) => tool.name)
+    .filter((name) => options.registry.isLifecycleTool(name));
+  messages.push({
+    id: `turn-budget-reminder:${turns}`,
+    role: "user",
+    content: [
+      "TURN_BUDGET_REMINDER",
+      remaining === 1
+        ? "This is your final model turn in this session."
+        : `You have ${remaining} model turns left in this session.`,
+      `Stop exploring and finish with your lifecycle tool${lifecycleTools.length ? ` (${lifecycleTools.join(", ")})` : ""} using the evidence you already have.`,
+      "If evidence is incomplete, still conclude and state the gaps explicitly; ending without the lifecycle tool discards this session's work.",
+    ].join("\n"),
+  });
+  return await checkpoint(options, messages, turns, seenCallIds);
+}
+
+const TURN_BUDGET_MIN_TURNS = 8;
 
 async function enforceReadOnlyStall(
   options: RunAgentLoopOptions,

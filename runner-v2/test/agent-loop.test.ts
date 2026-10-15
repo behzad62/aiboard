@@ -1563,3 +1563,23 @@ test("agent loop forwards hosted tools to provider requests", async () => {
   });
   assert.deepEqual(model.requests[0]?.hostedTools, [{ type: "apply_patch" }]);
 });
+
+test("a long session is warned before its turn limit and told to finish with its lifecycle tool", async () => {
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content", () => undefined));
+  registry.register(submitTool());
+  const reads = Array.from({ length: 8 }, (_, index) => ({
+    blocks: [{ type: "tool_call" as const, callId: `read_${index}`, name: "read_file", arguments: {} }],
+    stopReason: "tool_calls" as const,
+  }));
+  const model = new ScriptedModel(reads);
+  const result = await runAgentLoop({ model, registry, context: context(), initialMessages, maxTurns: 8 });
+  assert.equal(result.status, "suspended");
+  const reminders = (index: number) => model.requests[index]!.messages
+    .filter((message) => message.id.startsWith("turn-budget-reminder:"))
+    .map((message) => String(message.content).split("\n")[1]);
+  assert.deepEqual(reminders(4), [], "no reminder while turns are plentiful");
+  assert.deepEqual(reminders(5), ["You have 3 model turns left in this session."]);
+  assert.deepEqual(reminders(7), ["This is your final model turn in this session."], "only the newest reminder is kept");
+  assert.match(String(model.requests[7]!.messages.find((message) => message.id.startsWith("turn-budget-reminder:"))!.content), /submit_task/);
+});

@@ -36,7 +36,7 @@ import type { ChangeSet } from "../src/change-set.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
-import { snapshotNativeBuildAmbientEnvironment, validateKernelSnapshotVerificationAdvance } from "../src/native-build-factory.js";
+import { snapshotNativeBuildAmbientEnvironment, validateKernelSnapshotVerificationAdvance, verifierTargetRevision } from "../src/native-build-factory.js";
 import {
   NativeBuildFactory,
   IntegrationManager,
@@ -1409,4 +1409,20 @@ test("C3c R3: docs-v2 refuses first verification without durable baseline author
     await workspace.cleanup();
     rmSync(f.root, { recursive: true, force: true });
   }
+});
+
+test("docs-v2 plan critique targets the authoritative revision, never a stop-snapshot tip", () => {
+  const live = "f".repeat(40);
+  const baseline = "b".repeat(40);
+  const landed = "c".repeat(40);
+  // Before any landing: stop snapshots moved the tip, the creation baseline is authoritative.
+  assert.equal(
+    verifierTargetRevision({ docsV2: true, projection: { testIntegrity: { initialRevision: baseline } } as never, liveRevision: live }),
+    baseline,
+  );
+  assert.equal(
+    verifierTargetRevision({ docsV2: true, projection: { integrationRevision: landed, testIntegrity: { initialRevision: baseline } } as never, liveRevision: live }),
+    landed,
+  );
+  assert.equal(verifierTargetRevision({ docsV2: false, projection: { integrationRevision: landed } as never, liveRevision: live }), live);
 });

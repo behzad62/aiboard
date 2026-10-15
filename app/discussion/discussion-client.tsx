@@ -1460,6 +1460,8 @@ function DiscussionPageInner() {
       setNativeProjection(projection);
       setVerifierSelection(null);
       setError(null);
+      // Selecting only records the choice; like the Architect handoff, continue the run in one click.
+      await handleResume();
       nativeAttachmentControllerRef.current?.wake();
     } catch (selectionError) {
       setError(
@@ -2214,7 +2216,7 @@ function DiscussionPageInner() {
               </Button>
             ))}
           >
-            <p>{verifierSelection.reason}</p>
+            <p>{verifierSelectionReasonText(verifierSelection.reason)}</p>
             {verifierSelection.requiredCapabilities.length > 0 && (
               <p className="text-xs">
                 Required capabilities: {verifierSelection.requiredCapabilities.join(", ")}
@@ -3264,6 +3266,17 @@ function statusMeta(status: string): {
 }
 
 const OBSERVABILITY_REFRESH_MS = 10_000;
+
+function verifierSelectionReasonText(reason: string): string {
+  switch (reason) {
+    case "plan_critique_no_independent_runtime":
+      return "The independent plan review did not finish (the reviewer ran out of turns or failed). Choose the model that should review the plan; work starts after its review.";
+    case "no_independent_healthy_capability_match":
+      return "No healthy model other than the Architect and the change authors can verify this work. Choose one to continue.";
+    default:
+      return reason.replaceAll("_", " ");
+  }
+}
 
 export default function DiscussionPage() {
   return (

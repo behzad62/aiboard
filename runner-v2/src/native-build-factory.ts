@@ -1344,7 +1344,7 @@ export class NativeBuildFactory {
           objective: spec.objective,
           architectRuntimeId: projection.runtime.architect.runtimeId ?? spec.architectRuntimeId,
           projection,
-          baselineRevision: integrationManager.revision,
+          baselineRevision: verifierTargetRevision({ docsV2, projection, liveRevision: integrationManager.revision }),
           riskReasons,
           ...(preferredRuntimeId ? { preferredRuntimeId } : {}),
           ...(signal ? { signal } : {}),
@@ -4439,6 +4439,20 @@ function deliveryProbeFileSystem(workspacePath: string): MutationFileSystem {
 }
 
 
+/**
+ * Revision a snapshot-guarded verifier workspace (plan critique) must check out. Docs-v2 stop
+ * snapshots advance the integration tip without landing work, and the guard only accepts the
+ * authoritative revision -- the last landing, else the creation baseline -- never the live tip.
+ */
+export function verifierTargetRevision(input: {
+  docsV2: boolean;
+  projection: Pick<SchedulerProjection, "integrationRevision" | "testIntegrity">;
+  liveRevision: string;
+}): string {
+  if (!input.docsV2) return input.liveRevision;
+  return input.projection.integrationRevision ?? input.projection.testIntegrity?.initialRevision ?? input.liveRevision;
+}
+
 /** Verify the exact linear kernel snapshot chain against durable, tree-bound receipts. */
 export async function validateKernelSnapshotVerificationAdvance(input: {
   targetRevision: string;
@@ -4448,16 +4462,20 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
   execute: import("./git-repository.js").GitRunner;
 }): Promise<void> {
   const { projection, integrationManager, targetRevision, canonicalRevision } = input;
-  const refuse = (): never => { throw new Error("Canonical checkout revision changed without exact kernel snapshot authority."); };
+  const refuse = (reason: string): never => {
+    throw new Error(`Canonical checkout revision changed without exact kernel snapshot authority (${reason}; target ${targetRevision.slice(0, 12)}, canonical ${canonicalRevision.slice(0, 12)}).`);
+  };
   // N6: before the first landing no integration revision is recorded, so the
   // durably recorded creation baseline (delivery.test_integrity_initialized,
   // stamped before verification exists) anchors the requested target instead.
   // Authority comes only from durable records, never from the request.
   const authoritativeRevision = projection.integrationRevision ?? projection.testIntegrity?.initialRevision;
-  if (projection.projectDocsPolicyVersion !== 2 || authoritativeRevision === undefined || authoritativeRevision !== targetRevision) refuse();
+  if (projection.projectDocsPolicyVersion !== 2) refuse("project docs policy is not v2");
+  if (authoritativeRevision === undefined) refuse("no authoritative revision is recorded");
+  if (authoritativeRevision !== targetRevision) refuse(`target is not the authoritative revision ${authoritativeRevision!.slice(0, 12)}`);
   if (canonicalRevision === targetRevision) return;
   const ancestor = await input.execute({ cwd: integrationManager.path, args: ["merge-base", "--is-ancestor", targetRevision, canonicalRevision], allowFailure: true });
-  if (ancestor.exitCode !== 0) refuse();
+  if (ancestor.exitCode !== 0) refuse("target is not an ancestor of the canonical checkout");
   const history = await input.execute({ cwd: integrationManager.path, args: ["log", "--reverse", "--format=%H%x00%P%x00", `${targetRevision}..${canonicalRevision}`] });
   const fields = history.stdout.split("\0");
   let parent = targetRevision;
@@ -4467,21 +4485,24 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
     if (!commit) continue;
     const parents = fields[index + 1]!.trim();
     const matches = (projection.projectDocs?.snapshots ?? []).filter((record) => record.commit === commit);
-    if (matches.length !== 1 || parents !== parent || matches[0]!.parent !== parent) refuse();
+    if (matches.length !== 1) refuse(`commit ${commit.slice(0, 12)} has ${matches.length} snapshot receipts`);
+    if (parents !== parent || matches[0]!.parent !== parent) refuse(`commit ${commit.slice(0, 12)} parent does not continue the chain`);
     const receipt = matches[0]!;
     let audited = await integrationManager.findHandoffSnapshotCommit({ snapshotKey: `stop-snapshot:${receipt.stopSequence}` });
     if (!audited || audited.commit !== commit) audited = await integrationManager.findHandoffSnapshotCommit({ snapshotKey: `handoff-snapshot:${receipt.stopSequence}` });
-    if (!audited || audited.commit !== commit || audited.parent !== parent) refuse();
+    if (!audited || audited.commit !== commit || audited.parent !== parent) refuse(`commit ${commit.slice(0, 12)} is not an audited snapshot commit`);
     const stored = await integrationManager.readHandoffSnapshotFile({ commit, path: "docs/project/STATE.md" });
-    if (JSON.stringify([...stored.paths].sort()) !== JSON.stringify([...receipt.paths].sort())) refuse();
+    if (JSON.stringify([...stored.paths].sort()) !== JSON.stringify([...receipt.paths].sort())) {
+      refuse(`commit ${commit.slice(0, 12)} paths ${JSON.stringify([...stored.paths].sort())} differ from its receipt ${JSON.stringify([...receipt.paths].sort())}`);
+    }
     if (receipt.bodyDigest) {
       if (!stored.content || !verifyHandoffSnapshotDigest(stored.content) ||
-          !stored.content.split(/\r?\n/)[0]!.endsWith(`body_sha256: ${receipt.bodyDigest}`)) refuse();
-    } else if (!receipt.stateSkippedReason) refuse();
+          !stored.content.split(/\r?\n/)[0]!.endsWith(`body_sha256: ${receipt.bodyDigest}`)) refuse(`commit ${commit.slice(0, 12)} STATE.md does not match its receipt digest`);
+    } else if (!receipt.stateSkippedReason) refuse(`commit ${commit.slice(0, 12)} receipt has neither a digest nor a skip reason`);
     parent = commit;
     count += 1;
   }
-  if (count === 0 || parent !== canonicalRevision) refuse();
+  if (count === 0 || parent !== canonicalRevision) refuse("the snapshot chain does not reach the canonical checkout");
 }
 
 // Observability is polled every few seconds; `git log` is a supervised process (~1s on Windows), and

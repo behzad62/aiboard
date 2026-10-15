@@ -39,9 +39,26 @@ export interface NativeBuildPauseDescription {
 
 /** Plain-language explanation of why a native Build is paused, or null when it is not paused. */
 export function nativeBuildPauseDescription(
-  projection: Pick<NativeBuildProjection, "status" | "pauseReason"> | null | undefined
+  projection: (Pick<NativeBuildProjection, "status" | "pauseReason"> &
+    Partial<Pick<NativeBuildProjection, "verifierSelection" | "runtime" | "projectHandoff">>) | null | undefined
 ): NativeBuildPauseDescription | null {
   if (!projection || projection.status !== "paused") return null;
+  // Typed owner gates can hold a paused run without a pause reason; they take precedence.
+  if (projection.verifierSelection?.status === "required") {
+    return {
+      waitingForOwner: true,
+      title: "Waiting for you: choose a verifier",
+      detail: projection.verifierSelection.reason === "plan_critique_no_independent_runtime"
+        ? "The independent plan review did not finish. Pick the model that should review the plan."
+        : "Pick an independent verifier below to continue.",
+    };
+  }
+  if (projection.runtime?.architect.handoff) {
+    return { waitingForOwner: true, title: "Waiting for you: choose the Architect", detail: "The Architect's model call failed. Pick a runtime below to continue." };
+  }
+  if (projection.projectHandoff?.status === "requested") {
+    return { waitingForOwner: true, title: "Waiting for you: choose the handoff", detail: "The Build finished. Choose how to hand the result to your project." };
+  }
   const reason = projection.pauseReason?.reason ?? "";
   if (reason === "plan_start_required") {
     return {
