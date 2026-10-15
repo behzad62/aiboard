@@ -238,6 +238,11 @@ const EXCEPTIONAL_RECOVERY_STATES = new Set([
   "outcome_unknown",
 ]);
 
+/** The kernel never grants exceptional recovery outside these states (see canRecoverExceptional). */
+export function isExceptionalRecoveryState(state: string): boolean {
+  return EXCEPTIONAL_RECOVERY_STATES.has(state);
+}
+
 type SnapshotInvocation = SubprocessInvocation;
 interface StopTrigger {
   readonly reason: "cancelled" | "timed_out";

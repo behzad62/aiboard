@@ -299,6 +299,35 @@ test("process recovery: list reuses verified records until their revision change
   }
 });
 
+test("process recovery: list skips ownership reads for unchanged non-recoverable records", () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "aiboard-recovery-list-owned-"));
+  const executionGrants = createExecutionGrantAuthority({ clock: () => now });
+  const states = new Map([["cleaned-1", "cleaned"], ["orphan-1", "orphaned"]]);
+  const ownershipChecks: string[] = [];
+  try {
+    const runtime = createSubprocessProcessRecoveryRuntime({
+      runtime: { recoverExceptional: async () => { throw Error("must not execute"); } },
+      store: {
+        readByInvocation: (id: string) => ({
+          runId: "run", invocationId: id, logicalProcessId: id, revision: 1, ownerId: "owner", fencingToken: 1,
+          leaseExpiresAt: now.toISOString(), state: states.get(id), pendingEffects: [], cleanup: { state: "pending" }, requiredCapabilities: [],
+        }) as never,
+        listRowRevisions: () => [...states.keys()].sort().map((invocationId) => ({ invocationId, revision: 1 })),
+      },
+      canRecoverExceptional: (id) => { ownershipChecks.push(id); return id === "orphan-1"; },
+      isRecoverableState: (state) => state === "orphaned",
+      executionGrants, permissionProfile: "full", workspacePath: root,
+    });
+    runtime.list!();
+    ownershipChecks.length = 0;
+    const listed = runtime.list!();
+    assert.deepEqual(ownershipChecks, ["orphan-1"], "only recoverable-state records re-check live ownership");
+    assert.deepEqual(listed.map((target) => [target.scope.invocationId, target.owned]), [["cleaned-1", false], ["orphan-1", true]]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Task11.SPEC.closed-model-generator
 test("process recovery: model generator cannot author scope, target, call identity or expiry", async () => {
   const seen: unknown[] = [];

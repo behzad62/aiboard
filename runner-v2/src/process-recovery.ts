@@ -48,6 +48,11 @@ export function createSubprocessProcessRecoveryRuntime(options: {
   readonly runtime: Pick<SubprocessRuntime, "recoverExceptional">;
   /** Shared kernel authority for current-owner or safely reclaimable exceptional records. */
   readonly canRecoverExceptional: (invocationId: string) => boolean;
+  /**
+   * Kernel predicate for states where `canRecoverExceptional` can ever be true. Lets `list` skip the
+   * per-record authority read for unchanged records in routine/terminal states.
+   */
+  readonly isRecoverableState?: (state: string) => boolean;
   readonly store: Pick<DurableProcessStore, "readByInvocation"> & Partial<Pick<DurableProcessStore, "listRowIds" | "listRowRevisions">>;
   readonly kind?: "subprocess" | "streaming";
   readonly capabilities?: (record: DurableSubprocessRecord) => ExecutionSafetyCapabilities;
@@ -115,6 +120,9 @@ export function createSubprocessProcessRecoveryRuntime(options: {
       seen.add(invocationId);
       const cached = inspected.get(invocationId);
       if (cached && cached.revision === revision) {
+        if (options.isRecoverableState && !options.isRecoverableState(cached.target.scope.state) && !cached.target.owned) {
+          return [cached.target];
+        }
         const owned = options.canRecoverExceptional(invocationId);
         return [owned === cached.target.owned ? cached.target : Object.freeze({ ...cached.target, owned }) as RecoveryTarget];
       }

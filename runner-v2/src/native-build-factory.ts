@@ -249,7 +249,7 @@ import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "./w
 import { NativeOwnedProcessBackend } from "./native-process-backend.js";
 import { assertSubprocessCleanupSettled } from "./inspection-cleanup.js";
 import { createWindowsProcessSemanticProbeSource } from "./windows-process-semantic-probes.js";
-import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
+import { createSubprocessRuntimeKernel, isExceptionalRecoveryState } from "./subprocess-runtime.js";
 import {
   ProcessRecoveryController,
   createAgentProcessRecoveryGenerator,
@@ -1126,6 +1126,7 @@ export class NativeBuildFactory {
     processRecoveryRuntime = createSubprocessProcessRecoveryRuntime({
       runtime: subprocessKernel.runtime,
       canRecoverExceptional: subprocessKernel.canRecoverExceptional,
+      isRecoverableState: isExceptionalRecoveryState,
       store: subprocessKernel.readOnlyStore,
       executionGrants,
       permissionProfile: spec.permissionProfile,

@@ -58,7 +58,7 @@ import {
   type SqliteStreamingSessionStoreOptions,
   type StreamingSessionRecord,
 } from "./streaming-session-store.js";
-import { createSubprocessRuntimeKernel } from "./subprocess-runtime.js";
+import { createSubprocessRuntimeKernel, isExceptionalRecoveryState } from "./subprocess-runtime.js";
 import {
   combineProcessRecoveryRuntimes,
   createStreamingProcessRecoveryRuntime,
@@ -521,6 +521,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
     const subprocessRecoveryRuntime = createSubprocessProcessRecoveryRuntime({
       runtime: subprocessKernel.runtime,
       canRecoverExceptional: subprocessKernel.canRecoverExceptional,
+      isRecoverableState: isExceptionalRecoveryState,
       store: subprocessKernel.readOnlyStore,
       executionGrants,
       permissionProfile: input.permissionProfile,

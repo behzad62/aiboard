@@ -1972,7 +1972,8 @@ function DiscussionPageInner() {
       )}
       {(status === "stopped" || status === "failed") && !streamConnected && (
         <>
-          <Button
+          {/* An owner gate (plan/spec approval) is resolved in "Needs you"; Resume cannot pass it. */}
+          {!nativeBuildPauseDescription(nativeProjection)?.waitingForOwner && <Button
             size="sm"
             onClick={handleResume}
             disabled={
@@ -1984,7 +1985,7 @@ function DiscussionPageInner() {
           >
             <Play className="h-3.5 w-3.5" aria-hidden="true" />
             Resume
-          </Button>
+          </Button>}
           <Button
             size="sm"
             variant="outline"

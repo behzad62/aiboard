@@ -176,7 +176,8 @@ export function NativePlanStartCard({ projection, connection, onProjection }: { 
     {tasks.length > 0 && <ol className="list-decimal space-y-1 pl-5">
       {tasks.map((task) => <li key={task.id}>{task.outcome.user}{task.dependencies.length ? <span className="text-xs text-muted-foreground"> — after {task.dependencies.join(", ")}</span> : null}</li>)}
     </ol>}
-    {readiness?.blockers.map((blocker) => <p key={blocker} className="text-amber-700 dark:text-amber-300">{blocker}</p>)}
+    {/* The missing owner start is what this card's button resolves; show only other blockers. */}
+    {readiness?.blockers.filter((blocker) => !/explicit owner start/i.test(blocker)).map((blocker) => <p key={blocker} className="text-amber-700 dark:text-amber-300">{blocker}</p>)}
     {message && <p role="alert">{message}</p>}
     <div className="flex flex-wrap items-center gap-3">
       <Button size="sm" disabled={busy || !connection || !current} onClick={() => {
