@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createChangeSet } from "./support/git-fixture.js";
 import { captureGitBaseline } from "./support/git-fixture.js";
-import { runGit } from "./support/git-fixture.js";
+import { runGit, runGitBytes } from "./support/git-fixture.js";
 import type { GitRunner } from "../src/git-repository.js";
 import { IntegrationManager } from "./support/git-fixture.js";
 import { WorkspaceManager } from "./support/git-fixture.js";
@@ -1234,6 +1234,47 @@ test("files budgets the serialized JSON envelope including control-character esc
       Buffer.byteLength(JSON.stringify(snapshot), "utf8") <= 10 * 1024 * 1024,
       true
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("files reads a many-file revision in batched Git processes with exact per-file content", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-integration-files-batch-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(join(project, "deep", "nested"), { recursive: true });
+  mkdirSync(state);
+  const expected = new Map<string, string>();
+  for (let index = 0; index < 450; index += 1) {
+    const path = `deep/nested/file-${String(index).padStart(3, "0")}.txt`;
+    const content = index % 7 === 0 ? "" : `file ${index}\r\n${"é".repeat(index % 5)}\n`;
+    writeFileSync(join(project, path), content);
+    expected.set(path, content);
+  }
+  writeFileSync(join(project, "zz-binary.bin"), Buffer.from([0, 1, 2, 255]));
+  try {
+    const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: "run_files_batch" });
+    const reads: number[] = [];
+    const integration = new IntegrationManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_files_batch",
+      baselineRevision: baseline.revision,
+      executeBytes: async (options) => {
+        if (options.args[0] === "show") reads.push(options.args.length - 1);
+        return await runGitBytes(options);
+      },
+    });
+    await integration.initialize();
+    const snapshot = await integration.files("integration");
+    for (const [path, content] of expected) {
+      assert.equal(snapshot.files.find((file) => file.path === path)?.content, content, path);
+    }
+    assert.equal(snapshot.files.some((file) => file.path === "zz-binary.bin"), false);
+    assert.equal(snapshot.omittedFileCount, 1);
+    assert.ok(reads.length <= 4, `expected a few batched reads, got ${reads.length}`);
+    assert.equal(reads.reduce((total, objects) => total + objects, 0) >= 451, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

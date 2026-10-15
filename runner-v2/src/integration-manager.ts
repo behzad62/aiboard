@@ -62,6 +62,10 @@ const ARCHITECT_DOC_IDENTITY: Readonly<Record<string, string>> = {
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_FILE_RESPONSE_BYTES = 10 * 1024 * 1024;
+const SNAPSHOT_BATCH_MAX_OBJECTS = 200;
+const SNAPSHOT_BATCH_MAX_BYTES = 8 * 1024 * 1024;
+// Stays well inside the Windows 32,767-character command line with the Runner Git policy arguments.
+const SNAPSHOT_BATCH_MAX_ARGUMENT_CHARS = 24_000;
 
 interface ProjectApplyJournalBase {
   runId: string;
@@ -461,24 +465,32 @@ export class IntegrationManager {
     const files: IntegrationFile[] = [];
     let omittedFileCount = 0;
     let responseBytes = snapshotBytes(source, revision, entries.length, []);
-    for (const entry of entries) {
+    const prefetched = new Map<number, Buffer>();
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]!;
       const { path, size } = entry;
-      if (
-        entry.type !== "blob" ||
-        !Number.isSafeInteger(size) ||
-        size < 0 ||
-        size > MAX_FILE_BYTES
-      ) {
+      if (!isSnapshotReadable(entry)) {
         omittedFileCount += 1;
         continue;
       }
-      const object = `${revision}:${path}`;
-      const content = await this.executeBytes({
-        cwd: this.repositoryRoot,
-        args: ["show", object],
-        maxOutputBytes: MAX_FILE_BYTES + 4096,
-      });
-      const text = decodeUtf8Text(content.stdout, size);
+      // A file's JSON envelope is never smaller than its byte size, so a file that
+      // cannot fit the remaining response budget is omitted without reading it.
+      if (responseBytes + (files.length === 0 ? 0 : 1) + size > MAX_FILE_RESPONSE_BYTES) {
+        omittedFileCount += 1;
+        continue;
+      }
+      if (!prefetched.has(index)) {
+        await this.readSnapshotBatch(
+          revision,
+          entries,
+          index,
+          MAX_FILE_RESPONSE_BYTES - responseBytes,
+          prefetched,
+        );
+      }
+      const content = prefetched.get(index)!;
+      prefetched.delete(index);
+      const text = decodeUtf8Text(content, size);
       if (text === null) {
         omittedFileCount += 1;
         continue;
@@ -500,6 +512,62 @@ export class IntegrationManager {
       omittedFileCount,
       files,
     };
+  }
+
+  /**
+   * One supervised Git process per file made a repository-wide snapshot cost about a second per file
+   * on Windows (6,000 files ≈ 95 minutes, blocking every run command behind it). `git show` of several
+   * blobs writes their exact bytes back to back, so a chunk is read by one process and split by the
+   * sizes `ls-tree` already reported. A total-length mismatch falls back to exact per-file reads.
+   */
+  private async readSnapshotBatch(
+    revision: string,
+    entries: readonly TreeEntry[],
+    start: number,
+    budgetBytes: number,
+    into: Map<number, Buffer>,
+  ): Promise<void> {
+    const batch: number[] = [];
+    let batchBytes = 0;
+    let argumentChars = 0;
+    for (let index = start; index < entries.length; index += 1) {
+      const entry = entries[index]!;
+      // Files larger than the remaining budget are omitted unread by the caller; prefetching any
+      // other file is safe because inclusion is decided afterwards, in order, from exact bytes.
+      if (!isSnapshotReadable(entry) || entry.size > budgetBytes || into.has(index)) continue;
+      const argumentLength = revision.length + entry.path.length + 2;
+      if (
+        batch.length > 0 &&
+        (batch.length >= SNAPSHOT_BATCH_MAX_OBJECTS ||
+          batchBytes + entry.size > SNAPSHOT_BATCH_MAX_BYTES ||
+          argumentChars + argumentLength > SNAPSHOT_BATCH_MAX_ARGUMENT_CHARS)
+      ) break;
+      batch.push(index);
+      batchBytes += entry.size;
+      argumentChars += argumentLength;
+    }
+    const output = await this.executeBytes({
+      cwd: this.repositoryRoot,
+      args: ["show", ...batch.map((index) => `${revision}:${entries[index]!.path}`)],
+      maxOutputBytes: batchBytes + 4096,
+    });
+    if (output.stdout.length === batchBytes) {
+      let offset = 0;
+      for (const index of batch) {
+        const size = entries[index]!.size;
+        into.set(index, output.stdout.subarray(offset, offset + size));
+        offset += size;
+      }
+      return;
+    }
+    for (const index of batch) {
+      const single = await this.executeBytes({
+        cwd: this.repositoryRoot,
+        args: ["show", `${revision}:${entries[index]!.path}`],
+        maxOutputBytes: MAX_FILE_BYTES + 4096,
+      });
+      into.set(index, single.stdout);
+    }
   }
 
   private async resolveHistoricalCommit(revision: string): Promise<string> {
@@ -4383,6 +4451,15 @@ function isRevision(value: unknown): value is string {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function isSnapshotReadable(entry: TreeEntry): boolean {
+  return (
+    entry.type === "blob" &&
+    Number.isSafeInteger(entry.size) &&
+    entry.size >= 0 &&
+    entry.size <= MAX_FILE_BYTES
+  );
 }
 
 function decodeUtf8Text(bytes: Buffer, objectBytes: number): string | null {
