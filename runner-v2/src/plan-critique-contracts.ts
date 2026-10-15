@@ -93,6 +93,13 @@ export interface PlanCritiqueResolutionItem {
   findingId: string;
   resolution: "plan_reconciled" | "rejected";
   rationale: string;
+  /**
+   * Evidence-gated runs: the newer planning revision (from revise_planning_plan) that reconciles an
+   * accepted finding. Planned task contracts change only through a new ready revision and a new
+   * owner start, never through an in-place planReconciliation.
+   */
+  planRevisionId?: string;
+  planDigest?: string;
 }
 
 export interface PlanCritiqueProjection {

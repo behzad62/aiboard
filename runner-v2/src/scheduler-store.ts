@@ -9283,7 +9283,19 @@ function applyPlanCritiqueResolved(
   }
   const resolutions = parsePlanCritiqueResolutions(event.payload.resolutions, blockingFindingIds);
   const reconciled = resolutions.filter((item) => item.resolution === "plan_reconciled");
-  if (reconciled.length > 0) {
+  const plan = projection.planning?.plan;
+  // Evidence-gated runs never reconcile a critique in place: workers run only the approved contract
+  // (an in-place objective edit stranded P7 dispatch with scheduler_contract_mismatch), so accepted
+  // findings must cite a newer plan revision that goes through coverage review and owner start.
+  const reconciledByPlanRevision = projection.planningPolicyVersion === 1 && reconciled.length > 0;
+  if (reconciledByPlanRevision) {
+    assertCritiqueReconciledByPlanRevision({
+      reconciled,
+      hasPlanReconciliation: event.payload.planReconciliation !== undefined,
+      plan,
+      readiness: projection.planning?.readiness,
+    });
+  } else if (reconciled.length > 0) {
     if (event.payload.planReconciliation === undefined) {
       throw new Error("Plan critique plan_reconciled resolutions require a planReconciliation.");
     }
@@ -9313,6 +9325,35 @@ function applyPlanCritiqueResolved(
       },
     },
   };
+}
+
+/**
+ * Evidence-gated runs: accepted critique findings are reconciled by the newer planning revision the
+ * Architect drafted with revise_planning_plan. It must be the current revision and not yet ready, so
+ * it still needs coverage review and a new owner start before any planned task contract changes.
+ */
+export function assertCritiqueReconciledByPlanRevision(input: {
+  reconciled: readonly PlanCritiqueResolutionItem[];
+  hasPlanReconciliation: boolean;
+  plan?: { readonly currentRevisionId: string; readonly currentDigest: string };
+  readiness?: "not_ready" | "ready";
+}): void {
+  if (input.hasPlanReconciliation) {
+    throw new Error("Plan critique resolution by plan revision must not also carry a planReconciliation.");
+  }
+  const plan = input.plan;
+  if (!plan || input.readiness === "ready") {
+    throw new Error(
+      "Plan critique plan_reconciled resolutions in an evidence-gated run need a newer plan revision: call revise_planning_plan first, then cite its planRevisionId and planDigest.",
+    );
+  }
+  for (const item of input.reconciled) {
+    if (item.planRevisionId !== plan.currentRevisionId || item.planDigest !== plan.currentDigest) {
+      throw new Error(
+        `Plan critique finding ${item.findingId} must cite the current plan revision ${plan.currentRevisionId} and its digest.`,
+      );
+    }
+  }
 }
 
 function parsePlanCritiqueResolutions(
@@ -9347,6 +9388,12 @@ function parsePlanCritiqueResolutions(
       findingId,
       resolution,
       rationale: rationale.trim(),
+      ...(typeof candidate.planRevisionId === "string" && candidate.planRevisionId.trim()
+        ? { planRevisionId: candidate.planRevisionId }
+        : {}),
+      ...(typeof candidate.planDigest === "string" && candidate.planDigest.trim()
+        ? { planDigest: candidate.planDigest }
+        : {}),
     };
     return item;
   });
@@ -11805,4 +11852,4 @@ export function handoffSnapshotRetryPending(projection: SchedulerProjection): bo
 }
 
 const CONTRACT_CHANGE_GUIDANCE =
-  " Acceptance criteria, required capabilities and dependencies are fixed by the approved plan: revise only this task's objective here (action \"revise\" with objective), add new tasks, or reject the finding; changing the contract needs revise_planning_plan and a new owner start. Do not resend this change unchanged.";
+  " Acceptance criteria, required capabilities and dependencies of a planned task are fixed by the approved plan. To act on the finding, call revise_planning_plan with the corrected contract, then resolve with resolution \"plan_reconciled\" citing the new planRevisionId and planDigest (it then needs coverage review and a new owner start); otherwise reject the finding with evidence. Do not resend this change unchanged.";

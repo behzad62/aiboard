@@ -2927,10 +2927,14 @@ function validateResolvePlanCritique(input: unknown): ValidationResult<ResolvePl
         (candidate.resolution !== "plan_reconciled" && candidate.resolution !== "rejected") ||
         !nonEmpty(candidate.rationale)
       ) return null;
+      if (candidate.planRevisionId !== undefined && !nonEmpty(candidate.planRevisionId)) return null;
+      if (candidate.planDigest !== undefined && !nonEmpty(candidate.planDigest)) return null;
       resolutions.push({
         findingId: candidate.findingId,
         resolution: candidate.resolution,
         rationale: candidate.rationale,
+        ...(nonEmpty(candidate.planRevisionId) ? { planRevisionId: candidate.planRevisionId } : {}),
+        ...(nonEmpty(candidate.planDigest) ? { planDigest: candidate.planDigest } : {}),
       });
     }
     const planReconciliation = value.planReconciliation === undefined

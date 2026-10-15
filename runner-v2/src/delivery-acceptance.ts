@@ -1547,4 +1547,4 @@ function text(value: unknown, label: string): string {
 }
 
 const CONTRACT_CHANGE_GUIDANCE =
-  " Acceptance criteria, required capabilities and dependencies are fixed by the approved plan: revise only this task's objective here (action \"revise\" with objective), add new tasks, or reject the finding; changing the contract needs revise_planning_plan and a new owner start. Do not resend this change unchanged.";
+  " Acceptance criteria, required capabilities and dependencies of a planned task are fixed by the approved plan. To act on the finding, call revise_planning_plan with the corrected contract, then resolve with resolution \"plan_reconciled\" citing the new planRevisionId and planDigest (it then needs coverage review and a new owner start); otherwise reject the finding with evidence. Do not resend this change unchanged.";
