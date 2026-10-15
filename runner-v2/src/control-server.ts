@@ -597,7 +597,7 @@ export class ControlServer {
         const body = await readJson<{ optedIn: boolean; idempotencyKey: string }>(request);
         assertExactBodyKeys(body, ["optedIn", "idempotencyKey"]);
         if (typeof body.optedIn !== "boolean" || !isNonEmptyString(body.idempotencyKey) || body.idempotencyKey.length > 200) invalidBody();
-        const projection = await this.serializeRunCommand(runId, () => this.requireBuilds().setAnswerReview(runId, body.optedIn, body.idempotencyKey));
+        const projection = await this.ownerPlanningControl(runId, () => this.requireBuilds().setAnswerReview(runId, body.optedIn, body.idempotencyKey));
         sendJson(response, 200, projection); return;
       }
       if (segments.length === 5 && segments[3] === "build" && segments[4] === "planning-schedule" && request.method === "GET") {
@@ -732,7 +732,7 @@ export class ControlServer {
         } catch {
           invalidBody();
         }
-        const projection = await this.serializeRunCommand(runId, () =>
+        const projection = await this.ownerPlanningControl(runId, () =>
           this.requireBuilds().registerPlanningSource(runId, {
             approvedSource: record.approvedSource as ApprovedSourceInputV1,
             idempotencyKey: record.idempotencyKey as string,
@@ -756,7 +756,7 @@ export class ControlServer {
         } catch {
           invalidBody();
         }
-        const projection = await this.serializeRunCommand(runId, () =>
+        const projection = await this.ownerPlanningControl(runId, () =>
           this.requireBuilds().amendPlanningSource(runId, amendment)
         );
         sendJson(response, 200, projection);
@@ -790,7 +790,7 @@ export class ControlServer {
         } catch {
           invalidBody();
         }
-        const projection = await this.serializeRunCommand(runId, () =>
+        const projection = await this.ownerPlanningControl(runId, () =>
           this.requireBuilds().authorizeExplicitPlanStart(runId, start)
         );
         sendJson(response, 200, projection);
@@ -1069,6 +1069,32 @@ export class ControlServer {
       }
     }
     return projection;
+  }
+
+  /**
+   * Owner planning controls (spec approval, plan start, answer-review choice) resume the Build
+   * projection from its planning pause, but the supervisor run stayed paused, so nothing dispatched
+   * work and the page offered no Resume. Resume the run when the Build is running again.
+   */
+  private async ownerPlanningControl<T extends { status: string; lastSequence: number }>(
+    runId: string,
+    action: () => Promise<T>
+  ): Promise<T> {
+    return await this.serializeRunCommand(runId, async () => {
+      const projection = await action();
+      let run;
+      try {
+        run = this.supervisor.getRun(runId);
+      } catch (error) {
+        if (error instanceof Error && /^Unknown run /.test(error.message)) return projection;
+        throw error;
+      }
+      if (projection.status === "running" && run.state === "paused") {
+        this.supervisor.resume(runId, `owner-planning-control-resume:${projection.lastSequence}`);
+        this.requireBuilds().activate(runId);
+      }
+      return projection;
+    });
   }
 
   private async serializeRunCommand<T>(runId: string, action: () => Promise<T>): Promise<T> {

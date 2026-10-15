@@ -1820,3 +1820,42 @@ test("repair-cycle extension is a user POST that rejects a zero additional budge
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("plan start resumes a supervisor run left paused by the planning gate", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-plan-start-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const activated: string[] = [];
+  let buildStatus = "paused";
+  const builds = {
+    projection: () => { throw new Error("Unknown build runtime run_plan"); },
+    activate: (runId: string) => { activated.push(runId); },
+    authorizeExplicitPlanStart: async () => {
+      buildStatus = "running";
+      return { runId: "run_plan", status: buildStatus, lastSequence: 42 };
+    },
+  } as unknown as BuildControlPlane;
+  const server = new ControlServer({ supervisor, token, checkGit: async () => gitReady, bootstrapRun, builds });
+  const address = await server.start(0);
+  const call = (path: string, body: unknown) => fetch(`${address.url}${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  try {
+    assert.equal((await call("/v2/runs", { runId: "run_plan", projectPath: join(directory, "project"), permissionProfile: "full", idempotencyKey: "create" })).status, 201);
+    assert.equal((await call("/v2/runs/run_plan/commands", { command: "start", idempotencyKey: "start" })).status, 200);
+    assert.equal((await call("/v2/runs/run_plan/commands", { command: "pause", idempotencyKey: "pause", reason: "native-build" })).status, 200);
+    assert.equal(supervisor.getRun("run_plan").state, "paused");
+    const started = await call("/v2/runs/run_plan/build/plan-start", {
+      version: 1, planRevisionId: "plan-r1", planDigest: "a".repeat(64), sourceManifestId: "manifest-1",
+      sourceArtifactDigest: "b".repeat(64), planningPolicyVersion: 1, projectDocsPolicyVersion: 2,
+      ownerChoice: "execute", idempotencyKey: "owner-start",
+    });
+    assert.equal(started.status, 200, await started.text());
+    assert.equal(supervisor.getRun("run_plan").state, "running", "the owner start must also resume the run");
+    assert.deepEqual(activated, ["run_plan"]);
+  } finally {
+    await server.close();
+    supervisor.close();
+  }
+});
