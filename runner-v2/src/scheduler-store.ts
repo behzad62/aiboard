@@ -9284,10 +9284,11 @@ function applyPlanCritiqueResolved(
   const resolutions = parsePlanCritiqueResolutions(event.payload.resolutions, blockingFindingIds);
   const reconciled = resolutions.filter((item) => item.resolution === "plan_reconciled");
   const plan = projection.planning?.plan;
-  // Evidence-gated runs never reconcile a critique in place: workers run only the approved contract
-  // (an in-place objective edit stranded P7 dispatch with scheduler_contract_mismatch), so accepted
-  // findings must cite a newer plan revision that goes through coverage review and owner start.
-  const reconciledByPlanRevision = projection.planningPolicyVersion === 1 && reconciled.length > 0;
+  // Evidence-gated runs reconcile accepted findings by citing a newer plan revision. The refusal of
+  // new in-place reconciliations lives in resolve_plan_critique, not here: recorded history (including
+  // earlier in-place resolutions) must keep replaying.
+  const reconciledByPlanRevision = projection.planningPolicyVersion === 1 && reconciled.length > 0 &&
+    reconciled.every((item) => item.planRevisionId !== undefined || item.planDigest !== undefined);
   if (reconciledByPlanRevision) {
     assertCritiqueReconciledByPlanRevision({
       reconciled,

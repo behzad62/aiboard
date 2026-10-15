@@ -9,6 +9,7 @@ import type {
 import {
   assertPendingUserGuidanceAllowsEvent,
   assertOpenArchitectQuestionAllowsEvent,
+  assertCritiqueReconciledByPlanRevision,
   buildCompletionReadiness,
   latestUnresolvedContextRecordingNote,
   readyPlanIdentity,
@@ -315,6 +316,25 @@ export function resolvePlanCritiqueTool(
           "stale_plan_critique",
           "Plan critique resolution does not match the current submitted critique.",
         );
+      }
+      // Evidence-gated runs: workers run only the approved contract (an in-place objective edit
+      // stranded P7 dispatch with scheduler_contract_mismatch), so accepted findings must cite the
+      // newer plan revision from revise_planning_plan instead of an in-place planReconciliation.
+      const reconciled = input.resolutions.filter((item) => item.resolution === "plan_reconciled");
+      if (projection?.planningPolicyVersion === 1 && reconciled.length > 0) {
+        try {
+          assertCritiqueReconciledByPlanRevision({
+            reconciled,
+            hasPlanReconciliation: input.planReconciliation !== undefined,
+            plan: projection.planning?.plan,
+            readiness: projection.planning?.readiness,
+          });
+        } catch (error) {
+          return errorOutput(
+            "mechanical_transition_rejected",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
       }
       return appendEvent(store, {
         runId: context.runId,
