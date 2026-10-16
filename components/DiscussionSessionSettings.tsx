@@ -415,6 +415,13 @@ export function DiscussionSessionSettings({
                   ))}
                 </SelectContent>
               </Select>
+              {discussion.mode === "build" && discussion.nativeBuildRunId && !discussion.nativeBuildRequestedAt && (
+                <p className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
+                  The running Build keeps the models it started with; changes here apply to the next run
+                  (Restart or a follow-up Build). If the current Architect fails, the Build asks you in
+                  &ldquo;Needs you&rdquo; which model should take over.
+                </p>
+              )}
             </div>
           )}
 
