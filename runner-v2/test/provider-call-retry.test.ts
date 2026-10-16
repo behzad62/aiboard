@@ -297,3 +297,22 @@ test("an OpenAI no-credits 429 is a usage limit and is never retried", async () 
   }), /no credits remaining/);
   assert.equal(calls, 1, "no retries for an exhausted account");
 });
+
+test("a provider request with no response times out as a retryable transient failure", async () => {
+  const { fetchProviderJson } = await import("../src/provider-model-utils.js");
+  const hung: typeof fetch = (_input, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+  });
+  const error = await fetchProviderJson(hung, "https://api.example/v1/responses", { method: "POST" }, 30)
+    .catch((caught: unknown) => caught);
+  assert.ok(error instanceof ProviderTransportError);
+  assert.match((error as Error).message, /timed out/);
+  assert.equal(classifyProviderFailure(error).kind, "transient", "a timeout is retried, unlike a caller cancel");
+
+  const caller = new AbortController();
+  const cancelled = fetchProviderJson(hung, "https://api.example/v1/responses", { method: "POST", signal: caller.signal }, 60_000)
+    .catch((caught: unknown) => caught);
+  caller.abort();
+  const cancelError = await cancelled;
+  assert.equal(cancelError instanceof ProviderTransportError, false, "a caller cancel stays a cancellation");
+});

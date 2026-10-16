@@ -54,13 +54,42 @@ export function providerReportedTokenCount(value: unknown): number | undefined {
     : undefined;
 }
 
+/**
+ * Upper bound for one provider HTTP request. Long max-effort turns legitimately take ~10 minutes, but
+ * a stalled connection must not hang a run forever (P7: an OpenRouter call sat open for 33 minutes).
+ * A timeout surfaces as a transient provider failure, so the normal retry policy applies.
+ */
+export const PROVIDER_REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
+
 export async function fetchProviderJson<T>(
   fetchImpl: typeof globalThis.fetch,
   url: string,
-  init: RequestInit
+  init: RequestInit,
+  timeoutMs = PROVIDER_REQUEST_TIMEOUT_MS
 ): Promise<T> {
-  const response = await fetchImpl(url, init);
-  const data = await response.json().catch(() => ({})) as unknown;
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal;
+  let response: Response;
+  let data: unknown;
+  try {
+    response = await fetchImpl(url, { ...init, signal });
+    data = await response.json().catch((error: unknown) => {
+      if (timeout.signal.aborted && !init.signal?.aborted) throw error;
+      return {};
+    }) as unknown;
+  } catch (error) {
+    if (timeout.signal.aborted && !init.signal?.aborted) {
+      throw new ProviderTransportError(
+        `Provider request timed out after ${Math.round(timeoutMs / 1000)}s without a response.`,
+        undefined,
+        "timeout"
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!response.ok) {
     const error = providerError(data);
     throw new ProviderTransportError(
