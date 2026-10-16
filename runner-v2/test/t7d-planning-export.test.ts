@@ -537,7 +537,9 @@ test("T7d product: real factory planning and delivery export canonical C1 state,
     assert.equal((await control("plan-start", { ...start, ownerChoice: "preview" })).status, 400);
     assert.equal((await control("plan-start", start, "wrong-token")).status, 401);
     assert.deepEqual(manager.events(T7D_RUN), beforePreview);
-    const awaitingStart = await runtime!.step();
+    // The plan critique (risk assessment, then skip or critique) runs before the owner start.
+    let awaitingStart = await runtime!.step();
+    for (let guard = 0; guard < 6 && awaitingStart.action !== "plan_start_required" && awaitingStart.status === "progressed"; guard += 1) awaitingStart = await runtime!.step();
     assert.equal(awaitingStart.action, "plan_start_required");
     assert.equal(worker.requests.length, 0);
     await startNativeReadyPlan({ url: address.url, token: "t7d-control-token" }, T7D_RUN, start);

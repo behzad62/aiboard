@@ -1804,6 +1804,18 @@ export class BuildRuntime {
         await this.runArchitect({ type: "plan_required" }, projection);
         return this.afterArchitect("plan_required");
       }
+      // The plan critique runs on the ready plan BEFORE the owner start, beside the coverage
+      // review: accepted findings go through a plan revision and a fresh coverage review, and the
+      // owner approves once. Running it after the start forced a second approval and (P7) an
+      // expensive resolution loop against already-authorized task contracts.
+      if (
+        projection.planningTriageDecision === "build" &&
+        projection.runPolicy !== "plan_only" &&
+        !isAnsweredRun(projection)
+      ) {
+        const preStartCritique = await this.advancePlanCritique(projection);
+        if (preStartCritique) return preStartCritique;
+      }
       // T7b: readiness alone never authorizes execution. Before any worker
       // dispatch the owner must have authorized this exact ready identity;
       // drift refuses here as a durable owner-visible pause with zero
