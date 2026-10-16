@@ -271,3 +271,29 @@ test("Runner V2 and certified browser retry schedules remain identical", () => {
     [...CERTIFIED_RETRY_DELAYS_MS]
   );
 });
+
+test("an OpenAI no-credits 429 is a usage limit and is never retried", async () => {
+  const { fetchProviderJson } = await import("../src/provider-model-utils.js");
+  const { classifyProviderFailure } = await import("../src/provider-health.js");
+  let calls = 0;
+  const noCredits = async () => {
+    calls += 1;
+    return await fetchProviderJson(
+      async () => new Response(JSON.stringify({ error: { message: "You have no credits remaining. Add credits to continue using the API.", type: "insufficient_quota", code: null } }), { status: 429 }),
+      "https://api.example/v1/responses",
+      { method: "POST" },
+    );
+  };
+  const error = await noCredits().catch((caught: unknown) => caught);
+  assert.equal(classifyProviderFailure(error).kind, "usage_limit");
+  assert.equal(classifyProviderFailure({ status: 429, message: "You have no credits remaining." }).kind, "usage_limit");
+  calls = 0;
+  await assert.rejects(() => completeWithProviderRetry({
+    complete: noCredits,
+    classify: classifyProviderFailure,
+    sleep: async () => undefined,
+    random: () => 0.5,
+    now: () => 0,
+  }), /no credits remaining/);
+  assert.equal(calls, 1, "no retries for an exhausted account");
+});

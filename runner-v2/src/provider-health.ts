@@ -59,6 +59,7 @@ export function classifyProviderFailure(error: unknown): ProviderFailure {
     /usage limit(?: has been)? (?:reached|exceeded)|quota (?:has been )?(?:reached|exceeded)/i.test(
       message
     ) ||
+    /no credits remaining|insufficient (?:credits|balance|funds)|credit balance is too low/i.test(message) ||
     (details.status === 429 && /quota|insufficient/.test(code))
   ) {
     kind = "usage_limit";

@@ -110,7 +110,13 @@ function providerError(data: unknown): { message?: string; code?: string } {
     const error = nested as Record<string, unknown>;
     return {
       ...(typeof error.message === "string" ? { message: error.message } : {}),
-      ...(typeof error.code === "string" ? { code: error.code } : {}),
+      // OpenAI reports "insufficient_quota" (no credits) in `type` with a null `code`; without it the
+      // 429 classified as a retryable rate limit and was retried 5 times.
+      ...(typeof error.code === "string"
+        ? { code: error.code }
+        : typeof error.type === "string"
+          ? { code: error.type }
+          : {}),
     };
   }
   return {
