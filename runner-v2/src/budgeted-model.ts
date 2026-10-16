@@ -111,16 +111,23 @@ export class BudgetedAgentModel implements AgentModel {
       );
       return turn;
     } catch (error) {
-      this.settle(
-        reservationId,
-        inputTokens,
-        this.outputTokenReserve,
-        estimatedCostMicros,
-        0,
-        0,
-        "estimated",
-        "estimated"
-      );
+      if (isUnbilledProviderRejection(error)) {
+        // The provider refused the request before generating anything (rate limit, auth,
+        // validation), so nothing was billed. Booking the full reserve made each P7 429 retry show
+        // ~$0.36 and would drain a real budget.
+        this.settle(reservationId, 0, 0, 0, 0, 0, "reported", "reported");
+      } else {
+        this.settle(
+          reservationId,
+          inputTokens,
+          this.outputTokenReserve,
+          estimatedCostMicros,
+          0,
+          0,
+          "estimated",
+          "estimated"
+        );
+      }
       throw error;
     } finally {
       this.ledger.stopActive({
@@ -218,4 +225,12 @@ function resolveTokens(
   return Number.isSafeInteger(reported) && (reported as number) >= 0
     ? { value: reported as number, source: "reported" }
     : { value: estimated, source: "estimated" };
+}
+
+/** HTTP statuses a provider returns before any generation happens; such requests are not billed. */
+const UNBILLED_REJECTION_STATUSES = new Set([400, 401, 403, 404, 409, 413, 422, 429]);
+
+export function isUnbilledProviderRejection(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" && UNBILLED_REJECTION_STATUSES.has(status);
 }

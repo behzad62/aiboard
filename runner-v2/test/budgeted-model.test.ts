@@ -321,3 +321,32 @@ function budgetFixture() {
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
+
+test("a request the provider refused (429/4xx) settles at zero tokens; ambiguous failures stay conservative", async () => {
+  const fixture = budgetFixture();
+  const ledger = new SqliteBudgetLedger(fixture.database, {
+    limitsFor: () => ({ maxModelCalls: 10, maxInputTokens: 100_000, maxOutputTokens: 100_000 }),
+  });
+  try {
+    const failing = (error: Error) => new BudgetedAgentModel({
+      model: { complete: async () => { throw error; } },
+      ledger,
+      scopeId: "run_1",
+      attribution: modelAttribution(),
+      outputTokenReserve: 10,
+    });
+    const rateLimited = Object.assign(new Error("Provider rate limit"), { status: 429 });
+    await assert.rejects(() => failing(rateLimited).complete(request("session_1")), /rate limit/);
+    let snapshot = ledger.snapshot("run_1");
+    assert.equal(snapshot.effective.inputTokens, 0, "a refused request books no input");
+    assert.equal(snapshot.effective.outputTokens, 0, "a refused request books no output reserve");
+
+    const serverError = Object.assign(new Error("upstream reset"), { status: 502 });
+    await assert.rejects(() => failing(serverError).complete(request("session_2")), /upstream reset/);
+    snapshot = ledger.snapshot("run_1");
+    assert.ok(snapshot.effective.outputTokens >= 10, "an ambiguous failure keeps the conservative reserve");
+  } finally {
+    ledger.close();
+    fixture.cleanup();
+  }
+});
