@@ -342,6 +342,7 @@ export interface UserSettings {
       maxOutputTokens?: number;
       inputUsdPer1M?: number;
       outputUsdPer1M?: number;
+      cachedInputUsdPer1M?: number;
       apiParameters?: {
         toolChoice?: boolean;
         structuredOutputs?: boolean;

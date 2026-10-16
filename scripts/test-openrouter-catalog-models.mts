@@ -75,6 +75,18 @@ check(
   minimax
 );
 
+const cached = buildOpenRouterCatalogModel({
+  id: "xiaomi/mimo-v2.6-pro",
+  pricing: { prompt: "0.000000435", completion: "0.00000087", input_cache_read: "0.000000087" },
+} as never);
+check(
+  "OpenRouter cache-read pricing is carried as cachedInputUsdPer1M",
+  Math.abs((cached.cachedInputUsdPer1M ?? -1) - 0.087) < 1e-9 && Math.abs((cached.inputUsdPer1M ?? -1) - 0.435) < 1e-9,
+  cached
+);
+const uncached = buildOpenRouterCatalogModel({ id: "x/y", pricing: { prompt: "0.000001", completion: "0.000002" } } as never);
+check("a model without a cache-read price has no cachedInputUsdPer1M", uncached.cachedInputUsdPer1M === undefined, uncached);
+
 if (failures === 0) {
   console.log("PASS");
 } else {

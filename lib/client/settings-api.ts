@@ -237,7 +237,7 @@ interface OpenRouterModelsResponse {
     context_length?: number;
     max_output_tokens?: number;
     max_completion_tokens?: number;
-    pricing?: { prompt?: string; completion?: string };
+    pricing?: { prompt?: string; completion?: string; input_cache_read?: string };
     supported_parameters?: string[];
     architecture?: {
       input_modalities?: string[];
@@ -254,6 +254,8 @@ export interface OpenRouterCatalogModel {
   maxOutputTokens?: number;
   inputUsdPer1M?: number;
   outputUsdPer1M?: number;
+  /** Cache-read price (OpenRouter `pricing.input_cache_read`); absent when the provider does not publish one. */
+  cachedInputUsdPer1M?: number;
   inputModalities: string[];
   supportedParameters: string[];
   supportsImageInput: boolean;
@@ -324,6 +326,8 @@ export function buildOpenRouterCatalogModel(
   const outputPerToken = Number(entry.pricing?.completion);
   const inputUsdPer1M = Number.isFinite(inputPerToken) && inputPerToken >= 0 ? inputPerToken * 1_000_000 : undefined;
   const outputUsdPer1M = Number.isFinite(outputPerToken) && outputPerToken >= 0 ? outputPerToken * 1_000_000 : undefined;
+  const cacheReadPerToken = entry.pricing?.input_cache_read === undefined ? Number.NaN : Number(entry.pricing.input_cache_read);
+  const cachedInputUsdPer1M = Number.isFinite(cacheReadPerToken) && cacheReadPerToken >= 0 ? cacheReadPerToken * 1_000_000 : undefined;
   return {
     id: entry.id,
     name: entry.name?.trim() || entry.id,
@@ -333,6 +337,7 @@ export function buildOpenRouterCatalogModel(
     maxOutputTokens: maxCompletionTokens,
     inputUsdPer1M,
     outputUsdPer1M,
+    ...(cachedInputUsdPer1M !== undefined ? { cachedInputUsdPer1M } : {}),
     inputModalities,
     supportedParameters,
     supportsImageInput: modalitySet.has("image"),
@@ -686,6 +691,9 @@ function discoveryMetadataFromCatalogModel(
       : {}),
     ...(model.outputUsdPer1M !== undefined
       ? { outputUsdPer1M: model.outputUsdPer1M }
+      : {}),
+    ...(model.cachedInputUsdPer1M !== undefined
+      ? { cachedInputUsdPer1M: model.cachedInputUsdPer1M }
       : {}),
     apiParameters: {
       toolChoice: model.supportsToolChoice,

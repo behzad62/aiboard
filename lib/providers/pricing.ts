@@ -19,6 +19,7 @@ export interface ModelPricing {
 export interface DiscoveredModelPricingMetadata {
   inputUsdPer1M?: number;
   outputUsdPer1M?: number;
+  cachedInputUsdPer1M?: number;
   updatedAt?: string;
   source?: "openrouter-models" | "provider-models";
 }
@@ -353,9 +354,13 @@ export function getModelPricing(
   }
 
   if (!override && hasDiscoveredPricing) {
+    const discoveredCached = discovered?.cachedInputUsdPer1M;
     return {
       inputUsdPer1M: discoveredInput!,
       outputUsdPer1M: discoveredOutput!,
+      ...(typeof discoveredCached === "number" && Number.isFinite(discoveredCached) && discoveredCached >= 0
+        ? { cachedInputUsdPer1M: discoveredCached }
+        : {}),
       sourceLabel:
         discovered?.source === "openrouter-models"
           ? "OpenRouter live catalog pricing"
