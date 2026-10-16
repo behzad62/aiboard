@@ -38,7 +38,13 @@ export function syncAutonomousBuildLifecycle(
       `autonomous-build-completed:${run.lastSequence}`,
       build,
     );
-  } else if (result.status === "paused" && run.state === "running") {
+  } else if (
+    result.status === "paused" &&
+    run.state === "running" &&
+    // A pause result is stale once the Build already resumed (an owner answered the gate, e.g. an
+    // Architect handoff, while the step was settling); pausing the run then strands the pump.
+    build.status !== "running"
+  ) {
     supervisor.pause(
       runId,
       `autonomous-build-paused:${run.lastSequence}`,

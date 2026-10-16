@@ -77,3 +77,30 @@ function openSupervisor(directory: string): RunSupervisor {
     clock: () => "2026-09-23T00:00:00.000Z",
   });
 }
+
+test("a stale pause result does not pause a run whose Build already resumed", () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-cli-stale-pause-"));
+  const supervisor = openSupervisor(directory);
+  try {
+    supervisor.createRun({ runId: "run_handoff", projectPath: join(directory, "project"), permissionProfile: "full", idempotencyKey: "create:handoff" });
+    supervisor.captureBaseline("run_handoff", "baseline:handoff", "d".repeat(40), "refs/aiboard/runs/handoff/baseline");
+    supervisor.start("run_handoff", "start:handoff");
+    syncAutonomousBuildLifecycle(
+      supervisor,
+      "run_handoff",
+      { status: "paused", action: "user_guidance_required" },
+      { status: "running" } as SchedulerProjection,
+    );
+    assert.equal(supervisor.getRun("run_handoff").state, "running", "the owner's handoff already resumed the Build");
+    syncAutonomousBuildLifecycle(
+      supervisor,
+      "run_handoff",
+      { status: "paused", action: "plan_start_required" },
+      { status: "paused" } as SchedulerProjection,
+    );
+    assert.equal(supervisor.getRun("run_handoff").state, "paused");
+  } finally {
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
