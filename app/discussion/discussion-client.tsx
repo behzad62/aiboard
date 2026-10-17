@@ -39,6 +39,8 @@ import {
   BuildTranscriptPanel,
   buildBuildTranscriptMarkdown,
 } from "@/components/BuildTranscriptPanel";
+import { BuildTranscriptFeed } from "@/components/build/BuildTranscriptFeed";
+import { BuildEventCenter, alertsFromDiagnostics, type BuildAlert } from "@/components/build/BuildEventCenter";
 import { FinalAnswerCard } from "@/components/FinalAnswerCard";
 import { BuildResultCard } from "@/components/BuildResultCard";
 import { ArtifactPanel } from "@/components/ArtifactPanel";
@@ -162,6 +164,8 @@ import {
   type NativeBuildProjection,
 } from "@/lib/client/runner-v2";
 import { nativeBuildActivityEntries } from "@/lib/client/native-build-activity";
+import { followNativeLiveModelOutput, type NativeLiveModelEvent } from "@/lib/client/native-model-output";
+import { applyLiveModelEvent, type LiveModelTurn } from "@/lib/client/live-model-feed";
 import {
   BuildTaskBoard,
   type BuildTaskView,
@@ -345,6 +349,7 @@ function DiscussionPageInner() {
   const [persistedFiles, setPersistedFiles] = useState<ExtractedFile[]>([]);
   const [activeTab, setActiveTab] = useState("activity");
   const [buildView, setBuildView] = useState<BuildView>({ kind: "overview" });
+  const [liveModelTurns, setLiveModelTurns] = useState<LiveModelTurn[]>([]);
   const notifiedRef = useRef(false);
   const streamingRef = useRef<Map<string, string>>(new Map());
   const nativeTranscriptRef = useRef<NativeBuildTranscriptAttachment | null>(null);
@@ -367,6 +372,67 @@ function DiscussionPageInner() {
       discussion.runnerToken,
     ]);
   }, [id, discussion?.id, discussion?.mode, discussion?.runnerUrl, discussion?.runnerToken]);
+  // Native model text is intentionally ephemeral, separate from durable checkpoints.
+  const nativeRunTerminal = status === "completed" || status === "failed" || status === "stopped";
+  useEffect(() => {
+    const runId = discussion?.nativeBuildRunId;
+    const url = discussion?.runnerUrl;
+    const token = discussion?.runnerToken;
+    setLiveModelTurns([]);
+    if (discussion?.mode !== "build" || !runId || !url || !token ||
+      nativeRunTerminal) return;
+    const controller = new AbortController();
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    const queued: Array<{ event: NativeLiveModelEvent; snapshot: boolean }> = [];
+    const flush = () => {
+      flushTimer = undefined;
+      const batch = queued.splice(0);
+      if (batch.length > 0 && !controller.signal.aborted) {
+        setLiveModelTurns((current) => batch.reduce(
+          (turns, item) => applyLiveModelEvent(turns, item.event, item.snapshot), current));
+      }
+    };
+    const follow = async () => {
+      while (!controller.signal.aborted) {
+        try {
+          // A fresh SSE connection receives an active-text snapshot, including
+          // after a runner restart with a reset event sequence.
+          if (flushTimer) clearTimeout(flushTimer);
+          flushTimer = undefined;
+          queued.length = 0;
+          setLiveModelTurns([]);
+          await followNativeLiveModelOutput(
+            { url, token }, runId, 0,
+            (event, snapshot) => {
+              if (controller.signal.aborted) return;
+              queued.push({ event, snapshot });
+              if (!flushTimer) flushTimer = setTimeout(flush, 50);
+            }, controller.signal,
+          );
+        } catch {
+          // Older runners may not have the live output endpoint. Durable polling remains available.
+        }
+        if (controller.signal.aborted) break;
+        await new Promise<void>((resolve) => {
+          retryTimer = setTimeout(resolve, 1500);
+          controller.signal.addEventListener("abort", () => {
+            if (retryTimer) clearTimeout(retryTimer);
+            resolve();
+          }, { once: true });
+        });
+      }
+    };
+    void follow();
+    return () => {
+      controller.abort();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (flushTimer) clearTimeout(flushTimer);
+    };
+  }, [discussion?.id, discussion?.mode, discussion?.nativeBuildRunId,
+    discussion?.runnerUrl, discussion?.runnerToken,
+    nativeRunTerminal]);
+
   const noteDeliveryMode = useMemo(
     () => discussion
       ? classifyBuildNoteDelivery(discussion, nativeProjection)
@@ -1215,6 +1281,8 @@ function DiscussionPageInner() {
         nativeTranscriptRef.current = nextTranscript;
         streamingRef.current.clear();
         setNativeTranscript(nextTranscript);
+        // The checkpoint is authoritative; replace provisional completed output.
+        setLiveModelTurns((current) => current.filter((turn) => turn.streaming));
         if (files) setNativeFiles((current) => reconcileNativeBuildFiles(current, runId, files));
       },
       schedule: (callback, delayMs) =>
@@ -1867,6 +1935,17 @@ function DiscussionPageInner() {
     ? buildAttachmentView.messages
     : messages;
   const hasNativeAttachment = buildAttachmentView.nativeAttached;
+  const nativeLiveTranscriptMessages = liveModelTurns
+    .filter((turn) => turn.streaming || turn.content)
+    .map((turn, index) => ({
+      id: turn.id,
+      modelId: `native:${turn.actor.role}:${turn.actor.id}`,
+      modelName: `${turn.actor.role[0].toUpperCase()}${turn.actor.role.slice(1)} ${turn.actor.id}`,
+      content: turn.content,
+      streaming: turn.streaming,
+      round: (buildTranscriptMessages.at(-1)?.round ?? 0) + index + 1,
+      ordinal: index,
+    }));
 
   // Lead participants (Architect/Judge) that aren't among the
   // workers in modelIds — they'd otherwise never appear in the Team row even
@@ -2429,6 +2508,19 @@ function DiscussionPageInner() {
 
     const overview = (
       <div className="space-y-6">
+        <BuildTranscriptFeed
+          messages={[...buildTranscriptMessages, ...nativeLiveTranscriptMessages]}
+          active={isActive}
+          activeActors={isActive ? (nativeObservability?.agents ?? [])
+            .filter((agent) => agent.status === "active")
+            .slice(0, 8)
+            .map((agent) => ({
+              id: agent.sessionId,
+              role: agent.actor.role,
+              name: `${agent.actor.role} ${agent.actor.id}`,
+            })) : []}
+          onDownload={downloadTranscript}
+        />
         {discussion.nativeBuildRunId && !nativeProjection && (
           <LoadingNotice
             label="Loading the build from the runner"
@@ -2437,9 +2529,6 @@ function DiscussionPageInner() {
               : "Reading run status, plan, tasks, and usage."}
             since={nativeAttach?.since}
           />
-        )}
-        {discussion.nativeBuildRunId && (
-          <RunnerV2SteeringPanel projection={nativeProjection} section="ledger" />
         )}
         {finalResult && !hasNativeAttachment && (
           <BuildResultCard
@@ -2450,45 +2539,13 @@ function DiscussionPageInner() {
             discussionId={discussion.id}
           />
         )}
-        {!discussion.nativeBuildRunId && buildStopReport && (
-          <BuildStopReportPanel report={buildStopReport} />
-        )}
-        {!discussion.nativeBuildRunId && buildToolReviewReport && (
-          <BuildToolReviewPanel report={buildToolReviewReport} />
-        )}
-        <RunnerV2ObservabilityPanel
-          snapshot={nativeObservability}
-          projection={nativeProjection}
-          onDownloadAudit={
-            discussion.nativeBuildRunId ? () => void downloadNativeAudit() : undefined
-          }
-          onExtendRepairCycles={
-            discussion.nativeBuildRunId ? handleExtendRepairCycles : undefined
-          }
-        />
-        <NativePlanningPanel
-          projection={nativeProjection}
-          usage={nativeObservability?.budget}
-          connection={
-            discussion.runnerUrl && discussion.runnerToken
-              ? { url: discussion.runnerUrl, token: discussion.runnerToken }
-              : undefined
-          }
-          onProjection={(updated) =>
-            setNativeProjection((current) =>
-              current?.runId === updated.runId && current.lastSequence > updated.lastSequence
-                ? current
-                : updated
-            )
-          }
-        />
-        <DiscussionAttachments attachments={attachments} />
       </div>
     );
 
     const fileCount = currentNativeFiles ? nativeArtifactFiles.length : legacyArtifactFiles.length;
     const filesView = (
       <div className="space-y-6">
+        <DiscussionAttachments attachments={attachments} />
         {discussion.nativeBuildRunId && (nativeFilesLoad || (!currentNativeFiles && !nativeProjection)) && (
           <LoadingNotice
             label={currentNativeFiles ? "Refreshing project files" : "Reading project files from the runner"}
@@ -2524,6 +2581,27 @@ function DiscussionPageInner() {
         )}
       </div>
     );
+
+    const buildAlerts: BuildAlert[] = [
+      ...alertsFromDiagnostics(diagnostics),
+      ...(error ? [{ id: `ui-error:${error}`, kind: "error" as const, message: error }] : []),
+      ...(nativeAttach?.error ? [{ id: `attach:${nativeAttach.error}`, kind: "error" as const, message: nativeAttach.error }] : []),
+      ...(nativeObservability?.tools ?? [])
+        .filter((tool) => tool.isError)
+        .map((tool) => ({
+          id: `tool:${discussion.nativeBuildRunId}:${tool.callId}`,
+          kind: "error" as const,
+          message: `${tool.toolName}: ${tool.errorCode ?? "Tool call failed"}`,
+          at: new Date(tool.occurredAt).toLocaleTimeString(),
+        })),
+      ...(nativeObservability?.agents ?? [])
+        .filter((agent) => Boolean(agent.error))
+        .map((agent) => ({
+          id: `agent:${discussion.nativeBuildRunId}:${agent.sessionId}:${agent.error}`,
+          kind: "error" as const,
+          message: `${agent.actor.role} ${agent.actor.id}: ${agent.error}`,
+        })),
+    ];
 
     const workerNames = (discussion.nativeBuildRunId && discussion.judgeModelId
       ? selectNativeBuildRuntimes(participantIds, discussion.judgeModelId, discussion.reviewerModelId ?? null).workerRuntimeIds
@@ -2565,6 +2643,7 @@ function DiscussionPageInner() {
           />
         }
         actions={sessionActions}
+        notifications={<BuildEventCenter scope={`${discussion.id}:${discussion.nativeBuildRunId ?? "legacy"}`} events={buildAlerts} />}
         live={isActive ? liveActivity : null}
         banner={banner}
         tasks={workspaceTasks}
@@ -2580,9 +2659,9 @@ function DiscussionPageInner() {
             onDownload={downloadTranscript}
           />
         }
-        transcriptCount={buildTranscriptMessages.length}
         activity={
           <div className="space-y-6">
+            <h2 className="text-base font-semibold">Run activity &amp; diagnostics</h2>
             <DiscussionDiagnostics
               entries={diagnostics}
               connected={streamConnected}
@@ -2591,6 +2670,26 @@ function DiscussionPageInner() {
               roundLabel="turn"
               showEntryTokenUsage={false}
             />
+            {discussion.nativeBuildRunId && <RunnerV2SteeringPanel projection={nativeProjection} section="ledger" />}
+            <NativePlanningPanel
+              projection={nativeProjection}
+              usage={nativeObservability?.budget}
+              connection={discussion.runnerUrl && discussion.runnerToken
+                ? { url: discussion.runnerUrl, token: discussion.runnerToken }
+                : undefined}
+              onProjection={(updated) => setNativeProjection((current) =>
+                current?.runId === updated.runId && current.lastSequence > updated.lastSequence
+                  ? current : updated)}
+            />
+            <RunnerV2ObservabilityPanel
+              snapshot={nativeObservability}
+              projection={nativeProjection}
+              onDownloadAudit={discussion.nativeBuildRunId ? () => void downloadNativeAudit() : undefined}
+              onExtendRepairCycles={discussion.nativeBuildRunId ? handleExtendRepairCycles : undefined}
+            />
+            {!discussion.nativeBuildRunId && buildStopReport && <BuildStopReportPanel report={buildStopReport} />}
+            {!discussion.nativeBuildRunId && buildToolReviewReport && <BuildToolReviewPanel report={buildToolReviewReport} />}
+            <BuildTranscriptPanel messages={buildTranscriptMessages} accentMap={accentMap} onDownload={downloadTranscript} />
           </div>
         }
         settings={

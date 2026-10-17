@@ -16,7 +16,6 @@ import {
   LayoutDashboard,
   ListTodo,
   PanelRight,
-  ScrollText,
   Settings2,
   X,
 } from "lucide-react";
@@ -141,6 +140,7 @@ export function BuildWorkspace({
   crew,
   runnerChip,
   actions,
+  notifications,
   live,
   banner,
   tasks,
@@ -152,7 +152,6 @@ export function BuildWorkspace({
   activity,
   settings,
   fileCount,
-  transcriptCount,
   decisions,
   composer,
   details,
@@ -162,6 +161,7 @@ export function BuildWorkspace({
   crew: WorkspaceCrew;
   runnerChip: ReactNode;
   actions: ReactNode;
+  notifications?: ReactNode;
   live?: string | null;
   banner?: ReactNode;
   tasks: WorkspaceTask[];
@@ -173,7 +173,6 @@ export function BuildWorkspace({
   activity: ReactNode;
   settings: ReactNode;
   fileCount?: number;
-  transcriptCount?: number;
   decisions: WorkspaceDecision[];
   composer: ReactNode;
   details: ReactNode;
@@ -211,7 +210,6 @@ export function BuildWorkspace({
       mobileOnly: true,
     },
     { view: { kind: "files" }, label: "Files", icon: FileCode2, count: fileCount },
-    { view: { kind: "transcript" }, label: "Transcript", icon: ScrollText, count: transcriptCount },
     { view: { kind: "activity" }, label: "Activity", icon: Activity },
     { view: { kind: "settings" }, label: "Session settings", icon: Settings2 },
   ];
@@ -323,6 +321,7 @@ export function BuildWorkspace({
                   {topic}
                 </h1>
                 <div className="flex shrink-0 flex-wrap items-center gap-2 md:justify-end">
+                  {notifications}
                   {actions}
                   <button
                     ref={detailsButtonRef}

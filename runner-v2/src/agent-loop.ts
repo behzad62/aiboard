@@ -19,6 +19,7 @@ import {
   type RunnerProviderRetryEvent,
 } from "./provider-call-retry.js";
 import type { ProviderFailure } from "./provider-health.js";
+import { publishLiveModelOutput } from "./live-model-output.js";
 
 export type AgentSuspensionReason =
   | "model_ended_without_lifecycle"
@@ -273,18 +274,50 @@ export async function runAgentLoop(
     if (options.signal?.aborted) {
       return suspended("cancelled", turnNumber - 1, messages);
     }
+    let attempt = 0;
+    let streamingActive = false;
+    const identity = () => ({
+      runId: options.context.runId,
+      sessionId: options.context.sessionId,
+      actor: options.context.actor,
+      turn: turnNumber,
+      attempt,
+    });
+    // Retries repeat the exact same request, including callback identity.
+    // Providers must settle/cancel their response stream before rejecting.
+    const request = {
+      sessionId: options.context.sessionId,
+      messages: compactAgentMessages(messages, options.workingSet),
+      tools: options.registry.definitions(),
+      ...(options.hostedTools ? { hostedTools: options.hostedTools } : {}),
+      signal: options.signal,
+      onTextDelta: (text: string) => {
+        if (streamingActive && text && !options.signal?.aborted) {
+          publishLiveModelOutput({ ...identity(), phase: "delta" as const, text });
+        }
+      },
+    };
     let turn;
+    const streamAttempt = async () => {
+      attempt += 1;
+      const activeAttempt = identity();
+      streamingActive = true;
+      publishLiveModelOutput({ ...activeAttempt, phase: "reset", text: "" });
+      try {
+        const result = await options.model.complete(request);
+        streamingActive = false;
+        publishLiveModelOutput({ ...activeAttempt, phase: "finish", text: "" });
+        return result;
+      } catch (error) {
+        streamingActive = false;
+        publishLiveModelOutput({ ...activeAttempt, phase: "discard", text: "" });
+        throw error;
+      }
+    };
     try {
-      const request = {
-        sessionId: options.context.sessionId,
-        messages: compactAgentMessages(messages, options.workingSet),
-        tools: options.registry.definitions(),
-        ...(options.hostedTools ? { hostedTools: options.hostedTools } : {}),
-        signal: options.signal,
-      };
       turn = options.providerRetry
         ? await completeWithProviderRetry({
-            complete: () => options.model.complete(request),
+            complete: streamAttempt,
             signal: options.signal,
             deadlineMs: options.providerRetry.deadlineMs,
             classify: options.providerRetry.classify,
@@ -303,7 +336,7 @@ export async function runAgentLoop(
             modelId: options.providerRetry.modelId,
             retryIdentity: `${request.sessionId}:turn:${turnNumber}`,
           })
-        : await options.model.complete(request);
+        : await streamAttempt();
     } catch (error) {
       const budgetExhausted =
         error instanceof BudgetExceededError ||

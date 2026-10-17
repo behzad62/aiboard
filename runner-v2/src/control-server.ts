@@ -44,6 +44,7 @@ import type { RunSupervisor } from "./run-supervisor.js";
 import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./process-recovery.js";
+import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
@@ -892,6 +893,15 @@ export class ControlServer {
       if (
         segments.length === 5 &&
         segments[3] === "build" &&
+        segments[4] === "live-output" &&
+        request.method === "GET"
+      ) {
+        this.openLiveModelOutputStream(response, request, runId, readAfterSequence(url));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
         segments[4] === "stream" &&
         request.method === "GET"
       ) {
@@ -1141,6 +1151,48 @@ export class ControlServer {
     }, this.heartbeatMs);
     heartbeat.unref();
 
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      this.streams.delete(response);
+    };
+    request.once("close", cleanup);
+    response.once("close", cleanup);
+  }
+
+  private openLiveModelOutputStream(
+    response: ServerResponse,
+    request: IncomingMessage,
+    runId: string,
+    afterSequence: number
+  ): void {
+    // Existing bearer authorization and run ownership checks apply before any output.
+    this.requireBuilds().projection(runId);
+    response.statusCode = 200;
+    response.setHeader("Content-Type", "text/event-stream");
+    response.setHeader("Cache-Control", "no-cache");
+    response.setHeader("Connection", "keep-alive");
+    response.setHeader("X-Accel-Buffering", "no");
+    response.flushHeaders();
+    this.streams.add(response);
+    let cursor = afterSequence;
+    const send = (event: import("./live-model-output.js").LiveModelEvent) => {
+      if (event.sequence <= cursor) return;
+      cursor = event.sequence;
+      response.write(`id: ${event.sequence}\nevent: ${event.phase}\ndata: ${JSON.stringify(event)}\n\n`);
+    };
+    // No durable storage: snapshots recover an in-flight turn after reconnect.
+    const unsubscribe = subscribeLiveModelOutput(runId, send);
+    // A new subscription uses current active snapshots, not an arbitrary
+    // replay of already-finished provisional turns. Cursor replay is optional.
+    if (afterSequence > 0) {
+      for (const event of recentLiveModelOutput(runId, cursor)) send(event);
+    }
+    for (const event of activeLiveModelOutput(runId)) {
+      response.write(`event: snapshot\ndata: ${JSON.stringify(event)}\n\n`);
+    }
+    const heartbeat = setInterval(() => response.write(": heartbeat\n\n"), this.heartbeatMs);
+    heartbeat.unref();
     const cleanup = () => {
       clearInterval(heartbeat);
       unsubscribe();

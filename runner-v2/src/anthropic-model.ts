@@ -17,6 +17,7 @@ import {
   type ToolNameCodec,
 } from "./provider-model-utils.js";
 import { anthropicReasoningFields } from "./reasoning-effort.js";
+import { collectAnthropicStream } from "./native-provider-streaming.js";
 
 export interface AnthropicModelOptions {
   baseUrl?: string;
@@ -75,11 +76,10 @@ export class AnthropicModel implements AgentModel {
       ...(request.tools.length > 0
         ? { tools: request.tools.map((tool) => toAnthropicTool(tool, toolNames)) }
         : {}),
+      ...(request.onTextDelta ? { stream: true } : {}),
     });
-    const response = await fetchProviderJson<AnthropicResponse>(
-      this.fetchImpl,
-      joinEndpoint(this.options.baseUrl ?? "https://api.anthropic.com", "v1/messages"),
-      {
+    const endpoint = joinEndpoint(this.options.baseUrl ?? "https://api.anthropic.com", "v1/messages");
+    const init: RequestInit = {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -88,8 +88,10 @@ export class AnthropicModel implements AgentModel {
         },
         body,
         signal: request.signal,
-      }
-    );
+      };
+    const response = request.onTextDelta
+      ? await collectAnthropicStream(this.fetchImpl, endpoint, init, request.onTextDelta)
+      : await fetchProviderJson<AnthropicResponse>(this.fetchImpl, endpoint, init);
     const blocks: AssistantBlock[] = [];
     for (const [index, block] of (response.content ?? []).entries()) {
       if (block.type === "text" && block.text) {

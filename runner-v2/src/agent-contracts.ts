@@ -92,6 +92,8 @@ export interface AgentModelRequest {
   toolChoice?: AgentToolChoice;
   hostedTools?: readonly AgentHostedToolDefinition[];
   signal?: AbortSignal;
+  /** Public assistant text only; do not emit reasoning or raw tool arguments. */
+  onTextDelta?: (text: string) => void;
 }
 
 export interface AgentModel {

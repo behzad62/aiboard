@@ -155,14 +155,27 @@ export class AccountRunnerModel implements AgentModel {
     let usage: ModelTurn["usage"] = serializedInputUsage(body);
     let toolIndex = 0;
     let sawNativeToolCall = false;
+    let livePublished = 0;
     for await (const event of readSse(response)) {
       if (event.type === "token" && event.content) {
         text += event.content;
+        // Textual TOOL_CALL records carry raw tool arguments; never broadcast them.
+        // Retain a short trailing lookahead so a marker split across SSE tokens
+        // cannot flash into the browser before we recognize it.
+        const marker = text.indexOf("TOOL_CALL ");
+        const safeEnd = marker >= 0 ? marker : Math.max(0, text.length - 9);
+        if (safeEnd > livePublished && !isProviderAnnotation(text)) {
+          request.onTextDelta?.(text.slice(livePublished, safeEnd));
+          livePublished = safeEnd;
+        }
       } else if (event.type === "tool_call" && event.toolCall?.name) {
         sawNativeToolCall = true;
         if (text) {
+          if (!text.includes("TOOL_CALL ") && !isProviderAnnotation(text))
+            request.onTextDelta?.(text.slice(livePublished));
           blocks.push({ type: "text", text });
           text = "";
+          livePublished = 0;
         }
         toolIndex += 1;
         blocks.push({
@@ -189,6 +202,8 @@ export class AccountRunnerModel implements AgentModel {
       }
     }
     if (text) {
+      if (!text.includes("TOOL_CALL ") && !isProviderAnnotation(text))
+        request.onTextDelta?.(text.slice(livePublished));
       blocks.push(
         ...(sawNativeToolCall
           ? [{ type: "text" as const, text }]

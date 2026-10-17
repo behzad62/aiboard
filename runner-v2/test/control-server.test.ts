@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ControlServer } from "../src/control-server.js";
+import { publishLiveModelOutput } from "../src/live-model-output.js";
 import { NativeBuildRuntimeInitializationError } from "../src/native-build-factory.js";
 import { BuildRuntimeRegistry, type BuildControlPlane } from "../src/build-runtime-registry.js";
 import { BuildRuntime } from "../src/build-runtime.js";
@@ -1887,5 +1888,40 @@ test("choosing a verifier resumes a supervisor run left paused by the selection 
   } finally {
     await server.close();
     supervisor.close();
+  }
+});
+
+test("live model output SSE is authenticated and delivers isolated transient deltas", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-live-output-"));
+  const fixture = await createSteeringControlFixture(directory);
+  const endpoint = fixture.url.replace("/build/user-guidance", "/build/live-output");
+  const controller = new AbortController();
+  try {
+    const forbidden = await fetch(endpoint);
+    assert.equal(forbidden.status, 401);
+    const stream = await fetch(endpoint, authorized({ signal: controller.signal }));
+    assert.equal(stream.status, 200);
+    assert.equal(stream.headers.get("content-type"), "text/event-stream");
+    const reader = stream.body!.getReader();
+    publishLiveModelOutput({
+      runId: "run-steering", sessionId: "session1",
+      actor: { role: "worker", id: "worker1" },
+      turn: 1, attempt: 1, phase: "delta", text: "visible token",
+    });
+    const chunk = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("SSE delta timeout")), 1500)),
+    ]);
+    assert.equal(chunk.done, false);
+    const text = new TextDecoder().decode(chunk.value);
+    assert.match(text, /"phase":"delta"/);
+    assert.match(text, /visible token/);
+    assert.match(text, /"role":"worker"/);
+    controller.abort();
+    await reader.cancel().catch(() => {});
+  } finally {
+    controller.abort();
+    await fixture.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });

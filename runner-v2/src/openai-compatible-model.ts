@@ -20,6 +20,7 @@ import {
 import { createHash } from "node:crypto";
 import { openAICompatibleReasoningFields } from "./reasoning-effort.js";
 import { ProviderTransportError } from "./account-runner-model.js";
+import { streamOpenAIChat, streamOpenAIResponses } from "./openai-streaming.js";
 
 export interface OpenAICompatibleModelOptions {
   baseUrl: string;
@@ -140,11 +141,10 @@ export class OpenAICompatibleModel implements AgentModel {
       ...(toolPayload.length > 0
         ? { tools: toolPayload, tool_choice: toolChoice }
         : {}),
+      ...(request.onTextDelta ? { stream: true, stream_options: { include_usage: true } } : {}),
     });
-    const response = await fetchProviderJson<OpenAIResponse>(
-      this.fetchImpl,
-      joinEndpoint(this.options.baseUrl, "chat/completions"),
-      {
+    const endpoint = joinEndpoint(this.options.baseUrl, "chat/completions");
+    const init: RequestInit = {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -152,8 +152,10 @@ export class OpenAICompatibleModel implements AgentModel {
         },
         body,
         signal: request.signal,
-      }
-    );
+      };
+    const response = request.onTextDelta
+      ? await streamOpenAIChat(this.fetchImpl, endpoint, init, request.onTextDelta)
+      : await fetchProviderJson<OpenAIResponse>(this.fetchImpl, endpoint, init);
     const choice = response.choices?.[0];
     const blocks: AssistantBlock[] = [];
     if (choice?.message?.content) {
@@ -239,12 +241,11 @@ export class OpenAICompatibleModel implements AgentModel {
             tool_choice: runnerToolChoiceForResponses(request.toolChoice, toolNames),
           }
         : {}),
+      ...(request.onTextDelta ? { stream: true } : {}),
     });
     if (process.env.AIBOARD_DEBUG_PROMPT_CACHE === "1") logPromptCacheShape(request.sessionId, body);
-    const response = await fetchProviderJson<OpenAIResponsesResponse>(
-      this.fetchImpl,
-      joinEndpoint(this.options.baseUrl, "responses"),
-      {
+    const endpoint = joinEndpoint(this.options.baseUrl, "responses");
+    const init: RequestInit = {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -252,8 +253,10 @@ export class OpenAICompatibleModel implements AgentModel {
         },
         body,
         signal: request.signal,
-      }
-    );
+      };
+    const response = request.onTextDelta
+      ? await streamOpenAIResponses<OpenAIResponsesResponse>(this.fetchImpl, endpoint, init, request.onTextDelta)
+      : await fetchProviderJson<OpenAIResponsesResponse>(this.fetchImpl, endpoint, init);
     const blocks: AssistantBlock[] = [];
     for (const [index, output] of (response.output ?? []).entries()) {
       if (output.type === "message") {

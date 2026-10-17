@@ -17,6 +17,7 @@ import {
   type ToolNameCodec,
 } from "./provider-model-utils.js";
 import { geminiThinkingConfig } from "./reasoning-effort.js";
+import { collectGoogleStream } from "./native-provider-streaming.js";
 
 const GEMINI_SIGNATURE_BYPASS = "skip_thought_signature_validator";
 
@@ -90,16 +91,18 @@ export class GoogleModel implements AgentModel {
         ? { tools: [{ functionDeclarations: request.tools.map((tool) => toGoogleTool(tool, toolNames)) }] }
         : {}),
     });
-    const response = await fetchProviderJson<GoogleResponse>(
-      this.fetchImpl,
-      `${endpoint}?key=${encodeURIComponent(this.options.apiKey)}`,
-      {
+    const init: RequestInit = {
         method: "POST",
         headers: { "content-type": "application/json" },
         body,
         signal: request.signal,
-      }
-    );
+      };
+    const response = request.onTextDelta
+      ? await collectGoogleStream(this.fetchImpl,
+          `${endpoint.replace(":generateContent", ":streamGenerateContent")}?alt=sse&key=${encodeURIComponent(this.options.apiKey)}`,
+          init, request.onTextDelta)
+      : await fetchProviderJson<GoogleResponse>(this.fetchImpl,
+          `${endpoint}?key=${encodeURIComponent(this.options.apiKey)}`, init);
     const candidate = response.candidates?.[0];
     const blocks: AssistantBlock[] = [];
     for (const [index, part] of (candidate?.content?.parts ?? []).entries()) {
