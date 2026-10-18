@@ -10477,7 +10477,11 @@ export function isAcceptedSnapshotStopSequence(
 ): boolean {
   const stopKind = event.payload.stopKind;
   if (typeof stopKind === "string" && isStopSnapshotStopKind(stopKind)) {
-    return projection.status === "paused" || projection.status === "failed" || projection.status === "stopped";
+    // A stop snapshot commit takes seconds; an owner resume can land meanwhile. The commit
+    // already moved the integration tip, so its record is accepted for any earlier stop --
+    // refusing it left an unreceipted commit that blocked every later checkout (tunnel run).
+    return projection.status === "paused" || projection.status === "failed" || projection.status === "stopped" ||
+      stopSequence < event.sequence;
   }
   return stopSequence === requestedSequence || withdrawnStop;
 }
