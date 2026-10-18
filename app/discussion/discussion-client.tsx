@@ -2579,7 +2579,7 @@ function DiscussionPageInner() {
             .map((agent) => ({
               id: agent.sessionId,
               role: agent.actor.role,
-              name: `${agent.actor.role} ${agent.actor.id}`,
+              name: agent.actor.id,
             })) : []}
           onDownload={downloadTranscript}
         />

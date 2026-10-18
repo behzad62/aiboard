@@ -50,6 +50,47 @@ const roleTone: Record<BuildActorRole, string> = {
   model: "border-border bg-muted text-muted-foreground",
 };
 
+/**
+ * Role identity belongs to the timeline marker. The card heading is reserved
+ * for the actual model/runtime name, not another copy of "Architect/Worker".
+ */
+export function buildModelDisplayName(
+  message: Pick<BuildFeedMessage, "modelName" | "modelId">
+): string {
+  const role = buildActorRole(message);
+  const name = message.modelName.trim();
+  const separator = name.indexOf(" · ");
+  if (separator >= 0) {
+    const model = name.slice(separator + 3).trim();
+    if (model) return model;
+  }
+  if (role !== "model") {
+    const rolePrefix = new RegExp(`^${role}(?:\\s+|$)`, "i");
+    const identifier = name.replace(rolePrefix, "").trim();
+    return identifier || "Model output";
+  }
+  return name || "Model output";
+}
+
+/** Presentation only: retain verbatim text in the underlying transcript/export. */
+export function buildDisplayText(content: string, role: BuildActorRole): string {
+  if (role === "model") return content;
+  // Only an explicit leading speaker label is redundant. Do not delete prose
+  // that naturally begins with the word "architect", "worker", etc.
+  const prefix = new RegExp(
+    `^(\\s*)(?:\\*\\*)?${role}(?:\\s+\\d+)?(?:\\*\\*)?\\s*(?::|[—–])(?:\\*\\*)?\\s*`,
+    "i"
+  );
+  const withoutLabel = content.replace(prefix, "$1");
+  if (withoutLabel !== content) return withoutLabel;
+  // Some models emit their role as a standalone Markdown heading.
+  const standalone = new RegExp(
+    `^(\\s*)(?:#{1,3}\\s+)?(?:\\*\\*)?${role}(?:\\*\\*)?\\s*\\r?\\n(?:\\r?\\n)?`,
+    "i"
+  );
+  return content.replace(standalone, "$1");
+}
+
 const PAGE_SIZE = 25;
 const FOLLOW_THRESHOLD_PX = 320;
 /** Finished turns at most this long open by default; longer ones show a one-line preview. */
@@ -137,14 +178,21 @@ export function BuildTranscriptFeed({
           <ol className="space-y-1">
             {visible.map((message) => {
               const role = buildActorRole(message);
+              const modelLabel = buildModelDisplayName(message);
+              const displayContent = buildDisplayText(message.content, role);
+              const displaySegments = message.segments?.map((segment) =>
+                segment.channel === "text"
+                  ? { ...segment, text: buildDisplayText(segment.text, role) }
+                  : segment
+              );
               // A fixed default per turn: the old "newest open, previous closed" rule reshuffled the
               // page whenever a new turn arrived.
               const expanded = manualExpansion[message.id] ??
                 (Boolean(message.streaming) || message.content.length <= AUTO_EXPAND_CHARS);
-              const preview = message.content.trim().replace(/[#*_`>\[\]]/g, "").replace(/\s+/g, " ").slice(0, 200);
+              const preview = displayContent.trim().replace(/[#*_`>\[\]]/g, "").replace(/\s+/g, " ").slice(0, 200);
               return (
                 <li key={message.id} className="relative pl-9 pb-4 before:absolute before:bottom-0 before:left-[11px] before:top-7 before:w-px before:bg-border/70 last:before:hidden">
-                  <span className={cn("absolute left-0 top-2 flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-bold uppercase", roleTone[role])} aria-hidden="true">
+                  <span className={cn("absolute left-0 top-2 flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-bold uppercase", roleTone[role])} title={role} aria-hidden="true">
                     {role === "architect" ? "A" : role === "verifier" ? "V" : role === "worker" ? "W" : role === "subagent" ? "S" : "M"}
                   </span>
                   <article className={cn("min-w-0 overflow-hidden rounded-xl border transition-colors", expanded ? "bg-card/70" : "border-transparent hover:border-border hover:bg-card/50")}>
@@ -153,8 +201,8 @@ export function BuildTranscriptFeed({
                       className="flex w-full items-start gap-2 px-3 py-3 text-left focus-visible:outline-2 focus-visible:outline-primary">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider", roleTone[role])}>{role}</span>
-                          <span className="truncate text-sm font-medium">{message.modelName}</span>
+                          <span className="sr-only">{role} turn: </span>
+                          <span className="truncate text-sm font-medium" title={message.modelName}>{modelLabel}</span>
                           {message.streaming && <span className="text-xs font-medium text-primary motion-safe:animate-pulse">Streaming…</span>}
                         </div>
                         {!expanded && <p className="mt-1.5 truncate text-xs text-muted-foreground">{preview || "Model response"}</p>}
@@ -163,7 +211,9 @@ export function BuildTranscriptFeed({
                     </button>
                     {expanded && (
                       <div id={`build-turn-${message.id}`} className="min-w-0 border-t border-border/60 px-4 py-4 text-sm">
-                        {message.streaming ? <LiveTurnBody message={message} /> : <Markdown content={message.content} />}
+                        {message.streaming
+                          ? <LiveTurnBody message={{ ...message, content: displayContent, segments: displaySegments }} />
+                          : <Markdown content={displayContent} />}
                       </div>
                     )}
                   </article>

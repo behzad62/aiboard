@@ -305,7 +305,8 @@ export function BuildWorkspace({
 
         <div className="flex min-w-0 flex-col">
           <div className="flex-1 space-y-5 px-4 pb-6 pt-6 sm:px-8">
-            <header className="space-y-3">
+            <div className="glass-bar sticky top-14 z-30 -mx-4 -mt-6 border-b px-4 pb-3 pt-4 shadow-[0_12px_28px_-16px_rgba(0,0,0,0.55)] sm:-mx-8 sm:px-8">
+              <header className="space-y-2.5">
               <Link
                 href="/"
                 className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground lg:hidden"
@@ -315,7 +316,7 @@ export function BuildWorkspace({
               </Link>
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-4">
                 <h1
-                  className="line-clamp-2 min-w-0 max-w-4xl font-display text-xl font-semibold leading-tight tracking-tight sm:text-2xl xl:text-[1.75rem]"
+                  className="line-clamp-2 min-w-0 max-w-4xl font-sans text-base font-semibold leading-snug tracking-tight sm:text-lg"
                   title={topic}
                 >
                   {topic}
@@ -383,6 +384,7 @@ export function BuildWorkspace({
                 <NavButton key={item.label} item={item} view={view} onViewChange={onViewChange} compact />
               ))}
             </nav>
+            </div>
 
             {banner}
             <div className="min-w-0">{main}</div>
