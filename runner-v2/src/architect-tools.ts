@@ -68,6 +68,7 @@ import { boundaryNeedsArchitect, boundaryResolutionGeneration, latestBoundary, c
 import { deliveryBoundaryRootCause, failingTestIdsByCategory, repairMemberIssues, withFailingIds } from "./repair-budget-contracts.js";
 import { resolveEvidenceContent } from "./evidence-content.js";
 import { validateRepairApproachDecision } from "./repair-approach-contracts.js";
+import { lifecycleEventResult } from "./lifecycle-receipt.js";
 
 export interface ArchitectToolsOptions {
   store: SchedulerStore;
@@ -314,7 +315,7 @@ export function resolvePlanCritiqueTool(
       ) {
         return errorOutput(
           "stale_plan_critique",
-          "Plan critique resolution does not match the current submitted critique.",
+          planCritiqueMismatchMessage(current, input.critiqueId, input.planRevision, resolutionIds),
         );
       }
       // Evidence-gated runs: workers run only the approved contract (an in-place objective edit
@@ -2970,6 +2971,29 @@ function validateResolvePlanCritique(input: unknown): ValidationResult<ResolvePl
   }, "critiqueId, planRevision, and resolutions are required");
 }
 
+/** Names exactly what a refused critique resolution got wrong, so the Architect fixes it in one retry. */
+export function planCritiqueMismatchMessage(
+  current: { status: string; critiqueId: string; planRevision: number; blockingFindingIds?: string[] } | undefined,
+  critiqueId: string,
+  planRevision: number,
+  resolutionIds: readonly string[],
+): string {
+  const prefix = "Plan critique resolution does not match the current submitted critique:";
+  if (!current) return `${prefix} no plan critique exists.`;
+  if (current.status !== "submitted") return `${prefix} critique ${current.critiqueId} is ${current.status}, not awaiting resolution.`;
+  const issues: string[] = [];
+  if (current.critiqueId !== critiqueId) issues.push(`critiqueId must be ${current.critiqueId}`);
+  if (current.planRevision !== planRevision) issues.push(`planRevision must be ${current.planRevision}`);
+  const expected = current.blockingFindingIds ?? [];
+  const missing = expected.filter((id) => !resolutionIds.includes(id));
+  const unknown = resolutionIds.filter((id) => !expected.includes(id));
+  const repeated = resolutionIds.filter((id, index) => resolutionIds.indexOf(id) !== index);
+  if (missing.length) issues.push(`resolve missing blocking finding(s) ${missing.join(", ")}`);
+  if (unknown.length) issues.push(`remove finding id(s) that are not blocking findings of this critique: ${unknown.join(", ")}`);
+  if (repeated.length) issues.push(`resolve each finding once (repeated: ${[...new Set(repeated)].join(", ")})`);
+  return `${prefix} ${issues.join("; ")}. The blocking findings are ${expected.join(", ") || "none"}.`;
+}
+
 function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
   if (left.length !== right.length) return false;
   const remaining = new Set(left);
@@ -3144,7 +3168,7 @@ function appendEvent(
     }
     const appended = store.append(event);
     return {
-      content: [{ type: "json", value: appended }],
+      content: [{ type: "json", value: lifecycleEventResult(appended) }],
       isError: false,
       ...(lifecycle ? { lifecycle } : {}),
     };

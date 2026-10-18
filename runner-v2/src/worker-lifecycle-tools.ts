@@ -17,6 +17,7 @@ import {
   type ValidationScope,
 } from "./validation-scope.js";
 import { REPLAN_REASONS, type ReplanReason } from "./task-contracts.js";
+import { lifecycleEventResult } from "./lifecycle-receipt.js";
 import {
   VALIDATION_BUDGET_JUSTIFICATION_MAX_LENGTH,
   parseValidationBudgetJustification,
@@ -516,7 +517,7 @@ function append(
 ): ToolExecutionOutput {
   try {
     const appended = store.append(event);
-    return { content: [{ type: "json", value: appended }], isError: false };
+    return { content: [{ type: "json", value: lifecycleEventResult(appended) }], isError: false };
   } catch (error) {
     return failure(
       "mechanical_transition_rejected",

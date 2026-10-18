@@ -82,6 +82,7 @@ import {
   type ApprovedSourceManifest,
 } from "./source-manifest.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
+import { lifecycleEventResult } from "./lifecycle-receipt.js";
 import {
   assertFreshContextRequest,
   assertFreshContextSessionStarted,
@@ -1341,7 +1342,7 @@ export function createRequestCoverageReviewTool(
           },
         });
         return {
-          content: [{ type: "json", value: appended }],
+          content: [{ type: "json", value: lifecycleEventResult(appended) }],
           isError: false,
           lifecycle: { type: "architect_action", action: "plan_reconciled", referenceId: reviewId },
         };

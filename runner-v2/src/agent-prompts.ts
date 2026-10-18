@@ -999,7 +999,7 @@ export function architectContextSections(
         : [])
       : [required("project-docs", "project-docs", renderArchitectProjectDocs(input))]),
     required("build-objective", "user-intent", input.objective),
-    required("architect-action", "architect", architectActionContent(input.reason, docsV2, input.projection.planningPolicyVersion)),
+    required("architect-action", "architect", architectActionContent(input.reason, docsV2, input.projection.planningPolicyVersion, input.projection.planCritique)),
     required(
       "task-graph",
       "task-graph",
@@ -1334,11 +1334,30 @@ export function renderPlanningStatus(projection: SchedulerProjection): string {
 
 const PROJECT_DOCS_STATE_TEXT_CAP_BYTES = 4096;
 
-function architectActionContent(reason: unknown, docsV2: boolean, planningPolicyVersion?: number): string {
+function architectActionContent(
+  reason: unknown,
+  docsV2: boolean,
+  planningPolicyVersion?: number,
+  planCritique?: SchedulerProjection["planCritique"],
+): string {
   const body = docsV2 ? compactJson(reason) : JSON.stringify(reason, null, 2);
   const guidance = architectReasonGuidance(reason, docsV2, planningPolicyVersion);
-  if (guidance === undefined) return body;
-  return `${guidance}\n${body}`;
+  const findings = critiqueFindingsContent(reason, planCritique);
+  return [guidance, body, findings].filter((part) => part !== undefined).join("\n");
+}
+
+/**
+ * The blocking findings a critique-resolution action must answer. The reason carries only their ids,
+ * so the Architect searched its history and probed the resolver blind (tunnel run).
+ */
+export function critiqueFindingsContent(reason: unknown, planCritique: SchedulerProjection["planCritique"]): string | undefined {
+  const action = reason as { type?: unknown; critiqueId?: unknown } | null;
+  if (action?.type !== "plan_critique_resolution_required") return undefined;
+  const current = planCritique?.current;
+  if (!current || current.critiqueId !== action.critiqueId) return undefined;
+  const blocking = new Set(current.blockingFindingIds ?? []);
+  const findings = (current.findings ?? []).filter((finding) => blocking.has(finding.findingId));
+  return `Blocking findings (resolve each id exactly once in one resolve_plan_critique call):\n${compactJson(findings)}`;
 }
 
 /** T10 (L7): the Architect task-graph projection, compact on v2. */

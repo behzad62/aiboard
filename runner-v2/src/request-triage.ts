@@ -59,6 +59,7 @@ import {
 } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
+import { lifecycleEventResult } from "./lifecycle-receipt.js";
 import {
   assertFreshContextRequest,
   assertFreshContextSessionStarted,
@@ -383,7 +384,7 @@ function appendEvent(
     }
     const appended = store.append(event);
     return {
-      content: [{ type: "json", value: appended }],
+      content: [{ type: "json", value: lifecycleEventResult(appended) }],
       isError: false,
       lifecycle,
     };

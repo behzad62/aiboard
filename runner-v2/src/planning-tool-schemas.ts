@@ -44,8 +44,8 @@ export const REQUIREMENT_SCHEMA: Schema = {
       },
       required: ["status"],
     },
-    accountablePhaseId: text("The phase accountable for this requirement."),
-    contributingTaskIds: texts("Task ids that contribute (may be empty in the ledger)."),
+    accountablePhaseId: text("The phase accountable for this requirement. Every phase must be accountable for at least one requirement (a setup phase owns e.g. the workspace/build requirement)."),
+    contributingTaskIds: texts("Omit in a plan revision: the kernel derives it from each task's requirementIds. If supplied it must match those tasks exactly, or the draft is refused."),
     dependsOnRequirementIds: texts(),
     acceptanceConditions: {
       type: "array",
@@ -70,14 +70,14 @@ export const PHASE_SCHEMA: Schema = {
   properties: {
     id: text(),
     purpose: text(),
-    requirementIds: texts("Non-empty in a plan revision; derived by the kernel when omitted."),
+    requirementIds: texts("Omit: derived from the requirements whose accountablePhaseId is this phase (must come out non-empty)."),
     scope: {
       type: "object",
       properties: { includes: texts(), excludes: texts() },
       required: ["includes", "excludes"],
     },
     entryConditions: nonEmptyTexts(),
-    contributingTaskIds: texts("Non-empty in a plan revision; derived by the kernel when omitted."),
+    contributingTaskIds: texts("Omit: derived from the tasks whose accountablePhaseId is this phase (must come out non-empty)."),
     exitCriteria: nonEmptyTexts(),
     requiredCombinedValidation: {
       type: "array",
@@ -97,7 +97,7 @@ export const TASK_CONTRACT_SCHEMA: Schema = {
     id: text(),
     lineage: texts("Prior task ids this task replaces or splits from; [] for new tasks."),
     accountablePhaseId: text(),
-    requirementIds: texts(),
+    requirementIds: texts("The requirements this task delivers: the one place requirement-task links are written."),
     outcome: {
       type: "object",
       properties: { user: text("The user-visible outcome (workers run exactly this)."), system: text() },

@@ -117,11 +117,14 @@ export class ToolRegistry implements AgentToolRuntime {
       );
     }
     if (!validation.ok) {
+      // The model reads the message text, not `issues`: without them a coverage reviewer re-sent an
+      // 8.7k-character verdict guessing at the fault (tunnel run).
+      const message = `Arguments for ${call.name} are invalid: ${validation.issues.slice(0, 8).join("; ")}`;
       return {
-        ...failure(call, "invalid_arguments", `Arguments for ${call.name} are invalid.`),
+        ...failure(call, "invalid_arguments", message),
         error: {
           code: "invalid_arguments",
-          message: `Arguments for ${call.name} are invalid.`,
+          message,
           issues: [...validation.issues],
         },
       };

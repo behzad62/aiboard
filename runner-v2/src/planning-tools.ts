@@ -30,6 +30,7 @@ import {
 } from "./source-manifest.js";
 import { createRequestCoverageReviewTool } from "./planning-review.js";
 import { PHASE_SCHEMA, PLAN_REVISION_SCHEMA, REQUIREMENT_SCHEMA } from "./planning-tool-schemas.js";
+import { lifecycleEventResult } from "./lifecycle-receipt.js";
 
 /**
  * Architect lifecycle tools for evidence-gated planning (Runner V2 P6.6, T3a).
@@ -794,7 +795,7 @@ function appendEvent(
     }
     const appended = store.append(event);
     return {
-      content: [{ type: "json", value: appended }],
+      content: [{ type: "json", value: lifecycleEventResult(appended) }],
       isError: false,
       lifecycle,
     };
