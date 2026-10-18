@@ -3,6 +3,8 @@ import { isAbsolute, relative } from "node:path";
 import { assertSubmissionHasNoSecrets, inspectSubmissionScope, type SubmissionFile, type SubmissionScopeFinding } from "./submission-guard.js";
 import type { AssignmentClaim } from "./planning-contracts.js";
 
+const SUBMISSION_DIFF_CONCURRENCY = 8;
+
 /** Scan exact immutable tree bytes before any submitted diff artifact exists. */
 export async function inspectSubmissionTree(input: {
   git: GitRunner;
@@ -29,7 +31,9 @@ export async function inspectSubmissionTree(input: {
   // Key/env filename refusal precedes reading content or producing the diff.
   assertSubmissionHasNoSecrets(files);
   input.captureInventory?.(files.map(({ path, added }) => ({ path, added })));
-  for (const file of files) {
+  // A supervised git process costs ~1-3 s on Windows; one diff per file in sequence pushed a 33-file
+  // submission past the 120 s tool limit twice (tunnel run). Same per-file reads, bounded parallelism.
+  const readAddedLines = async (file: SubmissionFile) => {
     const diff = await git(["diff", "--text", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", input.baselineRevision, input.candidateRevision, "--", `:(literal)${file.path}`]);
     let inHunk = false;
     const addedLines: string[] = [];
@@ -38,6 +42,9 @@ export async function inspectSubmissionTree(input: {
       else if (inHunk && line.startsWith("+")) addedLines.push(line.slice(1));
     }
     file.addedLines = addedLines;
+  };
+  for (let index = 0; index < files.length; index += SUBMISSION_DIFF_CONCURRENCY) {
+    await Promise.all(files.slice(index, index + SUBMISSION_DIFF_CONCURRENCY).map(readAddedLines));
   }
   assertSubmissionHasNoSecrets(files);
   return inspectSubmissionScope(files, localSubmissionClaim(input.claim, input.workspacePath));

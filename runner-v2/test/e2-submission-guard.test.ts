@@ -85,8 +85,10 @@ test("E2 secret refusal is redacted for each token class and newly added env/key
   for (const secret of examples) {
     assert.throws(() => assertSubmissionHasNoSecrets([file("src/settings.ts", false, [secret])]), (error: unknown) => {
       assert.ok(error instanceof Error);
-      assert.equal(error.message, "Submission refused: secret or key material detected [REDACTED].");
+      // The refusal names the ordinary file (and the assigned field) so the worker can fix it, never the value.
+      assert.match(error.message, /^Submission refused: secret or key material detected \[REDACTED\] in src\/settings\.ts/);
       assert.ok(!error.message.includes(secret));
+      assert.ok(!error.message.includes("literalliteral"));
       return true;
     });
   }
@@ -95,6 +97,16 @@ test("E2 secret refusal is redacted for each token class and newly added env/key
 
 test("E2 secret control ignores removed lines and nonliteral references; invalid path aliases fail closed", () => {
   assert.doesNotThrow(() => assertSubmissionHasNoSecrets([file("src/settings.ts", false, ["api_key = process.env.API_KEY;", "const value = 2;"])]));
+  // Tunnel run: code that handles tokens is not a secret (a token-redaction task was refused three times).
+  assert.doesNotThrow(() => assertSubmissionHasNoSecrets([file("test/logger.test.ts", false, [
+    "const deviceToken = generateDeviceToken();",
+    "const adminToken = config.adminToken;",
+    "  authorization: `Bearer ${clientToken}`,",
+    " * Generate a new secret: `<prefix>_<base64url(randomBytes(32))>`.",
+  ])]));
+  assert.throws(() => assertSubmissionHasNoSecrets([file("test/logger.test.ts", false, [
+    `const deviceToken = "aib_dev_${"9f3a".repeat(8)}";`,
+  ])]), /\[REDACTED\] in test\/logger\.test\.ts \(value assigned to deviceToken\)/, "a real literal still blocks");
   for (const path of ["../src/value.ts", "src/../outside.ts", "C:\\src\\value.ts", "src/./value.ts", "src//value.ts", "bad\npath"]) assert.throws(() => inspectSubmissionScope([file(path)], claim), /path identity/);
 });
 

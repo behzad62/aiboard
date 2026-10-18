@@ -495,9 +495,12 @@ for (const length of [0, 131_073]) fixtureTest(`review2: POSIX positioned rehash
     assert.deepEqual(fs.readdirSync(f.workspace), ["value.txt"]);
   } finally { Object.defineProperty(process, "platform", descriptor); }
 });
-fixtureTest("review2: missing intermediate parent needs explicit createDirectories", async (f) => {
-  refused(await f.invoke("fs.write", { path: "missing/value.txt", content: "new" }), "target_missing");
+fixtureTest("missing intermediate parents are created by default; createDirectories: false refuses", async (f) => {
+  refused(await f.invoke("fs.write", { path: "missing/value.txt", content: "new", createDirectories: false }), "target_missing");
   assert.deepEqual(fs.readdirSync(f.workspace), []);
+  const created = await f.invoke("fs.write", { path: "missing/value.txt", content: "new" });
+  assert.equal(created.isError, false, JSON.stringify(created));
+  assert.deepEqual(fs.readdirSync(join(f.workspace, "missing")), ["value.txt"]);
 });
 fixtureTest("review2: mkdir race never takes over the winning directory", async (f) => {
   const parent = join(f.workspace, "missing"), mkdir = fs.mkdirSync;

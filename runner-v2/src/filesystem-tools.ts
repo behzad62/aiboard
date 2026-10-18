@@ -386,7 +386,9 @@ export function createFilesystemTools(
             return protectedPathError(context, path);
           }
           const bytes = fencedWrite(context, path, (original) => preserveUtf8Bom(original, Buffer.from(input.content as string)),
-            input.expectedSha256, input.createDirectories === true);
+            // Missing parents are created by default (the same fenced creation as the explicit flag):
+            // the opt-in only made workers regenerate and resend whole files (tunnel run).
+            input.expectedSha256, input.createDirectories !== false);
           return await successRevision(context, path, bytes, options.diagnostics);
         }),
     },
@@ -558,7 +560,7 @@ function filesystemSchema(name: string): Record<string, unknown> {
           path,
           content: { type: "string" },
           expectedSha256: sha,
-          createDirectories: { type: "boolean" },
+          createDirectories: { type: "boolean", description: "Missing parent folders are created by default; false refuses instead." },
         },
         ["path", "content"]
       );
