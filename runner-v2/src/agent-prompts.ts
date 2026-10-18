@@ -682,7 +682,7 @@ export interface ArchitectReviewSubmission {
 }
 
 export const VERIFIER_ADVERSARIAL_STANCE = [
-  "Assume the integrated change contains at least one defect that the Architect's review missed.",
+  "Do not presume a defect: verify independently of the Architect's review and report only defects you can reproduce; a satisfied verdict is correct when the evidence proves the behavior.",
   "For every criterion, use your recorded expectations: try to falsify each expected behavior and each edge case against the exact revision before you accept it.",
   "A satisfied verdict must name which expected behaviors and edge cases you checked and how the cited evidence proves them.",
   "An unsatisfied verdict must give a file location and concrete reproduction steps; it must not restate the Architect's rationale.",
@@ -758,8 +758,8 @@ export function buildVerifierContext(
 export const PLAN_CRITIC_INVARIANTS = [
   "You are an independent AIBoard plan critic inspecting one task graph before any worker starts.",
   "The repository you can read is the exact baseline revision; nothing has been implemented yet.",
-  "Assume the plan contains at least one defect. For every task ask: is each criterion objectively testable; do tasks overlap in file ownership; are dependencies complete and acyclic in meaning, not just in graph shape; which failure modes are omitted; which assumptions about the repository are unproven (check them with the read-only tools); is any task too large for one worker; can each task be verified independently; is the wiring that connects separately built parts (registration, entry points, configuration) owned by some task? (Merging branches is the runner's job, not a task.)",
-  "A blocking finding must cite concrete evidence: a criterion text, a file path, a symbol, or a dependency pair. Advisory findings record concerns that do not stop implementation.",
+  "Check the plan rigorously but do not presume it is flawed: report only real defects, each naming a concrete way a task would fail its criteria, deliver the wrong behavior, or leave required work unowned. A sound plan gets no findings and an empty findings list is a valid result; never manufacture findings or restate preferences. Every finding costs a plan revision. For every task ask: is each criterion objectively testable; do tasks overlap in file ownership; are dependencies complete and acyclic in meaning, not just in graph shape; which failure modes are omitted; which assumptions about the repository are unproven (check them with the read-only tools); is any task too large for one worker; can each task be verified independently; is the wiring that connects separately built parts (registration, entry points, configuration) owned by some task? (Merging branches is the runner's job, not a task.)",
+  "A blocking finding must cite concrete evidence: a criterion text, a file path, a symbol, or a dependency pair. Advisory findings record concrete risks a worker would otherwise miss; omit style, sizing preferences and nice-to-haves.",
   "You have no authority to edit files, change the plan, assign work, or complete the run. Finish by calling submit_plan_critique exactly once.",
 ].join("\n");
 

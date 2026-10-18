@@ -620,8 +620,8 @@ test("buildVerifierExpectationsContext names the baseline and omits implementati
   assert.doesNotMatch(pack.text, /accepted-reviews/);
   assert.doesNotMatch(pack.text, /FINAL-VERIFICATION/);
   assert.doesNotMatch(pack.text, /final build passed/);
-  assert.doesNotMatch(pack.text, /Assume the integrated change contains at least one defect/);
-  assert.match(VERIFIER_ADVERSARIAL_STANCE, /Assume the integrated change contains at least one defect/);
+  assert.doesNotMatch(pack.text, /Do not presume a defect: verify independently/);
+  assert.match(VERIFIER_ADVERSARIAL_STANCE, /Do not presume a defect: verify independently/);
   assert.equal(pack.sections.some((section) => section.id === "verifier-authority"), false);
   assert.equal(pack.sections.some((section) => section.id === "expectations-stage"), false);
   assert.equal(pack.text.includes(VERIFIER_AUTHORITY_INVARIANTS), false);
@@ -745,7 +745,7 @@ test("two-pass verification records expectations on the baseline before it can s
     assert.match(passTwo, /recorded-expectations/);
     assert.match(passTwo, /integration-revision/);
     assert.match(passTwo, new RegExp(escapeRegExp(TARGET_REVISION)));
-    assert.match(passTwo, /Assume the integrated change contains at least one defect/);
+    assert.match(passTwo, /Do not presume a defect: verify independently/);
     assert.match(passTwo, new RegExp(escapeRegExp(HASH)));
     assert.deepEqual(sortedToolNames(fixture.model.requests[1]!), PASS_2_TOOLS);
     assert.equal(authority.expectations.length, 1);
