@@ -144,6 +144,7 @@ test("a credit-limited provider refusal is a usage limit, so the provider cools 
   const refusal = Object.assign(new Error("This request requires more credits, or fewer max_tokens. You requested up to 131072 tokens, but can only afford 45564."), { status: 402 });
   const failure = classifyProviderFailure(refusal);
   assert.equal(failure.kind, "usage_limit");
+  assert.equal(failure.retryAfterMs, 24 * 60 * 60 * 1_000, "a monthly key limit cools down for a day, not an hour");
   const health = new ProviderHealthRegistry({ clock: () => 1_000 });
   health.recordFailure("openrouter", failure);
   assert.equal(health.isAvailable("openrouter"), false);

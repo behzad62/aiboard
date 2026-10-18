@@ -75,12 +75,16 @@ export function classifyProviderFailure(error: unknown): ProviderFailure {
   } else {
     kind = "transient";
   }
+  // A key's monthly spend limit does not lift within the hour-long usage-limit cooldown; every expiry
+  // re-tried the empty key and suspended the review again (tunnel run).
+  const monthlyLimit = kind === "usage_limit" && details.retryAfterMs === undefined &&
+    /monthly limit|requires more credits|can only afford \d+/i.test(message);
   return {
     kind,
     message,
     ...(details.retryAfterMs !== undefined
       ? { retryAfterMs: details.retryAfterMs }
-      : {}),
+      : monthlyLimit ? { retryAfterMs: 24 * 60 * 60 * 1_000 } : {}),
   };
 }
 
