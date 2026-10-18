@@ -7,6 +7,7 @@ import type {
   AgentLifecycleSignal,
   LiveOutputChannel,
   ToolCallBlock,
+  ToolResult,
   ToolExecutionContext,
 } from "./agent-contracts.js";
 import {
@@ -21,6 +22,8 @@ import {
 } from "./provider-call-retry.js";
 import type { ProviderFailure } from "./provider-health.js";
 import { publishLiveModelOutput } from "./live-model-output.js";
+import { lifecycleEventResult } from "./lifecycle-receipt.js";
+import type { SchedulerEvent } from "./scheduler-store.js";
 
 export type AgentSuspensionReason =
   | "model_ended_without_lifecycle"
@@ -564,7 +567,7 @@ export function compactAgentMessages(
     !Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 1_024 ||
     !Number.isSafeInteger(limits.retainRecent) || limits.retainRecent < 1
   ) throw new Error("Agent working-set limits are invalid.");
-  const currentMessages = omitSupersededRunnerSnapshots(messages);
+  const currentMessages = stubSettledBulk(omitSupersededRunnerSnapshots(messages));
   if (
     currentMessages.length <= limits.maxMessages &&
     Buffer.byteLength(JSON.stringify(currentMessages)) <= limits.maxBytes
@@ -591,6 +594,61 @@ export function compactAgentMessages(
 }
 
 const COMPACTION_GRID = 16;
+
+/** Settled tool-call arguments and lifecycle echoes above this size are stubbed in the working set. */
+export const SETTLED_BULK_STUB_BYTES = 32 * 1024;
+
+/**
+ * Settled bulk out of the working set. Whole-plan tool calls (84 KB each) and their full-event echoes
+ * (86 KB) pushed the Architect past the working-set limit, so compaction fell back to the sliding
+ * cutoff and rewrote the prefix every turn: 9-18% cache hits on 100k+ input calls (tunnel run).
+ * A call's arguments are stubbed once its result exists (the durable state holds what it recorded,
+ * readable through the matching read tool) and an oversized event echo becomes its receipt. Both
+ * depend only on the message and its own result, so a stubbed message never changes again.
+ */
+function stubSettledBulk(messages: readonly AgentMessage[]): AgentMessage[] {
+  const settled = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "tool" && !Array.isArray(message.content) && typeof message.content === "object") {
+      settled.add((message.content as ToolResult).callId);
+    }
+  }
+  return messages.map((message) => {
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      let changed = false;
+      const content = message.content.map((block) => {
+        if (block.type !== "tool_call" || !settled.has(block.callId)) return block;
+        const bytes = Buffer.byteLength(JSON.stringify(block.arguments ?? null));
+        if (bytes <= SETTLED_BULK_STUB_BYTES) return block;
+        changed = true;
+        return {
+          ...block,
+          arguments: { omittedArguments: `${bytes} bytes sent and settled; read the recorded state with the matching read tool (e.g. read_current_plan_revision)` },
+        };
+      });
+      return changed ? { ...message, content } : message;
+    }
+    if (message.role === "tool" && !Array.isArray(message.content) && typeof message.content === "object") {
+      const result = message.content as ToolResult;
+      let changed = false;
+      const content = (result.content ?? []).map((block) => {
+        if (block.type !== "json" || !isEchoedEvent(block.value)) return block;
+        if (Buffer.byteLength(JSON.stringify(block.value)) <= SETTLED_BULK_STUB_BYTES) return block;
+        changed = true;
+        return { ...block, value: lifecycleEventResult(block.value) };
+      });
+      return changed ? { ...message, content: { ...result, content } } : message;
+    }
+    return message;
+  });
+}
+
+function isEchoedEvent(value: unknown): value is SchedulerEvent {
+  if (!value || typeof value !== "object") return false;
+  const event = value as Record<string, unknown>;
+  return typeof event.eventId === "string" && typeof event.sequence === "number" &&
+    typeof event.type === "string" && typeof event.payload === "object" && event.payload !== null;
+}
 
 function compactAtCutoff(
   currentMessages: readonly AgentMessage[],

@@ -298,7 +298,12 @@ export function resolvePlanCritiqueTool(
       },
       planReconciliation: planReconciliationSchema(),
     }, ["critiqueId", "planRevision", "resolutions"]),
-    validate: validateResolvePlanCritique,
+    validate: (input) => {
+      const result = validateResolvePlanCritique(input);
+      if (result.ok || !isRecord(input)) return result;
+      const issues = resolvePlanCritiqueIssues(input);
+      return { ok: false, issues: issues.length ? issues : result.issues };
+    },
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
@@ -2970,6 +2975,32 @@ function validateResolvePlanCritique(input: unknown): ValidationResult<ResolvePl
       ...(planReconciliation ? { planReconciliation } : {}),
     };
   }, "critiqueId, planRevision, and resolutions are required");
+}
+
+/**
+ * The exact fields a refused resolve_plan_critique call got wrong. The generic message named three
+ * fields that were all present, so the Architect guessed ("likely size") and resent (tunnel run).
+ */
+function resolvePlanCritiqueIssues(value: Record<string, unknown>): string[] {
+  const issues: string[] = [];
+  if (!nonEmpty(value.critiqueId)) issues.push("critiqueId must be the critique id from the action");
+  if (!positiveInteger(value.planRevision)) issues.push("planRevision must be the critique's planRevision from the action (a positive integer)");
+  if (!Array.isArray(value.resolutions)) issues.push("resolutions must be an array");
+  else value.resolutions.forEach((candidate, index) => {
+    if (!isRecord(candidate)) { issues.push(`resolutions[${index}] must be an object`); return; }
+    if (!nonEmpty(candidate.findingId)) issues.push(`resolutions[${index}].findingId is required`);
+    if (candidate.resolution !== "plan_reconciled" && candidate.resolution !== "rejected") {
+      issues.push(`resolutions[${index}].resolution must be "plan_reconciled" or "rejected"`);
+    }
+    if (!nonEmpty(candidate.rationale)) issues.push(`resolutions[${index}].rationale is required`);
+    for (const key of ["planRevisionId", "planDigest"] as const) {
+      if (candidate[key] !== undefined && !nonEmpty(candidate[key])) issues.push(`resolutions[${index}].${key} must be non-empty when given`);
+    }
+  });
+  if (value.planReconciliation !== undefined && !parsePlanReconciliation(value.planReconciliation)) {
+    issues.push("planReconciliation is malformed; omit it when findings are reconciled by a plan revision (planRevisionId + planDigest)");
+  }
+  return issues;
 }
 
 /** Names exactly what a refused critique resolution got wrong, so the Architect fixes it in one retry. */

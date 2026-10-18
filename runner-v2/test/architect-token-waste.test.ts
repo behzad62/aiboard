@@ -106,3 +106,24 @@ test("a critique finding may cite a revision made after the critique even once t
     plan: { currentRevisionId: "plan-1", currentDigest: "d1" }, readiness: "not_ready", critiquedRevisionId: "plan-1", replay: true,
   }), "replay accepts what the readiness proxy accepted");
 });
+
+test("settled whole-plan calls and their echoes leave the working set as stubs, so the prefix stays stable", async () => {
+  const { compactAgentMessages } = await import("../src/agent-loop.js");
+  const plan = { revisionId: "plan-1", tasks: Array.from({ length: 300 }, (_, index) => ({ id: `t${index}`, text: "x".repeat(200) })) };
+  const echo = { eventId: "e1", runId: "r", sequence: 9, type: "planning.plan_drafted", occurredAt: "t", actor: { role: "architect", id: "a" }, idempotencyKey: "k", payload: { revision: plan } };
+  const messages = [
+    { id: "system", role: "system" as const, content: "policy" },
+    { id: "a1", role: "assistant" as const, content: [{ type: "tool_call" as const, callId: "c1", name: "draft_planning_plan", arguments: { revision: plan } }] },
+    { id: "t1", role: "tool" as const, content: { callId: "c1", toolName: "draft_planning_plan", isError: false, content: [{ type: "json" as const, value: echo }] } },
+    { id: "a2", role: "assistant" as const, content: [{ type: "tool_call" as const, callId: "c2", name: "draft_planning_plan", arguments: { revision: plan } }] },
+  ];
+  const working = compactAgentMessages(messages as never);
+  const text = JSON.stringify(working);
+  assert.ok(JSON.stringify(working.slice(0, 3)).length < 2_000, "the settled call and its echo are stubbed");
+  assert.match(text, /omittedArguments/);
+  assert.match(text, /"recorded":"planning.plan_drafted"/);
+  const pending = (working[3]!.content as Array<{ arguments: unknown }>)[0]!.arguments;
+  assert.deepEqual(pending, { revision: plan }, "a call without a result yet keeps its arguments");
+  assert.deepEqual(compactAgentMessages(messages as never), working, "deterministic: the stubbed prefix never changes");
+  assert.equal(JSON.stringify(messages[1]).includes("omittedArguments"), false, "durable history is not mutated");
+});
