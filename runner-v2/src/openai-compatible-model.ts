@@ -118,7 +118,7 @@ export class OpenAICompatibleModel implements AgentModel {
       ...hostedTools,
       ...localTools.map((tool) => toOpenAITool(tool, toolNames)),
     ]);
-    const payload = {
+    const body = JSON.stringify({
       model: this.options.modelId,
       ...(this.options.providerId === "openrouter"
         ? {
@@ -143,32 +143,20 @@ export class OpenAICompatibleModel implements AgentModel {
         ? { tools: toolPayload, tool_choice: toolChoice }
         : {}),
       ...(request.onTextDelta ? { stream: true, stream_options: { include_usage: true } } : {}),
-    };
+    });
     const endpoint = joinEndpoint(this.options.baseUrl, "chat/completions");
-    const send = async (extra: Record<string, unknown> = {}) => {
-      const init: RequestInit = {
+    const init: RequestInit = {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${this.options.apiKey}`,
         },
-        body: JSON.stringify({ ...payload, ...extra }),
+        body,
         signal: request.signal,
       };
-      return request.onTextDelta
-        ? await streamOpenAIChat(this.fetchImpl, endpoint, init, request.onTextDelta)
-        : await fetchProviderJson<OpenAIResponse>(this.fetchImpl, endpoint, init);
-    };
-    let response: Awaited<ReturnType<typeof send>>;
-    try {
-      response = await send();
-    } catch (error) {
-      // OpenRouter reserves credit for the model's maximum output when max_tokens is unset; a key near
-      // its limit refuses every request ("can only afford 45564"), so retry once within what it affords.
-      const affordable = affordableMaxTokens(error);
-      if (affordable === undefined) throw error;
-      response = await send({ max_tokens: affordable });
-    }
+    const response = request.onTextDelta
+      ? await streamOpenAIChat(this.fetchImpl, endpoint, init, request.onTextDelta)
+      : await fetchProviderJson<OpenAIResponse>(this.fetchImpl, endpoint, init);
     const choice = response.choices?.[0];
     const blocks: AssistantBlock[] = [];
     if (choice?.message?.content) {
@@ -192,7 +180,7 @@ export class OpenAICompatibleModel implements AgentModel {
           : "end_turn",
       ...(response.id ? { providerRequestId: response.id } : {}),
       usage: {
-        ...serializedInputUsage(JSON.stringify(payload), response.usage?.prompt_tokens),
+        ...serializedInputUsage(body, response.usage?.prompt_tokens),
         ...(response.usage?.prompt_tokens_details?.cached_tokens !== undefined
           ? { cachedInputTokens: response.usage.prompt_tokens_details.cached_tokens }
           : {}),
@@ -508,13 +496,4 @@ function logPromptCacheShape(sessionId: string, serializedBody: string): void {
       input: (parsed.input ?? []).map(short),
     })}`);
   } catch { /* diagnostics never affect the request */ }
-}
-
-/** The output budget a credit-limited key can afford, from OpenRouter's refusal text; else undefined. */
-export function affordableMaxTokens(error: unknown): number | undefined {
-  const message = error instanceof Error ? error.message : String(error);
-  const match = /can only afford (\d+)/i.exec(message);
-  if (!match) return undefined;
-  const affordable = Number(match[1]) - 256;
-  return affordable >= 1_024 ? affordable : undefined;
 }

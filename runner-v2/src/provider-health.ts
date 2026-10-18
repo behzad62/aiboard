@@ -60,6 +60,9 @@ export function classifyProviderFailure(error: unknown): ProviderFailure {
       message
     ) ||
     /no credits remaining|insufficient (?:credits|balance|funds)|credit balance is too low/i.test(message) ||
+    // OpenRouter's key-limit refusal (HTTP 402): the key cannot cover the model's maximum output, so
+    // the provider cools down and reviewer selection moves on instead of retrying into the same wall.
+    details.status === 402 || /requires more credits|can only afford \d+/i.test(message) ||
     (details.status === 429 && /quota|insufficient/.test(code))
   ) {
     kind = "usage_limit";

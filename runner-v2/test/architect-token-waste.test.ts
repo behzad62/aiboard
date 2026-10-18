@@ -139,25 +139,12 @@ test("Anthropic streaming requests get room for whole-plan tool calls", async ()
   assert.equal(anthropicDefaultMaxTokens("claude-opus-5-5", false), 16_384, "non-streamed requests stay under HTTP timeouts");
 });
 
-test("an OpenRouter key near its limit retries once within the output it can afford", async () => {
-  const { OpenAICompatibleModel, affordableMaxTokens } = await import("../src/openai-compatible-model.js");
-  assert.equal(affordableMaxTokens(new Error("This request requires more credits, or fewer max_tokens. You requested up to 131072 tokens, but can only afford 45564.")), 45_308);
-  assert.equal(affordableMaxTokens(new Error("can only afford 900")), undefined, "too little to be useful");
-  assert.equal(affordableMaxTokens(new Error("rate limited")), undefined);
-  const bodies: Array<Record<string, unknown>> = [];
-  const model = new OpenAICompatibleModel({
-    baseUrl: "https://openrouter.example/api/v1", apiKey: "k", modelId: "xiaomi/mimo", providerId: "openrouter",
-    fetch: async (_url, init) => {
-      bodies.push(JSON.parse(String(init?.body)));
-      if (bodies.length === 1) {
-        return new Response(JSON.stringify({ error: { code: 402, message: "This request requires more credits, or fewer max_tokens. You requested up to 131072 tokens, but can only afford 45564." } }), { status: 402, headers: { "content-type": "application/json" } });
-      }
-      return new Response(JSON.stringify({ id: "r1", choices: [{ message: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 1 } }), { status: 200, headers: { "content-type": "application/json" } });
-    },
-  });
-  const turn = await model.complete({ sessionId: "s", messages: [{ id: "u", role: "user", content: "hi" }], tools: [] });
-  assert.equal(turn.blocks[0]?.type, "text");
-  assert.equal(bodies.length, 2);
-  assert.equal(bodies[0]!.max_tokens, undefined);
-  assert.equal(bodies[1]!.max_tokens, 45_308);
+test("a credit-limited provider refusal is a usage limit, so the provider cools down and selection moves on", async () => {
+  const { classifyProviderFailure, ProviderHealthRegistry } = await import("../src/provider-health.js");
+  const refusal = Object.assign(new Error("This request requires more credits, or fewer max_tokens. You requested up to 131072 tokens, but can only afford 45564."), { status: 402 });
+  const failure = classifyProviderFailure(refusal);
+  assert.equal(failure.kind, "usage_limit");
+  const health = new ProviderHealthRegistry({ clock: () => 1_000 });
+  health.recordFailure("openrouter", failure);
+  assert.equal(health.isAvailable("openrouter"), false);
 });
