@@ -3494,3 +3494,14 @@ test("published planning tool schemas accept the kernel's own valid ledger and p
   check(PLAN_REVISION_SCHEMA, strippedSubmission(fixture, "revision_1"), "revision");
   assert.deepEqual(problems, []);
 });
+
+test("an incomplete plan phase names exactly the failing fields", async () => {
+  const { validateExecutionPlanRevision } = await import("../src/planning-contracts.js");
+  const fixture = scopedFixture("run_phase_fields", CLOCK);
+  const phases = fixture.revision.phases.map((phase, index) => index === 0 ? { ...phase, exitUnlocks: [], requiredCombinedValidation: [] } : phase);
+  const result = validateExecutionPlanRevision({ ...fixture.revision, phases } as never, fixture.manifest as never);
+  const message = JSON.stringify(result);
+  assert.match(message, /exitUnlocks \(non-empty\)/);
+  assert.match(message, /requiredCombinedValidation \(non-empty\)/);
+  assert.doesNotMatch(message, /entryConditions \(non-empty\)/, "fields that are fine are not blamed");
+});

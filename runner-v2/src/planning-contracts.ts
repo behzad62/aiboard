@@ -1048,10 +1048,26 @@ export function validateExecutionPlanRevision(
       !isNonBlankStringArray((phase as ExecutionPlanPhase).exitUnlocks) ||
       (phase as ExecutionPlanPhase).exitUnlocks.length === 0
     ) {
+      // Name the exact failing fields: the generic list made a cheap model resend a 65k-character
+      // plan without knowing what to change (tunnel test run).
+      const candidate = (isObj(phase) ? phase : {}) as Partial<ExecutionPlanPhase> & Record<string, unknown>;
+      const nonEmptyList = (value: unknown) => isNonBlankStringArray(value) && (value as unknown[]).length > 0;
+      const failing = [
+        ...(!nonEmpty(candidate.id) ? ["id"] : []),
+        ...(!nonEmpty(candidate.purpose) ? ["purpose"] : []),
+        ...(!nonEmptyList(candidate.requirementIds) ? ["requirementIds (non-empty; derived from requirements whose accountablePhaseId is this phase when omitted)"] : []),
+        ...(!isObj(candidate.scope) || !isNonBlankStringArray((candidate.scope as { includes?: unknown }).includes) ||
+          !isNonBlankStringArray((candidate.scope as { excludes?: unknown }).excludes) ? ["scope.includes/scope.excludes (string arrays)"] : []),
+        ...(!nonEmptyList(candidate.entryConditions) ? ["entryConditions (non-empty)"] : []),
+        ...(!nonEmptyList(candidate.contributingTaskIds) ? ["contributingTaskIds (non-empty; derived from tasks whose accountablePhaseId is this phase when omitted)"] : []),
+        ...(!nonEmptyList(candidate.exitCriteria) ? ["exitCriteria (non-empty)"] : []),
+        ...(!nonEmptyList(candidate.requiredCombinedValidation) ? ["requiredCombinedValidation (non-empty)"] : []),
+        ...(!nonEmptyList(candidate.exitUnlocks) ? ["exitUnlocks (non-empty)"] : []),
+      ];
       issues.push({
         code: "incomplete_phase_contract",
         phaseId: isObj(phase) ? (phase as ExecutionPlanPhase).id : undefined,
-        message: `Phase ${isObj(phase) ? (phase as ExecutionPlanPhase).id : "?"} is missing a required EP06 field (purpose/requirementIds/scope/entryConditions/contributingTaskIds/exitCriteria/requiredCombinedValidation/exitUnlocks).`,
+        message: `Phase ${isObj(phase) ? (phase as ExecutionPlanPhase).id : "?"} is missing or has empty required EP06 field(s): ${failing.join("; ") || "phase must be an object"}.`,
       });
       continue;
     }

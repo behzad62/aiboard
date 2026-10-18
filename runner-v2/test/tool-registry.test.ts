@@ -139,3 +139,24 @@ test("internal tools remain invokable without being advertised to the model", as
   );
   assert.equal(result.isError, false);
 });
+
+test("unparseable provider arguments are reported as invalid JSON with the failure position", async () => {
+  const registry = new ToolRegistry();
+  let executions = 0;
+  registry.register({
+    definition: { name: "draft_plan", description: "Draft", inputSchema: { type: "object" }, readOnly: false, effect: "workspace" },
+    validate: stringValue,
+    execute: async () => { executions += 1; return { content: [], isError: false }; },
+  });
+  const raw = "{\"revision\": {\"tasks\": [{\"id\": \"t1\"}, {\"id\": \"t2\"}, {\"id\": \"t3\"} }}";
+  const result = await registry.invoke(
+    { type: "tool_call", callId: "call_json", name: "draft_plan", arguments: { _malformedArgumentsJson: raw } },
+    { runId: "run_1", sessionId: "session_1", actor: { role: "architect" as const, id: "architect_1" } },
+  );
+  assert.equal(result.isError, true);
+  assert.equal(result.error?.code, "invalid_arguments_json");
+  assert.match(result.error?.message ?? "", /not valid JSON/);
+  assert.match(result.error?.message ?? "", /at character \d+ of \d+/);
+  assert.doesNotMatch(result.error?.message ?? "", /revisionId is required/);
+  assert.equal(executions, 0);
+});

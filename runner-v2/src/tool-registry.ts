@@ -95,6 +95,17 @@ export class ToolRegistry implements AgentToolRuntime {
     if (!tool) {
       return failure(call, "unknown_tool", `Tool ${call.name} is not registered.`);
     }
+    const malformed = malformedArgumentsJson(call.arguments);
+    if (malformed !== undefined) {
+      // The provider sent arguments that are not valid JSON. Validating the wrapper object would
+      // report a missing field ("revision ... is required"), which told a model nothing about its
+      // real mistake (tunnel test run: a bracket missing deep inside a 68k-character plan).
+      const message = malformedArgumentsMessage(call.name, malformed);
+      return {
+        ...failure(call, "invalid_arguments_json", message),
+        error: { code: "invalid_arguments_json", message },
+      };
+    }
     let validation: ValidationResult<unknown>;
     try {
       validation = tool.validate(call.arguments);
@@ -151,4 +162,27 @@ function failure(
     isError: true,
     error: { code, message },
   };
+}
+
+function malformedArgumentsJson(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  return keys.length === 1 && typeof record._malformedArgumentsJson === "string"
+    ? record._malformedArgumentsJson
+    : undefined;
+}
+
+function malformedArgumentsMessage(toolName: string, raw: string): string {
+  let detail = "the arguments could not be parsed";
+  try {
+    JSON.parse(raw);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const position = Number(/position (\d+)/.exec(reason)?.[1]);
+    detail = Number.isFinite(position)
+      ? `${reason.split(" in JSON")[0]} at character ${position} of ${raw.length}, near: ${JSON.stringify(raw.slice(Math.max(0, position - 80), position + 40))}`
+      : reason;
+  }
+  return `Arguments for ${toolName} are not valid JSON (${detail}). Check bracket/brace nesting and string escaping before that point; for a very large payload, resend it carefully as one complete JSON object.`;
 }

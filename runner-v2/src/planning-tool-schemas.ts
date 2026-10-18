@@ -12,6 +12,8 @@ type Schema = Record<string, unknown>;
 
 const text = (description?: string): Schema =>
   ({ type: "string", minLength: 1, ...(description ? { description } : {}) });
+const nonEmptyTexts = (description?: string): Schema =>
+  ({ type: "array", minItems: 1, items: { type: "string", minLength: 1 }, ...(description ? { description } : {}) });
 const texts = (description?: string): Schema =>
   ({ type: "array", items: { type: "string" }, ...(description ? { description } : {}) });
 
@@ -66,17 +68,17 @@ export const PHASE_SCHEMA: Schema = {
   properties: {
     id: text(),
     purpose: text(),
-    requirementIds: texts("Derived by the kernel when omitted in a plan revision."),
+    requirementIds: texts("Non-empty in a plan revision; derived by the kernel when omitted."),
     scope: {
       type: "object",
       properties: { includes: texts(), excludes: texts() },
       required: ["includes", "excludes"],
     },
-    entryConditions: texts(),
-    contributingTaskIds: texts("Derived by the kernel when omitted in a plan revision."),
-    exitCriteria: texts(),
-    requiredCombinedValidation: texts(),
-    exitUnlocks: texts(),
+    entryConditions: nonEmptyTexts(),
+    contributingTaskIds: texts("Non-empty in a plan revision; derived by the kernel when omitted."),
+    exitCriteria: nonEmptyTexts(),
+    requiredCombinedValidation: nonEmptyTexts(),
+    exitUnlocks: nonEmptyTexts("What finishing this phase unlocks; must be non-empty even for the last phase (e.g. \"run-completion\")."),
   },
   required: ["id", "purpose", "scope", "entryConditions", "exitCriteria", "requiredCombinedValidation", "exitUnlocks"],
 };
