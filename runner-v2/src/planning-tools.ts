@@ -685,7 +685,7 @@ function revisePlanTool(
           validation.issues.map((issue) => issue.message),
         );
       }
-      return appendEvent(store, {
+      const revised = appendEvent(store, {
         runId: context.runId,
         type: "planning.plan_revised",
         occurredAt: clock(),
@@ -701,8 +701,37 @@ function revisePlanTool(
         action: "plan_reconciled",
         referenceId: revision.revisionId,
       });
+      return revisedDuringCritiqueResolution(revised, projection, revision);
     },
   });
+}
+
+/**
+ * Accepted critique findings are resolved by a revision and then resolve_plan_critique citing it,
+ * before the revision's coverage review -- one Architect action. Ending the action at the revision
+ * stranded the critique ("returned ... without a typed action", tunnel run), so while a submitted
+ * critique awaits resolution the revision is a step, not the action's decision.
+ */
+export function revisedDuringCritiqueResolution(
+  output: ToolExecutionOutput,
+  projection: ReturnType<typeof rebuildSchedulerProjection>,
+  revision: { revisionId: string; digest: string },
+): ToolExecutionOutput {
+  const critique = projection.planCritique?.current;
+  if (output.isError || critique?.status !== "submitted" || (critique.blockingFindingIds ?? []).length === 0) return output;
+  const { lifecycle: _decision, ...step } = output;
+  return {
+    ...step,
+    content: [
+      ...step.content,
+      {
+        type: "text",
+        text: `Plan revised for plan critique ${critique.critiqueId}. Now call resolve_plan_critique (alone in its turn) ` +
+          `resolving ${critique.blockingFindingIds!.join(", ")}; cite planRevisionId ${revision.revisionId} and planDigest ` +
+          `${revision.digest} on each plan_reconciled finding.`,
+      },
+    ],
+  };
 }
 
 /**

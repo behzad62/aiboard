@@ -70,3 +70,19 @@ test("invalid tool arguments tell the model which fields failed", async () => {
   assert.equal(result.isError, true);
   assert.match(JSON.stringify(result.content), /obligationVerdicts\[2\]\.severity must be blocking or advisory/);
 });
+
+test("a plan revision made while a critique awaits resolution does not end the Architect action", async () => {
+  const { revisedDuringCritiqueResolution } = await import("../src/planning-tools.js");
+  const output = {
+    content: [{ type: "json" as const, value: { recorded: "planning.plan_revised" } }],
+    isError: false,
+    lifecycle: { type: "architect_action" as const, action: "plan_reconciled", referenceId: "plan-2" },
+  };
+  const awaiting = { planCritique: { history: [], current: { critiqueId: "crit-1", status: "submitted", blockingFindingIds: ["F-01", "F-02"] } } } as never;
+  const step = revisedDuringCritiqueResolution(output as never, awaiting, { revisionId: "plan-2", digest: "abc" });
+  assert.equal(step.lifecycle, undefined, "the revision is a step, so the loop continues to resolve_plan_critique");
+  assert.match(JSON.stringify(step.content), /resolve_plan_critique.*F-01, F-02.*plan-2.*abc/);
+  const noCritique = { planCritique: { history: [] } } as never;
+  assert.equal(revisedDuringCritiqueResolution(output as never, noCritique, { revisionId: "plan-2", digest: "abc" }), output,
+    "outside critique resolution the revision still ends the action");
+});
