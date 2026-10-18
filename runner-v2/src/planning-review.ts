@@ -924,7 +924,8 @@ export function createSubmitCoverageVerdictTool(
               type: "object",
               properties: {
                 id: { type: "string", minLength: 1 },
-                category: { type: "string", minLength: 1 },
+                // The enum: a reviewer named a category after a checklist phrase and re-sent a 27k-token verdict.
+                category: { type: "string", enum: [...PLANNING_FINDING_CATEGORIES] },
                 severity: { type: "string", enum: ["blocking", "advisory"] },
                 claim: { type: "string", minLength: 1 },
                 evidenceRefs: { type: "array", items: { type: "string", minLength: 1 } },
