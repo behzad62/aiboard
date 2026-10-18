@@ -1181,7 +1181,9 @@ function validateSubmitCoverageVerdict(
       }
       const entry = candidate as Record<string, unknown>;
       const entryUnknown = Object.keys(entry).filter(
-        (key) => key !== "priorFindingId" && key !== "status" && key !== "rationale",
+        // evidenceRefs rides on verdicts and findings in the same call; a reviewer adding it to a check
+        // was refused and re-sent the whole verdict (tunnel run). It is folded into the rationale.
+        (key) => key !== "priorFindingId" && key !== "status" && key !== "rationale" && key !== "evidenceRefs",
       );
       if (entryUnknown.length > 0) {
         return { ok: false, issues: [`Prior-finding check ${index} has unknown fields: ${entryUnknown.join(", ")}.`] };
@@ -1202,7 +1204,14 @@ function validateSubmitCoverageVerdict(
       if (typeof rationale !== "string" || rationale.trim().length === 0) {
         return { ok: false, issues: [`Prior-finding check for ${priorFindingId} requires a rationale.`] };
       }
-      priorFindingChecks.push({ priorFindingId, status, rationale });
+      const evidenceRefs = Array.isArray(entry.evidenceRefs)
+        ? entry.evidenceRefs.filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0)
+        : [];
+      priorFindingChecks.push({
+        priorFindingId,
+        status,
+        rationale: evidenceRefs.length ? `${rationale} (evidence: ${evidenceRefs.join(", ")})` : rationale,
+      });
     }
     for (const id of expected) {
       if (!seen.has(id)) {
