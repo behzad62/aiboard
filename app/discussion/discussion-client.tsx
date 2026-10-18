@@ -2067,9 +2067,17 @@ function DiscussionPageInner() {
   const sessionActions = (
     <>
       {isActive && streamConnected && (
-        <Button variant="destructive" size="sm" onClick={handleStop}>
+        <Button
+          variant={discussion?.nativeBuildRunId ? "outline" : "destructive"}
+          size="sm"
+          onClick={handleStop}
+          title={discussion?.nativeBuildRunId
+            ? "Pause at a durable checkpoint; Resume continues from there"
+            : undefined}
+        >
           <Square className="h-3.5 w-3.5" aria-hidden="true" />
-          Stop
+          {/* A Runner V2 build is paused, never ended, by this button (handleStop sends "pause"). */}
+          {discussion?.nativeBuildRunId ? "Pause" : "Stop"}
         </Button>
       )}
       {(status === "stopped" || status === "failed") && !streamConnected &&
