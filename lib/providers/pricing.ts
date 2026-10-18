@@ -27,6 +27,82 @@ export interface DiscoveredModelPricingMetadata {
 const VERIFIED_AT = "2026-06-10";
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
+  [formatModelId("openai", "gpt-6.1-sol")]: {
+    inputUsdPer1M: 2,
+    cachedInputUsdPer1M: 0.1,
+    outputUsdPer1M: 10,
+    sourceLabel: "OpenAI pricing (standard tier, <=272K input)",
+    sourceUrl: "https://developers.openai.com/api/docs/pricing",
+    verifiedAt: "2026-10-18",
+  },
+  [formatModelId("openai", "gpt-6-sol")]: {
+    inputUsdPer1M: 2,
+    cachedInputUsdPer1M: 0.2,
+    outputUsdPer1M: 10,
+    sourceLabel: "OpenAI pricing (standard tier, <=272K input)",
+    sourceUrl: "https://developers.openai.com/api/docs/pricing",
+    verifiedAt: "2026-10-18",
+  },
+  [formatModelId("openai", "gpt-6-luna")]: {
+    inputUsdPer1M: 0.1,
+    cachedInputUsdPer1M: 0.01,
+    outputUsdPer1M: 0.5,
+    sourceLabel: "OpenAI pricing (standard tier, <=272K input)",
+    sourceUrl: "https://developers.openai.com/api/docs/pricing",
+    verifiedAt: "2026-10-18",
+  },
+  // Introductory rates through 2026-11-30; Google doubles them on 2026-12-01.
+  [formatModelId("google", "gemini-4-argon")]: {
+    inputUsdPer1M: 2,
+    cachedInputUsdPer1M: 0.1,
+    outputUsdPer1M: 10,
+    sourceLabel: "Gemini API pricing (standard tier, intro rate to 2026-11-30)",
+    sourceUrl: "https://ai.google.dev/gemini-api/docs/pricing",
+    verifiedAt: "2026-10-18",
+  },
+  [formatModelId("google", "gemini-3.8-flash")]: {
+    inputUsdPer1M: 0.75,
+    cachedInputUsdPer1M: 0.075,
+    outputUsdPer1M: 3.75,
+    sourceLabel: "Gemini API pricing (standard tier, rate to 2026-12-31)",
+    sourceUrl: "https://ai.google.dev/gemini-api/docs/pricing",
+    verifiedAt: "2026-10-18",
+  },
+  // DeepSeek bills peak hours (01-04 and 06-10 UTC weekdays) at twice the off-peak rate. Budgets
+  // use the peak rate so a cap is never under-counted.
+  [formatModelId("deepseek", "deepseek-flash")]: {
+    inputUsdPer1M: 0.3,
+    cachedInputUsdPer1M: 0.006,
+    outputUsdPer1M: 1.2,
+    sourceLabel: "DeepSeek pricing (peak rate; off-peak is half)",
+    sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
+    verifiedAt: "2026-10-18",
+  },
+  [formatModelId("deepseek", "deepseek-v4-pro")]: {
+    inputUsdPer1M: 1.32,
+    cachedInputUsdPer1M: 0.044,
+    outputUsdPer1M: 3.96,
+    sourceLabel: "DeepSeek pricing (peak rate; off-peak is half)",
+    sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
+    verifiedAt: "2026-10-18",
+  },
+  // Retired aliases served by deepseek-flash and billed at its price.
+  [formatModelId("deepseek", "deepseek-chat")]: {
+    inputUsdPer1M: 0.3,
+    cachedInputUsdPer1M: 0.006,
+    outputUsdPer1M: 1.2,
+    sourceLabel: "DeepSeek pricing (legacy alias of deepseek-flash, peak rate)",
+    sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
+    verifiedAt: "2026-10-18",
+  },
+  [formatModelId("deepseek", "deepseek-reasoner")]: {
+    inputUsdPer1M: 0.3,
+    cachedInputUsdPer1M: 0.006,
+    outputUsdPer1M: 1.2,
+    sourceLabel: "DeepSeek pricing (legacy alias of deepseek-flash, peak rate)",
+    sourceUrl: "https://api-docs.deepseek.com/quick_start/pricing",
+    verifiedAt: "2026-10-18",
+  },
   [formatModelId("openai", "gpt-5.6-sol")]: {
     inputUsdPer1M: 5,
     cachedInputUsdPer1M: 0.5,

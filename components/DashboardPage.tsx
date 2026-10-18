@@ -379,6 +379,23 @@ export default function DashboardPage() {
     data?.settings.modelPricingOverrides,
     data?.settings.discoveredModelMetadata,
   ]);
+  // Not a blocker (a time limit still bounds the run), but a USD cap silently counts $0 for models
+  // without API pricing — say so instead of letting the owner believe the cap protects them.
+  const buildBudgetUnpricedWarning = useMemo(() => {
+    if (mode !== "build" || buildRunPolicy !== "budgeted" || !(buildBudgetUsd > 0)) return null;
+    const runtimeIds = [...new Set([
+      judgeModelId || effectiveSelectedModels[0],
+      buildReviewerId,
+      ...effectiveSelectedModels,
+    ].filter((id): id is string => Boolean(id)))];
+    const unpriced = runtimeIds.filter((runtimeId) =>
+      !getModelPricing(runtimeId, data?.settings.modelPricingOverrides, data?.settings.discoveredModelMetadata) &&
+      !getProviderDefinition(parseModelId(runtimeId).providerId)?.accountRunner
+    );
+    if (unpriced.length === 0) return null;
+    return `The ${buildBudgetUsd} cap can't count ${unpriced.map((id) => parseModelId(id).model).join(", ")}: ${unpriced.length === 1 ? "it has" : "they have"} no API pricing, so ${unpriced.length === 1 ? "its" : "their"} calls book $0. Add prices in Settings → Pricing${buildTimeLimitMinutes > 0 ? "; until then only the time limit bounds this run" : ""}.`;
+  }, [mode, buildRunPolicy, buildBudgetUsd, buildTimeLimitMinutes, judgeModelId, buildReviewerId, effectiveSelectedModels, data?.settings.modelPricingOverrides, data?.settings.discoveredModelMetadata]);
+
   // Only genuine blockers — no nagging about how the topic is phrased.
   const blockerHint =
     totalEnabledModels === 0
@@ -862,6 +879,11 @@ export default function DashboardPage() {
               />
             ) : singleChat ? null : (
               <EffortSlider value={effort} onChange={setEffort} mode={mode} />
+            )}
+            {isBuild && buildBudgetUnpricedWarning && (
+              <p className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
+                {buildBudgetUnpricedWarning}
+              </p>
             )}
 
             <DetailControl

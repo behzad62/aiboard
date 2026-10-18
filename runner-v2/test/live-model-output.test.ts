@@ -44,7 +44,7 @@ test("OpenAI chat SSE streams visible text and assembles tool calls", async () =
       ]);
     } });
   const turn = await provider.complete(request((x) => received.push(x)));
-  assert.deepEqual(received, ["hello ", "world"]);
+  assert.deepEqual(received, ["hello ", "world", "\n-> calling do_work\n"], "tool-call starts show in the live feed");
   assert.equal(turn.blocks[0]?.type, "text");
   assert.equal(turn.blocks[1]?.type, "tool_call");
   assert.equal(turn.stopReason, "tool_calls");
