@@ -448,7 +448,8 @@ test("IV-1 reviewer prompt judges scope sufficiency on findings and verdict, nev
     "findings names both rationales"
   );
   assert.ok(findings.includes("not run and notRun lacks a concrete justification"), "findings gates on justification");
-  assert.ok(findings.includes("thin or generic"), "findings gates on thin rationale");
+  assert.ok(findings.includes("thin or generic while the impacted areas were actually validated is an advisory finding"),
+    "a thin rationale over validated areas is advisory, not a fix round");
   assert.ok(
     findings.includes("record a normal blocking finding through record_deliverable_findings"),
     "findings uses the existing finding tool"
