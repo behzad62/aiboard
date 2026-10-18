@@ -6,7 +6,7 @@ import { BuildUserMediaStore, validateVisualInputs } from "../runner-v2/src/buil
 import { withVisualMedia } from "../runner-v2/src/provider-visual-input";
 import { wrapModelWithBuildUserVisuals } from "../runner-v2/src/build-visual-model";
 import { classifyBuildMessage, describeVisualEvidence } from "../runner-v2/src/build-message-intent";
-import { validateBuildComposerFiles, visualFileMime } from "../lib/client/build-user-attachments";
+import { initialBuildVisualInputs, validateBuildComposerFiles, visualFileMime } from "../lib/client/build-user-attachments";
 import type { AgentMediaAttachment, AgentModel } from "../runner-v2/src/agent-contracts";
 
 const png = Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0,0,0,0,0]);
@@ -74,6 +74,12 @@ assert.equal(await classifyBuildMessage(model, "Fix this error", [], [image]), "
 assert.match(await describeVisualEvidence(model, "Fix this error", [image]), /HTTP 500/);
 assert.deepEqual(observed, [[image], [image]]);
 
+assert.deepEqual(initialBuildVisualInputs([
+  { id: "a", filename: "screenshot.png", mimeType: "image/png", category: "image", base64Data: image.base64Data },
+  { id: "b", filename: "requirements.pdf", mimeType: "application/pdf", category: "document", base64Data: document.base64Data },
+]), [{ filename: "screenshot.png", mimeType: "image/png", base64Data: image.base64Data },
+  { filename: "requirements.pdf", mimeType: "application/pdf", base64Data: document.base64Data }]);
+assert.throws(() => initialBuildVisualInputs([{ id: "x", filename: "slides.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", category: "document", base64Data: "AA==" }]), /Only PNG/);
 assert.equal(visualFileMime({ name: "screenshot.png", type: "image/png" }), "image/png");
 assert.equal(visualFileMime({ name: "spec.pdf", type: "" }), "application/pdf");
 assert.equal(visualFileMime({ name: "fake.png", type: "application/pdf" }), null);

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ArtifactStore } from "./artifact-store.js";
 import type { AgentMediaAttachment } from "./agent-contracts.js";
@@ -7,6 +7,7 @@ import type { AgentMediaAttachment } from "./agent-contracts.js";
 export const MAX_VISUAL_FILES = 3;
 export const MAX_VISUAL_FILE_BYTES = 8 * 1024 * 1024;
 export const MAX_VISUAL_TOTAL_BYTES = 12 * 1024 * 1024;
+export const USER_VISUAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const allowed = ["image/png", "image/jpeg", "image/webp", "application/pdf"] as const;
 
 type MediaMime = (typeof allowed)[number];
@@ -102,6 +103,36 @@ export class BuildUserMediaStore {
     }
     return refs;
   }
+  /** Initial-Build preflight is idempotent across retries and runner restarts. */
+  async getOrCreateInitialEvidence(runId: string, fingerprint: string, generate: () => Promise<string>): Promise<string> {
+    const folder = join(this.directory, "prepared");
+    const target = join(folder, hashText(runId) + ".json");
+    await mkdir(folder, { recursive: true });
+    const cached = async (): Promise<string | null> => {
+      let raw: string;
+      try { raw = await readFile(target, "utf8"); }
+      catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
+        throw error;
+      }
+      const record = JSON.parse(raw) as { fingerprint: string; evidence: string };
+      if (record.fingerprint !== fingerprint || typeof record.evidence !== "string") {
+        throw new Error("Initial visual preparation conflicts with an earlier request for this Build.");
+      }
+      return record.evidence;
+    };
+    const previous = await cached();
+    if (previous !== null) return previous;
+    const evidence = await generate();
+    const file = JSON.stringify({ fingerprint, evidence });
+    try { await writeFile(target, file, { flag: "wx" }); }
+    catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error;
+      return (await cached())!;
+    }
+    return evidence;
+  }
+
   referenceToken(messageId: string, hash: string): string {
     return `AIBOARD_USER_MEDIA:${hashText(messageId)}:${hash}`;
   }
@@ -121,6 +152,69 @@ export class BuildUserMediaStore {
     const verified = await this.artifacts.verify(hash);
     if (verified.byteLength !== file.byteLength || verified.mediaType !== file.mimeType) throw new Error("Visual artifact integrity mismatch.");
     return { filename: file.filename, mimeType: file.mimeType, base64Data: (await this.artifacts.get(hash)).toString("base64") };
+  }
+
+  /** Called at controlled runner startup, before accepting new uploads. */
+  async cleanupExpired(
+    isTerminal: (runId: string) => boolean,
+    now = Date.now(),
+  ): Promise<{ expiredRuns: number; orphanArtifacts: number }> {
+    const cutoff = now - USER_VISUAL_RETENTION_MS;
+    const manifestRoot = join(this.directory, "manifests");
+    const folders = await readdir(manifestRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    const retainedHashes = new Set<string>();
+    let expiredRuns = 0;
+    for (const folder of folders) {
+      if (!folder.isDirectory() || !/^[a-f0-9]{64}$/.test(folder.name)) continue;
+      const location = join(manifestRoot, folder.name);
+      const names = (await readdir(location)).filter((file) => /^[a-f0-9]{64}\.json$/.test(file));
+      let runId: string | undefined;
+      let modified = 0;
+      const storedFiles: StoredMediaReference[] = [];
+      for (const name of names) {
+        const manifestPath = join(location, name);
+        const [body, info] = await Promise.all([readFile(manifestPath, "utf8"), stat(manifestPath)]);
+        const manifest = JSON.parse(body) as { runId: string; files: StoredMediaReference[] };
+        if (!runId) runId = manifest.runId;
+        if (manifest.runId !== runId || hashText(runId) !== folder.name || !Array.isArray(manifest.files)) {
+          throw new Error("User media manifest ownership is inconsistent; refusing cleanup.");
+        }
+        storedFiles.push(...manifest.files);
+        modified = Math.max(modified, info.mtimeMs);
+      }
+      if (!runId) continue;
+      // Unknown or live runs are always retained, irrespective of age.
+      if (modified < cutoff && isTerminal(runId)) {
+        await rm(location, { recursive: true, force: true });
+        await rm(join(this.directory, "prepared", folder.name + ".json"), { force: true });
+        expiredRuns++;
+      } else {
+        for (const file of storedFiles) retainedHashes.add(file.hash);
+      }
+    }
+    // Sweeping content-addressed objects only after all manifest references
+    // are counted avoids deleting a shared file referenced by another run.
+    const objectsRoot = join(this.directory, "objects");
+    const shards = await readdir(objectsRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    let orphanArtifacts = 0;
+    for (const shard of shards) {
+      if (!shard.isDirectory() || !/^[a-f0-9]{2}$/.test(shard.name)) continue;
+      for (const name of await readdir(join(objectsRoot, shard.name))) {
+        if (!/^[a-f0-9]{64}$/.test(name) || retainedHashes.has(name)) continue;
+        if (name.slice(0, 2) !== shard.name) continue;
+        const object = join(objectsRoot, shard.name, name);
+        if ((await stat(object)).mtimeMs >= cutoff) continue;
+        await this.artifacts.remove(name);
+        orphanArtifacts++;
+      }
+    }
+    return { expiredRuns, orphanArtifacts };
   }
 
   async load(runId: string, messageId: string, refs: readonly StoredMediaReference[]): Promise<AgentMediaAttachment[]> {

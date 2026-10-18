@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
 import { ArtifactStore } from "./artifact-store.js";
+import { BuildUserMediaStore } from "./build-user-media.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
 import { createExecutionHost } from "./execution-host.js";
 import { createRunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
@@ -127,6 +128,17 @@ async function main(): Promise<void> {
       new SqliteEventStore(join(options.stateDirectory, "events.sqlite"))
     );
     resources.supervisor = supervisor;
+    // Retain active and recently completed user visual evidence; prune only
+    // terminal-run media older than 30 days before accepting new uploads.
+    try {
+      const userMedia = new BuildUserMediaStore(join(options.stateDirectory, "user-input-media"));
+      await userMedia.cleanupExpired((runId) => {
+        try { return isTerminalRunState(supervisor.getRun(runId).state); }
+        catch { return true; } // Abandoned pre-build uploads with no run are pruned after 30 days.
+      });
+    } catch (error) {
+      console.warn(`[runner] user media retention cleanup unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
     await validateActiveRecoveryCapabilityContracts(
       supervisor,
       capabilitiesConfig,

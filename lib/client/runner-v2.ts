@@ -1701,6 +1701,17 @@ export async function pumpNativeBuild(
   );
 }
 
+export async function prepareNativeBuildInitialVisuals(
+  connection: NativeRunnerConnection,
+  input: { runId: string; architectRuntimeId: string; text: string; attachments: Array<{ filename: string; mimeType: string; base64Data: string }> },
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<{ visualEvidence: string }> {
+  return await request(connection, "/v2/builds/prepare-visuals", {
+    method: "POST", body: JSON.stringify(input), signal,
+  }, fetchImpl);
+}
+
 export interface NativeBuildMessageClassification {
   intent: "ask" | "check" | "change" | "clarify";
   reply?: string;

@@ -250,6 +250,8 @@ assert.match(discussionSource, /"Message · automatically routed"/);
 assert.match(discussionSource, /classifyNativeBuildUserMessage\(/);
 assert.match(discussionSource, /classification.intent !== "change"/);
 const nativeEngineSource = readFileSync("lib/client/native-build-engine.ts", "utf8");
+assert.match(nativeEngineSource, /initialBuildVisualInputs\(/);
+assert.match(nativeEngineSource, /prepareNativeBuildInitialVisuals\(/);
 assert.match(nativeEngineSource, /!message.id.startsWith\("native-message:"\)/);
 assert.match(
   discussionSource,

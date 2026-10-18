@@ -111,6 +111,30 @@ test("visual user-message HTTP endpoint authenticates, routes real media, persis
     assert.equal((change.payload.attachments as unknown[]).length, 1);
     assert.equal(scheduler.readRun(runId).length, before, "Routing itself must not submit guidance");
     assert.equal(mockBodies.length, 6, "Image Ask + PDF Ask + image Change each use classification and a response call");
+    const initialEndpoint = `${address.url}/v2/builds/prepare-visuals`;
+    const prepare = async (body: object) => {
+      const response = await fetch(initialEndpoint, { method: "POST", headers: auth, body: JSON.stringify(body) });
+      return { status: response.status, payload: (await response.json()) as Record<string, unknown> };
+    };
+    const initialRequest = { runId: "initial-ui-01", architectRuntimeId: textOnly.runtimeId,
+      text: "Create an authentication page matching the screenshot", attachments: [image] };
+    assert.equal((await fetch(initialEndpoint, { method: "POST", body: "{}" })).status, 401);
+    const initialInvalid = await prepare({ ...initialRequest, attachments: [{ ...image, mimeType: "application/pdf" }] });
+    assert.equal(initialInvalid.status, 400);
+    const beforePrepare = mockBodies.length;
+    const prepared = await prepare(initialRequest);
+    assert.equal(prepared.status, 200, JSON.stringify(prepared.payload));
+    assert.match(String(prepared.payload.visualEvidence), /HTTP 500/);
+    assert.match(String(prepared.payload.visualEvidence), /AIBOARD_USER_MEDIA:[a-f0-9]{64}:[a-f0-9]{64}/);
+    assert.equal(mockBodies.length, beforePrepare + 1, "One native visual interpretation");
+    const retry = await prepare(initialRequest);
+    assert.deepEqual(retry, prepared, "Retry returns identical persisted evidence");
+    assert.equal(mockBodies.length, beforePrepare + 1, "Retry must not call a model again");
+    const conflicting = await prepare({ ...initialRequest, text: "A different request" });
+    assert.equal(conflicting.status, 409, JSON.stringify(conflicting.payload));
+    const conflictingImage = await prepare({ ...initialRequest, attachments: [pdf] });
+    assert.equal(conflictingImage.status, 409, JSON.stringify(conflictingImage.payload));
+    assert.equal(supervisor.listRuns().length, 0, "Preparing attachments must not create a run");
     availableProviders = [textOnly];
     const unsupported = await submit({ text: "Inspect screenshot", messageId: "no-compatible-model", attachments: [image] });
     assert.equal(unsupported.status, 422);

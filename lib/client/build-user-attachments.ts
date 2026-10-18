@@ -1,5 +1,17 @@
 /** Browser-side build attachment staging; binary content goes only to Runner V2. */
 import { buildGuidanceWithTextFiles, isBuildTextFile, validateBuildTextFiles } from "./build-guidance-files";
+import type { AttachmentPayload } from "@/lib/attachments/types";
+export function initialBuildVisualInputs(files: readonly AttachmentPayload[]): BuildVisualFile[] {
+  return files.filter((file) => file.category !== "text_inline").map((file) => {
+    if ((file.category !== "image" && !(file.category === "document" && file.mimeType === "application/pdf")) ||
+        !file.base64Data || !file.filename || !SUPPORTED_VISUAL_MIMES.includes(file.mimeType)) {
+      throw new Error(`Initial Build cannot deliver attachment ${file.filename}. Only PNG, JPEG, WebP and PDF are supported.`);
+    }
+    return { filename: file.filename, mimeType: file.mimeType as BuildVisualFile["mimeType"], base64Data: file.base64Data };
+  });
+}
+
+const SUPPORTED_VISUAL_MIMES = ["image/png", "image/jpeg", "image/webp", "application/pdf"];
 export type BuildVisualFile = { filename: string; mimeType: "image/png" | "image/jpeg" | "image/webp" | "application/pdf"; base64Data: string };
 export function visualFileMime(file: Pick<File, "name" | "type">): BuildVisualFile["mimeType"] | null {
   const suffix = file.name.toLowerCase();

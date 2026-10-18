@@ -22,6 +22,7 @@ import {
   commandNativeRun,
   configureNativeProviders,
   createNativeBuild,
+  prepareNativeBuildInitialVisuals,
   getNativeBuild,
   getNativeBuildEvents,
   getNativeBuildUsage,
@@ -39,6 +40,7 @@ import {
 import { requestSpecificationSource } from "./native-planning-view";
 import { loadAttachmentPayloads } from "./attachments";
 import { initialNativeBuildTextAttachments } from "./build-guidance-files";
+import { initialBuildVisualInputs } from "./build-user-attachments";
 import {
   nativeBuildAttachmentIdentityPatch,
   nativeBuildTaskStatus,
@@ -218,7 +220,16 @@ export async function runNativeBuildDiscussion(
   if (providerConfigs.length > 0) await configureNativeProviders(connection, providerConfigs);
   if (!runId) {
     runId = nativeBuildProvisioningRunId(discussion.nativeBuildRunId);
-    const objective = buildObjective(discussion);
+    let objective = buildObjective(discussion);
+    const initialAttachmentIds: string[] = discussion.attachmentIds ? JSON.parse(discussion.attachmentIds) : [];
+    const visuals = initialBuildVisualInputs(loadAttachmentPayloads(initialAttachmentIds));
+    if (visuals.length) {
+      emit({ type: "diagnostic", phase: "initializing", message: "Preparing initial image/PDF evidence with a compatible model" });
+      const prepared = await prepareNativeBuildInitialVisuals(connection, {
+        runId, architectRuntimeId, text: objective, attachments: visuals,
+      });
+      objective = `${objective}\n\n${prepared.visualEvidence}`;
+    }
     const nativePolicy = effectiveNativeBuildPolicy(
       normalizeBuildSettings(discussion)
     );
@@ -733,7 +744,9 @@ function buildObjective(discussion: Discussion): string {
     : discussion.topic.trim();
   const ids: string[] = discussion.attachmentIds ? JSON.parse(discussion.attachmentIds) : [];
   const attachments = loadAttachmentPayloads(ids);
-  const unsupported = attachments.find((file) => file.category !== "text_inline");
+  const unsupported = attachments.find((file) =>
+    file.category !== "text_inline" && file.category !== "image" &&
+    !(file.category === "document" && file.mimeType === "application/pdf"));
   if (unsupported) {
     throw new Error(`Native Build cannot deliver ${unsupported.filename} (${unsupported.category}) to the Architect yet. Remove this attachment or provide its contents as text.`);
   }
