@@ -2530,6 +2530,42 @@ test("T3a repair N4: command refusal is evaluated on every invoke", async () => 
   }
 });
 
+// Tunnel run: re-readiness kept v1 criteria on unstarted tasks and dispatch failed with
+// scheduler_contract_mismatch once a revision changed a criterion.
+test("re-readiness refreshes an unstarted task's objective and criteria from the new contract", async () => {
+  const fixture = scopedFixture("run_reready_refresh", CLOCK);
+  const store = new MemorySchedulerStore();
+  const runId = "run_reready_refresh";
+  seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
+  seedDocsV2(store, runId);
+  const planningTools = createPlanningTools({ store, clock });
+  assert.equal((await invokePlanningTool(planningTools, "persist_planning_ledger", {
+    id: "ledger-1", requirements: fixture.requirements, phases: fixture.phases,
+  }, runId)).isError, false);
+  assert.equal((await invokePlanningTool(planningTools, "draft_planning_plan", {
+    revision: strippedSubmission(fixture, "revision_1"),
+  }, runId)).isError, false);
+  seedCoverageForStoredPlan(store, runId, fixture);
+  seedLegacyPlan(store, runId, [planTask("a"), planTask("b")]);
+  const r1plan = projectionOf(store, runId).planning!.plan!;
+  const next = reviseToNext(fixture.revision, "revision_2") as unknown as { tasks: Array<{ id: string; acceptance: { criteria: Array<{ id: string; text: string }> } }> };
+  const t1 = next.tasks.find((task) => task.id === "T1")!;
+  t1.acceptance.criteria[0] = { ...t1.acceptance.criteria[0]!, text: `${t1.acceptance.criteria[0]!.text} (revised)` };
+  assert.equal((await invokePlanningTool(planningTools, "revise_planning_plan", {
+    revision: next, expectedRevisionId: r1plan.currentRevisionId, expectedDigest: r1plan.currentDigest,
+  }, runId)).isError, false);
+  const r2plan = projectionOf(store, runId).planning!.plan!;
+  seedCoverageStandIn(store, runId, fixture, {
+    ...fixture.coverageReview, id: "coverage_2",
+    planRevisionId: r2plan.currentRevisionId, planRevisionDigest: r2plan.currentDigest,
+  }, r2plan.revisionsById[r2plan.currentRevisionId]);
+  const projection = projectionOf(store, runId);
+  assert.equal(projection.planning!.readiness, "ready");
+  const contract = r2plan.revisionsById[r2plan.currentRevisionId]!.tasks.find((task) => task.id === "T1")!;
+  assert.deepEqual(projection.tasks.T1!.acceptanceCriteria, contract.acceptance.criteria.map(({ id, text }) => ({ id, text })));
+  assert.equal(projection.tasks.T1!.objective, contract.outcome.user);
+});
+
 test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)", async () => {
   const fixture = scopedFixture("run_t3a_b2_rebind", CLOCK);
   const store = new MemorySchedulerStore();

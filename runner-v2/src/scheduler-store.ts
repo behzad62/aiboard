@@ -1733,9 +1733,17 @@ function materializeReadyPlanTasks(projection: SchedulerProjection): void {
       existing.status !== "integrated" &&
       existing.status !== "cancelled"
     ) {
+      // An unstarted task follows the re-ready contract: workers run only the approved contract, so a
+      // task left with the first ready revision's criteria failed dispatch with
+      // scheduler_contract_mismatch once a revision changed them (tunnel run, v1 -> v4).
       projection.tasks[contract.id] = {
         ...existing,
+        objective: contract.outcome.user,
         dependencies: [...contract.dependencies],
+        acceptanceCriteria: contract.acceptance.criteria.map((criterion) => ({
+          id: criterion.id,
+          text: criterion.text,
+        })),
       };
     }
     bindings[contract.id] = {
