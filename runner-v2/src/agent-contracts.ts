@@ -124,6 +124,11 @@ export interface ToolDefinition {
   readOnly: boolean;
   effect: ToolEffect;
   lifecycle?: boolean;
+  /**
+   * A lifecycle tool that only reads or records a read and never ends the action. It may share a
+   * model turn with other calls; deciding lifecycle tools must still be alone in theirs.
+   */
+  batchable?: boolean;
   /** Internal tools can remain executable while being omitted from model schemas. */
   modelVisible?: boolean;
   strict?: boolean;

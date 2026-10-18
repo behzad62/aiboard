@@ -1042,6 +1042,38 @@ test("restart executes a persisted pending tool call before another model turn",
   );
 });
 
+test("batchable lifecycle reads share a turn with other reads; deciding tools still stand alone", async () => {
+  let reads = 0;
+  let sections = 0;
+  const registry = new ToolRegistry();
+  registry.register(textTool("read_file", "content", () => reads++));
+  registry.register({
+    definition: { name: "read_source_section", description: "Read one source section", inputSchema: { type: "object" }, readOnly: false, effect: "none", lifecycle: true, batchable: true },
+    validate: (input) => ({ ok: true, value: input }),
+    execute: async () => { sections += 1; return { content: [{ type: "text", text: "section" }], isError: false }; },
+  });
+  registry.register(submitTool());
+  const model = new ScriptedModel([
+    {
+      blocks: [
+        { type: "tool_call", callId: "section_1", name: "read_source_section", arguments: { sectionId: "s1" } },
+        { type: "tool_call", callId: "section_2", name: "read_source_section", arguments: { sectionId: "s2" } },
+        { type: "tool_call", callId: "file_1", name: "read_file", arguments: {} },
+      ],
+      stopReason: "tool_calls",
+    },
+    {
+      blocks: [{ type: "tool_call", callId: "valid_submit", name: "submit_task", arguments: { changeSetId: "changeset_1" } }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({ model, registry, context: context(), initialMessages });
+  assert.equal(result.status, "submitted");
+  assert.equal(sections, 2, "both section reads ran in the batched turn");
+  assert.equal(reads, 1);
+  assert.equal(model.requests.length, 2, "one turn for all reads instead of one per section");
+});
+
 test("an invalid lifecycle batch is rejected without execution and corrected in-loop", async () => {
   let reads = 0;
   const registry = new ToolRegistry();

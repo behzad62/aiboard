@@ -127,3 +127,14 @@ test("settled whole-plan calls and their echoes leave the working set as stubs, 
   assert.deepEqual(compactAgentMessages(messages as never), working, "deterministic: the stubbed prefix never changes");
   assert.equal(JSON.stringify(messages[1]).includes("omittedArguments"), false, "durable history is not mutated");
 });
+
+test("Anthropic streaming requests get room for whole-plan tool calls", async () => {
+  const { anthropicDefaultMaxTokens } = await import("../src/anthropic-model.js");
+  assert.equal(anthropicDefaultMaxTokens("claude-opus-5-5", true), 64_000);
+  assert.equal(anthropicDefaultMaxTokens("claude-sonnet-4-6", true), 64_000);
+  assert.equal(anthropicDefaultMaxTokens("claude-haiku-4-5-20251001", true), 64_000);
+  assert.equal(anthropicDefaultMaxTokens("claude-opus-4-1-20250805", true), 32_000, "Opus 4.0/4.1 allow 32k");
+  assert.equal(anthropicDefaultMaxTokens("claude-opus-4-8", true), 64_000);
+  assert.equal(anthropicDefaultMaxTokens("claude-3-5-haiku-latest", true), 16_384, "unknown/older models keep the old default");
+  assert.equal(anthropicDefaultMaxTokens("claude-opus-5-5", false), 16_384, "non-streamed requests stay under HTTP timeouts");
+});

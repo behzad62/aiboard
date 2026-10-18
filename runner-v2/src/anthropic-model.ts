@@ -56,6 +56,7 @@ export class AnthropicModel implements AgentModel {
 
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
     const toolNames = createToolNameCodec(request.tools);
+    const maxTokens = this.options.maxTokens ?? anthropicDefaultMaxTokens(this.options.modelId, Boolean(request.onTextDelta));
     const system = request.messages
       .filter((message) => message.role === "system")
       .map(messageText)
@@ -63,11 +64,11 @@ export class AnthropicModel implements AgentModel {
       .join("\n\n");
     const body = JSON.stringify({
       model: this.options.modelId,
-      max_tokens: this.options.maxTokens ?? 16_384,
+      max_tokens: maxTokens,
       ...anthropicReasoningFields(
         this.options.modelId,
         this.options.reasoningEffort,
-        this.options.maxTokens ?? 16_384
+        maxTokens
       ),
       cache_control: { type: "ephemeral" },
       ...(system ? { system } : {}),
@@ -124,6 +125,18 @@ export class AnthropicModel implements AgentModel {
       },
     };
   }
+}
+
+/**
+ * The default per-response output cap. A fixed 16,384 cut off whole-plan tool calls (21-34k output
+ * tokens, more with thinking sharing the cap) mid-call, and every retry hit the same wall. Streaming
+ * requests get 64k on Claude 4.x/5 models (Opus 4.0/4.1 allow 32k); non-streamed ones keep ~16k so
+ * the request stays under HTTP timeouts.
+ */
+export function anthropicDefaultMaxTokens(modelId: string, streaming: boolean): number {
+  if (!streaming) return 16_384;
+  if (/^claude-opus-4(-[01])?(-\d{8})?$/.test(modelId)) return 32_000;
+  return /^claude-(fable|mythos|opus|sonnet|haiku)-[45]/.test(modelId) ? 64_000 : 16_384;
 }
 
 function anthropicInputUsage(

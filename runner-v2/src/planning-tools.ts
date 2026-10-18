@@ -158,6 +158,7 @@ function readCurrentPlanTool(store: SchedulerStore): NativeTool<Record<string, n
       // Planning surface tools are kernel lifecycle tools (like read_planning_source_section); this one
       // only reads and never ends the action.
       lifecycle: true,
+      batchable: true,
     },
     validate: (input) => validateObject(input, () => ({}), "This tool takes no input."),
     execute: async (_input, context) => {
@@ -199,6 +200,7 @@ function readSourceSectionTool(
 ): NativeTool<ReadSourceSectionInput> {
   return lifecycleTool({
     name: "read_planning_source_section",
+    batchable: true,
     description:
       "Read one approved-source section in full over the manifest's complete section inventory, " +
       "or list the inventory when sectionId is omitted. Bounded: a section larger than the byte " +
@@ -781,6 +783,8 @@ interface LifecycleToolOptions<T> {
   schema: Record<string, unknown>;
   validate: (input: unknown) => ValidationResult<T>;
   execute: NativeTool<T>["execute"];
+  /** Only reads or records a read and never ends the action (see ToolDefinition.batchable). */
+  batchable?: boolean;
 }
 
 function lifecycleTool<T>(options: LifecycleToolOptions<T>): NativeTool<T> {
@@ -792,6 +796,7 @@ function lifecycleTool<T>(options: LifecycleToolOptions<T>): NativeTool<T> {
       readOnly: false,
       effect: "none",
       lifecycle: true,
+      ...(options.batchable ? { batchable: true } : {}),
     },
     validate: options.validate,
     execute: options.execute,

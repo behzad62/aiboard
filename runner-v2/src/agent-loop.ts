@@ -1119,8 +1119,11 @@ function assertLifecycleBatch(
   calls: readonly ToolCallBlock[],
   registry: AgentToolRuntime
 ): void {
+  // Reads on the lifecycle surface (source sections, the current plan) never end the action, so they
+  // batch like any read: one-per-turn cost a full-context model call per source section (tunnel run).
+  const batchable = new Set(registry.definitions().filter((tool) => tool.batchable === true).map((tool) => tool.name));
   const lifecycleCalls = calls.filter((call) =>
-    registry.isLifecycleTool(call.name)
+    registry.isLifecycleTool(call.name) && !batchable.has(call.name)
   );
   if (lifecycleCalls.length > 0 && calls.length !== 1) {
     throw new AgentProtocolError(
