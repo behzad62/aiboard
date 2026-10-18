@@ -4,6 +4,39 @@ export interface UserGuidanceSubmission {
   version: number;
   /** Absent only on durable submissions written before managed interruption gating. */
   interruptionProtocolVersion?: 1;
+  /** Images the owner attached, stored in the artifact store; the text names each one. */
+  attachments?: UserGuidanceAttachment[];
+}
+
+export interface UserGuidanceAttachment {
+  hash: string;
+  mediaType: string;
+  label: string;
+  byteLength: number;
+}
+
+export const USER_GUIDANCE_ATTACHMENT_MEDIA_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
+export const USER_GUIDANCE_MAX_ATTACHMENTS = 4;
+export const USER_GUIDANCE_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+export function parseUserGuidanceAttachments(value: unknown): UserGuidanceAttachment[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > USER_GUIDANCE_MAX_ATTACHMENTS) {
+    throw new Error(`User guidance attachments must be 1-${USER_GUIDANCE_MAX_ATTACHMENTS} entries.`);
+  }
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("User guidance attachment is invalid.");
+    const record = entry as Record<string, unknown>;
+    assertExactKeys(record, ["hash", "mediaType", "label", "byteLength"]);
+    if (typeof record.hash !== "string" || !/^[a-f0-9]{64}$/.test(record.hash)) throw new Error("User guidance attachment hash is invalid.");
+    if (!(USER_GUIDANCE_ATTACHMENT_MEDIA_TYPES as readonly unknown[]).includes(record.mediaType)) {
+      throw new Error("User guidance attachments must be PNG, JPEG, WebP or GIF images.");
+    }
+    const byteLength = record.byteLength;
+    if (typeof byteLength !== "number" || !Number.isSafeInteger(byteLength) || byteLength < 1 || byteLength > USER_GUIDANCE_MAX_ATTACHMENT_BYTES) {
+      throw new Error("User guidance attachment size is invalid.");
+    }
+    return { hash: record.hash, mediaType: record.mediaType as string, label: requiredText(record, "label").slice(0, 200), byteLength };
+  });
 }
 
 export interface UserGuidanceNoPlanChangeResolution {
@@ -177,7 +210,7 @@ export interface ArchitectQuestionItem extends ArchitectQuestionRequest {
 }
 
 export function parseUserGuidanceSubmission(payload: Record<string, unknown>): UserGuidanceSubmission {
-  assertExactKeys(payload, ["guidanceId", "text", "version", "interruptionProtocolVersion"]);
+  assertExactKeys(payload, ["guidanceId", "text", "version", "interruptionProtocolVersion", "attachments"]);
   const interruptionProtocolVersion = payload.interruptionProtocolVersion;
   if (interruptionProtocolVersion !== undefined && interruptionProtocolVersion !== 1) {
     throw new Error("User guidance interruption protocol version is invalid.");
@@ -187,6 +220,7 @@ export function parseUserGuidanceSubmission(payload: Record<string, unknown>): U
     text: requiredText(payload, "text"),
     version: requiredPositiveInteger(payload, "version"),
     ...(interruptionProtocolVersion === 1 ? { interruptionProtocolVersion } : {}),
+    ...(payload.attachments !== undefined ? { attachments: parseUserGuidanceAttachments(payload.attachments) } : {}),
   };
 }
 
