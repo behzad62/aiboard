@@ -297,6 +297,10 @@ test("C4: docs-v2 planning turn drops templates, keeps one write line, carries t
       NEW_POLICY_PLANNING_INSTRUCTIONS_DOCS_V2,
       NEW_POLICY_PLANNING_INSTRUCTIONS.split("\n")
         .filter((line) => !line.includes("record_planning_checkpoint"))
+        // Revisions go through patch_planning_plan (only the changed items), not a whole-plan re-send.
+        .map((line) => line.startsWith("Draft and revise the plan")
+          ? "Draft the plan once with draft_planning_plan, then revise it with patch_planning_plan listing only the changed tasks, phases or requirements (revise_planning_plan re-sends the whole plan); investigations need a question, deliverable, decision criterion, and dependent unlock."
+          : line)
         .join("\n"),
     );
     // Per-role token counts (existing ceil(bytes/4) estimation): v2 < v1 on the same turn.
@@ -488,6 +492,7 @@ test("C4: record_planning_checkpoint is registered nowhere", () => {
     const clock = () => CLOCK;
     assert.deepEqual([...PLANNING_TOOL_NAMES].sort(), [
       "draft_planning_plan",
+      "patch_planning_plan",
       "persist_planning_ledger",
       "read_current_plan_revision",
       "read_planning_source_section",

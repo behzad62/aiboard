@@ -576,7 +576,7 @@ export interface NativePlanCritiqueState {
   history: NativePlanCritiqueProjection[];
   skipped?: {
     planRevision: number;
-    reason: "policy_off" | "low_plan_risk" | "critic_failed" | "plan_only";
+    reason: "policy_off" | "low_plan_risk" | "critic_failed" | "plan_only" | "covered_by_coverage_review";
     skippedAt: string;
   };
 }

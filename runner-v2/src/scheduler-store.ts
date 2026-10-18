@@ -9154,7 +9154,7 @@ function applyPlanCritiqueSkipped(
 
 function isPlanCritiqueSkipReason(value: unknown): value is PlanCritiqueSkipReason {
   return value === "policy_off" || value === "low_plan_risk"
-    || value === "critic_failed" || value === "plan_only";
+    || value === "critic_failed" || value === "plan_only" || value === "covered_by_coverage_review";
 }
 
 function applyPlanCritiqueRequested(

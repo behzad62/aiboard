@@ -52,6 +52,7 @@ import {
   type PlanningFinding,
   type SourceRequirement,
 } from "./planning-contracts.js";
+import { planRevisionDiff } from "./plan-revision-diff.js";
 import type {
   CoverageCorrectionViewRecord,
   CoverageObligationsRecord,
@@ -172,6 +173,7 @@ export interface CoverageReviewAuthority {
     reviewId: string;
     priorReviewId: string;
     occurredAt: string;
+    ownViewWaiver?: { reusedFromReviewId: string };
   }): void;
   recordUnavailable(input: {
     runId: string;
@@ -353,6 +355,8 @@ export class SchedulerCoverageReviewAuthority implements CoverageReviewAuthority
     reviewId: string;
     priorReviewId: string;
     occurredAt: string;
+    /** Single-pass re-review: no own-view pass ran; name the reused blind obligations instead. */
+    ownViewWaiver?: { reusedFromReviewId: string };
   }): void {
     this.store.append({
       runId: input.runId,
@@ -360,7 +364,11 @@ export class SchedulerCoverageReviewAuthority implements CoverageReviewAuthority
       occurredAt: input.occurredAt,
       actor: { role: "runner", id: this.runnerId },
       idempotencyKey: `coverage:release:${input.reviewId}`,
-      payload: { reviewId: input.reviewId, priorReviewId: input.priorReviewId },
+      payload: {
+        reviewId: input.reviewId,
+        priorReviewId: input.priorReviewId,
+        ...(input.ownViewWaiver ? { ownViewWaived: true, reusedFromReviewId: input.ownViewWaiver.reusedFromReviewId } : {}),
+      },
     });
   }
 
@@ -875,6 +883,8 @@ export interface SubmitCoverageVerdictToolOptions {
   priorFindingIds?: readonly string[];
   /** Re-review only: the blind obligations record reused (B2). Defaults to reviewId. */
   reusedFromReviewId?: string;
+  /** Single-pass re-review: the runner recorded the own-view waiver with the release. */
+  ownViewWaived?: boolean;
   runtimeId: string;
   sessionId: string;
   clock?: () => string;
@@ -995,7 +1005,9 @@ export function createSubmitCoverageVerdictTool(
         obligationVerdicts: input.obligationVerdicts.map((verdict) => ({ ...verdict })),
         findings: input.findings.map((finding) => ({ ...finding })),
         ...(options.priorReviewId !== undefined
-          ? { priorReviewId: options.priorReviewId, correctionOwnViewRecordedFirst: true as const }
+          ? options.ownViewWaived
+            ? { priorReviewId: options.priorReviewId, correctionOwnViewWaived: true as const }
+            : { priorReviewId: options.priorReviewId, correctionOwnViewRecordedFirst: true as const }
           : {}),
         recordedAt,
       };
@@ -1469,6 +1481,8 @@ export interface NativeCoverageReviewRequest {
   guidance: readonly CoverageDurableGuidanceSnapshot[];
   /** Set only for a scoped re-review; withheld from the deriving pass. */
   priorReview?: CoverageReview;
+  /** Re-review only: the revision the prior review judged, so the verdict sees just the changes. */
+  priorPlanRevision?: ExecutionPlanRevision;
   preferredRuntimeId?: string;
   providerRetryDeadlineMs?: number;
   signal?: AbortSignal;
@@ -1631,6 +1645,7 @@ export class NativeCoverageReviewRuntime {
     let deriveSessionId: string;
     let deriveMessages: readonly AgentMessage[];
     let reusedFromReviewId: string | undefined;
+    let ownViewRecorded = false;
     if (!isReReview) {
       const derive = await this.runDerivePass({ request, candidate, model, sections, independence: selection.independence, risk });
       if (derive.status !== "derived") return derive.result;
@@ -1659,23 +1674,18 @@ export class NativeCoverageReviewRuntime {
         deriveMessages = derive.messages;
         reusedFromReviewId = request.reviewId;
       }
-      const ownView = await this.runOwnViewPass({
-        request,
-        candidate,
-        model,
-        obligations,
-        reusedFromReviewId: reusedFromReviewId!,
-        independence: selection.independence,
-      });
-      if (ownView.status !== "viewed") return ownView.result;
-      // OA-10 #2: the own view is durable, so the prior findings may now be
-      // released — and only now. The reducer refuses a release without the
-      // recorded view, and the verdict without the release.
+      // Single pass: a re-review judges the plan diff with the prior verdicts and findings in one
+      // verdict call. The separate own-view pass re-sent the whole plan for a second full-context
+      // call per revision (tunnel run); the runner records the waiver with the release instead.
+      // A re-review that began under the two-pass flow already has its own view (and possibly the
+      // release) on record; it finishes that way, since a recorded view cannot also be waived.
+      ownViewRecorded = this.options.authority.correctionView(request.runId, request.reviewId) !== undefined;
       this.options.authority.releasePriorFindings({
         runId: request.runId,
         reviewId: request.reviewId,
         priorReviewId: request.priorReview!.id,
         occurredAt: this.clock(),
+        ...(ownViewRecorded ? {} : { ownViewWaiver: { reusedFromReviewId: reusedFromReviewId! } }),
       });
     }
     let criticChecksJson: string | undefined;
@@ -1707,6 +1717,7 @@ export class NativeCoverageReviewRuntime {
       deriveSessionId,
       deriveMessages,
       independence: selection.independence,
+      ownViewWaived: isReReview && !ownViewRecorded,
     });
   }
 
@@ -1965,212 +1976,14 @@ export class NativeCoverageReviewRuntime {
     };
   }
 
-  private async runOwnViewPass(input: {
-    request: NativeCoverageReviewRequest;
-    candidate: AgentRuntimeCandidate;
-    model: AgentModel;
-    obligations: readonly DerivedObligation[];
-    reusedFromReviewId: string;
-    independence: ReviewerIndependence;
-  }): Promise<
-    | { status: "viewed"; sessionId: string; messages: readonly AgentMessage[] }
-    | { status: "not-viewed"; result: NativeCoverageReviewResult }
-  > {
-    const { request, candidate, model, obligations, reusedFromReviewId, independence } = input;
-    const priorReview = request.priorReview!;
-    const contextLimits = this.options.contextLimits ?? { maxBytes: 512 * 1024, maxEstimatedTokens: 128 * 1024 };
-    let pack: ReturnType<typeof buildCoverageVerdictContext>;
-    try {
-      // B2/EP42: the re-review's first turn — reused blind obligations plus
-      // the corrected plan, but never the prior findings (withheld until
-      // the own view is durable).
-      pack = buildCoverageVerdictContext({
-        limits: contextLimits,
-        obligationsJson: compactJson(obligations),
-        // T9 repair cycle 3 (B4-r3): the verdict pass sees the acknowledged
-        // guidance snapshot (the blind deriving pass stays unchanged). A
-        // review requested after a folded acknowledgement therefore judges
-        // the plan with the folded guidance in context.
-        ...(request.guidance.length > 0
-          ? { guidance: request.guidance.map((item) => ({ ...item })) }
-          : {}),
-        planRevisionJson: compactJson(request.planRevision),
-        ledgerJson: compactJson(request.ledger),
-      });
-    } catch (error) {
-      if (error instanceof ProtectedContextOverflowError) {
-        return {
-          status: "not-viewed",
-          result: await this.recordUnavailable(
-            request,
-            "plan_pack_overflow",
-            `Protected plan context (${error.requiredBytes} bytes) exceeds the limit (${error.limitBytes} bytes); an incomplete review never counts.`,
-          ),
-        };
-      }
-      throw error;
-    }
-    const sessionId = coverageSessionId(request.runId, request.reviewId, pack.digest, "ownview", candidate.runtimeId, independence);
-    await recordContextPack({
-      store: this.options.contextManifests,
-      artifacts: this.options.artifacts,
-      recordPackText: this.options.recordContextPackText,
-      runId: request.runId,
-      sessionId,
-      actor: { role: "verifier", id: candidate.runtimeId },
-      role: "verifier",
-      purpose: "coverage:rereview-ownview",
-      limits: contextLimits,
-      pack,
-      recordedAt: this.clock(),
-    });
-    const systemMessage: AgentMessage = {
-      id: "coverage-rereview-ownview-system",
-      role: "system",
-      content: coverageReviewerSystemPrompt("rereview-ownview"),
-    };
-    const contextMessage: AgentMessage = {
-      id: `coverage-context:${pack.digest}`,
-      role: "user",
-      content: pack.text,
-    };
-    let messages: AgentMessage[] = [systemMessage, contextMessage];
-    const sessionEvents = this.options.sessions.events(sessionId);
-    const freshStart = sessionEvents.length === 0;
-    if (freshStart) {
-      assertFreshContextRequest({
-        independence,
-        priorEventCount: sessionEvents.length,
-        messages,
-        packMessageIds: [systemMessage.id, contextMessage.id],
-      });
-      await this.options.sessions.create({
-        sessionId,
-        runId: request.runId,
-        actor: { role: "verifier", id: candidate.runtimeId },
-        occurredAt: this.clock(),
-      });
-      assertFreshContextSessionStarted(independence, this.options.sessions.events(sessionId));
-    } else {
-      const recovered = await this.options.sessions.load(sessionId);
-      if (
-        recovered.actor.role !== "verifier" ||
-        recovered.actor.id !== candidate.runtimeId ||
-        recovered.runId !== request.runId
-      ) {
-        throw new Error(
-          independence === "fresh_context"
-            ? "A fresh-context reviewer cannot resume or reuse another session."
-            : "Recovered coverage session identity does not match the request.",
-        );
-      }
-      if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
-      if (!messages.some((message) => message.id === contextMessage.id)) {
-        messages.push(contextMessage);
-      }
-    }
-    const already = this.options.authority.correctionView(request.runId, request.reviewId);
-    if (already) {
-      this.options.sessions.complete(sessionId, this.clock());
-      return { status: "viewed", sessionId, messages };
-    }
-    // The plan is shown in this turn: record the durable delivery before the
-    // model runs, so a later true-stamped derivation for this review is
-    // refused (B2).
-    this.options.authority.recordPlanDelivered({
-      runId: request.runId,
-      reviewId: request.reviewId,
-      planRevisionId: request.planRevision.revisionId,
-      planRevisionDigest: request.planRevision.digest,
-      sourceManifestId: request.manifest.manifestId,
-      sessionId,
-      occurredAt: this.clock(),
-    });
-    const broker = createCoverageReviewBroker({
-      git: this.options.git,
-      executionGrants: this.options.executionGrants,
-      workspacePath: this.options.projectRoot,
-      artifacts: this.options.artifacts,
-      evidenceStore: this.options.evidenceStore,
-      runId: request.runId,
-      clock: this.clock,
-      ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
-      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
-      lifecycleTool: createRecordCoverageCorrectionViewTool({
-        authority: this.options.authority,
-        runId: request.runId,
-        reviewId: request.reviewId,
-        priorReviewId: priorReview.id,
-        reusedFromReviewId,
-        sourceManifestId: request.manifest.manifestId,
-        sourceManifestDigest: request.manifest.artifactDigest,
-        runtimeId: candidate.runtimeId,
-        sessionId,
-        clock: this.clock,
-      }),
-    });
-    const result = await runAgentLoop({
-      model: this.budgetedModel(model, candidate, request.runId, sessionId),
-      registry: this.budgetedTools(broker, request.runId),
-      context: {
-        runId: request.runId,
-        sessionId,
-        actor: { role: "verifier", id: candidate.runtimeId },
-        workspacePath: this.options.projectRoot,
-        signal: request.signal,
-      },
-      initialMessages: messages,
-      maxTurns: this.options.maxTurns ?? 20,
-      signal: request.signal,
-      providerRetry: {
-        runtimeId: candidate.runtimeId,
-        providerId: candidate.providerId,
-        modelId: candidate.modelId,
-        deadlineMs: request.providerRetryDeadlineMs,
-        classify: classifyProviderFailure,
-        ...(this.options.providerRetryRuntime
-          ? {
-              now: this.options.providerRetryRuntime.now,
-              random: this.options.providerRetryRuntime.random,
-              sleep: this.options.providerRetryRuntime.sleep,
-            }
-          : {}),
-      },
-      onCheckpoint: async (checkpoint) => {
-        await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
-      },
-    });
-    if (result.status === "verifier_expectations_recorded") {
-      const recorded = this.options.authority.correctionView(request.runId, request.reviewId);
-      if (!recorded || result.reviewId !== request.reviewId) {
-        throw new Error("Coverage correction view was not durable after the own-view pass.");
-      }
-      this.options.sessions.complete(sessionId, this.clock());
-      return { status: "viewed", sessionId, messages: result.messages };
-    }
-    if (result.status === "suspended") {
-      return { status: "not-viewed", result: this.suspend(sessionId, candidate, request, result) };
-    }
-    this.options.sessions.suspend(sessionId, `unexpected_coverage_lifecycle:${result.status}`, undefined, this.clock());
-    return {
-      status: "not-viewed",
-      result: {
-        status: "suspended",
-        reviewId: request.reviewId,
-        sessionId,
-        runtimeId: candidate.runtimeId,
-        reason: `unexpected_coverage_lifecycle:${result.status}`,
-        messages: result.messages,
-      },
-    };
-  }
-
   private async runVerdictPass(input: {
     request: NativeCoverageReviewRequest;
     candidate: AgentRuntimeCandidate;
     model: AgentModel;
     obligations: readonly DerivedObligation[];
     reusedFromReviewId?: string;
+    /** Single-pass re-review (no own-view pass ran). */
+    ownViewWaived?: boolean;
     criticChecksJson: string | undefined;
     criticHook: CoverageCriticHookOutcome;
     risk: PlanRiskAssessment;
@@ -2196,10 +2009,15 @@ export class NativeCoverageReviewRuntime {
         ...(request.guidance.length > 0
           ? { guidance: request.guidance.map((item) => ({ ...item })) }
           : {}),
-        planRevisionJson: compactJson(request.planRevision),
+        planRevisionJson: isReReview && request.priorPlanRevision
+          ? compactJson(planRevisionDiff(request.priorPlanRevision, request.planRevision))
+          : compactJson(request.planRevision),
         ledgerJson: compactJson(request.ledger),
         ...(isReReview
-          ? { priorFindingsJson: compactJson(requiredPriorFindings) }
+          ? {
+            priorFindingsJson: compactJson(requiredPriorFindings),
+            priorVerdictsJson: compactJson(request.priorReview!.obligationVerdicts),
+          }
           : {}),
         ...(input.criticChecksJson !== undefined ? { criticChecksJson: input.criticChecksJson } : {}),
       });
@@ -2335,6 +2153,7 @@ export class NativeCoverageReviewRuntime {
             }
           : {}),
         ...(input.reusedFromReviewId !== undefined ? { reusedFromReviewId: input.reusedFromReviewId } : {}),
+        ...(input.ownViewWaived ? { ownViewWaived: true } : {}),
         runtimeId: candidate.runtimeId,
         sessionId,
         clock: this.clock,

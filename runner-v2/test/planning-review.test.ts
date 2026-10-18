@@ -1448,10 +1448,7 @@ test("T3b blocking weakened holds readiness; resolution plus scoped re-review re
         claim: PRIOR_FINDING_CLAIM,
       }],
     ),
-    // Scoped re-review: own view of the correction, then checks.
-    ownViewTurn(
-      "The corrected plan adds an exercised one-hour purge criterion to T-PURGE.",
-    ),
+    // Scoped re-review: one verdict pass over the diff with the prior verdicts and findings.
     verdictTurn(
       coveredVerdicts(["obligation-audit", "obligation-retry", "obligation-purge"]),
       [],
@@ -1512,7 +1509,7 @@ test("T3b blocking weakened holds readiness; resolution plus scoped re-review re
     assert.equal(second.status, "reviewed");
     if (second.status !== "reviewed") throw new Error("unreachable");
     assert.equal(second.review.priorReviewId, "coverage_1");
-    assert.equal(second.review.correctionOwnViewRecordedFirst, true);
+    assert.equal(second.review.correctionOwnViewWaived, true);
     harness.store.append({
       runId,
       type: "planning.plan_ready",
@@ -1531,7 +1528,7 @@ test("T3b blocking weakened holds readiness; resolution plus scoped re-review re
   }
 });
 
-test("T3b re-review blindness: the first turn has no prior finding text; findings arrive only after the recorded view", async () => {
+test("single-pass re-review: one verdict turn sees only the plan changes, the prior verdicts and the prior findings", async () => {
   const source = buildCoverageSource();
   const harness = createCoverageHarness("rereview-blind", [
     recordTurn([AUDIT_OBLIGATION, RETRY_OBLIGATION, TAIL_OBLIGATION]),
@@ -1551,9 +1548,6 @@ test("T3b re-review blindness: the first turn has no prior finding text; finding
         severity: "blocking",
         claim: PRIOR_FINDING_CLAIM,
       }],
-    ),
-    ownViewTurn(
-      "The correction adds a purge task; I have not seen the prior findings.",
     ),
     verdictTurn(
       coveredVerdicts(["obligation-audit", "obligation-retry", "obligation-purge"]),
@@ -1598,31 +1592,25 @@ test("T3b re-review blindness: the first turn has no prior finding text; finding
       ...coverageReviewRequest(runId, "coverage_2", source, plan),
       planRevision: revisionTwo,
       priorReview: first.review,
+      priorPlanRevision: plan.revision,
     });
     assert.equal(second.status, "reviewed");
-    // The re-review's first turn: the correction is present, the prior
-    // finding text is not.
-    const rereviewDerive = harness.model.requests[requestsBefore]!;
-    const deriveText = JSON.stringify(rereviewDerive.messages);
-    assert.equal(deriveText.includes(revisionTwo.digest), true);
-    assert.equal(deriveText.includes(PRIOR_FINDING_CLAIM), false);
-    assert.equal(deriveText.includes("finding-purge"), false);
-    // The verdict turn receives the prior findings (checked, not blind).
-    const rereviewVerdict = harness.model.requests[requestsBefore + 1]!;
-    assert.equal(JSON.stringify(rereviewVerdict.messages).includes(PRIOR_FINDING_CLAIM), true);
-    // The log order proves view-before-findings: own view, then release.
+    // One model turn: the plan diff (not the whole plan), the prior verdicts and the prior findings.
+    assert.equal(harness.model.requests.length - requestsBefore, 1);
+    const verdictText = JSON.stringify(harness.model.requests[requestsBefore]!.messages);
+    assert.equal(verdictText.includes(PRIOR_FINDING_CLAIM), true, "prior findings are checked");
+    assert.equal(verdictText.includes("prior-verdicts"), true, "prior verdicts ride for carry-forward");
+    assert.equal(verdictText.includes("priorRevisionId"), true, "the plan section is the diff");
+    // The runner records the waiver with the release; no own-view pass ran.
     // No fresh obligations are derived for coverage_2 (B2 reuse).
     const events = harness.store.readRun(runId);
-    const ownView = events.find(
-      (event) =>
-        event.type === "planning.coverage_correction_view_recorded" &&
-        (event.payload as { reviewId?: string }).reviewId === "coverage_2",
-    )!;
+    assert.equal(events.some((event) =>
+      event.type === "planning.coverage_correction_view_recorded" &&
+      (event.payload as { reviewId?: string }).reviewId === "coverage_2"), false);
     const release = events.find(
       (event) => event.type === "planning.coverage_prior_findings_released",
     )!;
-    assert.ok(ownView && release);
-    assert.equal(release.sequence > ownView.sequence, true);
+    assert.deepEqual(release.payload, { reviewId: "coverage_2", priorReviewId: "coverage_1", ownViewWaived: true, reusedFromReviewId: "coverage_1" });
     assert.equal(
       events.some(
         (event) =>
@@ -3180,7 +3168,6 @@ test("T3b-R1 B2: the review that makes a REVISED plan ready reuses blind obligat
       ],
       [{ id: "finding-purge", category: "missing_coverage", severity: "blocking", claim: "Purge is missing." }],
     ),
-    ownViewTurn("The correction adds the missing purge task."),
     verdictTurn(
       coveredVerdicts(["obligation-audit", "obligation-retry", "obligation-purge"]),
       [],
@@ -3223,9 +3210,9 @@ test("T3b-R1 B2: the review that makes a REVISED plan ready reuses blind obligat
     });
     assert.equal(second.status, "reviewed");
     if (second.status !== "reviewed") throw new Error("unreachable");
-    // Reuse: the re-review ran exactly two turns (own view + verdict, no
-    // deriving turn) and its obligations equal the blind set.
-    assert.equal(harness.model.requests.length - requestsBefore, 2);
+    // Reuse: the re-review ran exactly one turn (the verdict; no deriving or
+    // own-view turn) and its obligations equal the blind set.
+    assert.equal(harness.model.requests.length - requestsBefore, 1);
     assert.deepEqual(
       second.review.derivedObligations.map((obligation) => obligation.id).sort(),
       first.review.derivedObligations.map((obligation) => obligation.id).sort(),
@@ -3239,12 +3226,12 @@ test("T3b-R1 B2: the review that makes a REVISED plan ready reuses blind obligat
       ),
       false,
     );
-    const view = events.find(
+    const release = events.find(
       (event) =>
-        event.type === "planning.coverage_correction_view_recorded" &&
+        event.type === "planning.coverage_prior_findings_released" &&
         (event.payload as { reviewId?: string }).reviewId === "coverage_2",
     )!;
-    assert.equal((view.payload as { reusedFromReviewId?: string }).reusedFromReviewId, "coverage_1");
+    assert.equal((release.payload as { reusedFromReviewId?: string }).reusedFromReviewId, "coverage_1");
     // And the revised plan can reach ready on the reused set.
     seedDurableSourceReads(harness.store, runId, source.manifest, CLOCK);
     harness.store.append({
@@ -3427,7 +3414,6 @@ test("T3b-R1 B3: F1 outstanding after review 2 is shown to review 3 and holds re
       ],
       [{ id: "finding-f1", category: "missing_coverage", severity: "blocking", claim: "F1 purge lineage claim." }],
     ),
-    ownViewTurn("Correction adds a purge task but keeps the weak bound."),
     verdictTurn(
       [
         ...coveredVerdicts(["obligation-audit", "obligation-retry"]),
@@ -3436,7 +3422,6 @@ test("T3b-R1 B3: F1 outstanding after review 2 is shown to review 3 and holds re
       [],
       [{ priorFindingId: "finding-f1", status: "outstanding", rationale: "Not yet fixed." }],
     ),
-    ownViewTurn("Correction strengthens the purge bound; F1 fixed."),
     verdictTurn(
       coveredVerdicts(["obligation-audit", "obligation-retry", "obligation-purge"]),
       [],
@@ -3523,10 +3508,9 @@ test("T3b-R1 B3: F1 outstanding after review 2 is shown to review 3 and holds re
     });
     assert.equal(third.status, "reviewed");
     if (third.status !== "reviewed") throw new Error("unreachable");
-    // Review 3's own view is blind to F1; its verdict turn sees F1.
-    const ownView = JSON.stringify(harness.model.requests[requestsBefore]!.messages);
-    assert.equal(ownView.includes("F1 purge lineage claim."), false);
-    const verdict = JSON.stringify(harness.model.requests[requestsBefore + 1]!.messages);
+    // Review 3's single verdict turn sees F1, the cumulative open finding it must check.
+    assert.equal(harness.model.requests.length - requestsBefore, 1);
+    const verdict = JSON.stringify(harness.model.requests[requestsBefore]!.messages);
     assert.equal(verdict.includes("F1 purge lineage claim."), true);
     harness.store.append({
       runId,

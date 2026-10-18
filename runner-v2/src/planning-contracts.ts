@@ -1620,6 +1620,8 @@ export interface CoverageReview {
   readonly priorReviewId?: string;
   /** OA-10 #2: this review's own findings were recorded before it received the prior review's findings. */
   readonly correctionOwnViewRecordedFirst?: boolean;
+  /** Single-pass re-review: the runner waived the own-view pass and recorded the waiver with the release. */
+  readonly correctionOwnViewWaived?: boolean;
   readonly recordedAt: string;
 }
 
@@ -1684,10 +1686,10 @@ export function validateCoverageReview(review: CoverageReview): PlanningValidati
 
   issues.push(...validateFindings(review.findings));
 
-  if (review.priorReviewId !== undefined && review.correctionOwnViewRecordedFirst !== true) {
+  if (review.priorReviewId !== undefined && review.correctionOwnViewRecordedFirst !== true && review.correctionOwnViewWaived !== true) {
     issues.push({
       code: "correction_missing_own_view_first",
-      message: "A scoped re-review of a prior CoverageReview must record its own view before receiving the prior findings (OA-10 #2).",
+      message: "A scoped re-review of a prior CoverageReview must record its own view before receiving the prior findings (OA-10 #2), or carry the runner-recorded own-view waiver.",
     });
   }
 

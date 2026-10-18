@@ -165,6 +165,7 @@ export function filterRunnerObservability<T extends SearchableObservability>(
 const PLAN_CRITIQUE_SKIP_LABELS = {
   policy_off: "policy off",
   low_plan_risk: "low plan risk",
+  covered_by_coverage_review: "covered by the coverage review",
   critic_failed: "critic failed",
   plan_only: "plan only",
 } as const;

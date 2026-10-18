@@ -450,6 +450,12 @@ export interface PlanningProjection {
   readonly coverageCorrectionViews: Readonly<Record<string, CoverageCorrectionViewRecord>>;
   /** T3b (OA-10#2): review id -> prior review id whose findings were released after the own view. */
   readonly coveragePriorFindingsReleased: Readonly<Record<string, string>>;
+  /**
+   * Single-pass re-reviews: review id -> the waived own view (prior review, reused blind obligations).
+   * The runner records the waiver with the release, so the re-review judges the plan diff, the prior
+   * verdicts and the prior findings in one verdict pass instead of a separate own-view pass.
+   */
+  readonly coverageOwnViewWaivers?: Readonly<Record<string, { priorReviewId: string; reusedFromReviewId: string }>>;
   /** T3b (OA-10#2): review id -> per-prior-finding checks supplied with the verdict. */
   readonly coveragePriorFindingChecks: Readonly<Record<string, readonly CoveragePriorFindingCheck[]>>;
   /** T3b: set while coverage review is explicitly unavailable; blocks plan_ready. */
@@ -1998,7 +2004,18 @@ export function reducePlanningProjection(
       const reviewId = requiredString(event.payload, "reviewId");
       const priorReviewId = requiredString(event.payload, "priorReviewId");
       const view = next.coverageCorrectionViews[reviewId];
-      if (!view || view.priorReviewId !== priorReviewId) {
+      const waived = event.payload.ownViewWaived === true;
+      let waiver: { priorReviewId: string; reusedFromReviewId: string } | undefined;
+      if (waived) {
+        if (view) throw new Error(`Coverage re-review ${reviewId} recorded its own view and cannot also waive it.`);
+        const reusedFromReviewId = requiredString(event.payload, "reusedFromReviewId");
+        const reused = next.coverageObligations[reusedFromReviewId];
+        const manifest = next.source.manifestsById[next.source.currentManifestId];
+        if (!reused || reused.sourceManifestId !== manifest.manifestId || reused.sourceManifestDigest !== manifest.artifactDigest) {
+          throw new Error("Coverage re-review waiver reuses blind obligations bound to a stale or unknown source manifest.");
+        }
+        waiver = { priorReviewId, reusedFromReviewId };
+      } else if (!view || view.priorReviewId !== priorReviewId) {
         throw new Error(
           "Prior findings cannot be released before the re-review records its own view of the correction (OA-10 #2).",
         );
@@ -2013,6 +2030,7 @@ export function reducePlanningProjection(
       next = {
         ...next,
         coveragePriorFindingsReleased: { ...next.coveragePriorFindingsReleased, [reviewId]: priorReviewId },
+        ...(waiver ? { coverageOwnViewWaivers: { ...(next.coverageOwnViewWaivers ?? {}), [reviewId]: waiver } } : {}),
       };
       break;
     }
@@ -2049,14 +2067,20 @@ export function reducePlanningProjection(
         }
       } else {
         const view = next.coverageCorrectionViews[review.id];
-        if (!view || view.priorReviewId !== review.priorReviewId) {
+        const waiver = next.coverageOwnViewWaivers?.[review.id];
+        let reusedFromReviewId: string;
+        if (view && view.priorReviewId === review.priorReviewId) {
+          reusedFromReviewId = view.reusedFromReviewId;
+        } else if (waiver && waiver.priorReviewId === review.priorReviewId && review.correctionOwnViewWaived === true) {
+          reusedFromReviewId = waiver.reusedFromReviewId;
+        } else {
           throw new Error(
             `Coverage re-review ${review.id} has no durably recorded own view of the correction (OA-10 #2).`,
           );
         }
-        effective = next.coverageObligations[view.reusedFromReviewId];
+        effective = next.coverageObligations[reusedFromReviewId];
         if (!effective) {
-          throw new Error(`Coverage re-review ${review.id} reuses unknown blind obligations ${view.reusedFromReviewId}.`);
+          throw new Error(`Coverage re-review ${review.id} reuses unknown blind obligations ${reusedFromReviewId}.`);
         }
       }
       if (

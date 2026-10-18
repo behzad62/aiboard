@@ -4905,6 +4905,9 @@ export class BuildRuntime {
       architectRuntimeId: projection.runtime.architect.runtimeId ?? this.architectId,
       manifest,
       planRevision: revision,
+      ...(priorReview && planning.plan.revisionsById[priorReview.planRevisionId]
+        ? { priorPlanRevision: planning.plan.revisionsById[priorReview.planRevisionId] }
+        : {}),
       ledger: {
         id: planning.ledger.id,
         requirements: planning.ledger.requirements,
@@ -5115,6 +5118,10 @@ export class BuildRuntime {
       return { status: "progressed", action: "plan_critique_skipped" };
     };
     if (this.runPolicy === "plan_only") return skip("plan_only");
+    // One plan reviewer: an evidence-gated run's coverage verdict already judges plan quality, so a
+    // second reviewer and its revision cycle only re-reviewed the same plan (tunnel run). A critique
+    // already requested on a run keeps its course.
+    if (projection.planningPolicyVersion === 1 && !state.current) return skip("covered_by_coverage_review");
     if (!state.risk) {
       const input = {
         architectDeclaration: driver.architectDeclaration(projection),
@@ -5758,6 +5765,7 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "complete_run",
   "convert_to_build",
   "draft_planning_plan",
+  "patch_planning_plan",
   "persist_planning_ledger",
   "plan_final_verification",
   "plan_tasks",

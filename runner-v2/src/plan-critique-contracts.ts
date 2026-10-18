@@ -142,7 +142,8 @@ export interface PlanCritiqueState {
   skipped?: { planRevision: number; reason: PlanCritiqueSkipReason; skippedAt: string };
 }
 
-export type PlanCritiqueSkipReason = "policy_off" | "low_plan_risk" | "critic_failed" | "plan_only";
+/** covered_by_coverage_review: evidence-gated runs judge plan quality in the coverage verdict itself. */
+export type PlanCritiqueSkipReason = "policy_off" | "low_plan_risk" | "critic_failed" | "plan_only" | "covered_by_coverage_review";
 
 export function parsePlanCritiqueFindings(
   value: unknown,

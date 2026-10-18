@@ -41,6 +41,7 @@ import {
   MAX_PLANNING_SOURCE_SECTION_BYTES,
   PLANNING_TOOL_NAMES,
 } from "../src/planning-tools.js";
+import { planRevisionDiff } from "../src/plan-revision-diff.js";
 import {
   currentExplicitStartIdentity,
   explicitStartBlocked,
@@ -792,6 +793,23 @@ test("T3a draft before the ledger is refused; ledger then draft then revise succ
     assert.deepEqual(after.revisionHistoryIds, ["revision_1", "revision_2"]);
     const storedR2 = after.revisionsById["revision_2"]!;
     assert.equal(storedR2.tasks.find((task) => task.id === "T1")!.requiredBase, "accepted plan revision revision_2");
+
+    // Patch: only the changed task travels; the kernel carries everything else over and re-derives links.
+    const t1 = structuredClone(storedR2.tasks.find((task) => task.id === "T1")!) as unknown as Record<string, unknown>;
+    delete t1.requiredBase;
+    (t1.outcome as { user: string }).user = "Patched user-visible outcome.";
+    const patched = await invokePlanningTool(tools, "patch_planning_plan", { revisionId: "revision_3", upsertTasks: [t1] }, runId);
+    assert.equal(patched.isError, false, JSON.stringify(patched.error));
+    const afterPatch = projectionOf(store, runId).planning!.plan!;
+    assert.equal(afterPatch.currentRevisionId, "revision_3");
+    const storedR3 = afterPatch.revisionsById["revision_3"]!;
+    assert.equal(storedR3.tasks.find((task) => task.id === "T1")!.outcome.user, "Patched user-visible outcome.");
+    const diff = planRevisionDiff(storedR2, storedR3);
+    assert.deepEqual(diff.tasks.changed.map((task) => (task as { id: string }).id), ["T1"]);
+    assert.equal(diff.tasks.unchanged.length, storedR2.tasks.length - 1);
+    assert.deepEqual(diff.requirements.changed, []);
+    const unknown = await invokePlanningTool(tools, "patch_planning_plan", { revisionId: "revision_4", removeTaskIds: ["NOPE"] }, runId);
+    assert.equal(unknown.error?.code, "unknown_plan_ids");
   } finally {
     store.close();
   }

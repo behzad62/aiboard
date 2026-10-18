@@ -29,7 +29,7 @@ import {
   type ApprovedSourceManifest,
 } from "./source-manifest.js";
 import { createRequestCoverageReviewTool } from "./planning-review.js";
-import { PHASE_SCHEMA, PLAN_REVISION_SCHEMA, REQUIREMENT_SCHEMA } from "./planning-tool-schemas.js";
+import { PHASE_SCHEMA, PLAN_REVISION_SCHEMA, REQUIREMENT_SCHEMA, TASK_CONTRACT_SCHEMA } from "./planning-tool-schemas.js";
 import { lifecycleEventResult } from "./lifecycle-receipt.js";
 
 /**
@@ -56,6 +56,7 @@ export const MAX_PLANNING_SOURCE_SECTION_BYTES = 64 * 1024;
 /** Stable lifecycle-surface names, in the sorted order the surface asserts. */
 export const PLANNING_TOOL_NAMES = Object.freeze([
   "draft_planning_plan",
+  "patch_planning_plan",
   "persist_planning_ledger",
   "read_current_plan_revision",
   "read_planning_source_section",
@@ -123,6 +124,7 @@ export function createPlanningTools(
     persistLedgerTool(options.store, clock),
     draftPlanTool(options.store, clock),
     revisePlanTool(options.store, clock),
+    patchPlanTool(options.store, revisePlanTool(options.store, clock)),
     createRequestCoverageReviewTool({ store: options.store, clock }),
   ];
 }
@@ -734,6 +736,147 @@ export function revisedDuringCritiqueResolution(
       },
     ],
   };
+}
+
+interface PatchPlanInput {
+  revisionId: string;
+  expectedRevisionId?: string;
+  expectedDigest?: string;
+  upsertTasks?: Record<string, unknown>[];
+  removeTaskIds?: string[];
+  upsertPhases?: Record<string, unknown>[];
+  removePhaseIds?: string[];
+  upsertRequirements?: Record<string, unknown>[];
+  removeRequirementIds?: string[];
+  upsertPlanningDecisions?: Record<string, unknown>[];
+  removePlanningDecisionIds?: string[];
+  validationObligations?: string[];
+}
+
+const PATCH_SECTIONS = [
+  ["tasks", "upsertTasks", "removeTaskIds"],
+  ["phases", "upsertPhases", "removePhaseIds"],
+  ["requirements", "upsertRequirements", "removeRequirementIds"],
+  ["planningDecisions", "upsertPlanningDecisions", "removePlanningDecisionIds"],
+] as const;
+
+/**
+ * Revise the plan by naming only what changes. Whole-plan revisions re-sent ~84 KB per revision and
+ * one wrong field threw the whole call away (tunnel run). The patch is applied to the current
+ * revision and goes through revise_planning_plan's exact path (normalization, validation, the
+ * plan_revised event), so the kernel sees an ordinary complete revision.
+ */
+function patchPlanTool(
+  store: SchedulerStore,
+  revise: NativeTool<RevisePlanInput>,
+): NativeTool<PatchPlanInput> {
+  const idList = { type: "array", items: { type: "string", minLength: 1 } };
+  return lifecycleTool({
+    name: "patch_planning_plan",
+    description:
+      "Revise the current plan by listing only the changes: upsert tasks, phases, requirements or planning " +
+      "decisions by id (a complete item replaces the item with that id, a new id is added) and remove by id; " +
+      "validationObligations replaces the list when given. Everything else is carried over from the current " +
+      "revision. Links the kernel derives (requirement contributingTaskIds, phase requirementIds and " +
+      "contributingTaskIds) are re-derived from the tasks and requirements. Prefer this over revise_planning_plan.",
+    schema: {
+      type: "object",
+      properties: {
+        revisionId: { type: "string", minLength: 1, description: "The new revision id." },
+        expectedRevisionId: { type: "string", minLength: 1 },
+        expectedDigest: { type: "string", minLength: 1 },
+        upsertTasks: { type: "array", items: TASK_CONTRACT_SCHEMA },
+        removeTaskIds: idList,
+        upsertPhases: { type: "array", items: PHASE_SCHEMA },
+        removePhaseIds: idList,
+        upsertRequirements: { type: "array", items: REQUIREMENT_SCHEMA },
+        removeRequirementIds: idList,
+        upsertPlanningDecisions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { id: { type: "string" }, description: { type: "string" } },
+            required: ["id", "description"],
+          },
+        },
+        removePlanningDecisionIds: idList,
+        validationObligations: { type: "array", items: { type: "string", minLength: 1 } },
+      },
+      required: ["revisionId"],
+      additionalProperties: false,
+    },
+    validate: (input) => {
+      if (!isRecord(input)) return { ok: false, issues: ["The patch must be an object."] };
+      const issues: string[] = [];
+      if (!nonEmpty(input.revisionId)) issues.push("revisionId (the new revision id) is required.");
+      for (const key of ["expectedRevisionId", "expectedDigest"] as const) {
+        if (input[key] !== undefined && !nonEmpty(input[key])) issues.push(`${key} must be non-empty when given.`);
+      }
+      for (const [, upsert, remove] of PATCH_SECTIONS) {
+        const items = input[upsert];
+        if (items !== undefined && (!Array.isArray(items) || items.some((item) => !isRecord(item) || !nonEmpty(item.id)))) {
+          issues.push(`${upsert} must be an array of items that each have an id.`);
+        }
+        const ids = input[remove];
+        if (ids !== undefined && (!Array.isArray(ids) || ids.some((id) => !nonEmpty(id)))) {
+          issues.push(`${remove} must be an array of ids.`);
+        }
+      }
+      if (
+        input.validationObligations !== undefined &&
+        (!Array.isArray(input.validationObligations) || input.validationObligations.some((item) => !nonEmpty(item)))
+      ) {
+        issues.push("validationObligations must be an array of non-empty strings.");
+      }
+      return issues.length ? { ok: false, issues } : { ok: true, value: input as unknown as PatchPlanInput };
+    },
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const plan = rebuildSchedulerProjection(store.readRun(context.runId)).planning?.plan;
+      if (!plan) return errorOutput("plan_not_drafted", "No plan revision exists yet; draft one with draft_planning_plan.");
+      const current = plan.revisionsById[plan.currentRevisionId] as unknown as Record<string, unknown>;
+      const revision: Record<string, unknown> = Object.fromEntries(
+        Object.entries(structuredClone(current))
+          .filter(([key]) => !(KERNEL_STAMPED_REVISION_FIELDS as readonly string[]).includes(key)),
+      );
+      const unknownIds: string[] = [];
+      for (const [section, upsert, remove] of PATCH_SECTIONS) {
+        let items = [...((revision[section] as Record<string, unknown>[] | undefined) ?? [])];
+        for (const id of input[remove] ?? []) {
+          if (!items.some((item) => item.id === id)) unknownIds.push(`${section}:${id}`);
+          items = items.filter((item) => item.id !== id);
+        }
+        for (const item of input[upsert] ?? []) {
+          const index = items.findIndex((candidate) => candidate.id === item.id);
+          if (index >= 0) items[index] = structuredClone(item);
+          else items.push(structuredClone(item));
+        }
+        revision[section] = items;
+      }
+      if (unknownIds.length) {
+        return errorOutput(
+          "unknown_plan_ids",
+          `The patch removes ids that are not in revision ${plan.currentRevisionId}: ${unknownIds.join(", ")}.`,
+        );
+      }
+      if (input.validationObligations) revision.validationObligations = [...input.validationObligations];
+      // Derived links and per-revision stamps are re-derived from the patched revision; carrying the
+      // stored copies would conflict with any changed task link.
+      for (const requirement of revision.requirements as Record<string, unknown>[]) delete requirement.contributingTaskIds;
+      for (const phase of revision.phases as Record<string, unknown>[]) {
+        delete phase.requirementIds;
+        delete phase.contributingTaskIds;
+      }
+      for (const task of revision.tasks as Record<string, unknown>[]) delete task.requiredBase;
+      revision.revisionId = input.revisionId;
+      return await revise.execute({
+        revision: revision as unknown as PlanSubmissionRevision,
+        ...(input.expectedRevisionId !== undefined ? { expectedRevisionId: input.expectedRevisionId } : {}),
+        ...(input.expectedDigest !== undefined ? { expectedDigest: input.expectedDigest } : {}),
+      }, context);
+    },
+  });
 }
 
 /**
