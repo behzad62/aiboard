@@ -766,6 +766,11 @@ const PATCH_SECTIONS = [
  * revision and goes through revise_planning_plan's exact path (normalization, validation, the
  * plan_revised event), so the kernel sees an ordinary complete revision.
  */
+/** An upsert names an existing id and only the fields that change; new items are validated whole by the kernel. */
+function idOnlyRequired(schema: Record<string, unknown>): Record<string, unknown> {
+  return { ...schema, required: ["id"] };
+}
+
 function patchPlanTool(
   store: SchedulerStore,
   revise: NativeTool<RevisePlanInput>,
@@ -775,7 +780,8 @@ function patchPlanTool(
     name: "patch_planning_plan",
     description:
       "Revise the current plan by listing only the changes: upsert tasks, phases, requirements or planning " +
-      "decisions by id (a complete item replaces the item with that id, a new id is added) and remove by id; " +
+      "decisions by id (for an existing id send only the fields that change, they are merged onto the item; a new " +
+      "id needs the complete item) and remove by id; " +
       "validationObligations replaces the list when given. Everything else is carried over from the current " +
       "revision. Links the kernel derives (requirement contributingTaskIds, phase requirementIds and " +
       "contributingTaskIds) are re-derived from the tasks and requirements. Prefer this over revise_planning_plan.",
@@ -785,11 +791,11 @@ function patchPlanTool(
         revisionId: { type: "string", minLength: 1, description: "The new revision id." },
         expectedRevisionId: { type: "string", minLength: 1 },
         expectedDigest: { type: "string", minLength: 1 },
-        upsertTasks: { type: "array", items: TASK_CONTRACT_SCHEMA },
+        upsertTasks: { type: "array", items: idOnlyRequired(TASK_CONTRACT_SCHEMA) },
         removeTaskIds: idList,
-        upsertPhases: { type: "array", items: PHASE_SCHEMA },
+        upsertPhases: { type: "array", items: idOnlyRequired(PHASE_SCHEMA) },
         removePhaseIds: idList,
-        upsertRequirements: { type: "array", items: REQUIREMENT_SCHEMA },
+        upsertRequirements: { type: "array", items: idOnlyRequired(REQUIREMENT_SCHEMA) },
         removeRequirementIds: idList,
         upsertPlanningDecisions: {
           type: "array",
@@ -849,7 +855,9 @@ function patchPlanTool(
         }
         for (const item of input[upsert] ?? []) {
           const index = items.findIndex((candidate) => candidate.id === item.id);
-          if (index >= 0) items[index] = structuredClone(item);
+          // Merge onto the existing item: omitted fields (links such as accountablePhaseId included) carry
+          // over. A replacing upsert dropped a task's phase link while the phase side was being re-derived.
+          if (index >= 0) items[index] = { ...items[index], ...structuredClone(item) };
           else items.push(structuredClone(item));
         }
         revision[section] = items;

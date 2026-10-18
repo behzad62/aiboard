@@ -798,7 +798,11 @@ test("T3a draft before the ledger is refused; ledger then draft then revise succ
     const t1 = structuredClone(storedR2.tasks.find((task) => task.id === "T1")!) as unknown as Record<string, unknown>;
     delete t1.requiredBase;
     (t1.outcome as { user: string }).user = "Patched user-visible outcome.";
-    const patched = await invokePlanningTool(tools, "patch_planning_plan", { revisionId: "revision_3", upsertTasks: [t1] }, runId);
+    // Only the changed field travels: the upsert merges onto T1, keeping its phase and requirement links.
+    const patched = await invokePlanningTool(tools, "patch_planning_plan", {
+      revisionId: "revision_3",
+      upsertTasks: [{ id: "T1", outcome: t1.outcome }],
+    }, runId);
     assert.equal(patched.isError, false, JSON.stringify(patched.error));
     const afterPatch = projectionOf(store, runId).planning!.plan!;
     assert.equal(afterPatch.currentRevisionId, "revision_3");
