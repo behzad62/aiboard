@@ -766,6 +766,20 @@ test("T3a draft before the ledger is refused; ledger then draft then revise succ
     assert.ok(investigation.decisionCriterion.length > 0);
     assert.deepEqual(investigation.dependentUnlockTaskIds, ["T3"]);
 
+    // The Architect can read the current revision in the exact submission shape to revise it.
+    const current = outputJson(await invokePlanningTool(tools, "read_current_plan_revision", {}, runId));
+    assert.equal(current.currentRevisionId, "revision_1");
+    assert.equal(current.currentDigest, plan.currentDigest);
+    const readable = current.revision as Record<string, unknown>;
+    assert.equal(readable.revisionId, "revision_1");
+    for (const stamped of ["digest", "runId", "sourceManifestId", "sourceManifestDigest", "createdAt"]) {
+      assert.equal(stamped in readable, false, `${stamped} is kernel-stamped and omitted`);
+    }
+    assert.equal((readable.tasks as unknown[]).length, storedR1.tasks.length);
+    const reviseTool = tools.find((tool) => tool.definition.name === "revise_planning_plan")!;
+    assert.equal(reviseTool.validate({ revision: { ...readable, revisionId: "revision_copy" } }).ok, true,
+      "the read shape is accepted as revise input");
+
     const revised = await invokePlanningTool(tools, "revise_planning_plan", {
       revision: reviseToNext(fixture.revision, "revision_2"),
       expectedRevisionId: plan.currentRevisionId,

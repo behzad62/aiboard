@@ -55,6 +55,7 @@ export const MAX_PLANNING_SOURCE_SECTION_BYTES = 64 * 1024;
 export const PLANNING_TOOL_NAMES = Object.freeze([
   "draft_planning_plan",
   "persist_planning_ledger",
+  "read_current_plan_revision",
   "read_planning_source_section",
   "request_coverage_review",
   "revise_planning_plan",
@@ -116,11 +117,73 @@ export function createPlanningTools(
   }
   return [
     readSourceSectionTool(options.store, readSource, clock),
+    readCurrentPlanTool(options.store),
     persistLedgerTool(options.store, clock),
     draftPlanTool(options.store, clock),
     revisePlanTool(options.store, clock),
     createRequestCoverageReviewTool({ store: options.store, clock }),
   ];
+}
+
+/** Kernel-stamped envelope fields a revision submission omits (the kernel re-stamps them). */
+const KERNEL_STAMPED_REVISION_FIELDS = [
+  "digest",
+  "runId",
+  "sourceManifestId",
+  "sourceManifestDigest",
+  "workflowPolicyVersion",
+  "createdAt",
+  "coverageReviewId",
+  "repairBudgetLineageId",
+] as const;
+
+/**
+ * Read-only: the current plan revision in the exact shape draft/revise accept. Without it an Architect
+ * revising a large plan had to rebuild the nested contract object from memory or from runner source
+ * (P7: mimo spent many turns reading planning-contracts.ts to learn the input shape).
+ */
+function readCurrentPlanTool(store: SchedulerStore): NativeTool<Record<string, never>> {
+  return {
+    definition: {
+      name: "read_current_plan_revision",
+      description:
+        "Read the current execution plan revision in the exact shape draft_planning_plan and " +
+        "revise_planning_plan accept (kernel-stamped envelope fields removed). To revise, copy it, " +
+        "change only what must change, give it a new revisionId, and pass it as revise_planning_plan's revision.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      readOnly: true,
+      effect: "none",
+      // Planning surface tools are kernel lifecycle tools (like read_planning_source_section); this one
+      // only reads and never ends the action.
+      lifecycle: true,
+    },
+    validate: (input) => validateObject(input, () => ({}), "This tool takes no input."),
+    execute: async (_input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const plan = projection.planning?.plan;
+      if (!plan) {
+        return errorOutput("no_plan_revision", "No plan revision exists yet; draft one with draft_planning_plan.");
+      }
+      const current = plan.revisionsById[plan.currentRevisionId] as unknown as Record<string, unknown>;
+      const revision = Object.fromEntries(
+        Object.entries(current).filter(([key]) => !(KERNEL_STAMPED_REVISION_FIELDS as readonly string[]).includes(key)),
+      );
+      return {
+        content: [{
+          type: "json",
+          value: {
+            currentRevisionId: plan.currentRevisionId,
+            currentDigest: plan.currentDigest,
+            readiness: projection.planning?.readiness,
+            revision,
+          },
+        }],
+        isError: false,
+      };
+    },
+  };
 }
 
 function artifactSourceReader(artifacts: ArtifactStore): PlanningSourceReader {
@@ -516,7 +579,8 @@ function revisePlanTool(
   return lifecycleTool({
     name: "revise_planning_plan",
     description:
-      "Revise the execution plan revision against the exact current revision identity " +
+      "Revise the execution plan revision (start from read_current_plan_revision's output, change only " +
+      "what must change, and give it a new revisionId) against the exact current revision identity " +
       "(expectedRevisionId plus expectedDigest, kernel-stamped from the durable plan when omitted; " +
       "a supplied stale base is refused). Envelope fields, requiredBase and decision timestamps are " +
       "kernel-stamped like a draft; one-sided links are derived, conflicting sides refused.",

@@ -5763,6 +5763,7 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "plan_tasks",
   "plan_verification_repairs",
   "plan_verifier_repairs",
+  "read_current_plan_revision",
   "read_planning_source_section",
   "reconcile_plan",
   "record_answer",
