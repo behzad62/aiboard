@@ -9214,6 +9214,7 @@ function applyPlanCritiqueRequested(
     ...(event.payload.independence === undefined ? {} : { independence }),
     status: "requested",
     requestedAt: event.occurredAt,
+    ...(projection.planning?.plan ? { critiquedPlanningRevisionId: projection.planning.plan.currentRevisionId } : {}),
   };
   projection.planCritique = {
     ...state,
@@ -9307,6 +9308,8 @@ function applyPlanCritiqueResolved(
       hasPlanReconciliation: event.payload.planReconciliation !== undefined,
       plan,
       readiness: projection.planning?.readiness,
+      critiquedRevisionId: current.critiquedPlanningRevisionId,
+      replay: true,
     });
   } else if (reconciled.length > 0) {
     if (event.payload.planReconciliation === undefined) {
@@ -9350,12 +9353,25 @@ export function assertCritiqueReconciledByPlanRevision(input: {
   hasPlanReconciliation: boolean;
   plan?: { readonly currentRevisionId: string; readonly currentDigest: string };
   readiness?: "not_ready" | "ready";
+  /** The revision the critique judged; when known it replaces the readiness proxy below. */
+  critiquedRevisionId?: string;
+  /** The reducer: accept a resolution either rule accepts. */
+  replay?: boolean;
 }): void {
   if (input.hasPlanReconciliation) {
     throw new Error("Plan critique resolution by plan revision must not also carry a planReconciliation.");
   }
   const plan = input.plan;
-  if (!plan || input.readiness === "ready") {
+  // A revision made after the critique stays valid once its own coverage review makes it ready
+  // (tunnel run: the Architect revised, the revision was reviewed, and only then resolved). Without
+  // the critiqued revision on record, "not ready" is the proxy for "revised since the critique".
+  // Replay accepts what either rule accepts, so history recorded under the proxy keeps replaying.
+  const revisedByRecord = input.critiquedRevisionId !== undefined && plan?.currentRevisionId !== input.critiquedRevisionId;
+  const revisedByReadiness = input.readiness !== "ready";
+  const notRevisedSinceCritique = input.replay
+    ? !revisedByRecord && !revisedByReadiness
+    : input.critiquedRevisionId !== undefined ? !revisedByRecord : !revisedByReadiness;
+  if (!plan || notRevisedSinceCritique) {
     throw new Error(
       "Plan critique plan_reconciled resolutions in an evidence-gated run need a newer plan revision: call revise_planning_plan first, then cite its planRevisionId and planDigest.",
     );

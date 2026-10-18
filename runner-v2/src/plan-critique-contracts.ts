@@ -111,6 +111,11 @@ export interface PlanCritiqueProjection {
   independence?: ReviewerIndependence;
   status: "requested" | "submitted" | "resolved";
   requestedAt: string;
+  /**
+   * The planning revision current when the critique was requested (derived on replay; absent before
+   * planning policy 1). An accepted finding is reconciled by citing a different, current revision.
+   */
+  critiquedPlanningRevisionId?: string;
   submittedAt?: string;
   resolvedAt?: string;
   findings?: PlanCritiqueFinding[];

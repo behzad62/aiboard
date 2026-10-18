@@ -329,6 +329,7 @@ export function resolvePlanCritiqueTool(
             hasPlanReconciliation: input.planReconciliation !== undefined,
             plan: projection.planning?.plan,
             readiness: projection.planning?.readiness,
+            critiquedRevisionId: current.critiquedPlanningRevisionId,
           });
         } catch (error) {
           return errorOutput(

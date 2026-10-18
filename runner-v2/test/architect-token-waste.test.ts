@@ -86,3 +86,23 @@ test("a plan revision made while a critique awaits resolution does not end the A
   assert.equal(revisedDuringCritiqueResolution(output as never, noCritique, { revisionId: "plan-2", digest: "abc" }), output,
     "outside critique resolution the revision still ends the action");
 });
+
+test("a critique finding may cite a revision made after the critique even once that revision is ready", async () => {
+  const { assertCritiqueReconciledByPlanRevision } = await import("../src/scheduler-store.js");
+  const reconciled = [{ findingId: "F-01", resolution: "plan_reconciled" as const, rationale: "r", planRevisionId: "plan-2", planDigest: "d2" }];
+  const revised = { currentRevisionId: "plan-2", currentDigest: "d2" };
+  assert.doesNotThrow(() => assertCritiqueReconciledByPlanRevision({
+    reconciled, hasPlanReconciliation: false, plan: revised, readiness: "ready", critiquedRevisionId: "plan-1",
+  }), "revised after the critique and already re-reviewed");
+  assert.throws(() => assertCritiqueReconciledByPlanRevision({
+    reconciled: [{ ...reconciled[0]!, planRevisionId: "plan-1", planDigest: "d1" }], hasPlanReconciliation: false,
+    plan: { currentRevisionId: "plan-1", currentDigest: "d1" }, readiness: "not_ready", critiquedRevisionId: "plan-1",
+  }), /need a newer plan revision/, "the critiqued revision itself is never a reconciliation");
+  assert.throws(() => assertCritiqueReconciledByPlanRevision({
+    reconciled, hasPlanReconciliation: false, plan: revised, readiness: "ready",
+  }), /need a newer plan revision/, "legacy critiques keep the readiness proxy");
+  assert.doesNotThrow(() => assertCritiqueReconciledByPlanRevision({
+    reconciled: [{ ...reconciled[0]!, planRevisionId: "plan-1", planDigest: "d1" }], hasPlanReconciliation: false,
+    plan: { currentRevisionId: "plan-1", currentDigest: "d1" }, readiness: "not_ready", critiquedRevisionId: "plan-1", replay: true,
+  }), "replay accepts what the readiness proxy accepted");
+});
