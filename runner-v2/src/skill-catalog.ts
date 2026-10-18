@@ -28,6 +28,8 @@ export interface SkillCatalogOptions {
 export interface SharedSkillRoot {
   path: string;
   source: "built-in" | "user";
+  /** Top-level folders under this root that hold another tool's managed skills, never AIBoard's. */
+  excludeDirectories?: readonly string[];
 }
 
 const DEFAULT_ROOTS = [
@@ -90,7 +92,8 @@ export class SkillCatalog {
         shared.source,
         0,
         discovered,
-        skillPaths
+        skillPaths,
+        shared.excludeDirectories
       );
     }
     this.cache = discovered;
@@ -124,7 +127,8 @@ export class SkillCatalog {
     source: SkillMetadata["source"],
     depth: number,
     discovered: Map<string, SkillMetadata>,
-    skillPaths: Map<string, string>
+    skillPaths: Map<string, string>,
+    excludeDirectories: readonly string[] = []
   ): Promise<void> {
     if (depth > this.maxDepth || discovered.size >= this.maxSkills) return;
     let canonicalDirectory: string;
@@ -162,8 +166,11 @@ export class SkillCatalog {
       skillPaths.set(id, canonical);
       return;
     }
+    // Hidden folders hold deleted (.trash), staged (.staging) or tool-internal (.system) copies;
+    // the tunnel run injected four deleted Claude.ai skills into every Architect turn.
     const directories = entries
-      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink() && !entry.name.startsWith(".") &&
+        !(depth === 0 && excludeDirectories.includes(entry.name)))
       .sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of directories) {
       if (discovered.size >= this.maxSkills) break;

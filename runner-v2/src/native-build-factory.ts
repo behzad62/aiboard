@@ -3813,7 +3813,9 @@ export function defaultSharedSkillRoots(): SharedSkillRoot[] {
   return [
     { path: builtIn, source: "built-in" },
     { path: join(home, ".codex", "skills"), source: "user" },
-    { path: join(home, ".claude", "skills"), source: "user" },
+    // `synced` is the Claude app's own skill sync (computer-use, Claude Docs, ...): those skills
+    // drive Claude-only tools, and their long descriptions matched unrelated Build objectives.
+    { path: join(home, ".claude", "skills"), source: "user", excludeDirectories: ["synced"] },
     { path: join(home, ".aiboard", "skills"), source: "user" },
   ];
 }

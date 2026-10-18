@@ -103,8 +103,20 @@ const GENERIC_CAPABILITY_TERMS = new Set([
   "tools", "vision",
 ]);
 
+// Function words: long skill descriptions shared "this", "it", "may", "are"... with any objective,
+// so the two-term description match fired for unrelated skills (tunnel run).
+const STOP_TERMS = new Set([
+  "about", "after", "all", "also", "any", "are", "as", "at", "be", "before", "but", "by",
+  "can", "cannot", "do", "does", "each", "every", "first", "from", "has", "have", "how", "if",
+  "into", "is", "it", "its", "may", "more", "must", "no", "not", "one", "only", "or", "other",
+  "own", "should", "so", "some", "such", "than", "that", "their", "them", "then", "there",
+  "these", "they", "this", "those", "through", "via", "was", "were", "what", "when", "where",
+  "whether", "which", "while", "who", "whose", "will", "without", "would", "you", "your",
+]);
+
 function meaningfulSkillTerms(value: string): string[] {
-  return skillTerms(value).filter((term) => !GENERIC_SKILL_TERMS.has(term));
+  return skillTerms(value).filter((term) =>
+    term.length > 1 && !GENERIC_SKILL_TERMS.has(term) && !STOP_TERMS.has(term));
 }
 
 function skillKey(value: string): string {
