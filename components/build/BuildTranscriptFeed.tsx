@@ -51,6 +51,9 @@ const roleTone: Record<BuildActorRole, string> = {
 };
 
 const PAGE_SIZE = 25;
+const FOLLOW_THRESHOLD_PX = 320;
+/** Finished turns at most this long open by default; longer ones show a one-line preview. */
+const AUTO_EXPAND_CHARS = 1_500;
 
 export function BuildTranscriptFeed({
   messages,
@@ -71,22 +74,31 @@ export function BuildTranscriptFeed({
   const visible = sorted.slice(-visibleCount);
   const hiddenCount = Math.max(0, sorted.length - visible.length);
 
+  // "Following" is measured against the transcript's own tail, not the page end: panels below the
+  // transcript and the sticky composer made the page-end distance exceed the threshold, so the feed
+  // silently stopped following (tunnel run).
   useEffect(() => {
     const watchScroll = () => {
-      const root = document.scrollingElement;
-      if (!root) return;
-      followRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 220;
+      const tail = tailRef.current;
+      if (!tail) return;
+      followRef.current = tail.getBoundingClientRect().top - window.innerHeight < FOLLOW_THRESHOLD_PX;
     };
     window.addEventListener("scroll", watchScroll, { passive: true });
-    return () => window.removeEventListener("scroll", watchScroll);
+    window.addEventListener("resize", watchScroll);
+    return () => {
+      window.removeEventListener("scroll", watchScroll);
+      window.removeEventListener("resize", watchScroll);
+    };
   }, []);
 
-  const latestContent = sorted.at(-1)?.content;
+  const latest = sorted.at(-1);
+  const latestSize = (latest?.content.length ?? 0) +
+    (latest?.segments?.reduce((sum, segment) => sum + segment.text.length, 0) ?? 0);
   useEffect(() => {
-    if (active && followRef.current && sorted.length > 0) {
-      tailRef.current?.scrollIntoView({ block: "end" });
-    }
-  }, [active, latestContent, sorted.length]);
+    if (!active || !followRef.current || sorted.length === 0) return;
+    const frame = requestAnimationFrame(() => tailRef.current?.scrollIntoView({ block: "end" }));
+    return () => cancelAnimationFrame(frame);
+  }, [active, latestSize, sorted.length]);
 
   return (
     <section aria-label="Build transcript" className="mx-auto w-full max-w-4xl">
@@ -123,10 +135,12 @@ export function BuildTranscriptFeed({
             </button>
           )}
           <ol className="space-y-1">
-            {visible.map((message, index) => {
+            {visible.map((message) => {
               const role = buildActorRole(message);
-              const recent = index === visible.length - 1;
-              const expanded = manualExpansion[message.id] ?? (Boolean(message.streaming) || recent);
+              // A fixed default per turn: the old "newest open, previous closed" rule reshuffled the
+              // page whenever a new turn arrived.
+              const expanded = manualExpansion[message.id] ??
+                (Boolean(message.streaming) || message.content.length <= AUTO_EXPAND_CHARS);
               const preview = message.content.trim().replace(/[#*_`>\[\]]/g, "").replace(/\s+/g, " ").slice(0, 200);
               return (
                 <li key={message.id} className="relative pl-9 pb-4 before:absolute before:bottom-0 before:left-[11px] before:top-7 before:w-px before:bg-border/70 last:before:hidden">
@@ -171,7 +185,8 @@ export function BuildTranscriptFeed({
           ))}
         </div>
       )}
-      <div ref={tailRef} aria-hidden="true" />
+      {/* Scroll margin keeps the newest line above the sticky composer / Needs-you dock. */}
+      <div ref={tailRef} aria-hidden="true" className="scroll-mb-56" />
     </section>
   );
 }
