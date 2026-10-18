@@ -3431,3 +3431,66 @@ test("T3a repair N-B: mid-turn readiness loss refuses later commands through the
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a question answered mid-planning resumes into a planning action that the kernel can consume", async () => {
+  const store = new MemorySchedulerStore();
+  const runId = "run_question_resume_planning";
+  const fixture = scopedFixture(runId, CLOCK);
+  seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
+  const tools = createPlanningTools({ store, clock });
+  const architect = { role: "architect" as const, id: "architect_1" };
+  const runner = { role: "runner" as const, id: "build-runtime" };
+  const append = (type: string, actor: { role: "architect" | "runner" | "user"; id: string }, key: string, payload: Record<string, unknown>) =>
+    store.append({ runId, type: type as never, occurredAt: CLOCK, actor, idempotencyKey: key, payload });
+  try {
+    append("architect.question_requested", architect, "q:ask", {
+      questionId: "ledger-schema",
+      version: 1,
+      decisionKind: "authority_decision",
+      question: "Which field links a requirement to its source section?",
+      checkpoint: { reason: { type: "plan_required" }, sequence: projectionOf(store, runId).lastSequence },
+    });
+    append("architect.question_answered", { role: "user", id: "local-user" }, "q:answer", {
+      questionId: "ledger-schema", expectedVersion: 1, answer: "Use reference: { sourceId, sectionIds }.",
+    });
+    append("architect.question_resume_started", runner, "q:start", { questionId: "ledger-schema", expectedVersion: 1 });
+    const persisted = await invokePlanningTool(tools, "persist_planning_ledger", {
+      id: "ledger-1", requirements: fixture.requirements, phases: fixture.phases,
+    }, runId);
+    assert.equal(persisted.isError, false, JSON.stringify(persisted.error));
+    const ledgerEvent = projectionOf(store, runId).lastArchitectActionEvent;
+    assert.equal(ledgerEvent?.type, "planning.ledger_persisted", "planning actions are recorded as the last Architect action");
+    assert.doesNotThrow(() => append("architect.question_resume_consumed", runner, "q:consume", {
+      questionId: "ledger-schema", expectedVersion: 1, actionEventSequence: ledgerEvent!.sequence,
+    }));
+    assert.equal(projectionOf(store, runId).architectQuestions["ledger-schema"]?.resumeStatus, "consumed");
+  } finally {
+    store.close();
+  }
+});
+
+test("published planning tool schemas accept the kernel's own valid ledger and plan payloads", async () => {
+  const { PHASE_SCHEMA, PLAN_REVISION_SCHEMA, REQUIREMENT_SCHEMA } = await import("../src/planning-tool-schemas.js");
+  const problems: string[] = [];
+  const check = (schema: Record<string, unknown>, value: unknown, path: string): void => {
+    if (schema.type === "object") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) { problems.push(`${path}: expected object`); return; }
+      const record = value as Record<string, unknown>;
+      for (const key of (schema.required as string[] | undefined) ?? []) if (!(key in record)) problems.push(`${path}.${key}: required by schema but absent in a valid payload`);
+      for (const [key, child] of Object.entries((schema.properties as Record<string, Record<string, unknown>>) ?? {})) {
+        if (key in record) check(child, record[key], `${path}.${key}`);
+      }
+    } else if (schema.type === "array") {
+      if (!Array.isArray(value)) { problems.push(`${path}: expected array`); return; }
+      if (schema.items) value.forEach((item, index) => check(schema.items as Record<string, unknown>, item, `${path}[${index}]`));
+    } else if (schema.type === "string") {
+      if (typeof value !== "string") problems.push(`${path}: expected string`);
+      else if (Array.isArray(schema.enum) && !schema.enum.includes(value)) problems.push(`${path}: ${value} not in schema enum`);
+    } else if (schema.type === "boolean" && typeof value !== "boolean") problems.push(`${path}: expected boolean`);
+  };
+  const fixture = scopedFixture("run_schema_check", CLOCK);
+  fixture.requirements.forEach((requirement, index) => check(REQUIREMENT_SCHEMA, requirement, `requirements[${index}]`));
+  fixture.phases.forEach((phase, index) => check(PHASE_SCHEMA, phase, `phases[${index}]`));
+  check(PLAN_REVISION_SCHEMA, strippedSubmission(fixture, "revision_1"), "revision");
+  assert.deepEqual(problems, []);
+});

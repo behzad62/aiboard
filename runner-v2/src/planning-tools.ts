@@ -29,6 +29,7 @@ import {
   type ApprovedSourceManifest,
 } from "./source-manifest.js";
 import { createRequestCoverageReviewTool } from "./planning-review.js";
+import { PHASE_SCHEMA, PLAN_REVISION_SCHEMA, REQUIREMENT_SCHEMA } from "./planning-tool-schemas.js";
 
 /**
  * Architect lifecycle tools for evidence-gated planning (Runner V2 P6.6, T3a).
@@ -394,8 +395,8 @@ function persistLedgerTool(
       type: "object",
       properties: {
         id: { type: "string", minLength: 1 },
-        requirements: { type: "array", minItems: 1 },
-        phases: { type: "array", minItems: 1 },
+        requirements: { type: "array", minItems: 1, items: REQUIREMENT_SCHEMA },
+        phases: { type: "array", minItems: 1, items: PHASE_SCHEMA },
         nonNormativeSections: { type: "array" },
       },
       required: ["id", "requirements", "phases"],
@@ -490,7 +491,7 @@ function draftPlanTool(
     schema: {
       type: "object",
       properties: {
-        revision: { type: "object" },
+        revision: PLAN_REVISION_SCHEMA,
       },
       required: ["revision"],
       additionalProperties: false,
@@ -587,7 +588,7 @@ function revisePlanTool(
     schema: {
       type: "object",
       properties: {
-        revision: { type: "object" },
+        revision: PLAN_REVISION_SCHEMA,
         expectedRevisionId: { type: "string", minLength: 1 },
         expectedDigest: { type: "string", minLength: 1 },
       },

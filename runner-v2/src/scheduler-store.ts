@@ -3563,6 +3563,18 @@ export function reduceSchedulerEvent(
       materializeReadyPlanTasks(next);
       rebindMemberTasksToReadyPlan(next);
     }
+    // Planning events are Architect lifecycle actions (isArchitectLifecycleEvent), but this early
+    // return skipped the shared tail that records them, so lastArchitectActionEvent stayed stale and
+    // a question resumed into a planning action could never be consumed ("has no completed resumed
+    // action"; the tunnel run's pump failed right after persisting its ledger).
+    if (isArchitectLifecycleEvent(event)) {
+      next.lastArchitectActionEvent = {
+        sequence: event.sequence,
+        type: event.type,
+        actor: { ...event.actor },
+        payload: structuredClone(event.payload),
+      };
+    }
     return next;
   }
   if (event.type === "planning.policy_configured") {

@@ -489,6 +489,7 @@ test("C4: record_planning_checkpoint is registered nowhere", () => {
     assert.deepEqual([...PLANNING_TOOL_NAMES].sort(), [
       "draft_planning_plan",
       "persist_planning_ledger",
+      "read_current_plan_revision",
       "read_planning_source_section",
       "request_coverage_review",
       "revise_planning_plan",
