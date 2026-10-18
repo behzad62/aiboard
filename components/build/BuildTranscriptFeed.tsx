@@ -12,6 +12,8 @@ export interface BuildFeedMessage {
   modelId: string;
   modelName: string;
   content: string;
+  /** Live turns only: streamed reasoning / answer text / tool-call starts, in order. */
+  segments?: Array<{ channel: "text" | "reasoning" | "tool"; text: string }>;
   streaming?: boolean;
 }
 
@@ -147,12 +149,7 @@ export function BuildTranscriptFeed({
                     </button>
                     {expanded && (
                       <div id={`build-turn-${message.id}`} className="min-w-0 border-t border-border/60 px-4 py-4 text-sm">
-                        {message.streaming ? (
-                          <div className="whitespace-pre-wrap break-words leading-relaxed text-foreground/90">
-                            {message.content || "Generating…"}
-                            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary align-middle" aria-hidden="true" />
-                          </div>
-                        ) : <Markdown content={message.content} />}
+                        {message.streaming ? <LiveTurnBody message={message} /> : <Markdown content={message.content} />}
                       </div>
                     )}
                   </article>
@@ -176,5 +173,59 @@ export function BuildTranscriptFeed({
       )}
       <div ref={tailRef} aria-hidden="true" />
     </section>
+  );
+}
+
+/**
+ * A streaming turn rendered like a coding-agent terminal: reasoning folds into one "Thinking" line
+ * the owner can expand, tool calls are one-line entries, and only answer text shows in full.
+ */
+function LiveTurnBody({ message }: { message: BuildFeedMessage }) {
+  const segments = message.segments?.length
+    ? message.segments
+    : message.content ? [{ channel: "text" as const, text: message.content }] : [];
+  if (segments.length === 0) {
+    return <p className="text-sm text-muted-foreground motion-safe:animate-pulse">Generating…</p>;
+  }
+  return (
+    <div className="space-y-1.5">
+      {segments.map((segment, index) => {
+        const last = index === segments.length - 1;
+        if (segment.channel === "reasoning") return <ReasoningLine key={index} text={segment.text} active={last} />;
+        if (segment.channel === "tool") {
+          return (
+            <p key={index} className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+              <span aria-hidden="true">→</span> {segment.text}
+            </p>
+          );
+        }
+        return (
+          <div key={index} className="whitespace-pre-wrap break-words leading-relaxed text-foreground/90">
+            {segment.text}
+            {last && <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary align-middle" aria-hidden="true" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReasoningLine({ text, active }: { text: string; active: boolean }) {
+  const [open, setOpen] = useState(false);
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  return (
+    <div className="text-xs text-muted-foreground">
+      <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}
+        className="inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-accent hover:text-foreground">
+        <ChevronDown className={cn("h-3 w-3 transition-transform", !open && "-rotate-90")} aria-hidden="true" />
+        <span className={cn(active && "motion-safe:animate-pulse")}>{active ? "Thinking…" : "Thought"}</span>
+        <span className="tabular-nums">· {words} words</span>
+      </button>
+      {open && (
+        <div className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-md border-l-2 border-border bg-muted/30 px-3 py-2 italic leading-relaxed">
+          {text}
+        </div>
+      )}
+    </div>
   );
 }

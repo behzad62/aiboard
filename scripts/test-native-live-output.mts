@@ -51,4 +51,17 @@ const cursor = await followNativeLiveModelOutput(
 );
 assert.equal(cursor, 3);
 assert.deepEqual(received, ["reset", "delta", "finish"]);
+// Channels: reasoning and tool starts become their own segments; content stays answer text only.
+let channelTurns = applyLiveModelEvent([], { ...base, sessionId: "s2" });
+channelTurns = applyLiveModelEvent(channelTurns, { ...base, sessionId: "s2", sequence: 2, phase: "delta", text: "plan ", channel: "reasoning" });
+channelTurns = applyLiveModelEvent(channelTurns, { ...base, sessionId: "s2", sequence: 3, phase: "delta", text: "it", channel: "reasoning" });
+channelTurns = applyLiveModelEvent(channelTurns, { ...base, sessionId: "s2", sequence: 4, phase: "delta", text: "Reading." });
+channelTurns = applyLiveModelEvent(channelTurns, { ...base, sessionId: "s2", sequence: 5, phase: "delta", text: "fs_read", channel: "tool" });
+assert.equal(channelTurns[0]?.content, "Reading.");
+assert.deepEqual(channelTurns[0]?.segments, [
+  { channel: "reasoning", text: "plan it" }, { channel: "text", text: "Reading." }, { channel: "tool", text: "fs_read" },
+]);
+const restored = applyLiveModelEvent([], { ...base, sessionId: "s3", sequence: 9, phase: "delta", text: "Reading.",
+  segments: [{ channel: "reasoning", text: "x" }, { channel: "text", text: "Reading." }] }, true);
+assert.equal(restored[0]?.segments.length, 2, "a reconnect snapshot restores the segment structure");
 console.log("PASS native live browser: retry isolation, snapshots, SSE authorization, fragmented frames");

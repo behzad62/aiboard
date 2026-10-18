@@ -1,4 +1,4 @@
-import type { NativeLiveModelEvent } from "./native-model-output";
+import type { LiveOutputSegment, NativeLiveModelEvent } from "./native-model-output";
 
 export interface LiveModelTurn {
   id: string;
@@ -6,8 +6,24 @@ export interface LiveModelTurn {
   actor: NativeLiveModelEvent["actor"];
   turn: number;
   attempt: number;
+  /** Answer text only (what the transcript keeps). */
   content: string;
+  /** Everything streamed, in order: reasoning (collapsed in the UI), answer text, tool-call starts. */
+  segments: LiveOutputSegment[];
   streaming: boolean;
+}
+
+const MAX_SEGMENT_CHARS = 100_000;
+
+function appendSegment(segments: readonly LiveOutputSegment[], segment: LiveOutputSegment): LiveOutputSegment[] {
+  const next = [...segments];
+  const last = next.at(-1);
+  if (last && last.channel === segment.channel && segment.channel !== "tool") {
+    next[next.length - 1] = { channel: last.channel, text: (last.text + segment.text).slice(-MAX_SEGMENT_CHARS) };
+  } else {
+    next.push(segment);
+  }
+  return next.slice(-200);
 }
 
 export function applyLiveModelEvent(
@@ -24,17 +40,24 @@ export function applyLiveModelEvent(
   if (event.phase === "reset") {
     return [...other, {
       id: key, sessionId: event.sessionId, actor: event.actor, turn: event.turn,
-      attempt: event.attempt, content: "", streaming: true,
+      attempt: event.attempt, content: "", segments: [], streaming: true,
     }];
   }
+  const sameAttempt = existing?.attempt === event.attempt;
+  const channel = event.channel ?? "text";
+  const segments = snapshot
+    ? event.segments ?? (event.text ? [{ channel: "text" as const, text: event.text }] : [])
+    : event.phase === "delta" && event.text
+      ? appendSegment(sameAttempt ? existing?.segments ?? [] : [], { channel, text: event.text })
+      : existing?.segments ?? [];
   const content = snapshot
     ? event.text
-    : event.phase === "delta"
-      ? (existing?.attempt === event.attempt ? existing.content : "") + event.text
-      : existing?.content ?? "";
+    : event.phase === "delta" && channel === "text"
+      ? (sameAttempt ? existing?.content ?? "" : "") + event.text
+      : sameAttempt || event.phase !== "delta" ? existing?.content ?? "" : "";
   return [...other, {
     id: key, sessionId: event.sessionId, actor: event.actor, turn: event.turn,
-    attempt: event.attempt, content: content.slice(-100_000),
+    attempt: event.attempt, content: content.slice(-100_000), segments,
     streaming: event.phase !== "finish",
   }].slice(-32);
 }

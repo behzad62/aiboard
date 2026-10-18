@@ -8,6 +8,8 @@
  * but additional ones are not rejected here.
  */
 
+import { PHASE_VALIDATION_CHECKS } from "./planning-contracts.js";
+
 type Schema = Record<string, unknown>;
 
 const text = (description?: string): Schema =>
@@ -77,7 +79,12 @@ export const PHASE_SCHEMA: Schema = {
     entryConditions: nonEmptyTexts(),
     contributingTaskIds: texts("Non-empty in a plan revision; derived by the kernel when omitted."),
     exitCriteria: nonEmptyTexts(),
-    requiredCombinedValidation: nonEmptyTexts(),
+    requiredCombinedValidation: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string", enum: Object.keys(PHASE_VALIDATION_CHECKS) },
+      description: "Runner-checkable validation keywords only (the runner runs them at the phase exit); put free-text checks in exitCriteria.",
+    },
     exitUnlocks: nonEmptyTexts("What finishing this phase unlocks; must be non-empty even for the last phase (e.g. \"run-completion\")."),
   },
   required: ["id", "purpose", "scope", "entryConditions", "exitCriteria", "requiredCombinedValidation", "exitUnlocks"],

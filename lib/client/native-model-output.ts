@@ -9,6 +9,16 @@ export interface NativeLiveModelEvent {
   attempt: number;
   phase: "reset" | "delta" | "finish" | "discard";
   text: string;
+  /** Delta channel; absent means answer text. */
+  channel?: LiveOutputChannel;
+  /** Snapshots only: the in-flight turn as ordered channel segments. */
+  segments?: LiveOutputSegment[];
+}
+
+export type LiveOutputChannel = "text" | "reasoning" | "tool";
+export interface LiveOutputSegment {
+  channel: LiveOutputChannel;
+  text: string;
 }
 
 /** Authenticated SSE reader. Cursor is managed by the caller across reconnects. */

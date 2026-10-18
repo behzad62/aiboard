@@ -25,6 +25,8 @@ export interface JsonBlock {
   value: unknown;
 }
 
+export type LiveOutputChannel = "text" | "reasoning" | "tool";
+
 export interface ToolCallBlock {
   type: "tool_call";
   callId: string;
@@ -93,7 +95,11 @@ export interface AgentModelRequest {
   hostedTools?: readonly AgentHostedToolDefinition[];
   signal?: AbortSignal;
   /** Public assistant text only; do not emit reasoning or raw tool arguments. */
-  onTextDelta?: (text: string) => void;
+  /**
+   * Live display only. `channel` separates model reasoning and tool-call starts from answer text
+   * (default "text") so the UI can collapse reasoning; nothing here enters the turn content.
+   */
+  onTextDelta?: (text: string, channel?: LiveOutputChannel) => void;
 }
 
 export interface AgentModel {

@@ -1,3 +1,4 @@
+import type { LiveOutputChannel } from "./agent-contracts.js";
 import { readProviderSse } from "./provider-sse.js";
 
 interface ChatResult {
@@ -8,7 +9,7 @@ interface ChatResult {
   usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
 }
 export async function streamOpenAIChat(
-  fetchImpl: typeof fetch, url: string, init: RequestInit, onText: (delta: string) => void
+  fetchImpl: typeof fetch, url: string, init: RequestInit, onText: (delta: string, channel?: LiveOutputChannel) => void
 ): Promise<ChatResult> {
   let id: string | undefined;
   let content = "";
@@ -61,7 +62,7 @@ export async function streamOpenAIChat(
 }
 
 export async function streamOpenAIResponses<T extends { output?: unknown[] }>(
-  fetchImpl: typeof fetch, url: string, init: RequestInit, onText: (delta: string) => void
+  fetchImpl: typeof fetch, url: string, init: RequestInit, onText: (delta: string, channel?: LiveOutputChannel) => void
 ): Promise<T> {
   let completed: T | undefined;
   const live = liveProgress(onText);
@@ -83,17 +84,11 @@ export async function streamOpenAIResponses<T extends { output?: unknown[] }>(
   return completed;
 }
 
-/** Formats live progress (reasoning, answer text, tool-call starts) for the transient output feed. */
-function liveProgress(onText: (delta: string) => void) {
-  let mode: "none" | "reasoning" | "text" = "none";
-  const enter = (next: "reasoning" | "text", heading: string) => {
-    if (mode === next) return;
-    onText(mode === "none" ? heading : `\n\n${heading}`);
-    mode = next;
-  };
+/** Routes live progress (reasoning, answer text, tool-call starts) to the transient output feed. */
+function liveProgress(onText: (delta: string, channel?: LiveOutputChannel) => void) {
   return {
-    reasoning(delta: string) { enter("reasoning", "Thinking: "); onText(delta); },
-    text(delta: string) { if (mode === "reasoning") enter("text", ""); else mode = "text"; onText(delta); },
-    toolCall(name: string) { onText(`${mode === "none" ? "" : "\n"}-> calling ${name}\n`); mode = "none"; },
+    reasoning(delta: string) { onText(delta, "reasoning"); },
+    text(delta: string) { onText(delta); },
+    toolCall(name: string) { onText(name, "tool"); },
   };
 }

@@ -1,5 +1,10 @@
 /** Transient, bounded, process-local model-output fanout. Never enters the audit log. */
-import type { AgentActor } from "./agent-contracts.js";
+import type { AgentActor, LiveOutputChannel } from "./agent-contracts.js";
+
+export interface LiveModelSegment {
+  channel: LiveOutputChannel;
+  text: string;
+}
 
 export type LiveModelPhase = "reset" | "delta" | "finish" | "discard";
 export interface LiveModelEvent {
@@ -11,6 +16,10 @@ export interface LiveModelEvent {
   attempt: number;
   phase: LiveModelPhase;
   text: string;
+  /** Delta channel; absent means answer text. */
+  channel?: LiveOutputChannel;
+  /** Active snapshots only: the in-flight turn as ordered channel segments. */
+  segments?: LiveModelSegment[];
 }
 interface RunBuffer {
   sequence: number;
@@ -56,8 +65,16 @@ export function publishLiveModelOutput(input: Omit<LiveModelEvent, "sequence">):
   if (input.phase === "reset") run.active.delete(key);
   if (input.phase === "delta" && input.text) {
     const previous = run.active.get(key);
-    const next = (previous?.text ?? "") + input.text;
-    run.active.set(key, { ...input, text: next.slice(-MAX_ACTIVE_BYTES), sequence: run.sequence + 1 });
+    const channel = input.channel ?? "text";
+    const segments = [...(previous?.segments ?? [])];
+    const last = segments.at(-1);
+    if (last && last.channel === channel && channel !== "tool") segments[segments.length - 1] = { channel, text: last.text + input.text };
+    else segments.push({ channel, text: input.text });
+    let total = segments.reduce((sum, segment) => sum + segment.text.length, 0);
+    while (total > MAX_ACTIVE_BYTES && segments.length > 1) total -= segments.shift()!.text.length;
+    const answer = channel === "text" ? ((previous?.text ?? "") + input.text).slice(-MAX_ACTIVE_BYTES) : previous?.text ?? "";
+    const { channel: _deltaChannel, ...rest } = input;
+    run.active.set(key, { ...rest, text: answer, segments, sequence: run.sequence + 1 });
   }
   if (input.phase === "finish" || input.phase === "discard") run.active.delete(key);
   const event: LiveModelEvent = { ...input, sequence: ++run.sequence };

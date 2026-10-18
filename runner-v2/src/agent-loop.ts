@@ -5,6 +5,7 @@ import type {
   AgentModel,
   AgentModelRequest,
   AgentLifecycleSignal,
+  LiveOutputChannel,
   ToolCallBlock,
   ToolExecutionContext,
 } from "./agent-contracts.js";
@@ -291,9 +292,14 @@ export async function runAgentLoop(
       tools: options.registry.definitions(),
       ...(options.hostedTools ? { hostedTools: options.hostedTools } : {}),
       signal: options.signal,
-      onTextDelta: (text: string) => {
+      onTextDelta: (text: string, channel?: LiveOutputChannel) => {
         if (streamingActive && text && !options.signal?.aborted) {
-          publishLiveModelOutput({ ...identity(), phase: "delta" as const, text });
+          publishLiveModelOutput({
+            ...identity(),
+            phase: "delta" as const,
+            text,
+            ...(channel && channel !== "text" ? { channel } : {}),
+          });
         }
       },
     };

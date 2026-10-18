@@ -1942,6 +1942,7 @@ function DiscussionPageInner() {
       modelId: `native:${turn.actor.role}:${turn.actor.id}`,
       modelName: `${turn.actor.role[0].toUpperCase()}${turn.actor.role.slice(1)} ${turn.actor.id}`,
       content: turn.content,
+      segments: turn.segments,
       streaming: turn.streaming,
       round: (buildTranscriptMessages.at(-1)?.round ?? 0) + index + 1,
       ordinal: index,
