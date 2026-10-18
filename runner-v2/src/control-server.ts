@@ -1051,14 +1051,19 @@ export class ControlServer {
         );
       case "resume":
         return this.supervisor.resume(runId, body.idempotencyKey);
-      case "stop":
+      case "stop": {
+        // A repeated stop finishes one left "stopping" (e.g. by a runner restart mid-stop).
+        const current = this.supervisor.getRun(runId);
+        if (current.state === "stopping") return current;
         return this.supervisor.requestStop(
           runId,
           body.idempotencyKey,
           body.reason ?? "user"
         );
       }
+      }
     })();
+    let buildQuiesced = false;
     if (this.builds) {
       try {
         this.builds.projection(runId);
@@ -1071,12 +1076,18 @@ export class ControlServer {
             body.reason ?? "user",
             `build:${body.idempotencyKey}`
           );
+          buildQuiesced = true;
         }
       } catch (error) {
         if (!(error instanceof Error) || !/^Unknown build runtime /.test(error.message)) {
           throw error;
         }
       }
+    }
+    // The build pause above aborted and quiesced the run's work, so the stop is complete;
+    // nothing else ever confirmed it and stopped runs stayed "stopping" forever (tunnel run).
+    if (body.command === "stop" && buildQuiesced && projection.state === "stopping") {
+      return this.supervisor.confirmStopped(runId, `${body.idempotencyKey}:stopped`, body.reason ?? "user");
     }
     return projection;
   }
