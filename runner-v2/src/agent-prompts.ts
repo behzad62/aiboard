@@ -197,8 +197,23 @@ export function architectReasonGuidance(
   if (type === "user_guidance_required" && planningPolicyVersion !== 1) {
     return ARCHITECT_USER_GUIDANCE_SENTENCE_LEGACY;
   }
+  if (type === "plan_critique_resolution_required" && planningPolicyVersion === 1) {
+    return PLAN_CRITIQUE_RESOLUTION_GUIDANCE_EVIDENCE_GATED;
+  }
   return ARCHITECT_REASON_GUIDANCE[type];
 }
+
+/**
+ * Evidence-gated runs only. The shared guidance also described the legacy in-place planReconciliation
+ * path, which these runs refuse, and read as if every finding must be accepted.
+ */
+export const PLAN_CRITIQUE_RESOLUTION_GUIDANCE_EVIDENCE_GATED =
+  "plan_critique_resolution_required: the blocking findings are listed below. Accept a finding only when it is a real defect " +
+  "in the plan; reject the rest with an evidence-based rationale (rejecting is a normal outcome). If you accept any, call " +
+  "revise_planning_plan once with every accepted correction (start from read_current_plan_revision), then call " +
+  "resolve_plan_critique once covering every blocking finding: plan_reconciled citing the new planRevisionId and planDigest " +
+  "(no planReconciliation), or rejected. The revision then gets a fresh coverage review. If the runner rejects a resolution, " +
+  "change it rather than resending it.";
 
 /** T10 (M1): general Architect system lines shared by the v1 and v2 prompts. */
 export const ARCHITECT_SYSTEM_GENERAL_LINES = [
