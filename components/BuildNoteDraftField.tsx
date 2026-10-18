@@ -25,22 +25,28 @@ export function BuildNoteDraftField({
       <textarea
         id="build-note-guidance"
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => {
+          onChange(event.target.value);
+          if (compact) {
+            event.target.style.height = "auto";
+            event.target.style.height = `${Math.min(event.target.scrollHeight, 192)}px`;
+          }
+        }}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             onSubmit();
           }
         }}
-        rows={2}
+        rows={compact ? 1 : 2}
         placeholder={
           compact
-            ? "Guide the architect…  (Ctrl+Enter to send)"
+            ? "Guide the build"
             : "e.g. Use Postgres instead of SQLite, and add a dark-mode toggle..."
         }
         className={
           compact
-            ? "block max-h-48 min-h-[2.75rem] w-full resize-none rounded-md bg-transparent px-2 py-1.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none"
+            ? "block max-h-48 min-h-[2.75rem] w-full resize-none rounded-md bg-transparent px-1 py-2.5 text-sm leading-6 placeholder:text-muted-foreground focus-visible:outline-none"
             : "w-full resize-y rounded-md border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         }
       />

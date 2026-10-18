@@ -16,6 +16,7 @@ import {
   toolResultText,
   type ToolNameCodec,
 } from "./provider-model-utils.js";
+import { withVisualMedia } from "./provider-visual-input.js";
 import { geminiThinkingConfig } from "./reasoning-effort.js";
 import { collectGoogleStream } from "./native-provider-streaming.js";
 
@@ -84,9 +85,9 @@ export class GoogleModel implements AgentModel {
           }
         : {}),
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-      contents: request.messages
+      contents: withVisualMedia(request.messages
         .filter((message) => message.role !== "system")
-        .map((message) => toGoogleContent(message, toolNames)),
+        .map((message) => toGoogleContent(message, toolNames)), request.attachments, "gemini"),
       ...(request.tools.length > 0
         ? { tools: [{ functionDeclarations: request.tools.map((tool) => toGoogleTool(tool, toolNames)) }] }
         : {}),

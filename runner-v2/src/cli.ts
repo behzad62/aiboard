@@ -218,6 +218,7 @@ async function main(): Promise<void> {
       buildProvisioner: builds,
       processRecovery: builds,
       providerConfigs,
+      userMediaDirectory: join(options.stateDirectory, "user-input-media"),
       allowedOrigins: options.allowOrigins,
       runnerInfo: {
         projectPath: options.projectPath,

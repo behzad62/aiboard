@@ -87,7 +87,15 @@ export interface AgentHostedToolDefinition {
   parameters?: Readonly<Record<string, unknown>>;
 }
 
+export interface AgentMediaAttachment {
+  filename: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp" | "application/pdf";
+  base64Data: string;
+}
+
 export interface AgentModelRequest {
+  /** Model-native, validated images/PDFs for the newest user message. */
+  attachments?: readonly AgentMediaAttachment[];
   sessionId: string;
   messages: readonly AgentMessage[];
   tools: readonly ToolDefinition[];

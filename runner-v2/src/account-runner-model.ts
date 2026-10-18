@@ -99,7 +99,10 @@ export class AccountRunnerModel implements AgentModel {
         ? [{ id: "function_calling", requirement: "required" }]
         : [],
       reasoningEffort: this.options.reasoningEffort,
-      attachments,
+      attachments: [...attachments, ...(request.attachments ?? []).map((item) => ({
+        category: item.mimeType === "application/pdf" ? "document" : "image",
+        filename: item.filename, mimeType: item.mimeType, base64Data: item.base64Data,
+      }))],
       sessionId: request.sessionId,
       runtimeMode: "build",
       stream: true,

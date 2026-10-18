@@ -16,6 +16,7 @@ import {
   toolResultText,
   type ToolNameCodec,
 } from "./provider-model-utils.js";
+import { withVisualMedia } from "./provider-visual-input.js";
 import { anthropicReasoningFields } from "./reasoning-effort.js";
 import { collectAnthropicStream } from "./native-provider-streaming.js";
 
@@ -70,9 +71,9 @@ export class AnthropicModel implements AgentModel {
       ),
       cache_control: { type: "ephemeral" },
       ...(system ? { system } : {}),
-      messages: request.messages
+      messages: withVisualMedia(request.messages
         .filter((message) => message.role !== "system")
-        .map((message) => toAnthropicMessage(message, toolNames)),
+        .map((message) => toAnthropicMessage(message, toolNames)), request.attachments, "anthropic"),
       ...(request.tools.length > 0
         ? { tools: request.tools.map((tool) => toAnthropicTool(tool, toolNames)) }
         : {}),

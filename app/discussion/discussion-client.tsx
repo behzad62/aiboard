@@ -52,7 +52,7 @@ import {
 import { DiscussionAttachments } from "@/components/DiscussionAttachments";
 import { ChatThread, type ChatThreadMessage } from "@/components/chat/ChatThread";
 import type { ExtractedFile } from "@/lib/artifacts/extract";
-import { getBuildCheckpoint, getBuildFiles, updateDiscussion } from "@/lib/client/store";
+import { getBuildCheckpoint, getBuildFiles, insertMessage, updateDiscussion } from "@/lib/client/store";
 import {
   DiscussionDiagnostics,
   type DiagnosticEntry,
@@ -65,6 +65,7 @@ import {
   Bell,
   Download,
   Gavel,
+  ArrowUp,
   Paperclip,
   Play,
   RotateCcw,
@@ -113,6 +114,8 @@ import {
   type BuildGuidanceDeliveryIdentity,
 } from "@/lib/client/build-notes";
 import { saveAttachmentFile } from "@/lib/client/settings-api";
+import { buildGuidanceWithTextFiles } from "@/lib/client/build-guidance-files";
+import { prepareBuildUserAttachments, validateBuildComposerFiles } from "@/lib/client/build-user-attachments";
 import {
   applyDiscussionLiveStatus,
   applyNativeBuildPolicyEvent,
@@ -142,6 +145,7 @@ import {
 } from "@/lib/client/project-fs";
 import {
   answerNativeArchitectQuestion,
+  classifyNativeBuildUserMessage,
   commandNativeRun,
   decideNativePermission,
   getNativeBuild,
@@ -440,9 +444,6 @@ function DiscussionPageInner() {
     [discussion, nativeProjection],
   );
   const noteAttachmentNotice = nativeBuildAttachmentNotice(noteDeliveryMode);
-  useEffect(() => {
-    if (noteAttachmentNotice) setNoteFiles([]);
-  }, [noteAttachmentNotice]);
 
   const requestNotificationPermission = useCallback(async () => {
     if (typeof window !== "undefined" && "Notification" in window) {
@@ -1637,10 +1638,19 @@ function DiscussionPageInner() {
     nativeAttachmentControllerRef.current?.wake();
   };
 
-  const handleNoteFileSelection = (files: FileList | null) => {
+  const handleNoteFileSelection = (files: FileList | readonly File[] | null) => {
     const selected = Array.from(files ?? []);
     if (selected.length === 0) return;
-    setNoteFiles((prev) => [...prev, ...selected]);
+    const merged = [...noteFiles, ...selected];
+    if (discussion?.nativeBuildRunId) {
+      const issue = validateBuildComposerFiles(merged);
+      if (issue) {
+        setError(issue);
+        return;
+      }
+    }
+    setError(null);
+    setNoteFiles(merged);
   };
 
   const removeNoteFile = (index: number) => {
@@ -1680,22 +1690,57 @@ function DiscussionPageInner() {
         setNativeProjection(resolvedRoute.projection);
       }
 
-      if (deliveryMode === "native_active") {
-        if (noteFiles.length > 0) {
-          throw new Error(
-            "Only text guidance is sent to this Runner V2 Build now. Remove the files or start a new follow-up Build.",
-          );
+      let routedChangeText: string | null = null;
+      if (discussion.nativeBuildRunId && deliveryMode !== "memory_queue") {
+        if (!discussion.runnerUrl || !discussion.runnerToken) {
+          throw new Error("Reconnect Runner V2 to route this message.");
         }
-        if (!note) throw new Error("Enter text guidance for the active Runner V2 Build.");
+        const prepared = await prepareBuildUserAttachments(note, noteFiles);
+        const guidanceText = prepared.text;
+        const displayText = prepared.attachments.length
+          ? `${guidanceText}\n\nAttached: ${prepared.attachments.map((file) => file.filename).join(", ")}`
+          : guidanceText;
+        const messageId = `native-message:${crypto.randomUUID()}`;
+        const classification = await classifyNativeBuildUserMessage(
+          { url: discussion.runnerUrl, token: discussion.runnerToken },
+          discussion.nativeBuildRunId,
+          { text: guidanceText, messageId, attachments: prepared.attachments,
+            history: messages.filter((item) => item.id.startsWith("native-message:"))
+              .slice(-6)
+              .map((item) => ({ role: item.modelId === "user" ? "user" as const : "assistant" as const, content: item.content.slice(0, 1200) })),
+          },
+        );
+        if (classification.intent !== "change") {
+          if (!classification.reply) throw new Error("The runner returned no answer.");
+          const round = messages.reduce((max, item) => Math.max(max, item.round), 0) + 1;
+          const createdAt = new Date().toISOString();
+          insertMessage({ id: `${messageId}:user`, discussionId: id, round, modelId: "user", role: "user", content: displayText, createdAt });
+          insertMessage({ id: `${messageId}:assistant`, discussionId: id, round, modelId: discussion.judgeModelId ?? "architect", role: "assistant", content: classification.reply, createdAt });
+          setMessages((current) => [...current,
+            { id: `${messageId}:user`, round, modelId: "user", modelName: "You", content: displayText },
+            { id: `${messageId}:assistant`, round, modelId: discussion.judgeModelId ?? "architect", modelName: classification.intent === "check" ? "Read-only inspection" : "Architect", content: classification.reply! },
+          ]);
+          setNoteDraft((current) => preserveEditedBuildNoteDraft(current, submittedDraft));
+          setNoteFiles([]);
+          setError(null);
+          return;
+        }
+        // Preserve the model's visual observations for the durable Architect plan.
+        const changeText = classification.visualEvidence
+          ? `${guidanceText}\n\n${classification.visualEvidence}`
+          : guidanceText;
+        routedChangeText = changeText;
+        if (deliveryMode === "native_active") {
+        if (!changeText) throw new Error("Enter a request or attach a file.");
         const identity = resolveBuildGuidanceIdentity(
           noteDeliveryIdentityRef.current,
-          note,
+          changeText,
           () => crypto.randomUUID(),
         );
         noteDeliveryIdentityRef.current = identity;
         const delivered = await submitNativeBuildNote(
           id,
-          note,
+          changeText,
           {
             guidanceId: identity.guidanceId,
             idempotencyKey: identity.idempotencyKey,
@@ -1712,7 +1757,7 @@ function DiscussionPageInner() {
                 round: delivered.message.round,
                 modelId: "user",
                 modelName: "Your guidance",
-                content: note,
+                content: changeText,
               },
             ]);
         noteDeliveryIdentityRef.current = null;
@@ -1720,11 +1765,14 @@ function DiscussionPageInner() {
         setNoteFiles([]);
         setError(null);
         return;
+        }
       }
 
-      let noteForArchitect = note;
+      let noteForArchitect = discussion.nativeBuildRunId
+        ? routedChangeText ?? await buildGuidanceWithTextFiles(note, noteFiles)
+        : note;
       let addedAttachments: AttachmentSummary[] = [];
-      if (noteFiles.length > 0) {
+      if (noteFiles.length > 0 && !discussion.nativeBuildRunId) {
         const savedAttachments = await Promise.all(
           noteFiles.map((file) => saveAttachmentFile(file))
         );
@@ -1932,7 +1980,9 @@ function DiscussionPageInner() {
     language: languageOf(file.path),
   }));
   const buildTranscriptMessages = discussion?.mode === "build"
-    ? buildAttachmentView.messages
+    ? [...buildAttachmentView.messages, ...messages.filter((message) =>
+        message.id.startsWith("native-message:") &&
+        !buildAttachmentView.messages.some((nativeMessage) => nativeMessage.id === message.id))]
     : messages;
   const hasNativeAttachment = buildAttachmentView.nativeAttached;
   const nativeLiveTranscriptMessages = liveModelTurns
@@ -2421,78 +2471,48 @@ function DiscussionPageInner() {
 
     const composer = (
       <form
-        className="glass-strong rounded-2xl border p-2 focus-within:ring-2 focus-within:ring-ring"
+        className="rounded-[22px] border border-border/70 bg-card/90 px-3 pb-2 pt-2 shadow-sm transition-colors focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/20"
         onSubmit={(event) => {
           event.preventDefault();
           void submitNote();
         }}
+        onPaste={(event) => {
+          const files = Array.from(event.clipboardData.files);
+          const pasted = files.length ? files : Array.from(event.clipboardData.items)
+            .filter((item) => item.kind === "file")
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => file !== null);
+          if (pasted.length && discussion.nativeBuildRunId) {
+            event.preventDefault();
+            handleNoteFileSelection(pasted);
+          }
+        }}
+        onDragOver={(event) => { if (discussion.nativeBuildRunId) event.preventDefault(); }}
+        onDrop={(event) => {
+          if (discussion.nativeBuildRunId && event.dataTransfer.files.length) {
+            event.preventDefault();
+            handleNoteFileSelection(event.dataTransfer.files);
+          }
+        }}
       >
-        {noteAttachmentNotice && (
-          <p className="mx-2 mt-1 rounded-md bg-accent/60 px-3 py-1.5 text-xs text-accent-foreground">
-            {noteAttachmentNotice}
-          </p>
-        )}
-        <div className="flex items-end gap-2">
-          <BuildNoteDraftField
-            compact
-            value={noteDraft}
-            onChange={setNoteDraft}
-            onSubmit={() => void submitNote()}
-          />
-          {!noteAttachmentNotice && (
-            <>
-              <input
-                ref={noteFileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  handleNoteFileSelection(event.currentTarget.files);
-                  event.currentTarget.value = "";
-                }}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 shrink-0"
-                onClick={() => noteFileInputRef.current?.click()}
-                disabled={noteSending}
-                aria-label="Attach files"
-                title="Attach files"
-              >
-                <Paperclip className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            </>
-          )}
-          <Button
-            type="submit"
-            size="sm"
-            className="shrink-0"
-            disabled={
-              noteSending ||
-              (!noteDraft.trim() &&
-                (noteAttachmentNotice !== null || noteFiles.length === 0))
-            }
-          >
-            {noteSending
-              ? "Sending..."
-              : noteDeliveryMode === "native_active" || noteDeliveryMode === "native_unknown"
-                ? "Send guidance"
-                : "Send note"}
-          </Button>
-        </div>
-        {noteFiles.length > 0 && !noteAttachmentNotice && (
-          <div className="flex flex-wrap gap-2 px-2 pt-1">
+        <BuildNoteDraftField
+          compact
+          value={noteDraft}
+          onChange={setNoteDraft}
+          onSubmit={() => void submitNote()}
+        />
+        {noteFiles.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
             {noteFiles.map((file, index) => (
               <span
                 key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
-                className="inline-flex max-w-full items-center gap-2 rounded-full border bg-muted px-3 py-1 text-xs text-muted-foreground"
+                className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-2 py-1 text-xs text-muted-foreground"
               >
-                <span className="truncate">{file.name}</span>
+                <Paperclip className="h-3 w-3 shrink-0" aria-hidden="true" />
+                <span className="max-w-44 truncate">{file.name}</span>
                 <button
                   type="button"
-                  className="rounded-full p-0.5 hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="rounded p-0.5 hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => removeNoteFile(index)}
                   aria-label={`Remove ${file.name}`}
                   disabled={noteSending}
@@ -2503,15 +2523,48 @@ function DiscussionPageInner() {
             ))}
           </div>
         )}
-        <p className="hidden px-2 pt-1 text-xs text-muted-foreground sm:block">
-          {noteDeliveryMode === "native_active"
-            ? "Durable guidance for this build. The steering ledger shows when the Architect acknowledges it."
-            : noteDeliveryMode === "native_unknown"
-              ? "Runner state is still loading — sending checks the build before choosing guidance or a follow-up pass."
-              : isActive
-                ? "Picked up at the Architect's next planning or review step."
-                : "The build is finished — a note starts a follow-up pass that addresses it."}
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <input
+              ref={noteFileInputRef}
+              type="file"
+              multiple
+              accept={discussion.nativeBuildRunId
+                ? ".txt,.md,.mdx,.json,.jsonl,.yaml,.yml,.toml,.xml,.csv,.tsv,.log,.ini,.cfg,.conf,.env,.ts,.tsx,.js,.jsx,.mjs,.cjs,.css,.scss,.html,.py,.go,.rs,.java,.cs,.sql,.sh,.ps1,.bat,.cmd,.diff,.patch,text/*,.png,.jpg,.jpeg,.webp,.pdf,image/png,image/jpeg,image/webp,application/pdf"
+                : undefined}
+              className="hidden"
+              onChange={(event) => {
+                handleNoteFileSelection(event.currentTarget.files);
+                event.currentTarget.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+              onClick={() => noteFileInputRef.current?.click()}
+              disabled={noteSending}
+              aria-label="Attach files, screenshots, or PDFs"
+              title={noteAttachmentNotice ?? "Attach files"}
+            >
+              <Paperclip className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <span className="truncate text-[11px] text-muted-foreground">
+              {discussion.nativeBuildRunId
+                ? "Message · automatically routed"
+                : "Follow-up request"}
+            </span>
+          </div>
+          <Button
+            type="submit"
+            size="icon"
+            className="h-9 w-9 shrink-0 rounded-full"
+            title="Send message"
+            aria-label={noteSending ? "Sending" : "Send build message"}
+            disabled={noteSending || (!noteDraft.trim() && noteFiles.length === 0)}
+          >
+            {noteSending ? <span className="text-xs">…</span> : <ArrowUp className="h-4 w-4" aria-hidden="true" />}
+          </Button>
+        </div>
       </form>
     );
 

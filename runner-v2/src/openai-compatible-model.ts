@@ -18,6 +18,7 @@ import {
   toolResultText,
 } from "./provider-model-utils.js";
 import { createHash } from "node:crypto";
+import { withVisualMedia } from "./provider-visual-input.js";
 import { openAICompatibleReasoningFields } from "./reasoning-effort.js";
 import { ProviderTransportError } from "./account-runner-model.js";
 import { streamOpenAIChat, streamOpenAIResponses } from "./openai-streaming.js";
@@ -137,7 +138,7 @@ export class OpenAICompatibleModel implements AgentModel {
             prompt_cache_retention: "24h",
           }
         : {}),
-      messages: request.messages.map((message) => toOpenAIMessage(message, toolNames)),
+      messages: withVisualMedia(request.messages.map((message) => toOpenAIMessage(message, toolNames)), request.attachments, "openai-chat"),
       ...(toolPayload.length > 0
         ? { tools: toolPayload, tool_choice: toolChoice }
         : {}),
@@ -232,9 +233,9 @@ export class OpenAICompatibleModel implements AgentModel {
             prompt_cache_retention: "24h",
           }
         : {}),
-      input: request.messages.flatMap((message) =>
+      input: withVisualMedia(request.messages.flatMap((message) =>
         toResponsesInput(message, toolNames)
-      ),
+      ), request.attachments, "openai-responses"),
       ...(responseTools.length > 0
         ? {
             tools: responseTools,

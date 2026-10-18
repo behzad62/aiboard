@@ -71,7 +71,7 @@ export async function resolveBuildNoteSubmissionRoute(
 
 export function nativeBuildAttachmentNotice(mode: BuildNoteDeliveryMode): string | null {
   if (mode !== "native_active" && mode !== "native_unknown") return null;
-  return "Only text guidance is sent to this Runner V2 Build now; files require a new follow-up Build.";
+  return "Text files, screenshots (PNG/JPEG/WebP), and PDFs are sent to a compatible configured model. The runner rejects unsupported inputs.";
 }
 
 const queues = new Map<string, string[]>();

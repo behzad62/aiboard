@@ -121,11 +121,11 @@ assert.equal(
 );
 assert.match(
   nativeBuildAttachmentNotice("native_active") ?? "",
-  /Only text guidance is sent/i,
+  /screenshots \(PNG\/JPEG\/WebP\)/i,
 );
 assert.match(
   nativeBuildAttachmentNotice("native_unknown") ?? "",
-  /files require a new follow-up Build/i,
+  /PDFs are sent to a compatible/i,
 );
 assert.equal(nativeBuildAttachmentNotice("follow_up"), null);
 let generatedIdentity = 0;
@@ -244,10 +244,13 @@ assert.match(
   /\{ expectedVersion: version, answer, idempotencyKey \}/,
 );
 assert.match(discussionSource, /nativeBuildAttachmentNotice/);
-assert.match(
-  discussionSource,
-  /if \(noteFiles\.length > 0\)[\s\S]*Only text guidance is sent/,
-);
+assert.match(discussionSource, /buildGuidanceWithTextFiles\(note, noteFiles\)/);
+assert.match(discussionSource, /aria-label="Attach files, screenshots, or PDFs"/);
+assert.match(discussionSource, /"Message · automatically routed"/);
+assert.match(discussionSource, /classifyNativeBuildUserMessage\(/);
+assert.match(discussionSource, /classification.intent !== "change"/);
+const nativeEngineSource = readFileSync("lib/client/native-build-engine.ts", "utf8");
+assert.match(nativeEngineSource, /!message.id.startsWith\("native-message:"\)/);
 assert.match(
   discussionSource,
   /nativeAttachmentControllerRef\.current\?\.wake\(\)/,

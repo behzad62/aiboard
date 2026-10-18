@@ -1701,6 +1701,29 @@ export async function pumpNativeBuild(
   );
 }
 
+export interface NativeBuildMessageClassification {
+  intent: "ask" | "check" | "change" | "clarify";
+  reply?: string;
+  inspectedPaths?: string[];
+  visualEvidence?: string;
+  attachments?: Array<{ filename: string; mimeType: string; hash: string; byteLength: number }>;
+}
+
+export async function classifyNativeBuildUserMessage(
+  connection: NativeRunnerConnection,
+  runId: string,
+  input: { text: string; messageId: string; history?: Array<{ role: "user" | "assistant"; content: string }>; attachments?: Array<{ filename: string; mimeType: string; base64Data: string }> },
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeBuildMessageClassification> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/user-message`,
+    { method: "POST", body: JSON.stringify(input), signal },
+    fetchImpl,
+  );
+}
+
 export async function submitNativeBuildUserGuidance(
   connection: NativeRunnerConnection,
   runId: string,

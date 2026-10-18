@@ -37,6 +37,8 @@ import {
   type NativeRunnerConnection,
 } from "./runner-v2";
 import { requestSpecificationSource } from "./native-planning-view";
+import { loadAttachmentPayloads } from "./attachments";
+import { initialNativeBuildTextAttachments } from "./build-guidance-files";
 import {
   nativeBuildAttachmentIdentityPatch,
   nativeBuildTaskStatus,
@@ -723,12 +725,20 @@ export function resolveNativeProviderTransport(
 
 function buildObjective(discussion: Discussion): string {
   const notes = getMessagesForDiscussion(discussion.id)
-    .filter((message) => message.role === "user")
+    .filter((message) => message.role === "user" && !message.id.startsWith("native-message:"))
     .map((message) => message.content.trim())
     .filter(Boolean);
-  return notes.length > 0
+  const text = notes.length > 0
     ? `${discussion.topic.trim()}\n\nUser follow-up guidance:\n${notes.map((note) => `- ${note}`).join("\n")}`
     : discussion.topic.trim();
+  const ids: string[] = discussion.attachmentIds ? JSON.parse(discussion.attachmentIds) : [];
+  const attachments = loadAttachmentPayloads(ids);
+  const unsupported = attachments.find((file) => file.category !== "text_inline");
+  if (unsupported) {
+    throw new Error(`Native Build cannot deliver ${unsupported.filename} (${unsupported.category}) to the Architect yet. Remove this attachment or provide its contents as text.`);
+  }
+  const attachmentText = initialNativeBuildTextAttachments(attachments);
+  return attachmentText ? `${text}\n\n${attachmentText}` : text;
 }
 
 function emitTaskProjection(projection: NativeBuildProjection, emit: Emit): void {

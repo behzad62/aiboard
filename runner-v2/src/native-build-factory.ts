@@ -20,6 +20,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AccountRunnerModel } from "./account-runner-model.js";
+import { BuildUserMediaStore } from "./build-user-media.js";
+import { wrapModelWithBuildUserVisuals } from "./build-visual-model.js";
 import { AnthropicModel } from "./anthropic-model.js";
 import type { AgentModel } from "./agent-contracts.js";
 import {
@@ -1158,10 +1160,13 @@ export class NativeBuildFactory {
     });
     initializationStage = "models";
     const providerModelFactory = this.options.providerModelFactory ?? createProviderModel;
+    const userVisuals = new BuildUserMediaStore(join(this.options.stateDirectory, "user-input-media"));
     const models = new Map<string, AgentModel>(
       selectedConfigs.map((config) => [
         config.runtimeId,
-        providerModelFactory(config, this.artifacts),
+        wrapModelWithBuildUserVisuals(
+          providerModelFactory(config, this.artifacts), userVisuals, spec.runId, config.inputCapabilities,
+        ),
       ])
     );
     const recoveryModel = models.get(spec.architectRuntimeId);
