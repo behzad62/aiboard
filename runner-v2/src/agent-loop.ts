@@ -557,7 +557,10 @@ async function invokeTool(
 export function compactAgentMessages(
   messages: readonly AgentMessage[],
   limits: AgentWorkingSetLimits = {
-    maxMessages: 80,
+    // Size governs. At 80 messages a worker batching several tool calls per turn compacted at ~85K
+    // tokens of a 1M-token context, dropping the prompt cache and making it re-read its own files, and
+    // the cutoff then moved every COMPACTION_GRID messages (tunnel run).
+    maxMessages: 1_000,
     maxBytes: 512 * 1024,
     retainRecent: 24,
   }
