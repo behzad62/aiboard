@@ -83,10 +83,12 @@ test("E2 secret refusal is redacted for each token class and newly added env/key
     'password: "hardcodedcredential{{suffix}}"',
   ];
   for (const secret of examples) {
-    assert.throws(() => assertSubmissionHasNoSecrets([file("src/settings.ts", false, [secret])]), (error: unknown) => {
+    // An unquoted value is a literal only outside program source (config, .env-style files).
+    const path = /^(?:API_KEY=|password: [^"])/.test(secret) ? "config/settings.yml" : "src/settings.ts";
+    assert.throws(() => assertSubmissionHasNoSecrets([file(path, false, [secret])]), (error: unknown) => {
       assert.ok(error instanceof Error);
       // The refusal names the ordinary file (and the assigned field) so the worker can fix it, never the value.
-      assert.match(error.message, /^Submission refused: secret or key material detected \[REDACTED\] in src\/settings\.ts/);
+      assert.ok(error.message.startsWith(`Submission refused: secret or key material detected [REDACTED] in ${path}`), error.message);
       assert.ok(!error.message.includes(secret));
       assert.ok(!error.message.includes("literalliteral"));
       return true;
@@ -104,6 +106,16 @@ test("E2 secret control ignores removed lines and nonliteral references; invalid
     "  authorization: `Bearer ${clientToken}`,",
     " * Generate a new secret: `<prefix>_<base64url(randomBytes(32))>`.",
   ])]));
+  // Tunnel run: identifiers and env var names are not literals; the worker renamed its API to get past them.
+  assert.doesNotThrow(() => assertSubmissionHasNoSecrets([file("src/config.ts", false, [
+    'export const ADMIN_TOKEN_ENV_VAR = "RELAY_ADMIN_TOKEN";',
+    "  adminTokenSource: AdminTokenSource;",
+    "  credentialSource: AdminCredentialSource;",
+    "    return { dataDir, adminToken: optionToken, adminTokenSource: \"option\" };",
+  ])]));
+  assert.throws(() => assertSubmissionHasNoSecrets([file("config/relay.env", false, [
+    `RELAY_ADMIN_TOKEN=Zq8xR2mT7vLp4WcN9sKbYh3d`,
+  ])]), /\[REDACTED\]/, "an unquoted literal in a config file still blocks");
   assert.throws(() => assertSubmissionHasNoSecrets([file("test/logger.test.ts", false, [
     `const deviceToken = "aib_dev_${"9f3a".repeat(8)}";`,
   ])]), /\[REDACTED\] in test\/logger\.test\.ts \(value assigned to deviceToken\)/, "a real literal still blocks");

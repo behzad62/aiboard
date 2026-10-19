@@ -27,8 +27,9 @@ export function assertSubmissionHasNoSecrets(files: readonly SubmissionFile[]): 
     if (file.added && secretFilePath(path)) {
       throw new Error("Submission refused: secret or key material detected [REDACTED].");
     }
+    const code = sourceCodePath(path);
     for (const line of file.addedLines) {
-      const hit = secretLine(line);
+      const hit = secretLine(line, code);
       if (hit === false) continue;
       throw new Error(
         `Submission refused: secret or key material detected [REDACTED] in ${path}` +
@@ -46,8 +47,9 @@ export function assertSubmissionHasNoSecrets(files: readonly SubmissionFile[]): 
 export function submissionSecretNotice(path: string, text: string): string | undefined {
   const normalized = submissionPath(path);
   if (secretFilePath(normalized)) return `submit_task will refuse ${normalized}: secret or key material files cannot be submitted.`;
+  const code = sourceCodePath(normalized);
   for (const line of text.split("\n")) {
-    const hit = secretLine(line);
+    const hit = secretLine(line, code);
     if (hit === false) continue;
     return `submit_task will refuse ${normalized}: secret or key material detected [REDACTED]` +
       `${hit === true ? "" : ` (value assigned to ${hit})`}. Use an obviously fake placeholder or build test values at runtime.`;
@@ -60,13 +62,21 @@ function secretFilePath(path: string): boolean {
   return name === ".env" || name.startsWith(".env.") || /\.(?:pem|p12|pfx|key)$/.test(name) || /^id_(?:rsa|dsa|ecdsa|ed25519)$/.test(name);
 }
 
+/** Program source, where a literal secret must be quoted: an unquoted value there is code. */
+function sourceCodePath(path: string): boolean {
+  return /\.(?:[cm]?[jt]sx?|py|go|rs|java|kts?|cs|rb|php|swift|scala|c|cc|cpp|h|hpp)$/i.test(path);
+}
+
 /** False when clean; true for a token-pattern match; the field name for a sensitive assignment. */
-function secretLine(line: string): boolean | string {
+function secretLine(line: string, code = false): boolean | string {
   if (/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/.test(line) ||
     /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/.test(line) ||
     /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}\b/.test(line) ||
     /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})\b/.test(line)) return true;
   for (const match of line.matchAll(/["']?([A-Za-z_][A-Za-z0-9_-]*)["']?\s*[:=]\s*(?:(["'`])([^"'`\r\n]{16,})\2|([A-Za-z0-9_./+=:@%-]{16,}))/g)) {
+    // In source an unquoted value is an identifier or expression (`adminTokenSource: AdminTokenSource`),
+    // never a literal; the worker renamed its API fields to get past this (tunnel run).
+    if (code && match[2] === undefined) continue;
     const value = match[3] ?? match[4]!;
     const environmentReference = match[2] === undefined && /^(?:process\.env\.|os\.environ\.|env\.)[A-Za-z_][A-Za-z0-9_]*$/.test(value);
     const templateReference = match[2] === "`" && /^\$\{[A-Za-z_][A-Za-z0-9_.$]*\}$/.test(value);
@@ -78,6 +88,8 @@ function secretLine(line: string): boolean | string {
     const memberReference = match[2] === undefined && /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(value);
     const interpolatedTemplate = match[2] === "`" && value.includes("${") && value.replace(/\$\{[^}]*\}/g, "").length < 16;
     const anglePlaceholder = /<[A-Za-z][\w-]*>/.test(value);
+    // The name of an environment variable (`ADMIN_TOKEN_ENV = "RELAY_ADMIN_TOKEN"`), not its value.
+    const environmentName = /^[A-Z]+(?:_[A-Z0-9]+)+$/.test(value);
     // The refusal tells the worker to use an obviously fake placeholder, so one must pass: a value that
     // says so, or one with almost no variety. A redaction task's tests need credential-named fields, and
     // without this the worker obfuscated its own field names to get through (tunnel run). The token
@@ -86,7 +98,8 @@ function secretLine(line: string): boolean | string {
       new Set(value).size < 6;
     if (
       isSensitiveKey(match[1]!) && !environmentReference && !templateReference && !wholePlaceholder &&
-      !callExpression && !memberReference && !interpolatedTemplate && !anglePlaceholder && !obviouslyFake
+      !callExpression && !memberReference && !interpolatedTemplate && !anglePlaceholder && !obviouslyFake &&
+      !environmentName
     ) return match[1]!;
   }
   return false;
