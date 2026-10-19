@@ -1,7 +1,7 @@
 import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import { randomUUID, createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import { computeAffectedTests, isRunnableTestFile } from "./affected-tests.js";
 import type { ArtifactStore } from "./artifact-store.js";
@@ -276,8 +276,11 @@ export interface TestReportPlan {
   /** Relative to the checkout root; unique per run, never a committed file. */
   reportPath?: string;
   format?: "junit" | "trx";
-  /** Maven Surefire fresh report-set collection (no flag to append). */
-  reportSet?: { kind: "maven-surefire-reports" };
+  /**
+   * Maven Surefire fresh report-set collection (no flag to append), or one node --test JUnit report per
+   * npm workspace (relative destination; npm runs each workspace's script in its own directory).
+   */
+  reportSet?: { kind: "maven-surefire-reports" } | { kind: "node-workspace-reports"; reportPaths: readonly string[] };
   unsupported?: string;
   /**
    * R6-B1: the run filters tests by name or `.only`; at least one real
@@ -471,9 +474,137 @@ export function planTestReport(input: {
   if (head[0] === "go" && head[1] === "test") {
     return { runner: "go test", unsupported: "the runner has no reader for go test -json output." };
   }
+  const workspaces = planNodeWorkspaceReports({ ...input, tokens: head, workspaces: (manifest as { workspaces?: unknown }).workspaces, junit });
+  if (workspaces) return workspaces;
   return {
     runner: last ? `"${last}"` : "unknown",
     unsupported: `the test command "${last || script}" is not a test runner the runner can make write a machine-readable report.`,
+  };
+}
+
+/**
+ * `npm run test --workspaces` over workspaces whose test scripts are all plain `node --test` (or
+ * `tsx --test`). One JUnit file per workspace, written relative to that workspace: a single
+ * destination would be overwritten by each workspace in turn. Before this an npm-workspaces monorepo
+ * whose tests passed could not prove a run, which blocked a correct task (tunnel run).
+ */
+function planNodeWorkspaceReports(input: {
+  checkoutPath: string;
+  command: FinalVerificationCommand;
+  ambientNodeOptions?: string;
+  platform?: NodeJS.Platform;
+  tokens: readonly string[];
+  workspaces: unknown;
+  junit: string;
+}): TestReportPlan | undefined {
+  const [manager, ...rest] = input.tokens;
+  if (manager !== "npm") return undefined;
+  const args = rest[0] === "run" ? rest.slice(1) : rest;
+  if (args[0] !== "test" || !args.slice(1).some((flag) => flag === "--workspaces" || flag === "-ws")) return undefined;
+  if (args.slice(1).some((flag) => !["--workspaces", "-ws", "--if-present"].includes(flag))) return undefined;
+  const runner = "npm workspaces: node --test";
+  const patterns = Array.isArray(input.workspaces) ? input.workspaces
+    : input.workspaces && typeof input.workspaces === "object" && Array.isArray((input.workspaces as { packages?: unknown }).packages)
+      ? (input.workspaces as { packages: unknown[] }).packages : undefined;
+  if (!patterns || patterns.some((pattern) => typeof pattern !== "string")) {
+    return { runner, unsupported: "the package.json workspaces field is missing or not a list of paths." };
+  }
+  const directories: string[] = [];
+  for (const pattern of patterns as string[]) {
+    const normalized = pattern.replaceAll("\\", "/").replace(/\/+$/, "");
+    if (normalized.includes("..") || isAbsolute(normalized)) return { runner, unsupported: `workspace path ${pattern} leaves the project.` };
+    if (/[*?[\]{}]/.test(normalized.replace(/\/\*$/, ""))) return { runner, unsupported: `workspace pattern ${pattern} is not a directory or a directory/* pattern.` };
+    if (normalized.endsWith("/*")) {
+      const parent = normalized.slice(0, -2);
+      let entries: string[];
+      try { entries = readdirSync(join(input.checkoutPath, parent), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort(); }
+      catch { continue; }
+      for (const entry of entries) directories.push(`${parent}/${entry}`);
+    } else directories.push(normalized);
+  }
+  const reportPaths: string[] = [];
+  let filtered = false;
+  for (const directory of directories) {
+    let workspaceManifest: { scripts?: Record<string, unknown> };
+    try { workspaceManifest = JSON.parse(readFileSync(join(input.checkoutPath, directory, "package.json"), "utf8")); }
+    catch { continue; }
+    const script = workspaceManifest.scripts?.test;
+    if (script === undefined) continue;
+    if (typeof script !== "string") return { runner, unsupported: `workspace ${directory} has a non-string test script.` };
+    const unmodeled = /[$`\\#!()<>^%]/.exec(script) ?? ((input.platform ?? process.platform) === "win32" ? /'/.exec(script) : null);
+    const split = unmodeled ? undefined : splitAndChain(script);
+    if (!split || "separator" in split) {
+      return { runner, unsupported: `workspace ${directory} test script is not a plain "&&" chain the runner can judge.` };
+    }
+    const tokens = (split.segments.at(-1) ?? "").split(/\s+/).filter(Boolean);
+    const head = tokens[0] === "npx" ? tokens.slice(1) : tokens;
+    if (!/^(node(\.exe)?|tsx(\.exe|\.cmd)?)$/i.test(head[0] ?? "") || !head.includes("--test")) {
+      return { runner, unsupported: `workspace ${directory} tests do not end with node --test, so the runner cannot make it write a JUnit report.` };
+    }
+    if (head.some((token) => token.startsWith("--test-reporter"))) {
+      return { runner, unsupported: `workspace ${directory} sets its own --test-reporter, which would replace the runner's JUnit reporter.` };
+    }
+    if (head.some((token) => /^--test-(name-pattern|skip-pattern|only)\b/.test(token))) filtered = true;
+    reportPaths.push(`${directory}/${input.junit}`);
+  }
+  if (reportPaths.length === 0) return { runner, unsupported: "no workspace defines a test script." };
+  const ambient = input.ambientNodeOptions?.trim() ?? "";
+  if (/(^|\s)--test-reporter/.test(ambient)) {
+    return { runner, unsupported: "the environment's NODE_OPTIONS sets its own --test-reporter, which would replace the runner's JUnit reporter." };
+  }
+  const reporterFlags = `--test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=${input.junit}`;
+  return {
+    runner,
+    format: "junit",
+    reportSet: { kind: "node-workspace-reports", reportPaths },
+    filtered: filtered || /(^|\s)--test-(name-pattern|skip-pattern|only)\b/.test(ambient),
+    command: {
+      ...input.command,
+      environment: {
+        ...(input.command.environment ?? {}),
+        NODE_OPTIONS: ambient ? `${ambient} ${reporterFlags}` : reporterFlags,
+        NODE_TEST_CONTEXT: undefined,
+      },
+    },
+  };
+}
+
+/** One JUnit report per workspace, summed; any missing or unusable member makes the whole set unknown. */
+export async function readNodeWorkspaceReportSet(
+  plan: TestReportPlan & { reportSet: { kind: "node-workspace-reports"; reportPaths: readonly string[] } },
+  checkoutPath: string,
+  artifacts: ArtifactStore,
+): Promise<DeliveryTestReport> {
+  const counts = { selected: 0, passed: 0, failed: 0, skipped: 0 };
+  const failingTestIds: string[] = [];
+  const parts: Buffer[] = [];
+  for (const reportPath of plan.reportSet.reportPaths) {
+    let bytes: Buffer;
+    try {
+      bytes = readBoundedReportBytes({ checkoutPath, reportPath });
+    } catch (error) {
+      return { status: "unknown", runner: plan.runner, format: "junit", path: reportPath, reason: `${reportPath}: ${/^Test report is missing|ENOENT/.test((error as Error).message) ? "this workspace wrote no junit report (its tests did not run, or a wrapper replaced NODE_OPTIONS)" : (error as Error).message}` };
+    }
+    parts.push(bytes);
+    const outcome = nodeJunitOutcome(bytes.toString("utf8"), checkoutPath, plan.filtered === true);
+    if (!outcome.counts) return { status: "unknown", runner: plan.runner, format: "junit", path: reportPath, reason: `${reportPath}: ${outcome.reason}` };
+    counts.selected += outcome.counts.selected;
+    counts.passed += outcome.counts.passed;
+    counts.failed += outcome.counts.failed;
+    counts.skipped += outcome.counts.skipped;
+    failingTestIds.push(...(outcome.failingTestIds ?? []));
+  }
+  const artifact = await artifacts.put(Buffer.concat(parts.flatMap((part, index) => index === 0 ? [part] : [Buffer.from("\n"), part])), "application/xml", "delivery npm workspace test reports");
+  const status = counts.failed > 0 ? "failed" : counts.selected >= 1 && counts.passed >= 1 ? "passed" : "unknown";
+  return {
+    status,
+    runner: plan.runner,
+    format: "junit",
+    path: plan.reportSet.reportPaths.join(", "),
+    artifactHash: artifact.hash,
+    counts,
+    ...(failingTestIds.length ? { failingTestIds: failingTestIds.sort() } : {}),
+    ...(status === "unknown" ? { reason: `The workspace reports show ${counts.selected} executed and ${counts.passed} passed tests; at least one executed test is required.` } : {}),
   };
 }
 
@@ -697,6 +828,9 @@ async function readRunReport(
   stderr: string,
   reportSetBefore?: ReadonlyMap<string, { size: number; mtimeMs: number }>,
 ): Promise<DeliveryTestReport> {
+  if (plan.reportSet?.kind === "node-workspace-reports") {
+    return await readNodeWorkspaceReportSet({ ...plan, reportSet: plan.reportSet }, checkoutPath, artifacts);
+  }
   if (plan.reportSet) {
     return await readRunReportSet({ plan, checkoutPath, artifacts, before: reportSetBefore });
   }
@@ -842,6 +976,11 @@ export async function runDeliveryCategory(input: {
     if (reportPlan.reportPath && existsSync(join(input.manager.path, reportPlan.reportPath))) {
       throw new Error(`Test report path ${reportPlan.reportPath} already exists; refusing to read a report this run did not write.`);
     }
+    for (const reportPath of reportPlan.reportSet?.kind === "node-workspace-reports" ? reportPlan.reportSet.reportPaths : []) {
+      if (existsSync(join(input.manager.path, reportPath))) {
+        throw new Error(`Test report path ${reportPath} already exists; refusing to read a report this run did not write.`);
+      }
+    }
     if (reportPlan.command) profile.commands.tests = [...commands.slice(0, -1), reportPlan.command];
     // V3 (AR-R26): a family-shaped wired plan without a matching trusted
     // descriptor (ambiguous multi-project/target runs share one report
@@ -862,7 +1001,7 @@ export async function runDeliveryCategory(input: {
       }
     }
     // reportSetBefore is declared at function scope above.
-    if (reportPlan.reportSet) {
+    if (reportPlan.reportSet?.kind === "maven-surefire-reports") {
       const { scanMavenSurefireReportFiles } = await import("./language-execution-profile.js");
       const snapshot = await scanMavenSurefireReportFiles({ checkoutPath: input.manager.path });
       if (snapshot.incomplete) {
