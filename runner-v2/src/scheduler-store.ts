@@ -7935,7 +7935,7 @@ function applyDeliveryDispositions(
     for (const raw of findingDispositions) {
       if (!isRecord(raw)) throw new Error("Deliverable finding disposition is invalid.");
       const findingId = requiredString(raw, "findingId");
-      if (review.reviewEvidencePolicyVersion === 1 && isMutationSurvivorFindingId(findingId)) throw new Error("Mutation survivors require the independent reviewer disposition.");
+      if (review.reviewEvidencePolicyVersion === 1 && isMutationSurvivorFindingId(findingId)) throw new Error(`Mutation survivors require the independent reviewer disposition: omit ${findingId} from findingDispositions; the reviewer already dispositioned it.`);
       if (!open.has(findingId)) {
         throw new Error(`Deliverable finding ${findingId} is not an open blocking finding.`);
       }
