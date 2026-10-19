@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { GitRunner } from "./git-repository.js";
 import type { GitBinaryRunner } from "./git-command.js";
 import { reviewChangeSetId } from "./review-integrity.js";
+import { addedLinesByPath } from "./submission-guard-git.js";
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 const hasBom = (bytes: Buffer) => bytes.subarray(0, 3).equals(BOM);
@@ -63,8 +64,8 @@ export function inspectEncodingDelta(path: string, baseline: Buffer | null, cand
 export async function captureEncodingSubmission(input: {
   git: GitRunner; gitBytes: GitBinaryRunner; workspacePath: string; runId: string; taskId: string; baselineRevision: string; taskRevision: string;
 }): Promise<EncodingSubmissionRecord> {
-  const text = async (args: string[]) => {
-    const result = await input.git({ cwd: input.workspacePath, args, maxOutputBytes: 64 * 1024 * 1024 });
+  const text = async (args: readonly string[]) => {
+    const result = await input.git({ cwd: input.workspacePath, args: [...args], maxOutputBytes: 64 * 1024 * 1024 });
     if (result.exitCode !== 0) throw new Error("Encoding inventory unavailable."); return result.stdout;
   };
   const rows = (await text(["diff", "--name-status", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", input.baselineRevision, input.taskRevision, "--"])).split("\0");
@@ -74,14 +75,16 @@ export async function captureEncodingSubmission(input: {
     if (result.exitCode !== 0 || !Buffer.isBuffer(result.stdout)) throw new Error("Encoding byte inventory unavailable."); return result.stdout;
   };
   const files: EncodingFileFact[] = [];
+  const changed: Array<{ status: string; path: string }> = [];
   for (let index = 0; index < rows.length; index += 2) {
     const status = rows[index]!; const path = rows[index + 1]!;
     if (!/^[AMDT]$/.test(status) || !safePath(path)) throw new Error("Unsupported encoding inventory identity.");
-    if (status === "D") continue;
-    const diff = await text(["diff", "--text", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=0", input.baselineRevision, input.taskRevision, "--", `:(literal)${path}`]);
-    const added: string[] = []; let inHunk = false;
-    for (const line of diff.split("\n")) { if (line.startsWith("@@ ")) inHunk = true; else if (inHunk && line.startsWith("+")) added.push(line.slice(1)); }
-    const fact = inspectEncodingDelta(path, status === "A" ? null : await blob(input.baselineRevision, path), await blob(input.taskRevision, path), added);
+    if (status !== "D") changed.push({ status, path });
+  }
+  // One diff for every file's added lines, not one per file (tunnel run: submit_task timed out).
+  const addedByPath = await addedLinesByPath(text, input.baselineRevision, input.taskRevision, changed.map((file) => file.path));
+  for (const { status, path } of changed) {
+    const fact = inspectEncodingDelta(path, status === "A" ? null : await blob(input.baselineRevision, path), await blob(input.taskRevision, path), addedByPath.get(path) ?? []);
     if (fact) files.push(fact);
   }
   return { version: 1, runId: input.runId, taskId: input.taskId, baselineRevision: input.baselineRevision, taskRevision: input.taskRevision,

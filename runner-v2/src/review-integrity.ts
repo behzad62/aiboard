@@ -82,13 +82,26 @@ export async function captureReviewSignals(input: {
   const listed = (await git(["ls-tree", "-r", "--name-only", "-z", input.taskRevision])).split("\0");
   if (listed.pop() !== "") throw new Error("Review-integrity tree inventory is malformed.");
   const contents = new Map<string, string>();
+  const sources: string[] = [];
   for (const path of listed) {
     if (!safePath(path)) throw new Error("Review-integrity tree path is invalid.");
-    if (sourceExtension.test(path) && !isTestFile(path) && !isReviewTestConfig(path)) contents.set(path, await git(["show", `${input.taskRevision}:${path}`]));
+    if (sourceExtension.test(path) && !isTestFile(path) && !isReviewTestConfig(path)) sources.push(path);
+  }
+  // Contents only answer whether an added source file is referenced. One supervised Git process per
+  // source file in the whole tree, in sequence, made submit_task scale with repository size and time
+  // out (tunnel run): read nothing when no source file was added, and read in bounded parallel.
+  if (files.some((file) => file.added && sourceExtension.test(file.path) && !isTestFile(file.path) && !isReviewTestConfig(file.path))) {
+    for (let index = 0; index < sources.length; index += REVIEW_SOURCE_READ_CONCURRENCY) {
+      const batch = sources.slice(index, index + REVIEW_SOURCE_READ_CONCURRENCY);
+      const read = await Promise.all(batch.map((path) => git(["show", `${input.taskRevision}:${path}`])));
+      batch.forEach((path, position) => contents.set(path, read[position]!));
+    }
   }
   return { version: 1, runId: input.runId, taskId: input.taskId, baselineRevision: input.baselineRevision,
     taskRevision: input.taskRevision, changeSetId: reviewChangeSetId(input.runId, input.taskId, input.taskRevision), signals: reviewRunnerSignals(files, contents) };
 }
+
+const REVIEW_SOURCE_READ_CONCURRENCY = 8;
 
 export function reviewChangeSetId(runId: string, taskId: string, revision: string): string {
   return `changeset_${createHash("sha256").update(`${runId}\0${taskId}\0${revision}`).digest("hex")}`;

@@ -448,6 +448,34 @@ function call(callId: string, path: string): ToolCallBlock {
   return { type: "tool_call", callId, name: "write_path", arguments: { path } };
 }
 
+test("a tool may raise the broker time limit for its input, never lower it", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-broker-timeout-")));
+  const broker = new ToolBroker({ permissionProfile: "project", workspacePath: root, toolTimeoutMs: 30 });
+  const slow = (name: string, timeoutMs?: (input: { waitMs: number }) => number) => broker.register({
+    definition: { name, description: "Wait", inputSchema: { type: "object" }, readOnly: true, effect: "none" },
+    validate: (input) => ({ ok: true, value: input as { waitMs: number } }),
+    ...(timeoutMs ? { timeoutMs } : {}),
+    execute: async (input) => {
+      await new Promise((resolve) => setTimeout(resolve, input.waitMs));
+      return { content: [{ type: "text", text: "done" }], isError: false };
+    },
+  });
+  slow("long_command", (input) => input.waitMs + 200);
+  slow("lowering_command", () => 1);
+  slow("default_command");
+  try {
+    const long = await broker.invoke({ type: "tool_call", callId: "long", name: "long_command", arguments: { waitMs: 80 } }, context());
+    assert.equal(long.isError, false, "the tool's own limit applies");
+    const lowered = await broker.invoke({ type: "tool_call", callId: "low", name: "lowering_command", arguments: { waitMs: 5 } }, context());
+    assert.equal(lowered.isError, false, "a smaller tool limit never undercuts the broker's");
+    const capped = await broker.invoke({ type: "tool_call", callId: "cap", name: "default_command", arguments: { waitMs: 80 } }, context());
+    assert.equal(capped.error?.code, "tool_timeout");
+    assert.match(capped.error?.message ?? "", /exceeded 30 ms/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function context(): ToolExecutionContext {
   return {
     runId: "run_1",

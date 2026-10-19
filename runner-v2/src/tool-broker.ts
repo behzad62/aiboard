@@ -403,6 +403,7 @@ export class ToolBroker implements AgentToolRuntime {
       ? AbortSignal.any([context.signal, timeoutController.signal])
       : timeoutController.signal;
     let timeout: NodeJS.Timeout | undefined;
+    const timeoutMs = Math.max(this.toolTimeoutMs, tool.timeoutMs?.(input) ?? 0);
     let executionGrant: OpaqueExecutionGrant | undefined;
     let grantDisposition: "completed" | "cancelled" | "timed_out" = "completed";
     try {
@@ -453,7 +454,7 @@ export class ToolBroker implements AgentToolRuntime {
         timeout = setTimeout(() => {
           timeoutController.abort();
           reject(new ToolTimeoutError());
-        }, this.toolTimeoutMs);
+        }, timeoutMs);
       });
       const output = await this.boundOutput(
         tool.definition.name,
@@ -469,7 +470,7 @@ export class ToolBroker implements AgentToolRuntime {
         grantDisposition = "timed_out";
         const output = outputFailure(
           "tool_timeout",
-          `Tool ${tool.definition.name} exceeded ${this.toolTimeoutMs} ms.`
+          `Tool ${tool.definition.name} exceeded ${timeoutMs} ms.`
         );
         this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
         this.settleToolBudget(budgetReservationId);

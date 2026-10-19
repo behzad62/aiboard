@@ -740,11 +740,26 @@ async function withProjectionLock<T>(path: string, action: () => Promise<T>): Pr
     });
   } catch (error) {
     if (error instanceof ExecutionIsolationError) throw error;
+    // Name the cause: a failed submit_task said only "lock is unavailable" (tunnel run), which hid
+    // whether the lock or the write under it failed.
+    const cause = error instanceof Error ? `${(error as NodeJS.ErrnoException).code ? `${(error as NodeJS.ErrnoException).code}: ` : ""}${error.message}` : String(error);
     throw new ExecutionIsolationError(
       "isolation_recovery_blocked",
-      "Enforcement state lock is unavailable.",
+      `Enforcement state update failed (${cause.slice(0, 300)}).`,
       { cause: error },
     );
+  }
+}
+
+/** Windows refuses to replace a file another handle (an indexer, antivirus, a reader) holds briefly. */
+async function renameReplacing(source: string, target: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try { await rename(source, target); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 5 || !(code === "EPERM" || code === "EBUSY" || code === "EACCES")) throw error;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 25 * (attempt + 1)));
+    }
   }
 }
 
@@ -849,7 +864,7 @@ async function writeBoundedEnforcementState(
   }
   parseEnforcementState(JSON.parse(serialized));
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  try { await writeFile(temporary, serialized, { flag: "wx", mode: 0o600 }); await rename(temporary, path); }
+  try { await writeFile(temporary, serialized, { flag: "wx", mode: 0o600 }); await renameReplacing(temporary, path); }
   finally { await rm(temporary, { force: true }); }
 }
 

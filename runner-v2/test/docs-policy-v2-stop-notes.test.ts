@@ -998,7 +998,8 @@ function pendingGuidanceSeed(runId: string): NewSchedulerEvent[] {
       version: 1,
       interruptionProtocolVersion: 1,
     }),
-    e(runId, "run.paused", "pause:user", "user", "local-user", { reason: "user" }),
+    // A notes-allowed stop (an owner pause no longer makes the notes call).
+    e(runId, "run.paused", "pause:recording", "user", "local-user", { reason: "context_recording_failed" }),
   ];
 }
 
@@ -1019,7 +1020,8 @@ function openQuestionSeed(runId: string): NewSchedulerEvent[] {
       question: "Should the value module keep its current export?",
       version: 1,
     }),
-    e(runId, "run.paused", "pause:user", "user", "local-user", { reason: "user" }),
+    // A notes-allowed stop (an owner pause no longer makes the notes call).
+    e(runId, "run.paused", "pause:recording", "user", "local-user", { reason: "context_recording_failed" }),
   ];
 }
 

@@ -147,6 +147,8 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
       effect: "external",
     },
     validate: (input) => validateRun(input, defaultTimeoutMs, maximumTimeoutMs),
+    // The command's own timeout plus the working-tree captures and artifact writes around it.
+    timeoutMs: (input) => input.timeoutMs + 5 * 60_000,
     assessAccess: (input) => ({
       capability: "evidence.command",
       paths: [{ path: input.cwd, access: "write" }],

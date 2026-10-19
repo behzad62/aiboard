@@ -235,6 +235,11 @@ export interface NativeTool<TInput = unknown> {
     input: TInput,
     context: ToolExecutionContext
   ): Promise<ToolExecutionOutput>;
+  /**
+   * Raises the broker's per-call time limit for this input. The one broker limit (120 s) cut off a
+   * submit_task after its commit and capped run_evidence_command below its own timeoutMs (tunnel run).
+   */
+  timeoutMs?(input: TInput): number;
 }
 
 export interface ToolError {
