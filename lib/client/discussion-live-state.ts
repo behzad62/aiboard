@@ -169,6 +169,8 @@ export interface NativeBuildTimelineMessage {
   ordinal: number;
   modelId: string;
   modelName: string;
+  taskId?: string;
+  taskTitle?: string;
   content: string;
   streaming?: boolean;
 }
@@ -185,6 +187,8 @@ export interface NativeBuildAttachmentViewMessage {
   ordinal?: number;
   modelId: string;
   modelName: string;
+  taskId?: string;
+  taskTitle?: string;
   content: string;
   streaming?: boolean;
 }
@@ -252,7 +256,7 @@ export function reconcileNativeBuildTranscript(
   current: NativeBuildTranscriptAttachment | null,
   runId: string,
   page: NativeBuildTranscriptPage,
-  projection: Pick<NativeBuildProjection, "runtime">,
+  projection: Pick<NativeBuildProjection, "runtime"> & Partial<Pick<NativeBuildProjection, "tasks">>,
   usage: Pick<NativeBuildUsageProjection, "models" | "reservations">
 ): NativeBuildTranscriptAttachment {
   const retained = current?.runId === runId ? current.messages : [];
@@ -272,6 +276,8 @@ export function reconcileNativeBuildTranscript(
       ordinal: turn.ordinal,
       modelId: identity?.runtimeId ?? `native:${turn.actor.role}:${turn.actor.id}`,
       modelName: identity ? `${actorName} · ${identity.modelName}` : `${actorName} · Model unavailable`,
+      ...(identity?.taskId ? { taskId: identity.taskId } : {}),
+      ...(identity?.taskTitle ? { taskTitle: identity.taskTitle } : {}),
       content: turn.text,
     });
   }
@@ -304,10 +310,11 @@ function compareCodeUnits(left: string, right: string): number {
 export function nativeActorModelIdentity(
   actor: { role: "architect" | "worker" | "subagent" | "verifier"; id: string },
   sessionId: string,
-  projection: Pick<NativeBuildProjection, "runtime"> | null | undefined,
+  projection: (Pick<NativeBuildProjection, "runtime"> &
+    Partial<Pick<NativeBuildProjection, "tasks">>) | null | undefined,
   usage: Pick<NativeBuildUsageProjection, "models" | "reservations"> | null | undefined,
   occurredAt?: string
-): { runtimeId: string; modelName: string } | null {
+): { runtimeId: string; modelName: string; taskId?: string; taskTitle?: string } | null {
   const calls = Object.values(usage?.reservations ?? {})
     .filter((reservation) => reservation.kind === "model" &&
       reservation.attribution?.sessionId === sessionId &&
@@ -329,12 +336,14 @@ export function nativeActorModelIdentity(
       : undefined);
 
   const assignments = Object.entries(projection?.runtime.workerAssignments ?? {});
-  const assignment = assignments.find(([, value]) => value.sessionId === sessionId)?.[1] ??
-    assignments.find(([key]) => actor.id === key || actor.id.startsWith(`${key}:`))?.[1];
+  const assignmentEntry = assignments.find(([, value]) => value.sessionId === sessionId) ??
+    assignments.find(([key]) => actor.id === key || actor.id.startsWith(`${key}:`));
+  const assignment = assignmentEntry?.[1];
   // Subagents may inherit a worker's runtime without a direct assignment.
-  const parent = actor.role === "subagent"
-    ? assignments.find(([key]) => actor.id.startsWith(`${key}:`))?.[1]
+  const parentEntry = actor.role === "subagent"
+    ? assignments.find(([key]) => actor.id.startsWith(`${key}:`))
     : undefined;
+  const parent = parentEntry?.[1];
   const runtimeId = attributed?.runtimeId ??
     (actor.role === "architect" ? projection?.runtime.architect.runtimeId
       : actor.role === "verifier" ? actor.id
@@ -342,9 +351,26 @@ export function nativeActorModelIdentity(
         (actor.role === "subagent" ? projection?.runtime.architect.runtimeId : undefined));
   if (!runtimeId) return null;
   const catalog = usage?.models?.find((model) => model.runtimeId === runtimeId);
+  // Use the provider and full model identifier, not a possibly-ambiguous
+  // display alias. Different providers can expose identical model names.
+  const providerId = attributed?.providerId ?? catalog?.providerId;
+  const modelId = attributed?.modelId ?? catalog?.modelId;
+  const modelName = providerId && modelId
+    ? `${providerId} / ${modelId}`
+    : catalog?.displayName ?? modelId ?? runtimeId;
+  const selectedEntry = assignmentEntry ?? parentEntry;
+  const key = selectedEntry?.[0];
+  const taskIdFromAssignment = selectedEntry?.[1].taskId ??
+    (key && key.lastIndexOf(":") > 0 ? key.slice(0, key.lastIndexOf(":")) : undefined);
+  const taskId = actor.role === "worker" || actor.role === "subagent"
+    ? attributed?.taskId ?? taskIdFromAssignment
+    : undefined;
+  const taskTitle = taskId ? projection?.tasks?.[taskId]?.objective : undefined;
   return {
     runtimeId,
-    modelName: catalog?.displayName ?? catalog?.modelId ?? attributed?.modelId ?? runtimeId,
+    modelName,
+    ...(taskId ? { taskId } : {}),
+    ...(taskTitle ? { taskTitle } : {}),
   };
 }
 

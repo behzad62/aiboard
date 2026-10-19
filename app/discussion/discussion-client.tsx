@@ -1997,6 +1997,8 @@ function DiscussionPageInner() {
         id: turn.id,
         modelId: identity?.runtimeId ?? `native:${turn.actor.role}:${turn.actor.id}`,
         modelName: `${role} · ${identity?.modelName ?? "Model unavailable"}`,
+        ...(identity?.taskId ? { taskId: identity.taskId } : {}),
+        ...(identity?.taskTitle ? { taskTitle: identity.taskTitle } : {}),
         content: turn.content,
         segments: turn.segments,
         streaming: turn.streaming,
@@ -2583,13 +2585,18 @@ function DiscussionPageInner() {
           activeActors={isActive ? (nativeObservability?.agents ?? [])
             .filter((agent) => agent.status === "active")
             .slice(0, 8)
-            .map((agent) => ({
-              id: agent.sessionId,
-              role: agent.actor.role,
-              name: nativeActorModelIdentity(
+            .map((agent) => {
+              const identity = nativeActorModelIdentity(
                 agent.actor, agent.sessionId, nativeProjection, nativeObservability?.budget
-              )?.modelName ?? "Model unavailable",
-            })) : []}
+              );
+              return {
+                id: agent.sessionId,
+                role: agent.actor.role,
+                name: identity?.modelName ?? "Model unavailable",
+                ...(identity?.taskId ? { taskId: identity.taskId } : {}),
+                ...(identity?.taskTitle ? { taskTitle: identity.taskTitle } : {}),
+              };
+            }) : []}
           onDownload={downloadTranscript}
         />
         {discussion.nativeBuildRunId && !nativeProjection && (

@@ -358,6 +358,57 @@ assert.equal(nativeActorModelIdentity(
   workspaceWorkerSession, workerWithTaskKey, workerModelUsage
 )?.modelName, "kimi-k2", "live worker turn uses its latest attributed model");
 
+// Provider-qualified names must not collapse distinct providers exposing
+// identical model IDs. Task context comes from the attributed call and the plan.
+const taskContextProjection = {
+  runtime: {
+    architect: { runtimeId: "architect-runtime" },
+    workerAssignments: {
+      "task-auth:1": { runtimeId: "openrouter-runtime", sessionId: "worker-auth", taskId: "task-auth" },
+      "task-api:1": { runtimeId: "direct-runtime", sessionId: "worker-api", taskId: "task-api" },
+    },
+  },
+  tasks: {
+    "task-auth": { id: "task-auth", objective: "Implement OAuth session persistence" },
+    "task-api": { id: "task-api", objective: "Build the MCP relay API" },
+  },
+} as never;
+const taskContextUsage = {
+  models: [
+    { runtimeId: "openrouter-runtime", providerId: "openrouter", modelId: "deepseek/flash", displayName: "Flash" },
+    { runtimeId: "direct-runtime", providerId: "deepseek", modelId: "deepseek/flash", displayName: "Flash" },
+  ],
+  reservations: {
+    auth: {
+      reservationId: "model:worker-auth:1", kind: "model", status: "settled",
+      settledAt: "2026-10-19T12:00:01.000Z",
+      attribution: { sessionId: "worker-auth", role: "worker", runtimeId: "openrouter-runtime",
+        providerId: "openrouter", modelId: "deepseek/flash", taskId: "task-auth" },
+    },
+    api: {
+      reservationId: "model:worker-api:1", kind: "model", status: "settled",
+      settledAt: "2026-10-19T12:00:01.000Z",
+      attribution: { sessionId: "worker-api", role: "worker", runtimeId: "direct-runtime",
+        providerId: "deepseek", modelId: "deepseek/flash", taskId: "task-api" },
+    },
+  },
+} as never;
+const qualifiedTranscript = reconcileNativeBuildTranscript(null, "run-qualified", {
+  turns: [
+    { id: "auth-turn", actor: { role: "worker", id: "worker-auth" }, sessionId: "worker-auth",
+      occurredAt: "2026-10-19T12:00:02.000Z", sequence: 1, ordinal: 0, text: "OAuth done" },
+    { id: "api-turn", actor: { role: "worker", id: "worker-api" }, sessionId: "worker-api",
+      occurredAt: "2026-10-19T12:00:02.000Z", sequence: 2, ordinal: 0, text: "API done" },
+  ], cursor: 2,
+} as never, taskContextProjection, taskContextUsage);
+assert.deepEqual(qualifiedTranscript.messages.map((message) => [message.modelName, message.taskId, message.taskTitle]), [
+  ["Worker worker-auth · openrouter / deepseek/flash", "task-auth", "Implement OAuth session persistence"],
+  ["Worker worker-api · deepseek / deepseek/flash", "task-api", "Build the MCP relay API"],
+], "same model name from different providers is disambiguated and saved turns keep task context");
+assert.equal(nativeActorModelIdentity(
+  { role: "worker", id: "worker-api" }, "worker-api", taskContextProjection, taskContextUsage
+)?.taskTitle, "Build the MCP relay API", "active worker carries its current plan task");
+
 const sameCheckpointTranscript = reconcileNativeBuildTranscript(
   null,
   "run_same_checkpoint",

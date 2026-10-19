@@ -43,6 +43,27 @@ assert.ok(cleaned.includes("Updated the plan"));
 assert.ok(!cleaned.includes("**Architect**:"));
 assert.ok(!cleaned.includes('font-semibold uppercase tracking-wider">architect</span>'));
 
+const qualifiedFeed = renderToStaticMarkup(createElement(BuildTranscriptFeed, {
+  messages: [
+    { id: "role-task", round: 1, modelId: "openrouter-runtime",
+      modelName: "Worker worker-task · openrouter / deepseek/flash",
+      taskId: "task-auth", taskTitle: "Implement OAuth session persistence", content: "Implementing now" },
+  ],
+  active: true,
+  activeActors: [
+    { id: "active-worker", role: "worker", name: "deepseek / deepseek/flash",
+      taskId: "task-api", taskTitle: "Build MCP relay API" },
+  ],
+  onDownload() {},
+}));
+assert.ok(qualifiedFeed.includes("openrouter / deepseek/flash"));
+assert.ok(qualifiedFeed.includes("task-auth"));
+assert.ok(qualifiedFeed.includes("Implement OAuth session persistence"));
+assert.ok(qualifiedFeed.includes("deepseek / deepseek/flash"));
+assert.ok(qualifiedFeed.includes("task-api"));
+assert.ok(qualifiedFeed.includes("Build MCP relay API"));
+assert.ok(!qualifiedFeed.includes(">worker-task<"), "Internal worker actor ID is not the card heading");
+
 // Build header stays underneath the app navbar (h-14) and above the transcript.
 const workspace = renderToStaticMarkup(createElement(BuildWorkspace, {
   topic: "Build test project", statusPill: "Building", crew: { workers: [], verifiers: [] }, runnerChip: "Runner",

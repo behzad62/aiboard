@@ -11,6 +11,8 @@ export interface BuildFeedMessage {
   ordinal?: number;
   modelId: string;
   modelName: string;
+  taskId?: string;
+  taskTitle?: string;
   content: string;
   /** Live turns only: streamed reasoning / answer text / tool-call starts, in order. */
   segments?: Array<{ channel: "text" | "reasoning" | "tool"; text: string }>;
@@ -23,6 +25,8 @@ export interface ActiveBuildActor {
   id: string;
   role: BuildActorRole;
   name: string;
+  taskId?: string;
+  taskTitle?: string;
 }
 
 export function buildActorRole(message: Pick<BuildFeedMessage, "modelName" | "modelId">): BuildActorRole {
@@ -202,7 +206,15 @@ export function BuildTranscriptFeed({
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="sr-only">{role} turn: </span>
-                          <span className="truncate text-sm font-medium" title={message.modelName}>{modelLabel}</span>
+                          <span className="min-w-0 max-w-full truncate text-sm font-medium" title={message.modelName}>{modelLabel}</span>
+                          {message.taskId && (
+                            <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground sm:max-w-sm"
+                              title={message.taskTitle ? `${message.taskId} — ${message.taskTitle}` : message.taskId}
+                              aria-label={message.taskTitle ? `Task ${message.taskId}: ${message.taskTitle}` : `Task ${message.taskId}`}>
+                              <span className="shrink-0 font-semibold text-foreground/80">{message.taskId}</span>
+                              {message.taskTitle && <span className="min-w-0 truncate">· {message.taskTitle}</span>}
+                            </span>
+                          )}
                           {message.streaming && <span className="text-xs font-medium text-primary motion-safe:animate-pulse">Streaming…</span>}
                         </div>
                         {!expanded && <p className="mt-1.5 truncate text-xs text-muted-foreground">{preview || "Model response"}</p>}
@@ -229,7 +241,13 @@ export function BuildTranscriptFeed({
             <div key={actor.id} className="flex items-center gap-2 pl-2 text-sm text-muted-foreground">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary motion-safe:animate-pulse" aria-hidden="true" />
               <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase", roleTone[actor.role])}>{actor.role}</span>
-              <span className="min-w-0 truncate">{actor.name}</span>
+              <span className="min-w-0 truncate" title={actor.name}>{actor.name}</span>
+              {actor.taskId && (
+                <span className="min-w-0 max-w-[40%] truncate rounded-md border border-border/70 px-2 py-0.5 text-[11px]"
+                  title={actor.taskTitle ? `${actor.taskId} — ${actor.taskTitle}` : actor.taskId}>
+                  {actor.taskId}{actor.taskTitle ? ` · ${actor.taskTitle}` : ""}
+                </span>
+              )}
               <span className="ml-auto shrink-0 text-xs">Working…</span>
             </div>
           ))}
