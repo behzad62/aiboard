@@ -38,6 +38,23 @@ export function assertSubmissionHasNoSecrets(files: readonly SubmissionFile[]): 
   }
 }
 
+/**
+ * The refusal submit_task would give for this file's content, or undefined. Writes report it at once:
+ * a worker found out only at submission, after every build and test run, and had to redo them all
+ * (tunnel run).
+ */
+export function submissionSecretNotice(path: string, text: string): string | undefined {
+  const normalized = submissionPath(path);
+  if (secretFilePath(normalized)) return `submit_task will refuse ${normalized}: secret or key material files cannot be submitted.`;
+  for (const line of text.split("\n")) {
+    const hit = secretLine(line);
+    if (hit === false) continue;
+    return `submit_task will refuse ${normalized}: secret or key material detected [REDACTED]` +
+      `${hit === true ? "" : ` (value assigned to ${hit})`}. Use an obviously fake placeholder or build test values at runtime.`;
+  }
+  return undefined;
+}
+
 function secretFilePath(path: string): boolean {
   const name = path.split("/").at(-1)!.toLowerCase();
   return name === ".env" || name.startsWith(".env.") || /\.(?:pem|p12|pfx|key)$/.test(name) || /^id_(?:rsa|dsa|ecdsa|ed25519)$/.test(name);
@@ -61,9 +78,15 @@ function secretLine(line: string): boolean | string {
     const memberReference = match[2] === undefined && /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(value);
     const interpolatedTemplate = match[2] === "`" && value.includes("${") && value.replace(/\$\{[^}]*\}/g, "").length < 16;
     const anglePlaceholder = /<[A-Za-z][\w-]*>/.test(value);
+    // The refusal tells the worker to use an obviously fake placeholder, so one must pass: a value that
+    // says so, or one with almost no variety. A redaction task's tests need credential-named fields, and
+    // without this the worker obfuscated its own field names to get through (tunnel run). The token
+    // patterns above still refuse unconditionally.
+    const obviouslyFake = /fake|dummy|example|placeholder|not[-_ ]?a[-_ ]?real|redacted|changeme/i.test(value) ||
+      new Set(value).size < 6;
     if (
       isSensitiveKey(match[1]!) && !environmentReference && !templateReference && !wholePlaceholder &&
-      !callExpression && !memberReference && !interpolatedTemplate && !anglePlaceholder
+      !callExpression && !memberReference && !interpolatedTemplate && !anglePlaceholder && !obviouslyFake
     ) return match[1]!;
   }
   return false;

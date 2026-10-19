@@ -105,6 +105,8 @@ export function createSubmitTaskTool(
           validationBudgetJustification: { type: "string", minLength: 1, maxLength: VALIDATION_BUDGET_JUSTIFICATION_MAX_LENGTH },
           criterionEvidenceLinks: {
             type: "array",
+            // Unstated, this cost a worker a refused 12 KB submission and a rewrite (tunnel run).
+            description: "Exactly one link per acceptance criterion: the single evidence record that best proves it, with that record's artifact hashes. Listing a criterion twice is refused.",
             minItems: requireCriterionEvidenceLinks ? 1 : 0,
             items: criterionEvidenceLinkSchema(),
           },
@@ -120,6 +122,9 @@ export function createSubmitTaskTool(
     },
     validate: (input) =>
       validateSubmit(input, requireCriterionEvidenceLinks, requireValidationScope),
+    // Commit, guards and change-set capture run many Git steps; at 120 s one was cut off after its
+    // commit and the worker had to resubmit (tunnel run).
+    timeoutMs: () => 15 * 60_000,
     assessAccess: () => ({
       capability: "task.submit",
       paths: [{ path: ".", access: "write" }],

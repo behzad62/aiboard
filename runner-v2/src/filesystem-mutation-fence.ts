@@ -24,7 +24,7 @@ import { ExecutionGrantError, reserveExecutionGrantForFilesystemMutation,
 export type FilesystemMutationErrorCode = "expected_revision_required" | "invalid_revision" | "revision_conflict"
   | "target_already_exists" | "target_missing" | "filesystem_alias" | "filesystem_identity_changed"
   | "hardlink_confinement_unprovable" | "filesystem_safety_unsupported" | "filesystem_cleanup_unverified"
-  | "directory_not_empty" | "ambiguous_patch";
+  | "directory_not_empty" | "ambiguous_patch" | "no_op_patch";
 export class FilesystemMutationError extends Error {
   constructor(readonly code: FilesystemMutationErrorCode, message: string,
     readonly details: Readonly<Record<string, unknown>> = {}) {

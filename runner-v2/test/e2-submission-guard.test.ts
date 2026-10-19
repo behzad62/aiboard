@@ -107,6 +107,15 @@ test("E2 secret control ignores removed lines and nonliteral references; invalid
   assert.throws(() => assertSubmissionHasNoSecrets([file("test/logger.test.ts", false, [
     `const deviceToken = "aib_dev_${"9f3a".repeat(8)}";`,
   ])]), /\[REDACTED\] in test\/logger\.test\.ts \(value assigned to deviceToken\)/, "a real literal still blocks");
+  // An obviously fake value passes, as the refusal advises; a real token pattern never does.
+  assert.doesNotThrow(() => assertSubmissionHasNoSecrets([file("test/logger.test.ts", false, [
+    'const fields = { access_token: "fake-access-token-for-redaction-test" };',
+    'const header = { authorization: "Bearer not-a-real-token-value" };',
+    'const adminToken = "xxxxxxxxxxxxxxxxxxxxxxxx";',
+  ])]));
+  assert.throws(() => assertSubmissionHasNoSecrets([file("test/logger.test.ts", false, [
+    `const fake_key = "sk-proj-${"Ab3x".repeat(8)}";`,
+  ])]), /\[REDACTED\]/, "a real token shape blocks even under a fake-sounding name");
   for (const path of ["../src/value.ts", "src/../outside.ts", "C:\\src\\value.ts", "src/./value.ts", "src//value.ts", "bad\npath"]) assert.throws(() => inspectSubmissionScope([file(path)], claim), /path identity/);
 });
 

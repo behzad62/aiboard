@@ -285,6 +285,50 @@ test("fs.patch accepts LF multiline edits for CRLF files without mixing line end
   }
 });
 
+test("fs.patch names no-op edits and refuses a batch that changes nothing; writes warn about secrets submit_task refuses", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-fs-patch-noop-")));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const file = join(workspace, "logger.ts");
+  const original = "export const a = 1;\nexport const b = 2;\n";
+  writeFileSync(file, original);
+  const broker = brokerWithFilesystem(workspace, new ArtifactStore(join(root, "artifacts")));
+  const value = (result: Awaited<ReturnType<typeof invoke>>) =>
+    (result.content.find((block) => block.type === "json") as { value: Record<string, unknown> }).value;
+  try {
+    const allNoOp = await invoke(broker, "noop_all", "fs.patch", {
+      path: "logger.ts",
+      expectedSha256: sha256(Buffer.from(original)),
+      edits: [{ search: "export const a = 1;", replace: "export const a = 1;" }],
+    });
+    assert.equal(allNoOp.isError, true);
+    assert.equal(allNoOp.error?.code, "no_op_patch");
+    assert.equal(readFileSync(file, "utf8"), original);
+
+    const mixed = await invoke(broker, "noop_mixed", "fs.patch", {
+      path: "logger.ts",
+      expectedSha256: sha256(Buffer.from(original)),
+      edits: [
+        { search: "export const a = 1;", replace: "export const a = 1;" },
+        { search: "export const b = 2;", replace: "export const b = 3;" },
+      ],
+    });
+    assert.equal(mixed.isError, false);
+    assert.deepEqual(value(mixed).notices, ["Edit 1 changed nothing: its replace is identical to its search."]);
+    assert.equal(readFileSync(file, "utf8"), "export const a = 1;\nexport const b = 3;\n");
+
+    const secret = await invoke(broker, "secret_write", "fs.write", {
+      path: "fixture.test.ts",
+      content: 'const DEVICE_TOKEN = "dt_live_0123456789abcdefABCDEF";\n',
+    });
+    assert.equal(secret.isError, false);
+    assert.match(String((value(secret).notices as string[])[0]), /submit_task will refuse fixture\.test\.ts: .*value assigned to DEVICE_TOKEN/);
+    assert.doesNotMatch(JSON.stringify(secret), /dt_live_0123/, "the notice never echoes the value");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("directory listing and search follow Git discovery and classification", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-fs-git-aware-")));
   const workspace = join(root, "workspace");

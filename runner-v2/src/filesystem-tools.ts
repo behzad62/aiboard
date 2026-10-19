@@ -1,5 +1,6 @@
 import { languageInvocation } from "./language-intelligence.js";
 import { preserveUtf8Bom } from "./encoding-safety.js";
+import { submissionSecretNotice } from "./submission-guard.js";
 import { createHash } from "node:crypto";
 import { fencedWrite, fencedPatch, fencedMove, fencedDelete, filesystemMutationFailure,
   FilesystemMutationError, isFilesystemMutation } from "./filesystem-mutation-fence.js";
@@ -256,7 +257,7 @@ export function createFilesystemTools(
     {
       definition: definition("fs.list", FS_LIST_DESCRIPTION, true, "none"),
       validate: objectWithString("path"),
-      assessAccess: (input) => pathAccess(input, "read"),
+      assessAccess: (input) => repositoryReadAccess(input),
       execute: async (input, context) => {
         const root = toolPath(context, input.path as string);
         const depth = integer(input.maxDepth, 1, 0, 20);
@@ -291,7 +292,7 @@ export function createFilesystemTools(
     {
       definition: definition("fs.search", FS_SEARCH_DESCRIPTION, true, "none"),
       validate: objectWithStrings("path", "pattern"),
-      assessAccess: (input) => pathAccess(input, "read"),
+      assessAccess: (input) => repositoryReadAccess(input),
       execute: async (input, context) => {
         const root = toolPath(context, input.path as string);
         const limit = integer(
@@ -410,10 +411,18 @@ export function createFilesystemTools(
           if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
+          let noOpEdits: number[] = [];
           const next = fencedPatch(context, path, input.expectedSha256, (bytes) => {
             const original = decodeText(bytes);
             let nextText = original;
             const edits = patchEdits(input);
+            noOpEdits = edits.flatMap((edit, index) => edit.search === edit.replace ? [index + 1] : []);
+            if (noOpEdits.length === edits.length) {
+              throw new FilesystemMutationError(
+                "no_op_patch",
+                `Every edit's replace is identical to its search, so nothing would change (edit ${noOpEdits.join(", ")}). No changes were written.`,
+              );
+            }
             for (const [index, edit] of edits.entries()) {
               const newline = preferredNewline(nextText);
               const exactCount = occurrences(nextText, edit.search);
@@ -439,7 +448,10 @@ export function createFilesystemTools(
             }
             return preserveUtf8Bom(bytes, Buffer.from(nextText));
           });
-          return await successRevision(context, path, next, options.diagnostics);
+          // A no-op edit used to succeed silently, so the model believed it had changed the code.
+          return await successRevision(context, path, next, options.diagnostics, noOpEdits.length > 0
+            ? `Edit ${noOpEdits.join(", ")} changed nothing: its replace is identical to its search.`
+            : undefined);
         }),
     },
     {
@@ -799,6 +811,18 @@ function pathAccess(input: Input, access: "read" | "write") {
   };
 }
 
+/**
+ * List and search read the repository snapshot, which runs Git at the workspace root; with only the
+ * requested folder granted, every folder-scoped search failed with "Git working directory is outside
+ * the original call access" (tunnel run). Both may already list the whole workspace with ".".
+ */
+function repositoryReadAccess(input: Input) {
+  return {
+    capability: "filesystem.read",
+    paths: [{ path: input.path as string, access: "read" as const }, { path: ".", access: "read" as const }],
+  };
+}
+
 function toolPath(context: ToolExecutionContext, path: string): string {
   if (!context.workspacePath) throw new Error("Filesystem tool requires a workspace.");
   return resolve(context.workspacePath, path);
@@ -972,11 +996,15 @@ async function successRevision(
   path: string,
   bytes: Buffer,
   diagnostics?: Pick<LanguageIntelligenceProvider, "diagnostics">,
+  notice?: string,
 ): Promise<ToolExecutionOutput> {
+  const secretNotice = submissionSecretNotice(displayPath(context, path), bytes.toString("utf8"));
+  const notices = [notice, secretNotice].filter((value): value is string => value !== undefined);
   const metadata: Record<string, unknown> = {
     path: displayPath(context, path),
     sha256: sha256(bytes),
     byteLength: bytes.byteLength,
+    ...(notices.length > 0 ? { notices } : {}),
   };
   if (diagnostics && context.workspacePath) {
     try {
