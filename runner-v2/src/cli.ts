@@ -58,6 +58,8 @@ interface CliOptions {
   mcpServers: McpServerSpec[];
   allowOrigins: string[];
   capabilitiesConfigPath?: string;
+  /** Runs the owner set aside: left paused and untouched, not rebuilt at startup. */
+  setAsideRuns: ReadonlySet<string>;
 }
 
 void main();
@@ -145,6 +147,7 @@ async function main(): Promise<void> {
       options.stateDirectory,
       options.projectPath,
       executionHost.filteredEnvironmentSource(),
+      options.setAsideRuns,
     );
     const providerConfigs = new EncryptedProviderConfigStore(
       join(options.stateDirectory, "provider-configs.enc"),
@@ -188,7 +191,7 @@ async function main(): Promise<void> {
       },
       prepareSpec: (spec, options) => buildFactory.prepareSpec(spec, options),
       shouldRecoverSpec: (spec) =>
-        !isTerminalRunState(supervisor.getRun(spec.runId).state),
+        !isTerminalRunState(supervisor.getRun(spec.runId).state) && !options.setAsideRuns.has(spec.runId),
       validateRecoveredSpec: async (spec) => {
         const run = supervisor.getRun(spec.runId);
         if (isTerminalRunState(run.state)) return;
@@ -220,7 +223,8 @@ async function main(): Promise<void> {
         if (report.failures.length === 0) return;
         throw new AggregateError(
           report.failures.map((failure) => failure.error),
-          `Native Build startup recovery left ${report.failures.length} unresolved owned resource failure(s): ${report.failures.map((failure) => `${failure.runId}:${failure.stage}`).join(", ")}.`,
+          `Native Build startup recovery left ${report.failures.length} unresolved owned resource failure(s): ${report.failures.map((failure) => `${failure.runId}:${failure.stage}`).join(", ")}. ` +
+          `The run stays paused; a fixed runner recovers it, or start with ${[...new Set(report.failures.map((failure) => `--set-aside-run ${failure.runId}`))].join(" ")} to leave it untouched.`,
         );
       },
     }]);
@@ -316,13 +320,14 @@ async function validateActiveRecoveryCapabilityContracts(
   stateDirectory: string,
   projectDirectory: string,
   environment: Readonly<Record<string, string>>,
+  setAsideRuns: ReadonlySet<string>,
 ): Promise<void> {
   const specs = new SqliteBuildSpecStore(join(stateDirectory, "build-specs.sqlite"));
   const failures: unknown[] = [];
   try {
     for (const spec of specs.list()) {
       const run = supervisor.getRun(spec.runId);
-      if (isTerminalRunState(run.state)) continue;
+      if (isTerminalRunState(run.state) || setAsideRuns.has(spec.runId)) continue;
       try {
         await preflightRecoveredRunnerCapabilities({
           spec,
@@ -349,6 +354,12 @@ async function validateActiveRecoveryCapabilityContracts(
   }
 }
 
+/**
+ * A capability-contract refusal is a lasting incompatibility and fails the run. Any other rebuild
+ * failure pauses it instead: twice a runner defect (a replay check the new code disagreed with)
+ * permanently failed a healthy run (tunnel run). A fixed runner recovers it; --set-aside-run lets the
+ * owner start the runner without it.
+ */
 function recordRuntimeRecoveryFailure(
   supervisor: RunSupervisor,
   runId: string,
@@ -357,7 +368,13 @@ function recordRuntimeRecoveryFailure(
   try {
     const run = supervisor.getRun(runId);
     if (isTerminalRunState(run.state)) return;
-    supervisor.fail(
+    if (classifyNativeBuildRecoveryError(error)?.kind === "capability") {
+      supervisor.fail(runId, `runtime-recovery:${run.lastSequence}`, runtimeRecoveryReason(error));
+      return;
+    }
+    writeRunnerWarning(runId, new Error(`${runtimeRecoveryReason(error)}: the run stays ${run.state === "running" ? "paused" : run.state}; start with --set-aside-run ${runId} to leave it untouched.`, { cause: error }));
+    if (run.state !== "running") return;
+    supervisor.pause(
       runId,
       `runtime-recovery:${run.lastSequence}`,
       runtimeRecoveryReason(error),
@@ -407,6 +424,7 @@ function parseArguments(args: string[]): CliOptions {
   const mcpEnvelopes: string[] = [];
   const allowOrigins: string[] = [];
   const allowOriginSet = new Set<string>();
+  const setAsideRuns = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
     if (!flag?.startsWith("--")) {
@@ -430,6 +448,15 @@ function parseArguments(args: string[]): CliOptions {
         name: value.slice(0, separator).trim(),
         command: value.slice(separator + 1).trim(),
       });
+      index += 1;
+      continue;
+    }
+    if (flag === "--set-aside-run") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("--") || !value.trim()) {
+        throw new Error("invalid_arguments: Expected a run ID after --set-aside-run.");
+      }
+      setAsideRuns.add(value.trim());
       index += 1;
       continue;
     }
@@ -492,6 +519,7 @@ function parseArguments(args: string[]): CliOptions {
     mcpServers: [...configureMcpServers(mcpServers, mcpEnvelopes)],
     allowOrigins,
     ...(capabilitiesConfigPath ? { capabilitiesConfigPath } : {}),
+    setAsideRuns,
   };
 }
 
@@ -530,6 +558,7 @@ function printHelp(): void {
     "  --mcp <name=command>    Register MCP server; can be repeated.",
     "  --mcp-envelope <name=JSON> Fixed paths/network/credential requirements; defaults to no extra access.",
     "  --allow-origin <url>    Allowed browser CORS origin (repeatable, comma-separated list supported).",
+    "  --set-aside-run <id>    Start without rebuilding this run; it stays paused and untouched (repeatable).",
     "                         Defaults to loopback origins + aiboard.me.",
     "  --help, -h              Show this help text.",
     "",

@@ -433,12 +433,14 @@ test("CLI records a non-capability runtime recovery failure and blocks readiness
     assert.equal(outcome.code, 1);
     assert.equal(outcome.stdout, "");
     assert.match(outcome.stderr, /startup reconciliation is blocked by nativeBuildRuntime/i);
+    assert.match(outcome.stderr, new RegExp(`--set-aside-run ${runId}`), "the refusal names the way to start without it");
 
+    // A run the runner cannot rebuild is never failed by it: a fixed runner recovers it.
     const recovered = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")));
     try {
       const run = recovered.getRun(runId);
-      assert.equal(run.state, "failed");
-      assert.equal(run.stopReason, "runtime-recovery:baseline_failed");
+      assert.equal(run.state, "created");
+      assert.equal(run.stopReason, undefined);
     } finally {
       recovered.close();
     }
