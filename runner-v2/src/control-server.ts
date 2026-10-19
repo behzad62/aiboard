@@ -956,12 +956,14 @@ export class ControlServer {
         const body = await readJson<RepairIssueBody>(request);
         if (!isNonEmptyString(body.idempotencyKey)) invalidBody();
         const builds = this.requireBuilds();
+        // The answer unpauses the Build; the supervisor run must follow, or the app keeps showing
+        // "paused" and the pump stops after one step (tunnel run).
         if (segments[6] === "extend") {
           if (!Number.isSafeInteger(body.additionalCycles) || body.additionalCycles! < 1 || body.additionalCycles! > MAX_REPAIR_CYCLE_EXTENSION || !builds.extendRepairIssueBudget) invalidBody();
-          sendJson(response, 200, await builds.extendRepairIssueBudget!(runId, issueId, body.additionalCycles!, body.idempotencyKey));
+          sendJson(response, 200, await this.ownerPlanningControl(runId, () => builds.extendRepairIssueBudget!(runId, issueId, body.additionalCycles!, body.idempotencyKey)));
         } else {
           if (!builds.clearRepairExternalBlocker) invalidBody();
-          sendJson(response, 200, await builds.clearRepairExternalBlocker!(runId, issueId, body.idempotencyKey));
+          sendJson(response, 200, await this.ownerPlanningControl(runId, () => builds.clearRepairExternalBlocker!(runId, issueId, body.idempotencyKey)));
         }
         return;
       }
@@ -981,11 +983,11 @@ export class ControlServer {
         sendJson(
           response,
           200,
-          await this.requireBuilds().extendRepairCycles(
+          await this.ownerPlanningControl(runId, () => this.requireBuilds().extendRepairCycles(
             runId,
             body.additionalRepairPlans,
             body.idempotencyKey,
-          ),
+          )),
         );
         return;
       }
