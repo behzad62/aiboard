@@ -34,7 +34,7 @@ export function createRuntimeGitCommandRunner(input: RuntimeGitCommandRunnerOpti
   if (!input.runId.trim() || !input.executable.trim() || input.executable.includes("\0")) throw new Error("Git runner requires an exact run and executable.");
   if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1) throw new Error("Git runtime timeout must be a positive integer.");
 
-  const runBytes = async (requested: GitCommandOptions): Promise<GitBinaryCommandResult> => {
+  const runOnce = async (requested: GitCommandOptions): Promise<GitBinaryCommandResult> => {
     // The caller must not change the command while its authority is acquired.
     const options = snapshotOptions(requested);
     const policy = prepareGitExecutionPolicy(options);
@@ -56,7 +56,8 @@ export function createRuntimeGitCommandRunner(input: RuntimeGitCommandRunnerOpti
       const process = executed.process;
       if (process.outcome === "launch_failed") throw new GitCommandError("git_unavailable", "Git executable could not be launched by the selected runtime.");
       if (process.outcome !== "exited" || process.cleanup.state !== "verified_empty" || !Number.isSafeInteger(process.exitCode)) {
-        throw new GitCommandError("command_failed", `Git runtime did not finish with verified cleanup (${process.outcome}/${process.cleanup.state}).`);
+        const error = new GitCommandError("command_failed", `Git runtime did not finish with verified cleanup (${process.outcome}/${process.cleanup.state}) for git ${options.args[0] ?? ""}.`);
+        throw Object.assign(error, { timedOutVerifiedEmpty: process.outcome === "timed_out" && process.cleanup.state === "verified_empty" });
       }
       const maximum = options.maxOutputBytes!;
       if (process.output.length !== 2 || process.output.filter((stream) => stream.stream === "stdout").length !== 1 ||
@@ -83,6 +84,18 @@ export function createRuntimeGitCommandRunner(input: RuntimeGitCommandRunnerOpti
     if (failed) throw primary;
     return result!;
   };
+  // One retry for a read-only inspection whose process timed out and was verifiably cleaned up: a
+  // `git rev-parse` that had already printed its answer went unobserved for 36 s at runner startup
+  // and failed a task whose work was committed (tunnel run; 1 of 7,740 processes). Same timeout,
+  // same supervision, fresh authority; mutating commands are never retried.
+  const runBytes = async (requested: GitCommandOptions): Promise<GitBinaryCommandResult> => {
+    try {
+      return await runOnce(requested);
+    } catch (error) {
+      if (!(error as { timedOutVerifiedEmpty?: boolean }).timedOutVerifiedEmpty || !READ_ONLY_GIT.has(requested.args[0] ?? "")) throw error;
+      return await runOnce(requested);
+    }
+  };
   return Object.freeze({
     runBytes,
     async run(options: GitCommandOptions): Promise<GitCommandResult> {
@@ -91,6 +104,8 @@ export function createRuntimeGitCommandRunner(input: RuntimeGitCommandRunnerOpti
     },
   });
 }
+
+const READ_ONLY_GIT = new Set(["rev-parse", "symbolic-ref", "status", "show", "diff", "ls-files", "ls-tree", "log", "cat-file", "rev-list", "merge-base", "diff-tree", "for-each-ref"]);
 
 function snapshotOptions(options: GitCommandOptions): Readonly<GitCommandOptions> {
   const maximum = options.maxOutputBytes ?? 4 * 1024 * 1024;

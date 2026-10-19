@@ -193,3 +193,24 @@ for (const variant of ["complete", "incomplete", "short", "over-bound"] as const
     assert.equal(f.state.released, true);
   });
 }
+
+test("a read-only git command that timed out with verified cleanup is retried once; a mutating one never is", async () => {
+  // Tunnel run: `git rev-parse` printed its answer, went unobserved for 36 s at runner startup and
+  // failed a task whose work was already committed.
+  const f = fixture(Buffer.from("D:/workspace\n"));
+  const exited = f.state.outcome;
+  const timedOut: OneShotCommandResult = { ...exited, process: { ...exited.process, outcome: "timed_out" } as OneShotCommandResult["process"] };
+  Object.defineProperty(f.state, "outcome", { get: () => (f.calls.filter((call) => call === "execute").length <= 1 ? timedOut : exited), configurable: true });
+  const result = await f.runner.run({ cwd, args: ["rev-parse", "--show-toplevel"] });
+  assert.equal(result.stdout, "D:/workspace\n");
+  assert.equal(f.calls.filter((call) => call === "authorize").length, 2, "the retry takes fresh authority");
+  assert.equal(f.calls.filter((call) => call === "release").length, 2);
+
+  const g = fixture();
+  const always: OneShotCommandResult = { ...g.state.outcome, process: { ...g.state.outcome.process, outcome: "timed_out" } as OneShotCommandResult["process"] };
+  g.state.outcome = always;
+  await assert.rejects(g.runner.run({ cwd, args: ["add", "-A"] }), /timed_out\/verified_empty\) for git add/);
+  assert.equal(g.calls.filter((call) => call === "execute").length, 1, "mutating commands are never retried");
+  await assert.rejects(g.runner.run({ cwd, args: ["status"] }), /for git status/);
+  assert.equal(g.calls.filter((call) => call === "execute").length, 3, "a read-only command retries exactly once");
+});
