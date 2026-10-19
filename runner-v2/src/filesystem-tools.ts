@@ -474,7 +474,7 @@ export function createFilesystemTools(
               if (count !== 1) {
                 throw new FilesystemMutationError(
                   "ambiguous_patch",
-                  `Edit ${index + 1}: expected one match, found ${count}. No changes were written.`,
+                  `Edit ${index + 1}: expected one match, found ${count}. ${patchMatchHint(nextText, search, count)}No changes were written.`,
                 );
               }
               const replacement = newline
@@ -1075,6 +1075,29 @@ async function successRevision(
     content: [json(metadata)],
     isError: false,
   };
+}
+
+/**
+ * Where to look instead. A bare "found 0" left the worker re-reading the file or guessing again
+ * (tunnel run: three refused patches in one task).
+ */
+function patchMatchHint(text: string, search: string, count: number): string {
+  const lines = text.split(/\r?\n/);
+  if (count > 1) {
+    const first = search.split(/\r?\n/)[0]!;
+    const at = lines.flatMap((line, index) => line.includes(first) ? [index + 1] : []).slice(0, 10);
+    return at.length ? `It starts on lines ${at.join(", ")}; include surrounding lines to make it unique. ` : "";
+  }
+  const wanted = search.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  if (!wanted.length) return "";
+  for (const probe of wanted) {
+    const index = lines.findIndex((line) => line.trim() === probe);
+    if (index >= 0) {
+      const excerpt = lines.slice(index, index + Math.min(wanted.length + 2, 12)).map((line, offset) => `${index + offset + 1}: ${line}`).join("\n");
+      return `The line "${probe.slice(0, 120)}" is at line ${index + 1}; the file there reads:\n${excerpt}\n`;
+    }
+  }
+  return "No line of the search text occurs in the file; read the current content before patching. ";
 }
 
 function occurrences(value: string, search: string): number {

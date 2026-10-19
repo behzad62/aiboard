@@ -213,11 +213,19 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     assert.equal(failedPatch.isError, true);
     assert.equal(failedPatch.error?.code, "ambiguous_patch");
     assert.match(text(failedPatch), /edit 2/i);
+    assert.match(text(failedPatch), /No line of the search text occurs/);
     assert.deepEqual(
       readFileSync(join(workspace, "src", "app.ts")),
       beforeFailedPatch,
       "all replacements must validate before the atomic write"
     );
+    // Tunnel run: a bare "found 0" left the worker guessing; the refusal shows where the text is.
+    const drifted = await invoke(broker, "patch_drifted", "fs.patch", {
+      path: "src/app.ts",
+      edits: [{ search: "const alpha = 10;\nconst beta = 31;", replace: "x" }],
+    });
+    assert.equal(drifted.isError, true);
+    assert.match(text(drifted), /"const alpha = 10;" is at line 1; the file there reads:\n1: const alpha = 10;\n2: const beta = 30;/);
 
     const staleBatch = await invoke(broker, "patch_many_stale", "fs.patch", {
       path: "src/app.ts",
