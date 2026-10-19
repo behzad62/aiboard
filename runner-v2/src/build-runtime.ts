@@ -4513,9 +4513,13 @@ export class BuildRuntime {
           this.repairMembers(boundaryRootCauses),
           `boundary:${action.boundary.boundaryId}`,
         );
+        // The Architect may resolve a boundary failure by rechecking, which needs no task attempt or
+        // repair plan; gating its turn on those looped the owner's extension straight back into a
+        // pause (tunnel run). The issue budget and blockers still gate it.
         const boundaryDispatch = await this.prepareRepairDispatch(
           boundaryRootCauses,
           { taskId: task.id, evidenceIds: failedBoundaryChecks.flatMap((check) => check.evidenceIds ?? []) },
+          { capacityGate: false },
         );
         if (boundaryDispatch.paused) return boundaryDispatch.paused;
         await this.runArchitect({
@@ -5327,6 +5331,7 @@ export class BuildRuntime {
   private async prepareRepairDispatch(
     categories: readonly string[],
     scope: { taskId: string; evidenceIds: readonly string[]; failingIdsByCategory?: ReadonlyMap<string, readonly string[]> },
+    options: { capacityGate?: boolean } = {},
   ): Promise<{ categories: string[]; paused?: BuildStepResult }> {
     if (this.projection().planningPolicyVersion !== 1) return { categories: [...categories] };
     // The durable issue identity namespaces bare final-verification
@@ -5360,14 +5365,14 @@ export class BuildRuntime {
             `Issue ${member.rootCause} used ${issue.used}/${issue.limit} repair cycles. The owner may extend the budget with additionalCycles via repair.issue_budget_extended.`),
         };
       }
-      if (maxTaskAttemptsRemaining <= 0) {
+      if (options.capacityGate !== false && maxTaskAttemptsRemaining <= 0) {
         return {
           categories: [...categories],
           paused: this.pauseOnRepairIssue(member.issueId, "budget_exhausted",
             `Task ${scope.taskId} has no attempts remaining for ${member.rootCause}; re-scope the plan before dispatching another repair.`),
         };
       }
-      if (maxRepairPlanRemaining <= 0) {
+      if (options.capacityGate !== false && maxRepairPlanRemaining <= 0) {
         return {
           categories: [...categories],
           paused: this.pauseOnRepairIssue(member.issueId, "budget_exhausted",
