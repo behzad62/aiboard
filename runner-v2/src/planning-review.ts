@@ -885,6 +885,8 @@ export interface SubmitCoverageVerdictToolOptions {
   reusedFromReviewId?: string;
   /** Single-pass re-review: the runner recorded the own-view waiver with the release. */
   ownViewWaived?: boolean;
+  /** Re-review over the same obligations: the prior review's verdicts, which may be carried forward. */
+  priorObligationVerdicts?: readonly CoverageVerdictToolInput[];
   runtimeId: string;
   sessionId: string;
   clock?: () => string;
@@ -902,9 +904,13 @@ export function createSubmitCoverageVerdictTool(
       inputSchema: {
         type: "object",
         properties: {
+          carryForwardObligationIds: {
+            type: "array",
+            description: "Re-review only: obligations the plan diff does not affect. Their prior verdicts are carried forward instead of restated; list every other obligation in obligationVerdicts.",
+            items: { type: "string", minLength: 1 },
+          },
           obligationVerdicts: {
             type: "array",
-            minItems: 1,
             items: {
               type: "object",
               properties: {
@@ -1033,6 +1039,11 @@ export function createSubmitCoverageVerdictTool(
   };
 }
 
+function sameObligationSet(left: readonly string[], right: readonly string[]): boolean {
+  const ids = new Set(left);
+  return ids.size === right.length && right.every((id) => ids.has(id));
+}
+
 function validateSubmitCoverageVerdict(
   input: unknown,
   options: SubmitCoverageVerdictToolOptions,
@@ -1042,7 +1053,7 @@ function validateSubmitCoverageVerdict(
   }
   const record = input as Record<string, unknown>;
   const unknown = Object.keys(record).filter(
-    (key) => key !== "obligationVerdicts" && key !== "findings" && key !== "priorFindingChecks",
+    (key) => key !== "obligationVerdicts" && key !== "findings" && key !== "priorFindingChecks" && key !== "carryForwardObligationIds",
   );
   if (unknown.length > 0) {
     return { ok: false, issues: [`Coverage verdict has unknown fields: ${unknown.join(", ")}.`] };
@@ -1100,9 +1111,27 @@ function validateSubmitCoverageVerdict(
       evidenceRefs: [...(evidenceRefs as string[])],
     });
   }
+  // A re-review restated the whole verdict (16 KB, 27k output tokens) for a plan diff that only listed
+  // one task's files (tunnel run): obligations the diff leaves alone keep the prior review's verdict.
+  if (record.carryForwardObligationIds !== undefined) {
+    if (!Array.isArray(record.carryForwardObligationIds) || !options.priorObligationVerdicts) {
+      return { ok: false, issues: ["carryForwardObligationIds is only for a re-review over the same obligations."] };
+    }
+    for (const obligationId of record.carryForwardObligationIds) {
+      const prior = options.priorObligationVerdicts.find((verdict) => verdict.obligationId === obligationId);
+      if (typeof obligationId !== "string" || !prior) {
+        return { ok: false, issues: [`Obligation ${String(obligationId)} has no prior verdict to carry forward.`] };
+      }
+      if (seenObligations.has(obligationId)) {
+        return { ok: false, issues: [`Obligation ${obligationId} is both restated and carried forward.`] };
+      }
+      seenObligations.add(obligationId);
+      obligationVerdicts.push({ ...prior, evidenceRefs: [...prior.evidenceRefs], rationale: `Carried forward from ${options.priorReviewId}: ${prior.rationale}` });
+    }
+  }
   for (const obligationId of options.obligationIds) {
     if (!seenObligations.has(obligationId)) {
-      return { ok: false, issues: [`Derived obligation ${obligationId} has no recorded verdict.`] };
+      return { ok: false, issues: [`Derived obligation ${obligationId} has no recorded verdict${options.priorObligationVerdicts ? " (restate it or carry it forward)" : ""}.`] };
     }
   }
   if (!Array.isArray(record.findings)) {
@@ -2164,6 +2193,10 @@ export class NativeCoverageReviewRuntime {
           : {}),
         ...(input.reusedFromReviewId !== undefined ? { reusedFromReviewId: input.reusedFromReviewId } : {}),
         ...(input.ownViewWaived ? { ownViewWaived: true } : {}),
+        // Carry-forward is offered only when the prior review judged exactly these obligations.
+        ...(request.priorReview !== undefined && sameObligationSet(request.priorReview.obligationVerdicts.map((verdict) => verdict.obligationId), obligations.map((obligation) => obligation.id))
+          ? { priorObligationVerdicts: request.priorReview.obligationVerdicts.map((verdict) => ({ ...verdict, evidenceRefs: [...verdict.evidenceRefs] })) }
+          : {}),
         runtimeId: candidate.runtimeId,
         sessionId,
         clock: this.clock,

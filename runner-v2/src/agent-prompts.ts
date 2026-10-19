@@ -837,6 +837,7 @@ export const COVERAGE_REREVIEW_VERDICT_INSTRUCTIONS = [
   "The plan section shows only what changed since the revision the prior review judged, with the prior verdicts beside it. Carry a prior verdict forward when no added, changed or removed item touches its obligation; re-judge only the obligations the changes touch.",
   "You now have the prior findings (the immediate prior's every finding plus every cumulative open blocking finding). Check EACH one as resolved or outstanding with a rationale, judge the plan against your recorded obligations, and finish by calling submit_coverage_verdict exactly once.",
   "Check both directions: each prior finding resolved or outstanding with a rationale, AND no correction beyond what the findings require and no previously covered obligation regressed.",
+  "Restate verdicts only for obligations the plan diff affects; list the rest in carryForwardObligationIds to keep their prior verdicts.",
   "Findings retired by a source amendment are listed separately as retired: they need no check and never hold readiness.",
 ].join("\n");
 
