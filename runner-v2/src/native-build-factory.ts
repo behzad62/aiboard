@@ -3996,11 +3996,15 @@ export function createProviderModel(
     providerId: config.providerId,
     ...(config.supportsTools !== undefined ? { supportsTools: config.supportsTools } : {}),
     ...(config.hostedTools ? { hostedTools: config.hostedTools } : {}),
-    ...(config.protocol
-      ? { protocol: config.protocol }
-      : config.providerId === "xai"
-        ? { protocol: "responses" as const }
-        : {}),
+    // A provider whose docs put its agent tools on Responses (DeepSeek: apply_patch) gets Responses
+    // even when the app sent its Chat Completions default; a rejected request falls back per call.
+    ...(providerProtocolProfile(config.providerId)?.preferredProtocol
+      ? { protocol: providerProtocolProfile(config.providerId)!.preferredProtocol! }
+      : config.protocol
+        ? { protocol: config.protocol }
+        : config.providerId === "xai"
+          ? { protocol: "responses" as const }
+          : {}),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     ...(config.providerId === "openai" ? { promptCaching: true } : {}),
   });

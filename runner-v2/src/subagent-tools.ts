@@ -19,6 +19,7 @@ import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
+import { createOpenRouterApplyPatchTool } from "./openrouter-apply-patch-tool.js";
 import { createGitTools } from "./git-tools.js";
 import { createMemoryTools } from "./memory-tools.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
@@ -184,6 +185,12 @@ function spawnSubagentTool(
         ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
       })) {
         if (!readOnly || tool.definition.readOnly) broker.register(tool);
+      }
+      // A session that can edit may be offered a provider-native patch tool; its executor must exist.
+      if (!readOnly) {
+        broker.register(createOpenRouterApplyPatchTool({
+          ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
+        }));
       }
       for (const tool of createCodeIntelligenceTools({
         repository,

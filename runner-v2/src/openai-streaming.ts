@@ -78,7 +78,7 @@ export async function streamOpenAIResponses<T extends { output?: unknown[] }>(
       typeof data.delta === "string") live.reasoning(data.delta);
     if (kind === "response.output_item.added") {
       const item = data.item as { type?: unknown; name?: unknown } | undefined;
-      if (item?.type === "function_call" && typeof item.name === "string") live.toolCall(item.name);
+      if ((item?.type === "function_call" || item?.type === "custom_tool_call") && typeof item.name === "string") live.toolCall(item.name);
     }
     if (type === "response.completed" || data.type === "response.completed" ||
       type === "response.incomplete" || data.type === "response.incomplete") {

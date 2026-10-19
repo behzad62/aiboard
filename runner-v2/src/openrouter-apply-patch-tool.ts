@@ -76,6 +76,10 @@ export function createOpenRouterApplyPatchTool(
 }
 
 function validateApplyPatchInput(input: unknown): ValidationResult<ApplyPatchInput> {
+  // A native patch the adapter could not parse comes here with its reason, so the model sees it.
+  if (isRecord(input) && typeof input._nativePatchError === "string") {
+    return { ok: false, issues: [input._nativePatchError] };
+  }
   if (!isRecord(input) || !isRecord(input.operation)) {
     return { ok: false, issues: ["operation must be an object"] };
   }

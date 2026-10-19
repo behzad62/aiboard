@@ -34,6 +34,11 @@ export interface ToolCallBlock {
   arguments: unknown;
   /** Opaque provider continuation token (Gemini `thoughtSignature`) echoed back on the next request. */
   thoughtSignature?: string;
+  /**
+   * One per-file part of a provider-native call (a Codex `apply_patch` custom tool call), so the
+   * adapter can send the original call back and merge the parts' results into its single output.
+   */
+  nativeCall?: { callId: string; name: string; input: string; part: number; parts: number };
 }
 
 /** The model's own reasoning for this turn, kept so it can be sent back where a provider requires it. */

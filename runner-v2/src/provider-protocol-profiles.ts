@@ -16,15 +16,52 @@ export interface ProviderProtocolProfile {
    * working set and compacted a 1M-token model's sessions every ~140k tokens (tunnel run).
    */
   readonly contextWindowTokens?: number;
+  /** The protocol whose tools the provider documents for agents; the runner prefers it over the app default. */
+  readonly preferredProtocol?: "responses";
+  readonly responses?: {
+    /** Send reasoning back as Responses `reasoning` items with plain `reasoning_text` content. */
+    readonly reasoningItems?: boolean;
+    /**
+     * Provider-native client tools, declared exactly as documented. A native tool replaces the
+     * generic tools it covers, so the model never sees two edit tools; it is offered only to a session
+     * that can edit (it sees `fs.patch`).
+     */
+    readonly nativeTools?: ReadonlyArray<{ readonly wire: Readonly<Record<string, unknown>>; readonly replaces: readonly string[] }>;
+  };
   readonly docsUrl: string;
   readonly verifiedAt: string;
 }
+
+const CODEX_APPLY_PATCH_DESCRIPTION = [
+  "Edit files with a patch. This is a freeform tool: send the patch text itself, not JSON.",
+  "*** Begin Patch",
+  "*** Add File: path/to/new.ts",
+  "+first line of the new file",
+  "*** Update File: path/to/existing.ts",
+  "@@ a line near the change",
+  " unchanged context line",
+  "-removed line",
+  "+added line",
+  "*** Delete File: path/to/old.ts",
+  "*** End Patch",
+  "Paths are relative to the workspace. Give about three lines of unchanged context around each change.",
+].join("\n");
 
 export const PROVIDER_PROTOCOL_PROFILES: Readonly<Record<string, ProviderProtocolProfile>> = Object.freeze({
   deepseek: Object.freeze({
     chatReasoningContent: true,
     // deepseek-flash and deepseek-v4-pro (api-docs.deepseek.com/quick_start/pricing).
     contextWindowTokens: 1_048_576,
+    // Responses accepts exactly one custom tool, apply_patch, "for Codex compatibility"
+    // (api-docs.deepseek.com/guides/responses_api).
+    preferredProtocol: "responses",
+    responses: Object.freeze({
+      reasoningItems: true,
+      nativeTools: Object.freeze([Object.freeze({
+        wire: Object.freeze({ type: "custom", name: "apply_patch", description: CODEX_APPLY_PATCH_DESCRIPTION }),
+        replaces: Object.freeze(["fs.patch", "fs.write"]),
+      })]),
+    }),
     docsUrl: "https://api-docs.deepseek.com/guides/thinking_mode/",
     verifiedAt: "2026-10-20",
   }),
