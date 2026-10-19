@@ -58,6 +58,13 @@ test("task-safe Git tools inspect and commit only the worker branch", async () =
     for (const path of ["../app.txt", "/app.txt", "-p", "a//b"]) {
       assert.equal((await invoke(broker, `show_bad_${path}`, "git.show", { revision: committed, path })).isError, true, path);
     }
+    // A reviewer matches evidence tree ids to the submission (tunnel run: ^{tree} was refused).
+    const treeId = (await runGit({ cwd: workspace.path, args: ["rev-parse", `${committed}^{tree}`] })).stdout.trim();
+    const tree = text(await invoke(broker, "show_tree", "git.show", { revision: `${committed}^{tree}` }));
+    assert.ok(tree.startsWith(`tree ${treeId}\n`), tree);
+    assert.match(tree, /app\.txt/);
+    assert.equal((await invoke(broker, "show_tree_path", "git.show", { revision: `${committed}^{tree}`, path: "app.txt" })).isError, true);
+    assert.equal((await invoke(broker, "show_bad_peel", "git.show", { revision: `${committed}^{blob}` })).isError, true);
 
     const remote = join(root, "remote.git");
     mkdirSync(remote);

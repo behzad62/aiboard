@@ -87,12 +87,18 @@ export function createGitTools(runContext?: Pick<RunGitExecutionContext, "forCal
       },
     },
     {
-      definition: definition("git.show", "Show one revision and its patch, or with path one file's content at that revision (e.g. a submitted taskRevision, which the fs tools do not show).", true),
+      definition: definition("git.show", "Show one revision and its patch, or with path one file's content at that revision (e.g. a submitted taskRevision, which the fs tools do not show). <revision>^{tree} shows its tree id and entries, e.g. to match an evidence workingTreeIdentity.treeId.", true),
       validate: objectInput,
       assessAccess: () => readAccess("git.show"),
       execute: async (input, context) => {
         const revision = input.revision ?? "HEAD";
-        if (!validRevision(revision)) return invalidRevision();
+        // A reviewer matching evidence tree ids to the submission asked for <rev>^{tree} and was
+        // refused twice with no hint (tunnel run).
+        if (typeof revision !== "string") return invalidRevision();
+        const peel = /\^\{(?:tree|commit)\}$/.exec(revision)?.[0] ?? "";
+        if (!validRevision(peel ? revision.slice(0, -peel.length) : revision) || (peel && input.path !== undefined)) {
+          return failure("invalid_revision", "Revision syntax is invalid: use a commit id, branch or tag, optionally with ~N, ^N or a ^{tree}/^{commit} suffix (no path with a suffix).");
+        }
         if (input.path !== undefined) {
           // The Architect reviewing a submission read the user's project with fs tools and found
           // only the old scaffold (tunnel run); this reads the submitted file itself.
@@ -106,6 +112,11 @@ export function createGitTools(runContext?: Pick<RunGitExecutionContext, "forCal
           false,
           64 * 1024 * 1024
         );
+        if (peel === "^{tree}") {
+          // git show names a tree as typed, never by id; the id is what evidence records.
+          const id = (await git(runContext, context, ["rev-parse", "--verify", "--end-of-options", revision])).stdout.trim();
+          return { content: [{ type: "text", text: `tree ${id}\n${output.stdout.replace(/^tree [^\n]*\n/, "")}` }], isError: false };
+        }
         return { content: [{ type: "text", text: output.stdout }], isError: false };
       },
     },
