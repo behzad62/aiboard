@@ -460,7 +460,11 @@ export class ToolBroker implements AgentToolRuntime {
         tool.definition.name,
         await Promise.race([execution, timeoutResult]),
         extensionId,
-        Math.max(this.maxInlineOutputBytes, tool.definition.inlineOutputBytes ?? 0),
+        Math.max(
+          this.maxInlineOutputBytes,
+          tool.definition.inlineOutputBytes ?? 0,
+          Number.isSafeInteger(context.inlineOutputBytes) && context.inlineOutputBytes! > 0 ? context.inlineOutputBytes! : 0,
+        ),
       );
       this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
       this.settleToolBudget(budgetReservationId);

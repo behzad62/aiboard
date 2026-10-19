@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { workingSetForContextWindow } from "../src/agent-loop.js";
+import { inlineResultBytesForContextWindow, workingSetForContextWindow } from "../src/agent-loop.js";
 import { BudgetedAgentModel } from "../src/budgeted-model.js";
 import { validateProviderConfigs } from "../src/provider-config-store.js";
 
@@ -25,4 +25,11 @@ test("a context window rides on the provider config and through the budgeted mod
     outputTokenReserve: 0,
   } as never);
   assert.equal(budgeted.contextWindowTokens, 1_000_000);
+});
+
+test("one tool result stays inline up to ~15% of the model context window (tunnel run)", () => {
+  assert.equal(inlineResultBytesForContextWindow(undefined), 32 * 1024);
+  assert.equal(inlineResultBytesForContextWindow(8_000), 32 * 1024, "small local models keep a usable floor");
+  assert.equal(inlineResultBytesForContextWindow(128_000), Math.floor(128_000 * 3.5 * 0.15));
+  assert.equal(inlineResultBytesForContextWindow(10_000_000), 1024 * 1024);
 });

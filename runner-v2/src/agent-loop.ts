@@ -551,7 +551,19 @@ async function invokeTool(
   return await options.registry.invoke(call, {
     ...options.context,
     signal: options.signal ?? options.context.signal,
+    inlineOutputBytes: inlineResultBytesForContextWindow(options.model.contextWindowTokens),
   });
+}
+
+/**
+ * How large one tool result may be before it is stored as an artifact: about 15% of the model's
+ * context window at ~3.5 bytes per token, within 32 KB-1 MB. A fixed 8-16 KB spilled a single
+ * commit or evidence record, which the model then paged through artifact.read call by call, and a
+ * spilled evidence read never counted as read, so a verdict citing it looped (tunnel run).
+ */
+export function inlineResultBytesForContextWindow(contextWindowTokens: number | undefined): number {
+  if (contextWindowTokens === undefined || !Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 1) return 32 * 1024;
+  return Math.min(1024 * 1024, Math.max(32 * 1024, Math.floor(contextWindowTokens * 3.5 * 0.15)));
 }
 
 /**

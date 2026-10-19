@@ -201,6 +201,8 @@ export interface ToolExecutionContext {
   executionGrant?: OpaqueExecutionGrant;
   /** Single-use last-mile ticket, backed by that same original Broker grant. */
   filesystemMutation?: FilesystemMutationPermit;
+  /** Runner-set from the calling model's context window: results up to this size stay inline. */
+  inlineOutputBytes?: number;
 }
 
 export type ToolPathAccessMode = "read" | "write" | "delete";
