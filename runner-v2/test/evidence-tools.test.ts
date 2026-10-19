@@ -38,6 +38,7 @@ test("evidence command routes through shared execution and keeps complete spill 
           },
           enforcement: "unconfined_explicit_full",
           disclosure: "unconfined_explicit_full",
+          childEnvironmentAudit: { inheritedNames: ["PATH"], removedNames: [], explicitSafeNames: [], grantedNames: [], decisions: [] },
         };
       },
     };
@@ -59,6 +60,15 @@ test("evidence command routes through shared execution and keeps complete spill 
     const record = jsonValue(result) as { fact: { stdoutArtifactHash: string; outputLossy: boolean } };
     assert.deepEqual(await artifacts.get(record.fact.stdoutArtifactHash), complete);
     assert.equal(record.fact.outputLossy, true);
+    // The model sees the stdout tail inline (no empty stderr block) and no environment audit; the
+    // durable record keeps the audit.
+    const texts = result.content.flatMap((block) => block.type === "text" ? [block.text] : []);
+    assert.deepEqual(texts, [
+      `stdout (last 12 of ${70 * 1024 * 1024} bytes; artifact.read hash=${spill.hash} for the rest):\nbounded-tail`,
+    ]);
+    assert.equal("childEnvironmentAudit" in (record.fact as object), false);
+    const stored = store.list({ runId: "run_1", taskId: "task_a" })[0]?.fact as { childEnvironmentAudit?: { inheritedNames: string[] } };
+    assert.deepEqual(stored.childEnvironmentAudit?.inheritedNames, ["PATH"]);
   } finally {
     store.close();
     fixture.cleanup();

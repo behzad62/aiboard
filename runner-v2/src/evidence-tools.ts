@@ -130,7 +130,7 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
   return {
     definition: {
       name: "run_evidence_command",
-      description: "Run one executable without a shell and record its exit code and output as durable evidence (no verdict). `command` is the executable (e.g. `dotnet`, `python`, `cmake`, `cargo`, `npm`); `args` is the argument list; pipes, `&&` and redirection are not interpreted. `cwd` is relative to the workspace. Output is stored as artifacts: read them with artifact.read. Cite the returned evidence ID.",
+      description: "Run one executable without a shell and record its exit code and output as durable evidence (no verdict). `command` is the executable (e.g. `dotnet`, `python`, `cmake`, `cargo`, `npm`); `args` is the argument list; pipes, `&&` and redirection are not interpreted. `cwd` is relative to the workspace. The result shows the exit code and the tail of stdout and stderr; the full output is stored as artifacts (artifact.read with the hash) when the tail is not enough. Cite the returned evidence ID.",
       inputSchema: {
         type: "object",
         properties: {
@@ -247,7 +247,14 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
         ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
       });
-        return { content: [{ type: "json", value: record }], isError: false };
+        return {
+          content: [
+            { type: "json", value: commandResultView(record) },
+            ...outputBlock("stdout", stdoutOutput, stdout.hash, 6 * 1024),
+            ...outputBlock("stderr", stderrOutput, stderr.hash, 3 * 1024),
+          ],
+          isError: false,
+        };
       } catch (error) {
         return failure(
           stableExecutionErrorCode(error) ?? "evidence_command_failed",
@@ -440,6 +447,39 @@ export function compactEvidenceView(record: EvidenceRecord): unknown {
   const fact = Object.fromEntries(Object.entries(record.fact as unknown as Record<string, unknown>).filter(([key, value]) =>
     !EVIDENCE_LIST_OMITTED_FACT_FIELDS.has(key) && !(EVIDENCE_LIST_DEFAULT_FLAGS.has(key) && (value === false || value === null))));
   return { ...rest, fact };
+}
+
+/**
+ * The command result the model sees. The environment audit (~3.7 KB of variable names per command)
+ * stays in the durable record, which inspect_evidence reads in full; in the result it only grew every
+ * later turn of the session (tunnel run).
+ */
+function commandResultView(record: EvidenceRecord): unknown {
+  const { idempotencyKey: _idempotencyKey, createdAt: _createdAt, ...rest } = record;
+  const { childEnvironmentAudit: _audit, ...fact } = record.fact as unknown as Record<string, unknown>;
+  return { ...rest, fact };
+}
+
+/**
+ * The tail of one output stream, inline. Returning only artifact hashes cost a whole extra turn of
+ * artifact.read even for a 9-byte `node --version` (tunnel run); the full output stays in the artifact.
+ */
+function outputBlock(
+  stream: "stdout" | "stderr",
+  output: ReturnType<typeof outputFor>,
+  hash: string,
+  maximumBytes: number,
+): Array<{ type: "text"; text: string }> {
+  if (!output.tail) return [];
+  const bytes = Buffer.from(output.tail);
+  const shown = bytes.byteLength > maximumBytes
+    ? bytes.subarray(bytes.byteLength - maximumBytes).toString("utf8")
+    : output.tail;
+  const omitted = Math.max(output.totalBytes, bytes.byteLength) - Buffer.byteLength(shown);
+  const header = omitted > 0
+    ? `${stream} (last ${Buffer.byteLength(shown)} of ${Math.max(output.totalBytes, bytes.byteLength)} bytes; artifact.read hash=${hash} for the rest):`
+    : `${stream}:`;
+  return [{ type: "text", text: `${header}\n${shown}` }];
 }
 
 function failure(code: string, message: string): ToolExecutionOutput {
