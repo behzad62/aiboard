@@ -288,4 +288,22 @@ check(
   unknownNvidia
 );
 
+// Tunnel run: deepseek-flash fell back to a 64k default; the runner then compacted every ~140k tokens.
+const deepseekFlash = resolveModelContextProfile("deepseek-flash", "deepseek");
+check(
+  "DeepSeek Flash uses the documented 1M context and caching",
+  deepseekFlash.contextWindowTokens === 1_048_576 &&
+    deepseekFlash.maxOutputTokens === 128_000 && // the resolver's Build cap on documented 384K
+    deepseekFlash.effectiveBuildInputCeilingTokens === 983_040 &&
+    deepseekFlash.promptCaching === true &&
+    deepseekFlash.source === "registry",
+  deepseekFlash
+);
+const unknownDeepseek = resolveModelContextProfile("deepseek-next", "deepseek");
+check(
+  "an unknown DeepSeek model resolves to the current 1M provider default",
+  unknownDeepseek.contextWindowTokens === 1_048_576 && unknownDeepseek.source === "provider-default",
+  unknownDeepseek
+);
+
 process.exit(failed === 0 ? 0 : 1);

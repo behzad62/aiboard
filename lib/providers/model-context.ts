@@ -85,13 +85,17 @@ export const PROVIDER_DEFAULT_CONTEXT_PROFILES: Record<
     promptCaching: true,
     recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
+  // DeepSeek's current models (deepseek-flash, deepseek-v4-pro) both document a 1,048,576-token
+  // context, 393,216 max output and automatic context caching (api-docs.deepseek.com, verified
+  // 2026-10-20). The old 64k default made the runner compact sessions every ~140k tokens, which
+  // broke the prompt cache each time (tunnel run).
   deepseek: {
-    contextWindowTokens: 64_000,
-    maxOutputTokens: 8_192,
-    buildOutputReserveTokens: 8_192,
-    longContextQuality: "ok",
-    promptCaching: false,
-    recommendedBuildRoles: ["worker", "reviewer", "summary"],
+    contextWindowTokens: 1_048_576,
+    maxOutputTokens: 393_216,
+    buildOutputReserveTokens: 65_536,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   chatgpt: {
     contextWindowTokens: 128_000,
@@ -415,6 +419,22 @@ export const MODEL_CONTEXT_PROFILES: Record<string, StaticModelContextProfile> =
     longContextQuality: "good",
     promptCaching: true,
     recommendedBuildRoles: ["worker", "reviewer", "summary"],
+  },
+  "deepseek:deepseek-flash": {
+    contextWindowTokens: 1_048_576,
+    maxOutputTokens: 393_216,
+    buildOutputReserveTokens: 65_536,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
+  },
+  "deepseek:deepseek-v4-pro": {
+    contextWindowTokens: 1_048_576,
+    maxOutputTokens: 393_216,
+    buildOutputReserveTokens: 65_536,
+    longContextQuality: "good",
+    promptCaching: true,
+    recommendedBuildRoles: [...ALL_BUILD_ROLES],
   },
   "openrouter:deepseek/deepseek-v4-pro": {
     contextWindowTokens: 128_000,

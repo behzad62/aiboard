@@ -80,20 +80,35 @@ export const MODEL_CATALOG: CatalogModel[] = [
     capabilities: { image: true, document: true, audio: false, video: false },
   },
 
-  // DeepSeek — https://api-docs.deepseek.com/
+  // DeepSeek — https://api-docs.deepseek.com/quick_start/pricing (verified 2026-10-20)
+  {
+    id: "deepseek-flash",
+    name: "DeepSeek Flash",
+    providerId: "deepseek",
+    description: "DeepSeek-V4.1-Flash via the native API; 1M context",
+    capabilities: { image: false, document: false, audio: false, video: false },
+    validationCandidate: true,
+  },
+  {
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    providerId: "deepseek",
+    description: "DeepSeek-V4-Pro via the native API; 1M context",
+    capabilities: { image: false, document: false, audio: false, video: false },
+  },
+  // Legacy aliases, served by deepseek-flash.
   {
     id: "deepseek-chat",
     name: "DeepSeek Chat",
     providerId: "deepseek",
-    description: "General-purpose DeepSeek model via the native API",
+    description: "Legacy alias of DeepSeek Flash",
     capabilities: { image: false, document: false, audio: false, video: false },
-    validationCandidate: true,
   },
   {
     id: "deepseek-reasoner",
     name: "DeepSeek Reasoner",
     providerId: "deepseek",
-    description: "Reasoning-focused DeepSeek model for complex analysis tasks",
+    description: "Legacy alias of DeepSeek Flash",
     capabilities: { image: false, document: false, audio: false, video: false },
   },
 
