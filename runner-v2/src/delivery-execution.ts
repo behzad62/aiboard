@@ -1,6 +1,6 @@
 import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import { randomUUID, createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import { computeAffectedTests, isRunnableTestFile } from "./affected-tests.js";
@@ -822,6 +822,35 @@ async function readRunReportSet(input: {
 
 /** Reads the report this run wrote; anything missing or unreadable is `unknown`. */
 async function readRunReport(
+  plan: TestReportPlan,
+  checkoutPath: string,
+  artifacts: ArtifactStore,
+  stderr: string,
+  reportSetBefore?: ReadonlyMap<string, { size: number; mtimeMs: number }>,
+): Promise<DeliveryTestReport> {
+  try {
+    return await readRunReportOnce(plan, checkoutPath, artifacts, stderr, reportSetBefore);
+  } finally {
+    removeRunnerReports(plan, checkoutPath);
+  }
+}
+
+/**
+ * The report is stored as an artifact once read; the file itself is runner residue. Left in the
+ * checkout it was read by the reviewer as if it were project content (tunnel run).
+ */
+function removeRunnerReports(plan: TestReportPlan, checkoutPath: string): void {
+  const paths = plan.reportSet?.kind === "node-workspace-reports" ? plan.reportSet.reportPaths : plan.reportPath ? [plan.reportPath] : [];
+  const root = resolve(checkoutPath);
+  for (const path of paths) {
+    const target = resolve(root, path);
+    const inside = relative(root, target);
+    if (!/^\.aiboard-report-[A-Za-z0-9]+\.(?:xml|trx)$/.test(basename(target)) || inside.startsWith("..") || isAbsolute(inside)) continue;
+    try { rmSync(target, { force: true }); } catch { /* best effort: the tree identity already ignores it */ }
+  }
+}
+
+async function readRunReportOnce(
   plan: TestReportPlan,
   checkoutPath: string,
   artifacts: ArtifactStore,
