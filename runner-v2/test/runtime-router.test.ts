@@ -10,6 +10,8 @@ import {
   type AgentRuntimeCandidate,
   type WorkerHandoffPackage,
 } from "../src/runtime-router.js";
+import { workerSelectionPreference } from "../src/native-worker-driver.js";
+import type { SchedulerProjection } from "../src/scheduler-store.js";
 
 const runtimes: AgentRuntimeCandidate[] = [
   {
@@ -62,6 +64,63 @@ test("confirmed usage limit cooldown prevents wasteful worker retries", () => {
   );
   now += 30_000;
   assert.equal(router.selectWorker(["code"]).runtime?.runtimeId, "openai:gpt-code");
+});
+
+test("tasks spread over every healthy worker: least loaded first, a retry keeps its worker, poor workers last", () => {
+  const router = new RuntimeRouter({ candidates: runtimes, health: new ProviderHealthRegistry() });
+  const pick = (preference: Parameters<RuntimeRouter["selectWorker"]>[2]) =>
+    router.selectWorker(["code"], new Set(), preference).runtime?.runtimeId;
+  assert.equal(pick({}), "openai:gpt-code", "ties go to the owner's order");
+  assert.equal(pick({ activeAssignments: new Map([["openai:gpt-code", 1]]) }), "anthropic:claude-code");
+  assert.equal(
+    pick({ activeAssignments: new Map([["openai:gpt-code", 2], ["anthropic:claude-code", 1]]) }),
+    "anthropic:claude-code",
+  );
+  assert.equal(
+    pick({ activeAssignments: new Map([["anthropic:claude-code", 3]]), affinity: ["anthropic:claude-code"] }),
+    "anthropic:claude-code",
+    "a retry stays on the worker that has its context cached",
+  );
+  assert.equal(pick({ affinity: ["openai:gpt-code"], demoted: new Set(["openai:gpt-code"]) }), "anthropic:claude-code");
+  assert.equal(
+    pick({ demoted: new Set(["openai:gpt-code", "anthropic:claude-code"]) }),
+    "openai:gpt-code",
+    "with every worker demoted, the build still runs",
+  );
+  assert.equal(
+    router.selectWorker(["code"], new Set(["openai:gpt-code"]), { affinity: ["openai:gpt-code"] }).runtime?.runtimeId,
+    "anthropic:claude-code",
+    "failover never returns the failed worker",
+  );
+});
+
+test("the selection preference is read from the run's own assignments", () => {
+  const task = (id: string, status: string, attempt: number) => ({ id, status, attempt });
+  const projection = {
+    tasks: {
+      a: task("a", "running", 1),
+      b: task("b", "running", 1),
+      c: task("c", "integrated", 1),
+      d: task("d", "running", 3),
+      e: task("e", "assigned", 2),
+    },
+    runtime: {
+      workerAssignments: {
+        "a:1": { runtimeId: "w1" },
+        "b:1": { runtimeId: "w1" },
+        "c:1": { runtimeId: "w2" },
+        "d:1": { runtimeId: "w3" },
+        "d:2": { runtimeId: "w3" },
+        "d:3": { runtimeId: "w2" },
+        "e:1": { runtimeId: "w2" },
+      },
+    },
+  } as unknown as SchedulerProjection;
+  const preference = workerSelectionPreference(projection, "e");
+  assert.deepEqual([...preference.activeAssignments!], [["w1", 2], ["w2", 1]]);
+  assert.deepEqual(preference.affinity, ["w2"]);
+  assert.deepEqual([...preference.demoted!], ["w3"], "w3 lost two attempts and has no approved task");
+  assert.deepEqual([...workerSelectionPreference(projection, "a").activeAssignments!], [["w1", 1], ["w2", 1]]);
 });
 
 test("worker failure automatically hands the same checkpoint to a compatible runtime", () => {

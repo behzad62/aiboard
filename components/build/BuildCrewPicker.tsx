@@ -314,8 +314,8 @@ export function BuildCrewPicker({
         </div>
         <p className="text-xs text-muted-foreground">
           {full
-            ? "Write the code for each task. Order matters: tasks go to the first worker in the list that is available, and the next one takes over when it runs out of credits or keeps failing. Fast, inexpensive coding models do well here."
-            : "Implement tasks; the first available worker in the list takes each task."}
+            ? "Write the code for each task. Every worker is used: each new task goes to the least busy one, a retried task stays with the worker that already has its context, and a worker that is out of credits, failing, or doing poorly is skipped while others can take the work. The list order breaks ties. Fast, inexpensive coding models do well here."
+            : "Implement tasks; each new task goes to the least busy healthy worker."}
         </p>
         {value.workers.length === 0 ? (
           <p className="rounded-md bg-muted/40 px-3 py-2 text-xs">
@@ -331,7 +331,6 @@ export function BuildCrewPicker({
                 <div className="flex min-w-0 items-center gap-2 rounded-md border bg-background/40 px-3 py-2 text-sm">
                   <span className="w-4 shrink-0 text-xs text-muted-foreground">{index + 1}</span>
                   <span className="truncate">{nameOf(worker.modelId)}</span>
-                  {index === 0 && value.workers.length > 1 && <Badge variant="secondary">first choice</Badge>}
                   <ProbeBadge status={probeStatus?.(worker.modelId)} />
                 </div>
                 <EffortSelect

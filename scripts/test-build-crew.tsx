@@ -113,7 +113,7 @@ assert.match(full, /DeepSeek Flash is also the Architect\. It reviews in a fresh
 assert.match(full, /DeepSeek Flash is also a worker\. It never reviews its own tasks/);
 assert.match(full, /Plan review:/);
 assert.match(full, /Not needed: the plan review above already covers it\./);
-assert.match(full, /first choice/);
+assert.match(full, /Every worker is used: each new task goes to the least busy one/);
 assert.match(full, /Build probe failed/);
 assert.match(full, /Up to 3 tasks run at a time/);
 const strict = render(crew, "full", true);

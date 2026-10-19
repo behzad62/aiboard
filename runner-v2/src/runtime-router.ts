@@ -38,6 +38,16 @@ export type WorkerSelection =
       handoff?: WorkerHandoffPackage;
     };
 
+/** How selectWorker spreads tasks over the owner's workers; every field is optional. */
+export interface WorkerSelectionPreference {
+  /** Task attempts each runtime is working on now: a new task goes to the least-loaded worker. */
+  readonly activeAssignments?: ReadonlyMap<string, number>;
+  /** Runtimes that worked on this task before, most recent first: a retry keeps its warm cache. */
+  readonly affinity?: readonly string[];
+  /** Runtimes doing poorly in this run: chosen only when no other healthy worker is eligible. */
+  readonly demoted?: ReadonlySet<string>;
+}
+
 export interface WorkerFailureRouteInput {
   currentRuntimeId: string;
   requiredCapabilities: string[];
@@ -117,14 +127,26 @@ export class RuntimeRouter {
     }
   }
 
+  /**
+   * Every task used to go to the first healthy worker, so the other workers the owner picked only
+   * took over on failure (tunnel run). Now: demoted workers last, then the task's previous worker,
+   * then the least-loaded one, ties in the owner's order.
+   */
   selectWorker(
     requiredCapabilities: readonly string[],
-    excludedRuntimeIds: ReadonlySet<string> = new Set()
+    excludedRuntimeIds: ReadonlySet<string> = new Set(),
+    preference: WorkerSelectionPreference = {}
   ): WorkerSelection {
     const required = unique(requiredCapabilities);
-    const runtime = this.eligible(required).find(
+    const eligible = this.eligible(required).filter(
       (candidate) => !excludedRuntimeIds.has(candidate.runtimeId)
     );
+    const preferred = eligible.filter((candidate) => !preference.demoted?.has(candidate.runtimeId));
+    const pool = preferred.length > 0 ? preferred : eligible;
+    const load = (candidate: AgentRuntimeCandidate) => preference.activeAssignments?.get(candidate.runtimeId) ?? 0;
+    const runtime =
+      preference.affinity?.map((runtimeId) => pool.find((candidate) => candidate.runtimeId === runtimeId)).find(Boolean) ??
+      pool.reduce<AgentRuntimeCandidate | undefined>((best, candidate) => (!best || load(candidate) < load(best) ? candidate : best), undefined);
     return runtime
       ? { status: "assigned", runtime: cloneCandidate(runtime) }
       : {

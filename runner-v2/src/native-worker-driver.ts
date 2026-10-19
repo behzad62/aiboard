@@ -39,7 +39,7 @@ import {
   type ProviderFailure,
   type ProviderHealthRegistry,
 } from "./provider-health.js";
-import type { RuntimeRouter, AgentRuntimeCandidate } from "./runtime-router.js";
+import type { RuntimeRouter, AgentRuntimeCandidate, WorkerSelectionPreference } from "./runtime-router.js";
 import type { SchedulerProjection, SchedulerStore } from "./scheduler-store.js";
 import { rebuildSchedulerProjection, resolveTaskContractReference } from "./scheduler-store.js";
 import type { ExecutionTaskContract } from "./planning-contracts.js";
@@ -206,7 +206,12 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     );
     if (!runtimeId) {
       const selection = this.options.router.selectWorker(
-        assignment.task.requiredCapabilities
+        assignment.task.requiredCapabilities,
+        new Set(),
+        workerSelectionPreference(
+          rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
+          assignment.task.id,
+        ),
       );
       if (selection.status === "unavailable") {
         return { type: "paused", reason: "no_healthy_capability_match" };
@@ -454,7 +459,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         }
         const selection = this.options.router.selectWorker(
           assignment.task.requiredCapabilities,
-          new Set([runtimeId])
+          new Set([runtimeId]),
+          workerSelectionPreference(
+            rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
+            assignment.task.id,
+          ),
         );
         if (selection.status === "unavailable") {
           return { type: "paused", reason: "all_worker_runtimes_unavailable" };
@@ -747,6 +756,46 @@ export function workerContinuationMessages(
       ].join("\n"),
     },
   ];
+}
+
+const ACTIVE_WORKER_STATUSES = new Set(["assigned", "running", "waiting_guidance"]);
+const APPROVED_WORKER_STATUSES = new Set(["approved", "integrating", "integration_resolution", "integrated"]);
+/** A worker with this many superseded attempts and no approved task is used only as a last resort. */
+const DEMOTE_AFTER_FAILED_ATTEMPTS = 2;
+
+/**
+ * How to spread `taskId` over the owner's workers, from the run's own record: the attempts each
+ * worker is running now, the workers that ran this task before (newest first), and the workers
+ * whose attempts keep being superseded without a single approved task.
+ */
+export function workerSelectionPreference(
+  projection: SchedulerProjection,
+  taskId: string,
+): WorkerSelectionPreference {
+  const assignments = Object.entries(projection.runtime.workerAssignments).map(([key, assignment]) => {
+    const separator = key.lastIndexOf(":");
+    return { taskId: key.slice(0, separator), attempt: Number(key.slice(separator + 1)), runtimeId: assignment.runtimeId };
+  });
+  const activeAssignments = new Map<string, number>();
+  const failed = new Map<string, number>();
+  const approved = new Map<string, number>();
+  for (const assignment of assignments) {
+    const task = projection.tasks[assignment.taskId];
+    if (!task) continue;
+    const current = assignment.attempt === task.attempt;
+    const count = (map: Map<string, number>) => map.set(assignment.runtimeId, (map.get(assignment.runtimeId) ?? 0) + 1);
+    if (current && assignment.taskId !== taskId && ACTIVE_WORKER_STATUSES.has(task.status)) count(activeAssignments);
+    if (!current && assignment.attempt < task.attempt) count(failed);
+    if (current && APPROVED_WORKER_STATUSES.has(task.status)) count(approved);
+  }
+  const affinity = [...new Set(assignments
+    .filter((assignment) => assignment.taskId === taskId)
+    .sort((left, right) => right.attempt - left.attempt)
+    .map((assignment) => assignment.runtimeId))];
+  const demoted = new Set([...failed]
+    .filter(([runtimeId, attempts]) => attempts >= DEMOTE_AFTER_FAILED_ATTEMPTS && !approved.get(runtimeId))
+    .map(([runtimeId]) => runtimeId));
+  return { activeAssignments, affinity, demoted };
 }
 
 export function shouldFailoverWorkerFailure(failure: ProviderFailure): boolean {
