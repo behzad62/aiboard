@@ -11,10 +11,22 @@ import {
 interface ReadArtifactInput {
   hash: string;
   offset: number;
-  maxBytes: number;
+  maxBytes?: number;
 }
 
-const MAX_RANGE_BYTES = 6 * 1024;
+/**
+ * One read returns up to the calling model's inline result budget (less room for metadata). A fixed
+ * 6 KB made models page a 7 KB test log call by call, and a paged read never counts as a complete
+ * evidence read, so that output could not be cited at all (tunnel run).
+ */
+const DEFAULT_INLINE_BYTES = 32 * 1024;
+const METADATA_ROOM_BYTES = 2 * 1024;
+const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
+function rangeBudget(inlineOutputBytes: number | undefined, base64: boolean): number {
+  const inline = Number.isSafeInteger(inlineOutputBytes) && inlineOutputBytes! > 0 ? inlineOutputBytes! : DEFAULT_INLINE_BYTES;
+  const room = Math.max(4 * 1024, inline - METADATA_ROOM_BYTES);
+  return base64 ? Math.floor(room * 3 / 4) : room;
+}
 
 export function createArtifactTools(
   store: ArtifactStore
@@ -23,7 +35,7 @@ export function createArtifactTools(
     definition: {
       name: "artifact.read",
       description:
-        "Reopen a bounded byte range from a content-addressed artifact referenced by prior tool, evidence, context, or history output",
+        "Reopen a content-addressed artifact referenced by prior tool, evidence, context, or history output. Without maxBytes it returns as much as fits in one result (usually the whole artifact); truncated and offset show where to continue.",
       inputSchema: {
         type: "object",
         properties: {
@@ -32,7 +44,6 @@ export function createArtifactTools(
           maxBytes: {
             type: "integer",
             minimum: 1,
-            maximum: MAX_RANGE_BYTES,
           },
         },
         required: ["hash"],
@@ -42,15 +53,17 @@ export function createArtifactTools(
       effect: "none",
     },
     validate: validateRead,
-    execute: async (input) => {
+    execute: async (input, context) => {
       try {
         const [metadata, bytes] = await Promise.all([
           store.verify(input.hash),
           store.get(input.hash),
         ]);
+        const budget = rangeBudget(context.inlineOutputBytes, !isTextMediaType(metadata.mediaType));
+        const maxBytes = Math.min(input.maxBytes ?? budget, budget);
         const range = bytes.subarray(
           Math.min(input.offset, bytes.byteLength),
-          Math.min(input.offset + input.maxBytes, bytes.byteLength)
+          Math.min(input.offset + maxBytes, bytes.byteLength)
         );
         const text = isTextMediaType(metadata.mediaType)
           ? range.toString("utf8")
@@ -92,21 +105,22 @@ function validateRead(input: unknown): ValidationResult<ReadArtifactInput> {
     return invalid("hash must be a SHA-256 artifact address");
   }
   const offset = value.offset ?? 0;
-  const maxBytes = value.maxBytes ?? MAX_RANGE_BYTES;
+  const maxBytes = value.maxBytes;
   if (!Number.isSafeInteger(offset) || (offset as number) < 0) {
     return invalid("offset must be a non-negative integer");
   }
   if (
-    !Number.isSafeInteger(maxBytes) ||
-    (maxBytes as number) < 1 ||
-    (maxBytes as number) > MAX_RANGE_BYTES
-  ) return invalid(`maxBytes must be from 1 to ${MAX_RANGE_BYTES}`);
+    maxBytes !== undefined && (
+      !Number.isSafeInteger(maxBytes) ||
+      (maxBytes as number) < 1 ||
+      (maxBytes as number) > MAX_REQUEST_BYTES)
+  ) return invalid(`maxBytes must be from 1 to ${MAX_REQUEST_BYTES}`);
   return {
     ok: true,
     value: {
       hash: value.hash,
       offset: offset as number,
-      maxBytes: maxBytes as number,
+      ...(maxBytes !== undefined ? { maxBytes: maxBytes as number } : {}),
     },
   };
 }
