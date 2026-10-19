@@ -9,7 +9,7 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
-import type { CommandEvidenceFact, EvidenceStore, ExtendedEvidenceStore } from "./evidence-store.js";
+import type { CommandEvidenceFact, EvidenceRecord, EvidenceStore, ExtendedEvidenceStore } from "./evidence-store.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type { GitRunner } from "./git-repository.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
@@ -275,7 +275,7 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
   return {
     definition: {
       name: "inspect_evidence",
-      description: "Inspect immutable command and browser evidence facts; no semantic verdict is provided. Without evidenceId, returns the task list; with evidenceId, returns only that exact record in the same JSON array shape. Prefer evidenceId when the full list would exceed the inline output bound.",
+      description: "Inspect immutable command and browser evidence facts; no semantic verdict is provided. Without evidenceId, returns the task list in a compact view (environment audit, cwd, process-cleanup details and false/null status flags omitted); with evidenceId (full ID or a unique prefix), returns only that exact full record in the same JSON array shape.",
       inputSchema: {
         type: "object",
         properties: {
@@ -286,6 +286,7 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
       },
       readOnly: true,
       effect: "none",
+      inlineOutputBytes: 16 * 1024,
     },
     validate: (input) => {
       if (typeof input !== "object" || input === null || Array.isArray(input)) {
@@ -320,16 +321,28 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
           content: [
             {
               type: "json",
-              value: options.store.list({ runId: context.runId, taskId }),
+              value: options.store.list({ runId: context.runId, taskId }).map(compactEvidenceView),
             },
           ],
           isError: false,
         };
       }
       const found = options.store.getByIds({ runId: context.runId, taskId, ids: [input.evidenceId] });
-      const record = found.find((candidate) => candidate.id === input.evidenceId && candidate.runId === context.runId && candidate.taskId === taskId);
+      let record = found.find((candidate) => candidate.id === input.evidenceId && candidate.runId === context.runId && candidate.taskId === taskId);
+      // Models abbreviate the 64-hex IDs (evidence_06af1e76) and then retry the same miss; a unique
+      // prefix resolves, and a miss names the IDs that exist (tunnel run coverage review).
+      const listed = record ? [] : options.store.list({ runId: context.runId, taskId });
+      if (!record && input.evidenceId.length >= "evidence_".length + 8) {
+        const matches = listed.filter((candidate) => candidate.id.startsWith(input.evidenceId!));
+        if (matches.length === 1) record = matches[0];
+      }
       if (!record) {
-        return failure("evidence_not_found", "No evidence with that ID exists for this run and task.");
+        return failure(
+          "evidence_not_found",
+          `No evidence with that ID exists for this run and task. ${listed.length
+            ? `Evidence IDs for task ${taskId}: ${listed.slice(0, 20).map((candidate) => candidate.id).join(", ")}${listed.length > 20 ? ` (+${listed.length - 20} more)` : ""}.`
+            : `Task ${taskId} has no recorded evidence.`}`,
+        );
       }
       return {
         content: [{ type: "json", value: [record] }],
@@ -410,6 +423,23 @@ async function artifactForOutput(
   }
   const artifact = await artifacts.put(Buffer.from(output.tail), "text/plain", label);
   return { hash: artifact.hash, fallbackLossy: output.spillArtifactId !== undefined };
+}
+
+const EVIDENCE_LIST_OMITTED_FACT_FIELDS = new Set([
+  "childEnvironmentAudit", "childEnvironmentIdentity", "cwd", "cleanup", "enforcement", "disclosure", "startedAt",
+]);
+const EVIDENCE_LIST_DEFAULT_FLAGS = new Set(["signal", "timedOut", "cancelled", "outputTruncated", "outputLossy"]);
+
+/**
+ * The environment audit alone is ~2.8 KB of variable names per command; a 12-command task list was
+ * 54 KB, spilled the inline bound and left the reviewer paging the artifact (tunnel run). The exact
+ * full record stays one evidenceId call away.
+ */
+export function compactEvidenceView(record: EvidenceRecord): unknown {
+  const { idempotencyKey: _idempotencyKey, createdAt: _createdAt, ...rest } = record;
+  const fact = Object.fromEntries(Object.entries(record.fact as unknown as Record<string, unknown>).filter(([key, value]) =>
+    !EVIDENCE_LIST_OMITTED_FACT_FIELDS.has(key) && !(EVIDENCE_LIST_DEFAULT_FLAGS.has(key) && (value === false || value === null))));
+  return { ...rest, fact };
 }
 
 function failure(code: string, message: string): ToolExecutionOutput {

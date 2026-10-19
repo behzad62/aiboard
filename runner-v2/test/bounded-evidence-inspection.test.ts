@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createArtifactTools } from "../src/artifact-tools.js";
-import { createEvidenceTools } from "../src/evidence-tools.js";
+import { compactEvidenceView, createEvidenceTools } from "../src/evidence-tools.js";
 import type { CommandEvidenceFact, EvidenceRecord } from "../src/evidence-store.js";
 import {
   architectReadProofsCoverEvidence,
@@ -21,7 +21,7 @@ import { ToolBroker } from "../src/tool-broker.js";
 import { toolInvocationKey } from "../src/tool-ledger.js";
 
 // Bounded evidence inspection: a task list whose combined JSON array spills
-// the default inline bound grants no read authority, while an explicit
+// inspect_evidence's 16 KiB inline bound grants no read authority, while an explicit
 // singular evidenceId selector returns the exact full immutable record in the
 // existing JSON array shape. Real ToolBroker (default cap, unchanged),
 // SqliteToolLedger, SqliteEvidenceStore and ArtifactStore throughout; no
@@ -134,11 +134,12 @@ test("bounded inspection: spilled aggregate grants nothing; singular selector re
     const first = await seedModest(fixture, "check-a", "modest-a");
     const second = await seedModest(fixture, "check-b", "modest-b");
     const third = await seedModest(fixture, "check-c", "modest-c");
-    // Self-calibration: each record is individually inline under the unchanged
-    // default bound, while the combined array spills.
+    for (const key of ["d", "e", "f"]) await seedModest(fixture, `check-${key}`, `modest-${key}`);
+    // Self-calibration: each record is individually inline under the tool's
+    // bound, while the combined compact array spills.
     const stored = (id: string) => fixture.evidence.getByIds({ runId: RUN, taskId: TASK, ids: [id] })[0]!;
-    assert.ok(Buffer.byteLength(JSON.stringify([stored(second.id)])) < 8 * 1024, "one record stays inline");
-    assert.ok(Buffer.byteLength(JSON.stringify(fixture.evidence.list({ runId: RUN, taskId: TASK }))) > 8 * 1024, "three records spill");
+    assert.ok(Buffer.byteLength(JSON.stringify([stored(second.id)])) < 16 * 1024, "one record stays inline");
+    assert.ok(Buffer.byteLength(JSON.stringify(fixture.evidence.list({ runId: RUN, taskId: TASK }).map(compactEvidenceView))) > 16 * 1024, "six records spill");
     const binding = { runId: RUN, sessionId: SESSION, actorId: ACTOR, taskId: TASK };
     const invokeArch = (name: string, args: unknown) =>
       fixture.broker.invoke(
@@ -154,7 +155,7 @@ test("bounded inspection: spilled aggregate grants nothing; singular selector re
     const aggregate = await invokeArch("inspect_evidence", {});
     assert.equal(aggregate.isError, false, "a successful spill is still a successful call");
     assert.equal(jsonArray(aggregate), undefined, "the spilled aggregate has no inline array");
-    assert.match(textBlocks(aggregate).join("\n"), /8192 inline bytes/, "the unchanged default bound is named");
+    assert.match(textBlocks(aggregate).join("\n"), /16384 inline bytes/, "the tool's bound is named");
     assert.equal(artifactHashes(aggregate).length, 1);
     assert.deepEqual(captureArchitectEvidenceReads(fixture.ledger, binding, fixture.evidence), [], "spill grants no Architect proof");
     const reviewerAggregate = await invokeReviewer("inspect_evidence", {});
@@ -292,12 +293,12 @@ test("bounded inspection: an individually oversized record spills without author
       runId: RUN,
       taskId: TASK,
       actor: { role: "worker", id: "worker:T1:1" },
-      fact: commandFact(`check-big ${"q".repeat(9000)}`, fixture.root, stdout.hash, stderr.hash),
+      fact: commandFact(`check-big ${"q".repeat(17000)}`, fixture.root, stdout.hash, stderr.hash),
       createdAt: AT,
       idempotencyKey: "big",
     });
     const stored = fixture.evidence.getByIds({ runId: RUN, taskId: TASK, ids: [big.id] })[0]!;
-    assert.ok(Buffer.byteLength(JSON.stringify([stored])) > 8 * 1024, "one record alone exceeds the bound");
+    assert.ok(Buffer.byteLength(JSON.stringify([stored])) > 16 * 1024, "one record alone exceeds the bound");
     const binding = { runId: RUN, sessionId: SESSION, actorId: ACTOR, taskId: TASK };
 
     const spilled = await fixture.broker.invoke(
@@ -334,7 +335,7 @@ test("bounded inspection: an individually oversized record spills without author
   }
 });
 
-test("bounded inspection: the no-selector list stays exactly compatible", async () => {
+test("bounded inspection: the no-selector list is the compact view of every task record", async () => {
   const fixture = setup();
   try {
     const stdout = await fixture.artifacts.put(Buffer.from("tiny\n"), "text/plain", "tiny stdout");
@@ -364,14 +365,50 @@ test("bounded inspection: the no-selector list stays exactly compatible", async 
         { runId: RUN, sessionId: SESSION, actor: { role: "architect", id: ACTOR } },
       );
       assert.equal(listed.isError, false);
-      assert.deepEqual(jsonArray(listed), expected);
-      assert.deepEqual(jsonArray(listed), fixture.evidence.list({ runId: RUN, taskId: TASK }));
+      assert.deepEqual(jsonArray(listed), expected.map(compactEvidenceView));
+      assert.deepEqual(jsonArray(listed), fixture.evidence.list({ runId: RUN, taskId: TASK }).map(compactEvidenceView));
+      const item = jsonArray(listed)![0] as { id: string; runId: string; taskId: string; fact: Record<string, unknown> };
+      assert.deepEqual([item.id, item.runId, item.taskId], [expected[0]!.id, RUN, TASK]);
+      assert.deepEqual(
+        [item.fact.label, item.fact.exitCode, item.fact.stdoutArtifactHash, item.fact.cwd, item.fact.timedOut, "idempotencyKey" in item],
+        ["tiny-a", 0, stdout.hash, undefined, undefined, false],
+        "the verdict facts stay; cwd, default flags and bookkeeping drop",
+      );
     }
     const binding = { runId: RUN, sessionId: SESSION, actorId: ACTOR, taskId: TASK };
     const covered = captureArchitectEvidenceReads(fixture.ledger, binding, fixture.evidence)
       .filter((proof) => proof.toolName === "inspect_evidence")
       .map((proof) => proof.evidenceId);
     assert.ok(covered.includes(expected[0]!.id) && covered.includes(expected[1]!.id));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("bounded inspection: an abbreviated evidence id resolves when unique, and a miss names the task's ids", async () => {
+  const fixture = setup();
+  try {
+    const own = await seedModest(fixture, "check-own", "own");
+    const foreignTask = await seedModest(fixture, "check-foreign-task", "foreign-task", "T2", RUN);
+    const invoke = (args: unknown) => fixture.broker.invoke(
+      { type: "tool_call", callId: `arch-${++fixture.ordinal}`, name: "inspect_evidence", arguments: args },
+      { runId: RUN, sessionId: SESSION, actor: { role: "architect", id: ACTOR } },
+    );
+    const short = own.id.slice(0, "evidence_".length + 8);
+    const resolved = await invoke({ evidenceId: short });
+    assert.equal(resolved.isError, false);
+    assert.equal(JSON.stringify(jsonArray(resolved)), JSON.stringify(fixture.evidence.getByIds({ runId: RUN, taskId: TASK, ids: [own.id] })));
+
+    const tooShort = await invoke({ evidenceId: own.id.slice(0, "evidence_".length + 4) });
+    assert.equal(tooShort.error?.code, "evidence_not_found");
+    const miss = await invoke({ evidenceId: `evidence_${"0".repeat(8)}` });
+    assert.equal(miss.error?.code, "evidence_not_found");
+    assert.ok(miss.error!.message.includes(own.id), "the miss lists the task's own ids");
+    assert.ok(!miss.error!.message.includes(foreignTask.id), "and never another task's");
+    const foreignPrefix = await invoke({ evidenceId: foreignTask.id.slice(0, "evidence_".length + 8) });
+    assert.equal(foreignPrefix.error?.code, "evidence_not_found", "a prefix resolves only within the requested task");
+    const empty = await invoke({ taskId: "T9", evidenceId: short });
+    assert.match(empty.error!.message, /Task T9 has no recorded evidence/);
   } finally {
     fixture.cleanup();
   }

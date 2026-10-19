@@ -129,6 +129,11 @@ export interface ToolDefinition {
    * model turn with other calls; deciding lifecycle tools must still be alone in theirs.
    */
   batchable?: boolean;
+  /**
+   * Raises the broker's inline output bound for a tool whose structured result is only useful whole
+   * (an over-bound result becomes a preview plus an artifact the model must page through).
+   */
+  inlineOutputBytes?: number;
   /** Internal tools can remain executable while being omitted from model schemas. */
   modelVisible?: boolean;
   strict?: boolean;

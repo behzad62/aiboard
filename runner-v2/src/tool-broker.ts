@@ -459,6 +459,7 @@ export class ToolBroker implements AgentToolRuntime {
         tool.definition.name,
         await Promise.race([execution, timeoutResult]),
         extensionId,
+        Math.max(this.maxInlineOutputBytes, tool.definition.inlineOutputBytes ?? 0),
       );
       this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
       this.settleToolBudget(budgetReservationId);
@@ -541,6 +542,7 @@ export class ToolBroker implements AgentToolRuntime {
     toolName: string,
     output: ToolExecutionOutput,
     extensionId?: string,
+    maxInlineOutputBytes = this.maxInlineOutputBytes,
   ): Promise<ToolExecutionOutput> {
     let changed = false;
     const content: ToolExecutionOutput["content"] = [];
@@ -552,7 +554,7 @@ export class ToolBroker implements AgentToolRuntime {
       const serialized = block.type === "text"
         ? block.text
         : (JSON.stringify(block.value) ?? "null");
-      if (Buffer.byteLength(serialized) <= this.maxInlineOutputBytes) {
+      if (Buffer.byteLength(serialized) <= maxInlineOutputBytes) {
         content.push(block);
         continue;
       }
@@ -570,8 +572,8 @@ export class ToolBroker implements AgentToolRuntime {
       content.push({
         type: "text",
         text: artifact
-          ? `${structured ? "Structured output" : "Output"} exceeded ${this.maxInlineOutputBytes} inline bytes and was stored as an artifact.\n\n${previewText(serialized, this.maxInlineOutputBytes)}`
-          : previewText(serialized, this.maxInlineOutputBytes),
+          ? `${structured ? "Structured output" : "Output"} exceeded ${maxInlineOutputBytes} inline bytes and was stored as an artifact.\n\n${previewText(serialized, maxInlineOutputBytes)}`
+          : previewText(serialized, maxInlineOutputBytes),
       });
       if (artifact) {
         content.push({
