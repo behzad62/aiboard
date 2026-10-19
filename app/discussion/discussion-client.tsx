@@ -130,6 +130,7 @@ import {
   nativeBuildRestorationPolicyPatch,
   nativeBuildTaskStatus,
   nativeBuildUsageWindow,
+  nativeActorModelIdentity,
   reconcileNativeBuildFiles,
   reconcileNativeBuildTranscript,
   selectNativeBuildAttachmentView,
@@ -1987,16 +1988,22 @@ function DiscussionPageInner() {
   const hasNativeAttachment = buildAttachmentView.nativeAttached;
   const nativeLiveTranscriptMessages = liveModelTurns
     .filter((turn) => turn.streaming || turn.content)
-    .map((turn, index) => ({
-      id: turn.id,
-      modelId: `native:${turn.actor.role}:${turn.actor.id}`,
-      modelName: `${turn.actor.role[0].toUpperCase()}${turn.actor.role.slice(1)} ${turn.actor.id}`,
-      content: turn.content,
-      segments: turn.segments,
-      streaming: turn.streaming,
-      round: (buildTranscriptMessages.at(-1)?.round ?? 0) + index + 1,
-      ordinal: index,
-    }));
+    .map((turn, index) => {
+      const identity = nativeActorModelIdentity(
+        turn.actor, turn.sessionId, nativeProjection, nativeObservability?.budget
+      );
+      const role = `${turn.actor.role[0].toUpperCase()}${turn.actor.role.slice(1)}`;
+      return {
+        id: turn.id,
+        modelId: identity?.runtimeId ?? `native:${turn.actor.role}:${turn.actor.id}`,
+        modelName: `${role} · ${identity?.modelName ?? "Model unavailable"}`,
+        content: turn.content,
+        segments: turn.segments,
+        streaming: turn.streaming,
+        round: (buildTranscriptMessages.at(-1)?.round ?? 0) + index + 1,
+        ordinal: index,
+      };
+    });
 
   // Lead participants (Architect/Judge) that aren't among the
   // workers in modelIds — they'd otherwise never appear in the Team row even
@@ -2579,7 +2586,9 @@ function DiscussionPageInner() {
             .map((agent) => ({
               id: agent.sessionId,
               role: agent.actor.role,
-              name: agent.actor.id,
+              name: nativeActorModelIdentity(
+                agent.actor, agent.sessionId, nativeProjection, nativeObservability?.budget
+              )?.modelName ?? "Model unavailable",
             })) : []}
           onDownload={downloadTranscript}
         />

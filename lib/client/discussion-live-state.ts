@@ -253,7 +253,7 @@ export function reconcileNativeBuildTranscript(
   runId: string,
   page: NativeBuildTranscriptPage,
   projection: Pick<NativeBuildProjection, "runtime">,
-  usage: Pick<NativeBuildUsageProjection, "models">
+  usage: Pick<NativeBuildUsageProjection, "models" | "reservations">
 ): NativeBuildTranscriptAttachment {
   const retained = current?.runId === runId ? current.messages : [];
   const byId = new Map(retained.map((message) => [message.id, message]));
@@ -262,8 +262,7 @@ export function reconcileNativeBuildTranscript(
       !["architect", "worker", "subagent", "verifier"].includes(turn.actor.role) ||
       !turn.text.trim()
     ) continue;
-    const runtimeId = nativeActorRuntimeId(turn.actor, projection);
-    const runtime = usage.models?.find((model) => model.runtimeId === runtimeId);
+    const identity = nativeActorModelIdentity(turn.actor, turn.sessionId, projection, usage, turn.occurredAt);
     const actorName = turn.actor.role === "architect"
       ? "Architect"
       : `${capitalize(turn.actor.role)} ${turn.actor.id}`;
@@ -271,10 +270,8 @@ export function reconcileNativeBuildTranscript(
       id: turn.id,
       round: turn.sequence,
       ordinal: turn.ordinal,
-      modelId: runtimeId ?? `native:${turn.actor.role}:${turn.actor.id}`,
-      modelName: runtimeId
-        ? `${actorName} · ${runtime?.displayName ?? runtime?.modelId ?? runtimeId}`
-        : actorName,
+      modelId: identity?.runtimeId ?? `native:${turn.actor.role}:${turn.actor.id}`,
+      modelName: identity ? `${actorName} · ${identity.modelName}` : `${actorName} · Model unavailable`,
       content: turn.text,
     });
   }
@@ -299,23 +296,56 @@ function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : 1;
 }
 
-function nativeActorRuntimeId(
-  actor: {
-    role: "architect" | "worker" | "subagent" | "verifier";
-    id: string;
-  },
-  projection: Pick<NativeBuildProjection, "runtime">
-): string | undefined {
-  if (actor.role === "architect") return projection.runtime.architect.runtimeId;
-  if (actor.role === "verifier") return actor.id;
-  const assignments = projection.runtime.workerAssignments;
-  const workerId = Object.keys(assignments)
-    .filter((candidate) => actor.id === candidate || actor.id.startsWith(`${candidate}:`))
-    .sort((left, right) => right.length - left.length)[0];
-  if (workerId) return assignments[workerId]?.runtimeId;
-  return actor.role === "subagent"
-    ? projection.runtime.architect.runtimeId
+/**
+ * Resolve the actual model used by a session. Worker actor IDs are NOT keys
+ * in workerAssignments (whose keys are taskId:attempt). Model reservations
+ * are session-attributed and remain available after worker failover.
+ */
+export function nativeActorModelIdentity(
+  actor: { role: "architect" | "worker" | "subagent" | "verifier"; id: string },
+  sessionId: string,
+  projection: Pick<NativeBuildProjection, "runtime"> | null | undefined,
+  usage: Pick<NativeBuildUsageProjection, "models" | "reservations"> | null | undefined,
+  occurredAt?: string
+): { runtimeId: string; modelName: string } | null {
+  const calls = Object.values(usage?.reservations ?? {})
+    .filter((reservation) => reservation.kind === "model" &&
+      reservation.attribution?.sessionId === sessionId &&
+      reservation.attribution.role === actor.role)
+    .sort((left, right) => {
+      const prefix = `model:${sessionId}:`;
+      const a = Number(left.reservationId.slice(prefix.length));
+      const b = Number(right.reservationId.slice(prefix.length));
+      return a - b;
+    });
+  // Checkpoint timestamps identify the model that finished before this
+  // turn. On a fresh/live call (no timestamp), use the newest reservation.
+  const completed = occurredAt
+    ? calls.filter((call) => call.settledAt && call.settledAt <= occurredAt)
+    : calls;
+  const attributed = completed.at(-1)?.attribution ??
+    (new Set(calls.map((call) => call.attribution?.runtimeId)).size === 1
+      ? calls.at(-1)?.attribution
+      : undefined);
+
+  const assignments = Object.entries(projection?.runtime.workerAssignments ?? {});
+  const assignment = assignments.find(([, value]) => value.sessionId === sessionId)?.[1] ??
+    assignments.find(([key]) => actor.id === key || actor.id.startsWith(`${key}:`))?.[1];
+  // Subagents may inherit a worker's runtime without a direct assignment.
+  const parent = actor.role === "subagent"
+    ? assignments.find(([key]) => actor.id.startsWith(`${key}:`))?.[1]
     : undefined;
+  const runtimeId = attributed?.runtimeId ??
+    (actor.role === "architect" ? projection?.runtime.architect.runtimeId
+      : actor.role === "verifier" ? actor.id
+      : assignment?.runtimeId ?? parent?.runtimeId ??
+        (actor.role === "subagent" ? projection?.runtime.architect.runtimeId : undefined));
+  if (!runtimeId) return null;
+  const catalog = usage?.models?.find((model) => model.runtimeId === runtimeId);
+  return {
+    runtimeId,
+    modelName: catalog?.displayName ?? catalog?.modelId ?? attributed?.modelId ?? runtimeId,
+  };
 }
 
 function capitalize(value: string): string {

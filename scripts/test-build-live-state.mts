@@ -24,6 +24,7 @@ import {
   createNativeBuildFileLoader,
   nativeBuildFileIdentity,
   nativeBuildUsageWindow,
+  nativeActorModelIdentity,
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
 } from "../lib/client/discussion-live-state";
@@ -294,6 +295,68 @@ const nativeTranscript = reconcileNativeBuildTranscript(
   transcriptProjection,
   transcriptUsage,
 );
+
+// Real worker session IDs do not equal workerAssignments task:attempt keys.
+// Prefer per-session budget attribution; it also survives a runtime failover.
+const workspaceWorkerSession = "worker:run_native:task-1:2";
+const workerWithTaskKey = {
+  runtime: {
+    architect: { runtimeId: "runtime-architect" },
+    workerAssignments: {
+      "task-1:2": { runtimeId: "runtime-new", sessionId: workspaceWorkerSession },
+    },
+  },
+} as never;
+const workerModelUsage = {
+  models: [
+    { runtimeId: "runtime-old", modelId: "deepseek-flash", displayName: "deepseek-flash" },
+    { runtimeId: "runtime-new", modelId: "kimi", displayName: "kimi-k2" },
+  ],
+  reservations: {
+    old: {
+      reservationId: `model:${workspaceWorkerSession}:1`,
+      kind: "model", status: "settled", settledAt: "2026-07-14T00:00:01.000Z",
+      attribution: { sessionId: workspaceWorkerSession, role: "worker", runtimeId: "runtime-old", modelId: "deepseek-flash" },
+    },
+    new: {
+      reservationId: `model:${workspaceWorkerSession}:2`,
+      kind: "model", status: "settled", settledAt: "2026-07-14T00:00:04.000Z",
+      attribution: { sessionId: workspaceWorkerSession, role: "worker", runtimeId: "runtime-new", modelId: "kimi" },
+    },
+  },
+} as never;
+const workerTranscript = reconcileNativeBuildTranscript(null, "run_native", {
+  turns: [
+    {
+      id: "worker-first", sessionId: workspaceWorkerSession,
+      actor: { role: "worker", id: "worker_task-1-workspace-shared_2" },
+      sequence: 11, ordinal: 2, occurredAt: "2026-07-14T00:00:02.000Z", text: "First provider",
+    },
+    {
+      id: "worker-second", sessionId: workspaceWorkerSession,
+      actor: { role: "worker", id: "worker_task-1-workspace-shared_2" },
+      sequence: 12, ordinal: 2, occurredAt: "2026-07-14T00:00:05.000Z", text: "After failover",
+    },
+  ],
+  cursor: 12,
+} as never, workerWithTaskKey, workerModelUsage);
+assert.deepEqual(workerTranscript.messages.map((message) => message.modelName), [
+  "Worker worker_task-1-workspace-shared_2 · deepseek-flash",
+  "Worker worker_task-1-workspace-shared_2 · kimi-k2",
+], "each saved worker turn uses its own attributed provider, not the current worker assignment");
+const assignedWorkerWithoutUsage = reconcileNativeBuildTranscript(null, "run_native", {
+  turns: [{
+    id: "worker-assigned", sessionId: workspaceWorkerSession,
+    actor: { role: "worker", id: "worker_task-1-workspace-shared_2" },
+    sequence: 13, ordinal: 2, occurredAt: "2026-07-14T00:00:06.000Z", text: "Assignment fallback",
+  }], cursor: 13,
+} as never, workerWithTaskKey, { models: workerModelUsage.models, reservations: {} } as never);
+assert.equal(assignedWorkerWithoutUsage.messages[0]?.modelId, "runtime-new",
+  "worker runtime falls back to the explicit assigned sessionId, not the actor id");
+assert.equal(nativeActorModelIdentity(
+  { role: "worker", id: "worker_task-1-workspace-shared_2" },
+  workspaceWorkerSession, workerWithTaskKey, workerModelUsage
+)?.modelName, "kimi-k2", "live worker turn uses its latest attributed model");
 
 const sameCheckpointTranscript = reconcileNativeBuildTranscript(
   null,

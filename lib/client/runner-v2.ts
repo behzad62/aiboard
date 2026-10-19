@@ -670,7 +670,7 @@ export interface NativeBuildProjection {
   reviewHistory?: Record<string, NativeReviewProjection[]>;
   runtime: {
     providerHealth: Record<string, unknown>;
-    workerAssignments: Record<string, { runtimeId: string }>;
+    workerAssignments: Record<string, { runtimeId: string; sessionId?: string }>;
     architect: {
       runtimeId?: string;
       handoff?: {
