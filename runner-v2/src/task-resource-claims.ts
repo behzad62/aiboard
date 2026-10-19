@@ -57,9 +57,49 @@ export function claimPathsEqual(left: string, right: string): boolean {
   return claimPathKey(left) === claimPathKey(right);
 }
 
+/**
+ * Plans write surfaces as globs ("packages/shared/**"); compared literally, every file under one was
+ * "outside_claim" and blocked a correct submission (tunnel run). "**" spans directories, "*" and "?"
+ * stay within one segment.
+ */
+function isClaimGlob(key: string): boolean {
+  return /[*?]/.test(key);
+}
+
+function claimGlobRegex(glob: string): RegExp {
+  // A trailing "/**" also matches the directory itself (the suffix below allows it).
+  const key = glob.endsWith("/**") ? glob.slice(0, -3) : glob;
+  let pattern = "";
+  for (let index = 0; index < key.length; index += 1) {
+    const char = key[index]!;
+    if (char === "*" && key[index + 1] === "*") {
+      const slash = key[index + 2] === "/";
+      pattern += slash ? "(?:.*/)?" : ".*";
+      index += slash ? 2 : 1;
+    } else if (char === "*") pattern += "[^/]*";
+    else if (char === "?") pattern += "[^/]";
+    else pattern += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${pattern}(?:/.*)?$`);
+}
+
+/** The directories before a glob's first wildcard segment ("packages/shared" for "packages/shared/**"). */
+function claimGlobBase(key: string): string {
+  const segments = key.split("/");
+  const wildcard = segments.findIndex((segment) => /[*?]/.test(segment));
+  return segments.slice(0, wildcard).join("/") || ".";
+}
+
 export function claimPathContains(outer: string, inner: string): boolean {
   const outerKey = claimPathKey(outer);
   const innerKey = claimPathKey(inner);
+  if (isClaimGlob(outerKey)) {
+    if (!isClaimGlob(innerKey)) return claimGlobRegex(outerKey).test(innerKey);
+    // A glob contains another glob when the inner one cannot reach outside the outer's "**" base.
+    return outerKey === innerKey ||
+      (/\/\*\*$/.test(outerKey) && claimPathContains(claimGlobBase(outerKey), claimGlobBase(innerKey)));
+  }
+  if (isClaimGlob(innerKey)) return claimPathContains(outerKey, claimGlobBase(innerKey));
   return outerKey === innerKey ||
     outerKey === "." ||
     outerKey === "" ||
@@ -68,7 +108,14 @@ export function claimPathContains(outer: string, inner: string): boolean {
 }
 
 export function claimPathsOverlap(left: string, right: string): boolean {
-  return claimPathContains(left, right) || claimPathContains(right, left);
+  if (claimPathContains(left, right) || claimPathContains(right, left)) return true;
+  // Two globs may still share files; overlap when their fixed bases nest (conservative).
+  const leftKey = claimPathKey(left);
+  const rightKey = claimPathKey(right);
+  if (!isClaimGlob(leftKey) && !isClaimGlob(rightKey)) return false;
+  const leftBase = isClaimGlob(leftKey) ? claimGlobBase(leftKey) : leftKey;
+  const rightBase = isClaimGlob(rightKey) ? claimGlobBase(rightKey) : rightKey;
+  return claimPathContains(leftBase, rightBase) || claimPathContains(rightBase, leftBase);
 }
 
 export interface AliasResolution {
