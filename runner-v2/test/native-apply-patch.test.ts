@@ -96,3 +96,13 @@ test("an unparseable native patch reaches the model as its reason, not a silent 
   assert.equal(turn.blocks.length, 1);
   assert.match(String((turn.blocks[0] as { arguments: { _nativePatchError: string } }).arguments._nativePatchError), /Begin Patch/);
 });
+
+test("a native patch result keeps the write-time secret notice that fs.write gives", async () => {
+  // Tunnel run: with apply_patch, the worker learned about a flagged value only at submit_task.
+  const { mergeNativePatchResults: merge } = await import("../src/codex-apply-patch.js");
+  const merged = merge([
+    { operation: { type: "create_file", path: "src/config.ts", diff: "" }, isError: false,
+      text: "Created src/config.ts\nsubmit_task will refuse src/config.ts: secret or key material detected [REDACTED] (value assigned to apiKey)." },
+  ]);
+  assert.equal(merged, "Success. Updated the following files:\nA src/config.ts\nsubmit_task will refuse src/config.ts: secret or key material detected [REDACTED] (value assigned to apiKey).");
+});

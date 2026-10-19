@@ -75,7 +75,10 @@ export function mergeNativePatchResults(
   const letter = (operation: CodexPatchOperation) =>
     operation.type === "create_file" ? "A" : operation.type === "delete_file" ? "D" : "M";
   const applied = done.map((result) => `${letter(result.operation!)} ${result.operation!.path}`).join("\n");
-  if (!failed.length) return `Success. Updated the following files:\n${applied}`;
+  // Lines after a part's first line are notices (e.g. "submit_task will refuse ..."); keep them.
+  const notices = done.flatMap((result) => result.text.split("\n").slice(1)).filter((line) => line.trim());
+  const notes = notices.length ? `\n${notices.join("\n")}` : "";
+  if (!failed.length) return `Success. Updated the following files:\n${applied}${notes}`;
   const errors = failed.map((result) => result.text).join("\n");
-  return `apply_patch verification failed: ${errors}${applied ? `\nThese parts were applied: \n${applied}` : ""}`;
+  return `apply_patch verification failed: ${errors}${applied ? `\nThese parts were applied: \n${applied}` : ""}${notes}`;
 }

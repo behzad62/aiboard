@@ -19,6 +19,7 @@ import {
   fencedWrite,
   filesystemMutationFailure,
 } from "./filesystem-mutation-fence.js";
+import { submissionSecretNotice } from "./submission-guard.js";
 
 export interface OpenRouterApplyPatchToolOptions {
   protectedPaths?: readonly string[];
@@ -158,7 +159,7 @@ async function executeApplyPatch(
       }
       try {
         fencedWrite(context, target, Buffer.from(content), undefined, true);
-        return success(`Created ${displayPath}`);
+        return success(`Created ${displayPath}`, submissionSecretNotice(displayPath, content));
       } catch (error) {
         if (error instanceof FilesystemMutationError && (error.code === "target_already_exists" || error.code === "expected_revision_required")) {
           return failure("file_exists", `${displayPath} already exists.`);
@@ -182,7 +183,7 @@ async function executeApplyPatch(
       }
       const diff = input.operation.diff;
       try {
-        fencedPatch(context, target, undefined, (originalBytes) => {
+        const patched = fencedPatch(context, target, undefined, (originalBytes) => {
           const currentText = originalBytes.toString("utf8");
           let nextText: string;
           try {
@@ -195,7 +196,7 @@ async function executeApplyPatch(
           }
           return Buffer.from(nextText);
         });
-        return success(`Updated ${displayPath}`);
+        return success(`Updated ${displayPath}`, submissionSecretNotice(displayPath, patched.toString("utf8")));
       } catch (error) {
         const refusal = filesystemMutationFailure(error, workspace);
         if (refusal) return refusal;
@@ -408,8 +409,9 @@ function normalizePolicyPath(path: string): string {
   return path.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
 }
 
-function success(message: string): ToolExecutionOutput {
-  return { content: [{ type: "text", text: message }], isError: false };
+/** The write-time secret notice fs.write gives; a native patch found out only at submit_task (tunnel run). */
+function success(message: string, notice?: string): ToolExecutionOutput {
+  return { content: [{ type: "text", text: notice ? `${message}\n${notice}` : message }], isError: false };
 }
 
 function failure(code: string, message: string): ToolExecutionOutput {

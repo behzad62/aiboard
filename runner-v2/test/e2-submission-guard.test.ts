@@ -113,6 +113,11 @@ test("E2 secret control ignores removed lines and nonliteral references; invalid
     "  credentialSource: AdminCredentialSource;",
     "    return { dataDir, adminToken: optionToken, adminTokenSource: \"option\" };",
   ])]));
+  // Tunnel run: test tokens padded with a repeated character are obviously fake; the worker dropped an assertion to get past them.
+  assert.doesNotThrow(() => assertSubmissionHasNoSecrets([file("test/client.test.ts", false, [
+    '  const token = "atc_wrong_token_0000000000000000000000000000";',
+    '  const token = "atc_local_timeout_token_0000000000000000";',
+  ])]));
   assert.throws(() => assertSubmissionHasNoSecrets([file("config/relay.env", false, [
     `RELAY_ADMIN_TOKEN=Zq8xR2mT7vLp4WcN9sKbYh3d`,
   ])]), /\[REDACTED\]/, "an unquoted literal in a config file still blocks");

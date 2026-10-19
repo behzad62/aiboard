@@ -94,8 +94,10 @@ function secretLine(line: string, code = false): boolean | string {
     // says so, or one with almost no variety. A redaction task's tests need credential-named fields, and
     // without this the worker obfuscated its own field names to get through (tunnel run). The token
     // patterns above still refuse unconditionally.
+    // A long run of one character (`atc_wrong_token_0000000000`) never occurs in a random secret; the
+    // worker rewrote such test tokens and dropped an assertion to get past the guard (tunnel run).
     const obviouslyFake = /fake|dummy|example|placeholder|not[-_ ]?a[-_ ]?real|redacted|changeme/i.test(value) ||
-      new Set(value).size < 6;
+      new Set(value).size < 6 || /(.)\1{7,}/.test(value);
     if (
       isSensitiveKey(match[1]!) && !environmentReference && !templateReference && !wholePlaceholder &&
       !callExpression && !memberReference && !interpolatedTemplate && !anglePlaceholder && !obviouslyFake &&
