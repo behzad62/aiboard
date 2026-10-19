@@ -87,12 +87,19 @@ export function createGitTools(runContext?: Pick<RunGitExecutionContext, "forCal
       },
     },
     {
-      definition: definition("git.show", "Show one revision and its patch", true),
+      definition: definition("git.show", "Show one revision and its patch, or with path one file's content at that revision (e.g. a submitted taskRevision, which the fs tools do not show).", true),
       validate: objectInput,
       assessAccess: () => readAccess("git.show"),
       execute: async (input, context) => {
         const revision = input.revision ?? "HEAD";
         if (!validRevision(revision)) return invalidRevision();
+        if (input.path !== undefined) {
+          // The Architect reviewing a submission read the user's project with fs tools and found
+          // only the old scaffold (tunnel run); this reads the submitted file itself.
+          if (!validRevisionPath(input.path)) return invalidRevision();
+          const file = await git(runContext, context, ["show", "--no-ext-diff", `${revision}:${input.path}`], false, 64 * 1024 * 1024);
+          return { content: [{ type: "text", text: file.stdout }], isError: false };
+        }
         const output = await git(
           runContext, context,
           ["show", "--no-ext-diff", "--format=fuller", revision, "--"],
@@ -227,7 +234,7 @@ function gitSchema(name: string): Record<string, unknown> {
       );
     case "git.show":
       return objectSchema(
-        { revision: { type: "string", minLength: 1 } },
+        { revision: { type: "string", minLength: 1 }, path: { type: "string", minLength: 1 } },
         []
       );
     case "git.remotes":
@@ -318,6 +325,14 @@ async function git(
     allowFailure,
     ...(maxOutputBytes ? { maxOutputBytes } : {}),
   });
+}
+
+/** A repository-relative file path: no absolute, parent, empty or option-like segments. */
+function validRevisionPath(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const path = value.replaceAll("\\", "/");
+  return !path.startsWith("/") && !path.startsWith("-") && !/^[A-Za-z]:/.test(path) && !/[\x00-\x1f]/.test(path) &&
+    path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
 function validRevision(value: unknown): value is string {

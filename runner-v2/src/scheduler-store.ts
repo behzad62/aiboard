@@ -7697,7 +7697,7 @@ function deliveryReviewRecorded(current: SchedulerProjection, state: DeliverySta
     }
     review.priorFindingChecks = checks;
   } else if (event.payload.priorFindingChecks !== undefined) {
-    throw new Error("Only a fix re-review checks prior findings.");
+    throw new Error("Only a fix re-review checks prior findings: omit priorFindingChecks on a first review.");
   }
   // W2 (AR-R28, CD-4): bounded late findings. After the first review, a
   // new blocking finding on unchanged already-reviewed code stays

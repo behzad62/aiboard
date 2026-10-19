@@ -427,11 +427,12 @@ export function validateCriterionReviewVerdicts(
         issues.push(`Review verdict for criterion ${criterionId} has no evidence mapping.`);
         continue;
       }
+      // Name what the verdict may cite: the bare refusal cost an Architect a 16K-token retry (tunnel run).
       const linkEvidence = new Set([link.evidenceId]);
       for (const evidenceId of verdict.evidenceIds) {
         if (!linkEvidence.has(evidenceId)) {
           issues.push(
-            `Review verdict for criterion ${criterionId} cites evidence outside its submitted mapping.`
+            `Review verdict for criterion ${criterionId} cites evidence outside its submitted mapping (${evidenceId}); it may cite only ${link.evidenceId}.`
           );
         }
       }
@@ -440,7 +441,7 @@ export function validateCriterionReviewVerdicts(
         for (const hash of verdict.artifactHashes) {
           if (!linkArtifacts.has(hash)) {
             issues.push(
-              `Review verdict for criterion ${criterionId} cites an artifact outside its submitted mapping.`
+              `Review verdict for criterion ${criterionId} cites an artifact outside its submitted mapping (${hash}); it may cite only ${link.artifactHashes.join(", ")}.`
             );
           }
         }

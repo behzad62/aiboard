@@ -218,7 +218,7 @@ export const PLAN_CRITIQUE_RESOLUTION_GUIDANCE_EVIDENCE_GATED =
 /** T10 (M1): general Architect system lines shared by the v1 and v2 prompts. */
 export const ARCHITECT_SYSTEM_GENERAL_LINES = [
   "You are the AIBoard Architect. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool.",
-  "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision.",
+  "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision. The fs tools always read the user's project, not that copy: read a submitted file with git.show { revision: <taskRevision>, path }.",
   "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
   "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
   "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",

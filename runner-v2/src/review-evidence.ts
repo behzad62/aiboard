@@ -87,11 +87,14 @@ export function validateCitations(value: unknown, capture: ReviewReadCapture | u
     if (!record(citation)) throw new Error("Invalid review citation.");
     if (typeof citation.path === "string" && positive(citation.line) && Object.keys(citation).every((key) => key === "path" || key === "line")) {
       const line = citation.line;
-      if (!capture.reads.some((read) => read.path === citation.path && read.startLine! <= line && read.endLine! >= line)) throw new Error("Citation location was not read in this review session.");
+      if (!capture.reads.some((read) => read.path === citation.path && read.startLine! <= line && read.endLine! >= line)) throw new Error(`Citation location was not read in this review session (${citation.path}:${line}); read that line in this session or cite one you read.`);
       return { path: citation.path, line: citation.line };
     }
     if (typeof citation.evidenceId === "string" && Object.keys(citation).length === 1 && capture.reads.some((read) => read.evidenceId === citation.evidenceId)) return { evidenceId: citation.evidenceId };
-    throw new Error("Citation evidence was not read in this review session.");
+    // Name the citation: a reviewer re-submitted a 22 KB verdict without knowing which one (tunnel run).
+    throw new Error(typeof citation.evidenceId === "string"
+      ? `Citation evidence was not read in this review session (${citation.evidenceId}); inspect it with inspect_evidence in this session first.`
+      : "Citation evidence was not read in this review session.");
   });
 }
 

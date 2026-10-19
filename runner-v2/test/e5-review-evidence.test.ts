@@ -64,8 +64,9 @@ test("E5 real completed SQLite tool reads bound citations to returned ranges; fa
   const artifacts = new ArtifactStore(join(root,"artifacts"));
   const broker = new ToolBroker({ permissionProfile:"guarded", workspacePath:root, ledger, artifacts });
   for (const tool of createFilesystemTools({artifacts})) broker.register(tool);
-  writeFileSync(join(root,"lines.txt"), "one\n" + "x".repeat(3100) + "\n" + "y".repeat(3100) + "\nlast\n");
-  writeFileSync(join(root,"large.txt"), "x".repeat(10000));
+  // Sized past fs.read's 24 KB range and 32 KB inline bounds.
+  writeFileSync(join(root,"lines.txt"), "one\n" + "x".repeat(13000) + "\n" + "y".repeat(13000) + "\nlast\n");
+  writeFileSync(join(root,"large.txt"), "x".repeat(40000));
   writeFileSync(join(root,"empty.txt"), "");
   let ordinal=0;
   const invoke = (name:string, args:unknown, sessionId=binding.sessionId, actorId=binding.reviewerRuntimeId) => broker.invoke({type:"tool_call",callId:`read-${++ordinal}`,name,arguments:args}, {runId:binding.runId,sessionId,actor:{role:"verifier",id:actorId}});

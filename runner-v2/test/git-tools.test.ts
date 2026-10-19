@@ -51,6 +51,13 @@ test("task-safe Git tools inspect and commit only the worker branch", async () =
     assert.equal((json(log) as { commits: Array<{ subject: string }> }).commits[0].subject, "Implement task change");
     const show = await invoke(broker, "show", "git.show", { revision: "HEAD" });
     assert.match(text(show), /changed/);
+    // One file at a revision, as an Architect reads a submission its fs tools do not show.
+    const committed = (json(commit) as { revision: string }).revision;
+    assert.equal(text(await invoke(broker, "show_file", "git.show", { revision: committed, path: "app.txt" })), "changed\n");
+    assert.equal(text(await invoke(broker, "show_base", "git.show", { revision: baseline.revision, path: "app.txt" })), "baseline\n");
+    for (const path of ["../app.txt", "/app.txt", "-p", "a//b"]) {
+      assert.equal((await invoke(broker, `show_bad_${path}`, "git.show", { revision: committed, path })).isError, true, path);
+    }
 
     const remote = join(root, "remote.git");
     mkdirSync(remote);
