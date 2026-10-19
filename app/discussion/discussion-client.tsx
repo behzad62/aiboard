@@ -134,6 +134,7 @@ import {
   reconcileNativeBuildFiles,
   reconcileNativeBuildTranscript,
   selectNativeBuildAttachmentView,
+  shouldShowBuildPauseAction,
   shouldShowLegacyBuildFileFallback,
   shouldShowBuildStopFallback,
   type NativeBuildFileAttachment,
@@ -2141,7 +2142,13 @@ function DiscussionPageInner() {
 
   const sessionActions = (
     <>
-      {isActive && streamConnected && (
+      {shouldShowBuildPauseAction({
+        status,
+        streamConnected,
+        nativeRunId: discussion.nativeBuildRunId,
+        nativeRunnerConfigured: Boolean(discussion.runnerUrl && discussion.runnerToken),
+        nativeStatus: nativeProjection?.status,
+      }) && (
         <Button
           variant={discussion?.nativeBuildRunId ? "outline" : "destructive"}
           size="sm"

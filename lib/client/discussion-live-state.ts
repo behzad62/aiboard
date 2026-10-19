@@ -157,6 +157,30 @@ export function shouldShowBuildStopFallback(input: {
   );
 }
 
+/**
+ * The native Runner V2 is observed by its own durable attachment controller,
+ * not the legacy in-tab streaming connection. Pausing must remain available
+ * after refresh/reconnect even when the old stream is disconnected.
+ */
+export function shouldShowBuildPauseAction(input: {
+  status: string;
+  streamConnected: boolean;
+  nativeRunId?: string | null;
+  nativeRunnerConfigured: boolean;
+  nativeStatus?: NativeBuildProjection["status"] | null;
+}): boolean {
+  if (!input.nativeRunId) {
+    return input.streamConnected &&
+      input.status !== "completed" &&
+      input.status !== "failed" &&
+      input.status !== "stopped";
+  }
+  if (!input.nativeRunnerConfigured) return false;
+  // Once loaded, the Runner's projection takes precedence over stale browser state.
+  if (input.nativeStatus) return input.nativeStatus === "running";
+  return input.status === "running";
+}
+
 export function shouldRestoreDurableBuildProjection(
   status: string
 ): boolean {

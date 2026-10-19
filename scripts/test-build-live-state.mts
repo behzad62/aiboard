@@ -11,6 +11,7 @@ import {
   nativeBuildTaskStatus,
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
+  shouldShowBuildPauseAction,
   nativeBuildRunPolicy,
   nativeBuildPolicyChange,
   nativeBuildRestorationPolicyPatch,
@@ -28,6 +29,39 @@ import {
   shouldRestoreDurableBuildProjection,
   shouldShowBuildStopFallback,
 } from "../lib/client/discussion-live-state";
+
+// Runner V2 Pause must not depend on a legacy browser stream. A reloaded
+// discussion can be running while that stream is disconnected.
+assert.equal(shouldShowBuildPauseAction({
+  status: "running", streamConnected: false, nativeRunId: "run-1",
+  nativeRunnerConfigured: true, nativeStatus: "running",
+}), true, "native running build keeps Pause visible without the legacy stream");
+assert.equal(shouldShowBuildPauseAction({
+  status: "running", streamConnected: false, nativeRunId: "run-1",
+  nativeRunnerConfigured: true,
+}), true, "cached running status shows Pause while native projection reconnects");
+assert.equal(shouldShowBuildPauseAction({
+  status: "stopped", streamConnected: false, nativeRunId: "run-1",
+  nativeRunnerConfigured: true, nativeStatus: "running",
+}), true, "authoritative native running projection overrides stale local status");
+assert.equal(shouldShowBuildPauseAction({
+  status: "running", streamConnected: true, nativeRunId: "run-1",
+  nativeRunnerConfigured: true, nativeStatus: "paused",
+}), false, "a paused native run must not offer Pause again");
+assert.equal(shouldShowBuildPauseAction({
+  status: "running", streamConnected: false, nativeRunId: "run-1",
+  nativeRunnerConfigured: true, nativeStatus: "completed",
+}), false, "completed native builds do not show Pause");
+assert.equal(shouldShowBuildPauseAction({
+  status: "running", streamConnected: false, nativeRunId: "run-1",
+  nativeRunnerConfigured: false, nativeStatus: "running",
+}), false, "cannot Pause without the native runner connection");
+assert.equal(shouldShowBuildPauseAction({
+  status: "running", streamConnected: false, nativeRunnerConfigured: false,
+}), false, "legacy build still requires its active stream");
+assert.equal(shouldShowBuildPauseAction({
+  status: "running", streamConnected: true, nativeRunnerConfigured: false,
+}), true, "legacy in-tab builds retain their Stop action");
 
 assert.deepEqual(
   nativeBuildAttachmentIdentityPatch(
