@@ -25,6 +25,8 @@ export interface ActiveBuildActor {
   id: string;
   role: BuildActorRole;
   name: string;
+  /** Runtime identity selects the per-role effort even for identical model names. */
+  modelId?: string;
   taskId?: string;
   taskTitle?: string;
 }
@@ -123,12 +125,34 @@ export function buildModelIdentityParts(value: string): { provider: string | nul
   return { provider: canonicalNames[rawProvider.toLowerCase()] ?? rawProvider, model };
 }
 
-function ModelIdentityChip({ name }: { name: string }) {
+const EFFORT_LABELS: Readonly<Record<string, string>> = {
+  none: "None",
+  default: "Default",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+};
+
+/** Read the configured effort by runtime identity; never infer it from a model alias. */
+export function buildRuntimeEffortLabel(
+  runtimeId: string | undefined,
+  efforts: Readonly<Record<string, string>>
+): string | null {
+  if (!runtimeId) return null;
+  const configured = efforts[runtimeId];
+  // The suffix is used when the same model has multiple effort-specific runtimes.
+  const fallback = /#(none|default|low|medium|high|xhigh|max)$/.exec(runtimeId)?.[1];
+  return EFFORT_LABELS[configured ?? fallback ?? ""] ?? null;
+}
+
+function ModelIdentityChip({ name, effort }: { name: string; effort?: string | null }) {
   const { provider, model } = buildModelIdentityParts(name);
   return (
     <span
       className="inline-flex min-w-0 max-w-full shrink items-center gap-1.5 rounded-lg border border-sky-400/25 bg-sky-500/10 px-2.5 py-1 text-xs text-foreground shadow-[inset_0_1px_0_rgb(255_255_255_/_0.05)] dark:bg-sky-400/10"
-      title={name}
+      title={effort ? `${name} (effort: ${effort})` : name}
     >
       <Network className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-300" aria-hidden="true" />
       {provider && (
@@ -138,6 +162,7 @@ function ModelIdentityChip({ name }: { name: string }) {
         </>
       )}
       <span className="min-w-0 truncate font-medium">{model}</span>
+      {effort && <span className="shrink-0 text-foreground/70" aria-label={`Reasoning effort: ${effort}`}>({effort})</span>}
     </span>
   );
 }
@@ -164,11 +189,13 @@ export function BuildTranscriptFeed({
   messages,
   active,
   activeActors = [],
+  runtimeEfforts = {},
   onDownload,
 }: {
   messages: BuildFeedMessage[];
   active: boolean;
   activeActors?: ActiveBuildActor[];
+  runtimeEfforts?: Readonly<Record<string, string>>;
   onDownload: () => void;
 }) {
   const sorted = useMemo(() => sortedBuildFeed(messages), [messages]);
@@ -266,7 +293,7 @@ export function BuildTranscriptFeed({
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 flex-nowrap items-center gap-1.5">
                           <span className="sr-only">{role} turn: </span>
-                          <ModelIdentityChip name={modelLabel} />
+                          <ModelIdentityChip name={modelLabel} effort={buildRuntimeEffortLabel(message.modelId, runtimeEfforts)} />
                           {message.taskId && <TaskContextChip taskId={message.taskId} taskTitle={message.taskTitle} />}
                           {message.taskTitle && <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={message.taskTitle}>{message.taskTitle}</span>}
                           {message.streaming && <span className="shrink-0 text-[11px] font-medium text-primary motion-safe:animate-pulse">Streaming…</span>}
@@ -295,7 +322,7 @@ export function BuildTranscriptFeed({
             <div key={actor.id} className="flex min-w-0 flex-nowrap items-center gap-2 pl-2 text-sm text-muted-foreground">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary motion-safe:animate-pulse" aria-hidden="true" />
               <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase", roleTone[actor.role])}>{actor.role}</span>
-              <ModelIdentityChip name={actor.name} />
+              <ModelIdentityChip name={actor.name} effort={buildRuntimeEffortLabel(actor.modelId, runtimeEfforts)} />
               {actor.taskId && <TaskContextChip taskId={actor.taskId} taskTitle={actor.taskTitle} />}
               {actor.taskTitle && <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={actor.taskTitle}>{actor.taskTitle}</span>}
               <span className="ml-auto shrink-0 text-xs">Working…</span>

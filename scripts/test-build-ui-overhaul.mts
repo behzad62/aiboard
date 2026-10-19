@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { BuildTranscriptFeed, buildActorRole, buildModelDisplayName, buildDisplayText, buildModelIdentityParts, sortedBuildFeed } from "../components/build/BuildTranscriptFeed";
+import { BuildTranscriptFeed, buildActorRole, buildModelDisplayName, buildDisplayText, buildModelIdentityParts, buildRuntimeEffortLabel, sortedBuildFeed } from "../components/build/BuildTranscriptFeed";
+import { buildCrewFromDiscussion, selectBuildCrewRuntimes } from "../lib/client/build-crew";
 import { BuildWorkspace } from "../components/build/BuildWorkspace";
 import { BuildEventCenter, alertsFromDiagnostics } from "../components/build/BuildEventCenter";
 import type { DiagnosticEntry } from "../components/DiscussionDiagnostics";
@@ -50,8 +51,9 @@ const qualifiedFeed = renderToStaticMarkup(createElement(BuildTranscriptFeed, {
       taskId: "task-auth", taskTitle: "Implement OAuth session persistence", content: "Implementing now" },
   ],
   active: true,
+  runtimeEfforts: { "openrouter-runtime": "high", "direct-runtime": "max" },
   activeActors: [
-    { id: "active-worker", role: "worker", name: "deepseek / deepseek/flash",
+    { id: "active-worker", role: "worker", name: "deepseek / deepseek/flash", modelId: "direct-runtime",
       taskId: "task-api", taskTitle: "Build MCP relay API" },
   ],
   onDownload() {},
@@ -62,6 +64,31 @@ assert.deepEqual(buildModelIdentityParts("GPT-6"), { provider: null, model: "GPT
 assert.ok(qualifiedFeed.includes("openrouter / deepseek/flash"));
 assert.ok(qualifiedFeed.includes("border-sky-400/25 bg-sky-500/10"), "Model identity is in a filled blue chip");
 assert.ok(qualifiedFeed.includes("bg-violet-500/15"), "Task is in a filled purple chip");
+assert.ok(qualifiedFeed.includes(">(High)</span>"), "Reasoning effort appears after the model in parentheses");
+assert.ok(qualifiedFeed.includes(">(Max)</span>"), "Active worker uses its configured runtime effort");
+assert.ok(qualifiedFeed.includes('aria-label="Reasoning effort: High"'), "The displayed effort has an accessible label");
+assert.ok(qualifiedFeed.indexOf(">deepseek/flash</span>") < qualifiedFeed.indexOf(">(High)</span>"), "Effort follows the model");
+assert.ok(qualifiedFeed.indexOf(">(High)</span>") < qualifiedFeed.indexOf(">task-auth</span>"), "Task chip still follows the effort on the same row");
+assert.equal(buildRuntimeEffortLabel("openrouter-runtime", { "openrouter-runtime": "default" }), "Default");
+assert.equal(buildRuntimeEffortLabel("model#xhigh", {}), "Extra High");
+assert.equal(buildRuntimeEffortLabel("model#max", {}), "Max");
+assert.equal(buildRuntimeEffortLabel("unknown", {}), null, "Never invent effort without runtime metadata");
+const effortCrew = buildCrewFromDiscussion({
+  modelIds: JSON.stringify(["openrouter:deepseek/flash"]),
+  judgeModelId: "openrouter:deepseek/flash",
+  reviewerModelId: null,
+  reasoningEffort: "medium",
+  buildArchitectReasoningEffort: "high",
+  buildReviewerReasoningEffort: null,
+  buildWorkers: JSON.stringify([{ modelId: "openrouter:deepseek/flash", reasoningEffort: "max" }]),
+} as never);
+assert.ok(effortCrew);
+assert.deepEqual(selectBuildCrewRuntimes(effortCrew!).runtimes.map(
+  (runtime) => [runtime.runtimeId, runtime.reasoningEffort]
+), [
+  ["openrouter:deepseek/flash", "high"],
+  ["openrouter:deepseek/flash#max", "max"],
+], "Same model under different reasoning effort must retain distinct runtime identities");
 assert.ok(qualifiedFeed.includes("flex-nowrap"), "Model and task must stay on the same header row");
 assert.ok(qualifiedFeed.indexOf(">OpenRouter</span>") < qualifiedFeed.indexOf(">deepseek/flash</span>"), "Provider precedes model in chip");
 assert.ok(qualifiedFeed.indexOf(">deepseek/flash</span>") < qualifiedFeed.indexOf(">task-auth</span>"), "Task chip follows model on the same row");

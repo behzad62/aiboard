@@ -179,7 +179,7 @@ import {
 } from "@/components/BuildTaskBoard";
 import { NativePlanningPanel, NativePlanStartCard } from "@/components/NativePlanningPanel";
 import { LoadingNotice } from "@/components/build/LoadingNotice";
-import { buildCrewFromDiscussion } from "@/lib/client/build-crew";
+import { buildCrewFromDiscussion, selectBuildCrewRuntimes } from "@/lib/client/build-crew";
 import { requestSpecificationSource } from "@/lib/client/native-planning-view";
 import {
   RepoWorkflowPanel,
@@ -1959,6 +1959,17 @@ function DiscussionPageInner() {
     }
   }, [discussion]);
 
+  // Build runtime identities distinguish the same provider/model configured at
+  // different reasoning efforts. They are also used for historical turns.
+  const buildRuntimeEfforts = useMemo<Record<string, string>>(() => {
+    if (!discussion || discussion.mode !== "build") return {};
+    const crew = buildCrewFromDiscussion(discussion);
+    if (!crew) return {};
+    return Object.fromEntries(selectBuildCrewRuntimes(crew).runtimes.map(
+      (runtime) => [runtime.runtimeId, runtime.reasoningEffort]
+    ));
+  }, [discussion]);
+
   const accentMap = useMemo(
     () => buildAccentMap(participantIds),
     [participantIds]
@@ -2582,6 +2593,7 @@ function DiscussionPageInner() {
         <BuildTranscriptFeed
           messages={[...buildTranscriptMessages, ...nativeLiveTranscriptMessages]}
           active={isActive}
+          runtimeEfforts={buildRuntimeEfforts}
           activeActors={isActive ? (nativeObservability?.agents ?? [])
             .filter((agent) => agent.status === "active")
             .slice(0, 8)
@@ -2593,6 +2605,7 @@ function DiscussionPageInner() {
                 id: agent.sessionId,
                 role: agent.actor.role,
                 name: identity?.modelName ?? "Model unavailable",
+                ...(identity?.runtimeId ? { modelId: identity.runtimeId } : {}),
                 ...(identity?.taskId ? { taskId: identity.taskId } : {}),
                 ...(identity?.taskTitle ? { taskTitle: identity.taskTitle } : {}),
               };
