@@ -56,8 +56,20 @@ export interface SqliteSchedulerStoreOptions {
   }) => void;
 }
 
+/** A full replay re-checks every event against the evidence and artifact stores at least this often. */
+const FULL_REPLAY_INTERVAL_MS = 30_000;
+
+/** One run's validated events, the exact rows they decode from, and the projection they fold to. */
+interface RunReplay {
+  readonly rows: readonly string[];
+  readonly validatedAt: number;
+  readonly events: readonly SchedulerEvent[];
+  readonly projection: SchedulerProjection | undefined;
+}
+
 export class SqliteSchedulerStore implements SchedulerStore {
   private readonly database: DatabaseSync;
+  private readonly replays = new Map<string, RunReplay>();
   private readonly readOnly: boolean;
   private readonly evidenceStore?: EvidenceStore;
   private readonly artifacts?: Pick<ArtifactStore, "verifySync">;
@@ -95,19 +107,10 @@ export class SqliteSchedulerStore implements SchedulerStore {
   append(input: NewSchedulerEvent): SchedulerEvent {
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const priorRows = this.database
-        .prepare(
-          "SELECT * FROM scheduler_events WHERE run_id = ? ORDER BY sequence"
-        )
-        .all(input.runId) as unknown as EventRow[];
-      const priorEvents = priorRows.map(decode);
-      const priorProjection = replaySchedulerEvents(
-        priorEvents,
-        this.evidenceStore,
-        this.artifacts,
-        this.validateCleanupReceipt,
-        this.validateExecutionProfile,
-      );
+      const prior = this.replayed(input.runId);
+      const priorEvents = prior.events;
+      // A copy: a refused append must leave the cached replay exactly as it was.
+      const priorProjection = prior.projection && structuredClone(prior.projection);
       const existing = this.database
         .prepare(
           "SELECT * FROM scheduler_events WHERE run_id = ? AND idempotency_key = ?"
@@ -201,7 +204,7 @@ export class SqliteSchedulerStore implements SchedulerStore {
         eventId: `sched_${randomUUID()}`,
         sequence: row.sequence,
       };
-      reduceSchedulerEvent(priorProjection, event);
+      const nextProjection = reduceSchedulerEvent(priorProjection, event);
       validateSchedulerEvent(
         priorProjection,
         event,
@@ -228,6 +231,21 @@ export class SqliteSchedulerStore implements SchedulerStore {
           JSON.stringify(event.payload)
         );
       this.database.exec("COMMIT");
+      this.replays.set(input.runId, {
+        rows: [...prior.rows, rowKey({
+          event_id: event.eventId,
+          run_id: event.runId,
+          sequence: event.sequence,
+          event_type: event.type,
+          occurred_at: event.occurredAt,
+          actor_json: JSON.stringify(event.actor),
+          idempotency_key: event.idempotencyKey,
+          payload_json: JSON.stringify(event.payload),
+        })],
+        validatedAt: prior.validatedAt,
+        events: [...prior.events, structuredClone(event)],
+        projection: nextProjection,
+      });
       return event;
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -236,21 +254,55 @@ export class SqliteSchedulerStore implements SchedulerStore {
   }
 
   readRun(runId: string, afterSequence = 0): SchedulerEvent[] {
-    const events = (
-      this.database
-        .prepare(
-          "SELECT * FROM scheduler_events WHERE run_id = ? ORDER BY sequence"
-        )
-        .all(runId) as unknown as EventRow[]
-    ).map(decode);
-    replaySchedulerEvents(
+    return structuredClone(this.replayed(runId).events.filter((event) => event.sequence > afterSequence));
+  }
+
+  readProjection(runId: string): SchedulerProjection | undefined {
+    const projection = this.replayed(runId).projection;
+    return projection && structuredClone(projection);
+  }
+
+  /**
+   * The run's validated events and projection. Every read and append used to decode and re-validate
+   * the whole log; with the client polling events and the projection every second, that kept the
+   * runner's event loop saturated and every evidence command waited behind it (tunnel run). The raw
+   * rows are still read every time: rows identical to the previous replay keep its validated events,
+   * new rows are folded and validated onto it, and any rewritten row, or a replay older than
+   * FULL_REPLAY_INTERVAL_MS, falls back to the full replay.
+   */
+  private replayed(runId: string): RunReplay {
+    const rows = this.database
+      .prepare("SELECT * FROM scheduler_events WHERE run_id = ? ORDER BY sequence")
+      .all(runId) as unknown as EventRow[];
+    const keys = rows.map(rowKey);
+    const cached = this.replays.get(runId);
+    this.replays.delete(runId);
+    if (
+      cached && Date.now() - cached.validatedAt < FULL_REPLAY_INTERVAL_MS &&
+      keys.length >= cached.rows.length && cached.rows.every((key, index) => key === keys[index])
+    ) {
+      const added = rows.slice(cached.rows.length).map(decode);
+      let projection = cached.projection;
+      for (const event of added) {
+        const next = reduceSchedulerEvent(projection, event);
+        validateSchedulerEvent(projection, event, this.evidenceStore, this.artifacts, this.validateCleanupReceipt, this.validateExecutionProfile);
+        projection = next;
+      }
+      const extended = { rows: keys, validatedAt: cached.validatedAt, events: added.length ? [...cached.events, ...added] : cached.events, projection };
+      this.replays.set(runId, extended);
+      return extended;
+    }
+    const events = rows.map(decode);
+    const projection = replaySchedulerEvents(
       events,
       this.evidenceStore,
       this.artifacts,
       this.validateCleanupReceipt,
       this.validateExecutionProfile,
     );
-    return events.filter((event) => event.sequence > afterSequence);
+    const replay = { rows: keys, validatedAt: Date.now(), events, projection };
+    this.replays.set(runId, replay);
+    return replay;
   }
 
   close(): void {
@@ -443,6 +495,11 @@ function requiresAuthoritativeEvidenceStore(
     taskId.length > 0 &&
     projection.tasks[taskId]?.acceptanceCriteria !== undefined
   );
+}
+
+/** Every stored column of a row, exactly: any rewrite of a row changes its key. */
+function rowKey(row: EventRow): string {
+  return JSON.stringify([row.event_id, row.run_id, row.sequence, row.event_type, row.occurred_at, row.actor_json, row.idempotency_key, row.payload_json]);
 }
 
 function decode(row: EventRow): SchedulerEvent {

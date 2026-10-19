@@ -1087,7 +1087,10 @@ export class BuildRuntime {
 
   projection(): SchedulerProjection {
     const events = this.store.readRun(this.runId);
-    const projection = events.length === 0 ? emptyProjection(this.runId) : rebuildSchedulerProjection(events);
+    // A store that keeps its replay already holds the projection these events fold to.
+    const projection = events.length === 0
+      ? emptyProjection(this.runId)
+      : this.store.readProjection?.(this.runId) ?? rebuildSchedulerProjection(events);
     // Live API seam only; historical reducers and persisted projections stay unchanged.
     if (projection.runtime.architect.handoff) projection.runtime.architect.handoff.requiredSequence = events.findLast((event) => event.type === "architect.handoff_required")?.sequence;
     if (projection.verifierSelection?.status === "required") projection.verifierSelection.requiredSequence = events.findLast((event) => event.type === "verifier.selection_required")?.sequence;

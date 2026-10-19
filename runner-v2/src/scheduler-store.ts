@@ -1080,6 +1080,8 @@ export interface SchedulerProjection {
 export interface SchedulerStore {
   append(input: NewSchedulerEvent): SchedulerEvent;
   readRun(runId: string, afterSequence?: number): SchedulerEvent[];
+  /** The projection the run's events fold to, when the store keeps it; a copy the caller may change. */
+  readProjection?(runId: string): SchedulerProjection | undefined;
   close(): void;
 }
 
@@ -2774,10 +2776,27 @@ export function rebuildSchedulerProjection(
   events: readonly SchedulerEvent[]
 ): SchedulerProjection {
   if (events.length === 0) throw new Error("Cannot rebuild an empty scheduler run.");
+  // The fold is pure, so identical events give an identical projection. A 175-event run took ~430 ms
+  // to fold and every status poll and Architect tool call refolded it (tunnel run); keying on the exact
+  // serialized events costs a few ms. The caller gets its own copy.
+  const key = createHash("sha256").update(JSON.stringify(events)).digest("hex");
+  const cached = rebuiltProjections.get(key);
+  if (cached) {
+    rebuiltProjections.delete(key);
+    rebuiltProjections.set(key, cached);
+    return structuredClone(cached);
+  }
   let projection: SchedulerProjection | undefined;
   for (const event of events) projection = reduceSchedulerEvent(projection, event);
+  rebuiltProjections.set(key, structuredClone(projection!));
+  if (rebuiltProjections.size > REBUILT_PROJECTION_CACHE_SIZE) {
+    rebuiltProjections.delete(rebuiltProjections.keys().next().value!);
+  }
   return projection!;
 }
+
+const REBUILT_PROJECTION_CACHE_SIZE = 8;
+const rebuiltProjections = new Map<string, SchedulerProjection>();
 
 /**
  * Validate evidence against the authoritative immutable evidence store before
