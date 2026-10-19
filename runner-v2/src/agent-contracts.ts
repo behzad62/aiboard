@@ -36,7 +36,13 @@ export interface ToolCallBlock {
   thoughtSignature?: string;
 }
 
-export type AssistantBlock = TextBlock | ToolCallBlock;
+/** The model's own reasoning for this turn, kept so it can be sent back where a provider requires it. */
+export interface ReasoningBlock {
+  type: "reasoning";
+  text: string;
+}
+
+export type AssistantBlock = TextBlock | ToolCallBlock | ReasoningBlock;
 export type ToolContentBlock = TextBlock | ArtifactBlock | JsonBlock;
 
 export interface AgentMessage {

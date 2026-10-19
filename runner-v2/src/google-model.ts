@@ -187,7 +187,8 @@ function toGoogleContent(
   const content = Array.isArray(message.content) ? message.content : [];
   return {
     role: message.role === "assistant" ? "model" : "user",
-    parts: content.map((block) =>
+    // Gemini carries reasoning continuity in thought signatures, not reasoning text.
+    parts: content.filter((block) => block.type !== "reasoning").map((block) =>
       block.type === "text"
         ? { text: block.text }
         : {

@@ -203,7 +203,8 @@ function toAnthropicMessage(
   const content = Array.isArray(message.content) ? message.content : [];
   return {
     role: message.role === "assistant" ? "assistant" : "user",
-    content: content.map((block) =>
+    // Anthropic thinking needs its signed blocks, which are not captured yet; plain reasoning is not sent.
+    content: content.filter((block) => block.type !== "reasoning").map((block) =>
       block.type === "text"
         ? { type: "text", text: block.text }
         : {

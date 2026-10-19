@@ -1790,3 +1790,26 @@ test("native Build factory forwards configured OpenRouter hosted tools", async (
     globalThis.fetch = originalFetch;
   }
 });
+
+test("DeepSeek reasoning is kept and sent back as reasoning_content; other providers never receive it", async () => {
+  // DeepSeek's thinking-mode docs: with tools, reasoning_content must be passed back on later requests.
+  const bodies: Array<{ messages: Array<Record<string, unknown>> }> = [];
+  const model = (providerId: string) => new OpenAICompatibleModel({
+    baseUrl: "https://api.deepseek.example", apiKey: "secret", modelId: "deepseek-flash", providerId,
+    fetch: async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({ choices: [{ finish_reason: "tool_calls", message: {
+        content: "", reasoning_content: "The store needs a 0600 mode check first.",
+        tool_calls: [{ id: "call_1", function: { name: "fs_read", arguments: "{\"path\":\"a.ts\"}" } }],
+      } }] });
+    },
+  });
+  const base = { sessionId: "s", tools: [], messages: [{ id: "u", role: "user" as const, content: "go" }] };
+  const turn = await model("deepseek").complete(base as never);
+  assert.deepEqual(turn.blocks[0], { type: "reasoning", text: "The store needs a 0600 mode check first." });
+  const history = { ...base, messages: [...base.messages, { id: "a", role: "assistant" as const, content: turn.blocks }] };
+  await model("deepseek").complete(history as never);
+  assert.equal(bodies.at(-1)!.messages[1]!.reasoning_content, "The store needs a 0600 mode check first.");
+  await model("openai").complete(history as never);
+  assert.equal(Object.hasOwn(bodies.at(-1)!.messages[1]!, "reasoning_content"), false, "only providers whose docs ask for it");
+});

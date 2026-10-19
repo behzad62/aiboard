@@ -4,7 +4,7 @@ import { readProviderSse } from "./provider-sse.js";
 interface ChatResult {
   id?: string;
   choices: Array<{ message: {
-    content: string; tool_calls: Array<{ id: string; function: { name: string; arguments: string } }>;
+    content: string; reasoning_content?: string; tool_calls: Array<{ id: string; function: { name: string; arguments: string } }>;
   }; finish_reason?: string }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
 }
@@ -13,6 +13,8 @@ export async function streamOpenAIChat(
 ): Promise<ChatResult> {
   let id: string | undefined;
   let content = "";
+  // Kept, not only displayed: DeepSeek requires it back on later requests when tools are present.
+  let reasoningContent = "";
   let finishReason: string | undefined;
   let usage: ChatResult["usage"];
   const tools = new Map<number, { id: string; name: string; arguments: string }>();
@@ -29,7 +31,10 @@ export async function streamOpenAIChat(
     const delta = choice?.delta as Record<string, unknown> | undefined;
     const reasoning = typeof delta?.reasoning_content === "string" ? delta.reasoning_content
       : typeof delta?.reasoning === "string" ? delta.reasoning : undefined;
-    if (reasoning) live.reasoning(reasoning);
+    if (reasoning) {
+      reasoningContent += reasoning;
+      live.reasoning(reasoning);
+    }
     if (typeof delta?.content === "string") {
       content += delta.content;
       live.text(delta.content);
@@ -52,7 +57,7 @@ export async function streamOpenAIChat(
     ...(id ? { id } : {}),
     choices: [{
       message: {
-        content, tool_calls: [...tools.entries()].sort((a, b) => a[0] - b[0])
+        content, ...(reasoningContent ? { reasoning_content: reasoningContent } : {}), tool_calls: [...tools.entries()].sort((a, b) => a[0] - b[0])
           .map(([index, call]) => ({ id: call.id || `tool_${index + 1}`, function: { name: call.name, arguments: call.arguments } })),
       },
       ...(finishReason ? { finish_reason: finishReason } : {}),

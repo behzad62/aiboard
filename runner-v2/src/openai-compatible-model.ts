@@ -20,6 +20,7 @@ import {
 import { createHash } from "node:crypto";
 import { withVisualMedia } from "./provider-visual-input.js";
 import { openAICompatibleReasoningFields } from "./reasoning-effort.js";
+import { providerProtocolProfile } from "./provider-protocol-profiles.js";
 import { ProviderTransportError } from "./account-runner-model.js";
 import { streamOpenAIChat, streamOpenAIResponses } from "./openai-streaming.js";
 
@@ -42,6 +43,7 @@ interface OpenAIResponse {
     finish_reason?: string;
     message?: {
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         id?: string;
         function?: { name?: string; arguments?: string };
@@ -138,7 +140,9 @@ export class OpenAICompatibleModel implements AgentModel {
             prompt_cache_retention: "24h",
           }
         : {}),
-      messages: withVisualMedia(request.messages.map((message) => toOpenAIMessage(message, toolNames)), request.attachments, "openai-chat"),
+      messages: withVisualMedia(request.messages.map((message) => toOpenAIMessage(message, toolNames, {
+        reasoningContent: providerProtocolProfile(this.options.providerId)?.chatReasoningContent === true,
+      })), request.attachments, "openai-chat"),
       ...(toolPayload.length > 0
         ? { tools: toolPayload, tool_choice: toolChoice }
         : {}),
@@ -159,6 +163,9 @@ export class OpenAICompatibleModel implements AgentModel {
       : await fetchProviderJson<OpenAIResponse>(this.fetchImpl, endpoint, init);
     const choice = response.choices?.[0];
     const blocks: AssistantBlock[] = [];
+    if (choice?.message?.reasoning_content) {
+      blocks.push({ type: "reasoning", text: choice.message.reasoning_content });
+    }
     if (choice?.message?.content) {
       blocks.push({ type: "text", text: choice.message.content });
     }
@@ -314,7 +321,8 @@ function shouldFallbackFromResponses(providerId: string | undefined, error: unkn
 }
 function toOpenAIMessage(
   message: AgentMessage,
-  toolNames: import("./provider-model-utils.js").ToolNameCodec
+  toolNames: import("./provider-model-utils.js").ToolNameCodec,
+  options: { reasoningContent?: boolean } = {}
 ): Record<string, unknown> {
   if (message.role === "tool") {
     const result = message.content as ToolResult;
@@ -339,9 +347,13 @@ function toOpenAIMessage(
       type: "function",
       function: { name: toolNames.wireFor(block.name), arguments: JSON.stringify(block.arguments) },
     }));
+  const reasoning = options.reasoningContent && message.role === "assistant"
+    ? content.filter((block) => block.type === "reasoning").map((block) => block.text).join("")
+    : "";
   return {
     role: message.role,
     content: text || null,
+    ...(reasoning ? { reasoning_content: reasoning } : {}),
     ...(calls.length > 0 ? { tool_calls: calls } : {}),
   };
 }

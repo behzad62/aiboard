@@ -253,6 +253,7 @@ import { NativeOwnedProcessBackend } from "./native-process-backend.js";
 import { assertSubprocessCleanupSettled } from "./inspection-cleanup.js";
 import { createWindowsProcessSemanticProbeSource } from "./windows-process-semantic-probes.js";
 import { createSubprocessRuntimeKernel, isExceptionalRecoveryState } from "./subprocess-runtime.js";
+import { providerProtocolProfile } from "./provider-protocol-profiles.js";
 import {
   ProcessRecoveryController,
   createAgentProcessRecoveryGenerator,
@@ -1173,7 +1174,7 @@ export class NativeBuildFactory {
       selectedConfigs.map((config) => [
         config.runtimeId,
         wrapModelWithBuildUserVisuals(
-          withContextWindow(providerModelFactory(config, this.artifacts), config.contextWindowTokens), userVisuals, spec.runId, config.inputCapabilities,
+          withContextWindow(providerModelFactory(config, this.artifacts), config.contextWindowTokens ?? providerProtocolProfile(config.providerId)?.contextWindowTokens), userVisuals, spec.runId, config.inputCapabilities,
         ),
       ])
     );

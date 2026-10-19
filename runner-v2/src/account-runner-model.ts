@@ -438,6 +438,8 @@ function toRunnerMessage(message: AgentMessage): {
     return {
       role: message.role,
       content: message.content
+      // Reasoning is only sent back where a provider profile asks for it.
+      .filter((block) => block.type !== "reasoning")
       .map((block) =>
         block.type === "text"
           ? block.text
