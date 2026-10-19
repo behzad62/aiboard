@@ -2902,22 +2902,34 @@ function validateAcceptanceContractUpgrade(
   }, "revision and criteria for every non-cancelled task are required");
 }
 
+/**
+ * One message for every nested problem told an Architect its present top-level fields were missing; it
+ * concluded the payload was truncated and resent it blind (tunnel run). Each check now names its field.
+ */
 function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
-  return validateObject(input, (value) => {
+  let issue = "taskId, decision, summary, and valid evidenceArtifactHashes are required";
+  const result = validateObject<ReviewTaskInput>(input, (value) => {
     if (!nonEmpty(value.taskId) || (value.decision !== "approved" && value.decision !== "rejected") || !nonEmpty(value.summary)) return null;
     const hashes = stringList(value.evidenceArtifactHashes);
     if (!hashes || hashes.some((hash) => !/^[a-f0-9]{64}$/.test(hash))) return null;
+    issue = "criterionVerdicts is malformed: each needs criterionId, a verdict, rationale and evidenceIds";
     const criterionVerdicts = value.criterionVerdicts === undefined
       ? undefined
       : parseCriterionReviewVerdicts(value.criterionVerdicts);
     if (criterionVerdicts === null) return null;
+    issue = isRecord(value.planReconciliation) && Array.isArray(value.planReconciliation.taskUpdates) &&
+      value.planReconciliation.taskUpdates.length === 0 && (!Array.isArray(value.planReconciliation.newTasks) || value.planReconciliation.newTasks.length === 0)
+      ? "planReconciliation must change the plan (a taskUpdates or newTasks entry); to accept submission-scope findings without a plan change, omit it and give each finding resolution \"plan_reconciled\" with the current planRevisionId and planDigest in findingDispositions"
+      : "planReconciliation is malformed: it needs revision, summary and taskUpdates entries with taskId and action cancel|revise";
     const planReconciliation = value.planReconciliation === undefined
       ? undefined
       : parsePlanReconciliation(value.planReconciliation);
     if (value.planReconciliation !== undefined && !planReconciliation) return null;
+    issue = "findingDispositions is malformed: each needs findingId, resolution plan_reconciled|rejected|deferred and rationale";
     const rawFindingDispositions: unknown = value.findingDispositions;
     const findingDispositions = rawFindingDispositions === undefined ? undefined : Array.isArray(rawFindingDispositions) ? rawFindingDispositions.map((candidate: unknown) => isRecord(candidate) && nonEmpty(candidate.findingId) && (candidate.resolution === "plan_reconciled" || candidate.resolution === "rejected" || candidate.resolution === "deferred") && nonEmpty(candidate.rationale) ? { findingId: candidate.findingId, resolution: candidate.resolution as "plan_reconciled" | "rejected" | "deferred", rationale: candidate.rationale, ...(nonEmpty(candidate.planRevisionId) ? { planRevisionId: candidate.planRevisionId } : {}), ...(nonEmpty(candidate.planDigest) ? { planDigest: candidate.planDigest } : {}) } : null) : null;
     if (findingDispositions === null || findingDispositions?.some((candidate) => candidate === null)) return null;
+    issue = "claimDispositions is malformed: each needs claimId, status verified and rationale";
     const claimDispositions = value.claimDispositions === undefined ? undefined : Array.isArray(value.claimDispositions) ? value.claimDispositions.map((candidate: unknown) => isRecord(candidate) && nonEmpty(candidate.claimId) && candidate.status === "verified" && nonEmpty(candidate.rationale) ? { claimId: candidate.claimId, status: "verified" as const, rationale: candidate.rationale } : null) : null;
     if (claimDispositions === null || claimDispositions?.some((candidate) => candidate === null)) return null;
     return {
@@ -2930,7 +2942,8 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
       ...(findingDispositions ? { findingDispositions: findingDispositions.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null) } : {}),
       ...(claimDispositions ? { claimDispositions: claimDispositions.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null) } : {}),
     };
-  }, "taskId, decision, summary, and valid evidenceArtifactHashes are required");
+  }, "");
+  return result.ok ? result : { ok: false, issues: [issue] };
 }
 
 function validatePlanReconciliation(input: unknown): ValidationResult<PlanReconciliation> {

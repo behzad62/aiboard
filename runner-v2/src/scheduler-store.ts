@@ -7948,7 +7948,8 @@ function applyDeliveryDispositions(
       let scopeResolutionDigest: string | undefined;
       if (review.runnerScope?.findings.some((fact) => fact.id === findingId)) {
         const ready = readyPlanIdentity(next);
-        if (resolution !== "plan_reconciled" || !ready || raw.planRevisionId !== ready.revisionId || raw.planDigest !== ready.digest) throw new Error("Submission scope findings require an explicit current-plan reconciliation.");
+        // Say exactly what reconciles it: the bare sentence cost an Architect four 16 KB retries (tunnel run).
+        if (resolution !== "plan_reconciled" || !ready || raw.planRevisionId !== ready.revisionId || raw.planDigest !== ready.digest) throw new Error(`Submission scope findings require an explicit current-plan reconciliation: give ${findingId} resolution "plan_reconciled"${ready ? ` with planRevisionId "${ready.revisionId}" and planDigest "${ready.digest}"` : " once the plan is ready"}.`);
         scopeResolutionDigest = ready.digest;
       }
       review.findings = (review.findings ?? []).map((finding) => finding.id === findingId
