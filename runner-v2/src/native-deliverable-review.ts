@@ -2041,6 +2041,10 @@ export function createRecordDeliverableFindingsTool(
   };
 }
 
+function hasPriorReview(options: DeliveryLifecycleToolOptions): boolean {
+  return rebuildSchedulerProjection(options.store.readRun(options.runId)).delivery?.reviews[options.taskId]?.priorReviewId !== undefined;
+}
+
 interface SubmitDeliverableVerdictInput {
   summary: string;
   satisfied: boolean;
@@ -2142,7 +2146,9 @@ export function createSubmitDeliverableVerdictTool(
         summary: input.summary,
         satisfied: input.satisfied,
         claimVerdicts: input.claimVerdicts,
-        ...(input.priorFindingChecks !== undefined ? { priorFindingChecks: input.priorFindingChecks } : {}),
+        // A first review has no prior findings to check; the kernel refused a verdict that carried
+        // the (offered) field and the reviewer resent 9 KB (tunnel run). Same test as the kernel's.
+        ...(input.priorFindingChecks !== undefined && hasPriorReview(options) ? { priorFindingChecks: input.priorFindingChecks } : {}),
         ...(input.survivorDispositions !== undefined ? { survivorDispositions: input.survivorDispositions } : {}),
         ...(input.testConsolidation !== undefined ? { testConsolidation: input.testConsolidation } : {}),
       },
