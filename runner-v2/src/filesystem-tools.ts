@@ -198,6 +198,7 @@ export function createFilesystemTools(
             content: [
               json({
                 ...baseMetadata,
+                ...lineEndingMetadata(source, selected),
                 totalLines: starts.length,
                 startLine,
                 endLine,
@@ -210,7 +211,7 @@ export function createFilesystemTools(
                     }
                   : {}),
               }),
-              { type: "text", text: selected },
+              { type: "text", text: modelText(selected) },
             ],
             isError: false,
           };
@@ -238,8 +239,9 @@ export function createFilesystemTools(
             isError: false,
           };
         }
+        const whole = decodeText(bytes);
         return {
-          content: [metadata, { type: "text", text: decodeText(bytes) }],
+          content: [json({ ...baseMetadata, ...lineEndingMetadata(whole, whole) }), { type: "text", text: modelText(whole) }],
           isError: false,
         };
       },
@@ -421,7 +423,7 @@ export function createFilesystemTools(
           if (hasPolicyPaths(options.protectedPaths) && await matchesCanonicalPolicyTarget(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
-          const bytes = fencedWrite(context, path, (original) => preserveUtf8Bom(original, Buffer.from(input.content as string)),
+          const bytes = fencedWrite(context, path, (original) => preserveUtf8Bom(original, Buffer.from(keepLineEndings(original, input.content as string))),
             // Missing parents are created by default (the same fenced creation as the explicit flag):
             // the opt-in only made workers regenerate and resend whole files (tunnel run).
             expectedRevision(input, context, path), input.createDirectories !== false);
@@ -1114,6 +1116,26 @@ function occurrences(value: string, search: string): number {
     cursor += search.length;
   }
   return count;
+}
+
+/**
+ * Models read and write LF. CRLF files (a Windows checkout's README, then every file the workers
+ * wrote in that style) put \r\n escapes into each large argument, and one 8.5 KB patch broke its
+ * JSON switching between \r\n and \\n (tunnel run). The file keeps its own style on disk.
+ */
+function modelText(text: string): string {
+  return text.includes("\r\n") ? text.replace(/\r\n/g, "\n") : text;
+}
+
+/** textByteLength is the returned text's size; a reader's completeness check compares against it. */
+function lineEndingMetadata(file: string, returned: string): Record<string, unknown> {
+  if (!file.includes("\r\n")) return {};
+  return { lineEndings: "crlf", textByteLength: Buffer.byteLength(modelText(returned)) };
+}
+
+function keepLineEndings(original: Buffer | undefined, content: string): string {
+  if (!original || content.includes("\r\n") || !isUtf8Text(original)) return content;
+  return preferredNewline(decodeText(original)) === "\r\n" ? content.replace(/\n/g, "\r\n") : content;
 }
 
 function preferredNewline(value: string): "\r\n" | "\n" | "\r" | null {

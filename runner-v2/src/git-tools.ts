@@ -104,7 +104,8 @@ export function createGitTools(runContext?: Pick<RunGitExecutionContext, "forCal
           // only the old scaffold (tunnel run); this reads the submitted file itself.
           if (!validRevisionPath(input.path)) return invalidRevision();
           const file = await git(runContext, context, ["show", "--no-ext-diff", `${revision}:${input.path}`], false, 64 * 1024 * 1024);
-          return { content: [{ type: "text", text: file.stdout }], isError: false };
+          // LF like fs.read: a CRLF file's \r\n otherwise flows into every later argument (tunnel run).
+          return { content: [{ type: "text", text: file.stdout.replace(/\r\n/g, "\n") }], isError: false };
         }
         const output = await git(
           runContext, context,

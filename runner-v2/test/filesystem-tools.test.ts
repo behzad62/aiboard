@@ -86,11 +86,13 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
       endLine: 2,
     });
     assert.equal(ranged.isError, false);
-    assert.equal(text(ranged), "const beta = 2;\r\n");
+    assert.equal(text(ranged), "const beta = 2;\n", "a CRLF file reads as LF");
     assert.deepEqual(json(ranged), {
       path: "src/app.ts",
       sha256: metadata.sha256,
       byteLength: 35,
+      lineEndings: "crlf",
+      textByteLength: 16,
       totalLines: 3,
       startLine: 2,
       endLine: 2,
@@ -131,6 +133,22 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     assert.equal(oversizedRange.isError, true);
     assert.equal(oversizedRange.error?.code, "line_range_too_large");
     assert.match(text(oversizedRange), /narrow the range/i);
+
+    // Tunnel run: CRLF files put \r\n into every argument; models read and write LF, files keep CRLF.
+    writeFileSync(join(workspace, "notes.md"), "first\r\nsecond\r\n");
+    const crlf = await invoke(broker, "read_crlf", "fs.read", { path: "notes.md" });
+    assert.equal(text(crlf), "first\nsecond\n");
+    assert.deepEqual(
+      (({ byteLength, lineEndings, textByteLength }) => ({ byteLength, lineEndings, textByteLength }))(json(crlf) as Record<string, unknown>),
+      { byteLength: 15, lineEndings: "crlf", textByteLength: 13 },
+    );
+    const crlfRange = await invoke(broker, "read_crlf_range", "fs.read", { path: "notes.md", startLine: 2, endLine: 2 });
+    assert.equal(text(crlfRange), "second\n");
+    assert.equal((await invoke(broker, "write_crlf", "fs.write", { path: "notes.md", content: "first\nthird\n" })).isError, false);
+    assert.equal(readFileSync(join(workspace, "notes.md"), "utf8"), "first\r\nthird\r\n");
+    assert.equal((await invoke(broker, "patch_crlf", "fs.patch", { path: "notes.md", search: "first\nthird", replace: "first\nfourth" })).isError, false);
+    assert.equal(readFileSync(join(workspace, "notes.md"), "utf8"), "first\r\nfourth\r\n");
+    rmSync(join(workspace, "notes.md"));
 
     const stat = await invoke(broker, "stat", "fs.stat", { path: "src/app.ts" });
     assert.equal((json(stat) as { type: string }).type, "file");

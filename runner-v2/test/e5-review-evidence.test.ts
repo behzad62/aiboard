@@ -89,6 +89,19 @@ test("E5 real completed SQLite tool reads bound citations to returned ranges; fa
   } finally { try { ledger.close(); } catch {} rmSync(root,{recursive:true,force:true}); }
 });
 
+test("E5 a whole read of a CRLF file still grants citation authority (tunnel run)", async () => {
+  // CRLF files are returned as LF; the completeness check uses the returned text size.
+  const root = mkdtempSync(join(tmpdir(), "e5-crlf-"));
+  const ledger = new SqliteToolLedger(join(root,"tools.sqlite"));
+  const broker = new ToolBroker({ permissionProfile:"guarded", workspacePath:root, ledger, artifacts:new ArtifactStore(join(root,"artifacts")) });
+  for (const tool of createFilesystemTools()) broker.register(tool);
+  writeFileSync(join(root,"windows.ts"), "export const a = 1;\r\nexport const b = 2;\r\n");
+  try {
+    await broker.invoke({type:"tool_call",callId:"crlf-1",name:"fs.read",arguments:{path:"windows.ts"}}, {runId:binding.runId,sessionId:binding.sessionId,actor:{role:"verifier",id:binding.reviewerRuntimeId}});
+    assert.deepEqual(validateCitations([{path:"windows.ts",line:2}],captureReviewReads(ledger,binding)), [{path:"windows.ts",line:2}]);
+  } finally { ledger.close(); rmSync(root,{recursive:true,force:true}); }
+});
+
 test("E5 evidence citations require actual same-task evidence content; partial artifacts and foreign-task facts grant no authority", async()=> {
   const root=mkdtempSync(join(tmpdir(),"e5-evidence-")); const artifacts=new ArtifactStore(join(root,"artifacts"));
   const ledger=new SqliteToolLedger(join(root,"tools.sqlite")); const evidence=new SqliteEvidenceStore(join(root,"evidence.sqlite"));

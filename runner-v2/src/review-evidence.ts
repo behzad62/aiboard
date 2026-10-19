@@ -50,7 +50,9 @@ export function captureReviewReads(ledger: ToolInvocationLedger, binding: Omit<R
       const endLine = meta.endLine ?? content.split("\n").length;
       if (!positive(startLine) || !positive(endLine) || endLine < startLine) continue;
       // Whole reads must be byte-complete; ranged reads must contain their actual returned range.
-      if (meta.startLine === undefined ? Buffer.byteLength(content) !== meta.byteLength : content.split("\n").length < endLine - startLine + 1) continue;
+      // A CRLF file is returned as LF; textByteLength is the size of what was actually returned.
+      const returnedBytes = meta.lineEndings === "crlf" && positive(meta.textByteLength) ? meta.textByteLength : meta.byteLength;
+      if (meta.startLine === undefined ? Buffer.byteLength(content) !== returnedBytes : content.split("\n").length < endLine - startLine + 1) continue;
       reads.push({ ...base, toolName: "fs.read", path: meta.path, startLine, endLine });
     } else if (result.toolName === "inspect_evidence") {
       if (!Array.isArray(values[0])) continue;
