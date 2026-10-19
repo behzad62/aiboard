@@ -149,9 +149,11 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
     validate: (input) => validateRun(input, defaultTimeoutMs, maximumTimeoutMs),
     // The command's own timeout plus the working-tree captures and artifact writes around it.
     timeoutMs: (input) => input.timeoutMs + 5 * 60_000,
+    // The working-tree identity is the whole workspace's, so a command in a subfolder also reads the
+    // workspace root; writes stay granted to its cwd only.
     assessAccess: (input) => ({
       capability: "evidence.command",
-      paths: [{ path: input.cwd, access: "write" }],
+      paths: [{ path: input.cwd, access: "write" }, ...(input.cwd === "." ? [] : [{ path: ".", access: "read" as const }])],
       external: true,
     }),
     execute: async (input, context) => {
@@ -164,8 +166,11 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
       }
       try {
         const cwd = await containedDirectory(context.workspacePath, input.cwd);
+        // Captured at the workspace root: from a subfolder the capture refused a wider snapshot, so
+        // every package-level test run had an unknown tree and its claims could not be verified (tunnel run).
+        const treeRoot = await containedDirectory(context.workspacePath, ".");
         const startedAt = clock();
-        const commandTree = await options.git?.workingTreeForCall?.(context, cwd) ?? unknownWorkingTree();
+        const commandTree = await options.git?.workingTreeForCall?.(context, treeRoot) ?? unknownWorkingTree();
         const revision = options.git ? await gitRevision(cwd, options.git.forCall(context).run) : undefined;
         if (!options.execution || !context.callId) {
           return failure(
@@ -204,7 +209,7 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
             finishedAt: validationFinish,
           });
         }
-        const postTree = await options.git?.workingTreeForCall?.(context, cwd) ?? unknownWorkingTree();
+        const postTree = await options.git?.workingTreeForCall?.(context, treeRoot) ?? unknownWorkingTree();
         const workingTreeIdentity = settleWorkingTreeIdentity(commandTree, postTree);
         const finishedAt = clock();
         const stdoutOutput = outputFor(execution.process, "stdout");
@@ -344,6 +349,13 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
       if (!record && input.evidenceId.length >= "evidence_".length + 8) {
         const matches = listed.filter((candidate) => candidate.id.startsWith(input.evidenceId!));
         if (matches.length === 1) record = matches[0];
+      }
+      // A reviewer's own commands are recorded under delivery:<task>; its verdict pass asked for them
+      // by the task's ID and got evidence_not_found (tunnel run). The record keeps its real taskId.
+      if (!record && !taskId.startsWith("delivery:")) {
+        const reviewScope = `delivery:${taskId}`;
+        record = options.store.getByIds({ runId: context.runId, taskId: reviewScope, ids: [input.evidenceId] })
+          .find((candidate) => candidate.id === input.evidenceId && candidate.runId === context.runId && candidate.taskId === reviewScope);
       }
       if (!record) {
         return failure(

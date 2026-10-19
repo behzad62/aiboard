@@ -409,6 +409,14 @@ test("bounded inspection: an abbreviated evidence id resolves when unique, and a
     assert.equal(foreignPrefix.error?.code, "evidence_not_found", "a prefix resolves only within the requested task");
     const empty = await invoke({ taskId: "T9", evidenceId: short });
     assert.match(empty.error!.message, /Task T9 has no recorded evidence/);
+
+    // A reviewer's own command, recorded under delivery:<task>, resolves when asked for by the task.
+    const reviewed = await seedModest(fixture, "check-review", "review", `delivery:${TASK}`);
+    const ownReview = await invoke({ evidenceId: reviewed.id });
+    assert.equal(ownReview.isError, false);
+    assert.equal((jsonArray(ownReview)?.[0] as { taskId: string } | undefined)?.taskId, `delivery:${TASK}`, "the record keeps its own scope");
+    const otherReview = await seedModest(fixture, "check-review-other", "review-other", "delivery:T2");
+    assert.equal((await invoke({ evidenceId: otherReview.id })).error?.code, "evidence_not_found", "never another task's review scope");
   } finally {
     fixture.cleanup();
   }
