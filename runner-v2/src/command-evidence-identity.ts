@@ -24,6 +24,8 @@ export const unknownChildEnvironment = (): ChildEnvironmentIdentity => ({ versio
  * A separate index per snapshot never reads or writes the owner's staging index.
  * Git owns newline/attribute/filter semantics; unsupported mechanics stay unknown.
  */
+const RUNNER_REPORT_EXCLUSION = ":(exclude,glob)**/.aiboard-report-*";
+
 export async function captureWorkingTreeIdentity(cwd: string, indexRoot: string, execute: GitRunner): Promise<WorkingTreeIdentity> {
   let temporary: string | undefined;
   try {
@@ -38,7 +40,9 @@ export async function captureWorkingTreeIdentity(cwd: string, indexRoot: string,
     if (traversal === "" || (traversal !== ".." && !traversal.startsWith(`..${sep}`) && !isAbsolute(traversal))) return { status: "unknown", reason: "capture_failed" };
     temporary = await mkdtemp(join(root, "command-index-"));
     const env = Object.freeze({ GIT_INDEX_FILE: join(temporary, "index") });
-    for (const args of [["read-tree", "HEAD"], ["add", "-A", "--", "."]]) {
+    // Runner-written test reports (.aiboard-report-*) are not project content: counting them made every
+    // reported test command "tree_changed_during_command", so its evidence lost its identity (tunnel run).
+    for (const args of [["read-tree", "HEAD"], ["add", "-A", "--", ".", RUNNER_REPORT_EXCLUSION]]) {
       const result = await execute({ cwd, args, env });
       if (result.exitCode !== 0) return { status: "unknown", reason: "capture_failed" };
     }
