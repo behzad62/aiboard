@@ -10405,7 +10405,7 @@ export const STOP_SNAPSHOT_TABLE: readonly StopSnapshotTableEntry[] = [
   { stop: "delivery_<other>", site: "build-runtime.ts pauseForDeliveryGate", stopKind: "paused", notes: "denied", note: "Unrecognized delivery reason: denied by default." },
   { stop: "coverage_reviewer_unavailable", site: "build-runtime.ts pauseForCoverageGate (run.paused)", stopKind: "paused", notes: "denied", note: "Provider failure: no reviewer runtime could be reached." },
   { stop: "answer_reviewer_unavailable", site: "build-runtime.ts pauseForAnswerReviewGate (run.paused)", stopKind: "paused", notes: "denied", note: "Provider failure: no reviewer runtime could be reached." },
-  { stop: "owner pause (run.paused, actor user, any other reason)", site: "build-runtime.ts pause", stopKind: "paused", notes: "denied", note: "Owner pause: the notes call would see only the owner's own reason, which the snapshot already records; it invented next steps and traps from it (tunnel run)." },
+  { stop: "owner pause (run.paused, actor user, any other reason)", site: "build-runtime.ts pause", stopKind: "paused", notes: "allowed", note: "Owner pause: notes may be recorded (older logs carry them), but the runtime makes no notes call: it would see only the owner's own reason and invented next steps from it (tunnel run)." },
   { stop: "owner_cancelled (run.paused)", site: "build-runtime.ts pause", stopKind: "cancelled", notes: "denied", note: "Cancel: the run is over, notes are pointless." },
   { stop: "verifier.selection_required", site: "scheduler-store.ts verifier.selection_required (build-runtime.ts driveIndependentVerifier)", stopKind: "paused", notes: "denied", note: "No verifier runtime is selected; fail closed until the owner selects one." },
   { stop: "architect.handoff_required", site: "scheduler-store.ts architect.handoff_required (native-architect-runtime.ts requireArchitectHandoff)", stopKind: "paused", notes: "denied", note: "No Architect runtime is active; a notes call cannot run." },
@@ -10466,12 +10466,14 @@ export function classifyStopSnapshot(options: {
   // C3a repair cycle 1 (M-2, M-3): reason first. The selection/handoff
   // gates and the pump's own pauses are denied even when the stop event
   // carries the owner actor (the pump records through pause(), actor
-  // `user`). An owner pause is denied too: its reason is all the notes call
-  // would see, and the snapshot already records it.
+  // `user`); the owner actor makes an unknown reason allowed only when it
+  // is not one of these known runner reasons. Replay accepts notes recorded
+  // for it; BuildRuntime no longer asks for them (resolveStopNotes).
   if (reason === "verifier.selection_required") return { stopKind: "paused", notes: "denied" };
   if (reason === "architect.handoff_required") return { stopKind: "paused", notes: "denied" };
   if (reason === "no_mechanical_progress") return { stopKind: "paused", notes: "denied" };
   if (reason === "autonomous_pump_error") return { stopKind: "paused", notes: "denied" };
+  if (options.ownerInitiated) return { stopKind: "paused", notes: "allowed" };
   return { stopKind: "paused", notes: "denied" };
 }
 

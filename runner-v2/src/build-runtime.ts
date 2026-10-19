@@ -3444,12 +3444,16 @@ export class BuildRuntime {
     if (stopSnapshotSkipReason(input.stopProjection) !== undefined) {
       return { notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
     }
+    // An owner pause is allowed only for its actor: a notes call would see just the owner's own
+    // reason, which the snapshot already records, and invented next steps from it (tunnel run).
+    const ownerOnly = input.stop.actor.role === "user" && input.classified.stopKind === "paused" &&
+      classifyStopSnapshot({ status: "paused", ...(reason !== undefined ? { reason } : {}), ...(detail !== undefined ? { detail } : {}), ownerInitiated: false }).notes === "denied";
     const denial = stopNotesDenialReason({
       stopKind: input.classified.stopKind,
-      allowed: input.classified.notes === "allowed",
+      allowed: input.classified.notes === "allowed" && !ownerOnly,
       reason,
       detail,
-      ownerInitiated: input.stop.actor.role === "user",
+      ownerInitiated: ownerOnly,
     });
     if (denial !== undefined) {
       return { notesAbsentReason: denial };

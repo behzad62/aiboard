@@ -382,7 +382,6 @@ test("C3a: the stop table classifies every stop reason", () => {
   assert.equal(byStop.get("autonomous_pump_error")?.stopKind, "paused");
   assert.equal(byStop.get("autonomous_pump_error")?.notes, "denied");
   assert.equal(byStop.get("context_recording_aborted")?.stopKind, "failed");
-  assert.equal(byStop.get("owner pause (run.paused, actor user, any other reason)")?.notes, "denied");
   // The classifier behind the table.
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "repair_cycle_limit", ownerInitiated: false }),
@@ -399,11 +398,11 @@ test("C3a: the stop table classifies every stop reason", () => {
   );
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "user", ownerInitiated: true }),
-    { stopKind: "paused", notes: "denied" },
+    { stopKind: "paused", notes: "allowed" },
   );
   // C3a repair cycle 1 (M-3): reason first -- the pump's own pauses stay
-  // denied even with the owner actor. An owner pause is denied too: its
-  // reason is all a notes call would see (tunnel run).
+  // denied even with the owner actor, while a genuinely unknown owner
+  // reason stays allowed.
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "no_mechanical_progress", ownerInitiated: true }),
     { stopKind: "paused", notes: "denied" },
@@ -422,7 +421,7 @@ test("C3a: the stop table classifies every stop reason", () => {
   );
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "something_new", ownerInitiated: true }),
-    { stopKind: "paused", notes: "denied" },
+    { stopKind: "paused", notes: "allowed" },
   );
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "owner_cancelled", ownerInitiated: true }),
