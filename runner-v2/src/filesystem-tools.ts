@@ -32,10 +32,13 @@ export interface FilesystemToolsOptions {
 }
 
 type Input = Record<string, unknown>;
-const MAX_READ_LINES = 500;
 // Reads were bounded at 6 KB per range and 8 KB inline, so an 11.5 KB STATE.md took a reviewer three
 // calls (a head-and-tail preview, then two ranges) on a model with a 1M-token context (tunnel run).
+// A range now returns up to the caller's inline budget; a line-count cap only refused calls the byte
+// bound already clips (with nextStartLine).
 const MAX_READ_RANGE_BYTES = 24 * 1024;
+const rangeByteLimit = (context: ToolExecutionContext) =>
+  Math.max(MAX_READ_RANGE_BYTES, (Number.isSafeInteger(context.inlineOutputBytes) ? context.inlineOutputBytes! : 0) - 2 * 1024);
 const MAX_READ_INLINE_BYTES = 32 * 1024;
 const MAX_PATCH_EDITS = 50;
 
@@ -113,7 +116,7 @@ export function createFilesystemTools(
     {
       definition: definition(
         "fs.read",
-        `Read a file with revision metadata. For large text files, request a targeted 1-based inclusive line range with startLine and endLine. Each ranged read is limited to ${MAX_READ_LINES} lines and ${MAX_READ_RANGE_BYTES} bytes; oversized multi-line ranges return the largest bounded prefix plus nextStartLine instead of failing.`,
+        `Read a file with revision metadata. For large text files, request a 1-based inclusive line range with startLine and endLine. A range larger than one tool result returns the largest prefix that fits plus nextStartLine instead of failing.`,
         true,
         "none",
         MAX_READ_INLINE_BYTES,
@@ -152,17 +155,18 @@ export function createFilesystemTools(
           let endOffset = endLine < starts.length ? starts[endLine] : source.length;
           let selected = source.slice(startOffset, endOffset);
           let selectedBytes = Buffer.byteLength(selected);
-          if (selectedBytes > MAX_READ_RANGE_BYTES) {
+          const rangeLimit = rangeByteLimit(context);
+          if (selectedBytes > rangeLimit) {
             const firstLineEndOffset = startLine < starts.length
               ? starts[startLine]
               : source.length;
             const firstLineBytes = Buffer.byteLength(
               source.slice(startOffset, firstLineEndOffset)
             );
-            if (firstLineBytes > MAX_READ_RANGE_BYTES) {
+            if (firstLineBytes > rangeLimit) {
               return error(
                 "line_range_too_large",
-                `Line ${startLine} contains ${firstLineBytes} bytes and cannot fit within the ${MAX_READ_RANGE_BYTES}-byte range limit; it is not possible to narrow the range further for this single line.`
+                `Line ${startLine} contains ${firstLineBytes} bytes and cannot fit within the ${rangeLimit}-byte range limit; it is not possible to narrow the range further for this single line.`
               );
             }
 
@@ -177,7 +181,7 @@ export function createFilesystemTools(
               const candidateBytes = Buffer.byteLength(
                 source.slice(startOffset, candidateEndOffset)
               );
-              if (candidateBytes <= MAX_READ_RANGE_BYTES) {
+              if (candidateBytes <= rangeLimit) {
                 bestEndLine = candidate;
                 low = candidate + 1;
               } else {
@@ -241,7 +245,7 @@ export function createFilesystemTools(
       },
     },
     {
-      definition: definition("fs.stat", "Inspect file metadata without following links; a link reports its target when it stays inside the workspace.", true, "none"),
+      definition: definition("fs.stat", "Inspect file metadata without following links; a link reports its target when it stays inside the workspace. A missing path returns exists: false.", true, "none"),
       validate: objectWithString("path"),
       // lstat reads the entry in its parent directory. Granting the path itself refused every symbolic
       // link ("Grant roots cannot be symbolic links"), e.g. npm workspace links (tunnel run).
@@ -257,7 +261,13 @@ export function createFilesystemTools(
         if (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths)) {
           return hiddenPathError(context, path);
         }
-        const details = await lstat(path);
+        // Whether something exists is an answer, not a failure: workers probing node_modules or dist
+        // got tool_execution_failed errors (tunnel run).
+        const details = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT" || error.code === "ENOTDIR") return undefined;
+          throw error;
+        });
+        if (!details) return { content: [json({ path: displayPath(context, path), exists: false })], isError: false };
         const linkTarget = details.isSymbolicLink() ? await workspaceLinkTarget(context, path) : undefined;
         return {
           content: [
@@ -734,12 +744,6 @@ function validateRead(input: unknown): ValidationResult<Input> {
     return {
       ok: false,
       issues: ["startLine and endLine must form a positive ascending range"],
-    };
-  }
-  if ((input.endLine as number) - (input.startLine as number) + 1 > MAX_READ_LINES) {
-    return {
-      ok: false,
-      issues: [`line ranges may contain at most ${MAX_READ_LINES} lines`],
     };
   }
   return { ok: true, value: input };

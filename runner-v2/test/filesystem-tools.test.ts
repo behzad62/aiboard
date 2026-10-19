@@ -47,8 +47,8 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     );
     assert.match(
       readDefinition?.description ?? "",
-      /24576 bytes/i,
-      "the model-facing read contract must advertise its byte ceiling"
+      /largest prefix that fits plus nextStartLine/i,
+      "the model-facing read contract says an oversized range is clipped, not refused"
     );
     assert.match(
       patchDefinition?.description ?? "",
@@ -134,6 +134,12 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
 
     const stat = await invoke(broker, "stat", "fs.stat", { path: "src/app.ts" });
     assert.equal((json(stat) as { type: string }).type, "file");
+    // Tunnel run: probing node_modules was a tool failure; a missing path is an answer.
+    for (const path of ["node_modules", "node_modules/ws/package.json", "src/app.ts/inner"]) {
+      const missing = await invoke(broker, `stat_missing_${path}`, "fs.stat", { path });
+      assert.equal(missing.isError, false, path);
+      assert.deepEqual(json(missing), { path, exists: false });
+    }
     const list = await invoke(broker, "list", "fs.list", { path: ".", maxDepth: 2 });
     assert.deepEqual(
       (json(list) as { entries: Array<{ path: string }> }).entries.map((entry) => entry.path),
