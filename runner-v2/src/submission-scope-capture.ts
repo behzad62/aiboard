@@ -43,8 +43,13 @@ export function validateSubmissionScopeRecord(projection: SchedulerProjection, t
   const identity = captureSubmissionScopeIdentity(projection, { runId: projection.runId, taskId, attempt: task.attempt,
     workerId: task.assignedWorkerId, sessionId: runtime.sessionId, workspacePath: task.workspacePath, baselineRevision: task.workspaceBaselineRevision });
   if (!identity) throw new Error("Submission scope record requires activated policy.");
-  const findings = inspectSubmissionScope(record.files.map((file) => ({ ...file, addedLines: [] })), localSubmissionClaim(identity.claim, task.workspacePath));
-  const expected = bindSubmissionScope(identity, changeSetId, record.taskRevision, findings, record.files);
-  if (JSON.stringify(record) !== JSON.stringify(expected)) throw new Error("Submission scope record differs from its exact runner authority or mechanical findings.");
-  return expected;
+  const files = record.files.map((file) => ({ ...file, addedLines: [] }));
+  const claim = localSubmissionClaim(identity.claim, task.workspacePath);
+  // Records made before glob surfaces were understood carry literal-matcher findings; both are the
+  // runner's own mechanical facts, so either reproduces the record exactly.
+  for (const literalPaths of [false, true]) {
+    const expected = bindSubmissionScope(identity, changeSetId, record.taskRevision, inspectSubmissionScope(files, claim, { literalPaths }), record.files);
+    if (JSON.stringify(record) === JSON.stringify(expected)) return expected;
+  }
+  throw new Error("Submission scope record differs from its exact runner authority or mechanical findings.");
 }

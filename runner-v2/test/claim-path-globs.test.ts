@@ -30,4 +30,9 @@ test("a glob write surface covers its files at submission (tunnel run: 13 false 
     .map((path) => ({ path, added: true, addedLines: [] }));
   const findings = inspectSubmissionScope(files, { writableSurfaces: ["packages/shared/**"], forbiddenSurfaces: [] });
   assert.deepEqual(findings.map((finding) => [finding.path, finding.code]), [["packages/relay/src/index.ts", "outside_claim"]]);
+  // Replay reproduces records made before globs were understood with the literal matcher.
+  const literal = inspectSubmissionScope(files, { writableSurfaces: ["packages/shared/**"], forbiddenSurfaces: [] }, { literalPaths: true });
+  assert.equal(literal.length, 3, "the literal matcher still finds every path outside");
+  assert.equal(claimPathsOverlap("packages/shared/**", "packages/shared/src/ids.ts", true), false);
+  assert.equal(claimPathsOverlap("packages/shared/**", "packages/shared/src/ids.ts"), true);
 });

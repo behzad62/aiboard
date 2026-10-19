@@ -107,7 +107,23 @@ export function claimPathContains(outer: string, inner: string): boolean {
     innerKey.startsWith(`${outerKey}/`);
 }
 
-export function claimPathsOverlap(left: string, right: string): boolean {
+/**
+ * The literal containment recorded logs were judged by before glob surfaces were understood. Replay
+ * keeps it: a log the old matcher accepted must keep replaying (a changed matcher made the runner
+ * refuse to start the tunnel run).
+ */
+export function literalClaimPathContains(outer: string, inner: string): boolean {
+  const outerKey = claimPathKey(outer);
+  const innerKey = claimPathKey(inner);
+  return outerKey === innerKey ||
+    outerKey === "." ||
+    outerKey === "" ||
+    outerKey === "/" ||
+    innerKey.startsWith(`${outerKey}/`);
+}
+
+export function claimPathsOverlap(left: string, right: string, literal = false): boolean {
+  if (literal) return literalClaimPathContains(left, right) || literalClaimPathContains(right, left);
   if (claimPathContains(left, right) || claimPathContains(right, left)) return true;
   // Two globs may still share files; overlap when their fixed bases nest (conservative).
   const leftKey = claimPathKey(left);
@@ -324,6 +340,8 @@ export function findClaimConflict(
     resolved: normalizeClaimPath(path),
     confirmed: false,
   }),
+  /** Replay judges recorded claims with the matcher they were made under (literal). */
+  literalPaths = false,
 ): ClaimConflict | undefined {
   const candidateFiles = candidate.files.map((file) => resolveAlias(file).resolved);
   const candidateResources = new Set(candidate.resources.map(normalizeResourceClaim));
@@ -338,7 +356,7 @@ export function findClaimConflict(
     const activeFiles = active.files.map((file) => resolveAlias(file).resolved);
     for (const left of candidateFiles) {
       for (const right of activeFiles) {
-        if (claimPathsOverlap(left, right)) {
+        if (claimPathsOverlap(left, right, literalPaths)) {
           const shared = isSharedSurface(left) || isSharedSurface(right);
           return {
             kind: shared ? "shared_surface" : "file",

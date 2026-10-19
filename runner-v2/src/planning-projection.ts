@@ -2315,7 +2315,8 @@ export function reducePlanningProjection(
       const activeClaims = Object.values(next.assignments)
         .filter((state) => state.status === "claimed")
         .map((state) => taskWriteClaimFromAssignment(state.claim, state.claim.packetId));
-      const conflict = findClaimConflict(candidateClaim, activeClaims);
+      // Literal, as recorded claims were made: the live scheduler checks glob overlap before claiming.
+      const conflict = findClaimConflict(candidateClaim, activeClaims, undefined, true);
       if (conflict) {
         throw new Error(`Planning assignment claim conflict: ${conflict.detail}`);
       }

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AssignmentClaim } from "./planning-contracts.js";
-import { claimPathContains } from "./task-resource-claims.js";
+import { claimPathContains, literalClaimPathContains } from "./task-resource-claims.js";
 import { isSensitiveKey } from "./sensitive-redaction.js";
 
 export interface SubmissionFile {
@@ -93,14 +93,15 @@ function secretLine(line: string): boolean | string {
 }
 
 /** Mechanical scope facts only; the Architect owns their disposition. */
-export function inspectSubmissionScope(files: readonly SubmissionFile[], claim: Pick<AssignmentClaim, "writableSurfaces" | "forbiddenSurfaces">): SubmissionScopeFinding[] {
+export function inspectSubmissionScope(files: readonly SubmissionFile[], claim: Pick<AssignmentClaim, "writableSurfaces" | "forbiddenSurfaces">, options: { literalPaths?: boolean } = {}): SubmissionScopeFinding[] {
   const findings: SubmissionScopeFinding[] = [];
   for (const file of files) {
     const path = submissionPath(file.path);
-    const claimed = claim.writableSurfaces.some((surface) => !surface.startsWith("resource:") && claimPathContains(surface, path));
+    const contains = options.literalPaths ? literalClaimPathContains : claimPathContains;
+    const claimed = claim.writableSurfaces.some((surface) => !surface.startsWith("resource:") && contains(surface, path));
     const codes: SubmissionScopeFinding["code"][] = [];
     if (!claimed) codes.push("outside_claim");
-    if (claim.forbiddenSurfaces.some((surface) => claimPathContains(surface, path))) codes.push("forbidden_surface");
+    if (claim.forbiddenSurfaces.some((surface) => contains(surface, path))) codes.push("forbidden_surface");
     if (!claimed && /(?:^|\/)(?:agents\.md|claude\.md|\.github(?:\/|$)|\.git[^/]*)/i.test(path)) codes.push("instruction_surface");
     if (file.added && diaryPath(path)) codes.push("harness_diary");
     for (const code of codes) findings.push({
