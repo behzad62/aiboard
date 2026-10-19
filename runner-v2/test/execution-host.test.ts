@@ -711,9 +711,8 @@ function commandRequest(
 function assertOwnedTail(tail: string, expected: string, forbidden: string): void {
   assert.equal(tail.endsWith(expected), true);
   assert.equal(tail.includes(forbidden), false);
-  if (process.platform === "win32") {
-    assert.match(tail, /^\[runner output lossy: private_spill_unavailable\]\n/);
-  }
+  // Tail-only output (no private spill on Windows) that fits in the tail is not lossy.
+  assert.doesNotMatch(tail, /runner output lossy/);
 }
 
 async function hostFixture() {

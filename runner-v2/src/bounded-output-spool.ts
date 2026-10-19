@@ -108,6 +108,10 @@ interface MutableStreamState {
   lossReason?: MutableOutputLossReason;
   lossReasons: MutableOutputLossReason[];
   spillUnavailable: boolean;
+  /** Set when no spill could be opened: output then lives only in the tail, and only bytes that
+   * fall out of the tail are lost. Counting every byte as lost marked all output lossy on Windows
+   * (no private spill there), which disabled command-evidence reuse. */
+  tailOnly?: { code: OutputLossReasonCode; accountedBytes: number };
   spillPath?: string;
   spillProofPath?: string;
   spillFile?: OutputSpillFile;
@@ -282,6 +286,10 @@ export class BoundedOutputSpool {
 
     state.totalBytes += bytes.byteLength;
     state.tail = appendTail(state.tail, bytes, this.tailBytes);
+    if (state.tailOnly) {
+      this.accountTailOnlyLoss(state);
+      return;
+    }
     if (state.lossReason && state.lossReason.code !== "spill_cap_exceeded") {
       this.addLoss(state, state.lossReason.code, bytes.byteLength);
       return;
@@ -291,8 +299,14 @@ export class BoundedOutputSpool {
     const spillable = bytes.subarray(0, Math.max(0, remaining));
     const overflow = bytes.byteLength - spillable.byteLength;
     if (spillable.byteLength > 0) {
-      if (!(await this.ensureOpen(state))) {
-        this.addLoss(state, state.lossReason!.code, bytes.byteLength);
+      const opened = await this.ensureOpen(state);
+      if (opened !== true) {
+        if (state.spillBytes === 0) {
+          state.tailOnly = { code: opened, accountedBytes: 0 };
+          this.accountTailOnlyLoss(state);
+        } else {
+          this.addLoss(state, opened, bytes.byteLength);
+        }
         return;
       }
       try {
@@ -309,7 +323,16 @@ export class BoundedOutputSpool {
     }
   }
 
-  private async ensureOpen(state: MutableStreamState): Promise<boolean> {
+  private accountTailOnlyLoss(state: MutableStreamState): void {
+    const tailOnly = state.tailOnly!;
+    const lost = Math.max(0, state.totalBytes - state.tail.byteLength);
+    if (lost > tailOnly.accountedBytes) {
+      this.addLoss(state, tailOnly.code, lost - tailOnly.accountedBytes);
+      tailOnly.accountedBytes = lost;
+    }
+  }
+
+  private async ensureOpen(state: MutableStreamState): Promise<true | OutputLossReasonCode> {
     if (state.spillFile) return true;
     if (!this.storageAttestation && !this.spillCapabilityUnavailable) {
       try {
@@ -323,10 +346,7 @@ export class BoundedOutputSpool {
         this.spillCapabilityUnavailable = true;
       }
     }
-    if (this.spillCapabilityUnavailable || !this.storageAttestation) {
-      this.addLoss(state, "private_spill_unavailable", 0);
-      return false;
-    }
+    if (this.spillCapabilityUnavailable || !this.storageAttestation) return "private_spill_unavailable";
     if (!this.ownedRoot) {
       try {
         this.ownedRoot = await prepareOwnedRoot(
@@ -336,8 +356,7 @@ export class BoundedOutputSpool {
           this.storageAttestation.currentPrincipalIdentity
         );
       } catch {
-        this.addLoss(state, "spill_root_invalid", 0);
-        return false;
+        return "spill_root_invalid";
       }
     }
     try {
@@ -365,7 +384,6 @@ export class BoundedOutputSpool {
       }
       return true;
     } catch {
-      this.addLoss(state, "spill_open_failed", 0);
       if (state.spillFile && state.spillPath && this.ownedRoot) {
         await state.spillFile.close().catch(() => undefined);
         await removeOwnedEntry(
@@ -380,7 +398,7 @@ export class BoundedOutputSpool {
       state.spillFile = undefined;
       state.spillPath = undefined;
       state.spillProofPath = undefined;
-      return false;
+      return "spill_open_failed";
     }
   }
 

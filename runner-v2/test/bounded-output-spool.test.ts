@@ -101,9 +101,11 @@ for (const [name, attestation] of [
     assert.equal(opens, 0);
     assert.equal(output.totalBytes, 60);
     assert.equal(output.spillBytes, 0);
-    assert.equal(output.lossyBytes, 60);
-    assert.equal(output.lossyOutput, true);
-    assert.equal(output.lossReason?.code, "private_spill_unavailable");
+    // Everything still fits in the tail, so nothing was lost (Windows has no private spill).
+    assert.equal(output.lossyBytes, 0);
+    assert.equal(output.lossyOutput, false);
+    assert.equal(output.lossReason, undefined);
+    assert.equal(output.tail, "first private spill unavailable chunk and draining continues");
     await assert.rejects(stat(root), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
   });
 }
@@ -143,7 +145,7 @@ for (const [name, attestation] of [
         throw new Error("malformed attestation reached disk");
       },
     };
-    const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+    const spool = new BoundedOutputSpool({ ...spoolOptions(root), tailBytes: 4, storage });
 
     await spool.write("stdout", Buffer.from("tail only"));
     await assert.rejects(stat(root), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
@@ -151,7 +153,7 @@ for (const [name, attestation] of [
 
     assert.equal(opens, 0);
     assert.equal(output.lossReason?.code, "private_spill_unavailable");
-    assert.equal(output.lossyBytes, 9);
+    assert.equal(output.lossyBytes, 5);
   });
 }
 
@@ -168,7 +170,7 @@ test("rejects accessor attestation fields without evaluating or rereading them",
     ...nodeStorage,
     attest: async () => attestation,
   };
-  const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+  const spool = new BoundedOutputSpool({ ...spoolOptions(root), tailBytes: 4, storage });
 
   await spool.write("stdout", Buffer.from("tail only"));
   const output = stream(await spool.finalize(), "stdout");
@@ -200,7 +202,7 @@ test("rejects proxy attestations before traps can supply changing guarantees", a
     ...nodeStorage,
     attest: async () => attestation,
   };
-  const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+  const spool = new BoundedOutputSpool({ ...spoolOptions(root), tailBytes: 4, storage });
 
   await spool.write("stdout", Buffer.from("tail only"));
   const output = stream(await spool.finalize(), "stdout");
@@ -251,14 +253,14 @@ test("treats unavailable attestation as tail-only without trying disk", async (t
     attest: async () => { throw new Error("capability unavailable"); },
     openExclusive: async (path) => { opens += 1; return await nodeStorage.openExclusive(path); },
   };
-  const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+  const spool = new BoundedOutputSpool({ ...spoolOptions(root), tailBytes: 4, storage });
 
   await spool.write("stdout", Buffer.from("tail only"));
   const output = stream(await spool.finalize(), "stdout");
 
   assert.equal(opens, 0);
   assert.equal(output.lossReason?.code, "private_spill_unavailable");
-  assert.equal(output.lossyBytes, 9);
+  assert.equal(output.lossyBytes, 5);
 });
 
 test("built-in backend creates no spill when it cannot attest current-principal privacy", async (t) => {
@@ -268,12 +270,14 @@ test("built-in backend creates no spill when it cannot attest current-principal 
     spillRoot: root,
     projectRoot: process.cwd(),
     ownershipId: "runner-test-owner",
+    tailBytes: 4,
   });
 
   await spool.write("stdout", Buffer.from("tail only"));
   const output = stream(await spool.finalize(), "stdout");
 
   assert.equal(output.lossReason?.code, "private_spill_unavailable");
+  assert.equal(output.lossyBytes, 5);
   assert.equal(output.spillBytes, 0);
   await assert.rejects(stat(root), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
 });
@@ -292,7 +296,7 @@ test("rejects an attested principal mismatch before opening a spill entry", asyn
     }),
     openExclusive: async (path) => { opens += 1; return await nodeStorage.openExclusive(path); },
   };
-  const spool = new BoundedOutputSpool({ ...spoolOptions(root), storage });
+  const spool = new BoundedOutputSpool({ ...spoolOptions(root), tailBytes: 4, storage });
 
   await spool.write("stdout", Buffer.from("tail only"));
   const output = stream(await spool.finalize(), "stdout");
@@ -593,19 +597,21 @@ test("converts spill open failure into typed lossy continuation", async (t) => {
     ...nodeStorage,
     openExclusive: async () => { throw new Error("permission denied"); },
   };
-  const spool = new BoundedOutputSpool(spoolOptions(root, { tailBytes: 64, spillBytes: 64, storage }));
+  const spool = new BoundedOutputSpool(spoolOptions(root, { tailBytes: 32, spillBytes: 64, storage }));
 
   await assert.doesNotReject(spool.write("stdout", Buffer.from("open failure still drains")));
   await assert.doesNotReject(spool.write("stdout", Buffer.from(" and continues")));
   const output = stream(await spool.finalize(), "stdout");
 
+  // Only the bytes that fell out of the tail are lost.
   assert.equal(output.totalBytes, 39);
   assert.equal(output.spillBytes, 0);
-  assert.equal(output.lossyBytes, 39);
+  assert.equal(output.lossyBytes, 7);
+  assert.equal(output.lossReasons.length, 1);
   assert.equal(output.lossReason?.code, "spill_open_failed");
-  assert.equal(output.truncated, false);
+  assert.equal(output.truncated, true);
   assert.equal(output.tailDisplayTruncated, true);
-  assert.match(output.tail, /^\[runner output lossy: spill_open_failed\]\n/);
+  assert.match(output.tail, /^\[runner output lossy: spill_open/);
 });
 
 test("keeps a marked lossy UTF-8 tail on a complete code-point boundary", async (t) => {
@@ -814,7 +820,7 @@ test("rejects a spill root inside the project boundary", async (t) => {
   const root = join(process.cwd(), `.runner-v2-forbidden-spill-${process.pid}`);
   const { rm } = await import("node:fs/promises");
   t.after(async () => await rm(root, { recursive: true, force: true }));
-  const spool = new BoundedOutputSpool(spoolOptions(root));
+  const spool = new BoundedOutputSpool(spoolOptions(root, { tailBytes: 2 }));
 
   await spool.write("stdout", Buffer.from("output"));
   assert.equal(stream(await spool.finalize(), "stdout").lossReason?.code, "spill_root_invalid");
@@ -825,7 +831,7 @@ test("rejects a pre-existing unowned root without deleting it", async (t) => {
   const root = await temporaryRoot(t);
   await mkdir(root);
   await writeFile(join(root, "keep.txt"), "foreign");
-  const spool = new BoundedOutputSpool(spoolOptions(root));
+  const spool = new BoundedOutputSpool(spoolOptions(root, { tailBytes: 2 }));
 
   await spool.write("stdout", Buffer.from("output"));
   const output = stream(await spool.finalize(), "stdout");
@@ -840,7 +846,7 @@ test("rejects a spill root aliased through a symlink or reparse point", async (t
   await mkdir(victim);
   await writeFile(join(victim, "keep.txt"), "victim");
   await symlink(victim, root, process.platform === "win32" ? "junction" : "dir");
-  const spool = new BoundedOutputSpool(spoolOptions(root));
+  const spool = new BoundedOutputSpool(spoolOptions(root, { tailBytes: 2 }));
 
   await spool.write("stdout", Buffer.from("output"));
   assert.equal(stream(await spool.finalize(), "stdout").lossReason?.code, "spill_root_invalid");
@@ -849,10 +855,10 @@ test("rejects a spill root aliased through a symlink or reparse point", async (t
 
 test("rejects a permissive or differently owned existing private root", async (t) => {
   const root = await temporaryRoot(t);
-  const first = new BoundedOutputSpool(spoolOptions(root, { ownershipId: "owner-a" }));
+  const first = new BoundedOutputSpool(spoolOptions(root, { tailBytes: 2, ownershipId: "owner-a" }));
   await first.write("stdout", Buffer.from("first"));
   if (process.platform !== "win32") await chmod(root, 0o777);
-  const second = new BoundedOutputSpool(spoolOptions(root, { ownershipId: "owner-b" }));
+  const second = new BoundedOutputSpool(spoolOptions(root, { tailBytes: 2, ownershipId: "owner-b" }));
 
   await second.write("stdout", Buffer.from("second"));
   assert.equal(stream(await second.finalize(), "stdout").lossReason?.code, "spill_root_invalid");
@@ -873,7 +879,7 @@ test("an open failure never unlinks a candidate the spool did not create", async
       throw new Error("exclusive collision");
     },
   };
-  const spool = new BoundedOutputSpool(spoolOptions(root, { storage }));
+  const spool = new BoundedOutputSpool(spoolOptions(root, { tailBytes: 2, storage }));
 
   await spool.write("stdout", Buffer.from("output"));
   assert.equal(stream(await spool.finalize(), "stdout").lossReason?.code, "spill_open_failed");
@@ -896,7 +902,7 @@ test("C3 shared spool cleanup is idempotent after a replacement removes the exac
       throw new Error("deliberate spill-open failure");
     },
   };
-  const options = spoolOptions(root, { storage, tailBytes: 64, spillBytes: 64 });
+  const options = spoolOptions(root, { storage, tailBytes: 2, spillBytes: 64 });
   const original = new BoundedOutputSpool(options);
   const replacement = new BoundedOutputSpool(options);
 
