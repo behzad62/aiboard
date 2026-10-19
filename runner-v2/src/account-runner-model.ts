@@ -7,7 +7,7 @@ import type {
   ToolDefinition,
   ToolResult,
 } from "./agent-contracts.js";
-import { serializedInputUsage } from "./provider-model-utils.js";
+import { parseToolArgumentsJson, serializedInputUsage } from "./provider-model-utils.js";
 
 export interface AccountRunnerModelOptions {
   baseUrl: string;
@@ -499,13 +499,7 @@ function toolArguments(
   call: NonNullable<Extract<RunnerEvent, { type: "tool_call" }>["toolCall"]>
 ): unknown {
   if (call.arguments) return call.arguments;
-  if (call.argumentsJson) {
-    try {
-      return JSON.parse(call.argumentsJson) as unknown;
-    } catch {
-      return { _malformedArgumentsJson: call.argumentsJson };
-    }
-  }
+  if (call.argumentsJson) return parseToolArgumentsJson(call.argumentsJson);
   return {};
 }
 

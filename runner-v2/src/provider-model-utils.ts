@@ -114,10 +114,31 @@ export function toolResultText(result: ToolResult): string {
 
 export function safeToolArguments(value: unknown): unknown {
   if (typeof value !== "string") return value ?? {};
+  return parseToolArgumentsJson(value);
+}
+
+/**
+ * Tool arguments as the model wrote them. Extra closing brackets after a complete object are
+ * dropped: what remains is exactly the model's text, and a 12 KB submit_task was refused for one
+ * stray "}" (tunnel run). Anything else malformed is reported, never repaired.
+ */
+export function parseToolArgumentsJson(text: string): unknown {
   try {
-    return JSON.parse(value) as unknown;
+    return JSON.parse(text) as unknown;
   } catch {
-    return { _malformedArgumentsJson: value };
+    let end = text.length;
+    for (let trimmed = 0; trimmed < 8; trimmed += 1) {
+      while (end > 0 && /\s/.test(text[end - 1]!)) end -= 1;
+      if (end === 0 || (text[end - 1] !== "}" && text[end - 1] !== "]")) break;
+      end -= 1;
+      try {
+        const value = JSON.parse(text.slice(0, end)) as unknown;
+        if (value && typeof value === "object" && !Array.isArray(value)) return value;
+      } catch {
+        // keep trimming closers
+      }
+    }
+    return { _malformedArgumentsJson: text };
   }
 }
 

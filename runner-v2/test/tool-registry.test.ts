@@ -160,3 +160,14 @@ test("unparseable provider arguments are reported as invalid JSON with the failu
   assert.doesNotMatch(result.error?.message ?? "", /revisionId is required/);
   assert.equal(executions, 0);
 });
+
+test("extra closing brackets after complete arguments are dropped; other malformed JSON is reported (tunnel run)", async () => {
+  const { parseToolArgumentsJson } = await import("../src/provider-model-utils.js");
+  // A 12 KB submit_task was refused for one stray "}" after an otherwise complete object.
+  assert.deepEqual(parseToolArgumentsJson('{"summary":"done","items":["a"]}}'), { summary: "done", items: ["a"] });
+  assert.deepEqual(parseToolArgumentsJson('{"a":{"b":[1]}}]}\n'), { a: { b: [1] } });
+  assert.deepEqual(parseToolArgumentsJson('{"a":1}'), { a: 1 });
+  for (const raw of ['{"a":"unterminated}', '{"a":1,}', '{"a":1} trailing', '[1]]']) {
+    assert.deepEqual(parseToolArgumentsJson(raw), { _malformedArgumentsJson: raw }, raw);
+  }
+});
