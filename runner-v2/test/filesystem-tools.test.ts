@@ -31,9 +31,9 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
   writeFileSync(join(workspace, "src", "app.ts"), "const alpha = 1;\r\nconst beta = 2;\r\n");
   writeFileSync(
     join(workspace, "src", "dense.ts"),
-    Array.from({ length: 100 }, (_, index) => `const value${index} = "${"x".repeat(80)}";\n`).join("")
+    Array.from({ length: 100 }, (_, index) => `const value${index} = "${"x".repeat(400)}";\n`).join("")
   );
-  writeFileSync(join(workspace, "src", "minified.js"), "x".repeat(7 * 1024));
+  writeFileSync(join(workspace, "src", "minified.js"), "x".repeat(25 * 1024));
   writeFileSync(join(workspace, "binary.bin"), Buffer.from([0, 1, 2, 255]));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const broker = brokerWithFilesystem(workspace, artifacts);
@@ -46,7 +46,7 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     );
     assert.match(
       readDefinition?.description ?? "",
-      /6144 bytes/i,
+      /24576 bytes/i,
       "the model-facing read contract must advertise its byte ceiling"
     );
     assert.match(
@@ -111,7 +111,7 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     assert.ok(clippedMetadata.endLine < 100);
     assert.equal(clippedMetadata.requestedEndLine, 100);
     assert.equal(clippedMetadata.nextStartLine, clippedMetadata.endLine + 1);
-    assert.ok(clippedMetadata.rangeByteLength <= 6144);
+    assert.ok(clippedMetadata.rangeByteLength <= 24 * 1024);
     assert.match(text(clippedRange), /const value0/);
 
     const invalidRange = await invoke(broker, "read_bad_range", "fs.read", {

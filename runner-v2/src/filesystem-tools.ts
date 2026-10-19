@@ -33,7 +33,10 @@ export interface FilesystemToolsOptions {
 
 type Input = Record<string, unknown>;
 const MAX_READ_LINES = 500;
-const MAX_READ_RANGE_BYTES = 6 * 1024;
+// Reads were bounded at 6 KB per range and 8 KB inline, so an 11.5 KB STATE.md took a reviewer three
+// calls (a head-and-tail preview, then two ranges) on a model with a 1M-token context (tunnel run).
+const MAX_READ_RANGE_BYTES = 24 * 1024;
+const MAX_READ_INLINE_BYTES = 32 * 1024;
 const MAX_PATCH_EDITS = 50;
 
 /** T10 (M9): model-facing search contract: literal match, skipped outputs. */
@@ -99,7 +102,8 @@ export function createFilesystemTools(
         "fs.read",
         `Read a file with revision metadata. For large text files, request a targeted 1-based inclusive line range with startLine and endLine. Each ranged read is limited to ${MAX_READ_LINES} lines and ${MAX_READ_RANGE_BYTES} bytes; oversized multi-line ranges return the largest bounded prefix plus nextStartLine instead of failing.`,
         true,
-        "none"
+        "none",
+        MAX_READ_INLINE_BYTES,
       ),
       validate: validateRead,
       assessAccess: (input) => pathAccess(input, "read"),
@@ -526,9 +530,10 @@ function definition(
   name: string,
   description: string,
   readOnly: boolean,
-  effect: "none" | "workspace"
+  effect: "none" | "workspace",
+  inlineOutputBytes?: number,
 ) {
-  return { name, description, inputSchema: filesystemSchema(name), readOnly, effect } as const;
+  return { name, description, inputSchema: filesystemSchema(name), readOnly, effect, ...(inlineOutputBytes ? { inlineOutputBytes } : {}) } as const;
 }
 
 function filesystemSchema(name: string): Record<string, unknown> {
