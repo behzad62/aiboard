@@ -1173,7 +1173,7 @@ export class NativeBuildFactory {
       selectedConfigs.map((config) => [
         config.runtimeId,
         wrapModelWithBuildUserVisuals(
-          providerModelFactory(config, this.artifacts), userVisuals, spec.runId, config.inputCapabilities,
+          withContextWindow(providerModelFactory(config, this.artifacts), config.contextWindowTokens), userVisuals, spec.runId, config.inputCapabilities,
         ),
       ])
     );
@@ -3939,6 +3939,11 @@ export function snapshotNativeBuildAmbientEnvironment(
     filtered[name] = value;
   }
   return Object.freeze(filtered);
+}
+
+/** Carries the owner's context window on the model so each agent loop sizes its working set from it. */
+function withContextWindow(model: AgentModel, contextWindowTokens: number | undefined): AgentModel {
+  return contextWindowTokens === undefined ? model : { complete: (request) => model.complete(request), contextWindowTokens };
 }
 
 export function createProviderModel(

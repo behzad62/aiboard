@@ -291,7 +291,7 @@ export async function runAgentLoop(
     // Providers must settle/cancel their response stream before rejecting.
     const request = {
       sessionId: options.context.sessionId,
-      messages: compactAgentMessages(messages, options.workingSet),
+      messages: compactAgentMessages(messages, options.workingSet ?? workingSetForContextWindow(options.model.contextWindowTokens)),
       tools: options.registry.definitions(),
       ...(options.hostedTools ? { hostedTools: options.hostedTools } : {}),
       signal: options.signal,
@@ -552,6 +552,18 @@ async function invokeTool(
     ...options.context,
     signal: options.signal ?? options.context.signal,
   });
+}
+
+/**
+ * The working set a model's context window holds: about 60% of it at ~3.5 bytes per token, leaving
+ * room for the system prompt, tool schemas and output, within 128 KB-2 MB. A fixed 512 KB compacted a
+ * 1M-token model's sessions every few turns and dropped its prompt cache (tunnel run), and overflowed
+ * small local models. Unknown windows keep the 512 KB default.
+ */
+export function workingSetForContextWindow(contextWindowTokens: number | undefined): AgentWorkingSetLimits | undefined {
+  if (contextWindowTokens === undefined || !Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 1) return undefined;
+  const maxBytes = Math.min(2 * 1024 * 1024, Math.max(128 * 1024, Math.floor(contextWindowTokens * 3.5 * 0.6)));
+  return { maxMessages: 1_000, maxBytes, retainRecent: 24 };
 }
 
 export function compactAgentMessages(

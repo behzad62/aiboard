@@ -37,6 +37,8 @@ export interface RunnerProviderConfig {
   outputCostMicrosPerMillion?: number;
   cachedInputCostMicrosPerMillion?: number;
   cacheWriteInputCostMicrosPerMillion?: number;
+  /** The model's context window in tokens, from the owner's model settings. */
+  contextWindowTokens?: number;
 }
 
 export interface ProviderConfigStore {
@@ -151,6 +153,9 @@ export function validateProviderConfigs(
     }
     if (PRICING_FIELDS.some((field) => !isOptionalNonNegativeInteger(config[field]))) {
       throw new Error(`Provider runtime ${config.runtimeId} has invalid pricing.`);
+    }
+    if (config.contextWindowTokens !== undefined && (!Number.isSafeInteger(config.contextWindowTokens) || config.contextWindowTokens < 1)) {
+      throw new Error(`Provider runtime ${config.runtimeId} has an invalid context window.`);
     }
     ids.add(config.runtimeId);
   }

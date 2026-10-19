@@ -112,6 +112,8 @@ export interface AgentModelRequest {
 
 export interface AgentModel {
   complete(request: AgentModelRequest): Promise<ModelTurn>;
+  /** The model's context window, when the owner's settings know it; sizes the agent working set. */
+  readonly contextWindowTokens?: number;
 }
 
 export type JsonSchema = Readonly<Record<string, unknown>>;

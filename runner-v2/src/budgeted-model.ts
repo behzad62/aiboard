@@ -30,6 +30,7 @@ export type ModelCostEstimator = (
 
 export class BudgetedAgentModel implements AgentModel {
   private readonly model: AgentModel;
+  readonly contextWindowTokens?: number;
   private readonly ledger: BudgetLedger;
   private readonly scopeId: string;
   private readonly attribution: Readonly<ModelCallAttribution>;
@@ -46,6 +47,7 @@ export class BudgetedAgentModel implements AgentModel {
       throw new Error("outputTokenReserve must be a non-negative integer.");
     }
     this.model = options.model;
+    if (options.model.contextWindowTokens !== undefined) this.contextWindowTokens = options.model.contextWindowTokens;
     this.ledger = options.ledger;
     this.scopeId = options.scopeId;
     this.attribution = Object.freeze({ ...options.attribution });

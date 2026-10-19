@@ -9,6 +9,7 @@ import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-res
 import {
   getDiscoveredModelMetadata,
   getPersistedProviderCapabilityEvidence,
+  resolveClientModelContextProfile,
 } from "./providers";
 import {
   getMessagesForDiscussion,
@@ -553,6 +554,16 @@ function comparisonPricing(modelId: string): ModelPricing | null {
   return getModelPricing(modelId, settings.modelPricingOverrides, settings.discoveredModelMetadata);
 }
 
+/** The owner's context window for this model (settings, discovery, registry); omitted when unknown. */
+function nativeContextWindow(modelRef: string): { contextWindowTokens?: number } {
+  try {
+    const tokens = resolveClientModelContextProfile(modelRef).contextWindowTokens;
+    return Number.isSafeInteger(tokens) && tokens > 0 ? { contextWindowTokens: tokens } : {};
+  } catch {
+    return {};
+  }
+}
+
 export function createNativeProviderConfig(
   runtimeId: string,
   priority: number,
@@ -590,6 +601,7 @@ export function createNativeProviderConfig(
       inputCapabilities: nativeInputCapabilities(custom.capabilities),
       priority,
       ...pricing,
+      ...nativeContextWindow(modelRef),
     };
   }
   const saved = getProviderKey(providerId);
@@ -653,6 +665,7 @@ export function createNativeProviderConfig(
       : {}),
     priority,
     ...pricing,
+    ...nativeContextWindow(modelRef),
     ...(reasoningEffort && reasoningEffort !== "default"
       ? { reasoningEffort }
       : {}),
