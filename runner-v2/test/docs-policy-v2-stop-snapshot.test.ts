@@ -382,6 +382,7 @@ test("C3a: the stop table classifies every stop reason", () => {
   assert.equal(byStop.get("autonomous_pump_error")?.stopKind, "paused");
   assert.equal(byStop.get("autonomous_pump_error")?.notes, "denied");
   assert.equal(byStop.get("context_recording_aborted")?.stopKind, "failed");
+  assert.equal(byStop.get("owner pause (run.paused, actor user, any other reason)")?.notes, "denied");
   // The classifier behind the table.
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "repair_cycle_limit", ownerInitiated: false }),
@@ -398,11 +399,11 @@ test("C3a: the stop table classifies every stop reason", () => {
   );
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "user", ownerInitiated: true }),
-    { stopKind: "paused", notes: "allowed" },
+    { stopKind: "paused", notes: "denied" },
   );
   // C3a repair cycle 1 (M-3): reason first -- the pump's own pauses stay
-  // denied even with the owner actor, while a genuinely unknown owner
-  // reason stays allowed.
+  // denied even with the owner actor. An owner pause is denied too: its
+  // reason is all a notes call would see (tunnel run).
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "no_mechanical_progress", ownerInitiated: true }),
     { stopKind: "paused", notes: "denied" },
@@ -421,7 +422,7 @@ test("C3a: the stop table classifies every stop reason", () => {
   );
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "something_new", ownerInitiated: true }),
-    { stopKind: "paused", notes: "allowed" },
+    { stopKind: "paused", notes: "denied" },
   );
   assert.deepEqual(
     classifyStopSnapshot({ status: "paused", reason: "owner_cancelled", ownerInitiated: true }),
@@ -564,13 +565,13 @@ test("C3a/CD-7/B-1/M-5c: factory runtime plus manager snapshots an owner pause w
       idempotencyKey: "c3a-factory-manager",
     }));
     // The owner pause through the manager snapshots the stop with no step:
-    // the pump never ran, so no completion turn could have happened. The
-    // only model call is the bounded C3b stop-notes one-shot.
+    // the pump never ran, so no completion turn could have happened, and an
+    // owner pause makes no stop-notes call either.
     const paused = await manager.pause(RUN, "user", "pause:c3a-factory");
     assert.equal(paused.status, "paused", "the stop proceeds");
     assert.equal(paused.pauseReason?.reason, "user");
     assert.equal(architect.completionCalls, 0, "the pause snapshot takes no step and no completion turn");
-    assert.equal(architect.stopNotesCalls, 1, "the pause snapshot takes exactly the bounded stop-notes call");
+    assert.equal(architect.stopNotesCalls, 0, "an owner pause makes no stop-notes call");
     let events = manager.events(RUN);
     let commits = snapshotCommits(events);
     assert.equal(commits.length, 1, "the owner pause commits exactly one stop snapshot");

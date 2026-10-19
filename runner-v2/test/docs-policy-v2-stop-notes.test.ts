@@ -425,10 +425,10 @@ test("C3b: cancel and unknown reasons deny notes; skip states and legacy docs v1
 test("C3b: replay of the same stop never calls twice; the next stop can call again", async () => {
   const RUN = "run-c3b-replay";
   const scripted = new ScriptedNotesModel((call) => `Notes for the next tool, call ${call}.`);
-  // An owner pause, not a repair-cycle gate: the owner's resume below is
-  // authorized without a repair-cycle decision.
-  const ownerPauseSeed = (runId: string): NewSchedulerEvent[] => pauseSeed(runId, "user");
-  const fixture = await openFactoryPort("notes-replay", RUN, ownerPauseSeed, "plan_only", {
+  // A notes-allowed stop that is not a repair-cycle gate: the owner's resume
+  // below is authorized without a repair-cycle decision.
+  const recordingPauseSeed = (runId: string): NewSchedulerEvent[] => pauseSeed(runId, "context_recording_failed");
+  const fixture = await openFactoryPort("notes-replay", RUN, recordingPauseSeed, "plan_only", {
     modelsFor: modelsFor(scripted),
   });
   try {
@@ -448,7 +448,7 @@ test("C3b: replay of the same stop never calls twice; the next stop can call aga
     assert.equal(scripted.calls, 1, "replay makes no second model call");
     // A new stop gets new notes.
     await resumeHandoff(fixture, RUN, "resume:c3b-replay");
-    await pauseHandoff(fixture, RUN, "user", "pause:c3b-second", { stopNotes: fixture.stopNotes });
+    await pauseHandoff(fixture, RUN, "context_recording_failed", "pause:c3b-second", { stopNotes: fixture.stopNotes });
     const third = await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
     assert.equal(snapshotCommits(third.events).length, 2, "the next stop commits anew");
     assert.equal(notesEvents(third.events).length, 2, "the next stop records new notes");
@@ -460,6 +460,25 @@ test("C3b: replay of the same stop never calls twice; the next stop can call aga
     );
     assert.ok(bodies[0]!.includes("call 1"), "the first stop keeps its notes");
     assert.ok(bodies[1]!.includes("call 2"), "the second stop carries the new notes");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C3b: an owner pause makes no notes call; its reason is the note", async () => {
+  const RUN = "run-c3b-owner";
+  const scripted = new ScriptedNotesModel((call) => `Invented notes, call ${call}.`);
+  const fixture = await openFactoryPort("notes-owner", RUN, (runId) => pauseSeed(runId, "fixing a defect"), "plan_only", {
+    modelsFor: modelsFor(scripted),
+  });
+  try {
+    const result = await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
+    assert.equal(snapshotCommits(result.events).length, 1, "the stop still snapshots");
+    assert.equal(scripted.calls, 0, "no notes call: it would only see the owner's own reason");
+    assert.equal(notesEvents(result.events).length, 0);
+    const body = await stateBody(fixture, (snapshotCommits(result.events)[0]!.payload as Record<string, unknown>).commit as string);
+    assert.ok(body.includes("fixing a defect"), "the owner's reason is in the snapshot");
+    assert.ok(!body.includes("Invented notes"));
   } finally {
     await fixture.close();
   }

@@ -595,6 +595,7 @@ function stopNotesDenialReason(input: {
   allowed: boolean;
   reason?: string;
   detail?: string;
+  ownerInitiated?: boolean;
 }): string | undefined {
   if (input.reason !== undefined && input.reason.startsWith("budget_exhausted")) {
     return "the run budget is exhausted; no budget remains for a notes call";
@@ -610,6 +611,7 @@ function stopNotesDenialReason(input: {
     if (lowered.includes("provider") || lowered.includes("credit")) {
       return "the provider is unavailable; a notes call cannot run";
     }
+    if (input.ownerInitiated) return "the owner paused the run; the reason above is the note";
     const name = (input.reason ?? input.stopKind).replace(/[\s]+/g, " ").trim().slice(0, 200) || input.stopKind;
     return `the ${name} stop does not allow model calls`;
   }
@@ -3447,6 +3449,7 @@ export class BuildRuntime {
       allowed: input.classified.notes === "allowed",
       reason,
       detail,
+      ownerInitiated: input.stop.actor.role === "user",
     });
     if (denial !== undefined) {
       return { notesAbsentReason: denial };
