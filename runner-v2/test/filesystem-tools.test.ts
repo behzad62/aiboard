@@ -226,6 +226,13 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     });
     assert.equal(drifted.isError, true);
     assert.match(text(drifted), /"const alpha = 10;" is at line 1; the file there reads:\n1: const alpha = 10;\n2: const beta = 30;/);
+    // Tunnel run: DeepSeek put the current text in replace and the wanted text in search.
+    const swapped = await invoke(broker, "patch_swapped", "fs.patch", {
+      path: "src/app.ts",
+      edits: [{ search: "const alpha = 99;", replace: "const beta = 30;" }],
+    });
+    assert.equal(swapped.isError, true);
+    assert.match(text(swapped), /replace text is already in the file at line 2: search and replace look swapped/);
 
     const staleBatch = await invoke(broker, "patch_many_stale", "fs.patch", {
       path: "src/app.ts",

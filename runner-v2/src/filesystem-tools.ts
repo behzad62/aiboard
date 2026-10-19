@@ -474,7 +474,7 @@ export function createFilesystemTools(
               if (count !== 1) {
                 throw new FilesystemMutationError(
                   "ambiguous_patch",
-                  `Edit ${index + 1}: expected one match, found ${count}. ${patchMatchHint(nextText, search, count)}No changes were written.`,
+                  `Edit ${index + 1}: expected one match, found ${count}. ${patchMatchHint(nextText, search, count, newline ? normalizeNewlines(edit.replace, newline) : edit.replace)}No changes were written.`,
                 );
               }
               const replacement = newline
@@ -1081,8 +1081,14 @@ async function successRevision(
  * Where to look instead. A bare "found 0" left the worker re-reading the file or guessing again
  * (tunnel run: three refused patches in one task).
  */
-function patchMatchHint(text: string, search: string, count: number): string {
+function patchMatchHint(text: string, search: string, count: number, replace: string): string {
   const lines = text.split(/\r?\n/);
+  // DeepSeek wrote replace before search in 37 of 40 edits and twice put the current text in replace
+  // and the wanted text in search (tunnel run). Say so instead of leaving it to guess.
+  if (count === 0 && replace.trim().length > 0 && occurrences(text, replace) === 1) {
+    const line = text.slice(0, text.indexOf(replace)).split(/\r?\n/).length;
+    return `Its replace text is already in the file at line ${line}: search and replace look swapped (search is the CURRENT text, replace the new text), or this edit is already applied. `;
+  }
   if (count > 1) {
     const first = search.split(/\r?\n/)[0]!;
     const at = lines.flatMap((line, index) => line.includes(first) ? [index + 1] : []).slice(0, 10);
