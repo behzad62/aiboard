@@ -20,6 +20,10 @@ export interface ReviewReadCapture {
 }
 
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** A review's own commands and the runner's delivery checks are recorded under delivery:<task>;
+ * counting only the task's scope made them uncitable, and the verdict looped (tunnel run). */
+const reviewScopes = (taskId: string): string[] => taskId.startsWith("delivery:") ? [taskId] : [taskId, `delivery:${taskId}`];
+const inReviewScope = (itemTaskId: unknown, taskId: string): boolean => typeof itemTaskId === "string" && reviewScopes(taskId).includes(itemTaskId);
 const positive = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
 
 /** Derive authority exclusively from successful completed native tool results.
@@ -51,7 +55,7 @@ export function captureReviewReads(ledger: ToolInvocationLedger, binding: Omit<R
     } else if (result.toolName === "inspect_evidence") {
       if (!Array.isArray(values[0])) continue;
       for (const item of values[0]) {
-        if (record(item) && typeof item.id === "string" && item.runId === binding.runId && item.taskId === binding.taskId && evidence?.getByIds({ runId: binding.runId, ids: [item.id] }).some((e) => e.id === item.id && e.taskId === binding.taskId)) reads.push({ ...base, toolName: "inspect_evidence", evidenceId: item.id });
+        if (record(item) && typeof item.id === "string" && item.runId === binding.runId && inReviewScope(item.taskId, binding.taskId) && evidence?.getByIds({ runId: binding.runId, ids: [item.id] }).some((e) => e.id === item.id && e.taskId === item.taskId)) reads.push({ ...base, toolName: "inspect_evidence", evidenceId: item.id });
       }
     } else if (result.toolName === "artifact.read") {
       const meta = values[0];
@@ -59,7 +63,7 @@ export function captureReviewReads(ledger: ToolInvocationLedger, binding: Omit<R
       // Bound to a const: property narrowing does not survive into closures over the evidence list.
       const hash = meta.hash;
       if (typeof hash !== "string" || meta.encoding !== "utf8" || meta.offset !== 0 || meta.truncated !== false || !positive(meta.returnedBytes) || meta.returnedBytes !== meta.byteLength || text.length !== 1 || Buffer.byteLength(text[0]!) !== meta.returnedBytes) continue;
-      for (const item of evidence?.list({ runId: binding.runId, taskId: binding.taskId }) ?? []) {
+      for (const item of reviewScopes(binding.taskId).flatMap((taskId) => evidence?.list({ runId: binding.runId, taskId }) ?? [])) {
         if (evidenceFactArtifactHashes(item.fact).includes(hash)) reads.push({ ...base, toolName: "artifact.read", evidenceId: item.id, artifactHash: hash });
       }
     }

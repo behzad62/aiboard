@@ -110,6 +110,14 @@ test("E5 evidence citations require actual same-task evidence content; partial a
     assert.throws(()=>validateCitations([{evidenceId:foreign.id}],captureReviewReads(ledger,binding,evidence)),/not read/);
     await invoke("inspect_evidence",{taskId:"T1"});
     assert.ok(captureReviewReads(ledger,binding,evidence).reads.some((r)=>r.toolName==="inspect_evidence" && r.evidenceId===own.id));
+    // Tunnel run: the review's own and the runner's check evidence live under delivery:<task>, and one
+    // record carried an ~18 KB execution snapshot that spilled; neither ever counted, so the verdict looped.
+    const snapshot={process:{output:[{stream:"stdout",tail:"x".repeat(20_000)}]}};
+    const review=evidence.record({runId:binding.runId,taskId:"delivery:T1",actor:{role:"verifier",id:"delivery-check-runtime"},fact:{...fact,stdoutArtifactHash:(await artifacts.put(Buffer.from("review output\n"),"text/plain")).hash,executionSnapshot:snapshot} as typeof fact,createdAt:initial.occurredAt,idempotencyKey:"review"});
+    assert.throws(()=>validateCitations([{evidenceId:review.id}],captureReviewReads(ledger,binding,evidence)),/not read/);
+    const inspected=await invoke("inspect_evidence",{taskId:"T1",evidenceId:review.id});
+    assert.equal(inspected.content.some((block)=>block.type==="artifact"),false,"one record stays inline");
+    assert.deepEqual(validateCitations([{evidenceId:review.id}],captureReviewReads(ledger,binding,evidence)),[{evidenceId:review.id}]);
   } finally {ledger.close();evidence.close();rmSync(root,{recursive:true,force:true});}
 });
 

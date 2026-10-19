@@ -289,7 +289,7 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
   return {
     definition: {
       name: "inspect_evidence",
-      description: "Inspect immutable command and browser evidence facts; no semantic verdict is provided. Without evidenceId, returns the task list in a compact view (environment audit, cwd, process-cleanup details and false/null status flags omitted); with evidenceId (full ID or a unique prefix), returns only that exact full record in the same JSON array shape.",
+      description: "Inspect immutable command and browser evidence facts; no semantic verdict is provided. Without evidenceId, returns the task list in a compact view (environment audit, cwd, process-cleanup details and false/null status flags omitted); with evidenceId (full ID or a unique prefix), returns only that exact record in the same JSON array shape (the environment audit and internal execution snapshot omitted; output stays in its stdout/stderr artifacts).",
       inputSchema: {
         type: "object",
         properties: {
@@ -366,7 +366,7 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
         );
       }
       return {
-        content: [{ type: "json", value: [record] }],
+        content: [{ type: "json", value: [singleEvidenceView(record)] }],
         isError: false,
       };
     },
@@ -468,6 +468,16 @@ export function compactEvidenceView(record: EvidenceRecord): unknown {
  * stays in the durable record, which inspect_evidence reads in full; in the result it only grew every
  * later turn of the session (tunnel run).
  */
+/**
+ * One record for a reviewer. The execution snapshot (process mechanics plus output tails already in
+ * the stdout/stderr artifacts, ~18 KB for one npm test) pushed the record past the inline limit, and a
+ * spilled read never counts as read, so the verdict citing it was refused in a loop (tunnel run).
+ */
+function singleEvidenceView(record: EvidenceRecord): unknown {
+  const { executionSnapshot: _snapshot, childEnvironmentAudit: _audit, ...fact } = record.fact as unknown as Record<string, unknown>;
+  return { ...record, fact };
+}
+
 function commandResultView(record: EvidenceRecord): unknown {
   const { idempotencyKey: _idempotencyKey, createdAt: _createdAt, ...rest } = record;
   const { childEnvironmentAudit: _audit, ...fact } = record.fact as unknown as Record<string, unknown>;
