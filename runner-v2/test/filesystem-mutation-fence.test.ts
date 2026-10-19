@@ -66,6 +66,17 @@ for (const tool of ["fs.write", "fs.patch"]) fixtureTest(`${tool} requires the c
   refused(result, "expected_revision_required");
   assert.equal(fs.readFileSync(path, "utf8"), "original");
 });
+fixtureTest("a session's own read supplies the expected revision; a change since that read still conflicts", async (f) => {
+  // Tunnel run: a worker that had read the file still had its write refused and spent a call retrying.
+  const path = join(f.workspace, "value.txt"); fs.writeFileSync(path, "original");
+  assert.equal((await f.invoke("fs.read", { path: "value.txt" })).isError, false);
+  assert.equal((await f.invoke("fs.write", { path: "value.txt", content: "second" })).isError, false);
+  assert.equal((await f.invoke("fs.patch", { path: "value.txt", search: "second", replace: "third" })).isError, false);
+  assert.equal(fs.readFileSync(path, "utf8"), "third");
+  fs.writeFileSync(path, "changed elsewhere");
+  refused(await f.invoke("fs.write", { path: "value.txt", content: "blind" }), "revision_conflict");
+  assert.equal(fs.readFileSync(path, "utf8"), "changed elsewhere");
+});
 fixtureTest("stale revision refuses replacement and supplies a current revision", async (f) => {
   const path = join(f.workspace, "value.txt"); fs.writeFileSync(path, "original");
   const result = await f.invoke("fs.write", { path: "value.txt", content: "replacement", expectedSha256: hash("stale") });

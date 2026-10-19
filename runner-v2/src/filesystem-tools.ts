@@ -81,6 +81,19 @@ export function createFilesystemTools(
   const maxReadBytes = options.maxReadBytes ?? 1024 * 1024;
   const maxEntries = options.maxEntries ?? 5_000;
   const maxSearchMatches = options.maxSearchMatches ?? 500;
+  // The revision each session last read or wrote per file. A write or patch without expectedSha256
+  // replaces only that revision, so replacing a file the worker has read needs no extra round trip,
+  // while content it has not seen is still refused (tunnel run: the refusal cost a model call).
+  const seenRevisions = new Map<string, string>();
+  const seenKey = (context: ToolExecutionContext, path: string) => `${context.sessionId}\0${path}`;
+  const rememberRevision = (context: ToolExecutionContext, path: string, hash: string) => {
+    const key = seenKey(context, path);
+    seenRevisions.delete(key);
+    seenRevisions.set(key, hash);
+    if (seenRevisions.size > 4_096) seenRevisions.delete(seenRevisions.keys().next().value!);
+  };
+  const expectedRevision = (input: Input, context: ToolExecutionContext, path: string) =>
+    input.expectedSha256 ?? seenRevisions.get(seenKey(context, path));
   let mutationQueue = Promise.resolve();
   const mutate = async <T>(operation: () => Promise<T>): Promise<T> => {
     const previous = mutationQueue;
@@ -117,6 +130,7 @@ export function createFilesystemTools(
         }
         const bytes = await readFile(path);
         const hash = sha256(bytes);
+        rememberRevision(context, path, hash);
         const baseMetadata = {
           path: displayPath(context, path),
           sha256: hash,
@@ -385,7 +399,7 @@ export function createFilesystemTools(
       },
     },
     {
-      definition: definition("fs.write", "Atomically create a new text file only if absent, or replace existing text using the SHA-256 from a prior read/inspection. Replacement without expectedSha256 is refused.", false, "workspace"),
+      definition: definition("fs.write", "Atomically create a new text file only if absent, or replace existing text using the SHA-256 from a prior read/inspection. expectedSha256 defaults to the revision you last read or wrote; replacing a file you have not read is refused.", false, "workspace"),
       validate: objectWithStrings("path", "content"),
       assessAccess: (input) => pathAccess(input, "write"),
       execute: async (input, context) =>
@@ -400,7 +414,8 @@ export function createFilesystemTools(
           const bytes = fencedWrite(context, path, (original) => preserveUtf8Bom(original, Buffer.from(input.content as string)),
             // Missing parents are created by default (the same fenced creation as the explicit flag):
             // the opt-in only made workers regenerate and resend whole files (tunnel run).
-            input.expectedSha256, input.createDirectories !== false);
+            expectedRevision(input, context, path), input.createDirectories !== false);
+          rememberRevision(context, path, sha256(bytes));
           return await successRevision(context, path, bytes, options.diagnostics);
         }),
     },
@@ -423,7 +438,7 @@ export function createFilesystemTools(
             return protectedPathError(context, path);
           }
           let noOpEdits: number[] = [];
-          const next = fencedPatch(context, path, input.expectedSha256, (bytes) => {
+          const next = fencedPatch(context, path, expectedRevision(input, context, path), (bytes) => {
             const original = decodeText(bytes);
             let nextText = original;
             const edits = patchEdits(input);
@@ -460,6 +475,7 @@ export function createFilesystemTools(
             return preserveUtf8Bom(bytes, Buffer.from(nextText));
           });
           // A no-op edit used to succeed silently, so the model believed it had changed the code.
+          rememberRevision(context, path, sha256(next));
           return await successRevision(context, path, next, options.diagnostics, noOpEdits.length > 0
             ? `Edit ${noOpEdits.join(", ")} changed nothing: its replace is identical to its search.`
             : undefined);
