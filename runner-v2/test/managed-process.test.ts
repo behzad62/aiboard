@@ -62,3 +62,29 @@ test("historical process observation reads persisted records without reconciliat
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("historical observations read current-schema records beside legacy ones (tunnel run)", () => {
+  // A live run's current-schema record made every other run's historical open throw "malformed".
+  const root = mkdtempSync(join(tmpdir(), "aiboard-managed-process-mixed-"));
+  const state = join(root, "state");
+  try {
+    mkdirSync(state, { recursive: true });
+    const current = (processId: string, runId: string) => ({
+      processId, pid: 105760, runId, sessionId: `worker:${runId}:task:1`, actor: { role: "worker", id: "worker_1" },
+      recordKind: "runner.managed-process", schemaVersion: 2, command: "node", args: ["npm-cli.js", "install"], cwd: root,
+      environmentKeys: [], configurationDigest: "f".repeat(64), streamingSessionId: `managed-stream-${processId}`,
+      launchId: `managed-launch-${processId}`, status: "stopped", exitCode: 0, signal: null,
+      startedAt: "2026-10-19T19:25:06.415Z", updatedAt: "2026-10-19T19:35:32.515Z", stdout: "added 10 packages\n", stderr: "",
+    });
+    writeFileSync(join(state, "process_other.json"), JSON.stringify(current("process_other", "run_other")));
+    writeFileSync(join(state, "process_mine.json"), JSON.stringify(current("process_mine", "run_mine")));
+    assert.deepEqual(readHistoricalManagedProcessObservations(state, "run_old"), []);
+    const [mine, ...rest] = readHistoricalManagedProcessObservations(state, "run_mine");
+    assert.equal(rest.length, 0);
+    assert.equal(mine?.processId, "process_mine");
+    assert.equal(mine?.stdout, "added 10 packages\n");
+    assert.equal(mine?.status, "stopped");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

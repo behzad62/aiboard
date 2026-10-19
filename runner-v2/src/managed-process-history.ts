@@ -2,6 +2,7 @@ import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { AgentActor } from "./agent-contracts.js";
 import type { ManagedProcessRecord, ManagedProcessSnapshot, ManagedProcessObservation } from "./managed-process-contracts.js";
+import { parseManagedSessionRecord } from "./managed-process-record.js";
 
 export function readHistoricalManagedProcessObservations(
   stateDirectory: string,
@@ -25,6 +26,11 @@ export function readHistoricalManagedProcessObservations(
     const path = join(directory, entry.name);
     const metadata = lstatSync(path);
     if (!metadata.isFile() || metadata.isSymbolicLink()) continue;
+    const current = currentSchemaObservation(path, entry.name.slice(0, -5), runId, maxPollBytes);
+    if (current !== undefined) {
+      if (current) observations.push(current);
+      continue;
+    }
     const record = readHistoricalManagedProcessRecord(path);
     if (record.runId !== runId) continue;
     observations.push({
@@ -43,6 +49,33 @@ export function readHistoricalManagedProcessObservations(
       left.startedAt.localeCompare(right.startedAt) ||
       left.processId.localeCompare(right.processId),
   );
+}
+
+/**
+ * A current-schema record (inline output) shares the directory with legacy ones (output files).
+ * Reading it as legacy threw "malformed" and failed every other run's historical open and startup
+ * cleanup once one live process existed (tunnel run). Undefined: not a current-schema record.
+ */
+function currentSchemaObservation(path: string, processId: string, runId: string, maxPollBytes: number): ManagedProcessObservation | null | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || !("schemaVersion" in value || "recordKind" in value)) return undefined;
+  const record = parseManagedSessionRecord(value, processId);
+  if (record.runId !== runId) return null;
+  const tailText = (text: string) => {
+    const bytes = Buffer.from(text);
+    return bytes.subarray(Math.max(0, bytes.byteLength - maxPollBytes)).toString("utf8");
+  };
+  return {
+    processId: record.processId, pid: record.pid, status: record.status, exitCode: record.exitCode, signal: record.signal,
+    startedAt: record.startedAt, updatedAt: record.updatedAt, stdout: tailText(record.stdout), stderr: tailText(record.stderr),
+    runId: record.runId, sessionId: record.sessionId, actor: { ...record.actor }, command: record.command,
+    args: [...record.args], cwd: record.cwd, environmentKeys: [...record.environmentKeys],
+  };
 }
 
 export function readHistoricalManagedProcessRecord(path: string): ManagedProcessRecord {
