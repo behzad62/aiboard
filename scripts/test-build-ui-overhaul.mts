@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { BuildTranscriptFeed, buildActorRole, buildModelDisplayName, buildDisplayText, sortedBuildFeed } from "../components/build/BuildTranscriptFeed";
+import { BuildTranscriptFeed, buildActorRole, buildModelDisplayName, buildDisplayText, buildModelIdentityParts, sortedBuildFeed } from "../components/build/BuildTranscriptFeed";
 import { BuildWorkspace } from "../components/build/BuildWorkspace";
 import { BuildEventCenter, alertsFromDiagnostics } from "../components/build/BuildEventCenter";
 import type { DiagnosticEntry } from "../components/DiscussionDiagnostics";
@@ -56,7 +56,15 @@ const qualifiedFeed = renderToStaticMarkup(createElement(BuildTranscriptFeed, {
   ],
   onDownload() {},
 }));
+assert.deepEqual(buildModelIdentityParts("openrouter / deepseek/flash"), { provider: "OpenRouter", model: "deepseek/flash" });
+assert.deepEqual(buildModelIdentityParts("deepseek / deepseek/deepseek-chat"), { provider: "DeepSeek", model: "deepseek/deepseek-chat" });
+assert.deepEqual(buildModelIdentityParts("GPT-6"), { provider: null, model: "GPT-6" });
 assert.ok(qualifiedFeed.includes("openrouter / deepseek/flash"));
+assert.ok(qualifiedFeed.includes("border-sky-400/25 bg-sky-500/10"), "Model identity is in a filled blue chip");
+assert.ok(qualifiedFeed.includes("bg-violet-500/15"), "Task is in a filled purple chip");
+assert.ok(qualifiedFeed.includes("flex-nowrap"), "Model and task must stay on the same header row");
+assert.ok(qualifiedFeed.indexOf(">OpenRouter</span>") < qualifiedFeed.indexOf(">deepseek/flash</span>"), "Provider precedes model in chip");
+assert.ok(qualifiedFeed.indexOf(">deepseek/flash</span>") < qualifiedFeed.indexOf(">task-auth</span>"), "Task chip follows model on the same row");
 assert.ok(qualifiedFeed.includes("task-auth"));
 assert.ok(qualifiedFeed.includes("Implement OAuth session persistence"));
 assert.ok(qualifiedFeed.includes("deepseek / deepseek/flash"));

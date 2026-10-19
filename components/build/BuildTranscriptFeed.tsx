@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Download, ScrollText, Sparkles } from "lucide-react";
+import { ChevronDown, Download, FolderClosed, Network, ScrollText, Sparkles } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
 
@@ -93,6 +93,66 @@ export function buildDisplayText(content: string, role: BuildActorRole): string 
     "i"
   );
   return content.replace(standalone, "$1");
+}
+
+/**
+ * Provider-qualified Runner names have the shape "provider / modelId".
+ * Keep internal model slashes intact (e.g. deepseek/deepseek-chat).
+ */
+export function buildModelIdentityParts(value: string): { provider: string | null; model: string } {
+  const name = value.trim();
+  const separator = name.indexOf(" / ");
+  if (separator <= 0 || separator + 3 >= name.length) return { provider: null, model: name || "Model unavailable" };
+  const rawProvider = name.slice(0, separator).trim();
+  const model = name.slice(separator + 3).trim();
+  if (!rawProvider || !model) return { provider: null, model: name };
+  const canonicalNames: Record<string, string> = {
+    openrouter: "OpenRouter",
+    openai: "OpenAI",
+    anthropic: "Anthropic",
+    deepseek: "DeepSeek",
+    google: "Google",
+    gemini: "Google",
+    azure: "Azure",
+    xai: "xAI",
+    mistral: "Mistral",
+    groq: "Groq",
+    together: "Together AI",
+    fireworks: "Fireworks",
+  };
+  return { provider: canonicalNames[rawProvider.toLowerCase()] ?? rawProvider, model };
+}
+
+function ModelIdentityChip({ name }: { name: string }) {
+  const { provider, model } = buildModelIdentityParts(name);
+  return (
+    <span
+      className="inline-flex min-w-0 max-w-full shrink items-center gap-1.5 rounded-lg border border-sky-400/25 bg-sky-500/10 px-2.5 py-1 text-xs text-foreground shadow-[inset_0_1px_0_rgb(255_255_255_/_0.05)] dark:bg-sky-400/10"
+      title={name}
+    >
+      <Network className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-300" aria-hidden="true" />
+      {provider && (
+        <>
+          <span className="shrink-0 font-semibold text-foreground/90">{provider}</span>
+          <span className="shrink-0 px-0.5 text-sky-500/80" aria-hidden="true">|</span>
+        </>
+      )}
+      <span className="min-w-0 truncate font-medium">{model}</span>
+    </span>
+  );
+}
+
+function TaskContextChip({ taskId, taskTitle }: { taskId: string; taskTitle?: string }) {
+  return (
+    <span
+      className="inline-flex max-w-[35%] shrink-0 items-center gap-1.5 rounded-lg border border-violet-400/20 bg-violet-500/15 px-2 py-1 text-[11px] text-violet-700 dark:text-violet-200"
+      title={taskTitle ? `${taskId} — ${taskTitle}` : taskId}
+      aria-label={taskTitle ? `Task ${taskId}: ${taskTitle}` : `Task ${taskId}`}
+    >
+      <FolderClosed className="h-3 w-3 shrink-0" aria-hidden="true" />
+      <span className="truncate font-semibold">{taskId}</span>
+    </span>
+  );
 }
 
 const PAGE_SIZE = 25;
@@ -202,20 +262,14 @@ export function BuildTranscriptFeed({
                   <article className={cn("min-w-0 overflow-hidden rounded-xl border transition-colors", expanded ? "bg-card/70" : "border-transparent hover:border-border hover:bg-card/50")}>
                     <button type="button" aria-expanded={expanded} aria-controls={`build-turn-${message.id}`}
                       onClick={() => setManualExpansion((current) => ({ ...current, [message.id]: !expanded }))}
-                      className="flex w-full items-start gap-2 px-3 py-3 text-left focus-visible:outline-2 focus-visible:outline-primary">
+                      className="flex w-full items-start gap-2 px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:outline-primary">
                       <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex min-w-0 flex-nowrap items-center gap-1.5">
                           <span className="sr-only">{role} turn: </span>
-                          <span className="min-w-0 max-w-full truncate text-sm font-medium" title={message.modelName}>{modelLabel}</span>
-                          {message.taskId && (
-                            <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground sm:max-w-sm"
-                              title={message.taskTitle ? `${message.taskId} — ${message.taskTitle}` : message.taskId}
-                              aria-label={message.taskTitle ? `Task ${message.taskId}: ${message.taskTitle}` : `Task ${message.taskId}`}>
-                              <span className="shrink-0 font-semibold text-foreground/80">{message.taskId}</span>
-                              {message.taskTitle && <span className="min-w-0 truncate">· {message.taskTitle}</span>}
-                            </span>
-                          )}
-                          {message.streaming && <span className="text-xs font-medium text-primary motion-safe:animate-pulse">Streaming…</span>}
+                          <ModelIdentityChip name={modelLabel} />
+                          {message.taskId && <TaskContextChip taskId={message.taskId} taskTitle={message.taskTitle} />}
+                          {message.taskTitle && <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={message.taskTitle}>{message.taskTitle}</span>}
+                          {message.streaming && <span className="shrink-0 text-[11px] font-medium text-primary motion-safe:animate-pulse">Streaming…</span>}
                         </div>
                         {!expanded && <p className="mt-1.5 truncate text-xs text-muted-foreground">{preview || "Model response"}</p>}
                       </div>
@@ -238,16 +292,12 @@ export function BuildTranscriptFeed({
       {activeActors.length > 0 && (
         <div className="mt-2 space-y-2 border-t pt-4" aria-label="Active model sessions">
           {activeActors.map((actor) => (
-            <div key={actor.id} className="flex items-center gap-2 pl-2 text-sm text-muted-foreground">
+            <div key={actor.id} className="flex min-w-0 flex-nowrap items-center gap-2 pl-2 text-sm text-muted-foreground">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary motion-safe:animate-pulse" aria-hidden="true" />
               <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase", roleTone[actor.role])}>{actor.role}</span>
-              <span className="min-w-0 truncate" title={actor.name}>{actor.name}</span>
-              {actor.taskId && (
-                <span className="min-w-0 max-w-[40%] truncate rounded-md border border-border/70 px-2 py-0.5 text-[11px]"
-                  title={actor.taskTitle ? `${actor.taskId} — ${actor.taskTitle}` : actor.taskId}>
-                  {actor.taskId}{actor.taskTitle ? ` · ${actor.taskTitle}` : ""}
-                </span>
-              )}
+              <ModelIdentityChip name={actor.name} />
+              {actor.taskId && <TaskContextChip taskId={actor.taskId} taskTitle={actor.taskTitle} />}
+              {actor.taskTitle && <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={actor.taskTitle}>{actor.taskTitle}</span>}
               <span className="ml-auto shrink-0 text-xs">Working…</span>
             </div>
           ))}
