@@ -2062,6 +2062,9 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "architect.question_resume_consumed" ||
     ((event.type === "run.paused" || event.type === "run.resumed") &&
       event.actor.role === "user") ||
+    // The owner's answer to a repair pause gives the Architect the turn in which it acknowledges the
+    // guidance or question; refusing it here deadlocked a paused run with a note sent first (tunnel run).
+    (OWNER_REPAIR_ANSWERS.has(event.type) && event.actor.role === "user") ||
     event.type === "provider.retry_scheduled" ||
     event.type === "provider.health_changed" ||
     event.type === "architect.runtime_assigned" ||
@@ -2095,6 +2098,12 @@ export function assertPendingUserGuidanceAllowsEvent(
   }
 }
 
+const OWNER_REPAIR_ANSWERS: ReadonlySet<string> = new Set([
+  "repair.issue_budget_extended",
+  "repair.external_blocker_cleared",
+  "repair.cycle_limit_extended",
+]);
+
 export function assertOpenArchitectQuestionAllowsEvent(
   current: SchedulerProjection,
   event: Pick<SchedulerEvent, "type" | "actor" | "payload">
@@ -2108,6 +2117,9 @@ export function assertOpenArchitectQuestionAllowsEvent(
       event.actor.role === "runner" && event.actor.id === "build-manager") ||
     ((event.type === "run.paused" || event.type === "run.resumed") &&
       event.actor.role === "user") ||
+    // The owner's answer to a repair pause gives the Architect the turn in which it acknowledges the
+    // guidance or question; refusing it here deadlocked a paused run with a note sent first (tunnel run).
+    (OWNER_REPAIR_ANSWERS.has(event.type) && event.actor.role === "user") ||
     event.type === "provider.retry_scheduled" ||
     event.type === "provider.health_changed" ||
     event.type === "architect.runtime_assigned" ||
