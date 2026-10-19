@@ -68,6 +68,8 @@ export interface BuildControlPlane {
     additionalRepairPlans: number,
     idempotencyKey: string,
   ): Promise<SchedulerProjection>;
+  extendRepairIssueBudget?(runId: string, issueId: string, additionalCycles: number, idempotencyKey: string): Promise<SchedulerProjection>;
+  clearRepairExternalBlocker?(runId: string, issueId: string, idempotencyKey: string): Promise<SchedulerProjection>;
   selectProjectHandoff(
     runId: string,
     choice: ProjectHandoffChoice,

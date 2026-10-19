@@ -1250,6 +1250,34 @@ export class BuildRuntime {
     return this.projection();
   }
 
+  /**
+   * The owner's answer to a repair-issue pause. The events and their reducer existed, but nothing
+   * recorded them, so a run paused on an exhausted issue could not be resumed at all (tunnel run).
+   */
+  extendRepairIssueBudget(issueId: string, additionalCycles: number, idempotencyKey: string): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "repair.issue_budget_extended",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: { issueId, additionalCycles },
+    });
+    return this.projection();
+  }
+
+  clearRepairExternalBlocker(issueId: string, idempotencyKey: string): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "repair.external_blocker_cleared",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: { issueId },
+    });
+    return this.projection();
+  }
+
   extendRepairCycles(additionalRepairPlans: number, idempotencyKey: string): SchedulerProjection {
     this.store.append({
       runId: this.runId,

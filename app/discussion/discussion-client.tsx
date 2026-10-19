@@ -163,6 +163,8 @@ import {
   selectNativeArchitectHandoff,
   selectNativeVerifierRuntime,
   extendNativeRepairCycles,
+  extendNativeRepairIssueBudget,
+  clearNativeRepairExternalBlocker,
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
   type NativeBuildObservability,
@@ -297,6 +299,8 @@ function DiscussionPageInner() {
   const [nativeProjection, setNativeProjection] =
     useState<NativeBuildProjection | null>(null);
   const [specificationBusy, setSpecificationBusy] = useState(false);
+  const [repairIssueBusy, setRepairIssueBusy] = useState(false);
+  const [repairIssueError, setRepairIssueError] = useState<string | null>(null);
   const [nativeAttach, setNativeAttach] = useState<{ since: number; error?: string } | null>(null);
   const [nativeFilesLoad, setNativeFilesLoad] = useState<{ since: number; error?: string } | null>(null);
   const [specificationError, setSpecificationError] = useState<string | null>(null);
@@ -2271,6 +2275,69 @@ function DiscussionPageInner() {
               one: <span className="italic">&ldquo;{discussion.topic.length > 160 ? `${discussion.topic.slice(0, 160)}…` : discussion.topic}&rdquo;</span>
             </p>
             {specificationError && <p role="alert" className="text-destructive">{specificationError}</p>}
+          </DecisionCard>
+        ),
+      });
+    }
+    // A repair-issue pause had no card at all, so the run sat paused with nothing to answer (tunnel run).
+    const repairIssueId = nativeProjection && pause && nativeProjection.pauseReason?.reason.startsWith("repair_issue_paused:")
+      ? nativeProjection.pauseReason.reason.slice("repair_issue_paused:".length)
+      : undefined;
+    if (nativeProjection && repairIssueId && nativeConnection && discussion.nativeBuildRunId) {
+      const issue = nativeProjection.repairIssues?.[repairIssueId];
+      const detail = nativeProjection.pauseReason?.detail ?? "";
+      const cause = /^repair:(budget_exhausted|external_blocker|approach_failed):/.exec(detail)?.[1];
+      const explanation = detail.replace(/^repair:[a-z_]+:/, "");
+      const runId = discussion.nativeBuildRunId;
+      const answer = (call: () => Promise<NativeBuildProjection>) => {
+        setRepairIssueBusy(true);
+        setRepairIssueError(null);
+        void call()
+          .then((updated) => {
+            acceptProjection(updated);
+            nativeAttachmentControllerRef.current?.wake();
+          })
+          .catch((error: unknown) => setRepairIssueError(error instanceof Error ? error.message : String(error)))
+          .finally(() => setRepairIssueBusy(false));
+      };
+      decisions.push({
+        id: `repair-issue:${repairIssueId}`,
+        node: (
+          <DecisionCard
+            title={cause === "external_blocker" ? "A repair is waiting on something outside the Build" : "A repair ran out of attempts"}
+            actions={
+              cause === "external_blocker" ? (
+                <Button
+                  size="sm"
+                  disabled={repairIssueBusy}
+                  onClick={() => answer(() => clearNativeRepairExternalBlocker(nativeConnection, runId, repairIssueId, { idempotencyKey: `repair-blocker-cleared:${repairIssueId}:${nativeProjection.lastSequence}` }))}
+                >
+                  {repairIssueBusy ? "Resuming…" : "It's resolved, continue"}
+                </Button>
+              ) : (
+                <>
+                  {[1, 2].map((additionalCycles) => (
+                    <Button
+                      key={additionalCycles}
+                      size="sm"
+                      variant={additionalCycles === 1 ? "default" : "outline"}
+                      disabled={repairIssueBusy}
+                      onClick={() => answer(() => extendNativeRepairIssueBudget(nativeConnection, runId, repairIssueId, { additionalCycles, idempotencyKey: `repair-issue-extend:${repairIssueId}:${nativeProjection.lastSequence}:${additionalCycles}` }))}
+                    >
+                      {repairIssueBusy ? "Resuming…" : `Allow ${additionalCycles} more attempt${additionalCycles === 1 ? "" : "s"}`}
+                    </Button>
+                  ))}
+                </>
+              )
+            }
+          >
+            <p>{explanation || "The Build paused on a repair."}</p>
+            {issue && <p className="text-muted-foreground">Used {issue.used} of {issue.limit} attempts{issue.rootCause ? ` for ${issue.rootCause}` : ""}.</p>}
+            <p className="text-muted-foreground">
+              Continuing gives the Architect a turn to recheck, re-plan or repair. To steer it, add guidance
+              in the box below before you continue.
+            </p>
+            {repairIssueError && <p role="alert" className="text-destructive">{repairIssueError}</p>}
           </DecisionCard>
         ),
       });

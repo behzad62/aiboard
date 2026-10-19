@@ -1725,6 +1725,7 @@ test("repair-cycle extension is a user POST that rejects a zero additional budge
     repairCycles: { limit: 4, used: 1, extensions: 1 },
   };
   let received: { additionalRepairPlans: number; idempotencyKey: string } | undefined;
+  const issueCalls: unknown[][] = [];
   const builds = {
     projection: () => projection,
     events: () => [],
@@ -1775,6 +1776,14 @@ test("repair-cycle extension is a user POST that rejects a zero additional budge
       received = { additionalRepairPlans, idempotencyKey };
       return projection;
     },
+    extendRepairIssueBudget: async (_runId: string, issueId: string, additionalCycles: number, idempotencyKey: string) => {
+      issueCalls.push(["extend", issueId, additionalCycles, idempotencyKey]);
+      return projection;
+    },
+    clearRepairExternalBlocker: async (_runId: string, issueId: string, idempotencyKey: string) => {
+      issueCalls.push(["clear", issueId, idempotencyKey]);
+      return projection;
+    },
     selectProjectHandoff: async () => projection,
     submitUserGuidance: async () => projection,
     answerArchitectQuestion: async () => projection,
@@ -1815,6 +1824,14 @@ test("repair-cycle extension is a user POST that rejects a zero additional budge
     const body = await json(accepted);
     assert.deepEqual(body.repairCycles, { limit: 4, used: 1, extensions: 1 });
     assert.deepEqual(received, { additionalRepairPlans: 2, idempotencyKey: "extend:2" });
+
+    // A repair-issue pause has its own owner answers (tunnel run: nothing could resume one).
+    const issue = encodeURIComponent("repair:abc123");
+    const post = async (path: string, body: unknown) => (await fetch(`${url}/v2/runs/run_1/build/repair-issues/${issue}/${path}`, authorized({ method: "POST", body: JSON.stringify(body) }))).status;
+    assert.equal(await post("extend", { additionalCycles: 0, idempotencyKey: "issue:0" }), 400);
+    assert.equal(await post("extend", { additionalCycles: 1, idempotencyKey: "issue:1" }), 200);
+    assert.equal(await post("clear-blocker", { idempotencyKey: "issue:clear" }), 200);
+    assert.deepEqual(issueCalls, [["extend", "repair:abc123", 1, "issue:1"], ["clear", "repair:abc123", "issue:clear"]]);
   } finally {
     await server.close();
     supervisor.close();

@@ -652,6 +652,8 @@ export interface NativeBuildProjection {
   pauseReason?: {
     reason: string;
     taskId?: string;
+    /** Runner explanation, e.g. a repair-issue pause names its cause and what to do. */
+    detail?: string;
   };
   contextRecording?: NativeContextRecordingState;
   runPolicy?: BuildRunPolicy;
@@ -699,6 +701,8 @@ export interface NativeBuildProjection {
     history: NativeBuildRiskAssessmentProjection[];
   };
   verifierSelection?: NativeIndependentVerifierObservability["selection"];
+  /** Per-root-cause repair budgets; a run pauses on one as `repair_issue_paused:<issueId>`. */
+  repairIssues?: Record<string, { rootCause?: string; used: number; limit: number; externalBlocker?: unknown }>;
   repairCycles?: {
     limit: number;
     used: number;
@@ -1824,6 +1828,38 @@ export async function selectNativeVerifierRuntime(
       body: JSON.stringify({ runtimeId, idempotencyKey, requiredSequence }),
       signal,
     },
+    fetchImpl,
+  );
+}
+
+/** The owner's answer to a repair-issue pause: more attempts for that root cause. */
+export async function extendNativeRepairIssueBudget(
+  connection: NativeRunnerConnection,
+  runId: string,
+  issueId: string,
+  input: { additionalCycles: number; idempotencyKey: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<NativeBuildProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/repair-issues/${encodeURIComponent(issueId)}/extend`,
+    { method: "POST", body: JSON.stringify(input) },
+    fetchImpl,
+  );
+}
+
+/** The owner's answer to a repair issue paused on an external blocker: it is cleared. */
+export async function clearNativeRepairExternalBlocker(
+  connection: NativeRunnerConnection,
+  runId: string,
+  issueId: string,
+  input: { idempotencyKey: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<NativeBuildProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/repair-issues/${encodeURIComponent(issueId)}/clear-blocker`,
+    { method: "POST", body: JSON.stringify(input) },
     fetchImpl,
   );
 }

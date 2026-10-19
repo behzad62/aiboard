@@ -147,6 +147,11 @@ interface RepairCyclesBody {
   idempotencyKey: string;
 }
 
+interface RepairIssueBody {
+  additionalCycles?: number;
+  idempotencyKey: string;
+}
+
 interface ProjectHandoffBody {
   choice: ProjectHandoffChoice;
   idempotencyKey: string;
@@ -938,6 +943,26 @@ export class ControlServer {
         // Read-only and redacted: evidence by identity only, no
         // transcripts, credentials, environment, or project writes.
         sendJson(response, 200, this.requireBuilds().planningExport(runId));
+        return;
+      }
+      if (
+        segments.length === 7 &&
+        segments[3] === "build" &&
+        segments[4] === "repair-issues" &&
+        (segments[6] === "extend" || segments[6] === "clear-blocker") &&
+        request.method === "POST"
+      ) {
+        const issueId = decodeURIComponent(segments[5]!);
+        const body = await readJson<RepairIssueBody>(request);
+        if (!isNonEmptyString(body.idempotencyKey)) invalidBody();
+        const builds = this.requireBuilds();
+        if (segments[6] === "extend") {
+          if (!Number.isSafeInteger(body.additionalCycles) || body.additionalCycles! < 1 || body.additionalCycles! > MAX_REPAIR_CYCLE_EXTENSION || !builds.extendRepairIssueBudget) invalidBody();
+          sendJson(response, 200, await builds.extendRepairIssueBudget!(runId, issueId, body.additionalCycles!, body.idempotencyKey));
+        } else {
+          if (!builds.clearRepairExternalBlocker) invalidBody();
+          sendJson(response, 200, await builds.clearRepairExternalBlocker!(runId, issueId, body.idempotencyKey));
+        }
         return;
       }
       if (
