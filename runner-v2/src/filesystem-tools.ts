@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { fencedWrite, fencedPatch, fencedMove, fencedDelete, filesystemMutationFailure,
   FilesystemMutationError, isFilesystemMutation } from "./filesystem-mutation-fence.js";
 import { lstat, readFile, readdir, realpath } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { isAbsolute, posix, relative, resolve, sep } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
@@ -227,9 +227,14 @@ export function createFilesystemTools(
       },
     },
     {
-      definition: definition("fs.stat", "Inspect file metadata", true, "none"),
+      definition: definition("fs.stat", "Inspect file metadata without following links; a link reports its target when it stays inside the workspace.", true, "none"),
       validate: objectWithString("path"),
-      assessAccess: (input) => pathAccess(input, "read"),
+      // lstat reads the entry in its parent directory. Granting the path itself refused every symbolic
+      // link ("Grant roots cannot be symbolic links"), e.g. npm workspace links (tunnel run).
+      assessAccess: (input) => ({
+        capability: "filesystem.read",
+        paths: [{ path: posix.dirname((input.path as string).replaceAll("\\", "/")) || ".", access: "read" as const }],
+      }),
       execute: async (input, context) => {
         const path = toolPath(context, input.path as string);
         if (matchesPolicyPath(context, path, options.hiddenPaths)) {
@@ -239,6 +244,7 @@ export function createFilesystemTools(
           return hiddenPathError(context, path);
         }
         const details = await lstat(path);
+        const linkTarget = details.isSymbolicLink() ? await workspaceLinkTarget(context, path) : undefined;
         return {
           content: [
             json({
@@ -252,6 +258,7 @@ export function createFilesystemTools(
                     : "other",
               byteLength: details.size,
               modifiedAt: details.mtime.toISOString(),
+              ...(details.isSymbolicLink() ? { linkTarget: linkTarget ?? "outside the workspace" } : {}),
             }),
           ],
           isError: false,
@@ -826,6 +833,20 @@ function repositoryReadAccess(input: Input) {
     capability: "filesystem.read",
     paths: [{ path: input.path as string, access: "read" as const }, { path: ".", access: "read" as const }],
   };
+}
+
+/** The workspace-relative target of a link, or undefined when it leaves the workspace or is broken. */
+async function workspaceLinkTarget(context: ToolExecutionContext, path: string): Promise<string | undefined> {
+  if (!context.workspacePath) return undefined;
+  try {
+    const target = await realpath(path);
+    const workspace = await realpath(context.workspacePath);
+    const inside = relative(workspace, target);
+    if (inside.startsWith("..") || isAbsolute(inside)) return undefined;
+    return inside.split(sep).join("/") || ".";
+  } catch {
+    return undefined;
+  }
 }
 
 function toolPath(context: ToolExecutionContext, path: string): string {

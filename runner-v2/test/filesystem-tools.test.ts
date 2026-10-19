@@ -9,6 +9,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -324,6 +325,29 @@ test("fs.patch names no-op edits and refuses a batch that changes nothing; write
     assert.equal(secret.isError, false);
     assert.match(String((value(secret).notices as string[])[0]), /submit_task will refuse fixture\.test\.ts: .*value assigned to DEVICE_TOKEN/);
     assert.doesNotMatch(JSON.stringify(secret), /dt_live_0123/, "the notice never echoes the value");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("fs.stat reports a workspace link and its target instead of refusing it", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-fs-stat-link-")));
+  const workspace = join(root, "workspace");
+  mkdirSync(join(workspace, "packages", "shared"), { recursive: true });
+  mkdirSync(join(workspace, "node_modules", "@scope"), { recursive: true });
+  mkdirSync(join(root, "outside"));
+  symlinkSync(join(workspace, "packages", "shared"), join(workspace, "node_modules", "@scope", "shared"), "junction");
+  symlinkSync(join(root, "outside"), join(workspace, "node_modules", "@scope", "escape"), "junction");
+  const broker = brokerWithFilesystem(workspace, new ArtifactStore(join(root, "artifacts")));
+  try {
+    const inside = await invoke(broker, "stat_link", "fs.stat", { path: "node_modules/@scope/shared" });
+    assert.equal(inside.isError, false, JSON.stringify(inside));
+    const stat = json(inside) as { type: string; linkTarget: string };
+    assert.equal(stat.type, "symlink");
+    assert.equal(stat.linkTarget, "packages/shared");
+    const escape = await invoke(broker, "stat_escape", "fs.stat", { path: "node_modules/@scope/escape" });
+    assert.equal(escape.isError, false);
+    assert.equal((json(escape) as { linkTarget: string }).linkTarget, "outside the workspace", "a target outside the workspace is not disclosed");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
