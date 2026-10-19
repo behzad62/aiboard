@@ -6,6 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ModelContextEditor } from "@/components/ModelContextEditor";
+import { ModelPricingEditor } from "@/components/ModelPricingEditor";
+import { getModelPricing } from "@/lib/providers/pricing";
+import { getUserSettings } from "@/lib/client/store";
 import { ProviderCapabilityTable } from "@/components/ProviderCapabilityTable";
 import { Plus, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -421,6 +424,14 @@ export function CustomModelsManager({
                   rows={resolvedCapabilityRows}
                   title="Declared tool support & readiness"
                 />
+                <details className="mt-3 rounded-md border p-3 text-sm">
+                  <summary className="cursor-pointer font-medium">Pricing</summary>
+                  <div className="mt-3">
+                    <ModelPricingEditor fullModelId={fullModelId}
+                      pricing={getModelPricing(fullModelId, getUserSettings().modelPricingOverrides, getUserSettings().discoveredModelMetadata)}
+                      onSaved={async () => { await load(); onChanged?.(); }} title="Pricing" />
+                  </div>
+                </details>
                 <ModelContextEditor
                   fullModelId={fullModelId}
                   profile={contextProfile}

@@ -80,9 +80,14 @@ const emitted: string[] = [];
 const toolEvents: Array<{ tool: string; phase: string; callId: string }> = [];
 let capturedClientOptions: Record<string, unknown> | undefined;
 let capturedSessionConfig: Record<string, unknown> | undefined;
+let capturedUsage: Record<string, number> | undefined;
 
 const fakeSession = {
   on(type: string, handler: (event: unknown) => void) {
+    if (type === "assistant.usage") queueMicrotask(() => {
+      handler({data:{inputTokens:100,outputTokens:20,cacheReadTokens:30,cacheWriteTokens:10,reasoningTokens:5,cost:6}});
+      handler({data:{inputTokens:200,outputTokens:40,cacheReadTokens:50,cacheWriteTokens:20,reasoningTokens:10,cost:6}});
+    });
     if (type === "assistant.message_delta") {
       queueMicrotask(() => handler({ data: { deltaContent: "SDK result" } }));
     }
@@ -113,6 +118,7 @@ const result = await sdk.runCopilotSdkChat(
   (token: string) => emitted.push(token),
   {
     onToolEvent(event: { tool: string; phase: string; callId: string }) { toolEvents.push(event); },
+    onUsage(usage: Record<string, number>) { capturedUsage = usage; },
     clientFactory(options: Record<string, unknown>) {
       capturedClientOptions = options;
       return {
@@ -132,6 +138,7 @@ check("SDK adapter forwards streaming deltas", emitted.join("") === "SDK result"
 check("SDK adapter forwards observable built-in tool lifecycle", toolEvents.map((event) => `${event.tool}:${event.phase}`).join(",") === "web_search:started,web_search:completed", toolEvents);
 check("SDK adapter passes the account token to the client", capturedClientOptions?.gitHubToken === "test-token", capturedClientOptions);
 check("SDK adapter creates a web-search session", Boolean(capturedSessionConfig?.availableTools), capturedSessionConfig);
+assert.deepEqual(capturedUsage, {inputTokens:300, outputTokens:60, cachedInputTokens:80, cacheWriteInputTokens:30, reasoningTokens:15, totalTokens:360}, "SDK tool-loop API calls are summed once and premium multipliers never become USD costs");
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

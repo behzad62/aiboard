@@ -27,8 +27,7 @@ export interface ResolvedTokenUsage {
 }
 
 /**
- * Provider streams currently expose content chunks but not billing usage. This
- * estimate is intentionally conservative and stable enough for UI accounting.
+ * Fallback only when a provider omits usage. Actual response counts take precedence.
  */
 export function estimateTextTokens(text: string): number {
   if (!text) return 0;
@@ -92,9 +91,14 @@ export function resolveModelCallUsage(input: {
     output: input.output,
     maxTokens: input.maxTokens,
   });
-  const inputTokens = finiteNonNegative(input.reportedUsage?.inputTokens);
-  const outputTokens = finiteNonNegative(input.reportedUsage?.outputTokens);
+  let inputTokens = finiteNonNegative(input.reportedUsage?.inputTokens);
+  let outputTokens = finiteNonNegative(input.reportedUsage?.outputTokens);
   const totalTokens = finiteNonNegative(input.reportedUsage?.totalTokens);
+  // Recover a missing side from reported totals before resorting to text estimates.
+  if (totalTokens !== undefined) {
+    if (inputTokens === undefined && outputTokens !== undefined && totalTokens >= outputTokens) inputTokens = totalTokens - outputTokens;
+    if (outputTokens === undefined && inputTokens !== undefined && totalTokens >= inputTokens) outputTokens = totalTokens - inputTokens;
+  }
   const hasReportedInput = inputTokens !== undefined;
   const hasReportedOutput = outputTokens !== undefined;
   const reportedAny = hasReportedInput || hasReportedOutput || totalTokens !== undefined;

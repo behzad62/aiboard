@@ -499,6 +499,20 @@ test("account runner preserves typed SSE errors and settles the reader before re
   }
 });
 
+test("account runner retains usage in JSON and partial SSE metadata updates", async () => {
+  for (const stream of [false,true]) {
+    const model=new AccountRunnerModel({baseUrl:'http://127.0.0.1:1455',runnerPath:'chatgpt',runnerToken:'fixture',modelId:'fixture',
+      fetch:async()=>stream ? new Response([
+        {type:'usage',usage:{inputTokens:100,outputTokens:40}},
+        {type:'usage',usage:{cachedInputTokens:30,cacheWriteInputTokens:5}},
+        {type:'done'},
+      ].map(e=>`data: ${JSON.stringify(e)}\n\n`).join(''),{headers:{'content-type':'text/event-stream'}}):
+      new Response(JSON.stringify({content:'OK',usage:{inputTokens:100,outputTokens:40,cachedInputTokens:30,cacheWriteInputTokens:5}}),{headers:{'content-type':'application/json'}})});
+    const turn=await model.complete({sessionId:'usage-fixture',messages:[],tools:[]});
+    assert.deepEqual(turn.usage,{inputTokens:100,inputTokenSource:'reported',outputTokens:40,cachedInputTokens:30,cacheWriteInputTokens:5});
+  }
+});
+
 test("account runner normalizes strict textual tool-call records from streamed tokens", async () => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "text/event-stream" });

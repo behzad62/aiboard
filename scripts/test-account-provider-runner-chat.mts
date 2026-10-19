@@ -79,6 +79,11 @@ fs.writeFileSync(
     {
       chatgpt: {
         type: "oauth",
+          flow: "chatgpt-plan",
+          issuer: "https://auth.openai.com",
+          clientId: "oaiapp_test",
+          subject: "account-test",
+          scopes: ["chatgpt.tokens.use.direct"],
         refresh: "fake-refresh-token",
         access: "fake-access-token",
         expires: Date.now() + 60 * 60 * 1000,
@@ -199,7 +204,7 @@ const runner = spawn(
     cwd: process.cwd(),
     env: {
       ...process.env,
-      AIBOARD_CHATGPT_CODEX_ENDPOINT: `http://127.0.0.1:${fakeBackendPort}/codex/responses`,
+      AIBOARD_CHATGPT_API_BASE: `http://127.0.0.1:${fakeBackendPort}/v1`,
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -282,6 +287,11 @@ async function runRefreshDisconnectCase(
     {
       chatgpt: {
         type: "oauth",
+          flow: "chatgpt-plan",
+          issuer: "https://auth.openai.com",
+          clientId: "oaiapp_test",
+          subject: "account-test",
+          scopes: ["chatgpt.tokens.use.direct"],
         refresh: `fake-refresh-${label}`,
         access: `stale-access-${label}`,
         expires,
@@ -299,7 +309,10 @@ async function runRefreshDisconnectCase(
       "const realFetch = global.fetch;",
       "global.fetch = (input, init) => {",
       "  const requestUrl = typeof input === 'string' ? input : input?.url ?? input?.href;",
-      "  if (requestUrl === 'https://auth.openai.com/oauth/token') {",
+      "  if (requestUrl === 'https://auth.openai.com/.well-known/openid-configuration') {",
+      "    return Promise.resolve(new Response(JSON.stringify({ issuer: 'https://auth.openai.com', authorization_endpoint: 'https://auth.openai.com/api/accounts/authorize', token_endpoint: 'https://auth.openai.com/api/accounts/oauth/token', jwks_uri: 'https://auth.openai.com/.well-known/jwks.json' }), { status: 200 }));",
+      "  }",
+      "  if (requestUrl === 'https://auth.openai.com/api/accounts/oauth/token') {",
       `    return realFetch('http://127.0.0.1:${fakeBackendPort}/oauth/token', init);`,
       "  }",
       "  return realFetch(input, init);",
@@ -325,7 +338,7 @@ async function runRefreshDisconnectCase(
         NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preloadFile}`]
           .filter(Boolean)
           .join(" "),
-        AIBOARD_CHATGPT_CODEX_ENDPOINT: `http://127.0.0.1:${fakeBackendPort}/codex/responses`,
+        AIBOARD_CHATGPT_API_BASE: `http://127.0.0.1:${fakeBackendPort}/v1`,
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -389,8 +402,8 @@ try {
   const healthResponse = await fetch(`${baseUrl}/health`);
   const health = await healthResponse.json();
   check(
-    "capability-handshake account-provider runner reports version 22",
-    healthResponse.ok && health.version === 22,
+    "account-provider runner reports version 28",
+    healthResponse.ok && health.version === 28,
     health
   );
 
@@ -430,11 +443,11 @@ try {
   check("ChatGPT chat returns HTTP 200 from fake backend", response.ok, data);
   check("ChatGPT chat returns response text", data.content === "ok", data);
   check("runner sends one ChatGPT backend request", capturedRequests.length === 1, capturedRequests);
-  check("runner sends store false to Codex backend", captured?.body.store === false, captured?.body);
-  check("runner requests the Codex backend stream", captured?.body.stream === true, captured?.body);
+  check("runner sends store false to the public API", captured?.body.store === false, captured?.body);
+  check("runner requests the public API stream", captured?.body.stream === true, captured?.body);
   check("runner sends selected model", captured?.body.model === "gpt-5.5", captured?.body);
   check(
-    "runner omits ChatGPT max output tokens unsupported by Codex backend",
+    "runner omits max output tokens unsupported by ChatGPT plan usage",
     !Object.prototype.hasOwnProperty.call(captured?.body ?? {}, "max_output_tokens"),
     captured?.body
   );
@@ -455,7 +468,7 @@ try {
     userContent.some((part) => part?.type === "input_image" && part.image_url === "data:image/png;base64,AAECAw=="),
     userContent
   );
-  check("runner sends account id header", captured?.headers["chatgpt-account-id"] === "fake-account-id", captured?.headers);
+  check("public API omits the Codex account id header", captured?.headers["chatgpt-account-id"] === undefined, captured?.headers);
   check("runner sends bearer token header", captured?.headers.authorization === "Bearer fake-access-token", captured?.headers);
   check(
     "runner bounds long ChatGPT session ids deterministically",

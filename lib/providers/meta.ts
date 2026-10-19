@@ -250,6 +250,8 @@ export async function* streamMetaResponses(
     let outputTokens: number | undefined;
     let totalTokens: number | undefined;
     let reasoningTokens: number | undefined;
+    let cachedInputTokens: number | undefined;
+    let cacheWriteInputTokens: number | undefined;
 
     for await (const event of stream) {
       const raw = event as Record<string, unknown>;
@@ -351,6 +353,9 @@ export async function* streamMetaResponses(
             typeof usage.output_tokens === "number" ? usage.output_tokens : outputTokens;
           totalTokens =
             typeof usage.total_tokens === "number" ? usage.total_tokens : totalTokens;
+          const inputDetails = usage.input_tokens_details as Record<string, unknown> | undefined;
+          if (typeof inputDetails?.cached_tokens === "number") cachedInputTokens = inputDetails.cached_tokens;
+          if (typeof inputDetails?.cache_write_tokens === "number") cacheWriteInputTokens = inputDetails.cache_write_tokens;
           const details =
             usage.output_tokens_details &&
             typeof usage.output_tokens_details === "object"
@@ -371,7 +376,7 @@ export async function* streamMetaResponses(
       inputTokens != null ||
       outputTokens != null ||
       totalTokens != null ||
-      reasoningTokens != null
+      reasoningTokens != null || cachedInputTokens != null || cacheWriteInputTokens != null
     ) {
       yield {
         type: "usage",
@@ -380,6 +385,8 @@ export async function* streamMetaResponses(
           outputTokens,
           totalTokens,
           reasoningTokens,
+          cachedInputTokens,
+          cacheWriteInputTokens,
         },
       };
     }

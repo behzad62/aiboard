@@ -14,6 +14,7 @@ import type {
   NativeRunProjection,
 } from "@/lib/client/runner-v2";
 import { mapNativeBuildUsageModels } from "@/lib/client/native-model-usage";
+import type { ModelPricing } from "@/lib/providers/pricing";
 
 export function applyDiscussionLiveStatus(
   discussion: Discussion,
@@ -680,11 +681,12 @@ export function nativeBuildDiscussionStatus(
 
 export function nativeBuildUsageWindow(
   projection: NativeBuildUsageProjection,
-  startedAt: string
+  startedAt: string,
+  pricingForModel?: (id: string) => ModelPricing | null,
 ): BuildUsageWindow {
   const usage = projection.effective;
   const estimatedUsd = usage.estimatedCostMicros / 1_000_000;
-  const models = mapNativeBuildUsageModels(projection);
+  const models = mapNativeBuildUsageModels(projection, pricingForModel);
   return {
     startedAt,
     elapsedMs: usage.activeMs,

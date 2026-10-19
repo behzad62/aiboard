@@ -28,7 +28,7 @@ for (const value of cliArgs.filter((item) => item.startsWith("--"))) {
 }
 const outputDirectoryOption = singleOption("--output-dir");
 const only = singleOption("--only");
-if (only && only !== "rjs-workbench") throw new Error(`Unknown publish-downloads selector: ${only}`);
+if (only && !["rjs-workbench", "account-runner"].includes(only)) throw new Error(`Unknown publish-downloads selector: ${only}`);
 if (only && !outputDirectoryOption) throw new Error("publish-downloads --only requires --output-dir.");
 const publicDirectory = outputDirectoryOption
   ? path.resolve(outputDirectoryOption)
@@ -354,6 +354,8 @@ function validateRjsIdentityPaths(value, label) {
 async function publishAccountRunner() {
   if (!fs.existsSync(accountRunnerSource) || !fs.existsSync(accountSdkSource)) return;
   const sdkVersion = pinnedVersion(rootPackage.dependencies?.["@github/copilot-sdk"], "@github/copilot-sdk");
+  const rootLock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
+  const cliVersion = pinnedVersion(rootLock.packages?.["node_modules/@github/copilot"]?.version, "@github/copilot");
   const zip = new JSZip();
   zip.file("account-provider-runner.mjs", archiveFileContent(accountRunnerSource), { date: new Date(0), createFolders: false });
   zip.file("account-provider-copilot-sdk.mjs", archiveFileContent(accountSdkSource), { date: new Date(0), createFolders: false });
@@ -365,7 +367,8 @@ async function publishAccountRunner() {
     type: "module",
     engines: { node: ">=20.19.0" },
     scripts: { start: "node account-provider-runner.mjs" },
-    dependencies: { "@github/copilot-sdk": sdkVersion },
+    dependencies: { "@github/copilot-sdk": sdkVersion, "@github/copilot": cliVersion },
+    overrides: { "@github/copilot": cliVersion },
   }, null, 2)}\n`, { date: new Date(0), createFolders: false });
   zip.file("README.md", `# AI Board account-provider runner
 
@@ -375,7 +378,7 @@ Copilot SDK and its built-in web_search/web_fetch tools.
 
 ## Install and start
 
-1. Extract this ZIP to a directory.
+1. Extract every file in this ZIP into its own directory (separate from Runner V2).
 2. Open a terminal in that directory.
 3. Install the runner dependencies:
 
@@ -390,6 +393,10 @@ Copilot SDK and its built-in web_search/web_fetch tools.
    \`\`\`
 
 The runner prints the local URL and token to paste into AI Board Settings.
+Restarting the runner creates a new session token; save the new token in each
+account provider that uses this runner. GitHub authorization remains saved.
+Keep the runner and Copilot helper from the same ZIP together. The SDK and CLI
+versions are pinned to the combination validated by this release.
 `, { date: new Date(0), createFolders: false });
   for (const legalFile of ["LICENSE", "NOTICE", "TRADEMARKS.md"]) {
     zip.file(legalFile, normalizedTextFile(path.join(root, legalFile)), { date: new Date(0), createFolders: false });
@@ -404,7 +411,10 @@ The runner prints the local URL and token to paste into AI Board Settings.
 }
 
 fs.mkdirSync(publicDirectory, { recursive: true });
-if (only === "rjs-workbench") {
+if (only === "account-runner") {
+  fs.copyFileSync(accountRunnerSource, path.join(publicDirectory, "account-provider-runner.mjs"));
+  await publishAccountRunner();
+} else if (only === "rjs-workbench") {
   await publishRjsWorkBenchRunner();
 } else {
   for (const retired of ["runner.mjs", "runner-manifest.json"]) {

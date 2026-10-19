@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { saveModelContextOverride } from "@/lib/client/settings-api";
+import { flush } from "@/lib/client/store";
 import {
   formatContextWindowTokens,
   type LongContextQuality,
@@ -27,6 +28,7 @@ interface ModelContextEditorProps {
   profile: ModelContextProfile;
   override?: ModelContextProfileOverride;
   onSaved: () => Promise<void> | void;
+  advancedOnly?: boolean;
 }
 
 const QUALITY_LABELS: Record<LongContextQuality, string> = {
@@ -52,6 +54,7 @@ export function ModelContextEditor({
   profile,
   override,
   onSaved,
+  advancedOnly = false,
 }: ModelContextEditorProps) {
   const [contextWindow, setContextWindow] = useState("");
   const [maxOutput, setMaxOutput] = useState("");
@@ -62,6 +65,7 @@ export function ModelContextEditor({
   const [roles, setRoles] = useState<ModelBuildRole[]>([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const rolesKey = JSON.stringify(profile.recommendedBuildRoles ?? []);
 
   useEffect(() => {
     setContextWindow(String(profile.contextWindowTokens));
@@ -74,9 +78,10 @@ export function ModelContextEditor({
     );
     setQuality(profile.longContextQuality ?? "ok");
     setPromptCaching(profile.promptCaching ?? false);
-    setRoles(profile.recommendedBuildRoles ?? []);
-    setMessage(null);
-  }, [fullModelId, override, profile]);
+    setRoles(JSON.parse(rolesKey) as ModelBuildRole[]);
+  }, [fullModelId, profile.contextWindowTokens, profile.maxOutputTokens, profile.buildOutputReserveTokens,
+    profile.effectiveBuildInputCeilingTokens, profile.longContextQuality, profile.promptCaching, rolesKey]);
+  useEffect(() => { setMessage(null); }, [fullModelId]);
 
   const toggleRole = (role: ModelBuildRole) => {
     setRoles((prev) =>
@@ -89,7 +94,7 @@ export function ModelContextEditor({
   const parseOptionalPositive = (value: string): number | undefined | null => {
     if (value.trim() === "") return undefined;
     const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
     return parsed;
   };
 
@@ -100,10 +105,9 @@ export function ModelContextEditor({
     const nextInputCeiling = parseOptionalPositive(inputCeiling);
 
     if (
-      nextContext == null ||
-      nextMaxOutput == null ||
-      nextReserve == null ||
-      nextInputCeiling == null
+      (!advancedOnly && (nextContext === null || nextMaxOutput === null)) ||
+      nextReserve === null ||
+      nextInputCeiling === null
     ) {
       setMessage("Enter valid positive token counts.");
       return;
@@ -114,16 +118,17 @@ export function ModelContextEditor({
     try {
       saveModelContextOverride({
         fullModelId,
-        contextWindowTokens: nextContext,
-        maxOutputTokens: nextMaxOutput,
+        contextWindowTokens: advancedOnly ? override?.contextWindowTokens ?? undefined : nextContext ?? undefined,
+        maxOutputTokens: advancedOnly ? override?.maxOutputTokens ?? undefined : nextMaxOutput ?? undefined,
         buildOutputReserveTokens: nextReserve,
         effectiveBuildInputCeilingTokens: nextInputCeiling,
         longContextQuality: quality,
         promptCaching,
         recommendedBuildRoles: roles,
       });
-      setMessage("Context override saved");
+      await flush();
       await onSaved();
+      setMessage(advancedOnly ? "Build settings saved" : "Context override saved");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to save context override");
     } finally {
@@ -135,9 +140,10 @@ export function ModelContextEditor({
     setSaving(true);
     setMessage(null);
     try {
-      saveModelContextOverride({ fullModelId, clear: true });
-      setMessage("Context override reset");
+      saveModelContextOverride(advancedOnly ? { fullModelId, clearBuildSettings: true } : { fullModelId, clear: true });
+      await flush();
       await onSaved();
+      setMessage(advancedOnly ? "Build settings reset" : "Context override reset");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to reset context override");
     } finally {
@@ -148,13 +154,16 @@ export function ModelContextEditor({
   return (
     <div className="space-y-3 rounded-md border bg-muted/30 p-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="font-medium">Context profile</p>
+        <p className="font-medium">{advancedOnly ? "Build settings" : "Context profile"}</p>
         {profile.source === "override" && (
           <Badge variant="warning">Local override</Badge>
         )}
+        {(profile.source === "provider-default" || profile.source === "default") && <Badge variant="warning">Conservative fallback</Badge>}
       </div>
+      {(profile.source === "provider-default" || profile.source === "default") && <p className="text-xs text-muted-foreground">Model token limits have not been reported or set. These fallback limits are used for scheduling; you can enter the actual limits in Model details.</p>}
 
       <p className="text-muted-foreground">
+        {advancedOnly ? "Scheduling profile: " : ""}
         {formatContextWindowTokens(profile.contextWindowTokens)} context
         {profile.maxOutputTokens
           ? ` / ${formatContextWindowTokens(profile.maxOutputTokens)} max output`
@@ -166,9 +175,10 @@ export function ModelContextEditor({
           ? ` - ${QUALITY_LABELS[profile.longContextQuality]} long context`
           : ""}
       </p>
+      {advancedOnly && <p className="text-xs text-muted-foreground">Scheduling values can include conservative fallbacks for unreported limits. Set model token limits in Model details. Save Build settings separately below.</p>}
 
-      <div className="grid gap-3 md:grid-cols-4">
-        <div className="space-y-1">
+      <div className={`grid gap-3 ${advancedOnly ? "md:grid-cols-2" : "md:grid-cols-4"}`}>
+        {!advancedOnly && <div className="space-y-1">
           <Label htmlFor={`${fullModelId}-context-window`}>Context tokens</Label>
           <Input
             id={`${fullModelId}-context-window`}
@@ -179,8 +189,8 @@ export function ModelContextEditor({
             onChange={(e) => setContextWindow(e.target.value)}
             placeholder="e.g. 128000"
           />
-        </div>
-        <div className="space-y-1">
+        </div>}
+        {!advancedOnly && <div className="space-y-1">
           <Label htmlFor={`${fullModelId}-max-output`}>Max output</Label>
           <Input
             id={`${fullModelId}-max-output`}
@@ -191,7 +201,7 @@ export function ModelContextEditor({
             onChange={(e) => setMaxOutput(e.target.value)}
             placeholder="e.g. 8192"
           />
-        </div>
+        </div>}
         <div className="space-y-1">
           <Label htmlFor={`${fullModelId}-build-reserve`}>Build reserve</Label>
           <Input
@@ -239,8 +249,8 @@ export function ModelContextEditor({
           </Select>
         </div>
         <div className="flex items-end gap-2 pb-2">
-          <Switch checked={promptCaching} onCheckedChange={setPromptCaching} />
-          <Label>Prompt caching</Label>
+          <Switch id={`${fullModelId}-prompt-caching`} checked={promptCaching} onCheckedChange={setPromptCaching} />
+          <Label htmlFor={`${fullModelId}-prompt-caching`}>Prompt caching</Label>
         </div>
       </div>
 
@@ -253,6 +263,7 @@ export function ModelContextEditor({
               type="button"
               size="sm"
               variant={roles.includes(role) ? "secondary" : "outline"}
+              aria-pressed={roles.includes(role)}
               onClick={() => toggleRole(role)}
             >
               {roleLabel(role)}
@@ -263,7 +274,7 @@ export function ModelContextEditor({
 
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" onClick={saveOverride} disabled={saving}>
-          {saving ? "Saving..." : "Save context override"}
+          {saving ? "Saving..." : advancedOnly ? "Save Build settings" : "Save context override"}
         </Button>
         <Button
           type="button"
@@ -272,7 +283,7 @@ export function ModelContextEditor({
           onClick={resetOverride}
           disabled={saving}
         >
-          Reset context override
+          {advancedOnly ? "Reset Build settings" : "Reset context override"}
         </Button>
       </div>
 

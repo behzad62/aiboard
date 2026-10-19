@@ -38,9 +38,21 @@ const backend = http.createServer((req, res) => {
         supported_in_api: true,
         input_modalities: ["text", "image"],
         supported_reasoning_levels: [{ effort: "medium", description: "balanced" }],
+        context_window: 262144,
+        max_output_tokens: 32768,
       },
       { slug: "gpt-hidden", display_name: "Hidden", visibility: "hide", supported_in_api: true },
-      { slug: "gpt-not-api", display_name: "Not API", visibility: "list", supported_in_api: false },
+      {
+        slug: "gpt-account-only",
+        display_name: "Account Only",
+        visibility: "list",
+        supported_in_api: false,
+        input_modalities: ["text"],
+      },
+      { slug: "gpt-no-api-flag", visibility: "list" },
+      { slug: "", visibility: "list" },
+      { slug: "   ", visibility: "list" },
+      { display_name: "Missing ID", visibility: "list" },
     ],
   }));
 });
@@ -52,6 +64,11 @@ const authFile = path.join(tmp, "auth.json");
 fs.writeFileSync(authFile, JSON.stringify({
   chatgpt: {
     type: "oauth",
+    flow: "chatgpt-plan",
+    issuer: "https://auth.openai.com",
+    clientId: "oaiapp_test",
+    subject: "account-test",
+    scopes: ["chatgpt.tokens.use.direct"],
     refresh: "refresh-token",
     access: "access-token",
     expires: Date.now() + 60 * 60 * 1000,
@@ -67,8 +84,7 @@ const child = spawn(process.execPath, [
   cwd: process.cwd(),
   env: {
     ...process.env,
-    AIBOARD_CHATGPT_CODEX_MODELS_ENDPOINT: `http://127.0.0.1:${backendPort}/backend-api/codex/models`,
-    AIBOARD_CHATGPT_MODEL_CLIENT_VERSION: "0.153.4-test",
+    AIBOARD_CHATGPT_API_BASE: `http://127.0.0.1:${backendPort}/v1`,
   },
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
@@ -90,16 +106,26 @@ try {
   const raw = await response.text();
   assert.equal(response.status, 200, childError || raw);
   const payload = JSON.parse(raw) as { data?: Array<Record<string, unknown>> };
-  assert.deepEqual(payload.data, [{
+  assert.deepEqual(payload.data?.map(({ id, name, description, capabilities }) => ({ id, name, ...(description ? { description } : {}), capabilities })), [{
     id: "gpt-live-a",
     name: "GPT Live A",
     description: "Live account model",
     capabilities: { supports: { vision: true, reasoningEffort: true } },
-  }]);
+  }, {
+    id: "gpt-account-only",
+    name: "Account Only",
+    capabilities: { supports: { vision: false } },
+  }, {
+    id: "gpt-no-api-flag",
+    name: "gpt-no-api-flag",
+    capabilities: { supports: {} },
+  }], "include account-listed models regardless of API eligibility, while excluding hidden or invalid entries");
+  assert.equal(payload.data?.[0].context_window, 262144, "runner must preserve provider limits for the browser");
+  assert.equal(payload.data?.[0].max_output_tokens, 32768);
   assert.equal(observedAuth, "Bearer access-token");
-  assert.equal(observedAccountId, "acct-test");
-  assert.match(observedUrl, /client_version=0\.153\.4-test/);
-  console.log("PASS ChatGPT subscription runner fetches the live authenticated Codex model catalog");
+  assert.equal(observedAccountId, "", "public API does not use the Codex account header");
+  assert.equal(observedUrl, "/v1/models");
+  console.log("PASS ChatGPT subscription runner fetches the public API catalog using its own OAuth token without an API key");
 } finally {
   child.kill();
   await new Promise<void>((resolve) => {

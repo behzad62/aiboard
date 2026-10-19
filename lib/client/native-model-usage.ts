@@ -1,4 +1,5 @@
 import type { BuildUsageModelTotal } from "@/lib/db/schema";
+import type { ModelPricing } from "@/lib/providers/pricing";
 import type {
   NativeBuildUsageProjection,
   NativeModelUsageRole,
@@ -26,7 +27,8 @@ const HEALTH_SEVERITY: Record<NativeModelUsageStatus, number> = {
 };
 
 export function mapNativeBuildUsageModels(
-  projection: NativeBuildUsageProjection
+  projection: NativeBuildUsageProjection,
+  pricingForModel?: (id: string) => ModelPricing | null,
 ): BuildUsageModelTotal[] {
   const models = projection.models ?? [];
   if (
@@ -34,7 +36,15 @@ export function mapNativeBuildUsageModels(
     models.some((model) => model.calls > 0) ||
     !hasAggregateUsage(projection)
   ) {
-    return models.map(mapNativeRow);
+    return models.map((model) => {
+      const row = mapNativeRow(model);
+      if (model.costBasis !== "account_not_metered" || !pricingForModel) return row;
+      const id = model.modelId.startsWith(`${model.providerId}:`) ? model.modelId : `${model.providerId}:${model.modelId}`;
+      const pricing = pricingForModel(id);
+      const cached = Math.min(model.inputTokens, model.cachedInputTokens ?? 0);
+      return { ...row, apiEquivalentUsd: pricing ?
+        ((model.inputTokens - cached) * pricing.inputUsdPer1M + cached * (pricing.cachedInputUsdPer1M ?? pricing.inputUsdPer1M) + model.outputTokens * pricing.outputUsdPer1M) / 1_000_000 : null };
+    });
   }
 
   if (models.length === 0) {

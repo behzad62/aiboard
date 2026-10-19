@@ -292,7 +292,7 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
         },
       })
     );
-    res.write(sseEvent({ type: "response.completed" }));
+    res.write(sseEvent({ type: "response.completed", response: {status:"completed",usage:{input_tokens:100,output_tokens:40,total_tokens:140,input_tokens_details:{cached_tokens:30,cache_write_tokens:5},output_tokens_details:{reasoning_tokens:10}}} }));
     res.end();
   });
 
@@ -309,6 +309,11 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
       JSON.stringify({
         chatgpt: {
           type: "oauth",
+          flow: "chatgpt-plan",
+          issuer: "https://auth.openai.com",
+          clientId: "oaiapp_test",
+          subject: "account-test",
+          scopes: ["chatgpt.tokens.use.direct"],
           refresh: "unused",
           access: "fake-access",
           expires: Date.now() + 3_600_000,
@@ -329,7 +334,7 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
         token,
         "--auth-file",
         authFile,
-        "--chatgpt-codex-endpoint",
+        "--chatgpt-api-base",
         upstreamUrl,
       ],
       { cwd: process.cwd() }
@@ -355,11 +360,13 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
     });
     const text = await response.text();
     const events = parseNormalizedSse(text);
-    const upstreamTools = upstreamBody?.tools as unknown[] | undefined;
+    const upstreamToolGroups = upstreamBody?.tools as Array<{ type?: string; tools?: unknown[] }> | undefined;
+    const upstreamTools = upstreamToolGroups?.flatMap((tool) => tool.type === "namespace" ? tool.tools ?? [] : [tool]);
 
     check(
       "local account runner omits unsupported local_shell while forwarding tools upstream",
       response.headers.get("content-type")?.includes("text/event-stream") === true &&
+        upstreamToolGroups?.some((tool) => tool.type === "namespace") === true &&
         Array.isArray(upstreamTools) &&
         upstreamTools.some(
           (tool) =>
@@ -389,6 +396,10 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
       events.some((event) => event.type === "token" && event.content === "hi "),
       events
     );
+    check("account runner forwards complete cache and reasoning usage", events.some((event)=>{
+      const usage=event.usage as Record<string,number> | undefined;
+      return event.type==='usage' && usage?.inputTokens===100 && usage.outputTokens===40 && usage.totalTokens===140 && usage.cachedInputTokens===30 && usage.cacheWriteInputTokens===5 && usage.reasoningTokens===10;
+    }),events);
     check(
       "local account runner streams normalized native tool-call events",
       events.some((event) => {
@@ -444,6 +455,11 @@ async function testLocalRunnerStreamsCompletedOutputText(): Promise<void> {
       JSON.stringify({
         chatgpt: {
           type: "oauth",
+          flow: "chatgpt-plan",
+          issuer: "https://auth.openai.com",
+          clientId: "oaiapp_test",
+          subject: "account-test",
+          scopes: ["chatgpt.tokens.use.direct"],
           refresh: "unused",
           access: "fake-access",
           expires: Date.now() + 3_600_000,
@@ -464,7 +480,7 @@ async function testLocalRunnerStreamsCompletedOutputText(): Promise<void> {
         token,
         "--auth-file",
         authFile,
-        "--chatgpt-codex-endpoint",
+        "--chatgpt-api-base",
         upstreamUrl,
       ],
       { cwd: process.cwd() }
@@ -573,6 +589,11 @@ async function testLocalRunnerStreamsMessageOutputItemText(): Promise<void> {
       JSON.stringify({
         chatgpt: {
           type: "oauth",
+          flow: "chatgpt-plan",
+          issuer: "https://auth.openai.com",
+          clientId: "oaiapp_test",
+          subject: "account-test",
+          scopes: ["chatgpt.tokens.use.direct"],
           refresh: "unused",
           access: "fake-access",
           expires: Date.now() + 3_600_000,
@@ -593,7 +614,7 @@ async function testLocalRunnerStreamsMessageOutputItemText(): Promise<void> {
         token,
         "--auth-file",
         authFile,
-        "--chatgpt-codex-endpoint",
+        "--chatgpt-api-base",
         upstreamUrl,
       ],
       { cwd: process.cwd() }
@@ -659,6 +680,11 @@ async function testLocalRunnerSurvivesUpstreamStreamError(): Promise<void> {
       JSON.stringify({
         chatgpt: {
           type: "oauth",
+          flow: "chatgpt-plan",
+          issuer: "https://auth.openai.com",
+          clientId: "oaiapp_test",
+          subject: "account-test",
+          scopes: ["chatgpt.tokens.use.direct"],
           refresh: "unused",
           access: "fake-access",
           expires: Date.now() + 3_600_000,
@@ -679,7 +705,7 @@ async function testLocalRunnerSurvivesUpstreamStreamError(): Promise<void> {
         token,
         "--auth-file",
         authFile,
-        "--chatgpt-codex-endpoint",
+        "--chatgpt-api-base",
         upstreamUrl,
       ],
       { cwd: process.cwd() }

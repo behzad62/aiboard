@@ -692,7 +692,8 @@ export async function* streamAnthropicWithClient(
       }
 
       if (requestInputTokens !== undefined) {
-        totalInputTokens += requestInputTokens;
+        // Anthropic input_tokens excludes cache reads/writes; our shared input total includes them.
+        totalInputTokens += requestInputTokens + (requestCachedTokens ?? 0) + (requestCacheWriteTokens ?? 0);
         sawInputUsage = true;
       }
       if (requestOutputTokens !== undefined) {

@@ -32,6 +32,17 @@ try {
   assert.equal(fast?.supportsImageInput, false);
   assert.equal(fast?.supportsReasoningEffort, false);
   console.log("PASS xAI discovery lists models without inventing unreported tool support");
+  requests.length = 0;
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") ?? undefined });
+    assert.ok(!init?.method || init.method === "GET", "catalog discovery must not make a generation request");
+    return new Response(JSON.stringify({ error: "Your team has either used all available credits or reached its monthly spending limit." }), { status: 403 });
+  };
+  await assert.rejects(fetchProviderModelCatalog({ providerId: "xai", apiKey: "xai-key" }), /blocked model catalog access.*no generation request was sent/i);
+  assert.equal(requests.length, 1);
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: "Permission denied for this endpoint" }), { status: 403 });
+  await assert.rejects(fetchProviderModelCatalog({ providerId: "xai", apiKey: "xai-key" }), /^Error: Permission denied for this endpoint$/);
+  console.log("PASS xAI catalog credit restrictions are distinct from endpoint permission errors");
 } finally {
   globalThis.fetch = originalFetch;
 }

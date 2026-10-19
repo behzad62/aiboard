@@ -4,7 +4,8 @@ import type { ModelPricing } from "@/lib/providers/pricing";
 export interface TokenPricingInput {
   inputTokens: number;
   outputTokens: number;
-  pricing: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M">;
+  cachedInputTokens?: number;
+  pricing: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M" | "cachedInputUsdPer1M">;
 }
 
 export interface BuildUsageCallInput {
@@ -18,8 +19,9 @@ export interface BuildUsageCallInput {
 }
 
 export function estimatedUsdForTokens(input: TokenPricingInput): number {
+  const cached = Math.min(input.inputTokens, Math.max(0, input.cachedInputTokens ?? 0));
   return (
-    (input.inputTokens * input.pricing.inputUsdPer1M +
+    ((input.inputTokens - cached) * input.pricing.inputUsdPer1M + cached * (input.pricing.cachedInputUsdPer1M ?? input.pricing.inputUsdPer1M) +
       input.outputTokens * input.pricing.outputUsdPer1M) /
     1_000_000
   );

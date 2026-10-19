@@ -294,7 +294,8 @@ export async function runNativeBuildDiscussion(
     type: "build_usage",
     usage: nativeBuildUsageWindow(
       await getNativeBuildUsage(connection, runId),
-      run.createdAt
+      run.createdAt,
+      comparisonPricing,
     ),
   });
   const attachAction = nativeBuildAttachAction(run.state);
@@ -349,7 +350,7 @@ export async function runNativeBuildDiscussion(
       emitTaskProjection(projection, emit);
       emit({
         type: "build_usage",
-        usage: nativeBuildUsageWindow(usage, run.createdAt),
+        usage: nativeBuildUsageWindow(usage, run.createdAt, comparisonPricing),
       });
       const permissions = await getNativePermissions(connection, runId);
       for (const permission of permissions) {
@@ -545,6 +546,11 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
     if (signal.aborted) abort();
     else signal.addEventListener("abort", abort, { once: true });
   });
+}
+
+function comparisonPricing(modelId: string): ModelPricing | null {
+  const settings = getUserSettings();
+  return getModelPricing(modelId, settings.modelPricingOverrides, settings.discoveredModelMetadata);
 }
 
 export function createNativeProviderConfig(

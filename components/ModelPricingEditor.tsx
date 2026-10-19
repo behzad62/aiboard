@@ -10,6 +10,7 @@ import {
   type ModelPricing,
 } from "@/lib/providers/pricing";
 import { savePricingOverride } from "@/lib/client/settings-api";
+import { flush } from "@/lib/client/store";
 
 interface ModelPricingEditorProps {
   fullModelId: string;
@@ -29,22 +30,23 @@ export function ModelPricingEditor({
   const [cachedInputPrice, setCachedInputPrice] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const currentInput = pricing?.inputUsdPer1M;
+  const currentOutput = pricing?.outputUsdPer1M;
+  const currentCached = pricing?.cachedInputUsdPer1M;
 
   useEffect(() => {
-    setInputPrice(pricing ? String(pricing.inputUsdPer1M) : "");
-    setOutputPrice(pricing ? String(pricing.outputUsdPer1M) : "");
-    setCachedInputPrice(
-      pricing?.cachedInputUsdPer1M !== undefined ? String(pricing.cachedInputUsdPer1M) : ""
-    );
-    setMessage(null);
-  }, [fullModelId, pricing]);
+    setInputPrice(currentInput !== undefined ? String(currentInput) : "");
+    setOutputPrice(currentOutput !== undefined ? String(currentOutput) : "");
+    setCachedInputPrice(currentCached !== undefined ? String(currentCached) : "");
+  }, [fullModelId, currentInput, currentOutput, currentCached]);
+  useEffect(() => { setMessage(null); }, [fullModelId]);
 
   const saveOverride = async () => {
     const nextInput = Number(inputPrice);
     const nextOutput = Number(outputPrice);
     const nextCached = cachedInputPrice.trim() === "" ? null : Number(cachedInputPrice);
 
-    if (!Number.isFinite(nextInput) || !Number.isFinite(nextOutput)) {
+    if (!inputPrice.trim() || !outputPrice.trim() || !Number.isFinite(nextInput) || !Number.isFinite(nextOutput) || (nextCached !== null && !Number.isFinite(nextCached))) {
       setMessage("Enter valid input and output prices.");
       return;
     }
@@ -62,8 +64,9 @@ export function ModelPricingEditor({
         outputUsdPer1M: nextOutput,
         cachedInputUsdPer1M: nextCached,
       });
-      setMessage("Pricing override saved");
+      await flush();
       await onSaved();
+      setMessage("Pricing override saved");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to save pricing override");
     } finally {
@@ -76,8 +79,9 @@ export function ModelPricingEditor({
     setMessage(null);
     try {
       savePricingOverride({ fullModelId, clear: true });
-      setMessage("Pricing override reset");
+      await flush();
       await onSaved();
+      setMessage("Pricing override reset");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to reset pricing override");
     } finally {
@@ -121,7 +125,7 @@ export function ModelPricingEditor({
         </>
       ) : (
         <p className="text-xs text-muted-foreground">
-          No built-in pricing data for this model. You can enter local pricing below.
+          Pricing is unknown for this model. You can enter local USD rates per million tokens below.
         </p>
       )}
 
@@ -169,7 +173,7 @@ export function ModelPricingEditor({
           {saving ? "Saving..." : "Save pricing override"}
         </Button>
         <Button type="button" size="sm" variant="outline" onClick={resetOverride} disabled={saving}>
-          Reset to built-in pricing
+          Reset pricing override
         </Button>
       </div>
 

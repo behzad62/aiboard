@@ -73,6 +73,7 @@ export function BuildRunStats({
   const inputTokens = models.reduce((sum, model) => sum + model.inputTokens, 0);
   const outputTokens = models.reduce((sum, model) => sum + model.outputTokens, 0);
   const totalTokens = models.reduce((sum, model) => sum + model.totalTokens, 0);
+  const equivalentRows = models.filter((model) => model.apiEquivalentUsd != null && hasUsage(model));
   const lifetimeCost = summarizeCost({ usage, models, hasNativeRows });
   const cost = policy === "budgeted" && usage
     ? {
@@ -112,6 +113,9 @@ export function BuildRunStats({
         { label: "Active time", value: formatDuration(usage?.elapsedMs ?? 0) },
         { label: "Cost", value: cost.value, detail: cost.detail },
       ];
+  if (equivalentRows.length > 0) summaryStats.push({ label: "API-equivalent estimate",
+    value: formatUsd(equivalentRows.reduce((sum, row) => sum + row.apiEquivalentUsd!, 0)),
+    detail: "Subscription usage at API rates; not a charge" });
 
   return (
     <section className="rounded-lg border bg-card shadow-sm">
@@ -230,6 +234,7 @@ export function BuildRunStats({
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                     {formatModelCost(model)}
+                    {model.apiEquivalentUsd != null && <div className="text-xs text-muted-foreground">API-equivalent: {formatUsd(model.apiEquivalentUsd)}</div>}
                   </td>
                   <td className="whitespace-nowrap py-2 pl-4 text-right font-mono text-xs text-muted-foreground">
                     {formatLastUsed(model.lastUsedAt)}

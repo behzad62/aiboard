@@ -34,6 +34,7 @@ import {
   getRunnerCapabilityPlanningContext,
   resolveClientModelContextProfile,
   resolveModelCapabilities,
+  resolveModelName,
   streamCustomChat,
 } from "./providers";
 import {
@@ -441,7 +442,7 @@ export async function collectStreamWithUsage(
           }
           const providerEvent = providerToolEventFromChunk(chunk);
           if (providerEvent) customProviderToolEvents.push(providerEvent);
-          if (chunk.type === "usage") {
+          if (chunk.usage) {
             customReportedUsage = mergeStreamUsage(
               customReportedUsage,
               chunk.usage
@@ -552,7 +553,7 @@ export async function collectStreamWithUsage(
         }
         const providerEvent = providerToolEventFromChunk(chunk);
         if (providerEvent) providerToolEvents.push(providerEvent);
-        if (chunk.type === "usage") {
+        if (chunk.usage) {
           reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
         }
         if (chunk.type === "done" && chunk.finishReason) {
@@ -612,12 +613,10 @@ function resolveModels(modelIds: string[]): SelectedModel[] {
         contextProfile,
       };
     }
-    const provider = getProvider(providerId);
-    const modelInfo = provider?.listModels().find((m) => m.id === model);
     return {
       modelId: fullId,
       providerId,
-      displayName: modelInfo?.name ?? model,
+      displayName: resolveModelName(fullId),
       contextProfile,
     };
   });

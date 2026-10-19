@@ -310,6 +310,7 @@ async function callCertifiedModelOnce(
       );
       if (next.done) break;
       const chunk = next.value;
+      if (chunk.usage) reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
       if (
         typeof wallClockBudgetMs === "number" &&
         Number.isFinite(runStartedMs) &&
@@ -330,8 +331,6 @@ async function callCertifiedModelOnce(
           }),
           "model-call streaming"
         );
-      } else if (chunk.type === "usage" && chunk.usage) {
-        reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
       } else if (chunk.type === "tool_call" && chunk.toolCall) {
         // A provider-native tool call is a substantive completion even when
         // the provider emits no token chunks. Preserve it as deterministic
@@ -365,6 +364,7 @@ async function callCertifiedModelOnce(
       fullModelId,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
+      cachedInputTokens: usage.cachedInputTokens,
       pricing: input.pricing,
     });
     const latencyMs = Math.max(0, Date.now() - startedMs);
@@ -510,6 +510,7 @@ async function callCertifiedModelOnce(
         fullModelId,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
+        cachedInputTokens: usage.cachedInputTokens,
         pricing: input.pricing,
       }),
       rawResponse,
@@ -951,7 +952,8 @@ function estimateCertifiedModelUsd(input: {
   fullModelId: string;
   inputTokens: number;
   outputTokens: number;
-  pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
+  cachedInputTokens?: number;
+  pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M" | "cachedInputUsdPer1M"> | null;
 }): number | null {
   const pricing =
     input.pricing === undefined
@@ -965,6 +967,7 @@ function estimateCertifiedModelUsd(input: {
   return estimatedUsdForTokens({
     inputTokens: input.inputTokens,
     outputTokens: input.outputTokens,
+    cachedInputTokens: input.cachedInputTokens,
     pricing,
   });
 }

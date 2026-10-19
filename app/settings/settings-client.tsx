@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { ApiKeyForm } from "@/components/ApiKeyForm";
 import { OpenAIProviderSettings } from "@/components/OpenAIProviderSettings";
-import { PricingSettings } from "@/components/PricingSettings";
 import { CustomModelsManager } from "@/components/CustomModelsManager";
 import { CapabilityLab } from "@/components/CapabilityLab";
 import { StorageSettings } from "@/components/StorageSettings";
@@ -41,7 +40,6 @@ import { getModeInfo, getModeLabel } from "@/lib/orchestrator/config";
 import type { ModelInfo } from "@/lib/providers/base";
 import type { ModelCapabilityProbeProfile } from "@/lib/providers/capability-probes";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
-import type { ModelPricingOverride } from "@/lib/providers/pricing";
 import { AlertTriangle, CheckCircle2, KeyRound } from "lucide-react";
 
 interface ProviderConfig {
@@ -68,13 +66,6 @@ interface SettingsData {
     defaultVerbosity?: Verbosity;
     defaultStyleNote?: string;
     defaultReasoningEffort?: ReasoningEffort;
-    modelPricingOverrides?: Record<string, ModelPricingOverride>;
-    discoveredModelMetadata?: Record<string, {
-      inputUsdPer1M?: number;
-      outputUsdPer1M?: number;
-      updatedAt: string;
-      source: "openrouter-models" | "provider-models";
-    }>;
     modelContextOverrides?: ModelContextOverrides;
     modelCapabilityProfiles?: Record<string, ModelCapabilityProbeProfile>;
     openAIConnectionMode?: "api" | "subscription";
@@ -84,7 +75,7 @@ interface SettingsData {
 
 const MODES: DiscussionMode[] = ["chat", "panel", "debate", "specialist", "build"];
 
-const TAB_VALUES = ["providers", "tools", "capability-lab", "pricing", "defaults", "storage", "security"];
+const TAB_VALUES = ["providers", "tools", "capability-lab", "defaults", "storage", "security"];
 
 export default function SettingsPage() {
   const [tab, setTab] = useState("providers");
@@ -128,7 +119,8 @@ export default function SettingsPage() {
     // Deep link: /settings?tab=storage opens that tab directly (used by the
     // "storage is locked" prompts). Static export — read the query client-side.
     const requested = new URLSearchParams(window.location.search).get("tab");
-    if (requested && TAB_VALUES.includes(requested)) setTab(requested);
+    if (requested === "pricing") setTab("providers");
+    else if (requested && TAB_VALUES.includes(requested)) setTab(requested);
     load().catch(() => undefined);
   }, []);
 
@@ -205,11 +197,10 @@ export default function SettingsPage() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="tools">Tools</TabsTrigger>
           <TabsTrigger value="capability-lab">Capability Lab</TabsTrigger>
-          <TabsTrigger value="pricing">Pricing</TabsTrigger>
           <TabsTrigger value="defaults">Defaults</TabsTrigger>
           <TabsTrigger value="storage">Storage</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
@@ -278,8 +269,8 @@ export default function SettingsPage() {
                   <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>
                     Ready for chats and builds. Enabled switches save
-                    immediately; the Save button is only for key and
-                    default-model changes.
+                    immediately; use Save for credentials, model selections,
+                    and model details.
                   </span>
                 </div>
               ) : (
@@ -300,7 +291,7 @@ export default function SettingsPage() {
               <h2 className="text-lg font-semibold">API keys</h2>
             </div>
             <Tabs
-              defaultValue={providerTabs[0]?.providerId ?? "custom"}
+              defaultValue="openai"
             >
               <TabsList className="flex h-auto flex-wrap justify-start gap-1">
                 {providerTabs.map((provider) => (
@@ -356,17 +347,6 @@ export default function SettingsPage() {
             providers={effectiveProviders}
             capabilityProfiles={data?.settings.modelCapabilityProfiles}
             onChanged={load}
-          />
-        </TabsContent>
-
-        {/* ── Pricing ───────────────────────────────────────────── */}
-        <TabsContent value="pricing">
-          <PricingSettings
-            providers={effectiveProviders}
-            overrides={data?.settings.modelPricingOverrides}
-            discoveredMetadata={data?.settings.discoveredModelMetadata}
-            contextOverrides={data?.settings.modelContextOverrides}
-            onSaved={load}
           />
         </TabsContent>
 

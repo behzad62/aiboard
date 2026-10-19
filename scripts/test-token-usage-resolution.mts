@@ -80,6 +80,10 @@ const fallback = resolveModelCallUsage({
   output,
   maxTokens: 256,
 });
+for (const reportedUsage of [{ inputTokens: 100, totalTokens: 150 }, { outputTokens: 50, totalTokens: 150 }]) {
+  const derived = resolveModelCallUsage({ messages, output, maxTokens: 256, reportedUsage });
+  check("reported totals derive the missing side without estimates", derived.inputTokens === 100 && derived.outputTokens === 50 && derived.usageSource === "reported", derived);
+}
 check(
   "missing provider usage falls back to local estimate",
   fallback.inputTokens === estimate.inputTokens &&

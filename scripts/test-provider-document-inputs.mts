@@ -205,6 +205,11 @@ async function testAccountRunnerRawDocumentInputFile(): Promise<void> {
       JSON.stringify({
         chatgpt: {
           type: "oauth",
+          flow: "chatgpt-plan",
+          issuer: "https://auth.openai.com",
+          clientId: "oaiapp_test",
+          subject: "account-test",
+          scopes: ["chatgpt.tokens.use.direct"],
           refresh: "unused",
           access: "fake-access",
           expires: Date.now() + 3_600_000,
@@ -225,7 +230,7 @@ async function testAccountRunnerRawDocumentInputFile(): Promise<void> {
         token,
         "--auth-file",
         authFile,
-        "--chatgpt-codex-endpoint",
+        "--chatgpt-api-base",
         upstreamUrl,
       ],
       { cwd: process.cwd() }

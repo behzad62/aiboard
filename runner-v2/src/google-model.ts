@@ -46,6 +46,8 @@ interface GoogleResponse {
     candidatesTokenCount?: number;
     /** Thinking tokens; billed as output but not included in candidatesTokenCount. */
     thoughtsTokenCount?: number;
+    totalTokenCount?: number;
+    toolUsePromptTokenCount?: number;
     /** Implicit/explicit context-cache hits; a subset of promptTokenCount. */
     cachedContentTokenCount?: number;
   };
@@ -128,16 +130,27 @@ export class GoogleModel implements AgentModel {
           : "end_turn",
       ...(response.responseId ? { providerRequestId: response.responseId } : {}),
       usage: {
-        ...serializedInputUsage(body, response.usageMetadata?.promptTokenCount),
+        ...serializedInputUsage(body, googleInputTokens(response.usageMetadata)),
         ...(providerReportedTokenCount(response.usageMetadata?.cachedContentTokenCount) !== undefined
           ? { cachedInputTokens: providerReportedTokenCount(response.usageMetadata?.cachedContentTokenCount) }
           : {}),
-        ...(response.usageMetadata?.candidatesTokenCount !== undefined
-          ? { outputTokens: response.usageMetadata.candidatesTokenCount + (providerReportedTokenCount(response.usageMetadata.thoughtsTokenCount) ?? 0) }
+        ...(googleOutputTokens(response.usageMetadata) !== undefined
+          ? { outputTokens: googleOutputTokens(response.usageMetadata) }
           : {}),
       },
     };
   }
+}
+
+function googleInputTokens(usage: GoogleResponse["usageMetadata"]): number | undefined {
+  const prompt = providerReportedTokenCount(usage?.promptTokenCount);
+  return prompt === undefined ? undefined : prompt + (providerReportedTokenCount(usage?.toolUsePromptTokenCount) ?? 0);
+}
+function googleOutputTokens(usage: GoogleResponse["usageMetadata"]): number | undefined {
+  const total = providerReportedTokenCount(usage?.totalTokenCount), input = googleInputTokens(usage);
+  if (total !== undefined && input !== undefined && total >= input) return total - input;
+  const candidate = providerReportedTokenCount(usage?.candidatesTokenCount);
+  return candidate === undefined ? undefined : candidate + (providerReportedTokenCount(usage?.thoughtsTokenCount) ?? 0);
 }
 
 function messageText(message: AgentMessage): string {

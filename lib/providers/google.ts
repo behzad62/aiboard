@@ -200,6 +200,8 @@ export async function* streamGoogleGenerateContent(
       let reportedTotalTokens: number | undefined;
       let reportedReasoningTokens: number | undefined;
       let reportedCachedInputTokens: number | undefined;
+      let promptTokens: number | undefined;
+      let toolPromptTokens: number | undefined;
       const captureGeminiUsage = (metadata: unknown): void => {
         const usage = metadata as
           | {
@@ -208,10 +210,11 @@ export async function* streamGoogleGenerateContent(
               thoughtsTokenCount?: number;
               totalTokenCount?: number;
               cachedContentTokenCount?: number;
+              toolUsePromptTokenCount?: number;
             }
           | undefined;
         if (typeof usage?.promptTokenCount === "number") {
-          reportedInputTokens = usage.promptTokenCount;
+          promptTokens = usage.promptTokenCount;
         }
         if (typeof usage?.totalTokenCount === "number") {
           reportedTotalTokens = usage.totalTokenCount;
@@ -219,6 +222,8 @@ export async function* streamGoogleGenerateContent(
         if (typeof usage?.cachedContentTokenCount === "number") {
           reportedCachedInputTokens = usage.cachedContentTokenCount;
         }
+        if (typeof usage?.toolUsePromptTokenCount === "number") toolPromptTokens = usage.toolUsePromptTokenCount;
+        if (promptTokens !== undefined) reportedInputTokens = promptTokens + (toolPromptTokens ?? 0);
         const candidateTokens =
           typeof usage?.candidatesTokenCount === "number"
             ? usage.candidatesTokenCount
@@ -282,6 +287,9 @@ export async function* streamGoogleGenerateContent(
       }
       for (const toolCall of pendingToolCalls) {
         yield { type: "tool_call", toolCall };
+      }
+      if (reportedTotalTokens !== undefined && reportedInputTokens !== undefined && reportedTotalTokens >= reportedInputTokens) {
+        reportedOutputTokens = reportedTotalTokens - reportedInputTokens;
       }
       if (
         reportedInputTokens != null ||

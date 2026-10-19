@@ -1,3 +1,4 @@
+import { effectiveModelMetadata, type ModelMetadataDetails } from "./model-metadata";
 export type LongContextQuality = "poor" | "ok" | "good" | "excellent";
 export type ModelBuildRole = "architect" | "worker" | "reviewer" | "summary";
 
@@ -33,7 +34,7 @@ export interface ModelContextProfileOverride {
   updatedAt?: string;
 }
 
-export interface DiscoveredModelContextMetadata {
+export interface DiscoveredModelContextMetadata extends ModelMetadataDetails {
   contextWindowTokens?: number;
   maxOutputTokens?: number;
 }
@@ -664,7 +665,8 @@ export function resolveModelContextProfile(
   const normalizedModelId = modelId.trim();
   const key = fullModelId(normalizedProviderId, normalizedModelId);
   const registry = MODEL_CONTEXT_PROFILES[key];
-  const discovered = discoveredModelContext?.[key];
+  const metadata = discoveredModelContext?.[key];
+  const discovered = metadata ? effectiveModelMetadata(metadata) : undefined;
   const providerDefault = PROVIDER_DEFAULT_CONTEXT_PROFILES[normalizedProviderId];
   const discoveredBase = (() => {
     if (!discovered) return null;
@@ -684,11 +686,11 @@ export function resolveModelContextProfile(
     } satisfies StaticModelContextProfile;
   })();
   const base =
-    registry ?? discoveredBase ?? providerDefault ?? DEFAULT_MODEL_CONTEXT_PROFILE;
-  const baseSource: ModelContextProfileSource = registry
-    ? "registry"
-    : discoveredBase
+    discoveredBase ?? (metadata?.reportedFields !== undefined ? undefined : registry) ?? providerDefault ?? DEFAULT_MODEL_CONTEXT_PROFILE;
+  const baseSource: ModelContextProfileSource = discoveredBase
       ? "discovered"
+    : registry && metadata?.reportedFields === undefined
+      ? "registry"
     : providerDefault
       ? "provider-default"
       : "default";
@@ -703,7 +705,7 @@ export function resolveModelContextProfile(
     modelId: normalizedModelId,
     base,
     override,
-    source: override ? "override" : baseSource,
+    source: override || metadata?.overrides?.contextWindowTokens !== undefined || metadata?.overrides?.maxOutputTokens !== undefined ? "override" : baseSource,
   });
 }
 

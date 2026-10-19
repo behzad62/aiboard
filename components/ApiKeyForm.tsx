@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,12 +16,17 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Copy } from "lucide-react";
 import { ProviderCapabilityTable } from "@/components/ProviderCapabilityTable";
+import { ModelMetadataEditor } from "@/components/ModelMetadataEditor";
+import { applySupplementalCatalogMetadata, fetchSupplementalCatalogMetadata } from "@/lib/client/model-metadata-enrichment";
+import { ProviderModelOptions } from "@/components/ProviderModelOptions";
+import { missingModelMetadata, validateModelMetadataOverrides, type ModelMetadataValues } from "@/lib/providers/model-metadata";
 import { TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
 import { completeSuggestedValue } from "@/lib/client/suggestion-completion";
 import type { ModelInfo } from "@/lib/providers/base";
 import type { ProviderCapabilityStatusRow } from "@/lib/providers/capability-status";
-import { getProviderDefinition } from "@/lib/providers/provider-registry";
+import { ACCOUNT_RUNNER_VERSION, getProviderDefinition } from "@/lib/providers/provider-registry";
 import { getModelRuntimeBehavior } from "@/lib/providers/runtime-behavior";
+import { normalizeProviderModelId } from "@/lib/client/providers";
 import {
   availableModelCatalogSortOptions,
   sortModelCatalog,
@@ -29,13 +34,19 @@ import {
 } from "@/lib/client/model-catalog-sort";
 import {
   fetchProviderModelCatalog,
+  discoveryMetadataFromCatalogModel,
+  persistProviderCatalogModels,
+  saveModelMetadataOverrides,
+  getModelMetadataOverrides,
+  fetchChatGPTAccountStatus,
+  type ChatGPTAccountStatus,
   type OpenRouterCatalogModel,
   refreshProviderModelCapabilities,
   resolveProviderCapabilityStatus,
   saveProviderKey,
   validateProvider,
 } from "@/lib/client/settings-api";
-import { getProviderKey } from "@/lib/client/store";
+import { flush, getProviderKey, getUserSettings } from "@/lib/client/store";
 
 function acceptSuggestionFromKey(
   event: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
@@ -168,11 +179,17 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [toggling, setToggling] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [deviceLoginPrompt, setDeviceLoginPrompt] = useState<DeviceLoginPrompt | null>(null);
+  const [chatgptAccount, setChatgptAccount] = useState("current");
+  const [chatgptStatus, setChatgptStatus] = useState<ChatGPTAccountStatus | null>(null);
+  const [chatgptStatusError, setChatgptStatusError] = useState<string | null>(null);
   const [openRouterCatalog, setOpenRouterCatalog] = useState<OpenRouterCatalogModel[]>([]);
   const [openRouterCatalogQuery, setOpenRouterCatalogQuery] = useState("");
   const [openRouterCatalogSort, setOpenRouterCatalogSort] = useState<ModelCatalogSortId>("name-asc");
   const [loadingOpenRouterCatalog, setLoadingOpenRouterCatalog] = useState(false);
   const [openRouterCatalogError, setOpenRouterCatalogError] = useState<string | null>(null);
+  const [catalogMetadataNote, setCatalogMetadataNote] = useState("");
+  const [metadataDrafts, setMetadataDrafts] = useState<Record<string, ModelMetadataValues>>({});
+  const [detailsSync, setDetailsSync] = useState<{ loading: boolean; error?: string }>({ loading: false });
   const [capabilityRows, setCapabilityRows] = useState<ProviderCapabilityStatusRow[]>([]);
   const [toolRuntimeRevision, setToolRuntimeRevision] = useState(0);
   const [capabilityLoading, setCapabilityLoading] = useState(false);
@@ -188,64 +205,117 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const providerDefinition = getProviderDefinition(provider.providerId);
   const baseUrlField = providerDefinition?.baseURLField;
   const runnerTokenField = providerDefinition?.runnerTokenField;
-  const modelIdsField = providerDefinition?.modelIdsField;
+  const hasModelDiscovery = providerDefinition?.modelDiscovery != null;
+  const modelIdsField = useMemo(() => hasModelDiscovery && providerDefinition?.modelIdsField
+    ? { ...providerDefinition.modelIdsField, label: "Model ids", suggestedValue: undefined, placeholder: "Browse the catalog or enter model ids",
+        hint: "Add models from the current provider catalog, or enter ids manually. Review each model's details below; missing information can be set optionally." }
+    : providerDefinition?.modelIdsField, [providerDefinition, hasModelDiscovery]);
   const accountRunner = providerDefinition?.accountRunner;
   const runnerDownload = providerDefinition?.runnerDownload;
-  const savedUserDefinedModelIds = new Set(provider.modelIds ?? []);
-  const builtInModels = provider.models.filter(
-    (model) => !savedUserDefinedModelIds.has(model.id)
-  );
+  const builtInModels = useMemo(() => hasModelDiscovery ? [] : provider.models.filter(
+    (model) => !(provider.modelIds ?? []).includes(model.id)
+  ), [hasModelDiscovery, provider.models, provider.modelIds]);
   const builtInModelIds = new Set(builtInModels.map((model) => model.id));
   const isOpenRouter = provider.providerId === "openrouter";
-  const hasModelDiscovery = providerDefinition?.modelDiscovery != null;
 
-  const parsedModelIds = modelIdsText
+  useEffect(() => {
+    if (provider.providerId !== "chatgpt") return;
+    const saved = getProviderKey("chatgpt");
+    const url = (baseURL || saved?.baseURL || "").trim();
+    const token = (apiKey || saved?.apiKey || "").trim();
+    if (!url || !token) { setChatgptStatus(null); setChatgptStatusError(null); return; }
+    const controller = new AbortController();
+    const refresh = async () => {
+      try {
+        const status = await fetchChatGPTAccountStatus(url, token, controller.signal);
+        if (controller.signal.aborted) return;
+        setChatgptStatus(status);
+        setChatgptStatusError(null);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setChatgptStatus(null);
+          setChatgptStatusError(error instanceof Error ? error.message : "Could not read ChatGPT account status");
+        }
+      }
+    };
+    void refresh();
+    window.addEventListener("focus", refresh);
+    return () => { controller.abort(); window.removeEventListener("focus", refresh); };
+  }, [provider.providerId, provider.keyHint, baseURL, apiKey]);
+
+  useEffect(() => {
+    setOpenRouterCatalog([]);
+    setOpenRouterCatalogQuery("");
+  }, [chatgptStatus?.accountId]);
+
+  const parsedModelIds = useMemo(() => [...new Set(modelIdsText
     .split(/[\n,]/)
-    .map((m) => m.trim())
-    .filter((m) => m.length > 0);
+    .map((m) => normalizeProviderModelId(provider.providerId, m))
+    .filter((m) => m.length > 0))], [modelIdsText, provider.providerId]);
   const parsedModelIdSet = new Set(parsedModelIds);
-  const selectableModels = modelIdsField
+  const selectableModels = useMemo(() => modelIdsField
     ? Array.from(
         new Map(
-          [...builtInModels, ...parsedModelIds.map((id) => ({ id, name: id }))].map(
+          [...builtInModels, ...parsedModelIds.map((id) => ({ id, name: openRouterCatalog.find((model) => model.id === id)?.name ?? provider.models.find((model) => model.id === id)?.name ?? id }))].map(
             (model) => [model.id, model]
           )
         ).values()
       )
-    : provider.models;
-  const selectableModelIds = new Set(selectableModels.map((model) => model.id));
+    : provider.models, [modelIdsField, builtInModels, parsedModelIds, provider.models, openRouterCatalog]);
+  const selectableModelIds = useMemo(() => new Set(selectableModels.map((model) => model.id)), [selectableModels]);
+  const savedModelIdsText = (provider.modelIds ?? []).join("\n");
 
   useEffect(() => {
-    const configured = provider.enabledModelIds;
-    const nextEnabled = configured !== undefined
-      ? configured.filter((id) => selectableModelIds.has(id))
-      : selectableModels.map((model) => model.id);
-    setEnabledModelIds(nextEnabled);
-  }, [provider.enabledModelIds, selectableModels.length, modelIdsText, provider.providerId]);
+    if (!hasModelDiscovery || !provider.hasKey || !savedModelIdsText) return;
+    if (apiKey.trim() || runnerToken.trim() || baseURL.trim() !== (provider.baseURL ?? "").trim()) {
+      setDetailsSync({ loading: false });
+      return;
+    }
+    const ids = savedModelIdsText.split("\n");
+    const metadata = getUserSettings().discoveredModelMetadata;
+    if (ids.every((id) => metadata?.[`${provider.providerId}:${id}`]?.catalogFetchedAt)) return;
+    let cancelled = false;
+    setDetailsSync({ loading: true });
+    void fetchProviderModelCatalog({ providerId: provider.providerId })
+      .then(async (catalog) => {
+        if (cancelled) return;
+        persistProviderCatalogModels(provider.providerId, catalog.filter((model) => ids.includes(model.id)));
+        await flush();
+        if (cancelled) return;
+        const missing = ids.filter((id) => !catalog.some((model) => model.id === id));
+        setDetailsSync({ loading: false, ...(missing.length ? { error: `Catalog did not include: ${missing.join(", ")}. Their details remain unverified.` } : {}) });
+      })
+      .catch((error) => {
+        if (!cancelled) setDetailsSync({ loading: false, error: `Could not verify saved model details: ${error instanceof Error ? error.message : "Catalog request failed"}` });
+      });
+    return () => { cancelled = true; };
+  }, [hasModelDiscovery, provider.hasKey, provider.providerId, provider.keyHint, provider.baseURL, savedModelIdsText, apiKey, runnerToken, baseURL]);
 
   useEffect(() => {
     setEnabledModelIds((prev) =>
       prev.filter((id) => selectableModelIds.has(id))
     );
-  }, [modelIdsText, provider.providerId, selectableModels.length]);
+  }, [selectableModelIds]);
 
   useEffect(() => {
-    setDefaultModel(provider.defaultModel ?? provider.models[0]?.id ?? "");
-    setEnabled(provider.enabled);
+    setDefaultModel(provider.defaultModel ?? savedModelIdsText.split("\n")[0] ?? "");
     setBaseURL(provider.baseURL ?? "");
     setRunnerToken("");
-    setModelIdsText((provider.modelIds ?? []).join("\n"));
+    setModelIdsText(savedModelIdsText);
     setOpenRouterCatalog([]);
     setOpenRouterCatalogQuery("");
     setOpenRouterCatalogSort("name-asc");
     setOpenRouterCatalogError(null);
+    setCatalogMetadataNote("");
     setOpenRouterCatalogFilters({
         structuredOutputs: false,
       imageInput: false,
       documentInput: false,
       reasoningEffort: false,
     });
-  }, [provider.defaultModel, provider.enabled, provider.models, provider.baseURL, provider.modelIds]);
+  }, [provider.defaultModel, provider.baseURL, provider.providerId, savedModelIdsText]);
+
+  useEffect(() => { setEnabled(provider.enabled); }, [provider.enabled]);
 
   useEffect(() => {
     const refresh = () => setToolRuntimeRevision((value) => value + 1);
@@ -312,6 +382,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   ).slice(0, 40);
 
   const addOpenRouterModelId = (modelId: string) => {
+    setEnabledModelIds((prev) => [...new Set([...prev, modelId])]);
     setModelIdsText((prev) => {
       const next = prev
         .split(/[\n,]/)
@@ -326,6 +397,8 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const loadOpenRouterCatalog = async () => {
     setLoadingOpenRouterCatalog(true);
     setOpenRouterCatalogError(null);
+    setMessage(null);
+    setCatalogMetadataNote("");
     try {
       const models = await fetchProviderModelCatalog({
         providerId: provider.providerId,
@@ -333,7 +406,12 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         baseURL: baseUrlField ? baseURL : undefined,
         runnerToken: runnerTokenField ? runnerToken.trim() || undefined : undefined,
       });
-      setOpenRouterCatalog(models);
+      const enriched = await fetchSupplementalCatalogMetadata(provider.providerId, models);
+      const savedMetadata = getUserSettings().discoveredModelMetadata;
+      setOpenRouterCatalog(enriched.models.map((model) => applySupplementalCatalogMetadata(model,
+        model.supplemental ?? savedMetadata?.[`${provider.providerId}:${model.id}`]?.supplemental)));
+      setCatalogMetadataNote(enriched.note);
+      setDetailsSync({ loading: false });
     } catch (err) {
       setOpenRouterCatalogError(
         err instanceof Error ? err.message : `Failed to load ${provider.name} models`
@@ -375,6 +453,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       const defaultForSave = enabledSelection.includes(nextDefault)
         ? nextDefault
         : enabledSelection[0] ?? null;
+      Object.values(metadataDrafts).forEach(validateModelMetadataOverrides);
       saveProviderKey({
         providerId: provider.providerId,
         apiKey: apiKey || undefined,
@@ -388,14 +467,20 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         enabled,
       });
       let savedMessage = "Saved successfully";
+      const selectedCatalogModels = openRouterCatalog.filter((model) => parsedModelIdSet.has(model.id));
+      persistProviderCatalogModels(provider.providerId, selectedCatalogModels);
+      for (const [id, values] of Object.entries(metadataDrafts)) {
+        if (parsedModelIdSet.has(id)) saveModelMetadataOverrides(`${provider.providerId}:${id}`, values);
+      }
       const capabilitySyncIds = isOpenRouter
         ? selectableModels.map((model) => model.id)
         : parsedModelIds;
-      if (hasModelDiscovery && capabilitySyncIds.length > 0) {
+      const missingCatalogIds = capabilitySyncIds.filter((id) => !selectedCatalogModels.some((model) => model.id === id));
+      if (hasModelDiscovery && missingCatalogIds.length > 0) {
         try {
           const sync = await refreshProviderModelCapabilities({
             providerId: provider.providerId,
-            modelIds: capabilitySyncIds,
+            modelIds: missingCatalogIds,
           });
           if (sync.synced > 0 && sync.missing.length === 0) {
             savedMessage = `Saved successfully. Synced live capabilities for ${sync.synced} model${sync.synced === 1 ? "" : "s"}.`;
@@ -413,8 +498,10 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       }
       setApiKey("");
       setRunnerToken("");
-      setMessage(savedMessage);
+      await flush();
       await onSaved();
+      setMetadataDrafts({});
+      setMessage(savedMessage);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Save failed");
     } finally {
@@ -460,6 +547,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       const runnerToken = (apiKey || saved?.apiKey || "").trim();
       if (!runnerBaseURL) throw new Error("Enter the account runner URL first");
       if (!runnerToken) throw new Error("Enter or save the account runner token first");
+      if (provider.providerId === "chatgpt") await fetchChatGPTAccountStatus(runnerBaseURL, runnerToken);
 
       const response = await fetch(`${runnerBaseURL}/providers/${accountRunner.path}/login`, {
         method: "POST",
@@ -467,6 +555,9 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           "content-type": "application/json",
           "x-runner-token": runnerToken,
         },
+        ...(provider.providerId === "chatgpt" ? { body: JSON.stringify(
+          chatgptAccount === "new" ? { newAccount: true } : chatgptAccount === "current" ? {} : { clientId: chatgptAccount }
+        ) } : {}),
       });
       const data = (await response.json().catch(() => ({}))) as AccountRunnerLoginResponse;
       if (!response.ok || data.error) {
@@ -548,6 +639,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         defaultModel,
         enabled: checked,
       });
+      await flush();
       setMessage(checked ? "Provider enabled" : "Provider disabled");
       await onSaved();
     } catch (err) {
@@ -690,7 +782,26 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
           <p className="font-medium text-foreground">Account runner and login</p>
           <p className="mt-1">{accountRunner.setupHint}</p>
-          <p className="mt-2 rounded bg-background/70 px-2 py-1 font-mono text-xs">
+          {provider.providerId === "chatgpt" && (
+            <div className="mt-3 space-y-2">
+              {chatgptStatusError && <p className="text-xs text-destructive">{chatgptStatusError}</p>}
+              {chatgptStatus?.requiresSignIn && <p className="text-xs">{chatgptStatus.message}</p>}
+              {chatgptStatus?.connected && <p className="text-xs">Connected ChatGPT account: {chatgptStatus.email ?? chatgptStatus.accountId}</p>}
+              <Label htmlFor="chatgpt-account">ChatGPT account</Label>
+              <Select value={chatgptAccount} onValueChange={setChatgptAccount}>
+                <SelectTrigger id="chatgpt-account"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="current">Continue with current account</SelectItem>
+                  {(chatgptStatus?.accounts ?? []).map((account) => (
+                    <SelectItem key={account.clientId} value={account.clientId}>{account.email ?? "Saved account"} · {account.clientId}{account.active ? " (active)" : ""}</SelectItem>
+                  ))}
+                  <SelectItem value="new">Add another account or workspace</SelectItem>
+                </SelectContent>
+              </Select>
+              <a className="inline-block text-xs text-primary underline" href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer">Manage ChatGPT plan usage</a>
+            </div>
+          )}
+          <p className="mt-2 whitespace-pre-line rounded bg-background/70 px-2 py-1 font-mono text-xs">
             {accountRunner.command}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -699,7 +810,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
               download
               className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
             >
-              Download account runner
+              Download account runner v{ACCOUNT_RUNNER_VERSION} (ZIP)
             </a>
             <Button
               type="button"
@@ -732,7 +843,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
           <p className="font-medium text-foreground">Account runner</p>
           <p className="mt-1">{runnerDownload.hint}</p>
-          <p className="mt-2 rounded bg-background/70 px-2 py-1 font-mono text-xs">
+          <p className="mt-2 whitespace-pre-line rounded bg-background/70 px-2 py-1 font-mono text-xs">
             {runnerDownload.command}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -741,7 +852,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
               download
               className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
             >
-              Download account runner
+              Download account runner v{ACCOUNT_RUNNER_VERSION} (ZIP)
             </a>
           </div>
         </div>
@@ -805,13 +916,16 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                 </Button>
                 {openRouterCatalog.length > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {openRouterCatalog.length.toLocaleString()} models available from the live {provider.name} catalog.
+                    {provider.providerId === "chatgpt"
+                      ? `${openRouterCatalog.length.toLocaleString()} models listed by your connected ChatGPT account.`
+                      : `${openRouterCatalog.length.toLocaleString()} models available from the live ${provider.name} catalog.`}
                   </span>
                 )}
               </div>
               {openRouterCatalogError && (
                 <p className="mt-2 text-xs text-destructive">{openRouterCatalogError}</p>
               )}
+              {catalogMetadataNote && <p className="mt-2 text-xs text-muted-foreground">{catalogMetadataNote}</p>}
               {openRouterCatalog.length > 0 && (
                 <div className="mt-3 space-y-3">
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
@@ -871,6 +985,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                       const isBuiltIn = builtInModelIds.has(model.id);
                       const isAdded = parsedModelIdSet.has(model.id);
                       const modalityBadges = [
+                        model.text === true ? "text" : null,
                         model.supportsImageInput ? "image" : null,
                         model.supportsDocumentInput ? "file" : null,
                         model.supportsAudioInput ? "audio" : null,
@@ -909,7 +1024,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                                     </Badge>
                                   ))
                                 ) : (
-                                  <Badge variant="secondary">text</Badge>
+                                  <Badge variant="secondary">Input types not reported</Badge>
                                 )}
                                 {model.supportsStructuredOutputs && (
                                   <Badge variant="secondary">structured output</Badge>
@@ -918,6 +1033,9 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                                   <Badge variant="secondary">reasoning effort</Badge>
                                 )}
                               </div>
+                              <p className="mt-2 text-xs text-muted-foreground">Context: {model.contextWindowTokens?.toLocaleString() ?? "Not reported"} · Max output: {model.maxOutputTokens?.toLocaleString() ?? "Not reported"}</p>
+                              {model.supplemental && <p className="mt-1 text-xs text-muted-foreground">Includes Models.dev references for missing details; review sources after adding.</p>}
+                              {missingModelMetadata(model).length > 0 && <p className="mt-1 text-xs text-muted-foreground">Some model details are not reported. Add this model to review and optionally fill them in.</p>}
                             </div>
                             <Button
                               type="button"
@@ -949,7 +1067,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         <Label>Default model</Label>
         <Select value={defaultModel} onValueChange={setDefaultModel}>
           <SelectTrigger>
-            <SelectValue placeholder={selectableModels.length ? undefined : "Add a model id above"} />
+            <SelectValue placeholder={selectableModels.length ? undefined : "Browse the catalog and add a model"} />
           </SelectTrigger>
           <SelectContent>
             {selectableModels.map((m) => (
@@ -986,17 +1104,24 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           <p className="text-xs text-muted-foreground">
             Only enabled models appear in selectors across the app for this provider.
           </p>
-          <div className="max-h-44 space-y-2 overflow-auto pr-1">
+          {detailsSync.loading && <p className="text-xs text-muted-foreground">Checking saved model details against the live catalog…</p>}
+          {detailsSync.error && <p className="text-xs text-destructive">{detailsSync.error}</p>}
+          <div className="max-h-[48rem] space-y-2 overflow-auto pr-1">
             {selectableModels.map((model) => {
               const checked = enabledModelIds.includes(model.id);
               return (
-                <label
+                <div
                   key={model.id}
-                  className="flex items-center justify-between gap-3 rounded-md border bg-background px-2 py-1.5 text-sm"
+                  className="rounded-md border bg-background px-2 py-1.5 text-sm"
+                  role="group"
+                  aria-label={`${model.name} settings`}
                 >
+                  <div className="flex items-center justify-between gap-3">
                   <span className="min-w-0 truncate">{model.name}</span>
+                  <div className="flex items-center gap-2">
                   <Switch
                     checked={checked}
+                    aria-label={`Enable ${model.name}`}
                     onCheckedChange={(value) =>
                       setEnabledModelIds((prev) =>
                         value
@@ -1005,10 +1130,28 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                       )
                     }
                   />
-                </label>
+                  {hasModelDiscovery && <Button type="button" size="sm" variant="ghost" aria-label={`Remove ${model.name}`} onClick={() => {
+                    const remaining = parsedModelIds.filter((id) => id !== model.id);
+                    setModelIdsText(remaining.join("\n"));
+                    if (defaultModel === model.id) setDefaultModel(remaining[0] ?? "");
+                    setMetadataDrafts((prev) => { const next = { ...prev }; delete next[model.id]; return next; });
+                  }}>Remove</Button>}
+                  </div>
+                  </div>
+                  {hasModelDiscovery && (() => {
+                    const saved = getUserSettings().discoveredModelMetadata?.[`${provider.providerId}:${model.id}`];
+                    const live = openRouterCatalog.find((entry) => entry.id === model.id);
+                    const metadata = live ? discoveryMetadataFromCatalogModel(live, "provider-models", new Date().toISOString()) : saved;
+                    const overrides = metadataDrafts[model.id] ?? getModelMetadataOverrides(`${provider.providerId}:${model.id}`);
+                    return <ModelMetadataEditor modelId={`${provider.providerId}:${model.id}`} metadata={metadata} overrides={overrides}
+                      onChange={(values) => setMetadataDrafts((prev) => ({ ...prev, [model.id]: values }))} />;
+                  })()}
+                  <ProviderModelOptions providerId={provider.providerId} modelId={model.id} catalogBacked={hasModelDiscovery} onSaved={onSaved} />
+                </div>
               );
             })}
           </div>
+          {selectableModels.length === 0 && <p className="text-xs text-muted-foreground">No models added. Browse the provider catalog above to choose models.</p>}
         </div>
         <ProviderCapabilityTable
           rows={capabilityRows}

@@ -61,6 +61,7 @@ export interface GoogleStreamResult {
   usageMetadata?: {
     promptTokenCount?: number; candidatesTokenCount?: number;
     thoughtsTokenCount?: number; cachedContentTokenCount?: number;
+    totalTokenCount?: number; toolUsePromptTokenCount?: number;
   };
 }
 export async function collectGoogleStream(
@@ -78,7 +79,7 @@ export async function collectGoogleStream(
         onText(part.text);
       } else if ("functionCall" in part && part.functionCall) parts.push(part);
     }
-    last = { ...last, ...event };
+    last = { ...last, ...event, usageMetadata: { ...last.usageMetadata, ...event.usageMetadata } };
   }
   return { ...last, candidates: [{ ...last.candidates?.[0], content: { parts } }] };
 }

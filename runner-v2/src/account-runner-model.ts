@@ -51,7 +51,7 @@ type RunnerEvent =
     }
   | {
       type: "usage";
-      usage?: { inputTokens?: number; outputTokens?: number };
+      usage?: ModelTurn["usage"];
     }
   | {
       type: "error";
@@ -138,6 +138,7 @@ export class AccountRunnerModel implements AgentModel {
     if (!contentType.includes("text/event-stream")) {
       const data = await response.json().catch(() => ({})) as {
         content?: string;
+        usage?: ModelTurn["usage"];
         error?: string;
       };
       if (data.error) throw new ProviderTransportError(data.error, response.status);
@@ -149,7 +150,7 @@ export class AccountRunnerModel implements AgentModel {
         stopReason: blocks.some((block) => block.type === "tool_call")
           ? "tool_calls"
           : "end_turn",
-        usage: serializedInputUsage(body),
+        usage: { ...data.usage, ...serializedInputUsage(body, data.usage?.inputTokens) },
       };
     }
 
@@ -189,7 +190,9 @@ export class AccountRunnerModel implements AgentModel {
         });
       } else if (event.type === "usage" && event.usage) {
         usage = {
-          ...serializedInputUsage(body, event.usage.inputTokens),
+          ...usage,
+          ...event.usage,
+          ...serializedInputUsage(body, event.usage.inputTokens ?? (usage?.inputTokenSource === "reported" ? usage.inputTokens : undefined)),
           ...(event.usage.outputTokens !== undefined
             ? { outputTokens: event.usage.outputTokens }
             : {}),

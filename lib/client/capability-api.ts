@@ -65,6 +65,7 @@ import {
   getCustomModelByFullId,
   getPersistedProviderCapabilityEvidence,
   getProvider,
+  listProviderModelInfos,
   getRunnerCapabilityPlanningContext,
   listFoundryModelInfos,
   listOpenRouterModelInfos,
@@ -194,7 +195,7 @@ function resolveProbeTarget(fullModelId: string): ProbeTarget {
       : providerId === NVIDIA_PROVIDER_ID
         ? listNvidiaModelInfos().find((m) => m.id === model)
         : undefined;
-  const modelInfo = gatewayModelInfo ?? provider?.listModels().find((m) => m.id === model);
+  const modelInfo = gatewayModelInfo ?? listProviderModelInfos(providerId as Parameters<typeof listProviderModelInfos>[0]).find((m) => m.id === model);
   if (!provider || !modelInfo) throw new Error(`Model ${fullModelId} not found`);
   return { providerId, modelId: model, fullModelId, modelInfo };
 }

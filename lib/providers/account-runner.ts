@@ -141,6 +141,7 @@ interface AccountRunnerProviderOptions {
 interface AccountRunnerResponse {
   ok?: boolean;
   content?: string;
+  usage?: StreamChunk["usage"];
   error?: string;
   errorMetadata?: CertifiedProviderErrorMetadata;
 }
@@ -426,6 +427,7 @@ export function createAccountRunnerProvider(
         const raw = data.content ?? "";
         const content = normalizeFences ? stripStructuredOutputFence(raw) : raw;
         if (content) yield { type: "token", content };
+        if (data.usage) yield { type: "usage", usage: data.usage };
         yield { type: "done" };
       } catch (err) {
         yield {

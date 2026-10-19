@@ -224,7 +224,7 @@ export function openAICompatibleStreamOptionsField(
 ): {
   stream_options?: { include_usage: true };
 } {
-  if (providerId !== "openai" && providerId !== "openrouter") return {};
+  if (!["openai", "openrouter", "deepseek"].includes(providerId)) return {};
   // OpenRouter's provider.require_parameters applies to every extra request
   // parameter. Structured-output calls use that routing guard, while
   // stream_options is not listed on OpenRouter endpoint parameter manifests.
@@ -463,6 +463,7 @@ export async function* streamOpenAICompatibleChat(
               cache_write_tokens?: number;
               audio_tokens?: number;
             };
+            prompt_cache_hit_tokens?: number;
             completion_tokens_details?: {
               reasoning_tokens?: number;
               audio_tokens?: number;
@@ -487,6 +488,8 @@ export async function* streamOpenAICompatibleChat(
         }
         if (typeof usage.prompt_tokens_details?.cached_tokens === "number") {
           reportedCachedInputTokens = usage.prompt_tokens_details.cached_tokens;
+        } else if (typeof usage.prompt_cache_hit_tokens === "number") {
+          reportedCachedInputTokens = usage.prompt_cache_hit_tokens;
         }
         if (typeof usage.prompt_tokens_details?.cache_write_tokens === "number") {
           reportedCacheWriteInputTokens =

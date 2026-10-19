@@ -440,4 +440,12 @@ assert.equal(
   Number.MAX_SAFE_INTEGER
 );
 
-console.log("PASS native Build model usage mapping");
+const comparison = mapNativeBuildUsageModels(projection({}, [{
+  runtimeId:'chatgpt:gpt-6.1-sol',providerId:'chatgpt',modelId:'gpt-6.1-sol',roles:['worker'],status:'healthy',
+  calls:1,inputTokens:1000000,cachedInputTokens:500000,cacheWriteInputTokens:0,outputTokens:100000,totalTokens:1100000,
+  estimatedCostMicros:null,costBasis:'account_not_metered',usageQuality:'reported',lastUsedAt:null,
+}],1),()=>({inputUsdPer1M:2,outputUsdPer1M:10,cachedInputUsdPer1M:0.1,sourceLabel:'API reference',sourceUrl:'',verifiedAt:'2026-10-19',basis:'api-equivalent'}));
+assert.equal(comparison[0].apiEquivalentUsd,2.05);
+assert.equal(comparison[0].estimatedUsd,null,'API-equivalent comparison must not become an account charge');
+assert.equal(comparison[0].costBasis,'account_not_metered','comparison must not alter budget policy');
+console.log("PASS native Build model usage mapping and separate API-equivalent costs");

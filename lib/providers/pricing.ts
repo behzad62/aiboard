@@ -1,4 +1,5 @@
 import { formatModelId } from "./base";
+import { effectiveModelMetadata, type ModelMetadataDetails } from "./model-metadata";
 import type { ModelPricingOverride } from "../db/schema";
 
 // Re-export so the pricing UI can import the override type from the pricing
@@ -14,9 +15,10 @@ export interface ModelPricing {
   sourceUrl: string;
   verifiedAt: string;
   isOverride?: boolean;
+  basis?: "api-equivalent";
 }
 
-export interface DiscoveredModelPricingMetadata {
+export interface DiscoveredModelPricingMetadata extends ModelMetadataDetails {
   inputUsdPer1M?: number;
   outputUsdPer1M?: number;
   cachedInputUsdPer1M?: number;
@@ -408,9 +410,38 @@ export function getModelPricing(
   overrides?: Record<string, ModelPricingOverride>,
   discoveredMetadata?: Record<string, DiscoveredModelPricingMetadata | undefined>,
 ): ModelPricing | null {
+  const account = /^(chatgpt|github-copilot):/.test(fullModelId);
+  let pricing = directModelPricing(fullModelId, overrides, discoveredMetadata);
+  if (!account) return pricing;
+  const modelId = fullModelId.slice(fullModelId.indexOf(":") + 1);
+  const apiModelId = discoveredMetadata?.[fullModelId]?.apiEquivalentPricing?.modelId ??
+    (fullModelId.startsWith("chatgpt:") || /^gpt-/.test(modelId) ? `openai:${modelId}` : undefined);
+  const apiPricing = apiModelId ? directModelPricing(apiModelId, overrides, discoveredMetadata) : null;
+  if (apiPricing) {
+    const manual = { ...discoveredMetadata?.[fullModelId]?.overrides, ...overrides?.[fullModelId] };
+    pricing = { ...apiPricing,
+      ...([manual.inputUsdPer1M, manual.outputUsdPer1M, manual.cachedInputUsdPer1M].some((value) => typeof value === "number")
+        ? { sourceLabel: "Local comparison override", isOverride: true } : {}),
+      ...(typeof manual.inputUsdPer1M === "number" ? { inputUsdPer1M: manual.inputUsdPer1M } : {}),
+      ...(typeof manual.outputUsdPer1M === "number" ? { outputUsdPer1M: manual.outputUsdPer1M } : {}),
+      ...(typeof manual.cachedInputUsdPer1M === "number" ? { cachedInputUsdPer1M: manual.cachedInputUsdPer1M } : {}),
+    };
+  }
+  return pricing ? { ...pricing, basis: "api-equivalent", sourceLabel: `API-equivalent estimate · ${pricing.sourceLabel}`,
+    notes: `Comparison with API list rates${apiModelId ? ` for ${apiModelId}` : ""}; this is not a subscription charge. ${pricing.notes ?? "Base tier; actual API rates can vary by request and service tier."}` } : null;
+}
+
+function directModelPricing(
+  fullModelId: string,
+  overrides?: Record<string, ModelPricingOverride>,
+  discoveredMetadata?: Record<string, DiscoveredModelPricingMetadata | undefined>,
+): ModelPricing | null {
   const base = MODEL_PRICING[fullModelId] ?? null;
   const override = overrides?.[fullModelId];
-  const discovered = discoveredMetadata?.[fullModelId];
+  const originalMetadata = discoveredMetadata?.[fullModelId];
+  const effective = effectiveModelMetadata(originalMetadata);
+  const discovered = originalMetadata ? { ...originalMetadata, inputUsdPer1M: effective.inputUsdPer1M,
+    outputUsdPer1M: effective.outputUsdPer1M, cachedInputUsdPer1M: effective.cachedInputUsdPer1M } : undefined;
   const discoveredInput = discovered?.inputUsdPer1M;
   const discoveredOutput = discovered?.outputUsdPer1M;
   const hasDiscoveredPricing =
@@ -421,29 +452,35 @@ export function getModelPricing(
     Number.isFinite(discoveredOutput) &&
     discoveredOutput >= 0;
 
-  if (!override && !base && !hasDiscoveredPricing) {
+  if (!override && !hasDiscoveredPricing && (!base || originalMetadata?.reportedFields !== undefined)) {
     return null;
   }
 
-  if (!override && base) {
+  if (!override && base && !hasDiscoveredPricing) {
     return base;
   }
 
   if (!override && hasDiscoveredPricing) {
     const discoveredCached = discovered?.cachedInputUsdPer1M;
+    const manual = [originalMetadata?.overrides?.inputUsdPer1M, originalMetadata?.overrides?.outputUsdPer1M, originalMetadata?.overrides?.cachedInputUsdPer1M].some((value) => value !== undefined);
+    const reference = originalMetadata?.supplemental;
+    const usesReference = reference && (["inputUsdPer1M", "outputUsdPer1M", "cachedInputUsdPer1M"] as const).some((field) =>
+      originalMetadata?.overrides?.[field] === undefined && originalMetadata?.reportedFields?.includes(field) === false && reference.values[field] !== undefined);
     return {
       inputUsdPer1M: discoveredInput!,
       outputUsdPer1M: discoveredOutput!,
       ...(typeof discoveredCached === "number" && Number.isFinite(discoveredCached) && discoveredCached >= 0
         ? { cachedInputUsdPer1M: discoveredCached }
         : {}),
-      sourceLabel:
+      sourceLabel: manual ? "Catalog pricing with local overrides" : originalMetadata?.apiEquivalentPricing ? "Models.dev API pricing reference" : usesReference ? "Pricing with Models.dev references" :
         discovered?.source === "openrouter-models"
           ? "OpenRouter live catalog pricing"
           : "Provider live catalog pricing",
-      sourceUrl: "",
+      sourceUrl: usesReference || originalMetadata?.apiEquivalentPricing ? "https://models.dev" : "",
+      ...(usesReference ? { notes: reference.pricingNote ?? "Community-maintained reference rates; actual costs depend on the provider's billing tier and request." } : {}),
+      ...(manual ? { isOverride: true } : {}),
       verifiedAt:
-        discovered?.updatedAt?.split("T")[0] ??
+        (usesReference ? reference.fetchedAt : discovered?.updatedAt)?.split("T")[0] ??
         new Date().toISOString().split("T")[0],
     };
   }

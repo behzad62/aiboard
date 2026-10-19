@@ -30,6 +30,8 @@ import { chatgptProvider } from "@/lib/providers/chatgpt";
 import { githubCopilotProvider } from "@/lib/providers/github-copilot";
 import { nvidiaProvider } from "@/lib/providers/nvidia";
 import { getModelDisplayName } from "@/lib/providers/catalog";
+import { getProviderDefinition } from "@/lib/providers/provider-registry";
+import { effectiveModelMetadata } from "@/lib/providers/model-metadata";
 import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/constants";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
 import { customCompatibleTransports } from "@/lib/providers/custom-capabilities";
@@ -129,11 +131,12 @@ const TEXT_ONLY = {
 function getDiscoveredCapabilities(fullModelId: string): ModelCapabilities | null {
   const metadata = getUserSettings().discoveredModelMetadata?.[fullModelId];
   if (!metadata) return null;
+  const effective = effectiveModelMetadata(metadata);
   return {
-    image: metadata.image,
-    document: metadata.document,
-    audio: metadata.audio,
-    video: metadata.video,
+    image: effective.image === true,
+    document: effective.document === true,
+    audio: effective.audio === true,
+    video: effective.video === true,
   };
 }
 
@@ -181,15 +184,6 @@ const FOUNDRY_CAPABILITIES = {
   audio: false,
   video: false,
 } as const;
-
-const NVIDIA_MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
-  "minimaxai/minimax-m3": {
-    image: true,
-    document: false,
-    audio: false,
-    video: false,
-  },
-};
 
 const providers: Record<ProviderId, AIProvider> = {
   openai: openaiProvider,
@@ -293,26 +287,28 @@ export function normalizeOpenRouterModelId(id: string): string {
   return normalizeProviderModelId(OPENROUTER_PROVIDER_ID, id);
 }
 
-/** Built-in models plus user-added live-catalog ids for one provider. */
+/** Configured models for discoverable providers; built-ins only for other providers. */
 export function listProviderModelInfos(providerId: ProviderId): ModelInfo[] {
   if (providerId === FOUNDRY_PROVIDER_ID) return listFoundryModelInfos();
 
   const provider = getProvider(providerId);
-  const catalogModels = provider?.listModels() ?? [];
+  const hasDiscovery = getProviderDefinition(providerId)?.modelDiscovery != null;
+  const catalogModels = hasDiscovery ? [] : provider?.listModels() ?? [];
   const knownIds = new Set(catalogModels.map((model) => model.id));
-  const additions = (getProviderKey(providerId)?.models ?? [])
+  const saved = getProviderKey(providerId);
+  const configured = [...new Set([...(saved?.models ?? []), ...(hasDiscovery ? saved?.enabledModelIds ?? [] : []),
+    ...(hasDiscovery && saved?.defaultModel ? [saved.defaultModel] : [])])];
+  const additions = configured
     .map((id) => normalizeProviderModelId(providerId, id))
-    .filter((id) => id.length > 0 && !knownIds.has(id))
+    .filter((id, index, all) => id.length > 0 && !knownIds.has(id) && all.indexOf(id) === index)
     .map((id) => ({
       id,
-      name: id,
+      name: getDiscoveredModelMetadata(formatModelId(providerId, id))?.name ?? id,
       providerId,
-      description: `User-added ${provider?.name ?? providerId} model`,
+      description: getDiscoveredModelMetadata(formatModelId(providerId, id))?.description ?? `User-added ${provider?.name ?? providerId} model`,
       capabilities:
         getDiscoveredCapabilities(formatModelId(providerId, id)) ??
-        (providerId === NVIDIA_PROVIDER_ID
-          ? { ...(NVIDIA_MODEL_CAPABILITIES[id] ?? TEXT_ONLY) }
-          : { ...TEXT_ONLY }),
+        { ...TEXT_ONLY },
     }));
   return [...catalogModels, ...additions];
 }

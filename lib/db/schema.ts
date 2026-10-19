@@ -4,6 +4,7 @@ import type {
   SkillEvidence,
 } from "@/lib/skills/types";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
+import type { ModelMetadataDetails } from "@/lib/providers/model-metadata";
 import type { CapabilityEvidence, ProviderTransportId, ToolCapabilityDescriptor } from "@/lib/providers/tool-capabilities";
 import type { BuildPhaseSpec } from "@/lib/orchestrator/build";
 import type { BuildPlanContractValidation } from "@/lib/orchestrator/build-plan-contract";
@@ -39,6 +40,8 @@ export type BuildStopReason =
   | "completed";
 
 export interface BuildUsageModelTotal {
+  /** API list-rate comparison for account-backed usage; separate from billing/budgets. */
+  apiEquivalentUsd?: number | null;
   runtimeId?: string;
   modelId: string;
   modelName: string;
@@ -353,7 +356,7 @@ export interface UserSettings {
       };
       updatedAt: string;
       source: "openrouter-models" | "provider-models";
-    }
+    } & ModelMetadataDetails
   >;
   /** Verified/scoped tool evidence; expired probed entries are ignored at runtime. */
   providerToolCapabilityEvidence?: CapabilityEvidence[];

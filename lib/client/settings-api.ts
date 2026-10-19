@@ -11,6 +11,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI, type Model as GoogleModel } from "@google/genai";
 import type { CustomModel, UserSettings } from "@/lib/db/schema";
 import type { ModelInfo, StreamChunk } from "@/lib/providers/base";
+import { extractModelMetadata, validateModelMetadataOverrides, type ModelMetadataDetails, type ModelMetadataValues } from "@/lib/providers/model-metadata";
+import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
 import { META_MODEL_API_BASE_URL } from "@/lib/providers/meta";
 import {
@@ -113,7 +115,7 @@ export function loadProviders(): {
       keyHint: saved?.keyHint,
       baseURL: saved?.baseURL ?? null,
       runnerTokenHint: saved?.runnerTokenHint ?? null,
-      modelIds: saved?.models ?? [],
+      modelIds: getProviderDefinition(p.id)?.modelDiscovery ? listProviderModelInfos(p.id as ProviderId).map((model) => model.id) : saved?.models ?? [],
       defaultModel: saved?.defaultModel,
       enabled: saved?.enabled ?? false,
       lastValidationSucceeded: saved?.lastValidationSucceeded ?? null,
@@ -226,6 +228,22 @@ export function saveProviderKey(input: {
   } else {
     throw new Error("API key required");
   }
+  if (getProviderDefinition(input.providerId)?.modelDiscovery) {
+    const settings = getUserSettings();
+    const metadata = { ...(settings.discoveredModelMetadata ?? {}) };
+    let changed = false;
+    for (const model of listProviderModelInfos(input.providerId as ProviderId)) {
+      const key = formatModelId(input.providerId, model.id);
+      if (metadata[key]) continue;
+      metadata[key] = {
+        name: model.id, reportedFields: [],
+        image: false, document: false, audio: false, video: false,
+        source: "provider-models", updatedAt: now,
+      };
+      changed = true;
+    }
+    if (changed) updateUserSettings({ discoveredModelMetadata: metadata });
+  }
 }
 
 interface OpenRouterModelsResponse {
@@ -237,6 +255,7 @@ interface OpenRouterModelsResponse {
     context_length?: number;
     max_output_tokens?: number;
     max_completion_tokens?: number;
+    top_provider?: { context_length?: number; max_completion_tokens?: number | null };
     pricing?: { prompt?: string; completion?: string; input_cache_read?: string };
     supported_parameters?: string[];
     architecture?: {
@@ -245,7 +264,7 @@ interface OpenRouterModelsResponse {
   }>;
 }
 
-export interface OpenRouterCatalogModel {
+export interface OpenRouterCatalogModel extends ModelMetadataDetails {
   id: string;
   name: string;
   description?: string;
@@ -269,6 +288,7 @@ export interface OpenRouterCatalogModel {
   supportsReasoningEffort: boolean;
   supportsTemperature: boolean;
   supportsMaxTokens: boolean;
+  parametersReported?: boolean;
 }
 
 function positiveInteger(value: unknown): number | undefined {
@@ -316,30 +336,28 @@ export function buildOpenRouterCatalogModel(
   const record = entry as Record<string, unknown>;
   const maxCompletionTokens =
     positiveInteger(record.max_output_tokens) ??
-    positiveInteger(record.max_completion_tokens);
+    positiveInteger(record.max_completion_tokens) ?? positiveInteger(entry.top_provider?.max_completion_tokens);
   const inputModalities = [...(entry.architecture?.input_modalities ?? [])];
   const modalitySet = normalizeOpenRouterInputModalities(inputModalities);
   const supportedParameters = [...(entry.supported_parameters ?? [])];
   const parameterSet = normalizeOpenRouterSupportedParameters(supportedParameters);
   const createdAtMs = Number.isFinite(entry.created) ? Number(entry.created) * 1_000 : undefined;
-  const inputPerToken = Number(entry.pricing?.prompt);
-  const outputPerToken = Number(entry.pricing?.completion);
-  const inputUsdPer1M = Number.isFinite(inputPerToken) && inputPerToken >= 0 ? inputPerToken * 1_000_000 : undefined;
-  const outputUsdPer1M = Number.isFinite(outputPerToken) && outputPerToken >= 0 ? outputPerToken * 1_000_000 : undefined;
-  const cacheReadPerToken = entry.pricing?.input_cache_read === undefined ? Number.NaN : Number(entry.pricing.input_cache_read);
-  const cachedInputUsdPer1M = Number.isFinite(cacheReadPerToken) && cacheReadPerToken >= 0 ? cacheReadPerToken * 1_000_000 : undefined;
+  const metadata = extractModelMetadata(record, "openrouter");
+  const { inputUsdPer1M, outputUsdPer1M, cachedInputUsdPer1M } = metadata;
   return {
+    ...metadata,
     id: entry.id,
     name: entry.name?.trim() || entry.id,
     description: entry.description?.trim() || undefined,
     createdAtMs,
-    contextWindowTokens: positiveInteger(record.context_length),
+    contextWindowTokens: metadata.contextWindowTokens,
     maxOutputTokens: maxCompletionTokens,
     inputUsdPer1M,
     outputUsdPer1M,
     ...(cachedInputUsdPer1M !== undefined ? { cachedInputUsdPer1M } : {}),
     inputModalities,
     supportedParameters,
+    parametersReported: Array.isArray(entry.supported_parameters),
     supportsImageInput: modalitySet.has("image"),
     supportsDocumentInput: modalitySet.has("file"),
     supportsAudioInput: modalitySet.has("audio"),
@@ -387,9 +405,10 @@ function basicCatalogModel(
     outputUsdPer1M?: number;
     image?: boolean;
     reasoningEffort?: boolean;
-  } = {}
+  } & ModelMetadataDetails = {}
 ): ProviderCatalogModel {
   return {
+    ...extractModelMetadata({ ...options }),
     id,
     name,
     description: options.description,
@@ -398,12 +417,12 @@ function basicCatalogModel(
     maxOutputTokens: options.maxOutputTokens,
     inputUsdPer1M: options.inputUsdPer1M,
     outputUsdPer1M: options.outputUsdPer1M,
-    inputModalities: options.image ? ["text", "image"] : ["text"],
+    inputModalities: [options.text ? "text" : null, options.image ? "image" : null].filter((value): value is string => value !== null),
     supportedParameters: [],
     supportsImageInput: options.image === true,
-    supportsDocumentInput: false,
-    supportsAudioInput: false,
-    supportsVideoInput: false,
+    supportsDocumentInput: options.document === true,
+    supportsAudioInput: options.audio === true,
+    supportsVideoInput: options.video === true,
     supportsTools: false,
     supportsToolChoice: false,
     supportsStructuredOutputs: false,
@@ -414,9 +433,22 @@ function basicCatalogModel(
   };
 }
 
+export function buildProviderCatalogModel(record: Record<string, unknown>): ProviderCatalogModel {
+  const metadata = extractModelMetadata(record);
+  const id = String(record.id ?? record.slug ?? "").trim();
+  const name = String(record.name ?? record.display_name ?? record.displayName ?? id);
+  return { ...basicCatalogModel(id, name, {
+    ...metadata,
+    description: typeof record.description === "string" ? record.description : undefined,
+    createdAtMs: typeof record.created === "number" ? record.created * 1_000 : typeof record.created_at === "string" ? Date.parse(record.created_at) : undefined,
+    reasoningEffort: typeof (record.capabilities as RunnerCatalogEntry["capabilities"])?.supports?.reasoningEffort === "boolean"
+      ? (record.capabilities as RunnerCatalogEntry["capabilities"])?.supports?.reasoningEffort : undefined,
+  }), ...metadata };
+}
+
 type GoogleCatalogModelRecord = Pick<
   GoogleModel,
-  "name" | "displayName" | "description" | "thinking" | "supportedActions"
+  "name" | "displayName" | "description" | "thinking" | "supportedActions" | "inputTokenLimit" | "outputTokenLimit"
 >;
 
 export async function collectGoogleModelCatalog(
@@ -434,6 +466,8 @@ export async function collectGoogleModelCatalog(
       basicCatalogModel(id, model.displayName?.trim() || id, {
         description: model.description?.trim() || undefined,
         reasoningEffort: model.thinking === true,
+        contextWindowTokens: positiveInteger(model.inputTokenLimit),
+        maxOutputTokens: positiveInteger(model.outputTokenLimit),
       })
     );
   }
@@ -459,22 +493,9 @@ async function fetchOpenAICompatibleModelCatalog(
     .filter((model) => typeof model.id === "string" && model.id.length > 0)
     .map((model) => {
       const record = model as unknown as Record<string, unknown>;
-      const contextWindowTokens =
-        positiveInteger(record.context_window) ??
-        positiveInteger(record.context_length) ??
-        positiveInteger(record.max_context_tokens) ??
-        positiveInteger(record.max_input_tokens) ??
-        positiveInteger(record.input_token_limit) ??
-        positiveInteger(record.token_limit);
-      const maxOutputTokens =
-        positiveInteger(record.max_output_tokens) ??
-        positiveInteger(record.max_completion_tokens) ??
-        positiveInteger(record.output_token_limit);
-      return basicCatalogModel(model.id, model.id, {
+      return { ...buildProviderCatalogModel(record),
         createdAtMs: Number.isFinite(model.created) ? model.created * 1_000 : undefined,
-        contextWindowTokens,
-        maxOutputTokens,
-      });
+      };
     })
     .sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -485,12 +506,15 @@ async function fetchAnthropicModelCatalog(
   const page = await new Anthropic({ apiKey, dangerouslyAllowBrowser: true }).models.list({
     limit: 1000,
   });
-  return page.data
-    .filter((model) => typeof model.id === "string" && model.id.length > 0)
-    .map((model) => basicCatalogModel(model.id, model.display_name || model.id, {
+  const models: ProviderCatalogModel[] = [];
+  for await (const model of page) {
+    if (typeof model.id !== "string" || !model.id.trim()) continue;
+    models.push(basicCatalogModel(model.id, model.display_name || model.id, {
+      ...extractModelMetadata(model as unknown as Record<string, unknown>),
       createdAtMs: Number.isFinite(Date.parse(model.created_at)) ? Date.parse(model.created_at) : undefined,
-    }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+    }));
+  }
+  return models.sort((a, b) => a.id.localeCompare(b.id));
 }
 
 async function fetchMetaModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
@@ -513,7 +537,8 @@ async function fetchMetaModelCatalog(apiKey: string): Promise<ProviderCatalogMod
     .map((model) =>
       basicCatalogModel(
         model.id,
-        model.display_name?.trim() || model.name?.trim() || model.id
+        model.display_name?.trim() || model.name?.trim() || model.id,
+        extractModelMetadata(model as unknown as Record<string, unknown>)
       )
     )
     .sort((a, b) => a.id.localeCompare(b.id));
@@ -530,6 +555,9 @@ async function fetchXaiLanguageModelCatalog(apiKey: string): Promise<ProviderCat
   if (!response.ok) {
     const error =
       typeof payload.error === "string" ? payload.error : payload.error?.message;
+    if (error && /credits|spending limit/i.test(error)) {
+      throw new Error(`xAI blocked model catalog access because of your team's credit or spending limit. Browsing only requests model metadata; no generation request was sent. Check your team's billing settings in the xAI Console. Provider response: ${error}`);
+    }
     throw new Error(error ?? `xAI language-model catalog request failed (${response.status})`);
   }
   return (payload.models ?? [])
@@ -538,7 +566,7 @@ async function fetchXaiLanguageModelCatalog(apiKey: string): Promise<ProviderCat
     )
     .map((model) => ({
       ...basicCatalogModel(model.id, model.id, {
-        image: model.input_modalities?.includes("image") === true,
+        ...extractModelMetadata(model as unknown as Record<string, unknown>, "xai"),
         reasoningEffort: !model.id.toLowerCase().includes("non-reasoning"),
       }),
       supportsTemperature: true,
@@ -557,12 +585,41 @@ interface RunnerCatalogEntry {
   };
 }
 
+export interface ChatGPTAccountStatus {
+  runnerVersion: number;
+  connected: boolean;
+  requiresSignIn: boolean;
+  message?: string | null;
+  email?: string | null;
+  accountId?: string | null;
+  accounts: Array<{ clientId: string; email?: string | null; active: boolean }>;
+}
+
+export async function fetchChatGPTAccountStatus(baseURL: string, runnerToken: string, signal?: AbortSignal): Promise<ChatGPTAccountStatus> {
+  const response = await fetch(`${baseURL.replace(/\/$/, "")}/providers/chatgpt/status`, {
+    headers: { "x-runner-token": runnerToken }, signal,
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error ?? `Account runner status failed (${response.status})`);
+  if (!(payload.runnerVersion >= 25)) {
+    throw new Error("This account runner is too old for ChatGPT public API sign-in. Download and restart account runner v25 or newer, then Continue with ChatGPT again.");
+  }
+  return payload as ChatGPTAccountStatus;
+}
+
 async function fetchRunnerModelCatalog(input: {
   providerId: "chatgpt" | "github-copilot" | "nvidia";
   apiKey: string;
   baseURL: string;
   runnerToken: string;
 }): Promise<ProviderCatalogModel[]> {
+  if (input.providerId === "chatgpt") {
+    const status = await fetchChatGPTAccountStatus(input.baseURL, input.runnerToken);
+    if (!status.connected) throw new Error(status.message ?? "Continue with ChatGPT to authorize plan usage first.");
+    if (status.runnerVersion < 26) {
+      throw new Error("This account runner is too old for complete ChatGPT model metadata. Download and restart account runner v26 or newer, then refresh the catalog.");
+    }
+  }
   const response = await fetch(
     `${input.baseURL.replace(/\/$/, "")}/providers/${input.providerId}/models`,
     {
@@ -581,12 +638,15 @@ async function fetchRunnerModelCatalog(input: {
     error?: string;
   };
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("Runner session token was rejected. Copy the current session token printed by the account runner, paste it above, and save. Restarting the runner changes this token; your provider login is separate.");
+    }
     if (
       input.providerId === "chatgpt" &&
       /does not expose a stable model catalog/i.test(payload.error ?? "")
     ) {
       throw new Error(
-        "This account runner is too old for ChatGPT live model discovery. Download and restart account runner v22 or newer.",
+        "This account runner is too old for ChatGPT live model discovery. Download and restart account runner v25 or newer, then Continue with ChatGPT again.",
       );
     }
     throw new Error(payload.error ?? `Provider model catalog request failed (${response.status})`);
@@ -596,10 +656,7 @@ async function fetchRunnerModelCatalog(input: {
       typeof model.id === "string" && model.id.length > 0
     )
     .map((model) =>
-      basicCatalogModel(model.id, model.name?.trim() || model.id, {
-        image: model.capabilities?.supports?.vision === true,
-        reasoningEffort: model.capabilities?.supports?.reasoningEffort === true,
-      })
+      buildProviderCatalogModel(model as unknown as Record<string, unknown>)
     )
     .sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -670,12 +727,22 @@ export async function fetchProviderModelCatalog(input: {
   throw new Error(`Live model discovery is not supported for ${input.providerId}`);
 }
 
-function discoveryMetadataFromCatalogModel(
+export function discoveryMetadataFromCatalogModel(
   model: ProviderCatalogModel,
   source: "openrouter-models" | "provider-models",
   updatedAt: string,
 ) {
   return {
+    catalogFetchedAt: updatedAt,
+    supplemental: model.supplemental,
+    apiEquivalentPricing: model.apiEquivalentPricing,
+    name: model.name,
+    description: model.description,
+    createdAtMs: model.createdAtMs,
+    inputModalities: model.inputModalities,
+    supportedParameters: model.supportedParameters,
+    text: model.text,
+    reportedFields: model.reportedFields ?? [],
     image: model.supportsImageInput,
     document: model.supportsDocumentInput,
     audio: model.supportsAudioInput,
@@ -695,16 +762,63 @@ function discoveryMetadataFromCatalogModel(
     ...(model.cachedInputUsdPer1M !== undefined
       ? { cachedInputUsdPer1M: model.cachedInputUsdPer1M }
       : {}),
-    apiParameters: {
+    apiParameters: model.parametersReported ? {
       toolChoice: model.supportsToolChoice,
       structuredOutputs: model.supportsStructuredOutputs,
       reasoning: model.supportsReasoning,
       reasoningEffort: model.supportsReasoningEffort,
       temperature: model.supportsTemperature,
       maxTokens: model.supportsMaxTokens,
-    },
+    } : model.supportsReasoningEffort ? { reasoning: true, reasoningEffort: true } : undefined,
     updatedAt,
     source,
+  };
+}
+
+export function persistProviderCatalogModels(providerId: string, models: ProviderCatalogModel[]): void {
+  const settings = getUserSettings();
+  const metadata = { ...(settings.discoveredModelMetadata ?? {}) };
+  let evidence = [...(settings.providerToolCapabilityEvidence ?? [])];
+  const updatedAt = new Date().toISOString();
+  for (const model of models) {
+    const key = formatModelId(providerId, model.id);
+    metadata[key] = { ...discoveryMetadataFromCatalogModel(model, providerId === "openrouter" ? "openrouter-models" : "provider-models", updatedAt),
+      overrides: metadata[key]?.overrides, supplemental: model.supplemental ?? metadata[key]?.supplemental,
+      apiEquivalentPricing: model.apiEquivalentPricing ?? metadata[key]?.apiEquivalentPricing };
+    if (providerId === "openrouter" && model.parametersReported) evidence = mergeCapabilityEvidenceRecords(evidence, openRouterCatalogCapabilityEvidence(model, updatedAt));
+  }
+  updateUserSettings({ discoveredModelMetadata: metadata, providerToolCapabilityEvidence: evidence });
+}
+
+export function saveModelMetadataOverrides(fullModelId: string, values: ModelMetadataValues): void {
+  validateModelMetadataOverrides(values);
+  const settings = getUserSettings();
+  const metadata = { ...(settings.discoveredModelMetadata ?? {}) };
+  const previous = metadata[fullModelId] ?? { image: false, document: false, audio: false, video: false,
+    source: "provider-models" as const, updatedAt: new Date().toISOString(), reportedFields: [] };
+  metadata[fullModelId] = { ...previous, overrides: values };
+  const prices = { ...(settings.modelPricingOverrides ?? {}) };
+  delete prices[fullModelId];
+  const contexts = { ...(settings.modelContextOverrides ?? {}) };
+  if (contexts[fullModelId]) {
+    const next = { ...contexts[fullModelId] };
+    delete next.contextWindowTokens;
+    delete next.maxOutputTokens;
+    if (Object.keys(next).every((field) => field === "updatedAt")) delete contexts[fullModelId];
+    else contexts[fullModelId] = next;
+  }
+  updateUserSettings({ discoveredModelMetadata: metadata, modelPricingOverrides: prices, modelContextOverrides: contexts });
+}
+
+export function getModelMetadataOverrides(fullModelId: string): ModelMetadataValues {
+  const settings = getUserSettings();
+  const pricing = settings.modelPricingOverrides?.[fullModelId];
+  const context = settings.modelContextOverrides?.[fullModelId];
+  return { ...settings.discoveredModelMetadata?.[fullModelId]?.overrides,
+    ...(pricing ? { inputUsdPer1M: pricing.inputUsdPer1M, outputUsdPer1M: pricing.outputUsdPer1M,
+      ...(pricing.cachedInputUsdPer1M != null ? { cachedInputUsdPer1M: pricing.cachedInputUsdPer1M } : {}) } : {}),
+    ...(context?.contextWindowTokens != null ? { contextWindowTokens: context.contextWindowTokens } : {}),
+    ...(context?.maxOutputTokens != null ? { maxOutputTokens: context.maxOutputTokens } : {}),
   };
 }
 
@@ -738,11 +852,10 @@ export async function refreshOpenRouterModelCapabilities(
       continue;
     }
     const model = buildOpenRouterCatalogModel(entry);
-    nextMetadata[formatModelId(OPENROUTER_PROVIDER_ID, id)] =
-      discoveryMetadataFromCatalogModel(model, "openrouter-models", updatedAt);
-    nextEvidence = mergeCapabilityEvidenceRecords(
-      nextEvidence,
-      openRouterCatalogCapabilityEvidence(model, updatedAt),
+    const key = formatModelId(OPENROUTER_PROVIDER_ID, id);
+    nextMetadata[key] = { ...discoveryMetadataFromCatalogModel(model, "openrouter-models", updatedAt), overrides: nextMetadata[key]?.overrides, supplemental: model.supplemental ?? nextMetadata[key]?.supplemental };
+    if (model.parametersReported) nextEvidence = mergeCapabilityEvidenceRecords(
+      nextEvidence, openRouterCatalogCapabilityEvidence(model, updatedAt),
     );
     synced += 1;
   }
@@ -782,8 +895,8 @@ export async function refreshProviderModelCapabilities(input: {
       missing.push(id);
       continue;
     }
-    nextMetadata[formatModelId(input.providerId, id)] =
-      discoveryMetadataFromCatalogModel(model, "provider-models", updatedAt);
+    const key = formatModelId(input.providerId, id);
+    nextMetadata[key] = { ...discoveryMetadataFromCatalogModel(model, "provider-models", updatedAt), overrides: nextMetadata[key]?.overrides, supplemental: model.supplemental ?? nextMetadata[key]?.supplemental };
     synced += 1;
   }
   updateUserSettings({ discoveredModelMetadata: nextMetadata });
@@ -1019,6 +1132,17 @@ export async function validateProvider(input: {
 
 // ── Pricing overrides ─────────────────────────────────────────────────────────
 
+function clearMetadataOverrideFields(fullModelId: string, fields: Array<keyof ModelMetadataValues>) {
+  const metadata = { ...(getUserSettings().discoveredModelMetadata ?? {}) };
+  const record = metadata[fullModelId];
+  if (record?.overrides) {
+    const overrides = { ...record.overrides };
+    for (const field of fields) delete overrides[field];
+    metadata[fullModelId] = { ...record, overrides };
+  }
+  return metadata;
+}
+
 export function savePricingOverride(input: {
   fullModelId: string;
   inputUsdPer1M?: number;
@@ -1041,7 +1165,9 @@ export function savePricingOverride(input: {
       updatedAt: new Date().toISOString(),
     };
   }
-  updateUserSettings({ modelPricingOverrides: next });
+  updateUserSettings({ modelPricingOverrides: next,
+    ...(input.clear ? { discoveredModelMetadata: clearMetadataOverrideFields(input.fullModelId, ["inputUsdPer1M", "outputUsdPer1M", "cachedInputUsdPer1M"]) } : {}),
+  });
 }
 
 // ── Context overrides ─────────────────────────────────────────────────────────
@@ -1055,12 +1181,21 @@ export function saveModelContextOverride(input: {
   longContextQuality?: ModelContextProfileOverride["longContextQuality"];
   promptCaching?: boolean;
   recommendedBuildRoles?: ModelContextProfileOverride["recommendedBuildRoles"];
+  clearBuildSettings?: boolean;
   clear?: boolean;
 }): void {
   const settings = getUserSettings();
   const next = { ...(settings.modelContextOverrides ?? {}) };
   if (input.clear) {
     delete next[input.fullModelId];
+  } else if (input.clearBuildSettings) {
+    const previous = next[input.fullModelId];
+    const limits = {
+      ...(previous?.contextWindowTokens != null ? { contextWindowTokens: previous.contextWindowTokens } : {}),
+      ...(previous?.maxOutputTokens != null ? { maxOutputTokens: previous.maxOutputTokens } : {}),
+    };
+    if (Object.keys(limits).length) next[input.fullModelId] = { ...limits, updatedAt: new Date().toISOString() };
+    else delete next[input.fullModelId];
   } else {
     next[input.fullModelId] = {
       ...(input.contextWindowTokens !== undefined
@@ -1090,7 +1225,9 @@ export function saveModelContextOverride(input: {
       updatedAt: new Date().toISOString(),
     };
   }
-  updateUserSettings({ modelContextOverrides: next });
+  updateUserSettings({ modelContextOverrides: next,
+    ...(input.clear ? { discoveredModelMetadata: clearMetadataOverrideFields(input.fullModelId, ["contextWindowTokens", "maxOutputTokens"]) } : {}),
+  });
 }
 
 // ── Custom models ─────────────────────────────────────────────────────────────

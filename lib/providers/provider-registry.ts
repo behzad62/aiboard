@@ -70,8 +70,10 @@ export interface ProviderDefinition {
   runtimeBehavior: ModelRuntimeBehavior;
 }
 
-const ACCOUNT_RUNNER_DOWNLOAD_HREF = "/account-provider-runner.mjs";
-const COPILOT_ACCOUNT_RUNNER_DOWNLOAD_HREF = "/aiboard-account-provider-runner.zip";
+export const ACCOUNT_RUNNER_VERSION = 28;
+const ACCOUNT_RUNNER_DOWNLOAD_HREF = "/aiboard-account-provider-runner.zip";
+const ACCOUNT_RUNNER_COMMAND = "npm install\nnpm start";
+const ACCOUNT_RUNNER_SETUP_HINT = "Download the account runner ZIP and extract every file into its own folder, separate from Runner V2. In that folder, run npm install, then npm start. One running instance serves ChatGPT, GitHub Copilot, and NVIDIA: reuse its printed URL and session token in each provider's settings and save.";
 
 function normalizedModelId(modelId = ""): string {
   return modelId.trim().toLowerCase();
@@ -271,9 +273,9 @@ export const PROVIDER_DEFINITIONS = {
     modelDiscovery: { source: "runner" },
     modelIdsField: {
       label: "Additional model ids (optional)",
-      placeholder: "gpt-5.7",
-      suggestedValue: "gpt-5.7",
-      hint: "Browse the models currently exposed to the signed-in ChatGPT account or add a model id manually.",
+      placeholder: "gpt-6.1-sol",
+      suggestedValue: "gpt-6.1-sol",
+      hint: "Browse the models listed for your signed-in ChatGPT account or add a model id manually. Adding an id does not grant access; OpenAI checks access when you use the model.",
     },
     credentialLabel: "Runner session token",
     credentialPlaceholder: "Paste the current token printed by the account runner",
@@ -284,30 +286,30 @@ export const PROVIDER_DEFINITIONS = {
       label: "Account runner URL",
       placeholder: "http://127.0.0.1:1455",
       suggestedValue: "http://127.0.0.1:1455",
-      hint: "Run node account-provider-runner.mjs, then paste its printed local URL here. ChatGPT OAuth uses port 1455, or 1457 if 1455 is busy.",
+      hint: "Start the shared account runner package with npm start and paste its printed URL here. If it is already running for Copilot or NVIDIA, reuse that URL and token. The default port is 1455, or 1457 if busy.",
     },
     baseURLRequiredMessage: "This provider needs the account runner URL",
     accountRunner: {
       path: "chatgpt",
-      loginLabel: "Log in with OpenAI",
+      loginLabel: "Continue with ChatGPT",
       tokenLabel: "Runner session token",
       tokenPlaceholder: "Paste the current token printed by the account runner",
       tokenHint:
         "This is the local runner session token printed in the terminal. Restarting the runner prints a new token, but your saved ChatGPT login stays in the auth file.",
-      command: "node account-provider-runner.mjs",
+      command: ACCOUNT_RUNNER_COMMAND,
       downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
       setupHint:
-        "Download the standalone runner file, run it with Node, then paste its printed local URL and session token above. Authorize ChatGPT if it is not already connected.",
+        `${ACCOUNT_RUNNER_SETUP_HINT} Continue with ChatGPT to authorize plan usage. No OpenAI API key is needed.`,
     },
     reasoningEffort: true,
     maxTokens: false,
     runtimeBehavior: {
       temperatureLabel: "Temperature is not sent",
       temperatureNote:
-        "ChatGPT account mode sends prompts through the local account runner. Image attachments, text-readable documents, raw document files, Responses streaming, structured output, reasoning effort, function tool calls, and the current hosted web search tool are forwarded through the runner. Provider-hosted local shell tools are not sent because the ChatGPT Codex account backend rejects that hosted tool type. Max-token caps are intentionally omitted because that backend rejects max_output_tokens.",
+        "ChatGPT plan mode uses the public OpenAI Responses API through the local runner. It supports text, images and files when accepted by the selected model, structured output, reasoning effort, and client function tools. Web search depends on model and account policy. Hosted shell, image generation, file search, Code Interpreter, audio/video input, temperature, and max-token caps are not supported by this connection.",
       promptCachingLabel: "Account-provider dependent",
       promptCachingNote:
-        "Caching and rate limits are controlled by the ChatGPT/Codex account backend, not by AI Board.",
+        "Caching and rate limits are controlled by OpenAI's ChatGPT plan usage service. Manage app usage and access in ChatGPT Settings → Usage.",
       concurrencyNote:
         "This uses the user's ChatGPT account entitlement. Expect behavior and limits to differ from OpenAI API billing.",
     },
@@ -332,7 +334,7 @@ export const PROVIDER_DEFINITIONS = {
       label: "Account runner URL",
       placeholder: "http://127.0.0.1:1455",
       suggestedValue: "http://127.0.0.1:1455",
-      hint: "Extract the downloaded runner ZIP, run npm install and npm start, then paste its printed local URL here.",
+      hint: "Start the shared account runner package with npm start and paste its printed URL here. If it is already running for ChatGPT or NVIDIA, reuse that URL and token.",
     },
     baseURLRequiredMessage: "This provider needs the account runner URL",
     accountRunner: {
@@ -342,10 +344,10 @@ export const PROVIDER_DEFINITIONS = {
       tokenPlaceholder: "Paste the current token printed by the account runner",
       tokenHint:
         "This is the local runner session token printed in the terminal. Restarting the runner prints a new token, but your saved GitHub login stays in the auth file.",
-      command: "npm install; npm start",
-      downloadHref: COPILOT_ACCOUNT_RUNNER_DOWNLOAD_HREF,
+      command: ACCOUNT_RUNNER_COMMAND,
+      downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
       setupHint:
-        "Download and extract the SDK runner ZIP, run npm install and npm start, then paste its printed local URL and session token above. Authorize GitHub if it is not already connected.",
+        `${ACCOUNT_RUNNER_SETUP_HINT} Log in with GitHub if it is not already connected.`,
     },
     reasoningEffort: (modelId: string) =>
       normalizedModelId(modelId) === "auto" ||
@@ -377,14 +379,14 @@ export const PROVIDER_DEFINITIONS = {
       label: "Local provider runner URL",
       placeholder: "http://127.0.0.1:1455",
       suggestedValue: "http://127.0.0.1:1455",
-      hint: "Run account-provider-runner.mjs locally, then paste its printed URL here. NVIDIA requests are proxied through the runner because the browser cannot call the NVIDIA API directly.",
+      hint: "Start the shared account runner package with npm start, then paste its printed URL here. Reuse the same URL and token if it is already running for ChatGPT or Copilot. NVIDIA requests are proxied through the runner because browsers cannot call its API directly.",
     },
     baseURLRequiredMessage: "This provider needs the local provider runner URL",
     runnerDownload: {
-      command: "node account-provider-runner.mjs",
+      command: ACCOUNT_RUNNER_COMMAND,
       downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
       hint:
-        "Download the standalone runner file, run it with Node, then paste its printed local URL and token above. The runner proxies NVIDIA requests because browsers cannot call the NVIDIA API directly.",
+        ACCOUNT_RUNNER_SETUP_HINT,
     },
     runnerTokenField: {
       label: "Local runner token",

@@ -448,4 +448,8 @@ assert.match(unknownLegacyAggregate, /Cost Unknown/);
 assert.doesNotMatch(unknownLegacyAggregate, /Cost \$0\.75/);
 assert.doesNotMatch(unknownLegacyAggregate, /Cost unknown:|missing pricing/);
 
-console.log("PASS Build run stats render contract");
+const comparisonHtml=renderStats("finish",{usage:{...usage,models:[{...usage.models[0],apiEquivalentUsd:2.05}]}});
+assert.match(comparisonHtml,/API-equivalent estimate/);
+assert.match(comparisonHtml,/Subscription usage at API rates; not a charge/);
+assert.match(comparisonHtml,/API-equivalent: \$2\.05/);
+console.log("PASS Build run stats render contract and separately labeled API-equivalent comparison");
