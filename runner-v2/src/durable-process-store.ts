@@ -1715,11 +1715,15 @@ function reduceMutation(
       requireState(current, ["launching"]);
       if (current.backendBinding || current.stopIntent || current.pendingEffects.length) throw new Error("Reuse requires a settled no-launch invocation.");
       return moveDerived({...base, reused_from: text(data.reused_from, "reused_from"), cleanup: {state: "not_required"}}, "reused", mutation.at, "observed_evidence_reused_no_launch");
-    case "fail_launch":
+    case "fail_launch": {
       requireState(current, ["prepared", "launching"]);
+      // A stop requested while prepared or launching is satisfied by a launch that never ran;
+      // keeping it made the record invalid and turned a paused command into "Durable stop intent is
+      // inconsistent" (tunnel run).
+      const { stopIntent: _satisfied, ...unlaunched } = base;
       return moveDerived(
         {
-          ...base,
+          ...unlaunched,
           result: { outcome: "launch_failed", finishedAt: mutation.at },
           cleanup: { state: "not_required" },
         },
@@ -1727,6 +1731,7 @@ function reduceMutation(
         mutation.at,
         text(data.detail, "detail"),
       );
+    }
     case "fail": {
       requireState(current, [
         "prepared",
@@ -2230,6 +2235,8 @@ function assertStateInvariants(record: DurableSubprocessRecord): void {
     !["verifying_empty", "cleanup_blocked", "cleaned"].includes(record.state)
   )
     throw new Error("Durable empty verification is inconsistent.");
+  // An orphaned record may carry the stop intent (OPTIONAL_BY_STATE allows it); a launch that is
+  // not proven drops it in fail_launch, because nothing ran for the stop to apply to.
   if (
     record.stopIntent &&
     ![
@@ -2240,6 +2247,7 @@ function assertStateInvariants(record: DurableSubprocessRecord): void {
       "exited",
       "verifying_empty",
       "cleaned",
+      "orphaned",
       "identity_mismatch",
       "backend_unavailable",
       "outcome_unknown",

@@ -1220,6 +1220,26 @@ test("exact prepare retries converge while divergent retries and stale CAS comma
   );
 });
 
+test("a stop requested while launching survives a launch that is then not proven", () => {
+  const kernel = createInMemoryDurableProcessKernel(stateKey);
+  const writer = writerFor(kernel);
+  writer.claim(prepared());
+  let revision = 0;
+  const apply = (command: Record<string, unknown>) => {
+    const record = writer.apply({ invocationId: "invoke-1", expectedRevision: revision, ...command } as never);
+    revision = record.revision;
+    return record;
+  };
+  apply({ type: "mark_output_prepared", at: "2026-01-01T00:00:00.500Z" });
+  apply({ type: "record_environment", at: "2026-01-01T00:00:00.600Z", environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] } });
+  apply({ type: "mark_launching", at: "2026-01-01T00:00:01.000Z" });
+  apply({ type: "request_stop", at: "2026-01-01T00:00:02.000Z", reason: "cancelled" });
+  const failed = apply({ type: "fail_launch", at: "2026-01-01T00:00:03.000Z", detail: "cancelled before launch" });
+  assert.equal(failed.state, "launch_not_proven");
+  assert.equal(failed.stopIntent, undefined, "nothing ran, so the stop is satisfied");
+  assert.equal(failed.result?.outcome, "launch_failed");
+});
+
 test("SQLite prepare is atomic across concurrent store instances and divergent requests conflict", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-process-store-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
