@@ -54,6 +54,7 @@ import {
 import { normalizeBuildTasksForResume } from "@/lib/orchestrator/build";
 import { chatTurns, nextChatRound } from "@/lib/orchestrator/chat";
 import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
+import { serializeBuildWorkers, type BuildCrewMember } from "./build-crew";
 
 export { runClientDiscussion as runDiscussion, stopDiscussion };
 export type { OrchestratorEvent } from "./engine";
@@ -353,6 +354,11 @@ export interface DiscussionConfigInput {
   effort: EffortLevel;
   modelIds: string[];
   judgeModelId?: string | null;
+  /** Build crew; omitted fields keep the saved value. */
+  reviewerModelId?: string | null;
+  buildReviewerReasoningEffort?: ReasoningEffort | null;
+  buildArchitectReasoningEffort?: ReasoningEffort | null;
+  buildWorkers?: BuildCrewMember[];
   verbosity?: Verbosity;
   reasoningEffort?: ReasoningEffort;
   styleNote?: string | null;
@@ -477,6 +483,10 @@ export function updateDiscussionConfig(
     patch.buildTimeLimitMinutes = buildSettings.timeLimitMinutes;
     patch.buildAlwaysRequireIndependentVerifier =
       buildSettings.alwaysRequireIndependentVerifier;
+    if (input.reviewerModelId !== undefined) patch.reviewerModelId = input.reviewerModelId;
+    if (input.buildReviewerReasoningEffort !== undefined) patch.buildReviewerReasoningEffort = input.buildReviewerReasoningEffort;
+    if (input.buildArchitectReasoningEffort !== undefined) patch.buildArchitectReasoningEffort = input.buildArchitectReasoningEffort;
+    if (input.buildWorkers !== undefined) patch.buildWorkers = serializeBuildWorkers(input.buildWorkers);
   }
   updateDiscussion(id, patch);
   return { ...discussion, ...patch };
@@ -534,6 +544,9 @@ export interface CreateDiscussionInput {
   judgeModelId?: string | null;
   reviewerModelId?: string | null;
   buildReviewerReasoningEffort?: ReasoningEffort | null;
+  buildArchitectReasoningEffort?: ReasoningEffort | null;
+  /** Build mode: explicit workers; omitted keeps the participants-minus-roles derivation. */
+  buildWorkers?: BuildCrewMember[];
   verbosity?: Verbosity;
   reasoningEffort?: ReasoningEffort;
   styleNote?: string;
@@ -587,6 +600,10 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     reviewerModelId: input.reviewerModelId ?? null,
     buildReviewerReasoningEffort:
       input.mode === "build" ? input.buildReviewerReasoningEffort ?? null : undefined,
+    buildArchitectReasoningEffort:
+      input.mode === "build" ? input.buildArchitectReasoningEffort ?? null : undefined,
+    buildWorkers:
+      input.mode === "build" && input.buildWorkers ? serializeBuildWorkers(input.buildWorkers) : undefined,
     status: "pending",
     currentRound: 0,
     maxRounds: 0,

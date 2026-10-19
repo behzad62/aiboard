@@ -418,6 +418,11 @@ export function getCapabilitiesMap(): Record<string, ModelCapabilities> {
 }
 
 export function getModelDisplayName(fullModelId: string): string {
+  // A Build role at a second reasoning effort runs as `model#effort` (lib/client/build-crew.ts).
+  const effortRuntime = /^(.+)#(default|none|low|medium|high|xhigh|max)$/.exec(fullModelId);
+  if (effortRuntime) {
+    return `${getModelDisplayName(effortRuntime[1]!)} · ${effortRuntime[2] === "default" ? "provider default" : effortRuntime[2]} reasoning`;
+  }
   const entry = MODEL_CATALOG.find(
     (m) => formatModelId(m.providerId, m.id) === fullModelId
   );

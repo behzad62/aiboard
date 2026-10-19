@@ -293,6 +293,41 @@ test("verifier selection prefers a distinct model, falls back to fresh context, 
   });
 });
 
+test("the owner's Reviewer ranks first, even on the Architect's model, and falls back when unavailable or an author", () => {
+  const health = new ProviderHealthRegistry({ clock: () => 1_000 });
+  const candidates: AgentRuntimeCandidate[] = [
+    { runtimeId: "openai:gpt-code", providerId: "openai", modelId: "gpt-code", capabilities: ["code"], priority: 0 },
+    { runtimeId: "openai:gpt-code@high", providerId: "openai", modelId: "gpt-code", capabilities: ["code"], priority: 1 },
+    { runtimeId: "anthropic:claude-code", providerId: "anthropic", modelId: "claude-code", capabilities: ["code"], priority: 2 },
+    { runtimeId: "google:gemini-code", providerId: "google", modelId: "gemini-code", capabilities: ["code"], priority: 3 },
+  ];
+  const all = candidates.map((candidate) => candidate.runtimeId);
+  const select = (router: RuntimeRouter, authors: string[] = []) => {
+    const selection = router.selectVerifier({
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: all,
+      architectRuntimeId: "openai:gpt-code",
+      acceptedChangeAuthorRuntimeIds: authors,
+    });
+    assert.equal(selection.status, "assigned");
+    return selection.status === "assigned" ? [selection.runtime.runtimeId, selection.independence] : [];
+  };
+
+  // A distinct Reviewer below another distinct candidate in priority still wins.
+  const google = new RuntimeRouter({ candidates, health, preferredVerifierRuntimeId: "google:gemini-code" });
+  assert.deepEqual(select(google), ["google:gemini-code", "distinct_model"]);
+  // The owner may deliberately review with the Architect's model at another effort: fresh context.
+  const sameModel = new RuntimeRouter({ candidates, health, preferredVerifierRuntimeId: "openai:gpt-code@high" });
+  assert.deepEqual(select(sameModel), ["openai:gpt-code@high", "fresh_context"]);
+  // A Reviewer that authored the change never reviews it.
+  assert.deepEqual(select(google, ["google:gemini-code"]), ["anthropic:claude-code", "distinct_model"]);
+  // Without a preference the priority-ordered distinct choice is unchanged.
+  assert.deepEqual(select(new RuntimeRouter({ candidates, health })), ["anthropic:claude-code", "distinct_model"]);
+  // An unavailable Reviewer falls back to the next candidate.
+  health.recordFailure("google", { kind: "usage_limit", message: "no credits" });
+  assert.deepEqual(select(google), ["anthropic:claude-code", "distinct_model"]);
+});
+
 test("verifier selection fails closed for unknown configured or author runtimes", () => {
   const router = new RuntimeRouter({
     candidates: runtimes,

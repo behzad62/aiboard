@@ -83,7 +83,7 @@ import type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 import type { BuildSkillEvent } from "@/lib/skills/types";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { getModelPricing } from "@/lib/providers/pricing";
-import { getModeLabel } from "@/lib/orchestrator/config";
+import { getModeLabel, getReasoningLabel } from "@/lib/orchestrator/config";
 import { diagnosticPhaseForBuildStop } from "@/lib/orchestrator/build-stop-diagnostics";
 import {
   addBuildUsageCall,
@@ -178,7 +178,7 @@ import {
 } from "@/components/BuildTaskBoard";
 import { NativePlanningPanel, NativePlanStartCard } from "@/components/NativePlanningPanel";
 import { LoadingNotice } from "@/components/build/LoadingNotice";
-import { selectNativeBuildRuntimes } from "@/lib/client/native-build-engine";
+import { buildCrewFromDiscussion } from "@/lib/client/build-crew";
 import { requestSpecificationSource } from "@/lib/client/native-planning-view";
 import {
   RepoWorkflowPanel,
@@ -2665,10 +2665,15 @@ function DiscussionPageInner() {
         })),
     ];
 
-    const workerNames = (discussion.nativeBuildRunId && discussion.judgeModelId
-      ? selectNativeBuildRuntimes(participantIds, discussion.judgeModelId, discussion.reviewerModelId ?? null).workerRuntimeIds
-      : participantIds
-    ).map(modelLabel);
+    const crew = buildCrewFromDiscussion(discussion);
+    const withEffort = (member: { modelId: string; reasoningEffort: Parameters<typeof getReasoningLabel>[0] }) =>
+      member.reasoningEffort === "default"
+        ? modelLabel(member.modelId)
+        : `${modelLabel(member.modelId)} (${getReasoningLabel(member.reasoningEffort).toLowerCase()})`;
+    // No workers means the Architect's model implements the tasks.
+    const workerNames = crew
+      ? crew.workers.length > 0 ? crew.workers.map(withEffort) : [withEffort(crew.architect)]
+      : participantIds.map(modelLabel);
     return (
       <BuildWorkspace
         topic={discussion.topic}
@@ -2688,9 +2693,9 @@ function DiscussionPageInner() {
           />
         }
         crew={{
-          architect: discussion.judgeModelId ? modelLabel(discussion.judgeModelId) : undefined,
+          architect: crew ? withEffort(crew.architect) : undefined,
           workers: workerNames,
-          verifiers: discussion.reviewerModelId ? [modelLabel(discussion.reviewerModelId)] : [],
+          verifiers: crew?.reviewer ? [withEffort(crew.reviewer)] : [],
         }}
         runnerChip={
           <RunnerChip
@@ -2776,7 +2781,7 @@ function DiscussionPageInner() {
                 <dt className="flex items-center gap-1.5 text-muted-foreground">
                   <RoleGlyph role="architect" /> Architect
                 </dt>
-                <dd>{discussion.judgeModelId ? modelLabel(discussion.judgeModelId) : "—"}</dd>
+                <dd>{crew ? withEffort(crew.architect) : "—"}</dd>
                 <dt className="flex items-center gap-1.5 text-muted-foreground">
                   <RoleGlyph role="worker" /> Workers
                 </dt>
@@ -2785,8 +2790,8 @@ function DiscussionPageInner() {
                   <RoleGlyph role="verifier" /> Verifier
                 </dt>
                 <dd>
-                  {discussion.reviewerModelId
-                    ? modelLabel(discussion.reviewerModelId)
+                  {crew?.reviewer
+                    ? `${withEffort(crew.reviewer)}, falls back to another model when unavailable`
                     : discussion.buildAlwaysRequireIndependentVerifier
                       ? "Independent model required"
                       : "Chosen by the runner"}

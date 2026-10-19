@@ -7,6 +7,14 @@ import { EffortSlider } from "@/components/EffortSlider";
 import { BuildRunPolicyControl } from "@/components/BuildRunPolicyControl";
 import { ModelSelector } from "@/components/ModelSelector";
 import { ReasoningControl } from "@/components/ReasoningControl";
+import { BuildCrewPicker } from "@/components/build/BuildCrewPicker";
+import {
+  buildCrewFromDiscussion,
+  buildCrewModelIds,
+  defaultReviewerModelId,
+  type BuildCrew,
+  type BuildCrewMember,
+} from "@/lib/client/build-crew";
 import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,6 +67,10 @@ export interface DiscussionSessionSettingsValue {
   effort: EffortLevel;
   modelIds: string[];
   judgeModelId: string | null;
+  reviewerModelId?: string | null;
+  buildReviewerReasoningEffort?: ReasoningEffort | null;
+  buildArchitectReasoningEffort?: ReasoningEffort | null;
+  buildWorkers?: BuildCrewMember[];
   verbosity: Verbosity;
   styleNote: string;
   reasoningEffort: ReasoningEffort;
@@ -89,6 +101,25 @@ function parseModelIds(discussion: Discussion): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * A session saved without an explicit Reviewer shows the model the runner preferred for it: the first
+ * non-Architect participant, which also stays a worker.
+ */
+function initialCrew(discussion: Discussion): BuildCrew | null {
+  const crew = buildCrewFromDiscussion(discussion);
+  if (!crew || crew.reviewer) return crew;
+  const reviewer = defaultReviewerModelId(crew.architect.modelId, [
+    ...crew.workers.map((worker) => worker.modelId),
+    crew.architect.modelId,
+  ]);
+  return reviewer
+    ? {
+        ...crew,
+        reviewer: { modelId: reviewer, reasoningEffort: discussion.reasoningEffort ?? "default" },
+      }
+    : crew;
 }
 
 export function DiscussionSessionSettings({
@@ -137,9 +168,13 @@ export function DiscussionSessionSettings({
       discussion.buildAlwaysRequireIndependentVerifier ??
         DEFAULT_BUILD_ALWAYS_REQUIRE_INDEPENDENT_VERIFIER
     );
+  const [crew, setCrew] = useState<BuildCrew | null>(() =>
+    discussion.mode === "build" ? initialCrew(discussion) : null
+  );
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    setCrew(discussion.mode === "build" ? initialCrew(discussion) : null);
     setEffort(discussion.effort);
     setSelectedModels(parseModelIds(discussion));
     setJudgeModelId(discussion.judgeModelId ?? "");
@@ -194,11 +229,13 @@ export function DiscussionSessionSettings({
     capabilities: m.capabilities,
     contextProfile: m.contextProfile,
   }));
+  const isBuild = discussion.mode === "build";
   const buildContextRows = Array.from(
-    new Set([
-      ...selectedModels,
-      ...(judgeModelId ? [judgeModelId] : []),
-    ])
+    new Set(
+      isBuild && crew
+        ? buildCrewModelIds(crew)
+        : [...selectedModels, ...(judgeModelId ? [judgeModelId] : [])]
+    )
   )
     .map((id) => enabledModels.find((model) => model.fullId === id))
     .filter(
@@ -217,15 +254,31 @@ export function DiscussionSessionSettings({
   const singleChat = discussion.mode === "chat";
   const hasEnoughModels = singleChat
     ? Boolean(compatibleJudgeModelId)
-    : hasEnoughParticipatingModels(discussion.mode, compatibleSelected.length);
+    : isBuild
+      ? Boolean(crew?.architect.modelId)
+      : hasEnoughParticipatingModels(discussion.mode, compatibleSelected.length);
   const canSave = canEdit && !busy && hasEnoughModels;
 
   const save = () => {
     if (!canSave) return;
     const saved = onSave({
       effort,
-      modelIds: singleChat ? [compatibleJudgeModelId] : compatibleSelected,
-      judgeModelId: compatibleJudgeModelId || compatibleSelected[0] || null,
+      modelIds: singleChat
+        ? [compatibleJudgeModelId]
+        : isBuild && crew
+          ? buildCrewModelIds(crew)
+          : compatibleSelected,
+      judgeModelId: isBuild && crew
+        ? crew.architect.modelId
+        : compatibleJudgeModelId || compatibleSelected[0] || null,
+      ...(isBuild && crew
+        ? {
+            reviewerModelId: crew.reviewer?.modelId ?? null,
+            buildReviewerReasoningEffort: crew.reviewer?.reasoningEffort ?? null,
+            buildArchitectReasoningEffort: crew.architect.reasoningEffort,
+            buildWorkers: crew.workers,
+          }
+        : {}),
       verbosity,
       styleNote,
       reasoningEffort,
@@ -326,12 +379,42 @@ export function DiscussionSessionSettings({
             mode={discussion.mode}
           />
 
-          <ReasoningControl
-            value={reasoningEffort}
-            onChange={setReasoningEffort}
-          />
+          {!isBuild && (
+            <ReasoningControl
+              value={reasoningEffort}
+              onChange={setReasoningEffort}
+            />
+          )}
 
-          {!singleChat && (
+          {isBuild && crew && (
+            <div className="space-y-2">
+              <Label>Models</Label>
+              <BuildCrewPicker
+                guidance="compact"
+                idPrefix="session-crew"
+                models={enabledModels.map((model) => ({ fullId: model.fullId, name: model.name }))}
+                architectModels={compatibleJudgeOptions.map((model) => ({ fullId: model.fullId, name: model.name }))}
+                value={crew}
+                onChange={setCrew}
+                planning={{
+                  evidenceGatedPlanning: planningOptions.evidenceGatedPlanning,
+                  answerReview: planningOptions.answerReview,
+                  alwaysRequireIndependentVerifier: buildAlwaysRequireIndependentVerifier,
+                  runPolicy: buildRunPolicy,
+                }}
+                disabled={!canEdit || busy}
+              />
+              {discussion.nativeBuildRunId && !discussion.nativeBuildRequestedAt && (
+                <p className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
+                  The running Build keeps the models it started with; changes here apply to the next run
+                  (Restart or a follow-up Build). If the current Architect fails, the Build asks you in
+                  &ldquo;Needs you&rdquo; which model should take over.
+                </p>
+              )}
+            </div>
+          )}
+
+          {!singleChat && !isBuild && (
             <ModelSelector
               models={modelsForSelector}
               selected={selectedModels}
@@ -346,11 +429,14 @@ export function DiscussionSessionSettings({
               <div className="space-y-1 text-sm">
                 {buildContextRows.map((model) => {
                   const profile = model.contextProfile!;
-                  const role =
-                    judgeModelId === model.fullId
-                      ? discussion.mode === "build"
-                        ? "Architect"
-                        : "Judge"
+                  const role = isBuild && crew
+                    ? [
+                        crew.architect.modelId === model.fullId ? "Architect" : null,
+                        crew.reviewer?.modelId === model.fullId ? "Reviewer" : null,
+                        crew.workers.some((worker) => worker.modelId === model.fullId) ? "Worker" : null,
+                      ].filter(Boolean).join(" · ")
+                    : judgeModelId === model.fullId
+                      ? "Judge"
                       : "Worker";
                   return (
                     <div
@@ -394,14 +480,10 @@ export function DiscussionSessionSettings({
             </div>
           )}
 
-          {compatibleJudgeOptions.length > 0 && (
+          {!isBuild && compatibleJudgeOptions.length > 0 && (
             <div className="space-y-2">
               <Label>
-                {discussion.mode === "build"
-                  ? "Architect model"
-                  : singleChat
-                    ? "Model"
-                    : "Judge model"}
+                {singleChat ? "Model" : "Judge model"}
               </Label>
               <Select value={judgeModelId} onValueChange={setJudgeModelId}>
                 <SelectTrigger>
@@ -415,13 +497,6 @@ export function DiscussionSessionSettings({
                   ))}
                 </SelectContent>
               </Select>
-              {discussion.mode === "build" && discussion.nativeBuildRunId && !discussion.nativeBuildRequestedAt && (
-                <p className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
-                  The running Build keeps the models it started with; changes here apply to the next run
-                  (Restart or a follow-up Build). If the current Architect fails, the Build asks you in
-                  &ldquo;Needs you&rdquo; which model should take over.
-                </p>
-              )}
             </div>
           )}
 

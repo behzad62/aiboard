@@ -26,6 +26,12 @@ import { DetailControl } from "@/components/DetailControl";
 import { ReasoningControl } from "@/components/ReasoningControl";
 import { AttachmentPicker, type AttachmentSummary } from "@/components/AttachmentPicker";
 import { DiscussionHistory } from "@/components/DiscussionHistory";
+import { BuildCrewPicker } from "@/components/build/BuildCrewPicker";
+import {
+  buildCrewModelIds,
+  defaultReviewerModelId,
+  type BuildCrew,
+} from "@/lib/client/build-crew";
 import type {
   Discussion,
   DiscussionMode,
@@ -40,7 +46,6 @@ import {
   estimateDiscussionCost,
   estimateDiscussionCostUsd,
   getModeInfo,
-  REASONING_OPTIONS,
 } from "@/lib/orchestrator/config";
 import {
   createDiscussion,
@@ -73,6 +78,7 @@ import {
   nativeProviderBillingBasis,
 } from "@/lib/client/native-build-policy";
 import {
+  actionProtocolStatusForId,
   selectBuildModelIdsByCapabilities,
   participantRequiredInputTypesForMode,
   selectParticipantModelIdsByInputSupport,
@@ -136,9 +142,8 @@ export default function DashboardPage() {
   const [styleNote, setStyleNote] = useState("");
   const [reasoningEffort, setReasoningEffort] =
     useState<ReasoningEffort>("default");
-  // Build mode reviewer: "auto" keeps the runner's derived choice (first non-Architect participant).
-  const [reviewerModelId, setReviewerModelId] = useState<string>("auto");
-  const [reviewerEffort, setReviewerEffort] = useState<ReasoningEffort | "inherit">("inherit");
+  // Build roles: Architect, preferred Reviewer and the ordered worker list, each with its own effort.
+  const [crew, setCrew] = useState<BuildCrew | null>(null);
   const [planningOptions, setPlanningOptions] = useState({
     answerReview: false,
     evidenceGatedPlanning: false,
@@ -226,6 +231,18 @@ export default function DashboardPage() {
             : defaultSelectedModels[0] ?? models[0] ?? "";
         setJudgeModelId(defaultLead);
         setChatModelId(defaultLead);
+        if (defaultLead) {
+          const defaultEffort = d.settings.defaultReasoningEffort ?? "default";
+          const pool = defaultSelectedModels.length > 0 ? defaultSelectedModels : models;
+          const reviewer = defaultReviewerModelId(defaultLead, pool.length > 1 ? pool : models);
+          setCrew({
+            architect: { modelId: defaultLead, reasoningEffort: defaultEffort },
+            reviewer: reviewer ? { modelId: reviewer, reasoningEffort: defaultEffort } : null,
+            workers: pool
+              .filter((id) => id !== defaultLead && id !== reviewer)
+              .map((modelId) => ({ modelId, reasoningEffort: defaultEffort })),
+          });
+        }
       }
     })().catch(() => setError("Failed to load dashboard"));
   }, []);
@@ -248,6 +265,12 @@ export default function DashboardPage() {
       prev && supportsInputTypes(capabilitiesById.get(prev), requiredInputTypes)
         ? prev
         : judgeOptions[0] ?? ""
+    );
+    // The Architect reads the attachments, so it must accept their types.
+    setCrew((prev) =>
+      prev && !supportsInputTypes(capabilitiesById.get(prev.architect.modelId), requiredInputTypes) && judgeOptions[0]
+        ? { ...prev, architect: { ...prev.architect, modelId: judgeOptions[0] } }
+        : prev
     );
   }, [data?.enabledModels, capabilitiesById, mode, requiredInputTypes]);
 
@@ -290,7 +313,9 @@ export default function DashboardPage() {
     ? effectiveChatModelId
       ? [effectiveChatModelId]
       : []
-    : effectiveSelectedModels;
+    : mode === "build"
+      ? crew ? buildCrewModelIds(crew) : []
+      : effectiveSelectedModels;
 
   const costEstimate =
     runModelIds.length > 0
@@ -316,28 +341,14 @@ export default function DashboardPage() {
   const hasEnoughModels = hasEnoughParticipatingModels(mode, runModelIds.length);
   const hasJudge = singleChat
     ? Boolean(effectiveChatModelId)
-    : Boolean(judgeModelId || effectiveSelectedModels[0]);
-  const buildArchitectId = judgeModelId || effectiveSelectedModels[0] || "";
-  const buildReviewerId =
-    mode === "build" &&
-    reviewerModelId !== "auto" &&
-    reviewerModelId !== buildArchitectId &&
-    compatibleJudgeOptions.some((model) => model.fullId === reviewerModelId)
-      ? reviewerModelId
-      : null;
-  const buildWorkerCount = Math.max(
-    1,
-    effectiveSelectedModels.filter(
-      (id) => id !== buildArchitectId && id !== buildReviewerId
-    ).length
-  );
+    : mode === "build"
+      ? Boolean(crew?.architect.modelId)
+      : Boolean(judgeModelId || effectiveSelectedModels[0]);
+  const buildReviewerId = mode === "build" ? crew?.reviewer?.modelId ?? null : null;
+  const buildWorkerCount = crew?.workers.length ?? 0;
   const buildBudgetEnforceabilityError = useMemo(() => {
     if (mode !== "build") return null;
-    const runtimeIds = [...new Set([
-      judgeModelId || effectiveSelectedModels[0],
-      buildReviewerId,
-      ...effectiveSelectedModels,
-    ].filter((id): id is string => Boolean(id)))];
+    const runtimeIds = crew ? buildCrewModelIds(crew) : [];
     return nativeBuildBudgetEnforceabilityError({
       runPolicy: buildRunPolicy,
       budgetLimits: {
@@ -370,9 +381,7 @@ export default function DashboardPage() {
     }));
   }, [
     mode,
-    judgeModelId,
-    buildReviewerId,
-    effectiveSelectedModels,
+    crew,
     buildRunPolicy,
     buildBudgetUsd,
     buildTimeLimitMinutes,
@@ -383,18 +392,14 @@ export default function DashboardPage() {
   // without API pricing — say so instead of letting the owner believe the cap protects them.
   const buildBudgetUnpricedWarning = useMemo(() => {
     if (mode !== "build" || buildRunPolicy !== "budgeted" || !(buildBudgetUsd > 0)) return null;
-    const runtimeIds = [...new Set([
-      judgeModelId || effectiveSelectedModels[0],
-      buildReviewerId,
-      ...effectiveSelectedModels,
-    ].filter((id): id is string => Boolean(id)))];
+    const runtimeIds = crew ? buildCrewModelIds(crew) : [];
     const unpriced = runtimeIds.filter((runtimeId) =>
       !getModelPricing(runtimeId, data?.settings.modelPricingOverrides, data?.settings.discoveredModelMetadata) &&
       !getProviderDefinition(parseModelId(runtimeId).providerId)?.accountRunner
     );
     if (unpriced.length === 0) return null;
     return `The ${buildBudgetUsd} cap can't count ${unpriced.map((id) => parseModelId(id).model).join(", ")}: ${unpriced.length === 1 ? "it has" : "they have"} no API pricing, so ${unpriced.length === 1 ? "its" : "their"} calls book $0. Add prices in Settings → Pricing${buildTimeLimitMinutes > 0 ? "; until then only the time limit bounds this run" : ""}.`;
-  }, [mode, buildRunPolicy, buildBudgetUsd, buildTimeLimitMinutes, judgeModelId, buildReviewerId, effectiveSelectedModels, data?.settings.modelPricingOverrides, data?.settings.discoveredModelMetadata]);
+  }, [mode, buildRunPolicy, buildBudgetUsd, buildTimeLimitMinutes, crew, data?.settings.modelPricingOverrides, data?.settings.discoveredModelMetadata]);
 
   // Only genuine blockers — no nagging about how the topic is phrased.
   const blockerHint =
@@ -430,7 +435,9 @@ export default function DashboardPage() {
         modelIds: runModelIds,
         judgeModelId: singleChat
           ? effectiveChatModelId
-          : judgeModelId || effectiveSelectedModels[0],
+          : mode === "build"
+            ? crew?.architect.modelId
+            : judgeModelId || effectiveSelectedModels[0],
         attachmentIds: attachments.map((a) => a.id),
         verbosity,
         styleNote: styleNote.trim() || undefined,
@@ -440,10 +447,9 @@ export default function DashboardPage() {
         runnerToken: mode === "build" ? runner?.token ?? null : null,
         runnerAccess: mode === "build" ? runner?.access ?? null : null,
         reviewerModelId: mode === "build" ? buildReviewerId : null,
-        buildReviewerReasoningEffort:
-          mode === "build" && buildReviewerId && reviewerEffort !== "inherit"
-            ? reviewerEffort
-            : null,
+        buildReviewerReasoningEffort: mode === "build" ? crew?.reviewer?.reasoningEffort ?? null : null,
+        buildArchitectReasoningEffort: mode === "build" ? crew?.architect.reasoningEffort ?? null : null,
+        buildWorkers: mode === "build" ? crew?.workers : undefined,
         buildAnswerReview: mode === "build" ? planningOptions.answerReview : undefined,
         buildEvidenceGatedPlanning: mode === "build" ? planningOptions.evidenceGatedPlanning : undefined,
         buildSpecCopy: mode === "build" ? planningOptions.specCopy : undefined,
@@ -497,7 +503,9 @@ export default function DashboardPage() {
   const isBuild = mode === "build";
   const leadModelId = singleChat
     ? effectiveChatModelId
-    : judgeModelId || effectiveSelectedModels[0] || "";
+    : isBuild
+      ? crew?.architect.modelId ?? ""
+      : judgeModelId || effectiveSelectedModels[0] || "";
   const leadName =
     data?.enabledModels.find((model) => model.fullId === leadModelId)?.name ??
     "No model";
@@ -508,9 +516,9 @@ export default function DashboardPage() {
     ? data?.enabledModels.find((model) => model.fullId === buildReviewerId)?.name ?? buildReviewerId
     : null;
   const optionsSummary = isBuild
-    ? `Architect ${leadName} · ${reviewerName ? `reviewer ${reviewerName} · ` : ""}${buildWorkerCount} worker${
+    ? `Architect ${leadName} · ${reviewerName ? `reviewer ${reviewerName} · ` : ""}${buildWorkerCount === 0 ? "Architect implements" : `${buildWorkerCount} worker${
         buildWorkerCount === 1 ? "" : "s"
-      } · ${
+      }`} · ${
         buildBudgetUsd > 0 ? `$${buildBudgetUsd} budget` : "no budget cap"
       }`
     : singleChat
@@ -608,26 +616,17 @@ export default function DashboardPage() {
                   aria-hidden="true"
                   className="inline-block h-2.5 w-2.5 rounded-full bg-foreground/70"
                 />
-                Workers <strong className="font-medium text-foreground">{buildWorkerCount}</strong>
+                Workers <strong className="font-medium text-foreground">{buildWorkerCount === 0 ? "Architect" : buildWorkerCount}</strong>
               </span>
               {reviewerName && (
                 <span className="inline-flex items-center gap-1.5">
                   <span
                     aria-hidden="true"
-                    className="inline-block h-2.5 w-2.5 rounded-full bg-success"
+                    className="inline-block h-2.5 w-2.5 rounded-full border-2 border-success"
                   />
                   Reviewer <strong className="font-medium text-foreground">{reviewerName}</strong>
                 </span>
               )}
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  aria-hidden="true"
-                  className="inline-block h-2.5 w-2.5 rounded-full border-2 border-success"
-                />
-                {buildAlwaysRequireIndependentVerifier
-                  ? "Independent verifier required"
-                  : "Verifier when available"}
-              </span>
             </p>
           ) : (
             <div className="mt-3 space-y-2">
@@ -753,7 +752,23 @@ export default function DashboardPage() {
             />
           </summary>
           <div className="space-y-6 border-t px-4 py-5 sm:px-5">
-            {!singleChat && (
+            {isBuild && crew && (
+              <BuildCrewPicker
+                models={(data?.enabledModels ?? []).map((model) => ({ fullId: model.fullId, name: model.name }))}
+                architectModels={compatibleJudgeOptions.map((model) => ({ fullId: model.fullId, name: model.name }))}
+                value={crew}
+                onChange={setCrew}
+                planning={{
+                  evidenceGatedPlanning: planningOptions.evidenceGatedPlanning,
+                  answerReview: planningOptions.answerReview,
+                  alwaysRequireIndependentVerifier: buildAlwaysRequireIndependentVerifier,
+                  runPolicy: buildRunPolicy,
+                }}
+                probeStatus={(modelId) => actionProtocolStatusForId(modelId, capabilityProfiles)}
+              />
+            )}
+
+            {!singleChat && !isBuild && (
               <ModelSelector
                 models={modelsForSelector}
                 selected={visibleSelectedModels}
@@ -762,27 +777,9 @@ export default function DashboardPage() {
               />
             )}
 
-            {isBuild && buildCapabilityDecision.diagnostics.length > 0 && (
-              <div className="rounded-lg border border-warning/40 bg-warning-soft p-3 text-sm text-warning">
-                {buildCapabilityDecision.diagnostics.map((line) => (
-                  <p key={line}>{line}</p>
-                ))}
-              </div>
-            )}
-
-            {!singleChat && compatibleJudgeOptions.length > 0 && (
+            {!singleChat && !isBuild && compatibleJudgeOptions.length > 0 && (
               <div className="space-y-2">
-                <Label>
-                  {isBuild
-                    ? "Architect — plans tasks, reviews, and integrates"
-                    : "Judge — writes the final synthesis"}
-                </Label>
-                {isBuild && (
-                  <p className="text-xs text-muted-foreground">
-                    The models above are the workers, except the Architect and
-                    the reviewer. Pick your most capable model to lead them.
-                  </p>
-                )}
+                <Label>Judge — writes the final synthesis</Label>
                 <Select value={judgeModelId} onValueChange={setJudgeModelId}>
                   <SelectTrigger>
                     <SelectValue />
@@ -795,58 +792,6 @@ export default function DashboardPage() {
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
-            )}
-
-            {isBuild && compatibleJudgeOptions.length > 1 && (
-              <div className="space-y-2">
-                <Label htmlFor="build-reviewer">
-                  Reviewer — critiques the plan and verifies the result
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  Never given worker tasks, so it stays independent of the code
-                  it checks. Automatic uses the first participant that isn&apos;t
-                  the Architect.
-                </p>
-                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,14rem)]">
-                  <Select
-                    value={buildReviewerId ?? "auto"}
-                    onValueChange={setReviewerModelId}
-                  >
-                    <SelectTrigger id="build-reviewer">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">Automatic</SelectItem>
-                      {compatibleJudgeOptions
-                        .filter((model) => model.fullId !== buildArchitectId)
-                        .map((model) => (
-                          <SelectItem key={model.fullId} value={model.fullId}>
-                            {model.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={buildReviewerId ? reviewerEffort : "inherit"}
-                    onValueChange={(value) =>
-                      setReviewerEffort(value as ReasoningEffort | "inherit")
-                    }
-                    disabled={!buildReviewerId}
-                  >
-                    <SelectTrigger aria-label="Reviewer reasoning effort">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="inherit">Same reasoning effort</SelectItem>
-                      {REASONING_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label} reasoning
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
               </div>
             )}
 
@@ -894,10 +839,13 @@ export default function DashboardPage() {
               mode={mode}
             />
 
-            <ReasoningControl
-              value={reasoningEffort}
-              onChange={setReasoningEffort}
-            />
+            {/* Build sets reasoning per role in the crew picker above. */}
+            {!isBuild && (
+              <ReasoningControl
+                value={reasoningEffort}
+                onChange={setReasoningEffort}
+              />
+            )}
 
             <AttachmentPicker attachments={attachments} onChange={setAttachments} />
 

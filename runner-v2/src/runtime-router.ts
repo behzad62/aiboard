@@ -78,6 +78,11 @@ export interface RuntimeRouterDecision {
 export interface RuntimeRouterOptions {
   candidates: readonly AgentRuntimeCandidate[];
   health: ProviderHealthRegistry;
+  /**
+   * The owner's Reviewer: chosen first by selectVerifier whenever it is an eligible candidate and did
+   * not author the change, even if it shares the Architect's model (recorded fresh_context).
+   */
+  preferredVerifierRuntimeId?: string;
   onDecision?: (decision: RuntimeRouterDecision) => void;
 }
 
@@ -92,10 +97,12 @@ export class RuntimeRouter {
   private readonly byId = new Map<string, AgentRuntimeCandidate>();
   private readonly health: ProviderHealthRegistry;
   private readonly onDecision?: RuntimeRouterOptions["onDecision"];
+  private readonly preferredVerifierRuntimeId?: string;
 
   constructor(options: RuntimeRouterOptions) {
     this.health = options.health;
     this.onDecision = options.onDecision;
+    this.preferredVerifierRuntimeId = options.preferredVerifierRuntimeId;
     this.candidates = options.candidates
       .map(cloneCandidate)
       .sort(compareCandidates);
@@ -190,23 +197,30 @@ export class RuntimeRouter {
     const excludedModelIdentities = new Set([
       canonicalModelIdentity(architect.modelId),
     ]);
+    const authorModelIdentities = new Set<string>();
     for (const runtimeId of new Set(input.acceptedChangeAuthorRuntimeIds)) {
       const author = this.byId.get(runtimeId);
       if (!author) {
         throw new Error(`Unknown accepted change author runtime ${runtimeId}.`);
       }
       excludedModelIdentities.add(canonicalModelIdentity(author.modelId));
+      authorModelIdentities.add(canonicalModelIdentity(author.modelId));
     }
     const eligibleAllowed = this.eligible(required).filter(
       (candidate) =>
         allowedRuntimeIds.has(candidate.runtimeId) &&
         !input.excludedRuntimeIds?.has(candidate.runtimeId),
     );
+    const preferred = eligibleAllowed.find(
+      (candidate) =>
+        candidate.runtimeId === this.preferredVerifierRuntimeId &&
+        !authorModelIdentities.has(canonicalModelIdentity(candidate.modelId)),
+    );
     const distinct = eligibleAllowed.find(
       (candidate) =>
         !excludedModelIdentities.has(canonicalModelIdentity(candidate.modelId)),
     );
-    const runtime = distinct ?? eligibleAllowed[0];
+    const runtime = preferred ?? distinct ?? eligibleAllowed[0];
     if (!runtime) {
       return {
         status: "unavailable",
@@ -217,7 +231,9 @@ export class RuntimeRouter {
     return {
       status: "assigned",
       runtime: cloneCandidate(runtime),
-      independence: distinct ? "distinct_model" : "fresh_context",
+      independence: excludedModelIdentities.has(canonicalModelIdentity(runtime.modelId))
+        ? "fresh_context"
+        : "distinct_model",
     };
   }
 

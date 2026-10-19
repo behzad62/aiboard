@@ -410,6 +410,13 @@ export interface Discussion {
   reviewerModelId?: string | null;
   /** Build mode: reasoning effort for the reviewer; null/undefined = `reasoningEffort`. */
   buildReviewerReasoningEffort?: ReasoningEffort | null;
+  /** Build mode: reasoning effort for the Architect; null/undefined = `reasoningEffort`. */
+  buildArchitectReasoningEffort?: ReasoningEffort | null;
+  /**
+   * Build mode: JSON `{ modelId, reasoningEffort }[]` worker list (see lib/client/build-crew.ts).
+   * Absent on older sessions, whose workers are the participants other than Architect and reviewer.
+   */
+  buildWorkers?: string | null;
   attachmentIds: string | null;
   /** Build mode: display name of the granted project folder (handle lives in IndexedDB). */
   projectFolderName?: string | null;

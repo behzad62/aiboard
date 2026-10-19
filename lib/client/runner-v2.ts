@@ -83,6 +83,8 @@ export interface CreateNativeBuildInput {
     architectRuntimeId: string;
     workerRuntimeIds: string[];
     verifierRuntimeIds: string[];
+    /** The owner's Reviewer; preferred for every verifier role, the other verifiers are its fallback. */
+    reviewerRuntimeId?: string;
     alwaysRequireIndependentVerifier: boolean;
     maxConcurrency: number;
     runPolicy: BuildRunPolicy;

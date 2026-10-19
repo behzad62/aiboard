@@ -103,6 +103,7 @@ interface CreateRunBody {
     architectRuntimeId: string;
     workerRuntimeIds: string[];
     verifierRuntimeIds: string[];
+    reviewerRuntimeId?: string;
     alwaysRequireIndependentVerifier: boolean;
     maxConcurrency: number;
     runPolicy: NativeBuildSpec["runPolicy"];
@@ -439,6 +440,7 @@ export class ControlServer {
             architectRuntimeId: body.build.architectRuntimeId,
             workerRuntimeIds: [...body.build.workerRuntimeIds],
             verifierRuntimeIds: [...body.build.verifierRuntimeIds],
+            ...(body.build.reviewerRuntimeId !== undefined ? { reviewerRuntimeId: body.build.reviewerRuntimeId } : {}),
             alwaysRequireIndependentVerifier:
               body.build.alwaysRequireIndependentVerifier,
             maxConcurrency: body.build.maxConcurrency,
@@ -1546,6 +1548,10 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length
   ) invalidBody();
   if (typeof body.alwaysRequireIndependentVerifier !== "boolean") invalidBody();
+  if (
+    body.reviewerRuntimeId !== undefined &&
+    (!isNonEmptyString(body.reviewerRuntimeId) || !body.verifierRuntimeIds.includes(body.reviewerRuntimeId))
+  ) invalidBody();
   if (!Number.isSafeInteger(body.maxConcurrency) || body.maxConcurrency < 1) {
     invalidBody();
   }

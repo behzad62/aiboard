@@ -543,3 +543,11 @@ test("legacy native Build specs migrate durably to Finish without hidden ceiling
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a Build spec's Reviewer must be one of its verifier runtimes", () => {
+  assert.doesNotThrow(() => validateBuildSpec({ ...validSpec, reviewerRuntimeId: "anthropic:claude-sonnet-4.5" }));
+  assert.throws(
+    () => validateBuildSpec({ ...validSpec, reviewerRuntimeId: "openai:not-configured" }),
+    /reviewer runtime must be one of its verifier runtimes/
+  );
+});

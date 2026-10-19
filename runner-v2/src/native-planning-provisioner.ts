@@ -712,6 +712,7 @@ export interface StableProvisioningRequest {
   readonly architectRuntimeId: string;
   readonly workerRuntimeIds: readonly string[];
   readonly verifierRuntimeIds: readonly string[];
+  readonly reviewerRuntimeId: string | null;
   readonly alwaysRequireIndependentVerifier: boolean;
   readonly repairPlanLimit: number | null;
   readonly maxConcurrency: number;
@@ -783,6 +784,7 @@ export function stableProvisioningRequestIdentity(
     architectRuntimeId: spec.architectRuntimeId,
     workerRuntimeIds: [...spec.workerRuntimeIds],
     verifierRuntimeIds: [...spec.verifierRuntimeIds],
+    reviewerRuntimeId: spec.reviewerRuntimeId ?? null,
     alwaysRequireIndependentVerifier: spec.alwaysRequireIndependentVerifier,
     repairPlanLimit: spec.repairPlanLimit ?? null,
     maxConcurrency: spec.maxConcurrency,

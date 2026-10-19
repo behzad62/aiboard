@@ -64,6 +64,12 @@ export interface NativeBuildSpec {
   architectRuntimeId: string;
   workerRuntimeIds: string[];
   verifierRuntimeIds: string[];
+  /**
+   * The owner's Reviewer pick: preferred for every verifier role while it is healthy and did not author
+   * the change under review, even when it shares the Architect's model. Other verifier runtimes are
+   * the fallback. Absent keeps the priority-order choice.
+   */
+  reviewerRuntimeId?: string;
   /** Strengthens low-risk qualification; it never disables the high-risk gate. */
   alwaysRequireIndependentVerifier: boolean;
   /** Kernel-counted repair plans per run; omitted means the runtime default. */
@@ -156,6 +162,9 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     throw new Error(
       "Build spec independent verifier qualification must be a boolean."
     );
+  }
+  if (spec.reviewerRuntimeId !== undefined && !spec.verifierRuntimeIds.includes(spec.reviewerRuntimeId)) {
+    throw new Error("Build spec reviewer runtime must be one of its verifier runtimes.");
   }
   if (
     spec.repairPlanLimit !== undefined &&

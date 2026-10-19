@@ -192,6 +192,7 @@ import {
 import { ProviderHealthRegistry, type ProviderHealthState } from "./provider-health.js";
 import { runnerProviderRetryDeadlineMs } from "./provider-call-retry.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
+import { canonicalModelIdentity } from "./verifier-contracts.js";
 import { isSensitiveKey } from "./sensitive-redaction.js";
 import {
   readyPlanIdentity,
@@ -1153,7 +1154,14 @@ export class NativeBuildFactory {
       health,
     });
     const architectRouter = new RuntimeRouter({ candidates, health });
-    const verifierRouter = new RuntimeRouter({ candidates, health });
+    // The owner's Reviewer ranks first for every verifier role. Under the strict independence setting a
+    // Reviewer sharing the Architect's model would block a distinct candidate, so it stays priority-ordered.
+    const reviewer = spec.reviewerRuntimeId ? candidates.find((candidate) => candidate.runtimeId === spec.reviewerRuntimeId) : undefined;
+    const architectCandidate = candidates.find((candidate) => candidate.runtimeId === spec.architectRuntimeId);
+    const preferredVerifierRuntimeId = reviewer && !(spec.alwaysRequireIndependentVerifier && architectCandidate &&
+      canonicalModelIdentity(reviewer.modelId) === canonicalModelIdentity(architectCandidate.modelId))
+      ? reviewer.runtimeId : undefined;
+    const verifierRouter = new RuntimeRouter({ candidates, health, ...(preferredVerifierRuntimeId ? { preferredVerifierRuntimeId } : {}) });
     const skillCatalog = new SkillCatalog({
       projectRoot: this.options.projectRoot,
       sharedRoots: this.options.skillRoots ?? defaultSharedSkillRoots(),

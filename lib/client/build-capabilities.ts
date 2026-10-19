@@ -24,7 +24,7 @@ export interface ParticipantInputSupportInput {
   requiredInputTypes: CapabilityInputType[];
 }
 
-type BuildActionProtocolStatus = "passed" | "not_passed" | "untested";
+export type BuildActionProtocolStatus = "passed" | "not_passed" | "untested";
 
 function fresh(profile: ModelCapabilityProbeProfile | undefined): ModelCapabilityProbeProfile | undefined {
   if (!profile) return undefined;
@@ -32,7 +32,7 @@ function fresh(profile: ModelCapabilityProbeProfile | undefined): ModelCapabilit
   return profile;
 }
 
-function actionProtocolStatusForId(
+export function actionProtocolStatusForId(
   modelId: string,
   profiles: CapabilityProfileMap
 ): BuildActionProtocolStatus {

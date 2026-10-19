@@ -41,6 +41,7 @@ import { requestSpecificationSource } from "./native-planning-view";
 import { loadAttachmentPayloads } from "./attachments";
 import { initialNativeBuildTextAttachments } from "./build-guidance-files";
 import { initialBuildVisualInputs } from "./build-user-attachments";
+import { buildCrewFromDiscussion, runtimeModelId, selectBuildCrewRuntimes } from "./build-crew";
 import {
   nativeBuildAttachmentIdentityPatch,
   nativeBuildTaskStatus,
@@ -190,26 +191,22 @@ export async function runNativeBuildDiscussion(
     runId &&
     (runId !== discussion.nativeBuildRunId || discussion.nativeBuildRequestedAt)
   );
-  const modelIds = JSON.parse(discussion.modelIds) as string[];
-  const architectRuntimeId = discussion.judgeModelId ?? modelIds[0];
-  if (!architectRuntimeId) throw new Error("Build mode requires an Architect model.");
-  const reviewerRuntimeId = discussion.reviewerModelId ?? null;
-  const { configuredRuntimeIds, workerRuntimeIds, verifierRuntimeIds } = selectNativeBuildRuntimes(
-    modelIds,
+  const crew = buildCrewFromDiscussion(discussion);
+  if (!crew) throw new Error("Build mode requires an Architect model.");
+  const {
+    runtimes,
     architectRuntimeId,
-    reviewerRuntimeId
-  );
+    reviewerRuntimeId,
+    workerRuntimeIds,
+    verifierRuntimeIds,
+  } = selectBuildCrewRuntimes(crew);
   const providerConfigs: NativeProviderConfig[] = [];
-  for (const [index, runtimeId] of configuredRuntimeIds.entries()) {
+  for (const [index, runtime] of runtimes.entries()) {
     try {
       providerConfigs.push(createNativeProviderConfig(
-        runtimeId,
+        runtime.runtimeId,
         index,
-        runtimeId === reviewerRuntimeId &&
-          runtimeId !== architectRuntimeId &&
-          discussion.buildReviewerReasoningEffort
-          ? discussion.buildReviewerReasoningEffort
-          : discussion.reasoningEffort
+        runtime.reasoningEffort
       ));
     } catch (error) {
       // Attaching to an existing run: the runner already holds durable (merged) provider configs,
@@ -249,6 +246,7 @@ export async function runNativeBuildDiscussion(
         architectRuntimeId,
         workerRuntimeIds,
         verifierRuntimeIds,
+        ...(reviewerRuntimeId ? { reviewerRuntimeId } : {}),
         maxConcurrency: Math.max(1, Math.min(4, workerRuntimeIds.length)),
         ...nativePolicy,
         ...explicitNativePlanningOptions(planningOptions ?? (discussion.buildEvidenceGatedPlanning === true ? {
@@ -555,10 +553,12 @@ export function createNativeProviderConfig(
   reasoningEffort?: string | null
 ): NativeProviderConfig {
   const settings = getUserSettings();
-  const { providerId, model } = parseModelId(runtimeId);
+  // A role at a second reasoning effort runs the same model under `model#effort`.
+  const modelRef = runtimeModelId(runtimeId);
+  const { providerId, model } = parseModelId(modelRef);
   const pricing = nativePricingMicros(
     getModelPricing(
-      runtimeId,
+      modelRef,
       settings.modelPricingOverrides,
       settings.discoveredModelMetadata,
     )
@@ -600,7 +600,7 @@ export function createNativeProviderConfig(
   const catalogModel = MODEL_CATALOG.find(
     (candidate) => candidate.providerId === providerId && candidate.id === model
   );
-  const discoveredMetadata = getDiscoveredModelMetadata(runtimeId);
+  const discoveredMetadata = getDiscoveredModelMetadata(modelRef);
   const inputCapabilities = discoveredMetadata ?? catalogModel?.capabilities ?? {
     image: false,
     document: false,

@@ -1,5 +1,6 @@
 import type { ClientStore } from "./store";
 import { migrateProviderCapabilitySettings } from "./provider-capability-migration";
+import { parseBuildWorkers, serializeBuildWorkers } from "./build-crew";
 import {
   migrateFullModelId,
   migrateModelIdKeyedRecord,
@@ -87,6 +88,13 @@ export function migrateClientStoreModelSelections(
       | string
       | null
       | undefined;
+    const workers = parseBuildWorkers(discussion.buildWorkers);
+    if (workers) {
+      const migrated = serializeBuildWorkers(
+        workers.map((worker) => ({ ...worker, modelId: migrateFull(worker.modelId) as string }))
+      );
+      if (migrated !== discussion.buildWorkers) discussion.buildWorkers = migrated;
+    }
   }
 
   return changed ? { store, changed: true } : { store: input, changed: false };
