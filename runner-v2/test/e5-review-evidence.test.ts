@@ -231,3 +231,20 @@ test("E5 an artifact read in chunks that cover every byte counts as one complete
     assert.match(proofs[0]!.invocationKey, /chunk-3$/, "bound to the read that completed coverage");
   } finally { ledger.close(); rmSync(root,{recursive:true,force:true}); }
 });
+
+test("E5 a review session scoped to delivery:<task> can inspect the worker's own evidence by id (tunnel run)", async () => {
+  // The verdict pass asked for the worker's evidence without naming the task and got evidence_not_found twice.
+  const root = mkdtempSync(join(tmpdir(), "e5-paired-"));
+  const artifacts = new ArtifactStore(join(root,"artifacts"));
+  const evidence = new SqliteEvidenceStore(join(root,"evidence.sqlite"));
+  const broker = new ToolBroker({ permissionProfile:"guarded", workspacePath:root, artifacts });
+  for (const tool of createEvidenceTools({ store: evidence, artifacts, taskId: "delivery:T1" })) broker.register(tool);
+  try {
+    const out = await artifacts.put(Buffer.from("ok\n"), "text/plain");
+    const fact = { kind:"command" as const, label:"tests", command:"node", args:["--test"], cwd:root, startedAt:initial.occurredAt, finishedAt:initial.occurredAt, exitCode:0, signal:null, timedOut:false, cancelled:false, outputTruncated:false, stdoutArtifactHash:out.hash, stderrArtifactHash:out.hash };
+    const worker = evidence.record({ runId: binding.runId, taskId: "T1", actor: { role: "worker", id: "w" }, fact, createdAt: initial.occurredAt, idempotencyKey: "worker" });
+    const result = await broker.invoke({ type:"tool_call", callId:"paired-1", name:"inspect_evidence", arguments:{ evidenceId: worker.id } },
+      { runId: binding.runId, sessionId: binding.sessionId, actor: { role: "verifier", id: binding.reviewerRuntimeId } });
+    assert.equal(result.isError, false, JSON.stringify(result));
+  } finally { evidence.close(); rmSync(root,{recursive:true,force:true}); }
+});

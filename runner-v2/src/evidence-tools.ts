@@ -352,10 +352,12 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
       }
       // A reviewer's own commands are recorded under delivery:<task>; its verdict pass asked for them
       // by the task's ID and got evidence_not_found (tunnel run). The record keeps its real taskId.
-      if (!record && !taskId.startsWith("delivery:")) {
-        const reviewScope = `delivery:${taskId}`;
-        record = options.store.getByIds({ runId: context.runId, taskId: reviewScope, ids: [input.evidenceId] })
-          .find((candidate) => candidate.id === input.evidenceId && candidate.runId === context.runId && candidate.taskId === reviewScope);
+      // The pair works both ways: a review defaults to delivery:<task>, and its verdict pass asked for
+      // the worker's own evidence without naming the task and got evidence_not_found twice (tunnel run).
+      const pairedScope = taskId.startsWith("delivery:") ? taskId.slice("delivery:".length) : `delivery:${taskId}`;
+      if (!record && pairedScope) {
+        record = options.store.getByIds({ runId: context.runId, taskId: pairedScope, ids: [input.evidenceId] })
+          .find((candidate) => candidate.id === input.evidenceId && candidate.runId === context.runId && candidate.taskId === pairedScope);
       }
       if (!record) {
         return failure(
