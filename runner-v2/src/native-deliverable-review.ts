@@ -965,6 +965,7 @@ export class NativeDeliverableReviewRuntime {
         git: this.options.git,
         executionGrants: this.options.executionGrants,
         workspacePath: workspacePath!,
+        evidenceTaskId: `delivery:${context.inputs.taskId}`,
         artifacts: this.options.artifacts,
         evidenceStore: this.options.evidenceStore,
         runId: context.request.runId,

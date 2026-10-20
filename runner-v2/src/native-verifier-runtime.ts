@@ -919,6 +919,12 @@ export interface InspectionToolsInput {
   execution?: OneShotCommandExecutor;
   /** Test double. Production uses `run_evidence_command` from `createEvidenceTools`. */
   commandTool?: NativeTool<unknown>;
+  /**
+   * The evidence scope this session records into and lists by default. A deliverable review uses
+   * `delivery:<task>`, which its verdict pass can inspect and cite; the generic "verifier" scope was
+   * invisible to it, so a citation of the review's own command was refused (tunnel run).
+   */
+  evidenceTaskId?: string;
 }
 
 /** Correct wiring returns the verification workspace. `projectRoot` is the prove-red target. */
@@ -951,7 +957,7 @@ export function createVerifierCommandBroker(
         ...(input.git ? { git: input.git } : {}),
         store: input.evidenceStore,
         artifacts: input.artifacts,
-        taskId: "verifier",
+        taskId: input.evidenceTaskId ?? "verifier",
         clock: input.clock,
         ...(input.execution ? { execution: input.execution } : {}),
       })
@@ -1020,7 +1026,7 @@ export function createInspectionTools(input: InspectionToolsInput): ToolBroker {
           git: input.git,
           store: input.evidenceStore,
           artifacts: input.artifacts,
-          taskId: "verifier",
+          taskId: input.evidenceTaskId ?? "verifier",
           clock: input.clock,
         })
       : []),
