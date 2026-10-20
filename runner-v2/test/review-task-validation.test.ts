@@ -24,6 +24,8 @@ test("review_task names the malformed field instead of the present top-level one
     assert.match(issues({ ...base, findingDispositions: [{ findingId: "f1", resolution: "accepted", rationale: "x" }] })[0]!, /findingDispositions is malformed/);
     assert.match(issues({ ...base, claimDispositions: [{ claimId: "c1", status: "maybe", rationale: "x" }] })[0]!, /claimDispositions is malformed/);
     assert.match(issues({ ...base, decision: "maybe" })[0]!, /taskId, decision, summary/);
+    // Tunnel run: only verdict was missing, but the message listed every field.
+    assert.equal(issues({ ...base, criterionVerdicts: [{ criterionId: "c1", verdict: "satisfied", rationale: "r", evidenceIds: ["e"] }, { criterionId: "c2", rationale: "r", evidenceIds: ["e"] }] })[0], 'criterionVerdicts[1] (c2) needs verdict "satisfied" or "unsatisfied"');
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

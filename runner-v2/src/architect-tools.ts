@@ -2912,11 +2912,13 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
     if (!nonEmpty(value.taskId) || (value.decision !== "approved" && value.decision !== "rejected") || !nonEmpty(value.summary)) return null;
     const hashes = stringList(value.evidenceArtifactHashes);
     if (!hashes || hashes.some((hash) => !/^[a-f0-9]{64}$/.test(hash))) return null;
-    issue = "criterionVerdicts is malformed: each needs criterionId, a verdict, rationale and evidenceIds";
     const criterionVerdicts = value.criterionVerdicts === undefined
       ? undefined
       : parseCriterionReviewVerdicts(value.criterionVerdicts);
-    if (criterionVerdicts === null) return null;
+    if (criterionVerdicts === null) {
+      issue = criterionVerdictIssue(value.criterionVerdicts);
+      return null;
+    }
     issue = isRecord(value.planReconciliation) && Array.isArray(value.planReconciliation.taskUpdates) &&
       value.planReconciliation.taskUpdates.length === 0 && (!Array.isArray(value.planReconciliation.newTasks) || value.planReconciliation.newTasks.length === 0)
       ? "planReconciliation must change the plan (a taskUpdates or newTasks entry); to accept submission-scope findings without a plan change, omit it and give each finding resolution \"plan_reconciled\" with the current planRevisionId and planDigest in findingDispositions"
@@ -3352,6 +3354,30 @@ function criterionReviewVerdictSchema(): Record<string, unknown> {
     },
     overrideReason: { type: "string", minLength: 1 },
   }, ["criterionId", "verdict", "rationale", "evidenceIds"]);
+}
+
+/**
+ * The first concrete problem in criterionVerdicts. "each needs criterionId, a verdict, rationale and
+ * evidenceIds" listed every field when only verdict was missing; the Architect guessed (tunnel run).
+ */
+function criterionVerdictIssue(value: unknown): string {
+  if (!Array.isArray(value)) return "criterionVerdicts must be an array";
+  for (const [index, candidate] of value.entries()) {
+    const at = `criterionVerdicts[${index}]${isRecord(candidate) && nonEmpty(candidate.criterionId) ? ` (${candidate.criterionId})` : ""}`;
+    if (!isRecord(candidate)) return `${at} must be an object`;
+    if (!nonEmpty(candidate.criterionId)) return `${at} is missing criterionId`;
+    if (candidate.verdict !== "satisfied" && candidate.verdict !== "unsatisfied") return `${at} needs verdict "satisfied" or "unsatisfied"`;
+    if (!nonEmpty(candidate.rationale)) return `${at} is missing rationale`;
+    const evidenceIds = stringList(candidate.evidenceIds);
+    if (!evidenceIds || evidenceIds.length === 0) return `${at} needs at least one evidenceIds entry`;
+    if (candidate.artifactHashes !== undefined) {
+      const hashes = stringList(candidate.artifactHashes);
+      if (!hashes || hashes.length === 0 || hashes.some((hash) => !/^[a-f0-9]{64}$/.test(hash))) return `${at} artifactHashes must be a non-empty list of 64-hex hashes`;
+    }
+    if (candidate.acceptedFailures !== undefined && parseAcceptedFailures(candidate.acceptedFailures) === null) return `${at} acceptedFailures is malformed`;
+    if (candidate.overrideReason !== undefined && typeof candidate.overrideReason !== "string") return `${at} overrideReason must be a string`;
+  }
+  return "criterionVerdicts is malformed: each needs criterionId, a verdict, rationale and evidenceIds";
 }
 
 function parseCriterionReviewVerdicts(value: unknown): CriterionReviewVerdict[] | null {
