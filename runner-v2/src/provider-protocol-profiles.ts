@@ -72,6 +72,34 @@ export const PROVIDER_PROTOCOL_PROFILES: Readonly<Record<string, ProviderProtoco
     docsUrl: "https://api-docs.deepseek.com/guides/thinking_mode/",
     verifiedAt: "2026-10-20",
   }),
+  // apply_patch on Responses (also Chat Completions and Assistants), listed for GPT-5.1 to 5.5. It
+  // returns apply_patch_call { operation: create_file | update_file (V4A diff) | delete_file } and
+  // takes apply_patch_call_output { status: completed | failed, output }.
+  openai: Object.freeze({
+    preferredProtocol: "responses",
+    responses: Object.freeze({
+      nativeTools: Object.freeze([Object.freeze({
+        wire: Object.freeze({ type: "apply_patch" }),
+        replaces: Object.freeze(["fs.patch", "fs.write"]),
+      })]),
+    }),
+    docsUrl: "https://developers.openai.com/api/docs/guides/tools-apply-patch",
+    verifiedAt: "2026-10-20",
+  }),
+  // openrouter:apply_patch (beta, Responses only): OpenRouter validates the V4A patch and the client
+  // applies it, with the same apply_patch_call / apply_patch_call_output items as OpenAI. Its
+  // openrouter:shell runs in OpenRouter's sandbox, outside the project, so it is not offered.
+  openrouter: Object.freeze({
+    preferredProtocol: "responses",
+    responses: Object.freeze({
+      nativeTools: Object.freeze([Object.freeze({
+        wire: Object.freeze({ type: "openrouter:apply_patch" }),
+        replaces: Object.freeze(["fs.patch", "fs.write"]),
+      })]),
+    }),
+    docsUrl: "https://openrouter.ai/docs/guides/features/server-tools/apply-patch",
+    verifiedAt: "2026-10-20",
+  }),
 });
 
 export function providerProtocolProfile(providerId: string | undefined): ProviderProtocolProfile | undefined {

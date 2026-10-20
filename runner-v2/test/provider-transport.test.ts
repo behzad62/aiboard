@@ -1288,7 +1288,10 @@ test("factory-created direct transports preserve canonical reasoning effort in p
       baseUrl: "https://openai.example/v1",
       reasoningEffort: "max",
     });
-    assert.equal(openAiCeiling.body.reasoning_effort, "xhigh");
+    // OpenAI's profile selects Responses (its apply_patch and shell are documented there), so the
+    // clamped effort travels as reasoning.effort.
+    assert.equal(openAiCeiling.url, "https://openai.example/v1/responses");
+    assert.deepEqual(openAiCeiling.body.reasoning, { effort: "xhigh" });
 
     const openRouterKimi = await complete({
       ...common,
@@ -1299,7 +1302,8 @@ test("factory-created direct transports preserve canonical reasoning effort in p
       baseUrl: "https://openrouter.example/api/v1",
       reasoningEffort: "low",
     });
-    assert.equal(openRouterKimi.body.reasoning_effort, "max");
+    // OpenRouter's profile also selects Responses (openrouter:apply_patch is Responses only).
+    assert.deepEqual(openRouterKimi.body.reasoning, { effort: "max" });
 
     const xai = await complete({
       ...common,

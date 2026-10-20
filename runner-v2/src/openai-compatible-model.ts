@@ -462,11 +462,13 @@ function toResponsesInput(
   if (message.role === "tool") {
     const result = message.content as ToolResult;
     if (result.toolName === "openrouter.apply_patch") {
+      // The documented output is a short human-readable log ("Error: File not found at path ..."),
+      // not our JSON error envelope; status already says it failed.
       return [{
         type: "apply_patch_call_output",
         call_id: result.callId,
         status: result.isError ? "failed" : "completed",
-        output: toolResultText(result),
+        output: result.content.map((block) => block.type === "text" ? block.text : "").filter(Boolean).join("\n") || toolResultText(result),
       }];
     }
     return [{

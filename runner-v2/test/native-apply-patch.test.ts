@@ -120,3 +120,37 @@ test("DeepSeek Responses requests carry the documented output headroom; other pr
   assert.equal(bodies[0]!.max_output_tokens, 393_216);
   assert.equal(Object.hasOwn(bodies[1]!, "max_output_tokens"), false);
 });
+
+for (const [providerId, wireType] of [["openai", "apply_patch"], ["openrouter", "openrouter:apply_patch"]] as const) {
+  test(`${providerId} on Responses gets its documented ${wireType} in place of fs.patch and fs.write, round-tripping apply_patch_call`, async () => {
+    const bodies: Array<{ tools?: Array<Record<string, unknown>>; input: Array<Record<string, unknown>> }> = [];
+    const operation = { type: "update_file", path: "b.ts", diff: "@@\n-y\n+z\n" };
+    const model = new OpenAICompatibleModel({
+      baseUrl: "https://api.example", apiKey: "secret", modelId: "m", providerId, protocol: "responses",
+      fetch: async (_input, init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return Response.json({ id: "resp_1", status: "completed", output: [
+          { type: "apply_patch_call", id: "apc_1", call_id: "call_p", status: "completed", operation },
+        ] });
+      },
+    });
+    const editing = [tool("fs.read", true), tool("fs.patch"), tool("fs.write")];
+    const user: AgentMessage = { id: "u", role: "user", content: "go" };
+    const turn = await model.complete({ sessionId: "s", tools: editing, messages: [user] } as never);
+    const declared = bodies[0]!.tools!;
+    assert.deepEqual(declared.filter((entry) => entry.type === wireType), [{ type: wireType }]);
+    assert.equal(declared.some((entry) => entry.type === "function" && /patch|write/.test(String(entry.name))), false, "the model never sees two edit tools");
+    assert.deepEqual(turn.blocks, [{ type: "tool_call", callId: "call_p", name: "openrouter.apply_patch", arguments: { status: "completed", operation } }]);
+    await model.complete({ sessionId: "s", tools: editing, messages: [
+      user, { id: "a", role: "assistant", content: turn.blocks },
+      { id: "r", role: "tool", content: { callId: "call_p", toolName: "openrouter.apply_patch", isError: true, content: [{ type: "text", text: "Error: File not found at path 'b.ts'" }] } as ToolResult },
+    ] } as never);
+    const input = bodies[1]!.input;
+    assert.deepEqual(input.filter((item) => item.type === "apply_patch_call"), [{ type: "apply_patch_call", call_id: "call_p", status: "completed", operation }]);
+    assert.deepEqual(input.filter((item) => item.type === "apply_patch_call_output"), [
+      { type: "apply_patch_call_output", call_id: "call_p", status: "failed", output: "Error: File not found at path 'b.ts'" },
+    ]);
+    await model.complete({ sessionId: "r", tools: [tool("fs.read", true)], messages: [user] } as never);
+    assert.equal(bodies[2]!.tools!.some((entry) => entry.type === wireType), false, "a session that cannot edit is not offered it");
+  });
+}
