@@ -547,7 +547,7 @@ test("rejected Architect planning releases its inspected port before a later val
       type: "tool_call",
       callId: "accepted-plan",
       name: "plan_final_verification",
-      arguments: { plan: allRequiredPlan() },
+      arguments: { plan: serverPlan() },
     }, context);
     assert.equal(accepted.isError, false, accepted.error?.message ?? "valid final-verification plan failed");
     const current = rebuildSchedulerProjection(store.readRun(fixture.runId)).finalVerification?.current;
@@ -595,7 +595,7 @@ test("mechanically rejected generation append releases the inspected port lease"
       type: "tool_call",
       callId: "mechanically-rejected-plan",
       name: "plan_final_verification",
-      arguments: { plan: allRequiredPlan() },
+      arguments: { plan: serverPlan() },
     }, {
       runId: fixture.runId,
       sessionId: "architect:mechanical-rejection",
@@ -628,6 +628,15 @@ function allNotApplicablePlan() {
         summary: `Architect claims ${category} is absent.`,
       },
     })),
+  };
+}
+
+/** The server fixture has a server but no build or test command; plan_final_verification refuses required checks it cannot run. */
+function serverPlan() {
+  return {
+    checks: ["build", "tests", "runtime_smoke", "browser"].map((category) => category === "runtime_smoke" || category === "browser"
+      ? { category, status: "required" }
+      : { category, status: "not_applicable", rationale: `The fixture has no ${category} command.`, repositoryInspection: { paths: ["package.json"], summary: `package.json has no ${category} script.` } }),
   };
 }
 

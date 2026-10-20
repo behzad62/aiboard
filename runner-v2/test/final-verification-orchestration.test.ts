@@ -343,6 +343,35 @@ test("plan_final_verification is idempotent and rejects a conflicting current pl
   }
 });
 
+test("plan_final_verification refuses a required check the runner has nothing to run for, and says what to do", async () => {
+  // Tunnel run: a required runtime_smoke for a CLI relay (no server script) was accepted, and the
+  // build pump then crashed on it at every resume.
+  const fixture = createFixture();
+  const tools = new ToolRegistry();
+  for (const tool of createArchitectTools({
+    store: fixture.store,
+    finalVerificationPlanAvailable: true,
+    finalVerificationProfileFor: async (revision) => emptyFinalVerificationProfile(revision),
+  })) tools.register(tool);
+  const context = { runId: RUN_ID, sessionId: "architect:test", actor: { role: "architect" as const, id: "architect-test" } };
+  try {
+    const plan = finalVerificationPlan();
+    plan.checks = plan.checks.map((check) => check.category === "runtime_smoke"
+      ? { category: "runtime_smoke", status: "required", rationale: "Start the relay and probe /healthz." }
+      : check);
+    const refused = await invokePlan(tools, context, "plan-unrunnable", plan);
+    assert.equal(refused.isError, true);
+    assert.equal(refused.error?.code, "final_verification_check_not_runnable");
+    assert.match(refused.error?.message ?? "", /runtime_smoke is required.*found none.*not_applicable/s);
+    assert.equal(fixture.store.readRun(RUN_ID).some((event) => event.type === "final_verification.generation_created"), false);
+    const accepted = await invokePlan(tools, context, "plan-runnable", finalVerificationPlan());
+    assert.equal(accepted.isError, false, accepted.error?.message);
+  } finally {
+    fixture.store.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("runner-owned final-verification planning cannot bypass pending user guidance", async () => {
   const fixture = createFixture();
   const tools = new ToolRegistry();

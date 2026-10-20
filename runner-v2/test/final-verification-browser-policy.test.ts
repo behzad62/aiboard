@@ -204,3 +204,18 @@ function networkEvent(status: number, failure?: string) {
     occurredAt: "2026-08-26T00:00:03.500Z",
   };
 }
+
+test("a required check with no runner specification is accepted only as an evidence-free failure with its reason", () => {
+  // Tunnel run: the runner recorded "Required runtime_smoke check has no runtime command." and the
+  // scheduler then threw on that honest failure, crashing the build pump at every resume.
+  const profile = { version: 1 as const, targetRevision: "a".repeat(40), inspectedPaths: ["package.json"], detectedSignals: [], commands: {} };
+  const check = (overrides: Record<string, unknown>) => ({
+    check: { category: "runtime_smoke", status: "required", green: false, evidenceIds: [], facts: [], issues: ["Required runtime_smoke check has no runtime command."], ...overrides },
+    profile, targetRevision: "a".repeat(40), workspacePath: "/workspace",
+  });
+  assert.doesNotThrow(() => assertFinalVerificationCheckSemantics(check({})));
+  assert.doesNotThrow(() => assertFinalVerificationCheckSemantics(check({ category: "browser" })));
+  assert.doesNotThrow(() => assertFinalVerificationCheckSemantics(check({ category: "tests", issues: ["No tests command."] })));
+  assert.throws(() => assertFinalVerificationCheckSemantics(check({ green: true, issues: [] })), /no runner-inspected specification/);
+  assert.throws(() => assertFinalVerificationCheckSemantics(check({ issues: [] })), /no runner-inspected specification/);
+});

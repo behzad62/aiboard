@@ -54,8 +54,14 @@ export function assertFinalVerificationCheckSemantics(
     return;
   }
 
+  // A required check the runner has no specification for cannot run. Recorded as a failed check with
+  // its reason and no evidence, it is an honest mechanical failure the Architect can re-plan around;
+  // throwing here crashed the build pump on every resume (tunnel run: a required runtime_smoke for a
+  // CLI relay the runner detects no server for).
+  const unrunnable = check.green === false && facts.length === 0 && issues.length > 0;
   if (category === "build" || category === "tests") {
     const specifications = input.profile.commands[category];
+    if (!specifications?.length && unrunnable) return;
     if (!specifications?.length) {
       throw new Error(`Required final verification ${category} has no runner-inspected command specification.`);
     }
@@ -64,6 +70,7 @@ export function assertFinalVerificationCheckSemantics(
   }
   if (category === "runtime_smoke") {
     const specification = input.profile.runtimeSmoke;
+    if (!specification && unrunnable) return;
     if (!specification) {
       throw new Error("Required final verification runtime_smoke has no runner-inspected specification.");
     }
@@ -72,6 +79,7 @@ export function assertFinalVerificationCheckSemantics(
   }
 
   const specification = input.profile.browser;
+  if (!specification && unrunnable) return;
   if (!specification) {
     throw new Error("Required final verification browser has no runner-inspected specification.");
   }

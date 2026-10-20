@@ -1967,6 +1967,19 @@ function planFinalVerificationTool(
           authoritativeValidation.issues.join(" "),
         );
       }
+      const unrunnable = unrunnableRequiredChecks(input.plan, executionProfile);
+      if (unrunnable.length > 0) {
+        if (discardProfile) {
+          try { await discardProfile(executionProfile); }
+          catch (error) {
+            return errorOutput(
+              "final_verification_profile_cleanup_failed",
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
+        return errorOutput("final_verification_check_not_runnable", unrunnable.join(" "));
+      }
       const revisionKey = shortHash(projection.integrationRevision);
       const planVersion = (projection.finalVerification?.history.length ?? 0) + 1;
       const generationSuffix = planVersion === 1 ? "" : `-${planVersion}`;
@@ -3275,6 +3288,24 @@ function newPolicyPlanNotReady(
     );
   }
   return null;
+}
+
+/** Required checks the runner found nothing to execute for at this revision, each with what to do instead. */
+function unrunnableRequiredChecks(plan: FinalVerificationPlan, profile: FinalVerificationExecutionProfile): string[] {
+  const required = new Set(plan.checks.filter((check) => check.status === "required").map((check) => check.category));
+  const issues: string[] = [];
+  for (const category of ["build", "tests"] as const) {
+    if (required.has(category) && !profile.commands[category]?.length) {
+      issues.push(`${category} is required, but the runner found no ${category} command in this repository at this revision; mark it not_applicable with a rationale, or add the command to the project first.`);
+    }
+  }
+  if (required.has("runtime_smoke") && !profile.runtimeSmoke) {
+    issues.push("runtime_smoke is required, but the runner can start and probe only a server it detects from package.json scripts (start, dev, serve), and found none at this revision. Mark runtime_smoke not_applicable with a rationale, and keep any start-and-probe proof in the tests (for example an end-to-end test that starts the built program).");
+  }
+  if (required.has("browser") && !profile.browser) {
+    issues.push("browser is required, but the runner detected no served UI to open at this revision. Mark browser not_applicable with a rationale.");
+  }
+  return issues;
 }
 
 function errorOutput(code: string, message: string, issues?: string[]): ToolExecutionOutput {
