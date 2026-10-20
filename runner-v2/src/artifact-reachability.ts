@@ -94,7 +94,14 @@ export class ArtifactReachabilityGuard {
     const files = await this.durableFiles();
     let totalBytes = 0;
     for (const path of files) {
-      const details = await lstat(path);
+      let details;
+      try {
+        details = await lstat(path);
+      } catch (error) {
+        // Recovering a hot journal (collectSqliteHashes) deletes the journal listed earlier.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" && isCompanionSqliteFile(path)) continue;
+        throw error;
+      }
       totalBytes += details.size;
       if (totalBytes > this.maxBytes) throw new Error("Artifact scan byte limit exceeded.");
       if (
@@ -203,7 +210,19 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 function collectSqliteHashes(path: string, hashes: Set<string>): void {
-  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    collectOpenSqliteHashes(new DatabaseSync(path, { readOnly: true }), hashes);
+  } catch (error) {
+    // A database a killed process left mid-transaction has a hot journal, and only a writable
+    // connection may roll it back; read-only it fails with "attempt to write a readonly database",
+    // and a job-host fence lock nobody reopens failed every startup cleanup (tunnel run). The scan
+    // runs quiescent, so recovering here is what the next normal open would do anyway.
+    if (!/readonly database/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    collectOpenSqliteHashes(new DatabaseSync(path), hashes);
+  }
+}
+
+function collectOpenSqliteHashes(database: DatabaseSync, hashes: Set<string>): void {
   try {
     const tables = database.prepare(
       `SELECT name FROM sqlite_schema

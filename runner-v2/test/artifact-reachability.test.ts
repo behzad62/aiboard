@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -244,6 +244,37 @@ test("verification checkouts are project content, not durable state: their npm w
     await guard.runQuiescent(async () => {
       await guard.prepareReachabilityIndex();
       assert.equal(await guard.removeIfGloballyUnreachable(artifact.hash), true);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a database left with a hot journal by a killed process is recovered, not a failed scan", async () => {
+  // Tunnel run: a job-host fence lock killed mid-transaction failed every startup cleanup with
+  // "attempt to write a readonly database"; a read-only connection cannot roll back a hot journal.
+  const root = mkdtempSync(join(tmpdir(), "aiboard-artifact-guard-hot-journal-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  try {
+    const kept = await artifacts.put(Buffer.from("referenced"), "application/json");
+    const orphan = await artifacts.put(Buffer.from("orphan"), "application/json");
+    const live = join(root, "live.fence.lock");
+    const database = new DatabaseSync(live);
+    database.exec("PRAGMA journal_mode=DELETE; CREATE TABLE t(v TEXT);");
+    database.prepare("INSERT INTO t VALUES (?)").run(kept.hash);
+    database.exec("PRAGMA cache_size=1; BEGIN IMMEDIATE;");
+    for (let index = 0; index < 300; index += 1) database.prepare("INSERT INTO t VALUES (?)").run(`${orphan.hash}${"x".repeat(400)}`);
+    const killed = join(root, "jobs");
+    mkdirSync(killed);
+    for (const suffix of ["", "-journal"]) copyFileSync(`${live}${suffix}`, join(killed, `process.fence.lock${suffix}`));
+    database.exec("ROLLBACK");
+    database.close();
+    rmSync(live);
+    const guard = new ArtifactReachabilityGuard(root, artifacts);
+    await guard.runQuiescent(async () => {
+      await guard.prepareReachabilityIndex();
+      assert.equal(await guard.removeIfGloballyUnreachable(kept.hash), false, "the committed reference is kept");
+      assert.equal(await guard.removeIfGloballyUnreachable(orphan.hash), true, "the rolled-back rows are not references");
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
