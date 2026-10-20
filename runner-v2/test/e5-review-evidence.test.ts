@@ -89,6 +89,22 @@ test("E5 real completed SQLite tool reads bound citations to returned ranges; fa
   } finally { try { ledger.close(); } catch {} rmSync(root,{recursive:true,force:true}); }
 });
 
+test("E5 an fs.search match line grants citation authority for that line only (tunnel run)", async () => {
+  // A reviewer cited a line it had found by search, was refused, and re-read it.
+  const root = mkdtempSync(join(tmpdir(), "e5-search-"));
+  const ledger = new SqliteToolLedger(join(root,"tools.sqlite"));
+  const broker = new ToolBroker({ permissionProfile:"guarded", workspacePath:root, ledger, artifacts:new ArtifactStore(join(root,"artifacts")) });
+  for (const tool of createFilesystemTools()) broker.register(tool);
+  writeFileSync(join(root,"cli.ts"), "const a = 1;\nexport const pairCommand = \"connector pair\";\nconst c = 3;\n");
+  try {
+    await broker.invoke({type:"tool_call",callId:"search-1",name:"fs.search",arguments:{path:"cli.ts",pattern:"pairCommand"}}, {runId:binding.runId,sessionId:binding.sessionId,actor:{role:"verifier",id:binding.reviewerRuntimeId}});
+    const capture = captureReviewReads(ledger,binding);
+    assert.deepEqual(validateCitations([{path:"cli.ts",line:2}],capture), [{path:"cli.ts",line:2}]);
+    assert.throws(()=>validateCitations([{path:"cli.ts",line:3}],capture),/not read/,"only the matched line");
+    assert.deepEqual(validateReadCapture(JSON.parse(JSON.stringify(capture)),binding).reads.map((read)=>read.toolName),["fs.search"]);
+  } finally { ledger.close(); rmSync(root,{recursive:true,force:true}); }
+});
+
 test("E5 a whole read of a CRLF file still grants citation authority (tunnel run)", async () => {
   // CRLF files are returned as LF; the completeness check uses the returned text size.
   const root = mkdtempSync(join(tmpdir(), "e5-crlf-"));
@@ -190,4 +206,28 @@ test("E5 a completed read belongs to the latest actual SQLite retry actor, not a
       assert.equal(captureReviewReads(ledger,binding).reads.some((read)=>read.invocationKey===key),accepted,"completed attempt actor governs read authority");
     }
   }finally{ledger.close();rmSync(root,{recursive:true,force:true});}
+});
+
+test("E5 an artifact read in chunks that cover every byte counts as one complete read (tunnel run)", async () => {
+  // The Architect read a 146 KB diff in five 30 KB chunks and was still refused for not reading it, in a loop.
+  const { captureArchitectEvidenceReads } = await import("../src/review-evidence.js");
+  const root = mkdtempSync(join(tmpdir(), "e5-chunks-"));
+  const ledger = new SqliteToolLedger(join(root,"tools.sqlite"));
+  const artifacts = new ArtifactStore(join(root,"artifacts"));
+  const broker = new ToolBroker({ permissionProfile:"guarded", workspacePath:root, ledger, artifacts });
+  for (const tool of createArtifactTools(artifacts)) broker.register(tool);
+  const diff = await artifacts.put(Buffer.from("x".repeat(100)), "text/x-diff");
+  const arch = { runId: binding.runId, sessionId: "architect:session", actorId: "architect-1", taskId: "T1" };
+  let ordinal = 0;
+  const read = (offset: number) => broker.invoke({ type:"tool_call", callId:`chunk-${++ordinal}`, name:"artifact.read", arguments:{ hash: diff.hash, offset, maxBytes: 40 } },
+    { runId: arch.runId, sessionId: arch.sessionId, actor: { role: "architect", id: arch.actorId } });
+  try {
+    await read(0); await read(40);
+    assert.deepEqual(captureArchitectEvidenceReads(ledger, arch), [], "two of three chunks prove nothing");
+    await read(80);
+    const proofs = captureArchitectEvidenceReads(ledger, arch);
+    assert.equal(proofs.length, 1);
+    assert.equal(proofs[0]!.artifactHash, diff.hash);
+    assert.match(proofs[0]!.invocationKey, /chunk-3$/, "bound to the read that completed coverage");
+  } finally { ledger.close(); rmSync(root,{recursive:true,force:true}); }
 });

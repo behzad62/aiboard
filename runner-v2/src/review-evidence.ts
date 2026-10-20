@@ -6,7 +6,7 @@ export type ReviewCitation = { path: string; line: number } | { evidenceId: stri
 export interface ReviewReadFact {
   invocationKey: string;
   completedSequence: number;
-  toolName: "fs.read" | "inspect_evidence" | "artifact.read";
+  toolName: "fs.read" | "fs.search" | "inspect_evidence" | "artifact.read";
   path?: string;
   startLine?: number;
   endLine?: number;
@@ -20,6 +20,44 @@ export interface ReviewReadCapture {
 }
 
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * Complete reads of an artifact from one session's artifact.read results, including a file read in
+ * consecutive chunks: the Architect read a 146 KB diff in five 30 KB chunks, every byte of it, and
+ * was still refused for not having read the complete diff, in a loop (tunnel run). A chunk counts
+ * only when its returned text is exactly the bytes it reports. The proof binds the last chunk read.
+ */
+function artifactReadTracker() {
+  const chunks = new Map<string, { byteLength: number; ranges: Array<[number, number]>; key: string; sequence: number }>();
+  return {
+    /** Returns the hash when this result alone is a complete read; otherwise records it as a chunk. */
+    add(meta: Record<string, unknown>, text: readonly string[], key: string, sequence: number): string | undefined {
+      const hash = meta.hash;
+      if (typeof hash !== "string" || meta.encoding !== "utf8" || !positive(meta.returnedBytes) || !positive(meta.byteLength) ||
+        !Number.isSafeInteger(meta.offset) || (meta.offset as number) < 0 || text.length !== 1 || Buffer.byteLength(text[0]!) !== meta.returnedBytes) return undefined;
+      if (meta.offset === 0 && meta.truncated === false && meta.returnedBytes === meta.byteLength) return hash;
+      const entry = chunks.get(hash) ?? { byteLength: meta.byteLength as number, ranges: [], key, sequence };
+      if (entry.byteLength !== meta.byteLength) return undefined;
+      entry.ranges.push([meta.offset as number, (meta.offset as number) + (meta.returnedBytes as number)]);
+      if (sequence >= entry.sequence) { entry.key = key; entry.sequence = sequence; }
+      chunks.set(hash, entry);
+      return undefined;
+    },
+    /** Hashes whose recorded chunks cover every byte, with the invocation that completed them. */
+    covered(): Array<{ hash: string; key: string; sequence: number }> {
+      const out: Array<{ hash: string; key: string; sequence: number }> = [];
+      for (const [hash, entry] of chunks) {
+        let reached = 0;
+        for (const [start, end] of [...entry.ranges].sort((a, b) => a[0] - b[0])) {
+          if (start > reached) break;
+          reached = Math.max(reached, end);
+        }
+        if (reached >= entry.byteLength) out.push({ hash, key: entry.key, sequence: entry.sequence });
+      }
+      return out;
+    },
+  };
+}
 /** A review's own commands and the runner's delivery checks are recorded under delivery:<task>;
  * counting only the task's scope made them uncitable, and the verdict looped (tunnel run). */
 const reviewScopes = (taskId: string): string[] => taskId.startsWith("delivery:") ? [taskId] : [taskId, `delivery:${taskId}`];
@@ -33,6 +71,12 @@ const positive = (v: unknown): v is number => Number.isSafeInteger(v) && (v as n
 export function captureReviewReads(ledger: ToolInvocationLedger, binding: Omit<ReviewReadCapture, "reads">, evidence?: EvidenceStore): ReviewReadCapture {
   const events = ledger.listRun(binding.runId);
   const reads: ReviewReadFact[] = [];
+  const artifactReads = artifactReadTracker();
+  const pushArtifactRead = (hash: string, invocationKey: string, completedSequence: number) => {
+    for (const item of reviewScopes(binding.taskId).flatMap((taskId) => evidence?.list({ runId: binding.runId, taskId }) ?? [])) {
+      if (evidenceFactArtifactHashes(item.fact).includes(hash)) reads.push({ invocationKey, completedSequence, toolName: "artifact.read", evidenceId: item.id, artifactHash: hash });
+    }
+  };
   for (const completed of events) {
     if (completed.type !== "tool.completed" || completed.runId !== binding.runId || completed.sessionId !== binding.sessionId || !completed.result || completed.result.isError) continue;
     // A replay-safe retry is a new actual invocation; never borrow its earlier actor.
@@ -54,6 +98,16 @@ export function captureReviewReads(ledger: ToolInvocationLedger, binding: Omit<R
       const returnedBytes = meta.lineEndings === "crlf" && positive(meta.textByteLength) ? meta.textByteLength : meta.byteLength;
       if (meta.startLine === undefined ? Buffer.byteLength(content) !== returnedBytes : content.split("\n").length < endLine - startLine + 1) continue;
       reads.push({ ...base, toolName: "fs.read", path: meta.path, startLine, endLine });
+    } else if (result.toolName === "fs.search") {
+      // A search match shows the line's exact text: a reviewer that cited a line it had found by
+      // search was refused and re-read it (tunnel run). Each returned match grants that one line.
+      const value = values[0];
+      if (!record(value) || !Array.isArray(value.matches) || result.content.some((b) => b.type === "artifact")) continue;
+      for (const match of value.matches) {
+        if (record(match) && typeof match.path === "string" && match.path && positive(match.line) && typeof match.text === "string") {
+          reads.push({ ...base, toolName: "fs.search", path: match.path, startLine: match.line, endLine: match.line });
+        }
+      }
     } else if (result.toolName === "inspect_evidence") {
       if (!Array.isArray(values[0])) continue;
       for (const item of values[0]) {
@@ -62,14 +116,11 @@ export function captureReviewReads(ledger: ToolInvocationLedger, binding: Omit<R
     } else if (result.toolName === "artifact.read") {
       const meta = values[0];
       if (!record(meta)) continue;
-      // Bound to a const: property narrowing does not survive into closures over the evidence list.
-      const hash = meta.hash;
-      if (typeof hash !== "string" || meta.encoding !== "utf8" || meta.offset !== 0 || meta.truncated !== false || !positive(meta.returnedBytes) || meta.returnedBytes !== meta.byteLength || text.length !== 1 || Buffer.byteLength(text[0]!) !== meta.returnedBytes) continue;
-      for (const item of reviewScopes(binding.taskId).flatMap((taskId) => evidence?.list({ runId: binding.runId, taskId }) ?? [])) {
-        if (evidenceFactArtifactHashes(item.fact).includes(hash)) reads.push({ ...base, toolName: "artifact.read", evidenceId: item.id, artifactHash: hash });
-      }
+      const hash = artifactReads.add(meta, text, base.invocationKey, base.completedSequence);
+      if (hash) pushArtifactRead(hash, base.invocationKey, base.completedSequence);
     }
   }
+  for (const chunked of artifactReads.covered()) pushArtifactRead(chunked.hash, chunked.key, chunked.sequence);
   return { ...binding, reads };
 }
 
@@ -77,9 +128,9 @@ export function validateReadCapture(value: unknown, binding: Omit<ReviewReadCapt
   if (!record(value) || Object.entries(binding).some(([key, expected]) => value[key] !== expected) || !Array.isArray(value.reads)) throw new Error("Review read capture must bind the exact current review, submission, reviewer and session.");
   const reads: ReviewReadFact[] = value.reads.map((read) => {
     if (!record(read) || typeof read.invocationKey !== "string" || !read.invocationKey.startsWith(`${binding.runId}\0${binding.sessionId}\0`) || !positive(read.completedSequence)) throw new Error("Invalid completed review read identity.");
-    if (read.toolName === "fs.read") {
+    if (read.toolName === "fs.read" || read.toolName === "fs.search") {
       if (typeof read.path !== "string" || !read.path || !positive(read.startLine) || !positive(read.endLine) || read.endLine < read.startLine) throw new Error("Invalid review read range.");
-      return { invocationKey: read.invocationKey, completedSequence: read.completedSequence, toolName: "fs.read", path: read.path, startLine: read.startLine, endLine: read.endLine };
+      return { invocationKey: read.invocationKey, completedSequence: read.completedSequence, toolName: read.toolName, path: read.path, startLine: read.startLine, endLine: read.endLine };
     }
     if ((read.toolName !== "inspect_evidence" && read.toolName !== "artifact.read") || typeof read.evidenceId !== "string" || !read.evidenceId || (read.toolName === "artifact.read" && (typeof read.artifactHash !== "string" || !/^[a-f0-9]{64}$/.test(read.artifactHash)))) throw new Error("Invalid evidence content read.");
     return { invocationKey: read.invocationKey, completedSequence: read.completedSequence, toolName: read.toolName, evidenceId: read.evidenceId, ...(read.toolName === "artifact.read" ? { artifactHash: read.artifactHash as string } : {}) };
@@ -150,6 +201,13 @@ export function captureArchitectEvidenceReads(
 ): ArchitectReadProof[] {
   const events = ledger.listRun(binding.runId);
   const proofs: ArchitectReadProof[] = [];
+  const artifactReads = artifactReadTracker();
+  const pushArtifactProof = (hash: string, invocationKey: string, completedSequence: number) => {
+    const owners = (evidence?.list({ runId: binding.runId, taskId: binding.taskId }) ?? [])
+      .filter((item) => evidenceFactArtifactHashes(item.fact).includes(hash));
+    if (owners.length === 0) proofs.push({ toolName: "artifact.read", invocationKey, completedSequence, artifactHash: hash });
+    for (const item of owners) proofs.push({ toolName: "artifact.read", invocationKey, completedSequence, evidenceId: item.id, artifactHash: hash });
+  };
   for (const completed of events) {
     if (completed.type !== "tool.completed" || completed.runId !== binding.runId || completed.sessionId !== binding.sessionId || !completed.result || completed.result.isError) continue;
     const started = events.filter((e) => e.key === completed.key && e.fingerprint === completed.fingerprint && e.sequence < completed.sequence && (e.type === "tool.started" || e.type === "tool.retry_started")).sort((a, b) => b.sequence - a.sequence)[0];
@@ -167,19 +225,11 @@ export function captureArchitectEvidenceReads(
     } else if (result.toolName === "artifact.read") {
       const meta = values[0];
       if (!record(meta)) continue;
-      // Bound to a const: property narrowing does not survive into the filter closure below.
-      const hash = meta.hash;
-      if (typeof hash !== "string" || meta.encoding !== "utf8" || meta.offset !== 0 || meta.truncated !== false || !positive(meta.returnedBytes) || meta.returnedBytes !== meta.byteLength || text.length !== 1 || Buffer.byteLength(text[0]!) !== meta.returnedBytes) continue;
-      const owners = (evidence?.list({ runId: binding.runId, taskId: binding.taskId }) ?? [])
-        .filter((item) => evidenceFactArtifactHashes(item.fact).includes(hash));
-      if (owners.length === 0) {
-        proofs.push({ toolName: "artifact.read", invocationKey: completed.key, completedSequence: completed.sequence, artifactHash: hash });
-      }
-      for (const item of owners) {
-        proofs.push({ toolName: "artifact.read", invocationKey: completed.key, completedSequence: completed.sequence, evidenceId: item.id, artifactHash: hash });
-      }
+      const hash = artifactReads.add(meta, text, completed.key, completed.sequence);
+      if (hash) pushArtifactProof(hash, completed.key, completed.sequence);
     }
   }
+  for (const chunked of artifactReads.covered()) pushArtifactProof(chunked.hash, chunked.key, chunked.sequence);
   return proofs;
 }
 

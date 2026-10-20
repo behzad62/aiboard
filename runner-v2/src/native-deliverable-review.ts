@@ -829,7 +829,7 @@ export class NativeDeliverableReviewRuntime {
       `The worker's report (a claim, not evidence):\nSummary: ${inputs.workerSummary}\n` +
         `Unresolved concerns:\n${inputs.unresolvedConcerns.length > 0 ? inputs.unresolvedConcerns.map((item) => `- ${item}`).join("\n") : "- none"}`,
     ));
-    if (durable?.reviewEvidencePolicyVersion === 1) sections.push(section("review-evidence-policy", "contract", "Every verified claim requires citations: [{path, line}] or [{evidenceId}], backed by successful fs.read, inspect_evidence or complete artifact.read in THIS fresh verdict session. Earlier pass reads and context prose grant no citation authority. Surviving mutants are reserved blocking findings. Release only with survivorDispositions: [{findingId, disposition: \"not_a_real_gap\", rationale}] explaining why each survivor is not a real gap; otherwise return unsatisfied."));
+    if (durable?.reviewEvidencePolicyVersion === 1) sections.push(section("review-evidence-policy", "contract", "Every verified claim requires citations: [{path, line}] or [{evidenceId}], backed by successful fs.read, an fs.search match line, inspect_evidence or complete artifact.read in THIS fresh verdict session. Earlier pass reads and context prose grant no citation authority. Surviving mutants are reserved blocking findings. Release only with survivorDispositions: [{findingId, disposition: \"not_a_real_gap\", rationale}] explaining why each survivor is not a real gap; otherwise return unsatisfied."));
     sections.push(section(
       "worker-claims",
       "claims",
