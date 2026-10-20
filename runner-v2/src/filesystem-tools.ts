@@ -746,19 +746,20 @@ function objectWithString(key: string) {
       : { ok: false, issues: [`${key} must be a string`] };
 }
 
-function validateRead(input: unknown): ValidationResult<Input> {
-  if (!isObject(input) || typeof input.path !== "string") {
+function validateRead(raw: unknown): ValidationResult<Input> {
+  if (!isObject(raw) || typeof raw.path !== "string") {
     return { ok: false, issues: ["path must be a string"] };
   }
+  let input = raw;
   const hasStart = input.startLine !== undefined;
   const hasEnd = input.endLine !== undefined;
+  if (!hasStart && !hasEnd) return { ok: true, value: input };
+  // One bound means the obvious range: endLine alone is "from line 1", startLine alone is "to the
+  // end" (still clipped by the byte budget, with nextStartLine). Refusing endLine: 90 cost a retry
+  // (tunnel run).
   if (hasStart !== hasEnd) {
-    return {
-      ok: false,
-      issues: ["startLine and endLine must be provided together"],
-    };
+    input = { ...input, ...(hasStart ? { endLine: Number.MAX_SAFE_INTEGER } : { startLine: 1 }) };
   }
-  if (!hasStart) return { ok: true, value: input };
   if (
     !Number.isSafeInteger(input.startLine) ||
     !Number.isSafeInteger(input.endLine) ||

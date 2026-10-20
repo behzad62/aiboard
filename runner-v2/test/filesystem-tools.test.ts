@@ -125,6 +125,17 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
     assert.equal(invalidRange.isError, true);
     assert.equal(invalidRange.error?.code, "invalid_arguments");
 
+    // Tunnel run: a worker sent endLine: 90 alone and was refused. One bound is the obvious range.
+    const headRange = await invoke(broker, "read_head_range", "fs.read", { path: "src/app.ts", endLine: 2 });
+    assert.equal(headRange.isError, false);
+    assert.equal(text(headRange), "const alpha = 1;\nconst beta = 2;\n");
+    const tailRange = await invoke(broker, "read_tail_range", "fs.read", { path: "src/app.ts", startLine: 2 });
+    assert.equal(tailRange.isError, false);
+    assert.match(text(tailRange), /^const beta = 2;\n/);
+    const tailMetadata = json(tailRange) as Record<string, unknown>;
+    assert.equal(tailMetadata.endLine, 3);
+    assert.equal(tailMetadata.requestedEndLine, undefined);
+
     const oversizedRange = await invoke(broker, "read_oversized_range", "fs.read", {
       path: "src/minified.js",
       startLine: 1,
