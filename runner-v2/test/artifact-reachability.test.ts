@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -223,6 +223,29 @@ test("a near-miss SQLite schema is not trusted as a Runner session store", async
     await artifacts.verify(artifact.hash);
   } finally {
     try { database.close(); } catch { /* already closed */ }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("verification checkouts are project content, not durable state: their npm workspace links do not fail the scan", async () => {
+  // Tunnel run: every startup cleanup failed with "Artifact scan refuses symbolic link
+  // ...\verification-workspaces\<run>\node_modules\@aiboard\client".
+  const root = mkdtempSync(join(tmpdir(), "aiboard-artifact-guard-checkouts-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  try {
+    const artifact = await artifacts.put(Buffer.from("orphan"), "application/json");
+    for (const checkout of ["verification-workspaces", "verifier-workspaces"]) {
+      const modules = join(root, checkout, "run", "node_modules", "@scope");
+      mkdirSync(modules, { recursive: true });
+      mkdirSync(join(root, checkout, "run", "packages", "client"), { recursive: true });
+      symlinkSync(join(root, checkout, "run", "packages", "client"), join(modules, "client"), "junction");
+    }
+    const guard = new ArtifactReachabilityGuard(root, artifacts);
+    await guard.runQuiescent(async () => {
+      await guard.prepareReachabilityIndex();
+      assert.equal(await guard.removeIfGloballyUnreachable(artifact.hash), true);
+    });
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

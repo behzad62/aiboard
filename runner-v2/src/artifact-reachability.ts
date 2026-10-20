@@ -12,7 +12,9 @@ const HASH_PATTERN = /[a-f0-9]{64}/g;
 const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "binary");
 const DEFAULT_MAX_FILES = 250_000;
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
-const EXCLUDED_ROOTS = new Set(["artifacts", "integration", "workspaces"]);
+// Project checkouts hold project files, not Runner records. The verification checkouts were scanned
+// too, and npm workspace links in their node_modules failed every startup cleanup (tunnel run).
+const EXCLUDED_ROOTS = new Set(["artifacts", "integration", "workspaces", "verification-workspaces", "verifier-workspaces"]);
 const NON_LIVE_SESSION_TABLES = new Set([
   "agent_artifact_cleanup",
   "agent_compacted_checkpoint_idempotency",
