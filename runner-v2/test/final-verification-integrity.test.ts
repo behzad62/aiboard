@@ -318,10 +318,13 @@ test("scheduler revalidates exact evidence facts and artifact integrity after re
 
     fixture.store.append(checkEvent(fact, record.id));
     await fixture.artifacts.remove(fact.stdoutArtifactHash);
-    assert.throws(
-      () => fixture.store.readRun(RUN_ID),
-      /artifact.*not found|missing|integrity/i,
-    );
+    // A restart is a fresh store; a live store may reuse its validated replay for a short interval.
+    const restarted = restartedStore(fixture);
+    try {
+      assert.throws(() => restarted.readRun(RUN_ID), /artifact.*not found|missing|integrity/i);
+    } finally {
+      restarted.close();
+    }
   } finally {
     fixture.close();
   }
@@ -343,7 +346,12 @@ test("scheduler restart rejects a corrupt final-verification artifact", async ()
     fixture.store.append(checkEvent(fact, record.id));
     const artifact = await fixture.artifacts.stat(fact.stderrArtifactHash);
     writeFileSync(artifact.path, "corrupt");
-    assert.throws(() => fixture.store.readRun(RUN_ID), /artifact.*hash mismatch|integrity/i);
+    const restarted = restartedStore(fixture);
+    try {
+      assert.throws(() => restarted.readRun(RUN_ID), /artifact.*hash mismatch|integrity/i);
+    } finally {
+      restarted.close();
+    }
   } finally {
     fixture.close();
   }
@@ -397,6 +405,14 @@ test("a forged end-to-end event chain cannot claim cleanup without an authentic 
     fixture.close();
   }
 });
+
+function restartedStore(fixture: { database: string; evidence: SqliteEvidenceStore; artifacts: ArtifactStore }): SqliteSchedulerStore {
+  return new SqliteSchedulerStore(fixture.database, {
+    evidenceStore: fixture.evidence,
+    artifacts: fixture.artifacts,
+    validateExecutionProfile: acceptFinalVerificationProfile,
+  });
+}
 
 async function createFixture(options: {
   allNotApplicable?: boolean;

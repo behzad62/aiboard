@@ -349,12 +349,14 @@ function repairPlanningArchitectDriver(plans: { count: number }, taskPrefix: str
       const evidenceIds = [...(failure?.evidenceIds ?? [])];
       plans.count += 1;
       const n = plans.count;
+      // New-policy repairs name the contract-bound task they repair; legacy runs have none to name.
+      const parent = Object.entries(projection.readyPlanTaskBindings ?? {}).find(([, binding]) => (binding as { contractId?: string }).contractId)?.[0];
       const decision = await request.tools.invoke({ type: "tool_call", callId: `dec-${taskPrefix}-${n}`, name: "record_repair_approach_decision", arguments: { issueId, approachId: `${taskPrefix}a${n}`, repeat: false, hypothesis: `fix attempt ${n}`, diagnosticSet: [], evidenceIds } }, request.context);
       assert.equal((decision as { isError?: boolean }).isError, false);
       const plan = await request.tools.invoke({ type: "tool_call", callId: `plan-${taskPrefix}-${n}`, name: "plan_verification_repairs", arguments: {
         finalVerificationTaskId: TASK_ID, generationId: current?.generationId, targetRevision: REVISION,
         source: { type: "mechanical_failure", failureId: failure.failureId, issueIds: failure.issueIds, factIds: failure.factIds },
-        tasks: [{ id: `${taskPrefix}repair-${n}`, objective: "fix tests", categories: ["tests"], evidenceIds, dependencies: [], requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "ac-1", text: "tests pass" }] }],
+        tasks: [{ id: `${taskPrefix}repair-${n}`, objective: "fix tests", categories: ["tests"], evidenceIds, dependencies: parent ? [parent] : [], requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "ac-1", text: "tests pass" }] }],
       } }, request.context);
       assert.equal((plan as { isError?: boolean }).isError, false);
       return undefined;
@@ -522,6 +524,82 @@ test("a scaled run dispatches its first repair through the real pump", async () 
     assert.equal(after.repairCycles?.used, 1);
     assert.equal(effectiveRepairPlanLimit(after), 9);
     assert.equal(repairCyclesExhausted(after), false);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a new-policy repair must name the contract-bound task it repairs", async () => {
+  // Tunnel run: a repair with dependencies [] was accepted, then could neither run (no contract)
+  // nor be cancelled, and the build paused at its last step.
+  const fixture = await createStore();
+  try {
+    seedPolicy(fixture);
+    seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
+    seedIntegrationRevision(fixture);
+    seedGeneration(fixture);
+    await driveToDispatchReady(fixture);
+    const outcomes: Array<{ isError?: boolean; error?: { code?: string; message?: string } }> = [];
+    const runtime = buildTestRuntime(fixture, failingCheckDriver(fixture, []), {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      architectDriver: { run: async (request: any) => {
+        if (request.reason?.type !== "final_verification_repair_plan_required") return;
+        const projection = request.projection;
+        const failure = projection.finalVerification.current.failure;
+        const issueId = Object.keys(projection.repairIssues ?? {})[0];
+        await request.tools.invoke({ type: "tool_call", callId: "decide", name: "record_repair_approach_decision", arguments: { issueId, approachId: "a1", repeat: false, hypothesis: "fix", diagnosticSet: [], evidenceIds: [...failure.evidenceIds] } }, request.context);
+        const plan = (dependencies: string[], callId: string) => request.tools.invoke({ type: "tool_call", callId, name: "plan_verification_repairs", arguments: {
+          finalVerificationTaskId: TASK_ID, generationId: projection.finalVerification.current.generationId, targetRevision: REVISION,
+          source: { type: "mechanical_failure", failureId: failure.failureId, issueIds: failure.issueIds, factIds: failure.factIds },
+          tasks: [{ id: "orphan-repair", objective: "fix tests", categories: ["tests"], evidenceIds: [...failure.evidenceIds], dependencies, requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "ac-1", text: "tests pass" }] }],
+        } }, request.context);
+        outcomes.push(await plan([], "orphan"));
+        const parent = Object.entries(projection.readyPlanTaskBindings ?? {}).find(([, binding]) => (binding as { contractId?: string }).contractId)?.[0];
+        outcomes.push(await plan(parent ? [parent] : [], "parented"));
+      } },
+    });
+    await runtime.step();
+    assert.equal(outcomes[0]?.isError, true);
+    assert.equal(outcomes[0]?.error?.code, "repair_parent_required");
+    assert.match(outcomes[0]?.error?.message ?? "", /orphan-repair must list in dependencies the integrated task/);
+    assert.equal(outcomes[1]?.isError, false, outcomes[1]?.error?.message ?? "parented repair failed");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("repair approach errors name the open repair issues and the field holding a non-evidence id", async () => {
+  // Tunnel run: three calls were spent on "Repair approach requires the current durable issue." and
+  // "Unresolved current-run evidence repair:...".
+  const fixture = await createStore();
+  try {
+    seedPolicy(fixture);
+    seedReadyPlan(fixture);
+    authorizeOwnerStart(fixture);
+    seedIntegrationRevision(fixture);
+    seedGeneration(fixture);
+    await driveToDispatchReady(fixture);
+    const outcomes: Array<{ isError?: boolean; error?: { code?: string; message?: string } }> = [];
+    let issueId = "";
+    const runtime = buildTestRuntime(fixture, failingCheckDriver(fixture, []), {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      architectDriver: { run: async (request: any) => {
+        if (request.reason?.type !== "final_verification_repair_plan_required") return;
+        const projection = request.projection;
+        const failure = projection.finalVerification.current.failure;
+        issueId = Object.keys(projection.repairIssues ?? {})[0]!;
+        const decide = (id: string, diagnosticSet: string[], callId: string) => request.tools.invoke({ type: "tool_call", callId, name: "record_repair_approach_decision", arguments: { issueId: id, approachId: callId, repeat: false, hypothesis: "fix", diagnosticSet, evidenceIds: [...failure.evidenceIds] } }, request.context);
+        outcomes.push(await decide(failure.issueIds[0], [], "failure-issue-id"));
+        outcomes.push(await decide(issueId, [issueId], "repair-id-as-evidence"));
+      } },
+    });
+    await assert.rejects(runtime.step(), /without a typed action/);
+    assert.equal(outcomes[0]?.error?.code, "unknown_repair_issue");
+    assert.ok(outcomes[0]?.error?.message?.includes(`Open repair issues: ${issueId} (`), outcomes[0]?.error?.message ?? "no message");
+    assert.match(outcomes[0]?.error?.message ?? "", /names the failure, not its repair issue/);
+    assert.equal(outcomes[1]?.error?.code, "unknown_evidence");
+    assert.equal(outcomes[1]?.error?.message, `diagnosticSet entry ${issueId} is not an evidence id recorded in this run; diagnosticSet lists evidence ids (evidence_...) only.`);
   } finally {
     fixture.close();
   }

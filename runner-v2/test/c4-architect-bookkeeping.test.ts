@@ -299,7 +299,8 @@ test("C4: docs-v2 planning turn drops templates, keeps one write line, carries t
         .filter((line) => !line.includes("record_planning_checkpoint"))
         // Revisions go through patch_planning_plan (only the changed items), not a whole-plan re-send.
         .map((line) => line.startsWith("Draft and revise the plan")
-          ? "Draft the plan once with draft_planning_plan, then revise it with patch_planning_plan listing only the changed tasks, phases or requirements (revise_planning_plan re-sends the whole plan); investigations need a question, deliverable, decision criterion, and dependent unlock."
+          ? "Draft the plan once with draft_planning_plan, then revise it with patch_planning_plan listing only the changed tasks, phases or requirements (revise_planning_plan re-sends the whole plan); investigations need a question, deliverable, decision criterion, and dependent unlock.\n" +
+            "Each task's acceptance criteria name the tests that prove that task (its new or changed tests, its own package's suite); the runner runs the whole project suite once in final verification, so make \"the root/full test suite stays green\" a criterion only of a task that builds or changes the test setup itself."
           : line)
         .join("\n"),
     );

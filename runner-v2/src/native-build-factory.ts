@@ -2112,6 +2112,14 @@ export class NativeBuildFactory {
           await finalVerificationPorts.release(profile.portLease, spec.runId, profile.targetRevision);
         }
       },
+      // The runner launches an Architect-named smoke program without a per-command approval, so it
+      // is offered only where the Architect could already run commands that way.
+      ...(spec.permissionProfile === "full"
+        ? {
+            finalVerificationRuntimeSmoke: async (profile, request) =>
+              await finalVerificationProfiles.withArchitectRuntimeSmoke(profile, request),
+          }
+        : {}),
       independentVerifier,
       planCritic: planCriticDriver,
       coverageReview: coverageReviewDriver,

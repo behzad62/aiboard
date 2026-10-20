@@ -11,6 +11,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
+import { architectRuntimeSmokeSpec } from "../src/final-verification-profile.js";
 import { captureGitBaseline } from "./support/git-fixture.js";
 import { IntegrationManager } from "./support/git-fixture.js";
 import { createExecutionHost } from "../src/execution-host.js";
@@ -384,3 +385,46 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: n
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+test("an Architect-named smoke spec runs on its leased port and is ready only when its path answers 200", async (t) => {
+  // The tunnel relay serves GET /healthz; the default probe must hit that path, not the root.
+  const fixture = await createFixture("architect smoke");
+  const port = await freePort();
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const managedOwner = await createManagedExecution(fixture);
+  const workspace = workspaceFor(fixture);
+  const runtime = new FinalVerificationRuntime({
+    execution: createTestOneShotCommandExecutor(t),
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    integrationRevision: () => fixture.integration.revision,
+    managedProcessService: managedOwner.service,
+    managedProcessAuthority: managedOwner.authority,
+  });
+  try {
+    const script = [
+      "const http=require('node:http');",
+      "http.createServer((req,res)=>{res.statusCode=req.url==='/healthz'?200:404; res.end();})",
+      ".listen(Number(process.argv[1]),'127.0.0.1',()=>console.log('relay listening'));",
+    ].join("");
+    const smoke = architectRuntimeSmokeSpec({ label: "relay server", executable: "node", args: ["-e", script, "{port}"], readinessPath: "/healthz", timeoutMs: 5_000 }, port);
+    assert.deepEqual(smoke.args, ["-e", script, String(port)]);
+    const run = await runtime.run({
+      plan: smokePlan(),
+      executionProfile: smokeProfile(fixture.integration.revision, smoke),
+      runtimeSmoke: smoke,
+    });
+    const check = runtimeCheck(run);
+    assert.equal(check.green, true, check.issues.join("\n"));
+    assert.equal((check.facts[0] as unknown as { endpoint: string }).endpoint, `http://127.0.0.1:${port}/healthz`);
+    await assertPortReusable(port);
+  } finally {
+    await managedOwner.close();
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});

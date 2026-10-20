@@ -41,7 +41,7 @@ import {
 } from "./provider-health.js";
 import type { RuntimeRouter, AgentRuntimeCandidate, WorkerSelectionPreference } from "./runtime-router.js";
 import type { SchedulerProjection, SchedulerStore } from "./scheduler-store.js";
-import { rebuildSchedulerProjection, resolveTaskContractReference } from "./scheduler-store.js";
+import { rebuildSchedulerProjection, repairParentContractId, resolveTaskContractReference } from "./scheduler-store.js";
 import type { ExecutionTaskContract } from "./planning-contracts.js";
 import type { TaskContractRef } from "./task-contracts.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
@@ -235,6 +235,17 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         );
       } catch (error) {
         if (error instanceof WorkerContractUnavailableError) {
+          // A final-verification repair naming no integrated task has no contract to run under. The
+          // Architect can fix that with revise_task, so it is a task failure for the Architect, not an
+          // owner pause (tunnel run: missing_task_contract:dropped at the build's last step).
+          const projection = rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId));
+          const task = projection.tasks[assignment.task.id];
+          if (task?.kind === "verification_repair" && repairParentContractId(projection, task) === undefined) {
+            return {
+              type: "failed",
+              reason: `repair_contract_unresolvable: repair ${task.id} lists no dependency on an integrated task, so it has no task contract to run under. Use revise_task to set its dependencies to the integrated task(s) whose delivered work it repairs.`,
+            };
+          }
           return { type: "paused", reason: `missing_task_contract:${error.resolution}` };
         }
         throw error;

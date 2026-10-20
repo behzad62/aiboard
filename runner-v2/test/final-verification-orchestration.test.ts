@@ -362,10 +362,10 @@ test("plan_final_verification refuses a required check the runner has nothing to
     const refused = await invokePlan(tools, context, "plan-unrunnable", plan);
     assert.equal(refused.isError, true);
     assert.equal(refused.error?.code, "final_verification_check_not_runnable");
-    assert.match(refused.error?.message ?? "", /runtime_smoke is required.*found none.*not_applicable/s);
+    assert.match(refused.error?.message ?? "", /runtime_smoke is required.*detects no server.*not_applicable/s);
     assert.equal(fixture.store.readRun(RUN_ID).some((event) => event.type === "final_verification.generation_created"), false);
     const accepted = await invokePlan(tools, context, "plan-runnable", finalVerificationPlan());
-    assert.equal(accepted.isError, false, accepted.error?.message);
+    assert.equal(accepted.isError, false, accepted.error?.message ?? "runnable plan failed");
   } finally {
     fixture.store.close();
     rmSync(fixture.root, { recursive: true, force: true });

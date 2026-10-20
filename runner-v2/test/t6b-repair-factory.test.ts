@@ -103,7 +103,9 @@ class T6bFactoryArchitect implements AgentModel {
             objective: "Fix the steadily failing t6b red test.",
             categories: ["tests"],
             evidenceIds,
-            dependencies: [],
+            // New-policy repairs name the contract-bound task they repair.
+            dependencies: Object.entries(rebuildSchedulerProjection(store!.readRun(RUN_ID)).readyPlanTaskBindings ?? {})
+              .filter(([, binding]) => binding.contractId !== undefined).map(([taskId]) => taskId).slice(0, 1),
             requiredCapabilities: ["code"],
             acceptanceCriteria: [{ id: "fix-1", text: "The t6b red test passes." }],
           }],

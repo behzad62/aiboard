@@ -157,6 +157,12 @@ export type FinalVerificationRevisionSource =
   | (() => string | Promise<string>);
 
 export interface FinalVerificationRuntimeOptions {
+  /**
+   * The value the first run's ordinal follows. Run ordinals name each run's process calls, evidence
+   * keys and report files, so they must not repeat across runner processes; the default is the time
+   * this runtime was created. Tests that predict names pass 0.
+   */
+  runOrdinalStart?: number;
   git?: GitRunner;
   workspaceManager: VerificationWorkspaceManager;
   artifacts: ArtifactStore;
@@ -387,9 +393,13 @@ export class FinalVerificationRuntime {
   private readonly ambientNodeOptions?: string;
   private readonly testNamePattern?: string;
   private readonly tempRecorders?: Pick<TempRecordSink, "recorded">;
-  private runOrdinal = 0;
+  // Restarted at 0 in every runner process, a re-run after a restart reused the previous process's
+  // call ids and failed with "Process idempotency conflict" (tunnel run).
+  private runOrdinal: number;
 
   constructor(options: FinalVerificationRuntimeOptions) {
+    this.runOrdinal = options.runOrdinalStart ?? Date.now();
+    if (!Number.isSafeInteger(this.runOrdinal) || this.runOrdinal < 0) throw new Error("runOrdinalStart must be a non-negative integer.");
     if (!options.runId.trim()) throw new Error("Final verification runId is required.");
     if (options.taskId !== undefined && !options.taskId.trim()) {
       throw new Error("Final verification taskId is required.");

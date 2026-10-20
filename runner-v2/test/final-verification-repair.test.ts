@@ -705,3 +705,50 @@ function integrateRepair(fixture: Fixture, taskId: string, revision: string): vo
 function projection(store: SqliteSchedulerStore) { return rebuildSchedulerProjection(store.readRun(RUN_ID)); }
 function current(store: SqliteSchedulerStore) { return projection(store).finalVerification?.current; }
 function repairs(store: SqliteSchedulerStore) { return Object.values(projection(store).tasks).filter((task) => task.kind === "verification_repair"); }
+
+test("repairs that finish without changing the revision retire the failed generation for a fresh plan", async () => {
+  // Tunnel run: a no-change repair of an unrunnable runtime_smoke left the failed generation current
+  // on the same revision, with nothing to re-verify it and no fresh plan ever requested.
+  const fixture = createMechanicalFixture();
+  try {
+    const failure = current(fixture.store)!.failure!;
+    const planned = await invokeRepairs(repairTools(fixture), {
+      finalVerificationTaskId: FINAL_TASK_ID,
+      generationId: GENERATION_ID,
+      targetRevision: REVISION_ONE,
+      source: { type: "mechanical_failure" as const, failureId: failure.failureId, issueIds: [...failure.issueIds], factIds: [...failure.factIds] },
+      tasks: [{
+        id: "repair-no-change",
+        objective: "Re-run the failing check; nothing in the product needs to change.",
+        categories: ["build" as const],
+        evidenceIds: [...failure.evidenceIds],
+        dependencies: ["implementation-one"],
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "rerun", text: "The check was re-run." }],
+      }],
+    }, "no-change-repair");
+    assert.equal(planned.isError, false, planned.error?.message ?? "repair plan failed");
+    integrateRepair(fixture, "repair-no-change", REVISION_ONE);
+    assert.equal(current(fixture.store)?.generationId, GENERATION_ID, "an unchanged revision does not invalidate the generation");
+
+    const reasons: string[] = [];
+    const runtime = buildRuntime(fixture, async (request) => {
+      reasons.push(request.reason.type);
+      const result = await request.tools.invoke({
+        type: "tool_call", callId: "fresh-same-revision", name: "plan_final_verification",
+        arguments: { plan: finalPlan() },
+      }, request.context);
+      assert.equal(result.isError, false, result.error?.message ?? "fresh plan failed");
+    });
+    assert.equal((await runtime.step()).action, "final_verification_superseded");
+    assert.equal(current(fixture.store), undefined);
+    assert.equal(projection(fixture.store).finalVerification?.history.at(-1)?.supersededReason, "repairs_completed_without_revision_change");
+    assert.equal((await runtime.step()).action, "final_verification_plan_required");
+    assert.deepEqual(reasons, ["final_verification_plan_required"]);
+    assert.equal(current(fixture.store)?.targetRevision, REVISION_ONE);
+    assert.equal(current(fixture.store)?.planVersion, 2);
+    assert.notEqual(current(fixture.store)?.generationId, GENERATION_ID);
+  } finally {
+    fixture.close();
+  }
+});

@@ -14,6 +14,7 @@ import {
   latestUnresolvedContextRecordingNote,
   readyPlanIdentity,
   rebuildSchedulerProjection,
+  repairParentContractId,
   type SchedulerActor,
   type SchedulerStore,
 } from "./scheduler-store.js";
@@ -52,6 +53,7 @@ import {
 } from "./final-verification-contracts.js";
 import {
   cloneFinalVerificationExecutionProfile,
+  type ArchitectRuntimeSmokeRequest,
   type FinalVerificationExecutionProfile,
 } from "./final-verification-profile.js";
 import type {
@@ -139,6 +141,8 @@ export interface ArchitectToolsOptions {
   artifacts?: ArtifactStore;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
+  /** Present only when the run may launch an Architect-named program (full access). */
+  finalVerificationRuntimeSmoke?: (profile: FinalVerificationExecutionProfile, request: ArchitectRuntimeSmokeRequest) => Promise<FinalVerificationExecutionProfile>;
 }
 
 interface PlanTaskInput {
@@ -204,7 +208,7 @@ interface ReviewTaskInput {
 
 interface TaskIdInput { taskId: string }
 interface CompleteRunInput { summary: string }
-interface PlanFinalVerificationInput { plan: FinalVerificationPlan }
+interface PlanFinalVerificationInput { plan: FinalVerificationPlan; runtimeSmoke?: ArchitectRuntimeSmokeRequest }
 interface FinalVerificationCategoryReviewInput {
   category: FinalVerificationCategory;
   verdict: "approved" | "repair_required";
@@ -647,6 +651,7 @@ export function createArchitectTools(
         clock,
         options.finalVerificationProfileFor,
         options.discardFinalVerificationProfile,
+        options.finalVerificationRuntimeSmoke,
       )]
     : core;
   const verification = options.finalVerificationReviewAvailable && !answerPath
@@ -807,6 +812,18 @@ function planVerificationRepairsTool(
       // member issue and charge one cycle per member on dispatch. Legacy
       // runs bypass the gate and the charge unchanged.
       if (projection.planningPolicyVersion === 1) {
+        // A repair runs under the contract of the integrated task it repairs, found through its
+        // dependencies; one naming none was accepted, then could neither run nor be cancelled (tunnel run).
+        const orphans = input.tasks.filter((task) => repairParentContractId(projection, {
+          id: task.id, kind: "verification_repair", objective: task.objective, dependencies: [...task.dependencies],
+          status: "planned", requiredCapabilities: [], attempt: 0,
+        } as BuildTask) === undefined);
+        if (orphans.length > 0) {
+          return errorOutput(
+            "repair_parent_required",
+            `Repair ${orphans.map((task) => task.id).join(", ")} must list in dependencies the integrated task(s) whose delivered work it repairs (for example ${integratedTaskExamples(projection)}); a repair runs under that task's contract.`,
+          );
+        }
         const members = repairMemberIssues(toolProjectId(toolOptions, context.runId), input.tasks.flatMap((task) => task.categories.map((category) => withFailingIds(category, failingTestIdsByCategory(projection.finalVerification?.current?.completedChecks ?? [])))));
         const taskEvidence = [...new Set(input.tasks.flatMap((task) => task.evidenceIds))];
         // T6b repair (N7): repair tasks cite durable evidence.
@@ -1093,7 +1110,12 @@ function recordRepairApproachDecisionTool(
       if (denied) return denied;
       const projection = rebuildSchedulerProjection(store.readRun(context.runId));
       const issue = projection.repairIssues?.[input.issueId];
-      if (!issue) return errorOutput("unknown_repair_issue", "Repair approach requires the current durable issue.");
+      if (!issue) {
+        // The Architect passed a verification failure's issue:... id, which names the failure, not the
+        // repair issue (tunnel run). Naming the open issues ends the guessing.
+        const open = Object.values(projection.repairIssues ?? {}).map((entry) => `${entry.issueId} (${entry.rootCause})`);
+        return errorOutput("unknown_repair_issue", `${input.issueId} is not an open repair issue. ${open.length > 0 ? `Open repair issues: ${open.join(", ")}.` : "There are no open repair issues."}${input.issueId.startsWith("issue:") ? " An issue:... id from a verification failure names the failure, not its repair issue." : ""}`);
+      }
       // T6b repair (B4): the kernel validates actor, lineage, prior
       // failure, and immutable evidence references here, where the
       // evidence store is available. Every cited id must exist; repeats
@@ -1103,16 +1125,20 @@ function recordRepairApproachDecisionTool(
       let evidenceContentDigests: Record<string, string> | undefined;
       try {
         const cited = [...new Set([...input.diagnosticSet, ...input.evidenceIds, ...issue.approaches.flatMap((entry) => [...entry.diagnosticSet, ...entry.evidenceIds, ...entry.failureEvidenceIds])])];
-        if (evidenceStore && artifacts) evidenceContentDigests = resolveEvidenceContent(evidenceStore, artifacts, context.runId, cited);
         const known = evidenceStore
           ? evidenceStore.getByIds({ runId: context.runId, ids: cited }).map((record) => record.id)
           : undefined;
         if (known !== undefined) {
-          const unknownDiagnostic = input.diagnosticSet.find((id) => !known.includes(id));
-          if (unknownDiagnostic) {
-            return errorOutput("unknown_evidence", `Repair approach cites unknown diagnostic evidence ${unknownDiagnostic}.`);
+          // Checked per field before content resolution: a repair id put in diagnosticSet came back as
+          // "Unresolved current-run evidence repair:...", which did not say which field was wrong (tunnel run).
+          for (const field of ["diagnosticSet", "evidenceIds"] as const) {
+            const unknown = input[field].find((id) => !known.includes(id));
+            if (unknown) {
+              return errorOutput("unknown_evidence", `${field} entry ${unknown} is not an evidence id recorded in this run; ${field} lists evidence ids (evidence_...) only.`);
+            }
           }
         }
+        if (evidenceStore && artifacts) evidenceContentDigests = resolveEvidenceContent(evidenceStore, artifacts, context.runId, cited);
         validateRepairApproachDecision({
           actorRole: "architect",
           actorId: context.actor.id,
@@ -1899,16 +1925,37 @@ function planFinalVerificationTool(
   clock: () => string,
   profileFor?: ArchitectToolsOptions["finalVerificationProfileFor"],
   discardProfile?: ArchitectToolsOptions["discardFinalVerificationProfile"],
+  runtimeSmokeFor?: ArchitectToolsOptions["finalVerificationRuntimeSmoke"],
 ): NativeTool<PlanFinalVerificationInput> {
   return lifecycleTool({
     name: "plan_final_verification",
-    description: "Create the kernel-owned final-verification generation for the current canonical integration revision",
-    schema: objectSchema({ plan: finalVerificationPlanSchema() }, ["plan"]),
+    description: "Create the kernel-owned final-verification generation for the current canonical integration revision. For a required runtime_smoke the runner does not detect itself, pass runtimeSmoke: the runner starts that program on a leased loopback port (args carry {port}) and expects HTTP 200 from readinessPath.",
+    schema: objectSchema({
+      plan: finalVerificationPlanSchema(),
+      runtimeSmoke: objectSchema({
+        label: { type: "string", minLength: 1, description: "What is started, e.g. relay server." },
+        executable: { type: "string", minLength: 1, description: "Program to run in the verification checkout, e.g. node." },
+        args: { type: "array", items: { type: "string" }, description: "Arguments; one must contain {port}, the runner-leased port." },
+        readinessPath: { type: "string", minLength: 1, description: "HTTP path probed on 127.0.0.1:{port} until it answers 200, e.g. /healthz." },
+        timeoutMs: { type: "integer", minimum: 1000, maximum: 300000 },
+      }, ["label", "executable", "args", "readinessPath"]),
+    }, ["plan"]),
     validate: (input) => validateObject(input, (value) => {
       const validation = validateFinalVerificationPlan(value.plan);
       if (!validation.valid) return null;
-      return { plan: canonicalFinalVerificationPlan(planFinalVerification(value.plan)) };
-    }, "plan must explicitly and validly represent build, tests, runtime_smoke, and browser"),
+      const smoke = value.runtimeSmoke as Record<string, unknown> | undefined;
+      if (smoke !== undefined && (typeof smoke !== "object" || smoke === null || Array.isArray(smoke) ||
+          !nonEmpty(smoke.label) || !nonEmpty(smoke.executable) || !nonEmpty(smoke.readinessPath) ||
+          !Array.isArray(smoke.args) || smoke.args.some((arg) => typeof arg !== "string") ||
+          (smoke.timeoutMs !== undefined && !Number.isSafeInteger(smoke.timeoutMs)))) return null;
+      return {
+        plan: canonicalFinalVerificationPlan(planFinalVerification(value.plan)),
+        ...(smoke ? { runtimeSmoke: {
+          label: smoke.label as string, executable: smoke.executable as string, args: [...smoke.args as string[]],
+          readinessPath: smoke.readinessPath as string, ...(smoke.timeoutMs !== undefined ? { timeoutMs: smoke.timeoutMs as number } : {}),
+        } } : {}),
+      };
+    }, "plan must explicitly and validly represent build, tests, runtime_smoke, and browser; runtimeSmoke, when given, needs label, executable, args (strings) and readinessPath"),
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
@@ -1949,6 +1996,23 @@ function planFinalVerificationTool(
           error instanceof Error ? error.message : String(error),
         );
       }
+      if (input.runtimeSmoke) {
+        const refuse = async (code: string, message: string) => {
+          if (discardProfile) await discardProfile(executionProfile).catch(() => undefined);
+          return errorOutput(code, message);
+        };
+        if (input.plan.checks.find((check) => check.category === "runtime_smoke")?.status !== "required") {
+          return await refuse("runtime_smoke_not_required", "runtimeSmoke names the program for a required runtime_smoke check, and this plan marks runtime_smoke not_applicable.");
+        }
+        if (!runtimeSmokeFor) {
+          return await refuse("runtime_smoke_spec_unavailable", "This run cannot start an Architect-named program for runtime_smoke: that needs full access, where the runner may launch it without per-command approval. Mark runtime_smoke not_applicable with a rationale, and keep any start-and-probe proof in the tests.");
+        }
+        try {
+          executionProfile = await runtimeSmokeFor(executionProfile, input.runtimeSmoke);
+        } catch (error) {
+          return await refuse("runtime_smoke_spec_invalid", error instanceof Error ? error.message : String(error));
+        }
+      }
       const authoritativeValidation = validateFinalVerificationPlan(input.plan, {
         detectedSignals: executionProfile.detectedSignals,
       });
@@ -1967,7 +2031,7 @@ function planFinalVerificationTool(
           authoritativeValidation.issues.join(" "),
         );
       }
-      const unrunnable = unrunnableRequiredChecks(input.plan, executionProfile);
+      const unrunnable = unrunnableRequiredChecks(input.plan, executionProfile, runtimeSmokeFor !== undefined);
       if (unrunnable.length > 0) {
         if (discardProfile) {
           try { await discardProfile(executionProfile); }
@@ -3290,8 +3354,16 @@ function newPolicyPlanNotReady(
   return null;
 }
 
+function integratedTaskExamples(projection: ReturnType<typeof rebuildSchedulerProjection>): string {
+  const integrated = Object.values(projection.tasks)
+    .filter((task) => task.status === "integrated" && task.kind !== "verification_repair" && task.kind !== "final_verification")
+    .map((task) => task.id)
+    .sort();
+  return integrated.length > 0 ? integrated.slice(0, 4).join(", ") : "an implementation task";
+}
+
 /** Required checks the runner found nothing to execute for at this revision, each with what to do instead. */
-function unrunnableRequiredChecks(plan: FinalVerificationPlan, profile: FinalVerificationExecutionProfile): string[] {
+function unrunnableRequiredChecks(plan: FinalVerificationPlan, profile: FinalVerificationExecutionProfile, architectSmoke: boolean): string[] {
   const required = new Set(plan.checks.filter((check) => check.status === "required").map((check) => check.category));
   const issues: string[] = [];
   for (const category of ["build", "tests"] as const) {
@@ -3300,7 +3372,9 @@ function unrunnableRequiredChecks(plan: FinalVerificationPlan, profile: FinalVer
     }
   }
   if (required.has("runtime_smoke") && !profile.runtimeSmoke) {
-    issues.push("runtime_smoke is required, but the runner can start and probe only a server it detects from package.json scripts (start, dev, serve), and found none at this revision. Mark runtime_smoke not_applicable with a rationale, and keep any start-and-probe proof in the tests (for example an end-to-end test that starts the built program).");
+    issues.push(architectSmoke
+      ? "runtime_smoke is required, but the runner detects no server to start at this revision. Name the program with runtimeSmoke (label, executable, args with {port}, readinessPath such as /healthz) and the runner will start it on a leased port and probe it, or mark runtime_smoke not_applicable with a rationale."
+      : "runtime_smoke is required, but the runner detects no server to start at this revision, and this run cannot start an Architect-named program (that needs full access). Mark runtime_smoke not_applicable with a rationale, and keep any start-and-probe proof in the tests (for example an end-to-end test that starts the built program).");
   }
   if (required.has("browser") && !profile.browser) {
     issues.push("browser is required, but the runner detected no served UI to open at this revision. Mark browser not_applicable with a rationale.");

@@ -578,7 +578,7 @@ function repairPlanningArchitectDriver(plans: { count: number }, taskPrefix: str
       const plan = await request.tools.invoke({ type: "tool_call", callId: `plan-${taskPrefix}-${n}`, name: "plan_verification_repairs", arguments: {
         finalVerificationTaskId: TASK_ID, generationId: current?.generationId, targetRevision: REVISION,
         source: { type: "mechanical_failure", failureId: failure.failureId, issueIds: failure.issueIds, factIds: failure.factIds },
-        tasks: [{ id: `${taskPrefix}repair-${n}`, objective: "fix tests", categories: ["tests"], evidenceIds, dependencies: [], requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "ac-1", text: "tests pass" }] }],
+        tasks: [{ id: `${taskPrefix}repair-${n}`, objective: "fix tests", categories: ["tests"], evidenceIds, dependencies: repairParents(request.projection), requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "ac-1", text: "tests pass" }] }],
       } }, request.context);
       assert.equal((plan as { isError?: boolean }).isError, false);
       return undefined;
@@ -901,7 +901,7 @@ test("a failed approach relabelled with no evidence is refused and charges nothi
           const plan = await request.tools.invoke({ type: "tool_call", callId: "plan", name: "plan_verification_repairs", arguments: {
             finalVerificationTaskId: TASK_ID, generationId: current?.generationId, targetRevision: REVISION,
             source: { type: "mechanical_failure", failureId: failure.failureId, issueIds: failure.issueIds, factIds: failure.factIds },
-            tasks: [{ id: "relabel-repair", objective: "fix tests", categories: ["tests"], evidenceIds: [...failure.evidenceIds], dependencies: [], requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "ac-1", text: "tests pass" }] }],
+            tasks: [{ id: "relabel-repair", objective: "fix tests", categories: ["tests"], evidenceIds: [...failure.evidenceIds], dependencies: repairParents(request.projection), requiredCapabilities: ["code"], acceptanceCriteria: [{ id: "ac-1", text: "tests pass" }] }],
           } }, request.context);
           observed.planIsError = (plan as { isError?: boolean }).isError;
           return undefined;
@@ -1207,7 +1207,7 @@ test("three real fixes on the same failing test charge once each, then the fourt
             source: { type: "mechanical_failure", failureId: failure.failureId, issueIds: [...failure.issueIds], factIds: [...failure.factIds] },
             tasks: [{
               id: `three-round-fix-${round}`, objective: `Fix red-one (round ${round}).`, categories: ["tests"],
-              evidenceIds: [...failure.evidenceIds], dependencies: [], requiredCapabilities: ["code"],
+              evidenceIds: [...failure.evidenceIds], dependencies: repairParents(request.projection), requiredCapabilities: ["code"],
               acceptanceCriteria: [{ id: "ac-1", text: "red-one passes" }],
             }],
           } }, request.context);
@@ -1531,7 +1531,7 @@ test("a decision recorded only in round 1 refuses the round-2 dispatch until a n
         source: { type: "mechanical_failure", failureId: failure.failureId, issueIds: [...failure.issueIds], factIds: [...failure.factIds] },
         tasks: [{
           id: `r3b2-fix-${approachTag}-${round}`, objective: `Fix red-one (${approachTag} round ${round}).`, categories: ["tests"],
-          evidenceIds: [...failure.evidenceIds], dependencies: [], requiredCapabilities: ["code"],
+          evidenceIds: [...failure.evidenceIds], dependencies: repairParents(request.projection), requiredCapabilities: ["code"],
           acceptanceCriteria: [{ id: "ac-1", text: "red-one passes" }],
         }],
       } }, request.context);
@@ -1661,3 +1661,10 @@ test("the third correction dispatches and charges through the real pump", async 
     fixture.close();
   }
 });
+
+/** New-policy repairs name the contract-bound task they repair; legacy runs have none to name. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function repairParents(projection: any): string[] {
+  const parent = Object.entries(projection?.readyPlanTaskBindings ?? {}).find(([, binding]) => (binding as { contractId?: string }).contractId)?.[0];
+  return parent ? [parent] : [];
+}

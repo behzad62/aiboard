@@ -222,6 +222,7 @@ export type SchedulerEventType =
   | "final_verification.review_requested"
   | "final_verification.review_decided"
   | "final_verification.repairs_planned"
+  | "final_verification.generation_superseded"
   | "verifier.policy_configured"
   | "build.risk_assessed"
   | "verifier.selection_required"
@@ -570,6 +571,8 @@ export interface FinalVerificationGenerationProjection {
   state: "current" | "invalidated";
   invalidatedByRevision?: string;
   invalidatedByGuidanceId?: string;
+  /** Superseded by the runner: every repair finished without changing the verified revision. */
+  supersededReason?: "repairs_completed_without_revision_change";
   completedChecks?: FinalVerificationCompletedCheckProjection[];
   failure?: FinalVerificationFailureProjection;
   submission?: FinalVerificationSubmissionReference;
@@ -4300,6 +4303,13 @@ export function reduceSchedulerEvent(
     case "final_verification.cleanup_started": {
       if (event.actor.role !== "runner") throw new Error("Only the runner may start final verification cleanup.");
       recordFinalVerificationCleanup(next, event.payload, "started", event.occurredAt);
+      break;
+    }
+    case "final_verification.generation_superseded": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may supersede a final verification generation.");
+      }
+      supersedeFinalVerificationAfterRepairs(next, event.payload);
       break;
     }
     case "final_verification.cleanup_succeeded": {
@@ -11605,6 +11615,46 @@ function cloneBuildTask(task: BuildTask): BuildTask {
       ? { deliveryRepair: { ...task.deliveryRepair, evidenceIds: [...task.deliveryRepair.evidenceIds] } }
       : {}),
     ...(task.conflictPaths ? { conflictPaths: [...task.conflictPaths] } : {}),
+  };
+}
+
+/**
+ * A failed generation whose repairs all finished without moving the integration revision would stay
+ * current forever: nothing changed to re-verify and no fresh plan was ever requested (tunnel run: a
+ * no-change repair of an unrunnable runtime_smoke). The runner retires it so the Architect plans a
+ * fresh generation for the same revision.
+ */
+function supersedeFinalVerificationAfterRepairs(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): void {
+  const current = projection.finalVerification?.current;
+  const generationId = requiredString(payload, "generationId");
+  if (!current || current.generationId !== generationId) {
+    throw new Error(`Final verification generation ${generationId} is not current.`);
+  }
+  if (payload.reason !== "repairs_completed_without_revision_change") {
+    throw new Error("Final verification supersession reason is unsupported.");
+  }
+  if (current.targetRevision !== projection.integrationRevision) {
+    throw new Error("A generation on a stale revision is invalidated by that revision, not superseded.");
+  }
+  const repairs = current.repairTaskIds ?? [];
+  if (repairs.length === 0 || repairs.some((id) => {
+    const status = projection.tasks[id]?.status;
+    return status !== "integrated" && status !== "cancelled";
+  })) {
+    throw new Error("Final verification can be superseded only after every one of its repairs finished.");
+  }
+  projection.finalVerification = {
+    history: [
+      ...(projection.finalVerification?.history ?? []).map(cloneFinalVerificationGeneration),
+      {
+        ...cloneFinalVerificationGeneration(current),
+        state: "invalidated",
+        supersededReason: "repairs_completed_without_revision_change",
+      },
+    ],
   };
 }
 

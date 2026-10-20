@@ -414,7 +414,7 @@ test("executes one scheduler-selected category with the durable generation ident
     assert.equal(category.check.green, true);
     assert.equal(evidence.list({ runId: fixture.runId }).length, 1);
     assert.match(evidence.list({ runId: fixture.runId })[0]!.idempotencyKey,
-      /^durable-generation:1:tests:0$/);
+      /^durable-generation:\d+:tests:0$/);
   } finally {
     evidence.close();
     await workspace.cleanup().catch(() => undefined);

@@ -834,3 +834,79 @@ async function assertPortBindable(port: number): Promise<void> {
   });
   await new Promise<void>((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
 }
+
+test("an Architect-named runtime smoke runs on a runner-leased port, and is refused where it cannot run", async () => {
+  // Tunnel run: the relay is started by its own CLI (serve --port), which the runner never detects
+  // as a server, so a required runtime_smoke could not run at all.
+  const root = mkdtempSync(join(tmpdir(), "aiboard-architect-smoke-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const runId = "architect-smoke";
+  mkdirSync(project, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(project, "package.json"), JSON.stringify({ name: "cli-relay-fixture" }));
+  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
+  const integration = new IntegrationManager({ repositoryRoot: project, stateDirectory: state, runId, baselineRevision: baseline.revision });
+  await integration.initialize();
+  const ports = new FinalVerificationPortAuthority(state);
+  const authority = new FinalVerificationProfileAuthority({ stateDirectory: state, runId, portAuthority: ports });
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+    validateExecutionProfile: (input) => authority.validate(input.profile, input.targetRevision),
+  });
+  const smokePlan = {
+    checks: ["build", "tests", "runtime_smoke", "browser"].map((category) => category === "runtime_smoke"
+      ? { category, status: "required" }
+      : { category, status: "not_applicable", rationale: `The fixture has no ${category}.`, repositoryInspection: { paths: ["package.json"], summary: `No ${category}.` } }),
+  };
+  const smoke = { label: "relay server", executable: "node", args: ["dist/cli.js", "serve", "--port", "{port}"], readinessPath: "/healthz" };
+  const context = { runId, sessionId: "architect:smoke", actor: { role: "architect" as const, id: "architect" } };
+  const toolsWith = (runtimeSmoke: boolean) => {
+    const tools = new ToolRegistry();
+    for (const tool of createArchitectTools({
+      store,
+      finalVerificationPlanAvailable: true,
+      finalVerificationProfileFor: async (revision) => await authority.inspectAndPersist({ repositoryRoot: integration.path, targetRevision: revision }),
+      discardFinalVerificationProfile: async (profile) => {
+        if (profile.portLease) await ports.release(profile.portLease, runId, profile.targetRevision);
+      },
+      ...(runtimeSmoke ? { finalVerificationRuntimeSmoke: async (profile, request) => await authority.withArchitectRuntimeSmoke(profile, request) } : {}),
+    })) tools.register(tool);
+    return tools;
+  };
+  const plan = (tools: ToolRegistry, callId: string, args: Record<string, unknown>) =>
+    tools.invoke({ type: "tool_call", callId, name: "plan_final_verification", arguments: args }, context);
+  const activeLeases = () => { try { return readdirSync(join(state, "final-verification-ports", "active")).filter((name) => name.endsWith(".json")); } catch { return []; } };
+  try {
+    seedPlanningState(store, runId, integration.revision);
+
+    const unrunnable = await plan(toolsWith(true), "no-spec", { plan: smokePlan });
+    assert.equal(unrunnable.error?.code, "final_verification_check_not_runnable");
+    assert.match(unrunnable.error?.message ?? "", /Name the program with runtimeSmoke/);
+
+    const restricted = await plan(toolsWith(false), "restricted", { plan: smokePlan, runtimeSmoke: smoke });
+    assert.equal(restricted.error?.code, "runtime_smoke_spec_unavailable");
+    assert.match(restricted.error?.message ?? "", /needs full access/);
+
+    const noPort = await plan(toolsWith(true), "no-port", { plan: smokePlan, runtimeSmoke: { ...smoke, args: ["dist/cli.js", "serve"] } });
+    assert.equal(noPort.error?.code, "runtime_smoke_spec_invalid");
+    assert.match(noPort.error?.message ?? "", /must pass the runner-leased port as \{port\}/);
+    assert.deepEqual(activeLeases(), [], "a refused smoke releases its leased port");
+
+    const accepted = await plan(toolsWith(true), "smoke", { plan: smokePlan, runtimeSmoke: smoke });
+    assert.equal(accepted.isError, false, accepted.error?.message ?? "smoke plan failed");
+    const current = rebuildSchedulerProjection(store.readRun(runId)).finalVerification?.current;
+    const spec = current?.executionProfile.runtimeSmoke;
+    const lease = current?.executionProfile.portLease;
+    assert.ok(spec && lease);
+    assert.equal(spec.executable, process.execPath);
+    assert.deepEqual(spec.args, ["dist/cli.js", "serve", "--port", String(lease.port)]);
+    assert.equal(spec.endpoint, `http://127.0.0.1:${lease.port}/healthz`);
+    assert.ok(current?.executionProfile.detectedSignals.some((signal) => signal.category === "runtime_smoke" && signal.source === "plan_final_verification runtimeSmoke"));
+    await ports.validate(lease, runId, integration.revision);
+  } finally {
+    store.close();
+    await ports.releaseRun(runId).catch(() => undefined);
+    await integration.cleanup().catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+  }
+});

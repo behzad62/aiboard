@@ -71,6 +71,53 @@ interface FinalVerificationProfileArchive {
 }
 
 /** Runner-owned durable authority for exact-revision execution profiles. */
+/**
+ * A runtime smoke the Architect names for a program the runner cannot detect: it detects a server
+ * only from a vite preview or next start script, so a CLI-launched service (the tunnel relay's
+ * `serve --port`) could never be smoke-tested. The runner leases the port, substitutes it for
+ * {port} in args, and probes http://127.0.0.1:<port><readinessPath> for HTTP 200.
+ */
+export interface ArchitectRuntimeSmokeRequest {
+  label: string;
+  executable: string;
+  args: string[];
+  readinessPath: string;
+  timeoutMs?: number;
+}
+
+export const ARCHITECT_RUNTIME_SMOKE_PORT = "{port}";
+const ARCHITECT_RUNTIME_SMOKE_MAX_TIMEOUT_MS = 300_000;
+
+/** Issues with a requested Architect runtime smoke; empty when it is usable. */
+export function architectRuntimeSmokeIssues(request: ArchitectRuntimeSmokeRequest): string[] {
+  const issues: string[] = [];
+  if (!request.label.trim()) issues.push("runtimeSmoke.label must name the program.");
+  if (!request.executable.trim() || request.executable.includes("\0")) issues.push("runtimeSmoke.executable must be a program name such as node.");
+  if (request.args.some((arg) => arg.includes("\0"))) issues.push("runtimeSmoke.args must not contain NUL characters.");
+  if (!request.args.some((arg) => arg.includes(ARCHITECT_RUNTIME_SMOKE_PORT))) {
+    issues.push(`runtimeSmoke.args must pass the runner-leased port as ${ARCHITECT_RUNTIME_SMOKE_PORT} (for example "--port", "${ARCHITECT_RUNTIME_SMOKE_PORT}"); the runner owns the port.`);
+  }
+  if (!/^\/[^\s?#]*(?:\?[^\s#]*)?$/.test(request.readinessPath)) issues.push("runtimeSmoke.readinessPath must be a path such as /healthz.");
+  if (request.timeoutMs !== undefined && (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 1_000 || request.timeoutMs > ARCHITECT_RUNTIME_SMOKE_MAX_TIMEOUT_MS)) {
+    issues.push(`runtimeSmoke.timeoutMs must be an integer from 1000 to ${ARCHITECT_RUNTIME_SMOKE_MAX_TIMEOUT_MS}.`);
+  }
+  return issues;
+}
+
+/** The exact runner-owned smoke spec for a validated request and leased port. */
+export function architectRuntimeSmokeSpec(request: ArchitectRuntimeSmokeRequest, port: number): FinalVerificationRuntimeSmokeInput {
+  const timeoutMs = request.timeoutMs ?? 120_000;
+  return {
+    label: request.label.trim(),
+    // node is the runner's own executable, so the smoke runs on the runtime the evidence identifies.
+    executable: request.executable === "node" ? process.execPath : request.executable,
+    args: request.args.map((arg) => arg.replaceAll(ARCHITECT_RUNTIME_SMOKE_PORT, String(port))),
+    endpoint: `http://127.0.0.1:${port}${request.readinessPath}`,
+    timeoutMs,
+    readiness: { timeoutMs, pollIntervalMs: 100, expectedStatus: 200 },
+  };
+}
+
 export class FinalVerificationProfileAuthority {
   private readonly stateDirectory: string;
 
@@ -114,6 +161,40 @@ export class FinalVerificationProfileAuthority {
           input.targetRevision,
         ).catch(() => undefined);
       }
+      throw error;
+    }
+  }
+
+  /**
+   * The inspected profile plus an Architect-named runtime smoke, on a runner-leased port, archived
+   * like any inspected profile so the generation event validates against it.
+   */
+  async withArchitectRuntimeSmoke(
+    profile: FinalVerificationExecutionProfile,
+    request: ArchitectRuntimeSmokeRequest,
+  ): Promise<FinalVerificationExecutionProfile> {
+    const issues = architectRuntimeSmokeIssues(request);
+    if (issues.length > 0) throw new Error(issues.join(" "));
+    if (profile.runtimeSmoke) throw new Error(`The runner already runs runtime_smoke as ${profile.runtimeSmoke.label}; omit runtimeSmoke.`);
+    if (!this.options.portAuthority) throw new Error("Runtime smoke needs the runner-owned port authority.");
+    let created: FinalVerificationPortLease | undefined;
+    try {
+      const reservation = profile.portLease
+        ? { lease: profile.portLease, created: false }
+        : await this.options.portAuthority.reserveDetailed(this.options.runId, profile.targetRevision);
+      if (reservation.created) created = reservation.lease;
+      const smoke = architectRuntimeSmokeSpec(request, reservation.lease.port);
+      return await this.persistInspected({
+        ...cloneFinalVerificationExecutionProfile(profile),
+        detectedSignals: [
+          ...profile.detectedSignals.map((signal) => ({ ...signal })),
+          { category: "runtime_smoke", source: "plan_final_verification runtimeSmoke", detail: [request.executable, ...smoke.args].join(" ") },
+        ],
+        portLease: reservation.lease,
+        runtimeSmoke: smoke,
+      });
+    } catch (error) {
+      if (created) await this.options.portAuthority.release(created, this.options.runId, profile.targetRevision).catch(() => undefined);
       throw error;
     }
   }

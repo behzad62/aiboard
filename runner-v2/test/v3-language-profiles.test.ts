@@ -1256,6 +1256,7 @@ test("V3 runtime: a preexisting stale report is refused", async () => {
     targetRevision: fixture.integration.revision,
   });
   const runtime = new FinalVerificationRuntime({
+    runOrdinalStart: 0,
     workspaceManager: workspace,
     artifacts,
     evidenceStore: evidence,
@@ -1301,6 +1302,7 @@ test("V3 runtime: a symlinked report is refused", async () => {
     targetRevision: fixture.integration.revision,
   });
   const runtime = new FinalVerificationRuntime({
+    runOrdinalStart: 0,
     workspaceManager: workspace,
     artifacts,
     evidenceStore: evidence,
@@ -2095,4 +2097,47 @@ test("V3 root F5: tracked Sdk.props is a local import in detector and actual pro
   const { root, revision } = await v3Repo(files);
   try { const profile = await inspectFinalVerificationExecutionProfile({ repositoryRoot: root, targetRevision: revision, execute: runGit }); assert.ok(profile.commands.tests); assert.equal(profile.reports, undefined); }
   finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a check re-run by a new runtime (a runner restart) uses fresh call ids and evidence keys", async () => {
+  // Tunnel run: run ordinals restarted at 0 in each runner process, so the first re-run after a
+  // restart reused the old call id and failed with "Process idempotency conflict".
+  const fixture = await v3RuntimeFixture("restart");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const callIds: string[] = [];
+  const stub = familyStubExecutor({ exitCode: 0, writeReport: (cwd, args) => {
+    const dest = stubFlagDestination(args);
+    if (dest) writeStubFile(cwd, dest, PYTEST_JUNIT_XML, false);
+  } });
+  const execution: OneShotCommandExecutor = { execute: async (request) => {
+    callIds.push(request.context.callId);
+    return await stub.execute(request);
+  } };
+  try {
+    const command = { ...PYTEST_COMMAND, args: [...PYTEST_COMMAND.args] };
+    const profile = v3FamilyProfile(fixture.integration.revision, command, [{ commandLabel: "pytest", runner: "pytest", format: "junit" }]);
+    const runs = [];
+    for (let process = 0; process < 2; process += 1) {
+      const workspace = new VerificationWorkspaceManager({
+        repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId, targetRevision: fixture.integration.revision,
+      });
+      const runtime = new FinalVerificationRuntime({
+        workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+        integrationRevision: () => fixture.integration.revision, generationId: "v3restart", execution,
+      });
+      try {
+        runs.push(await runtime.runCategory({ plan: v3TestsPlan(), executionProfile: profile, commands: { tests: [command] } }, "tests"));
+      } finally {
+        await workspace.cleanup().catch(() => undefined);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(runs.every((run) => run.check.green), true, runs.flatMap((run) => run.check.issues).join("\n"));
+    assert.equal(new Set(callIds).size, callIds.length, `call ids repeat: ${callIds.join(", ")}`);
+    assert.notDeepEqual(runs[0]!.check.evidenceIds, runs[1]!.check.evidenceIds);
+  } finally {
+    evidence.close();
+    await v3CloseRuntimeFixture(fixture);
+  }
 });

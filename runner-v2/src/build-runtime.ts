@@ -451,6 +451,8 @@ export interface BuildRuntimeOptions {
   finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
+  /** An Architect-named runtime smoke on a leased port; supplied only for full-access runs. */
+  finalVerificationRuntimeSmoke?: import("./architect-tools.js").ArchitectToolsOptions["finalVerificationRuntimeSmoke"];
   independentVerifier?: IndependentVerifierDriver;
   planCritic?: PlanCriticDriver;
   repairPlanLimit?: number;
@@ -903,6 +905,7 @@ export class BuildRuntime {
   private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
   private readonly discardFinalVerificationProfile?: BuildRuntimeOptions["discardFinalVerificationProfile"];
+  private readonly finalVerificationRuntimeSmoke?: BuildRuntimeOptions["finalVerificationRuntimeSmoke"];
   private readonly independentVerifier?: IndependentVerifierDriver;
   private readonly planCritic?: PlanCriticDriver;
   private readonly repairPlanLimit: number;
@@ -972,6 +975,7 @@ export class BuildRuntime {
     this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
     this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
+    this.finalVerificationRuntimeSmoke = options.finalVerificationRuntimeSmoke;
     this.independentVerifier = options.independentVerifier;
     this.planCritic = options.planCritic;
     this.repairPlanLimit = options.repairPlanLimit ?? DEFAULT_REPAIR_PLAN_LIMIT;
@@ -2104,6 +2108,35 @@ export class BuildRuntime {
     return { status: "idle", action: "no_mechanical_progress" };
   }
 
+  /**
+   * Repairs that changed nothing leave a failed generation current on the same revision, and nothing
+   * would ever re-verify it or request a fresh plan (tunnel run: a no-change repair of an unrunnable
+   * runtime_smoke). Once every repair finished on that revision, the generation is retired.
+   */
+  private supersedeAfterFinishedRepairs(
+    generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+  ): BuildStepResult | undefined {
+    const projection = this.projection();
+    const finished = (generation.repairTaskIds ?? []).every((id) => {
+      const status = projection.tasks[id]?.status;
+      return status === "integrated" || status === "cancelled";
+    });
+    if (!finished || projection.integrationRevision !== generation.targetRevision) return undefined;
+    this.store.append({
+      runId: this.runId,
+      type: "final_verification.generation_superseded",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `${generation.generationId}:superseded:repairs-completed`,
+      payload: {
+        generationId: generation.generationId,
+        targetRevision: generation.targetRevision,
+        reason: "repairs_completed_without_revision_change",
+      },
+    });
+    return { status: "progressed", action: "final_verification_superseded" };
+  }
+
   private async advanceFinalVerification(
     generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
   ): Promise<BuildStepResult | undefined> {
@@ -2136,7 +2169,7 @@ export class BuildRuntime {
         if (generation.review.status === "rejected") {
           return { status: "idle", action: "final_verification_repair_required" };
         }
-        if (generation.repairTaskIds?.length) return undefined;
+        if (generation.repairTaskIds?.length) return this.supersedeAfterFinishedRepairs(generation);
         const decision = generation.review.decision;
         if (!decision) {
           throw new Error("Final verification repair review lacks a structured decision.");
@@ -2240,7 +2273,7 @@ export class BuildRuntime {
       if (generation.cleanup?.status !== "succeeded") {
         return await this.advanceFinalVerificationCleanup(generation);
       }
-      if (generation.repairTaskIds?.length) return undefined;
+      if (generation.repairTaskIds?.length) return this.supersedeAfterFinishedRepairs(generation);
       const pausedForRepair = this.pauseIfRepairCyclesExhausted(
         this.projection(),
         "final_verification",
@@ -4264,6 +4297,9 @@ export class BuildRuntime {
         : {}),
       ...(this.finalVerificationProfileFor
         ? { finalVerificationProfileFor: this.finalVerificationProfileFor }
+        : {}),
+      ...(this.finalVerificationRuntimeSmoke
+        ? { finalVerificationRuntimeSmoke: this.finalVerificationRuntimeSmoke }
         : {}),
       ...(this.discardFinalVerificationProfile
         ? { discardFinalVerificationProfile: this.discardFinalVerificationProfile }

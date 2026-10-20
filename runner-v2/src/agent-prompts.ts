@@ -134,6 +134,9 @@ export const NEW_POLICY_PLANNING_INSTRUCTIONS_DOCS_V2 = [
   "Evidence-gated planning: list the source inventory with read_planning_source_section (no sectionId), then read every section in full.",
   "Persist the requirement ledger with persist_planning_ledger before drafting any task; a draft before the ledger is refused.",
   "Draft the plan once with draft_planning_plan, then revise it with patch_planning_plan listing only the changed tasks, phases or requirements (revise_planning_plan re-sends the whole plan); investigations need a question, deliverable, decision criterion, and dependent unlock.",
+  // Tunnel run: nearly every task required "the root npm test stays green", so each worker ran the
+  // whole suite per task.
+  "Each task's acceptance criteria name the tests that prove that task (its new or changed tests, its own package's suite); the runner runs the whole project suite once in final verification, so make \"the root/full test suite stays green\" a criterion only of a task that builds or changes the test setup itself.",
   "After drafting or revising, call request_coverage_review; an independent reviewer derives obligations from the source first, then judges the plan.",
   "The plan becomes ready only with no blocking missing/weakened verdict, no unread source section, and every blocking prior finding resolved; resolve blocking findings by revising, then request again.",
   "No worker starts until the plan is ready, and plan-only runs never start workers. Command execution is refused while the run is in planning state.",
