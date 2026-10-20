@@ -443,6 +443,14 @@ test("directory listing and search follow Git discovery and classification", asy
       "src/app.ts",
       "vendor/library.js",
     ]);
+    // Tunnel run: an empty search in node_modules and an a|b literal pattern gave no reason, and the
+    // worker fell back to shell commands.
+    const ignoredDir = await invoke(broker, "git_search_ignored", "fs.search", { path: "ignored", pattern: "needle" });
+    assert.match(JSON.stringify(json(ignoredDir)), /skipped; set includeIgnored: true/);
+    const literal = await invoke(broker, "git_search_literal", "fs.search", { path: "src", pattern: "needle|other" });
+    assert.match(JSON.stringify(json(literal)), /matched literally; set regex: true/);
+    const regex = await invoke(broker, "git_search_regex", "fs.search", { path: "src", pattern: "needle|other", regex: true });
+    assert.deepEqual(searchPaths(regex), ["src/app.ts"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

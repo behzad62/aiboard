@@ -377,6 +377,8 @@ export function createFilesystemTools(
           return matches.length < limit;
         };
         const rootDetails = await lstat(root);
+        let skippedIgnored = 0;
+        let listedWithin = 0;
         if (rootDetails.isFile()) {
           await searchFile(root);
         } else if (rootDetails.isDirectory()) {
@@ -391,9 +393,13 @@ export function createFilesystemTools(
             );
             for (const entry of snapshot.entries) {
               if (matches.length >= limit) break;
-              if (!entryIsSearchable(entry, input)) continue;
               const path = resolve(context.workspacePath, entry.path);
               if (!isWithin(root, path)) continue;
+              listedWithin += 1;
+              if (!entryIsSearchable(entry, input)) {
+                if (entry.gitState !== "tracked") skippedIgnored += 1;
+                continue;
+              }
               await searchFile(path);
             }
           } else {
@@ -404,8 +410,24 @@ export function createFilesystemTools(
         } else {
           return error("invalid_search_path", "Search path must be a file or directory.");
         }
+        // An empty result says why it may be empty: a worker searched node_modules (skipped as
+        // ignored) and an a|b pattern (matched literally), got nothing twice and fell back to shell
+        // commands (tunnel run).
+        const notes: string[] = [];
+        // The snapshot leaves ignored files out entirely, so a non-empty directory it lists nothing
+        // under (node_modules, dist) is itself ignored.
+        if (!matches.length && input.includeIgnored !== true && rootDetails.isDirectory() && listedWithin === 0 &&
+          (await readdir(root).catch(() => [])).length > 0) {
+          skippedIgnored = Math.max(skippedIgnored, 1);
+        }
+        if (!matches.length && skippedIgnored > 0) {
+          notes.push(`${skippedIgnored} git-ignored or generated file(s) under this path were skipped; set includeIgnored: true to search them.`);
+        }
+        if (!matches.length && input.regex !== true && /[|*+?()[\]{}^$\\]/.test(String(input.pattern))) {
+          notes.push("The pattern was matched literally; set regex: true to use it as a regular expression.");
+        }
         return {
-          content: [json({ matches, truncated: matches.length >= limit })],
+          content: [json({ matches, truncated: matches.length >= limit, ...(notes.length ? { notes } : {}) })],
           isError: false,
         };
       },
