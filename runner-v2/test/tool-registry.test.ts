@@ -171,3 +171,19 @@ test("extra closing brackets after complete arguments are dropped; other malform
     assert.deepEqual(parseToolArgumentsJson(raw), { _malformedArgumentsJson: raw }, raw);
   }
 });
+
+test("an unknown tool named after another tool's argument points to that tool (tunnel run)", async () => {
+  // The Architect called review_task's claimDispositions argument as if it were a tool, twice.
+  const { ToolRegistry } = await import("../src/tool-registry.js");
+  const registry = new ToolRegistry();
+  registry.register({
+    definition: { name: "review_task", description: "r", inputSchema: { type: "object", properties: { taskId: { type: "string" }, claimDispositions: { type: "array" } } }, readOnly: false, effect: "none" },
+    validate: (input: unknown) => ({ ok: true, value: input }),
+    execute: async () => ({ content: [], isError: false }),
+  } as never);
+  const result = await registry.invoke({ type: "tool_call", callId: "c1", name: "claimDispositions", arguments: {} }, { runId: "r", sessionId: "s", actor: { role: "architect", id: "a" } });
+  assert.equal(result.isError, true);
+  assert.match(JSON.stringify(result.content), /claimDispositions is an argument of review_task\. Call review_task with it\./);
+  const other = await registry.invoke({ type: "tool_call", callId: "c2", name: "nothing", arguments: {} }, { runId: "r", sessionId: "s", actor: { role: "architect", id: "a" } });
+  assert.match(JSON.stringify(other.content), /Tool nothing is not registered\.(?!;)/);
+});

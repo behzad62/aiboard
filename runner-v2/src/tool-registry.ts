@@ -93,7 +93,14 @@ export class ToolRegistry implements AgentToolRuntime {
   ): Promise<ToolResult> {
     const tool = this.tools.get(call.name);
     if (!tool) {
-      return failure(call, "unknown_tool", `Tool ${call.name} is not registered.`);
+      // A model called review_task's claimDispositions argument as a tool, twice (tunnel run).
+      const owner = [...this.tools.values()].find((candidate) => {
+        const properties = (candidate.definition.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+        return candidate.definition.modelVisible !== false && properties !== undefined && Object.hasOwn(properties, call.name);
+      });
+      return failure(call, "unknown_tool", owner
+        ? `Tool ${call.name} is not registered; ${call.name} is an argument of ${owner.definition.name}. Call ${owner.definition.name} with it.`
+        : `Tool ${call.name} is not registered.`);
     }
     const malformed = malformedArgumentsJson(call.arguments);
     if (malformed !== undefined) {
