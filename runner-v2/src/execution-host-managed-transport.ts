@@ -145,6 +145,10 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       }
       if (!context) { recordOf(target); return await snapshot(target, undefined, undefined, maximum); }
       const assertion = expected(target, context, "observe");
+      // Like stop, an observation by the live owner renews its lease first: a worker that ran other
+      // commands for a few minutes lost process.poll/list on its own relay with "ownership lease has
+      // expired" (tunnel run).
+      entries.get(target.processId)?.facade?.retainOwnership();
       const authorization = run.sessionAuthority.authorizeOperation({ ...assertion, grant: context.executionGrant! });
       const result = await snapshot(target, authorization, assertion, maximum);
       if (context.signal?.aborted) throw cancelled();
@@ -154,6 +158,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
     async observeMany(targets, context, maximum) {
       if (targets.length < 1 || targets.length > 128) throw refused("Managed observation batch exceeds its bound.");
       const assertions = targets.map(target => { recordOf(target); return expected(target, context, "observe"); });
+      for (const target of targets) entries.get(target.processId)?.facade?.retainOwnership();
       const authorizations = run.sessionAuthority.authorizeObservationBatch({ ...noExtraAccess,
         sessionIds: assertions.map(item => item.sessionId), binding: bindingFor(context, options.permissionProfile), grant: context.executionGrant! });
       const results = await Promise.all(targets.map((target, index) => snapshot(target, authorizations[index], assertions[index], maximum)));

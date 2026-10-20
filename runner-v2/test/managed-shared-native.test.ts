@@ -78,6 +78,23 @@ test("managed real shared sessions survive start-grant revocation, drain output,
   }
 }));
 
+test("managed poll and list by the live owner renew a lease that lapsed while it worked elsewhere", { timeout: 120_000 }, async t => withHost(t, async f => {
+  // Tunnel run: a worker ran other commands for a few minutes and then could not poll, list or stop
+  // its own relay ("Streaming session ownership lease has expired").
+  const started = metadata(await f.invoke("process.start", {}));
+  metadata(await f.invoke("process.poll", { processId: started.processId }));
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 5 * 60_000 });
+  try {
+    assert.equal(metadata(await f.invoke("process.poll", { processId: started.processId })).status, "running");
+    t.mock.timers.setTime(Date.now() + 5 * 60_000);
+    assert.equal(((await f.outputMetadata(await f.invoke("process.list", {}))).processes as unknown[]).length, 1);
+    t.mock.timers.setTime(Date.now() + 5 * 60_000);
+    assert.equal(metadata(await f.invoke("process.signal", { processId: started.processId, signal: "SIGTERM" })).status, "stopped");
+  } finally {
+    t.mock.timers.reset();
+  }
+}));
+
 test("managed natural exit retains the exact exit code and final output after shared cleanup", { timeout: 120_000 }, async t => withHost(t, async f => {
   const started = metadata(await f.invoke("process.start", {}));
   await writeFile(f.quit, "exit only this owned fixture");
