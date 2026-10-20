@@ -341,7 +341,9 @@ const W1_COVERAGE_PIN = "w1-coverage-pin";
 
 class W1JourneyReviewer implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
-  private interrupted = false;
+  // The verdict pass gets two reminders after stopping without its lifecycle call, so a durable
+  // interruption stops three times in that session.
+  private interruptions = 0;
   constructor(private readonly projection: () => SchedulerProjection) {}
 
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
@@ -390,8 +392,8 @@ class W1JourneyReviewer implements AgentModel {
       if (w1ReadText(request, "src/value.mjs") === undefined) {
         return w1Call("fs.read", { path: "src/value.mjs", startLine: 1, endLine: 1 }, "verdict-read");
       }
-      if (!this.interrupted) {
-        this.interrupted = true;
+      if (this.interruptions < 3) {
+        this.interruptions += 1;
         return { blocks: [{ type: "text", text: "Stopped before recording the verdict." }], stopReason: "end_turn", usage: { inputTokens: 8, outputTokens: 4 } };
       }
       if (w1ReadText(request, "test/value.test.mjs") === undefined) {

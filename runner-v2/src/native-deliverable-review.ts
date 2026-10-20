@@ -658,7 +658,7 @@ export class NativeDeliverableReviewRuntime {
     assertFreshContextSessionStarted(independence, this.options.sessions.events(sessionId));
     const counter = { calls: 0 };
     const tools = this.passTools(context, pass, sessionId, workspacePath, counter);
-    const result = await runAgentLoop({
+    const loopOptions: Parameters<typeof runAgentLoop>[0] = {
       model: this.budgetedModel(model, candidate, request.runId, sessionId),
       registry: tools,
       context: {
@@ -688,7 +688,21 @@ export class NativeDeliverableReviewRuntime {
       onCheckpoint: async (checkpoint) => {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
       },
-    });
+    };
+    let result = await runAgentLoop(loopOptions);
+    // A verdict model ended a turn with reasoning only and the whole build paused (tunnel run). Like a
+    // worker, a pass that stops without its lifecycle call continues in the same session with a
+    // reminder naming the call, at most twice, before it suspends as before.
+    for (let continuation = 0; continuation < 2 && result.status === "suspended" && result.reason === "model_ended_without_lifecycle"; continuation += 1) {
+      result = await runAgentLoop({
+        ...loopOptions,
+        initialMessages: [...result.messages, {
+          id: `delivery-${pass}-continue-${continuation + 1}`,
+          role: "user",
+          content: `You ended your turn without calling ${lifecycleToolForPass(pass)}. Continue the ${pass} pass and finish it by calling ${lifecycleToolForPass(pass)} exactly once.`,
+        }],
+      });
+    }
     const durable = this.projection(request.runId).delivery?.reviews[context.inputs.taskId];
     if (passEnded(result, pass, reviewId) && durable?.reviewId === reviewId && durable.stage === expectedStageForPass(pass)) {
       this.options.sessions.complete(sessionId, this.clock());
@@ -1776,6 +1790,12 @@ export const DELIVERABLE_REVIEW_CONTEXT_LIMITS: ContextLimits = {
   maxBytes: 512 * 1024,
   maxEstimatedTokens: 128 * 1024,
 };
+
+function lifecycleToolForPass(pass: Pass): string {
+  return pass === "obligations" ? "record_deliverable_obligations"
+    : pass === "findings" ? "record_deliverable_findings"
+      : "submit_deliverable_verdict";
+}
 
 export const DELIVERABLE_REVIEWER_INVARIANTS = [
   "You are an independent reviewer of a submitted change. You did not write it.",
