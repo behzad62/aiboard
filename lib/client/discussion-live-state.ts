@@ -482,14 +482,17 @@ export function createNativeBuildFileLoader(options: {
     identity?: NativeBuildFileIdentity
   ) => NativeBuildFileSnapshot | undefined;
 } {
-  let cached: { key: string; snapshot: NativeBuildFileSnapshot } | undefined;
+  // Kept under the key that was asked for as well as the snapshot's own: the runner answers with its
+  // current revision, and when that differed from the projection's, every 2 s poll missed the cache
+  // and re-read the whole repository for hours (tunnel run).
+  let cached: { keys: readonly string[]; snapshot: NativeBuildFileSnapshot } | undefined;
   // A file snapshot can take many seconds on a large repository; concurrent polls share one fetch.
   const inFlight = new Map<string, Promise<NativeBuildFileSnapshot>>();
   const keyFor = (runId: string, identity?: NativeBuildFileIdentity) => identity
     ? `${runId}:${identity.source}:${identity.revision}`
     : undefined;
   const hit = (runId: string, requestedKey: string | undefined) =>
-    cached && (requestedKey ? cached.key === requestedKey : cached.key.startsWith(`${runId}:`))
+    cached && (requestedKey ? cached.keys.includes(requestedKey) : cached.keys.some((key) => key.startsWith(`${runId}:`)))
       ? cached.snapshot
       : undefined;
   return {
@@ -502,8 +505,9 @@ export function createNativeBuildFileLoader(options: {
       const pending = inFlight.get(flightKey);
       if (pending) return await pending;
       const request = options.load(runId, identity).then((snapshot) => {
+        const snapshotKey = `${runId}:${snapshot.source}:${snapshot.revision}`;
         cached = {
-          key: `${runId}:${snapshot.source}:${snapshot.revision}`,
+          keys: requestedKey && requestedKey !== snapshotKey ? [snapshotKey, requestedKey] : [snapshotKey],
           snapshot,
         };
         return snapshot;

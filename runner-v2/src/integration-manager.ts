@@ -310,6 +310,12 @@ export class IntegrationManager {
   private readonly afterProjectApplyOwnershipReleased?: IntegrationManagerOptions["afterProjectApplyOwnershipReleased"];
   private operationQueue: Promise<void> = Promise.resolve();
   private currentRevision: string | undefined;
+  /**
+   * A commit's files and history never change, so the last answer per commit is kept. The Build
+   * page re-requested one revision's snapshot every ~3 s for hours (tunnel run: ~3,000 git
+   * processes, each about a second of supervised launch on Windows).
+   */
+  private readonly revisionReads = new Map<string, IntegrationFileSnapshot | IntegrationCommit[]>();
 
   constructor(options: IntegrationManagerOptions) {
     this.repositoryRoot = resolve(options.repositoryRoot);
@@ -426,6 +432,29 @@ export class IntegrationManager {
     revision: string,
     limit: number,
   ): Promise<IntegrationCommit[]> {
+    return [...await this.rememberRevisionRead(`history:${limit}`, revision, async () => await this.readHistoryAtRevision(revision, limit))];
+  }
+
+  private async rememberRevisionRead<T extends IntegrationFileSnapshot | IntegrationCommit[]>(
+    kind: string,
+    revision: string,
+    read: () => Promise<T>,
+  ): Promise<T> {
+    if (!/^[a-f0-9]{40,64}$/.test(revision)) return await read();
+    const key = `${kind}:${revision}`;
+    const remembered = this.revisionReads.get(key);
+    if (remembered) return remembered as T;
+    const value = await read();
+    this.revisionReads.set(key, value);
+    // Snapshots are up to MAX_FILE_RESPONSE_BYTES each; keep only the few most recent answers.
+    while (this.revisionReads.size > 6) this.revisionReads.delete(this.revisionReads.keys().next().value!);
+    return value;
+  }
+
+  private async readHistoryAtRevision(
+    revision: string,
+    limit: number,
+  ): Promise<IntegrationCommit[]> {
     const result = await this.git(this.repositoryRoot, [
       "log",
       "-n",
@@ -447,6 +476,14 @@ export class IntegrationManager {
   }
 
   private async filesAtRevision(
+    source: IntegrationFileSource,
+    revision: string,
+  ): Promise<IntegrationFileSnapshot> {
+    const snapshot = await this.rememberRevisionRead(`files:${source}`, revision, async () => await this.readFilesAtRevision(source, revision));
+    return { ...snapshot, files: [...snapshot.files] };
+  }
+
+  private async readFilesAtRevision(
     source: IntegrationFileSource,
     revision: string,
   ): Promise<IntegrationFileSnapshot> {

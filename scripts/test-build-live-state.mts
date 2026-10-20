@@ -693,6 +693,24 @@ const concurrentRevision = { source: "integration" as const, revision: "f".repea
 await Promise.all([fileLoader.load("run_b", concurrentRevision), fileLoader.load("run_b", concurrentRevision)]);
 assert.equal(fileFetches, 5, "concurrent polls share one in-flight file fetch");
 
+// The runner answers with its own current revision, not the one the projection named (tunnel run:
+// every 2 s poll then missed the cache and re-read the repository for hours).
+let runnerFetches = 0;
+const runnerFileLoader = createNativeBuildFileLoader({
+  load: async () => {
+    runnerFetches += 1;
+    return { source: "integration" as const, revision: "9".repeat(40), appliedToProject: false, omittedFileCount: 0, files: [] };
+  },
+});
+const projectionRevision = { source: "integration" as const, revision: "8".repeat(40) };
+await runnerFileLoader.load("run_a", projectionRevision);
+assert.equal(runnerFileLoader.peek("run_a", projectionRevision)?.revision, "9".repeat(40), "the requested identity finds the runner's answer");
+await runnerFileLoader.load("run_a", projectionRevision);
+assert.equal(runnerFetches, 1, "an unchanged requested identity does not refetch when the runner answered another revision");
+assert.equal(runnerFileLoader.peek("run_a", { source: "integration", revision: "9".repeat(40) })?.revision, "9".repeat(40));
+await runnerFileLoader.load("run_a", { source: "integration", revision: "7".repeat(40) });
+assert.equal(runnerFetches, 2, "a new requested identity still fetches");
+
 assert.deepEqual(
   nativeBuildFileIdentity({
     tasks: {},

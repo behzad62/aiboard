@@ -1275,6 +1275,13 @@ test("files reads a many-file revision in batched Git processes with exact per-f
     assert.equal(snapshot.omittedFileCount, 1);
     assert.ok(reads.length <= 4, `expected a few batched reads, got ${reads.length}`);
     assert.equal(reads.reduce((total, objects) => total + objects, 0) >= 451, true);
+    // The Build page polled one revision every ~3 s for hours (tunnel run); a commit's files never
+    // change, so a repeat request reads nothing.
+    const batchedReads = reads.length;
+    const again = await integration.files("integration");
+    assert.equal(reads.length, batchedReads);
+    assert.deepEqual(again, snapshot);
+    assert.notEqual(again.files, snapshot.files);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
