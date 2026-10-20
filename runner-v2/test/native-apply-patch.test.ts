@@ -106,3 +106,17 @@ test("a native patch result keeps the write-time secret notice that fs.write giv
   ]);
   assert.equal(merged, "Success. Updated the following files:\nA src/config.ts\nsubmit_task will refuse src/config.ts: secret or key material detected [REDACTED] (value assigned to apiKey).");
 });
+
+test("DeepSeek Responses requests carry the documented output headroom; other providers do not", async () => {
+  // DeepSeek's Responses default cut the Architect's thinking at 16,384 tokens twice in a row (tunnel run).
+  const bodies: Array<Record<string, unknown>> = [];
+  const model = (providerId: string) => new OpenAICompatibleModel({
+    baseUrl: "https://api.example", apiKey: "secret", modelId: "m", providerId, protocol: "responses",
+    fetch: async (_input, init) => { bodies.push(JSON.parse(String(init?.body))); return Response.json({ status: "completed", output: [] }); },
+  });
+  const request = { sessionId: "s", tools: [], messages: [{ id: "u", role: "user" as const, content: "go" }] };
+  await model("deepseek").complete(request as never);
+  await model("openai").complete(request as never);
+  assert.equal(bodies[0]!.max_output_tokens, 393_216);
+  assert.equal(Object.hasOwn(bodies[1]!, "max_output_tokens"), false);
+});

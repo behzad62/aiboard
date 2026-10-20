@@ -16,6 +16,12 @@ export interface ProviderProtocolProfile {
    * working set and compacted a 1M-token model's sessions every ~140k tokens (tunnel run).
    */
   readonly contextWindowTokens?: number;
+  /**
+   * The provider's documented maximum output, sent as reasoning headroom (never a length control).
+   * DeepSeek's Responses default cut the Architect's thinking at 16,384 tokens twice in a row, each
+   * time re-sending a 282k-token context (tunnel run).
+   */
+  readonly maxOutputTokens?: number;
   /** The protocol whose tools the provider documents for agents; the runner prefers it over the app default. */
   readonly preferredProtocol?: "responses";
   readonly responses?: {
@@ -52,6 +58,7 @@ export const PROVIDER_PROTOCOL_PROFILES: Readonly<Record<string, ProviderProtoco
     chatReasoningContent: true,
     // deepseek-flash and deepseek-v4-pro (api-docs.deepseek.com/quick_start/pricing).
     contextWindowTokens: 1_048_576,
+    maxOutputTokens: 393_216,
     // Responses accepts exactly one custom tool, apply_patch, "for Codex compatibility"
     // (api-docs.deepseek.com/guides/responses_api).
     preferredProtocol: "responses",

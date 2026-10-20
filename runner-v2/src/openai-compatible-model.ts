@@ -248,6 +248,7 @@ export class OpenAICompatibleModel implements AgentModel {
             prompt_cache_retention: "24h",
           }
         : {}),
+      ...(profile?.maxOutputTokens ? { max_output_tokens: profile.maxOutputTokens } : {}),
       input: withVisualMedia(responsesInput(request.messages, toolNames, {
         reasoningItems: profile?.responses?.reasoningItems === true,
       }), request.attachments, "openai-responses"),
