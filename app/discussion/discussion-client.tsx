@@ -318,6 +318,9 @@ function DiscussionPageInner() {
     reason: string;
     candidateRuntimeIds: string[];
   } | null>(null);
+  // The owner's pick on the handoff card: which runtime is being applied, and why the last try failed.
+  const [architectHandoffPending, setArchitectHandoffPending] = useState<string | null>(null);
+  const [architectHandoffError, setArchitectHandoffError] = useState<string | null>(null);
   const [verifierSelection, setVerifierSelection] = useState<{
     requiredSequence?: number;
     reason: string;
@@ -1514,8 +1517,21 @@ function DiscussionPageInner() {
       !discussion?.runnerUrl ||
       !discussion.runnerToken ||
       !discussion.nativeBuildRunId
-    ) return;
+    ) {
+      setArchitectHandoffError("This session has no runner connection; reconnect the runner and try again.");
+      return;
+    }
+    setArchitectHandoffPending(runtimeId);
+    setArchitectHandoffError(null);
     try {
+      // Credentials and models saved since the failure reach the run while it is still paused, so a
+      // handoff back to a provider whose token was just fixed runs on the new one.
+      const { applyNativeBuildCrew } = await import("@/lib/client/native-build-engine");
+      await applyNativeBuildCrew(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        discussion,
+        discussion.nativeBuildRunId,
+      );
       await selectNativeArchitectHandoff(
         { url: discussion.runnerUrl, token: discussion.runnerToken },
         discussion.nativeBuildRunId,
@@ -1526,11 +1542,13 @@ function DiscussionPageInner() {
       setArchitectHandoff(null);
       await handleResume();
     } catch (handoffError) {
-      setError(
+      setArchitectHandoffError(
         handoffError instanceof Error
           ? handoffError.message
           : "Could not select the Architect runtime."
       );
+    } finally {
+      setArchitectHandoffPending(null);
     }
   };
 
@@ -2487,13 +2505,17 @@ function DiscussionPageInner() {
                 type="button"
                 size="sm"
                 variant="outline"
+                disabled={architectHandoffPending !== null}
                 onClick={() => void handleArchitectHandoff(runtimeId)}
               >
-                {getModelDisplayName(runtimeId)}
+                {architectHandoffPending === runtimeId ? "Switching…" : getModelDisplayName(runtimeId)}
               </Button>
             ))}
           >
             <p>{architectHandoff.reason}</p>
+            {architectHandoffError && (
+              <p role="alert" className="text-destructive">{architectHandoffError}</p>
+            )}
           </DecisionCard>
         ),
       });
