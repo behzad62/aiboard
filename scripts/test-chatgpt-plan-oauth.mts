@@ -161,6 +161,9 @@ try {
   assert.equal(lastChat.store, false); assert.equal(lastChat.stream, true); assert.equal(lastChat.instructions, "Be brief");
   assert.equal("max_output_tokens" in lastChat, false); assert.equal("temperature" in lastChat, false);
   assert.equal((lastChat.tools as Array<{ type: string }>)[0].type, "namespace");
+  const namespace = (lastChat.tools as Array<{ description?: string; tools: Array<{ description?: string }> }>)[0]!;
+  assert.ok(namespace.description?.trim(), "the API refuses a namespace without a description");
+  assert.equal(namespace.tools[0]!.description, "Call read_file.", "an empty tool description falls back to a non-empty one");
   for (const stream of [false, true]) for (const outcome of ["failed", "incomplete", "truncated"]) {
     nextStream = outcome;
     const response = await post("chat", { ...chat, stream }), text = await response.text();
