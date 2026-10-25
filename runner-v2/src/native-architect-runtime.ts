@@ -964,18 +964,10 @@ export function architectInspectionWorkspace(
   if (reason.type === "review_required") {
     return projection.tasks[reason.taskId]?.workspacePath?.trim() || projectRoot;
   }
-  if (
-    reason.type === "final_verification_plan_required" ||
-    reason.type === "final_verification_review_required" ||
-    reason.type === "final_verification_repair_plan_required" ||
-    reason.type === "verifier_repair_plan_required" ||
-    reason.type === "plan_critique_resolution_required" ||
-    // T6a: a failed boundary is judged on the integrated revision.
-    reason.type === "delivery_boundary_failed"
-  ) {
-    return canonicalProjectRoot?.trim() || projectRoot;
-  }
-  return projectRoot;
+  // Every other turn plans or judges against the integrated revision. The owner's project folder
+  // stays at the baseline until handoff, so reading it showed the Architect the initial scaffold
+  // mid-build and it fell back to git.show one file at a time (tunnel run).
+  return canonicalProjectRoot?.trim() || projectRoot;
 }
 
 export function prioritizedArchitectCapabilities(

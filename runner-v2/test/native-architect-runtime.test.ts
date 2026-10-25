@@ -246,6 +246,11 @@ test("Architect reviews inspect the submitted attempt workspace instead of the p
     "C:/project"
   );
   assert.equal(
+    architectInspectionWorkspace({ type: "plan_required" }, projection, "C:/project", "C:/runner/integration/run"),
+    "C:/runner/integration/run",
+    "mid-build turns read the integrated revision, not the owner's baseline folder",
+  );
+  assert.equal(
     architectInspectionWorkspace(
       { type: "final_verification_plan_required", integrationRevision: "a".repeat(40) },
       projection,

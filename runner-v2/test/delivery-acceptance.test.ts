@@ -1088,7 +1088,7 @@ test("a boundary check cut short by the owner's pause records no failure and run
     await assert.rejects(harness.until(accepted("T1"), 150), /Run paused \(user\).*delivery_boundary_interrupted/);
     let projection = harness.projection();
     assert.equal(projection.delivery?.boundaries.T1?.length ?? 0, 0, "the cut-short check recorded no verdict");
-    assert.equal(Object.keys(projection.repair?.issues ?? {}).length, 0, "no repair issue was opened");
+    assert.equal(Object.keys(projection.repairIssues ?? {}).length, 0, "no repair issue was opened");
     harness.runtime.resume("resume-after-pause");
     await harness.until(accepted("T1"), 40);
     projection = harness.projection();
