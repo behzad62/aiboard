@@ -191,7 +191,41 @@ export interface ExecutionSafetyObservability {
     cleanup: RecoveryTarget["cleanup"];
     output: { status: "complete" | "truncated" | "lossy"; totalBytes: number; truncated: boolean; lossyBytes: number } | { status: "unavailable" };
   }>;
+  /**
+   * Every process the run has recorded, counted; `processes` lists only the ones that need
+   * attention plus the latest settled few. A long run records tens of thousands of settled Git
+   * calls, which made each observability poll a 25 MB response (tunnel run).
+   */
+  processSummary: {
+    total: number;
+    listed: number;
+    incompleteOutputs: number;
+    lossyBytes: number;
+    latestIncomplete: string[];
+  };
   recovery: Array<Pick<RecoveryAuditRecord, "proposalId" | "requestedAction" | "state" | "reason" | "updatedAt" | "observation" | "cleanupState">>;
+}
+
+/** Settled processes listed beside the ones needing attention, newest last. */
+export const SETTLED_PROCESSES_LISTED = 20;
+
+function processOutputObservation(output: RecoveryTarget["output"]): ExecutionSafetyObservability["processes"][number]["output"] {
+  return output
+    ? {
+        status: output.lossyBytes > 0 ? "lossy" as const : output.truncated ? "truncated" as const : "complete" as const,
+        totalBytes: output.totalBytes,
+        truncated: output.truncated,
+        lossyBytes: output.lossyBytes,
+      }
+    : { status: "unavailable" as const };
+}
+
+/** A settled process: finished, cleanup proven, and every required capability enforced. */
+function processIsSettled(process: RecoveryTarget): boolean {
+  return (process.scope.state === "cleaned" || process.scope.state === "released") &&
+    (process.cleanup.state === "verified_empty" || process.cleanup.state === "not_required") &&
+    (process.requiredCapabilities ?? []).every((capability) =>
+      process.capabilities[capability as keyof RecoveryTarget["capabilities"]] === "enforced");
 }
 
 export function projectExecutionSafetyObservability(input: {
@@ -235,6 +269,25 @@ export function projectExecutionSafetyObservability(input: {
     if (state === "issued") grants.active += 1;
     else grants.consumed += 1;
   }
+  const settledIndexes: number[] = [];
+  const incomplete: RecoveryTarget[] = [];
+  let lossyBytes = 0;
+  input.processes.forEach((process, index) => {
+    if (processIsSettled(process)) settledIndexes.push(index);
+    if (process.output && (process.output.lossyBytes > 0 || process.output.truncated)) {
+      incomplete.push(process);
+      lossyBytes += process.output.lossyBytes;
+    }
+  });
+  const hiddenSettled = new Set(settledIndexes.slice(0, Math.max(0, settledIndexes.length - SETTLED_PROCESSES_LISTED)));
+  const listed = input.processes.filter((_, index) => !hiddenSettled.has(index));
+  const processSummary: ExecutionSafetyObservability["processSummary"] = {
+    total: input.processes.length,
+    listed: listed.length,
+    incompleteOutputs: incomplete.length,
+    lossyBytes,
+    latestIncomplete: incomplete.slice(-3).map((process) => process.scope.logicalProcessId),
+  };
   return {
     fullBypass,
     isolation: {
@@ -244,7 +297,8 @@ export function projectExecutionSafetyObservability(input: {
       blockers,
     },
     grants,
-    processes: input.processes.map((process) => ({
+    processSummary,
+    processes: listed.map((process) => ({
       kind: process.scope.kind,
       invocationId: process.scope.invocationId,
       logicalProcessId: process.scope.logicalProcessId,
@@ -258,14 +312,7 @@ export function projectExecutionSafetyObservability(input: {
       requiredCapabilities: [...(process.requiredCapabilities ?? [])],
       ...(process.leaseExpiresAt ? { leaseExpiresAt: process.leaseExpiresAt } : {}),
       cleanup: structuredClone(process.cleanup),
-      output: process.output
-        ? {
-            status: process.output.lossyBytes > 0 ? "lossy" as const : process.output.truncated ? "truncated" as const : "complete" as const,
-            totalBytes: process.output.totalBytes,
-            truncated: process.output.truncated,
-            lossyBytes: process.output.lossyBytes,
-          }
-        : { status: "unavailable" as const },
+      output: processOutputObservation(process.output),
     })),
     recovery: Object.values(input.recovery)
       .sort((left, right) => left.proposalId.localeCompare(right.proposalId))

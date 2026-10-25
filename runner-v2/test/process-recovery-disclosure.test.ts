@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { projectExecutionSafetyObservability } from "../src/build-observability.js";
+import { projectExecutionSafetyObservability, SETTLED_PROCESSES_LISTED } from "../src/build-observability.js";
 import type { RecoveryAuditRecord, RecoveryTarget } from "../src/process-recovery.js";
 
 const capabilities = {
@@ -120,4 +120,36 @@ test("execution disclosure surfaces recorded lifecycle attestation and required 
   assert.equal("requiredLifecycleScope" in legacy.processes[0]!, false);
   assert.equal(legacy.processes[0]?.lifecycle, undefined);
   assert.equal(legacy.processes[0]?.requiredLifecycleScope, undefined);
+});
+
+test("execution disclosure lists processes needing attention and only the latest settled ones, counting all", () => {
+  const settled = (index: number, lossy = false): RecoveryTarget => ({
+    ...target,
+    scope: { ...target.scope, invocationId: `settled-${index}`, logicalProcessId: `git-${index}`, state: "cleaned" },
+    owned: false,
+    cleanup: { state: "verified_empty", verifiedAt: "2026-10-25T00:00:00.000Z" },
+    output: { totalBytes: 10, truncated: false, lossyBytes: lossy ? 2 : 0 },
+  });
+  const processes = [
+    ...Array.from({ length: SETTLED_PROCESSES_LISTED + 30 }, (_, index) => settled(index, index % 10 === 0)),
+    target, // outcome_unknown with pending cleanup: always listed
+  ];
+  const result = projectExecutionSafetyObservability({
+    permissionProfile: "full",
+    isolation: { version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [] },
+    activeIsolationLeaseCount: 0,
+    grantStates: [],
+    processes,
+    recovery: {},
+  });
+  assert.equal(result.processes.length, SETTLED_PROCESSES_LISTED + 1);
+  assert.equal(result.processes.at(-1)?.invocationId, "inv", "the unsettled process is listed");
+  assert.equal(result.processes[0]?.invocationId, "settled-30", "only the latest settled processes are listed");
+  assert.deepEqual(result.processSummary, {
+    total: SETTLED_PROCESSES_LISTED + 31,
+    listed: SETTLED_PROCESSES_LISTED + 1,
+    incompleteOutputs: 6,
+    lossyBytes: 15,
+    latestIncomplete: ["git-30", "git-40", "logical"],
+  });
 });

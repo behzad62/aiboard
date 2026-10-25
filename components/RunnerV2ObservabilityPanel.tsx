@@ -96,6 +96,14 @@ export function runnerExecutionSafetyDiagnostics(snapshot: NativeBuildObservabil
     title: "Execution grants",
     detail: `${safety.grants.active} active · ${safety.grants.consumed} consumed`,
   });
+  const unlisted = safety.processSummary ? safety.processSummary.total - safety.processSummary.listed : 0;
+  if (unlisted > 0) {
+    items.push({
+      key: "execution-safety:settled-processes",
+      title: `${unlisted.toLocaleString()} earlier settled processes`,
+      detail: "Finished with cleanup proven and every required capability enforced; only the latest are listed below.",
+    });
+  }
   for (const process of safety.processes) {
     const backend = process.backend
       ? `${process.backend.backendId}${process.backend.providerId ? ` via ${process.backend.providerId}` : ""}`
@@ -784,17 +792,21 @@ export function runnerUserFacingObservability(
     const exceptionalStates = new Set(["orphaned", "identity_mismatch", "backend_unavailable", "outcome_unknown"]);
     // One summary instead of one card per process: a long run records thousands of runner-internal
     // reads (Git snapshots, status probes) whose output is captured in memory but not spilled.
+    // Newer runners list only the processes needing attention and count the rest in processSummary.
     const incompleteOutput = executionSafety.processes.filter((process) =>
       process.output.status === "lossy" || process.output.status === "truncated"
     );
-    if (incompleteOutput.length > 0) {
-      const lostBytes = incompleteOutput.reduce((sum, process) => sum + ("lossyBytes" in process.output ? process.output.lossyBytes : 0), 0);
-      const examples = incompleteOutput.slice(-3).map((process) => process.logicalProcessId).join(", ");
+    const incompleteCount = executionSafety.processSummary?.incompleteOutputs ?? incompleteOutput.length;
+    if (incompleteCount > 0) {
+      const lostBytes = executionSafety.processSummary?.lossyBytes ??
+        incompleteOutput.reduce((sum, process) => sum + ("lossyBytes" in process.output ? process.output.lossyBytes : 0), 0);
+      const examples = (executionSafety.processSummary?.latestIncomplete ??
+        incompleteOutput.slice(-3).map((process) => process.logicalProcessId)).join(", ");
       problems.push({
         key: "execution-safety:output",
-        title: incompleteOutput.length === 1
+        title: incompleteCount === 1
           ? "Process output is incomplete"
-          : `${incompleteOutput.length} process outputs are incomplete`,
+          : `${incompleteCount} process outputs are incomplete`,
         detail: `${lostBytes > 0 ? `${lostBytes.toLocaleString()} bytes were not durably kept. ` : ""}Captured output must not be treated as complete evidence. Latest: ${examples}.`,
       });
     }

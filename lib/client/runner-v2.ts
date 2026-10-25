@@ -1028,6 +1028,14 @@ export type NativeBuildExecutionSafetyObservability =
         cleanup: { state: "not_required" | "pending" | "verified_empty" | "failed"; detail?: string; verifiedAt?: string };
         output: { status: "complete" | "truncated" | "lossy"; totalBytes: number; truncated: boolean; lossyBytes: number } | { status: "unavailable" };
       }>;
+      /** Totals over every recorded process; `processes` then lists only those needing attention plus the latest settled few. Absent from older runners. */
+      processSummary?: {
+        total: number;
+        listed: number;
+        incompleteOutputs: number;
+        lossyBytes: number;
+        latestIncomplete: string[];
+      };
       recovery: Array<Pick<NativeProcessRecoveryRecord, "proposalId" | "requestedAction" | "state" | "reason" | "updatedAt" | "observation" | "cleanupState">>;
     }
   | { availability: "unavailable"; reason: "historical_execution_safety_unavailable" };

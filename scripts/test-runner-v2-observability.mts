@@ -441,6 +441,23 @@ const unverifiedSafety = {
   },
 } as NativeBuildObservability;
 assert.deepEqual(problemKeys(unverifiedSafety, projectionWithoutHandoff), ["execution-safety:isolation"]);
+// Newer runners list only processes needing attention; the summary carries the totals.
+const summarizedSafety = {
+  ...unverifiedSafety,
+  executionSafety: {
+    ...unverifiedSafety.executionSafety,
+    processSummary: { total: 17134, listed: 21, incompleteOutputs: 4039, lossyBytes: 1200, latestIncomplete: ["git-a", "git-b", "git-c"] },
+  },
+} as NativeBuildObservability;
+assert.deepEqual(problemKeys(summarizedSafety, projectionWithoutHandoff), ["execution-safety:isolation", "execution-safety:output"]);
+const summarizedOutput = runnerUserFacingObservability(summarizedSafety, projectionWithoutHandoff).problems
+  .find((problem) => problem.key === "execution-safety:output");
+assert.equal(summarizedOutput?.title, "4039 process outputs are incomplete");
+assert.match(summarizedOutput?.detail ?? "", /Latest: git-a, git-b, git-c\./);
+assert.equal(
+  runnerExecutionSafetyDiagnostics(summarizedSafety).find((item) => item.key === "execution-safety:settled-processes")?.title,
+  `${(17113).toLocaleString()} earlier settled processes`,
+);
 const unavailableSafety = {
   ...observability,
   executionSafety: { availability: "unavailable", reason: "historical_execution_safety_unavailable" },
