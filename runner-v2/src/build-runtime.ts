@@ -2612,6 +2612,7 @@ export class BuildRuntime {
     this.recordingFailureContext = {
       ...(targetRevision ? { revision: targetRevision } : {}),
     };
+    const verifySignal = this.activeLifecycleSignal();
     const result = await driver.verify({
       runId: this.runId,
       projection,
@@ -2620,7 +2621,7 @@ export class BuildRuntime {
           projection.verifierSelection.selectedRuntimeId
         ? { preferredRuntimeId: projection.verifierSelection.selectedRuntimeId }
         : {}),
-      signal: this.activeLifecycleSignal(),
+      signal: verifySignal,
     });
     // T6b repair (R2-B6): the OA-17 cleanup search also runs after this
     // checkout-backed step (no-op for legacy runs).
@@ -2652,12 +2653,8 @@ export class BuildRuntime {
     if (result.status === "suspended" && result.reason === "provider_error") {
       return { status: "progressed", action: "verifier_provider_failed" };
     }
-    if (
-      result.status === "suspended" && result.reason === "cancelled" &&
-      this.projection().status === "paused"
-    ) {
-      return { status: "paused", action: "verifier_interrupted" };
-    }
+    const verifierInterrupted = this.stopInterruption(result, verifySignal, "verifier_interrupted");
+    if (verifierInterrupted) return verifierInterrupted;
     const reason = result.status === "unavailable"
       ? result.reason
       : result.reason || "verifier_suspended";
@@ -4471,6 +4468,22 @@ export class BuildRuntime {
     return this.afterArchitect("architect_question_resumed");
   }
 
+  /**
+   * A review call cancelled by a stop. The owner can resume before the cancelled call returns (a
+   * pause landed during the step's slow checkout work and the resume came 40 s later): the run is
+   * running again, but the cancellation is still the pause's, never the reviewer's failure, so the
+   * step retries. Reading it as a failure asked the owner to pick a new verifier (tunnel run).
+   */
+  private stopInterruption(
+    result: { status: string; reason?: string },
+    signal: AbortSignal,
+    action: string,
+  ): BuildStepResult | undefined {
+    if (result.status !== "suspended" || result.reason !== "cancelled") return undefined;
+    if (this.projection().status === "paused") return { status: "paused", action };
+    return signal.aborted ? { status: "progressed", action } : undefined;
+  }
+
   private activeLifecycleSignal(allowPendingGuidanceReset = false): AbortSignal {
     const projection = this.projection();
     if (
@@ -5045,6 +5058,7 @@ export class BuildRuntime {
     // N2: an unknown prior review hands control to the Architect (whose next
     // request clears the stale binding) instead of throwing out of the step.
     if (request.priorReviewId !== undefined && !priorReview) return undefined;
+    const coverageSignal = this.activeLifecycleSignal();
     const input: NativeCoverageReviewRequest = {
       runId: this.runId,
       reviewId: request.reviewId,
@@ -5065,7 +5079,7 @@ export class BuildRuntime {
         text: guidance.text,
       })),
       ...(priorReview !== undefined ? { priorReview } : {}),
-      signal: this.activeLifecycleSignal(),
+      signal: coverageSignal,
     };
     const result = await this.coverageReview.review(input);
     if (result.status === "reviewed") return { status: "progressed", action: "coverage_review_recorded" };
@@ -5073,9 +5087,8 @@ export class BuildRuntime {
     // A suspension is transient progress: the pump retries with a fresh
     // attempt on the next step. On N6 exhaustion record an explicit
     // outstanding gate for the owner and pause instead of looping.
-    if (result.status === "suspended" && result.reason === "cancelled" && this.projection().status === "paused") {
-      return { status: "paused", action: "coverage_review_suspended" };
-    }
+    const coverageInterrupted = this.stopInterruption(result, coverageSignal, "coverage_review_suspended");
+    if (coverageInterrupted) return coverageInterrupted;
     const suspended = authority.recordSuspended({
       runId: this.runId,
       reviewId: request.reviewId,
@@ -5313,6 +5326,7 @@ export class BuildRuntime {
     this.recordingFailureContext = {
       ...(projection.integrationRevision ? { revision: projection.integrationRevision } : {}),
     };
+    const critiqueSignal = this.activeLifecycleSignal();
     const result = await driver.critique({
       runId: this.runId,
       projection,
@@ -5320,12 +5334,11 @@ export class BuildRuntime {
       ...(projection.verifierSelection?.status === "selected" && projection.verifierSelection.selectedRuntimeId
         ? { preferredRuntimeId: projection.verifierSelection.selectedRuntimeId }
         : {}),
-      signal: this.activeLifecycleSignal(),
+      signal: critiqueSignal,
     });
     if (result.status === "submitted") return { status: "progressed", action: "plan_critique_submitted" };
-    if (result.status === "suspended" && result.reason === "cancelled" && this.projection().status === "paused") {
-      return { status: "paused", action: "plan_critic_interrupted" };
-    }
+    const critiqueInterrupted = this.stopInterruption(result, critiqueSignal, "plan_critic_interrupted");
+    if (critiqueInterrupted) return critiqueInterrupted;
     const failures = this.projection().planCritique?.history.length ?? 0;
     if (result.status === "suspended" && result.reason === "provider_error" && failures < 2) {
       return { status: "progressed", action: "plan_critic_provider_failed" };

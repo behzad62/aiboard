@@ -854,6 +854,39 @@ test("guidance invalidation during verifier execution suppresses stale selection
   }
 });
 
+test("a verifier call cancelled by a pause the owner already resumed retries, never asks for a new verifier", async () => {
+  const fixture = createFixture("runtime-pause-resumed-during-verifier");
+  let calls = 0;
+  try {
+    let runtime!: ReturnType<typeof createRuntime>;
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async (input) => {
+        calls += 1;
+        // The pause lands during the step's checkout work; the owner resumes before the call returns.
+        runtime.pause("owner pause", "pause:during-verifier");
+        runtime.resume("resume:during-verifier");
+        assert.equal(input.signal?.aborted, true, "the call still holds the pause's cancelled signal");
+        return { status: "suspended", reason: "cancelled", runtimeId: "google:verifier" };
+      },
+    };
+    runtime = createRuntime(fixture.store, verifier, async () => {
+      assert.fail("Completion must not run without a verdict.");
+    });
+
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    const interrupted = await runtime.step();
+    assert.deepEqual(interrupted, { status: "progressed", action: "verifier_interrupted" });
+    assert.equal(calls, 1);
+    assert.equal(runtime.projection().status, "running");
+    assert.equal(runtime.projection().verifierSelection, undefined, "no owner selection is required");
+    assert.equal(fixture.store.readRun(RUN_ID).some((event) => event.type === "verifier.selection_required"), false);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("provider failure supersedes a pending review with an independent fallback", async () => {
   const fixture = createFixture("runtime-provider-fallback");
   let calls = 0;
