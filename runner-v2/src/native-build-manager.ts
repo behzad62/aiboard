@@ -1056,9 +1056,11 @@ export class NativeBuildManager implements BuildControlPlane {
     } catch (error) {
       const projection = handle.runtime.projection();
       if (projection.status === "running") {
+        // The bare reason left the owner (and the UI) with no idea what failed (tunnel run).
         handle.runtime.pause(
           "autonomous_pump_error",
-          `autonomous-error:${projection.lastSequence}`
+          `autonomous-error:${projection.lastSequence}`,
+          pumpErrorDetail(error)
         );
       }
       let reported = error;
@@ -1363,4 +1365,11 @@ function isHistoricalTerminalState(value: unknown): value is HistoricalTerminalS
 
 function eventLoopYield(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** One line naming what failed, kept short enough to show in a pause banner. */
+export function pumpErrorDetail(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const line = message.split(/\r?\n/, 1)[0]!.trim() || "unknown error";
+  return line.length > 400 ? `${line.slice(0, 399)}…` : line;
 }

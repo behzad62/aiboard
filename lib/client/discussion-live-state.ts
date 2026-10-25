@@ -91,6 +91,14 @@ export function nativeBuildPauseDescription(
       detail: "The coverage reviewer failed repeatedly (see Activity). Resume retries the review.",
     };
   }
+  if (reason === "autonomous_pump_error") {
+    const failure = projection.pauseReason?.detail;
+    return {
+      waitingForOwner: false,
+      title: "Paused: the runner hit an error",
+      detail: `${failure ? `${failure} ` : ""}Resume retries from the saved checkpoint.`,
+    };
+  }
   if (reason.startsWith("protocol_error")) {
     return {
       waitingForOwner: false,

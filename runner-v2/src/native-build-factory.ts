@@ -873,6 +873,16 @@ export class NativeBuildFactory {
           execute: requireGitRunner(gitContext).lifecycle("verification").run,
         }),
     } : {};
+    // Pinned checkouts may outlive a pause, whose stop snapshot advances the canonical checkout.
+    const pinnedSnapshotVerificationOptions = docsV2 ? {
+      validateCanonicalState: async (input: { canonicalRevision: string; recordedCanonicalRevision?: string }) =>
+        validatePinnedKernelSnapshotAdvance({
+          ...input,
+          projection: rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)),
+          integrationManager,
+          execute: requireGitRunner(gitContext).lifecycle("verification").run,
+        }),
+    } : {};
     const verificationRevisionSource = docsV2 ? {
       get revision(): string {
         const revision = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).integrationRevision;
@@ -912,6 +922,7 @@ export class NativeBuildFactory {
       ...(!docsV2 ? { integrationManager } : {}),
       kind: "independent-verifier",
       workspaceSuffix: "architect-commands",
+      ...pinnedSnapshotVerificationOptions,
     });
     const deliveryWorkspaceFor = (suffix: string) => (targetRevision?: string) => new VerificationWorkspaceManager({
       execute: requireGitRunner(gitContext).lifecycle("verification").run,
@@ -922,6 +933,7 @@ export class NativeBuildFactory {
       workspaceSuffix: suffix,
       // Pinned to the exact task or integration revision under check.
       ...(targetRevision ? { targetRevision } : { integrationManager }),
+      ...pinnedSnapshotVerificationOptions,
     });
     const deliveryReviewWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-review"));
     const deliveryBoundaryWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-boundary"));
@@ -960,6 +972,7 @@ export class NativeBuildFactory {
       ...(!docsV2 ? { integrationManager } : {}),
       kind: "independent-verifier",
       workspaceSuffix: "baseline",
+      ...pinnedSnapshotVerificationOptions,
     });
     constructionResources.add(
       "independent_verifier_baseline_workspace",
@@ -4532,13 +4545,50 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
   if (authoritativeRevision === undefined) refuse("no authoritative revision is recorded");
   if (authoritativeRevision !== targetRevision) refuse(`target is not the authoritative revision ${authoritativeRevision!.slice(0, 12)}`);
   if (canonicalRevision === targetRevision) return;
-  const chainKey = `${targetRevision}..${canonicalRevision}`;
+  await proveKernelSnapshotChain({ from: targetRevision, to: canonicalRevision, projection, integrationManager, execute: input.execute, refuse });
+}
+
+/**
+ * A workspace pinned to a fixed revision (the verifier's baseline, Architect commands, delivery
+ * checks) is not the authoritative revision, so it cannot use the target..canonical proof above.
+ * What its fence protects is the canonical checkout it recorded at creation: that may advance only
+ * by audited kernel snapshot commits. Without this, a pause's stop snapshot stranded a baseline
+ * workspace created before the pause, and every resume failed with "Canonical checkout revision
+ * changed after verification workspace creation" (tunnel run).
+ */
+export async function validatePinnedKernelSnapshotAdvance(input: {
+  canonicalRevision: string;
+  recordedCanonicalRevision?: string;
+  projection: SchedulerProjection;
+  integrationManager: IntegrationManager;
+  execute: import("./git-repository.js").GitRunner;
+}): Promise<void> {
+  const { projection, integrationManager, canonicalRevision, recordedCanonicalRevision } = input;
+  // Before the workspace exists nothing is recorded; creation itself records the canonical checkout.
+  if (recordedCanonicalRevision === undefined || recordedCanonicalRevision === canonicalRevision) return;
+  const refuse = (reason: string): never => {
+    throw new Error(`Canonical checkout revision changed after verification workspace creation without exact kernel snapshot authority (${reason}; recorded ${recordedCanonicalRevision.slice(0, 12)}, canonical ${canonicalRevision.slice(0, 12)}).`);
+  };
+  if (projection.projectDocsPolicyVersion !== 2) refuse("project docs policy is not v2");
+  await proveKernelSnapshotChain({ from: recordedCanonicalRevision, to: canonicalRevision, projection, integrationManager, execute: input.execute, refuse });
+}
+
+async function proveKernelSnapshotChain(input: {
+  from: string;
+  to: string;
+  projection: SchedulerProjection;
+  integrationManager: IntegrationManager;
+  execute: import("./git-repository.js").GitRunner;
+  refuse: (reason: string) => never;
+}): Promise<void> {
+  const { from, to, projection, integrationManager, refuse } = input;
+  const chainKey = `${from}..${to}`;
   if (provenSnapshotAdvances.get(integrationManager)?.has(chainKey)) return;
-  const ancestor = await input.execute({ cwd: integrationManager.path, args: ["merge-base", "--is-ancestor", targetRevision, canonicalRevision], allowFailure: true });
+  const ancestor = await input.execute({ cwd: integrationManager.path, args: ["merge-base", "--is-ancestor", from, to], allowFailure: true });
   if (ancestor.exitCode !== 0) refuse("target is not an ancestor of the canonical checkout");
-  const history = await input.execute({ cwd: integrationManager.path, args: ["log", "--reverse", "--format=%H%x00%P%x00", `${targetRevision}..${canonicalRevision}`] });
+  const history = await input.execute({ cwd: integrationManager.path, args: ["log", "--reverse", "--format=%H%x00%P%x00", `${from}..${to}`] });
   const fields = history.stdout.split("\0");
-  let parent = targetRevision;
+  let parent = from;
   let count = 0;
   for (let index = 0; index + 1 < fields.length; index += 2) {
     const commit = fields[index]!.trim();
@@ -4562,7 +4612,7 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
     parent = commit;
     count += 1;
   }
-  if (count === 0 || parent !== canonicalRevision) refuse("the snapshot chain does not reach the canonical checkout");
+  if (count === 0 || parent !== to) refuse("the snapshot chain does not reach the canonical checkout");
   let proven = provenSnapshotAdvances.get(integrationManager);
   if (!proven) provenSnapshotAdvances.set(integrationManager, proven = new Set());
   proven.add(chainKey);
@@ -4570,8 +4620,8 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
 
 /**
  * Snapshot chains already proven, per integration manager. Commits are immutable and receipts are
- * append-only, so a proven target..canonical chain stays proven while the target is still the
- * authoritative revision, which every call checks first. Re-proving it walked every snapshot commit
+ * append-only, so a proven from..to chain stays proven; authority over the target is still checked
+ * on every call before the chain is consulted. Re-proving it walked every snapshot commit
  * (several supervised git calls each, the history lookup repeated per commit) on every verification
  * workspace create, resume and ownership check: about 30 s each with six snapshots, so final
  * verification spent ~16 of its 18 minutes between checks (tunnel run). Only successes are cached.

@@ -11,6 +11,7 @@ import {
   nativeBuildTaskStatus,
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
+  nativeBuildPauseDescription,
   shouldShowBuildPauseAction,
   nativeBuildRunPolicy,
   nativeBuildPolicyChange,
@@ -1216,6 +1217,19 @@ const tokensOnlyUnknownApi = nativeBuildUsageWindow({
 assert.deepEqual(
   tokensOnlyUnknownApi.unknownPricedModelIds,
   ["model-tokens-only"]
+);
+
+// A runner error pause names what failed instead of a bare reason code.
+assert.deepEqual(
+  nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "autonomous_pump_error", detail: "Canonical checkout revision changed after verification workspace creation." },
+  } as never),
+  {
+    waitingForOwner: false,
+    title: "Paused: the runner hit an error",
+    detail: "Canonical checkout revision changed after verification workspace creation. Resume retries from the saved checkpoint.",
+  }
 );
 
 console.log("PASS Build live discussion state");

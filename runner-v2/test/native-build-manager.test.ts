@@ -280,13 +280,14 @@ test("autonomous pump error durably pauses then quiesces exact run resources", a
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-error-quiesce-"));
   const calls: string[] = [];
   const errors: unknown[] = [];
+  const pauses: Array<{ reason: string; detail?: string }> = [];
   let manager: NativeBuildManager | undefined;
   try {
     const projection = fakeRuntime("run_1").projection();
     const runtime = {
       ...fakeRuntime("run_1"), projection: () => projection,
       runUntilBlocked: async () => { throw new Error("pump failed"); },
-      pause: () => { projection.status = "paused"; calls.push("pause"); return projection; },
+      pause: (reason: string, _key: string, detail?: string) => { projection.status = "paused"; calls.push("pause"); pauses.push({ reason, detail }); return projection; },
     } as unknown as BuildRuntime;
     manager = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
@@ -304,6 +305,8 @@ test("autonomous pump error durably pauses then quiesces exact run resources", a
     await manager.create(spec); manager.activate("run_1"); await manager.awaitIdle("run_1");
     assert.deepEqual(calls, ["pause", "quiesce"]);
     assert.equal(errors.length, 1);
+    // The owner sees what failed, not a bare reason code.
+    assert.deepEqual(pauses, [{ reason: "autonomous_pump_error", detail: "pump failed" }]);
   } finally { await manager?.close(); rmSync(root, { recursive: true, force: true }); }
 });
 

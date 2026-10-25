@@ -1108,7 +1108,8 @@ export class BuildRuntime {
     return this.store.readRun(this.runId, afterSequence);
   }
 
-  pause(reason: string, idempotencyKey: string): SchedulerProjection {
+  /** `detail` is shown to the owner with the reason; stop policy still keys on the reason alone. */
+  pause(reason: string, idempotencyKey: string, detail?: string): SchedulerProjection {
     this.ensureInitialized();
     const projection = this.projection();
     if (projection.status === "completed") {
@@ -1123,7 +1124,7 @@ export class BuildRuntime {
       occurredAt: this.clock(),
       actor: { role: "user", id: "local-user" },
       idempotencyKey,
-      payload: { reason },
+      payload: { reason, ...(detail ? { detail } : {}) },
     });
     return this.projection();
   }

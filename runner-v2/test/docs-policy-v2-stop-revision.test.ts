@@ -36,7 +36,7 @@ import type { ChangeSet } from "../src/change-set.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
-import { snapshotNativeBuildAmbientEnvironment, validateKernelSnapshotVerificationAdvance, verifierTargetRevision } from "../src/native-build-factory.js";
+import { snapshotNativeBuildAmbientEnvironment, validateKernelSnapshotVerificationAdvance, validatePinnedKernelSnapshotAdvance, verifierTargetRevision } from "../src/native-build-factory.js";
 import {
   NativeBuildFactory,
   IntegrationManager,
@@ -1470,4 +1470,42 @@ test("docs-v2 proves a kernel snapshot chain once, and authority is still checke
     /target is not the authoritative revision/,
     "a cached proof never outlives the target's authority",
   );
+});
+
+test("docs-v2 pinned verification workspaces survive a kernel stop snapshot, never foreign movement", async () => {
+  const f = await trailerFixture("pinnedsnapshot");
+  const projection = {
+    projectDocsPolicyVersion: 2,
+    integrationRevision: f.baseline.revision,
+    projectDocs: { pending: [], snapshots: [] },
+  } as unknown as SchedulerProjection;
+  // The verifier's baseline checkout: pinned to a fixed revision, created before the pause.
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: f.integration.path,
+    stateDirectory: f.state,
+    runId: f.runId,
+    targetRevision: f.baseline.revision,
+    workspaceSuffix: "baseline",
+    execute: runGit,
+    validateCanonicalState: (input) => validatePinnedKernelSnapshotAdvance({ ...input, projection, integrationManager: f.integration, execute: runGit }),
+  });
+  try {
+    await workspace.create(f.baseline.revision);
+    await f.integration.commitHandoffSnapshot({
+      writes: [{ path: "docs/project/STATE.md", content: "# State\n" }],
+      summary: "stop snapshot",
+      runId: f.runId,
+      snapshotKey: "stop-snapshot:7",
+    });
+    const snapshot = await gitText(f.integration.path, ["rev-parse", "HEAD"]);
+    assert.notEqual(snapshot, f.baseline.revision, "the stop snapshot advanced the canonical checkout");
+    projection.projectDocs!.snapshots = [{ commit: snapshot, parent: f.baseline.revision, stopSequence: 7, paths: ["docs/project/STATE.md"], stateSkippedReason: "fixture" }] as never;
+    const resumed = await workspace.create(f.baseline.revision);
+    assert.equal(resumed.targetRevision, f.baseline.revision, "the resumed run reuses its pinned checkout");
+
+    writeFileSync(join(f.integration.path, "shared.txt"), "foreign product modification\n");
+    await runGit({ cwd: f.integration.path, args: ["add", "shared.txt"] });
+    await runGit({ cwd: f.integration.path, args: ["commit", "-m", "Foreign change"], env: { GIT_AUTHOR_NAME: "Someone", GIT_AUTHOR_EMAIL: "someone@example.com", GIT_COMMITTER_NAME: "Someone", GIT_COMMITTER_EMAIL: "someone@example.com" } });
+    await assert.rejects(() => workspace.create(f.baseline.revision), /without exact kernel snapshot authority/, "only audited snapshot commits may move the canonical checkout");
+  } finally { await workspace.cleanup(); rmSync(f.root, { recursive: true, force: true }); }
 });

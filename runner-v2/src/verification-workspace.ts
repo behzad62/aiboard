@@ -37,8 +37,16 @@ export interface VerificationWorkspaceManagerOptions {
   /** Separates a second worktree for the same run and kind, such as the baseline pass. */
   workspaceSuffix?: string;
   execute?: GitRunner;
-  /** Explicit docs-v2 authority. Validate target -> physical HEAD using durable kernel receipts. */
-  validateCanonicalState?: (input: { targetRevision: string; canonicalRevision: string }) => Promise<void>;
+  /**
+   * Explicit docs-v2 authority. Validate target -> physical HEAD using durable kernel receipts.
+   * `recordedCanonicalRevision` is the canonical checkout recorded at workspace creation; it is
+   * absent only for the check before a new workspace exists.
+   */
+  validateCanonicalState?: (input: {
+    targetRevision: string;
+    canonicalRevision: string;
+    recordedCanonicalRevision?: string;
+  }) => Promise<void>;
 }
 
 export interface VerificationWorkspace {
@@ -520,7 +528,11 @@ export class VerificationWorkspaceManager {
     const canonical = await this.readCanonicalState();
     this.assertCanonicalClean(canonical);
     if (this.validateCanonicalState) {
-      await this.validateCanonicalState({ targetRevision: metadata.targetRevision, canonicalRevision: canonical.revision });
+      await this.validateCanonicalState({
+        targetRevision: metadata.targetRevision,
+        canonicalRevision: canonical.revision,
+        recordedCanonicalRevision: metadata.canonicalRevision,
+      });
       await this.assertCanonicalStateUnchanged(canonical);
     } else if (canonical.revision !== metadata.canonicalRevision) {
       throw new Error("Canonical checkout revision changed after verification workspace creation.");

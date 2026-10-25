@@ -213,7 +213,8 @@ async function main(): Promise<void> {
           result,
           builds.projection(runId),
         ),
-      onPumpError: (runId, error) => writeRunnerWarning(runId, error),
+      // Pump and cleanup failures share this hook; "runner_cleanup" mislabelled a pump error that paused a run.
+      onPumpError: (runId, error) => writeRunnerWarning(runId, error, "runner_error"),
       runArtifactCompaction: (operation) =>
         buildFactory.runArtifactCompaction(operation),
       prepareArtifactCleanup: () => buildFactory.prepareArtifactCleanup(),
@@ -660,13 +661,13 @@ function writeStartupError(error: unknown): void {
   process.stderr.write(`${JSON.stringify({ error: message })}\n`);
 }
 
-function writeRunnerWarning(runId: string, error: unknown): void {
+function writeRunnerWarning(runId: string, error: unknown, warning = "runner_cleanup"): void {
   const message = error instanceof Error ? error.message : String(error);
   // The wrapper alone ("Artifact reachability scan failed") left the actual failure unknowable.
   const cause = error instanceof Error && error.cause !== undefined
     ? (error.cause instanceof Error ? error.cause.message : String(error.cause))
     : undefined;
   process.stderr.write(
-    `${JSON.stringify({ warning: "runner_cleanup", runId, error: message, ...(cause ? { cause } : {}) })}\n`
+    `${JSON.stringify({ warning, runId, error: message, ...(cause ? { cause } : {}) })}\n`
   );
 }
