@@ -828,9 +828,19 @@ export function assessDeliveryRisk(input: DeliveryRiskInput): DeliveryRiskRecord
     ...(input.trackRecord ? { trackRecordSnapshot: input.trackRecord } : {}),
   };
   const assessment = assessChangeRisk(riskInput);
-  if (input.runnerSignals) {
-    const signals = input.runnerSignals;
-    if (!Array.isArray(signals.unreferencedSourceFiles) || signals.unreferencedSourceFiles.some((path) => typeof path !== "string" || !input.changedFiles.includes(path)) || typeof signals.testOnlyDiff !== "boolean") throw new Error("Invalid runner review signals.");
+  const signals = input.runnerSignals;
+  if (signals && (!Array.isArray(signals.unreferencedSourceFiles) || signals.unreferencedSourceFiles.some((path) => typeof path !== "string" || !input.changedFiles.includes(path)) || typeof signals.testOnlyDiff !== "boolean")) throw new Error("Invalid runner review signals.");
+  // A no-change submission has no changed code to select tests for or mutate, so it never gets
+  // the high-tier depth; the reviewer still inspects the repository and judges the evidence.
+  if (input.changedFiles.length === 0) {
+    return {
+      tier: assessment.tier === "high" ? "medium" : assessment.tier,
+      score: assessment.score,
+      digest: createHash("sha256").update(JSON.stringify([assessment.digest, "no_change"])).digest("hex"),
+      signals: [...assessment.signals.map((signal) => `${signal.signal}:${signal.points}`), "no_change:depth_capped"],
+    };
+  }
+  if (signals) {
     const raised = signals.testOnlyDiff || signals.unreferencedSourceFiles.length > 0;
     return {
       tier: raised && assessment.tier === "low" ? "medium" : assessment.tier,

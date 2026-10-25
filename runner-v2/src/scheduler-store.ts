@@ -7454,6 +7454,9 @@ function deliveryReviewReused(
   };
 }
 
+/** The empty diff artifact's address: a no-change submission's diff. */
+const EMPTY_DIFF_SHA256 = createHash("sha256").update("").digest("hex");
+
 function deliveryReviewRequested(current: SchedulerProjection, state: DeliveryState, event: SchedulerEvent): void {
   requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
   const review = requireDeliveryReview(state, event, ["started"]);
@@ -7505,10 +7508,13 @@ function deliveryReviewRequested(current: SchedulerProjection, state: DeliverySt
     throw new Error("Deliverable review risk input must state whether an accepted evidence failure was used.");
   }
   if (
-    changedFiles.length === 0 ||
     !Number.isSafeInteger(linesAdded) || !Number.isSafeInteger(linesRemoved) ||
     linesAdded < 0 || linesRemoved < 0
   ) {
+    throw new Error("Deliverable review risk input requires the real changed files and line counts.");
+  }
+  // No changed files only for a genuine no-change submission: the empty diff artifact.
+  if (changedFiles.length === 0 && (linesAdded !== 0 || linesRemoved !== 0 || review.diffArtifactHash !== EMPTY_DIFF_SHA256)) {
     throw new Error("Deliverable review risk input requires the real changed files and line counts.");
   }
   // T6b repair (EP50): the recorded OA-16 track-record snapshot replays

@@ -146,10 +146,12 @@ const FEATURE_ADDED_LINES = ["export const b = 3;", "export const c = a + b;"];
 type Pass = "obligations" | "findings" | "verdict";
 
 class ScriptedReviewer implements AgentModel {
+  readonly prompts: string[] = [];
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
     const system = request.messages.find((message) => message.role === "system");
     const pass = (system?.id.replace("delivery-", "").replace("-system", "") ?? "findings") as Pass;
     const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
+    this.prompts.push(text);
     const toolResults = request.messages.filter((message) => message.role === "tool");
     const call = (name: string, args: unknown): ModelTurn => ({
       blocks: [{ type: "tool_call", callId: `${pass}-${name}-${toolResults.length}-${request.messages.length}`, name, arguments: args }],
@@ -185,6 +187,9 @@ interface Harness {
   runtime: BuildRuntime;
   review: NativeDeliverableReviewRuntime;
   verifierSelections: VerifierSelectionInput[];
+  /** The worker submits evidence only: no file changes and the empty diff. */
+  noChange: boolean;
+  reviewPrompts: string[];
   projection(): SchedulerProjection;
   close(): void;
 }
@@ -216,14 +221,14 @@ class FailoverWorkers implements WorkerRuntimeDriver {
     const scopeIdentity = captureSubmissionScopeIdentity(live, { runId: RUN_ID, taskId: task.id, attempt, workerId: assignment.workerId, sessionId: `session:${task.id}:${attempt}:b`, workspacePath: assignment.workspacePath, baselineRevision });
     assert.ok(scopeIdentity, "the new-policy run captures submission scope authority");
     const claimedPaths = localSubmissionClaim(scopeIdentity.claim, assignment.workspacePath).writableSurfaces.filter((surface) => surface !== "." && !surface.startsWith("resource:"));
-    const submissionFiles = (claimedPaths.length > 0 ? claimedPaths : ["src/feature.ts"]).map((path) => ({ path, added: false }));
+    const submissionFiles = this.harness.noChange ? [] : (claimedPaths.length > 0 ? claimedPaths : ["src/feature.ts"]).map((path) => ({ path, added: false }));
     const scopeFindings = inspectSubmissionScope(submissionFiles.map((file) => ({ ...file, addedLines: [] as string[] })), localSubmissionClaim(scopeIdentity.claim, assignment.workspacePath));
     assert.equal(scopeFindings.length, 0, "the fixture change stays inside its durable claim");
     const submissionScope = bindSubmissionScope(scopeIdentity, changeSetId, taskRevision, scopeFindings, submissionFiles);
     const reviewSignals = { version: 1 as const, runId: RUN_ID, taskId: task.id, baselineRevision, taskRevision, changeSetId, signals: reviewRunnerSignals(submissionFiles, new Map<string, string>(submissionFiles.map((file) => [file.path, FEATURE_CANDIDATE] as [string, string]))) };
-    const featureEncoding = inspectEncodingDelta(submissionFiles[0]!.path, Buffer.from(FEATURE_BASELINE, "utf8"), Buffer.from(FEATURE_CANDIDATE, "utf8"), FEATURE_ADDED_LINES);
+    const featureEncoding = inspectEncodingDelta(submissionFiles[0]?.path ?? "src/feature.ts", Buffer.from(FEATURE_BASELINE, "utf8"), Buffer.from(FEATURE_CANDIDATE, "utf8"), FEATURE_ADDED_LINES);
     assert.ok(featureEncoding, "the feature change is a text delta");
-    const encodingSubmission = { version: 1 as const, runId: RUN_ID, taskId: task.id, baselineRevision, taskRevision, changeSetId, files: [featureEncoding] };
+    const encodingSubmission = { version: 1 as const, runId: RUN_ID, taskId: task.id, baselineRevision, taskRevision, changeSetId, files: this.harness.noChange ? [] : [featureEncoding] };
     const validationScope = parseValidationScope({
       changed: submissionFiles.map((file) => file.path),
       verified: [`criterion evidence links recorded for ${(task.acceptanceCriteria ?? []).map((criterion) => criterion.id).join(", ") || "no criteria"}`],
@@ -258,7 +263,7 @@ class TestArchitect implements ArchitectRuntimeDriver {
   }
 }
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(options: { noChange?: boolean } = {}): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), "aiboard-current-author-"));
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
@@ -285,7 +290,7 @@ async function createHarness(): Promise<Harness> {
   const verifierSelections: VerifierSelectionInput[] = [];
   const reviewer = new ScriptedReviewer();
   const workspaceRoot = join(root, "review-workspace");
-  const harness = { root, scheduler, evidence, artifacts, sessions, verifierSelections } as unknown as Harness;
+  const harness = { root, scheduler, evidence, artifacts, sessions, verifierSelections, noChange: options.noChange === true, reviewPrompts: reviewer.prompts } as unknown as Harness;
   const review = new NativeDeliverableReviewRuntime({
     store: scheduler,
     architectRuntimeId: "arch:architect",
@@ -303,7 +308,7 @@ async function createHarness(): Promise<Harness> {
     artifacts,
     evidenceStore: evidence,
     loadInputs: async ({ task, projection }): Promise<DeliverableReviewInputs> => {
-      const diffText = `${DIFF}\n# ${task.id} attempt ${task.attempt}`;
+      const diffText = options.noChange ? "" : `${DIFF}\n# ${task.id} attempt ${task.attempt}`;
       const diff = await artifacts.put(Buffer.from(diffText), "text/x-diff", "diff");
       const criteria = (task.acceptanceCriteria ?? []).map((criterion) => ({ id: criterion.id, text: criterion.text }));
       return {
@@ -314,7 +319,7 @@ async function createHarness(): Promise<Harness> {
         taskRevision: task.submissionScope!.taskRevision,
         diffArtifactHash: diff.hash,
         diffText,
-        changedPaths: ["src/feature.ts"],
+        changedPaths: options.noChange ? [] : ["src/feature.ts"],
         objective: task.objective,
         criteria,
         workerSummary: `Worker summary for ${task.id}`,
@@ -450,6 +455,50 @@ test("kernel still refuses forged distinct_model reviewers for current authors a
         () => reduceSchedulerEvent(beforeRequest, { ...requested, payload: { ...requested.payload, reviewerRuntimeId: runtimeId, reviewerModelIdentity: modelIdentity, independence: "distinct_model" } }),
         /Self-review is impossible/,
         `${runtimeId} must stay refused as distinct_model`,
+      );
+    }
+  } finally {
+    harness.close();
+  }
+});
+
+test("a no-change submission is reviewed on its evidence instead of pausing the run", async () => {
+  // Tunnel run: a verification repair re-ran the smoke, proved the integrated code right and
+  // submitted no files; the review refused the empty diff and paused the build.
+  const harness = await createHarness({ noChange: true });
+  try {
+    await stepUntilSubmitted(harness);
+    const result = await harness.review.review({ runId: RUN_ID, taskId: "T1" });
+    assert.equal(result.status, "reviewed", `expected a completed review, got ${JSON.stringify(result)}`);
+    const requested = harness.scheduler.readRun(RUN_ID).find((entry) => entry.type === "delivery.review_requested")!;
+    const riskInput = requested.payload.riskInput as { changedFiles: string[]; linesAdded: number; linesRemoved: number };
+    assert.deepEqual([riskInput.changedFiles, riskInput.linesAdded, riskInput.linesRemoved], [[], 0, 0]);
+    assert.notEqual(requested.payload.reviewTier, "high", "no changed code means no affected-test or mutation depth");
+    assert.ok(harness.reviewPrompts.some((prompt) => prompt.includes("Changed files: none.")), "the reviewer is told nothing changed");
+    assert.equal(harness.projection().delivery?.reviews.T1?.stage, "completed");
+  } finally {
+    harness.close();
+  }
+});
+
+test("kernel refuses an empty changed-file list for a submission whose diff is not empty", async () => {
+  const harness = await createHarness();
+  try {
+    await stepUntilSubmitted(harness);
+    const result = await harness.review.review({ runId: RUN_ID, taskId: "T1" });
+    assert.equal(result.status, "reviewed", `expected a completed review, got ${JSON.stringify(result)}`);
+    const events = harness.scheduler.readRun(RUN_ID);
+    const requestedIndex = events.findIndex((entry) => entry.type === "delivery.review_requested");
+    const requested = events[requestedIndex]!;
+    const beforeRequest = rebuildSchedulerProjection(events.slice(0, requestedIndex));
+    const riskInput = requested.payload.riskInput as Record<string, unknown>;
+    for (const forged of [
+      { ...riskInput, changedFiles: [] },
+      { ...riskInput, changedFiles: [], linesAdded: 0, linesRemoved: 0 },
+    ]) {
+      assert.throws(
+        () => reduceSchedulerEvent(beforeRequest, { ...requested, payload: { ...requested.payload, riskInput: forged } }),
+        /requires the real changed files/,
       );
     }
   } finally {

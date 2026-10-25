@@ -786,7 +786,7 @@ export class NativeDeliverableReviewRuntime {
         "submitted-diff",
         "diff",
         `Submitted change ${inputs.changeSetId} (baseline ${inputs.baselineRevision} -> task revision ${inputs.taskRevision}).\n` +
-          `Changed files:\n${inputs.changedPaths.map((path) => `- ${path}`).join("\n")}\n\n${this.cumulativeDiffTail(context)}`,
+          this.changedFilesAndDiff(context),
       ));
     }
     // W2 (AR-R28): delta-first re-review input rides both the findings
@@ -875,6 +875,15 @@ export class NativeDeliverableReviewRuntime {
    * fix delta as the primary surface. Initial reviews always include
    * the full diff.
    */
+  private changedFilesAndDiff(context: PassContext): string {
+    const { inputs } = context;
+    if (inputs.changedPaths.length === 0) {
+      return "Changed files: none. The worker submitted no file changes, so the task revision equals the baseline. " +
+        "Judge whether the task's criteria are met by the existing code and the submitted evidence, and whether making no change was right.";
+    }
+    return `Changed files:\n${inputs.changedPaths.map((path) => `- ${path}`).join("\n")}\n\n${this.cumulativeDiffTail(context)}`;
+  }
+
   private cumulativeDiffTail(context: PassContext): string {
     const { inputs } = context;
     const delta = inputs.fixDelta;
@@ -926,7 +935,7 @@ export class NativeDeliverableReviewRuntime {
         "submitted-diff",
         "diff",
         `Submitted change ${inputs.changeSetId} (baseline ${inputs.baselineRevision} -> task revision ${inputs.taskRevision}).\n` +
-          `Changed files:\n${inputs.changedPaths.map((path) => `- ${path}`).join("\n")}\n\n${this.cumulativeDiffTail(context)}`,
+          this.changedFilesAndDiff(context),
       ),
     ];
   }
@@ -1666,15 +1675,21 @@ function nextGeneration(projection: SchedulerProjection, taskId: string): number
   return Math.max(0, current?.generation ?? 0, ...history.map((review) => review.generation)) + 1;
 }
 
+const EMPTY_SHA256 = createHash("sha256").update("").digest("hex");
+
 function assertInputs(inputs: DeliverableReviewInputs, task: BuildTask): void {
   if (task.submissionScope && (inputs.taskRevision !== task.submissionScope.taskRevision || inputs.baselineRevision !== task.submissionScope.baselineRevision)) throw new DeliverableReviewInputsUnavailableError("Review revision differs from the exact guarded submission.");
   if (inputs.taskId !== task.id || inputs.attempt !== task.attempt || inputs.changeSetId !== task.changeSetId) {
     throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs do not describe the current submission.");
   }
-  if (!/^[a-f0-9]{64}$/.test(inputs.diffArtifactHash) || !inputs.diffText.trim()) {
+  // A no-change submission (a repair that re-ran a check and proved the code already right) is
+  // reviewed on its evidence: its diff is the empty artifact and it lists no files. Tunnel run:
+  // requiring a non-empty diff paused the build on exactly such a repair.
+  const noChange = inputs.changedPaths.length === 0 && inputs.diffText === "" && inputs.diffArtifactHash === EMPTY_SHA256;
+  if (!/^[a-f0-9]{64}$/.test(inputs.diffArtifactHash) || (!noChange && !inputs.diffText.trim())) {
     throw new DeliverableReviewInputsUnavailableError("The submitted diff is unavailable.");
   }
-  if (inputs.changedPaths.length === 0) {
+  if (inputs.changedPaths.length === 0 && !noChange) {
     throw new DeliverableReviewInputsUnavailableError("The submitted change lists no changed files.");
   }
   if (!inputs.workerSummary.trim()) {
