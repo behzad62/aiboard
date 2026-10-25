@@ -8,6 +8,7 @@ import {
   buildStopFallbackMessage,
   buildRunWorkflowStatus,
   durableBuildHandoffPanels,
+  nativeSessionIsWorking,
   verifierCandidateCooldown,
   nativeBuildTaskStatus,
   nativeBuildAttachmentIdentityPatch,
@@ -1232,6 +1233,25 @@ assert.deepEqual(
     detail: "Canonical checkout revision changed after verification workspace creation. Resume retries from the saved checkpoint.",
   }
 );
+
+// Tunnel run: four never-closed verifier sessions and a waiting Architect were all shown as
+// "Working…". Only an open model or tool segment means a session is working now.
+{
+  const run = "native-run";
+  const budget = { activeSegments: {
+    [`active:model:architect:${run}:126`]: { segmentId: "x", startedAt: "t", durationMs: 1951 },
+    [`active:tool:delivery:${run}:old:call_a`]: { segmentId: "x", startedAt: "t", durationMs: 40 },
+    [`active:model:verifier:${run}:gem:3`]: { segmentId: "x", startedAt: "t" },
+    [`active:tool:worker:${run}:w1:call_b`]: { segmentId: "x", startedAt: "t" },
+    [`active:model:architect:${run}:sub:1`]: { segmentId: "x", startedAt: "t" },
+  } } as unknown as Parameters<typeof nativeSessionIsWorking>[0];
+  assert.equal(nativeSessionIsWorking(budget, `architect:${run}`), false, "a waiting Architect with only closed calls is not working");
+  assert.equal(nativeSessionIsWorking(budget, `delivery:${run}:old`), false, "an abandoned review session is not working");
+  assert.equal(nativeSessionIsWorking(budget, `verifier:${run}:gem`), true, "an open model call is working");
+  assert.equal(nativeSessionIsWorking(budget, `worker:${run}:w1`), true, "an open tool call is working");
+  assert.equal(nativeSessionIsWorking(budget, `architect:${run}:sub`), true);
+  assert.equal(nativeSessionIsWorking(null, `verifier:${run}:gem`), false);
+}
 
 // Tunnel run: both ChatGPT models were offered as verifiers right after a usage limit, and the
 // router skips a cooling provider, so choosing one only brought the same card back.

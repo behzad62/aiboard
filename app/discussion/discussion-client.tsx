@@ -123,6 +123,7 @@ import {
   createNativeBuildAttachmentController,
   createNativeBuildFileLoader,
   durableBuildHandoffPanels,
+  nativeSessionIsWorking,
   verifierCandidateCooldown,
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
@@ -2757,7 +2758,8 @@ function DiscussionPageInner() {
           active={isActive}
           runtimeEfforts={buildRuntimeEfforts}
           activeActors={isActive ? (nativeObservability?.agents ?? [])
-            .filter((agent) => agent.status === "active")
+            .filter((agent) => agent.status === "active" &&
+              nativeSessionIsWorking(nativeObservability?.budget, agent.sessionId))
             .slice(0, 8)
             .map((agent) => {
               const identity = nativeActorModelIdentity(

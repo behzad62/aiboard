@@ -675,6 +675,26 @@ export function createNativeBuildAttachmentController<
 }
 
 /**
+ * Whether a session has a model or tool call open right now. A session's "active" status only means
+ * it was never closed: abandoned delivery reviews and a waiting Architect stayed "active" for days,
+ * and the transcript listed them all as "Working…" (tunnel run: four idle verifiers). The ledger
+ * opens `active:model:<session>:<n>` / `active:tool:<session>:<call>` and closes it with a duration.
+ */
+export function nativeSessionIsWorking(
+  budget: Pick<NativeBuildUsageProjection, "activeSegments"> | null | undefined,
+  sessionId: string,
+): boolean {
+  return Object.entries(budget?.activeSegments ?? {}).some(([segmentId, segment]) => {
+    if ((segment as { durationMs?: unknown } | null)?.durationMs !== undefined) return false;
+    for (const kind of ["model", "tool"]) {
+      const prefix = `active:${kind}:${sessionId}:`;
+      if (segmentId.startsWith(prefix) && !segmentId.slice(prefix.length).includes(":")) return true;
+    }
+    return false;
+  });
+}
+
+/**
  * The cooldown that keeps the runner from using a verifier candidate. The runner offers every
  * candidate but its router skips a provider still cooling down, so choosing one only brought the
  * same card back (tunnel run: both ChatGPT models were offered right after a usage limit).
