@@ -911,13 +911,20 @@ test("provider failure supersedes a pending review with an independent fallback"
             runtimeId: "google:verifier",
           };
         }
-        requestReviewFor(authority, {
+        const fallback = {
           reviewId: "review-fallback",
           runtimeId: "fallback:verifier",
           providerId: "fallback",
           modelId: "fallback/independent-model",
           sessionId: "session-fallback",
-        });
+        };
+        requestReviewFor(authority, fallback);
+        // A restart retries the step: re-requesting the superseding review is idempotent.
+        requestReviewFor(authority, fallback);
+        assert.equal(
+          fixture.store.readRun(RUN_ID).filter((event) => event.type === "verifier.review_requested" && event.payload.reviewId === "review-fallback").length,
+          1,
+        );
         authority.submitVerdict({
           runId: RUN_ID,
           reviewId: "review-fallback",

@@ -66,6 +66,10 @@ implements VerifierVerdictAuthority {
 
   requestReview(input: RequestVerifierReviewInput): VerifierReviewProjection {
     const current = this.currentReview(input.runId);
+    // The same review re-requested (a restart or resume retrying the step) is already durable.
+    // Re-appending it would drop the supersedesReviewId the original carried, and the changed
+    // payload failed as an idempotency conflict that paused the run (tunnel run).
+    if (current?.reviewId === input.reviewId) return current;
     const supersedesReviewId =
       current?.status === "requested" && current.reviewId !== input.reviewId
         ? current.reviewId
