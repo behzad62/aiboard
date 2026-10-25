@@ -4598,6 +4598,12 @@ async function proveKernelSnapshotChain(input: {
     if (matches.length !== 1) refuse(`commit ${commit.slice(0, 12)} has ${matches.length} snapshot receipts`);
     if (parents !== parent || matches[0]!.parent !== parent) refuse(`commit ${commit.slice(0, 12)} parent does not continue the chain`);
     const receipt = matches[0]!;
+    const linkKey = JSON.stringify([parent, commit, receipt.stopSequence, [...receipt.paths].sort(), receipt.bodyDigest ?? null, receipt.stateSkippedReason ?? null]);
+    if (provenSnapshotLinks.get(integrationManager)?.has(linkKey)) {
+      parent = commit;
+      count += 1;
+      continue;
+    }
     let audited = await integrationManager.findHandoffSnapshotCommit({ snapshotKey: `stop-snapshot:${receipt.stopSequence}` });
     if (!audited || audited.commit !== commit) audited = await integrationManager.findHandoffSnapshotCommit({ snapshotKey: `handoff-snapshot:${receipt.stopSequence}` });
     if (!audited || audited.commit !== commit || audited.parent !== parent) refuse(`commit ${commit.slice(0, 12)} is not an audited snapshot commit`);
@@ -4609,6 +4615,9 @@ async function proveKernelSnapshotChain(input: {
       if (!stored.content || !verifyHandoffSnapshotDigest(stored.content) ||
           !stored.content.split(/\r?\n/)[0]!.endsWith(`body_sha256: ${receipt.bodyDigest}`)) refuse(`commit ${commit.slice(0, 12)} STATE.md does not match its receipt digest`);
     } else if (!receipt.stateSkippedReason) refuse(`commit ${commit.slice(0, 12)} receipt has neither a digest nor a skip reason`);
+    let links = provenSnapshotLinks.get(integrationManager);
+    if (!links) provenSnapshotLinks.set(integrationManager, links = new Set());
+    links.add(linkKey);
     parent = commit;
     count += 1;
   }
@@ -4627,6 +4636,15 @@ async function proveKernelSnapshotChain(input: {
  * verification spent ~16 of its 18 minutes between checks (tunnel run). Only successes are cached.
  */
 const provenSnapshotAdvances = new WeakMap<object, Set<string>>();
+
+/**
+ * Snapshot links (parent -> commit, under one exact receipt) already audited, per integration
+ * manager. A whole-chain proof is keyed by its ends, but every pause adds a snapshot (a new end) and
+ * pinned checkouts prove from other starts, so the chain cache alone re-audited every earlier
+ * snapshot: ~390 supervised git calls, seven minutes, before one verifier model call (tunnel run).
+ * The cheap receipt and parent checks still run for every link on every call.
+ */
+const provenSnapshotLinks = new WeakMap<object, Set<string>>();
 
 // Observability is polled every few seconds; `git log` is a supervised process (~1s on Windows), and
 // the history only changes when the integration revision moves.

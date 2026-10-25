@@ -1472,6 +1472,57 @@ test("docs-v2 proves a kernel snapshot chain once, and authority is still checke
   );
 });
 
+test("docs-v2 audits each snapshot link once: a new stop snapshot re-audits only itself", async () => {
+  const target = "a".repeat(40);
+  const first = "b".repeat(40);
+  const second = "c".repeat(40);
+  const audits: string[] = [];
+  const execute = (async (options: { args: readonly string[] }) => {
+    if (options.args[0] === "merge-base") return { exitCode: 0, stdout: "", stderr: "" };
+    if (options.args[0] === "log") {
+      const range = options.args.at(-1)!;
+      const all = [[first, target], [second, first]];
+      const [start, end] = range.split("..");
+      const from = all.findIndex(([commit]) => commit === start) + 1;
+      const links = all.slice(from, all.findIndex(([commit]) => commit === end) + 1);
+      return { exitCode: 0, stdout: links.map(([commit, parent]) => `${commit}\0${parent}\0\n`).join(""), stderr: "" };
+    }
+    throw new Error(`unexpected git ${options.args.join(" ")}`);
+  }) as unknown as Parameters<typeof validateKernelSnapshotVerificationAdvance>[0]["execute"];
+  const parents: Record<string, string> = { [first]: target, [second]: first };
+  const commits: Record<string, string> = { "stop-snapshot:1": first, "stop-snapshot:2": second };
+  const integrationManager = {
+    path: "/integration",
+    findHandoffSnapshotCommit: async (input: { snapshotKey: string }) => {
+      const commit = commits[input.snapshotKey];
+      audits.push(`find:${input.snapshotKey}`);
+      return commit ? { commit, parent: parents[commit] } : undefined;
+    },
+    readHandoffSnapshotFile: async (input: { commit: string }) => {
+      audits.push(`read:${input.commit.slice(0, 1)}`);
+      return { content: null, paths: ["docs/project/STATE.md"] };
+    },
+  } as unknown as Parameters<typeof validateKernelSnapshotVerificationAdvance>[0]["integrationManager"];
+  const receipt = (commit: string, stopSequence: number) => ({ commit, parent: parents[commit], stopSequence, paths: ["docs/project/STATE.md"], stateSkippedReason: "fixture" });
+  const projection = {
+    projectDocsPolicyVersion: 2,
+    integrationRevision: target,
+    projectDocs: { pending: [], snapshots: [receipt(first, 1)] },
+  } as unknown as SchedulerProjection;
+
+  await validateKernelSnapshotVerificationAdvance({ targetRevision: target, canonicalRevision: first, projection, integrationManager, execute });
+  assert.deepEqual(audits, ["find:stop-snapshot:1", "read:b"]);
+  audits.length = 0;
+  // The next pause commits another snapshot on top: only the new link is audited.
+  projection.projectDocs!.snapshots = [receipt(first, 1), receipt(second, 2)] as never;
+  await validateKernelSnapshotVerificationAdvance({ targetRevision: target, canonicalRevision: second, projection, integrationManager, execute });
+  assert.deepEqual(audits, ["find:stop-snapshot:2", "read:c"]);
+  audits.length = 0;
+  // A pinned checkout recorded at the first snapshot proves the same link without re-auditing it.
+  await validatePinnedKernelSnapshotAdvance({ canonicalRevision: second, recordedCanonicalRevision: first, projection, integrationManager, execute });
+  assert.deepEqual(audits, []);
+});
+
 test("docs-v2 pinned verification workspaces survive a kernel stop snapshot, never foreign movement", async () => {
   const f = await trailerFixture("pinnedsnapshot");
   const projection = {
