@@ -20,6 +20,7 @@ import {
 import {
   ARCHITECT_BASE_SNAPSHOT_SECTION_ID,
   architectBaseSnapshotEligible,
+  architectFullTaskGraphJson,
   buildArchitectContext,
   buildArchitectSystemPrompt,
   architectContextSections,
@@ -314,12 +315,21 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     const commandRevision = this.architectCommandRevision(
       await this.architectCommandCheckoutRevision(request, projection),
     );
+    // The broker binds every tool call to its own workspace, so the inspection workspace has to
+    // reach it, not just the loop context: a context-only change left fs.read on the owner's
+    // baseline folder and final verification refused the plan (tunnel run).
+    const inspectionWorkspace = architectInspectionWorkspace(
+      request.reason,
+      projection,
+      this.options.projectRoot,
+      this.options.canonicalProjectRoot,
+    );
     try {
     const extras = createArchitectInspectionBroker({
       git: this.options.git,
       executionGrants: this.options.executionGrants,
       permissionProfile: this.options.permissionProfile ?? "project",
-      projectRoot: this.options.projectRoot,
+      projectRoot: inspectionWorkspace,
       artifacts: this.options.artifacts,
       sessions: this.options.sessions,
       evidenceStore: this.options.evidenceStore,
@@ -404,12 +414,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       registry: tools,
       context: {
         ...request.context,
-        workspacePath: architectInspectionWorkspace(
-          request.reason,
-          projection,
-          this.options.projectRoot,
-          this.options.canonicalProjectRoot,
-        ),
+        workspacePath: inspectionWorkspace,
       },
       initialMessages: messages,
       signal: request.context.signal,
@@ -794,6 +799,13 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     // T10 (M11): the configured worker capability vocabulary (union over
     // candidates); rendered as a required section on docs-v2 turns only.
     const workerCapabilities = [...new Set(this.options.candidates.flatMap((candidate) => candidate.capabilities))];
+    const taskGraphArtifactHash = projection.projectDocsPolicyVersion === 2
+      ? (await this.options.artifacts.put(
+          Buffer.from(architectFullTaskGraphJson(projection, this.options.objective)),
+          "application/json",
+          "architect task graph",
+        )).hash
+      : undefined;
     const input = {
       limits,
       objective: this.options.objective,
@@ -809,6 +821,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       recentHistory: [],
       ...(projectDocsStateText !== undefined ? { projectDocsStateText } : {}),
       ...(baseSnapshot !== undefined ? { baseSnapshot } : {}),
+      ...(taskGraphArtifactHash ? { taskGraphArtifactHash } : {}),
     };
     if (!this.options.capabilityRegistry) return buildArchitectContext(input);
     return (await assembleContextWithExtensions({

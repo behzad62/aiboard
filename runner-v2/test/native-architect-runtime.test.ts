@@ -899,6 +899,99 @@ test("Architect excludes mutating extension tools under Project and Full access"
   }
 });
 
+test("Architect file tools read the integrated workspace, not the owner's baseline folder", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-architect-integrated-read-"));
+  const project = join(root, "project");
+  const integration = join(root, "integration");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(integration);
+  mkdirSync(state);
+  writeFileSync(join(project, "README.md"), "baseline scaffold\n");
+  writeFileSync(join(integration, "package.json"), "{\"name\":\"integrated\"}\n");
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  try {
+    const model = new ScriptedModel([
+      {
+        blocks: [{ type: "tool_call", callId: "read_manifest", name: "fs.read", arguments: { path: "package.json" } }],
+        stopReason: "tool_calls",
+      },
+      {
+        blocks: [{
+          type: "tool_call",
+          callId: "plan_tasks",
+          name: "plan_tasks",
+          arguments: {
+            revision: 1,
+            tasks: [{
+              id: "task_a",
+              objective: "Extend the integrated package.",
+              dependencies: [],
+              requiredCapabilities: ["code"],
+              acceptanceCriteria: [{ id: "extended", text: "The package is extended." }],
+            }],
+          },
+        }],
+        stopReason: "tool_calls",
+      },
+    ]);
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "fixture:architect",
+      providerId: "fixture",
+      modelId: "architect",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const architect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, model]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project_1",
+      projectRoot: project,
+      canonicalProjectRoot: integration,
+      objective: "Extend the package.",
+    });
+    const runtime = new BuildRuntime({
+      runId: "run_integrated_read",
+      store: scheduler,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: architect,
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "unused",
+    });
+
+    assert.equal((await runtime.step()).status, "progressed");
+    const toolResult = model.requests[1]!.messages.find((message) =>
+      message.role === "tool" && (message.content as { callId?: string }).callId === "read_manifest");
+    assert.ok(toolResult, "the read result reaches the next model call");
+    const content = toolResult.content as { isError: boolean; content: { type: string; text?: string }[] };
+    assert.equal(content.isError, false, JSON.stringify(content));
+    assert.match(content.content.map((block) => block.text ?? "").join(""), /"name":"integrated"/);
+  } finally {
+    sessions.close();
+    scheduler.close();
+    evidence.close();
+    memory.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
 function planOnlyListedTool(name: string) {
   return {
     definition: {
