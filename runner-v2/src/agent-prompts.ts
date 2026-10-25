@@ -562,6 +562,11 @@ export interface BuildArchitectContextInput {
    * turns only. Omitted on v1 turns, which keep legacy bytes.
    */
   workerCapabilities?: readonly string[];
+  /**
+   * Docs-v2: artifact holding the full task graph (`architectFullTaskGraphJson`). When present the
+   * task-graph section condenses settled work and points here; absent, it renders the full graph.
+   */
+  taskGraphArtifactHash?: string;
 }
 
 /** T10 (M11): the worker capability vocabulary. A "*" candidate capability is a wildcard (RuntimeRouter.hasCapabilities): it satisfies any concrete requirement, so it is never itself a task requirement. */
@@ -1026,12 +1031,15 @@ export function architectContextSections(
       : [required("project-docs", "project-docs", renderArchitectProjectDocs(input))]),
     required("build-objective", "user-intent", input.objective),
     required("architect-action", "architect", architectActionContent(input.reason, docsV2, input.projection.planningPolicyVersion, input.projection.planCritique)),
-    required(
-      "task-graph",
-      "task-graph",
-      // T10 (L7): compact on v2, pretty on v1 (legacy bytes frozen).
-      formatTaskGraphProjection(input, docsV2)
-    ),
+    {
+      ...required(
+        "task-graph",
+        "task-graph",
+        // T10 (L7): compact on v2, pretty on v1 (legacy bytes frozen).
+        formatTaskGraphProjection(input, docsV2)
+      ),
+      ...(docsV2 && input.taskGraphArtifactHash ? { artifactHash: input.taskGraphArtifactHash } : {}),
+    },
     // T6b repair (B4): open repair issues ride every new-policy Architect
     // turn, so the decision tool gets exact issue ids and the prior
     // failed approaches with their diagnostic evidence ids.
@@ -1387,23 +1395,105 @@ export function critiqueFindingsContent(reason: unknown, planCritique: Scheduler
 }
 
 /** T10 (L7): the Architect task-graph projection, compact on v2. */
-function formatTaskGraphProjection(input: BuildArchitectContextInput, docsV2: boolean): string {
-  const graph = {
-    status: input.projection.status,
-    initialObjective: input.projection.initialObjective ?? input.objective,
-    planRevision: input.projection.planRevision,
-    tasks: input.projection.tasks,
-    guidance: input.projection.guidance,
-    userGuidance: input.projection.userGuidance,
-    userGuidanceVersion: input.projection.userGuidanceVersion,
-    architectQuestions: input.projection.architectQuestions,
-    architectQuestionVersion: input.projection.architectQuestionVersion,
-    blockingArchitectQuestionId: input.projection.blockingArchitectQuestionId ?? null,
-    reviews: input.projection.reviews,
-    integrationRevision: input.projection.integrationRevision,
-    finalVerification: input.projection.finalVerification ?? null,
+function architectTaskGraph(projection: SchedulerProjection, objective: string) {
+  return {
+    status: projection.status,
+    initialObjective: projection.initialObjective ?? objective,
+    planRevision: projection.planRevision,
+    tasks: projection.tasks,
+    guidance: projection.guidance,
+    userGuidance: projection.userGuidance,
+    userGuidanceVersion: projection.userGuidanceVersion,
+    architectQuestions: projection.architectQuestions,
+    architectQuestionVersion: projection.architectQuestionVersion,
+    blockingArchitectQuestionId: projection.blockingArchitectQuestionId ?? null,
+    reviews: projection.reviews,
+    integrationRevision: projection.integrationRevision,
+    finalVerification: projection.finalVerification ?? null,
   };
-  return docsV2 ? compactJson(graph) : JSON.stringify(graph, null, 2);
+}
+
+/** The full docs-v2 task graph, stored as an artifact the condensed context section points to. */
+export function architectFullTaskGraphJson(projection: SchedulerProjection, objective: string): string {
+  return compactJson(architectTaskGraph(projection, objective));
+}
+
+function formatTaskGraphProjection(input: BuildArchitectContextInput, docsV2: boolean): string {
+  const graph = architectTaskGraph(input.projection, input.objective);
+  if (!docsV2) return JSON.stringify(graph, null, 2);
+  if (!input.taskGraphArtifactHash) return compactJson(graph);
+  return compactJson(condenseSettledTaskGraph(graph, focusTaskId(input.reason), input.taskGraphArtifactHash));
+}
+
+/** Statuses whose per-attempt detail no longer drives an Architect decision. */
+const SETTLED_TASK_STATUSES: ReadonlySet<string> = new Set(["integrated", "cancelled"]);
+const SETTLED_TASK_DETAIL = [
+  "validationScope",
+  "submissionScope",
+  "encodingSubmission",
+  "criterionEvidenceLinks",
+  "reviewSignals",
+  "validationBudget",
+  "verificationPlan",
+] as const;
+
+function focusTaskId(reason: unknown): string | undefined {
+  if (!reason || typeof reason !== "object" || !("taskId" in reason)) return undefined;
+  const taskId = (reason as { taskId?: unknown }).taskId;
+  return typeof taskId === "string" ? taskId : undefined;
+}
+
+/**
+ * Every Architect action re-sent the whole projection: settled tasks' scopes, encoding and evidence
+ * links, every review's per-criterion verdicts and earlier final-verification generations' raw check
+ * facts, about 260 KB (65k tokens) per action late in the tunnel run. Settled work keeps what a
+ * decision reads (status, objective, criteria, review outcome, check outcome); the full graph stays one
+ * artifact.read away.
+ */
+function condenseSettledTaskGraph(
+  graph: ReturnType<typeof architectTaskGraph>,
+  focus: string | undefined,
+  fullGraphArtifact: string,
+) {
+  const settled = (taskId: string) =>
+    taskId !== focus && SETTLED_TASK_STATUSES.has(graph.tasks[taskId]?.status ?? "");
+  const tasks = Object.fromEntries(Object.entries(graph.tasks).map(([taskId, task]) => {
+    if (!settled(taskId)) return [taskId, task];
+    const lean: Record<string, unknown> = { ...task };
+    for (const field of SETTLED_TASK_DETAIL) delete lean[field];
+    return [taskId, lean];
+  }));
+  const reviews = Object.fromEntries(Object.entries(graph.reviews).map(([reviewId, review]) => {
+    if (!settled(review.taskId)) return [reviewId, review];
+    const { criterionVerdicts: _verdicts, criterionEvidenceLinks: _links, evidenceArtifactHashes: _hashes, ...lean } = review;
+    return [reviewId, lean];
+  }));
+  const finalVerification = graph.finalVerification
+    ? {
+        ...graph.finalVerification,
+        history: graph.finalVerification.history.map((generation) => ({
+          ...generation,
+          ...(generation.completedChecks
+            ? {
+                completedChecks: generation.completedChecks.map((check) => ({
+                  category: check.category,
+                  status: check.status,
+                  green: check.green,
+                  attempt: check.attempt,
+                  ...(check.issues.length > 0 ? { issues: check.issues } : {}),
+                })),
+              }
+            : {}),
+        })),
+      }
+    : null;
+  return {
+    ...graph,
+    tasks,
+    reviews,
+    finalVerification,
+    condensed: `Settled (integrated or cancelled) tasks, their reviews and earlier final-verification generations are condensed; artifact.read ${fullGraphArtifact} for the full graph.`,
+  };
 }
 
 function renderArchitectProjectDocs(input: BuildArchitectContextInput): string {

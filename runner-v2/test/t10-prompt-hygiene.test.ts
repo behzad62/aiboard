@@ -9,6 +9,7 @@ import {
   ANSWER_REVIEWER_INVARIANTS,
   ARCHITECT_PROJECT_DOCS_INSTRUCTIONS,
   ARCHITECT_REASON_GUIDANCE,
+  architectFullTaskGraphJson,
   architectReasonGuidance,
   buildAnswerReviewFindingsContext,
   buildArchitectContext,
@@ -762,4 +763,66 @@ test("T10 AR-R30: reviewer lines cover durable state and both-directions re-revi
   assert.match(WRITE_PROJECT_DOC_V2_DESCRIPTION, /does not need to keep a journal|not need to keep a journal/);
   assert.ok(ANSWER_REVIEWER_INVARIANTS.length > 0, "answer reviewer invariants exist");
   void COVERAGE_REREVIEW_VERDICT_INSTRUCTIONS;
+});
+
+test("docs-v2 Architect task graph condenses settled work and points at the full graph artifact", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task-graph-condense-"));
+  const store = seedRun("run_graph", join(root, "v2.sqlite"), true);
+  try {
+    const heavy = "scope-detail-".repeat(200);
+    const task = (id: string, status: string) => ({
+      id, objective: `Build ${id}.`, dependencies: [], status, requiredCapabilities: ["code"], attempt: 1,
+      acceptanceCriteria: [{ id: `${id}-c1`, text: `${id} works.` }],
+      validationScope: { note: heavy }, submissionScope: { note: heavy }, criterionEvidenceLinks: [{ note: heavy }],
+    });
+    const review = (taskId: string) => ({
+      taskId, attempt: 1, status: "approved", summary: `${taskId} approved.`,
+      evidenceArtifactHashes: ["e".repeat(64)], criterionVerdicts: [{ note: heavy }], criterionEvidenceLinks: [{ note: heavy }],
+    });
+    const projection = {
+      ...rebuildSchedulerProjection(store.readRun("run_graph")),
+      tasks: {
+        done: task("done", "integrated"),
+        active: task("active", "architect_review"),
+        focus: task("focus", "integrated"),
+        ...Object.fromEntries(["a", "b", "c", "d", "e"].map((id) => [`old-${id}`, task(`old-${id}`, "cancelled")])),
+      },
+      reviews: { "review-done": review("done"), "review-active": review("active"), "review-focus": review("focus") },
+      finalVerification: {
+        history: [{
+          generationId: "gen-1", targetRevision: "r".repeat(40), state: "superseded",
+          completedChecks: [{ category: "tests", status: "passed", green: true, attempt: 1, issues: [], facts: [{ note: heavy }], evidenceIds: ["ev"], workspacePath: "/w", startedAt: AT, finishedAt: AT }],
+        }],
+      },
+    } as unknown as ReturnType<typeof rebuildSchedulerProjection>;
+    const input = {
+      limits: { maxBytes: 1024 * 1024, maxEstimatedTokens: 256 * 1024 },
+      objective: "Ship it.",
+      reason: { type: "review_required", taskId: "focus" },
+      projection,
+      instructions: [], skills: [], memories: [], evidence: [], recentHistory: [],
+    };
+    const full = architectFullTaskGraphJson(projection, "Ship it.");
+    const fullPack = buildArchitectContext(input);
+    assert.ok(fullPack.text.includes(full), "without an artifact the section carries the full graph");
+
+    const hash = "f".repeat(64);
+    const pack = buildArchitectContext({ ...input, taskGraphArtifactHash: hash });
+    const section = pack.text.split("\n\n").find((part) => part.startsWith("## TASK-GRAPH: task-graph"))!;
+    assert.ok(section.startsWith(`## TASK-GRAPH: task-graph [artifact=${hash}]\n`), section.slice(0, 120));
+    const graph = JSON.parse(section.slice(section.indexOf("\n") + 1));
+    assert.equal(graph.tasks.done.validationScope, undefined, "a settled task drops its working detail");
+    assert.deepEqual(graph.tasks.done.acceptanceCriteria, [{ id: "done-c1", text: "done works." }]);
+    assert.ok(graph.tasks.active.validationScope, "an active task keeps its detail");
+    assert.ok(graph.tasks.focus.validationScope, "the task the action names keeps its detail");
+    assert.equal(graph.reviews["review-done"].criterionVerdicts, undefined);
+    assert.equal(graph.reviews["review-done"].summary, "done approved.");
+    assert.ok(graph.reviews["review-active"].criterionVerdicts);
+    assert.deepEqual(graph.finalVerification.history[0].completedChecks, [{ category: "tests", status: "passed", green: true, attempt: 1 }]);
+    assert.ok(graph.condensed.includes(`artifact.read ${hash}`), graph.condensed);
+    assert.ok(Buffer.byteLength(section) < Buffer.byteLength(full) / 2, "the condensed section is much smaller");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
