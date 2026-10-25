@@ -113,6 +113,15 @@ export class ToolRegistry implements AgentToolRuntime {
         error: { code: "invalid_arguments_json", message },
       };
     }
+    if (isOmittedArgumentsPlaceholder(call.arguments)) {
+      // A verifier resent the history placeholder of its own earlier verdict as the verdict, and
+      // was told only "unknown fields: omittedArguments" (tunnel run).
+      const message = `Arguments for ${call.name} are the history placeholder of an earlier call, not arguments. Send the complete arguments again.`;
+      return {
+        ...failure(call, "invalid_arguments", message),
+        error: { code: "invalid_arguments", message, issues: [message] },
+      };
+    }
     let validation: ValidationResult<unknown>;
     try {
       validation = tool.validate(call.arguments);
@@ -158,6 +167,12 @@ export class ToolRegistry implements AgentToolRuntime {
       );
     }
   }
+}
+
+/** The stub agent-loop puts in place of a settled call's bulky arguments. */
+function isOmittedArgumentsPlaceholder(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length === 1 && Object.hasOwn(value, "omittedArguments");
 }
 
 function failure(

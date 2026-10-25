@@ -694,25 +694,43 @@ export const SETTLED_BULK_STUB_BYTES = 32 * 1024;
  * A call's arguments are stubbed once its result exists (the durable state holds what it recorded,
  * readable through the matching read tool) and an oversized event echo becomes its receipt. Both
  * depend only on the message and its own result, so a stubbed message never changes again.
+ *
+ * A rejected call recorded nothing, and its arguments are what the model must correct: it keeps
+ * them until a later call to the same tool replaces it. The stub said "sent and settled" for a
+ * rejected 39 KB verdict, and the verifier resent the stub as its verdict (tunnel run).
  */
 function stubSettledBulk(messages: readonly AgentMessage[]): AgentMessage[] {
-  const settled = new Set<string>();
+  const settled = new Map<string, ToolResult>();
   for (const message of messages) {
     if (message.role === "tool" && !Array.isArray(message.content) && typeof message.content === "object") {
-      settled.add((message.content as ToolResult).callId);
+      const result = message.content as ToolResult;
+      settled.set(result.callId, result);
     }
+  }
+  const latestCallByTool = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) if (block.type === "tool_call") latestCallByTool.set(block.name, block.callId);
   }
   return messages.map((message) => {
     if (message.role === "assistant" && Array.isArray(message.content)) {
       let changed = false;
       const content = message.content.map((block) => {
-        if (block.type !== "tool_call" || !settled.has(block.callId)) return block;
+        if (block.type !== "tool_call") return block;
+        const result = settled.get(block.callId);
+        if (!result) return block;
+        const rejected = result.isError === true;
+        if (rejected && latestCallByTool.get(block.name) === block.callId) return block;
         const bytes = Buffer.byteLength(JSON.stringify(block.arguments ?? null));
         if (bytes <= SETTLED_BULK_STUB_BYTES) return block;
         changed = true;
         return {
           ...block,
-          arguments: { omittedArguments: `${bytes} bytes sent and settled; read the recorded state with the matching read tool (e.g. read_current_plan_revision)` },
+          arguments: {
+            omittedArguments: rejected
+              ? `Placeholder, not arguments: ${bytes} bytes of a call that was rejected (see its result) and later replaced.`
+              : `Placeholder, not arguments: ${bytes} bytes accepted and recorded; read them back with the matching read tool if needed.`,
+          },
         };
       });
       return changed ? { ...message, content } : message;

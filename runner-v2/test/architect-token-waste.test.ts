@@ -128,6 +128,43 @@ test("settled whole-plan calls and their echoes leave the working set as stubs, 
   assert.equal(JSON.stringify(messages[1]).includes("omittedArguments"), false, "durable history is not mutated");
 });
 
+test("a rejected bulky call keeps its arguments until a later call replaces it; a resent stub is named", async () => {
+  const { compactAgentMessages } = await import("../src/agent-loop.js");
+  const verdict = { criterionVerdicts: Array.from({ length: 60 }, (_, index) => ({ criterionId: `c${index}`, rationale: "r".repeat(700) })) };
+  const rejected = (callId: string) => ({ callId, toolName: "submit_verifier_verdict", isError: true, content: [{ type: "text" as const, text: "Verifier verdict cites failing command evidence e1." }], error: { code: "tool_execution_failed", message: "x" } });
+  const call = (id: string, callId: string, name = "submit_verifier_verdict", args: unknown = verdict) =>
+    ({ id, role: "assistant" as const, content: [{ type: "tool_call" as const, callId, name, arguments: args }] });
+  const messages = [
+    { id: "system", role: "system" as const, content: "policy" },
+    call("a1", "v1"),
+    { id: "t1", role: "tool" as const, content: rejected("v1") },
+    call("a2", "i1", "inspect_evidence", { taskId: "t" }),
+    { id: "t2", role: "tool" as const, content: { callId: "i1", toolName: "inspect_evidence", isError: false, content: [{ type: "text" as const, text: "ok" }] } },
+  ];
+  // Tunnel run: the stub said "sent and settled" for a rejected 39 KB verdict, and the verifier
+  // resent the stub as its next verdict.
+  const kept = compactAgentMessages(messages as never);
+  assert.deepEqual((kept[1]!.content as Array<{ arguments: unknown }>)[0]!.arguments, verdict, "the latest rejected attempt stays correctable");
+  const retried = compactAgentMessages([...messages, call("a3", "v2"), { id: "t3", role: "tool" as const, content: rejected("v2") }] as never);
+  const replaced = (retried[1]!.content as Array<{ arguments: { omittedArguments?: string } }>)[0]!.arguments;
+  assert.match(replaced.omittedArguments ?? "", /^Placeholder, not arguments: \d+ bytes of a call that was rejected \(see its result\) and later replaced\.$/);
+  assert.deepEqual((retried[5]!.content as Array<{ arguments: unknown }>)[0]!.arguments, verdict, "only the newest attempt is kept whole");
+
+  const { ToolRegistry } = await import("../src/tool-registry.js");
+  const registry = new ToolRegistry();
+  registry.register({
+    definition: { name: "submit_verifier_verdict", description: "d", inputSchema: { type: "object", properties: {} } },
+    validate: (value: unknown) => ({ ok: true as const, value }),
+    execute: async () => ({ content: [{ type: "text" as const, text: "accepted" }] }),
+  } as never);
+  const echoed = await registry.invoke(
+    { type: "tool_call", callId: "v3", name: "submit_verifier_verdict", arguments: { omittedArguments: replaced.omittedArguments } } as never,
+    {} as never,
+  );
+  assert.equal(echoed.isError, true);
+  assert.match(echoed.error?.message ?? "", /history placeholder of an earlier call, not arguments\. Send the complete arguments again\./);
+});
+
 test("Anthropic streaming requests get room for whole-plan tool calls", async () => {
   const { anthropicDefaultMaxTokens } = await import("../src/anthropic-model.js");
   assert.equal(anthropicDefaultMaxTokens("claude-opus-5-5", true), 64_000);
