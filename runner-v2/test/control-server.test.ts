@@ -1908,6 +1908,44 @@ test("choosing a verifier resumes a supervisor run left paused by the selection 
   }
 });
 
+test("the crew route passes the owner's new role models to the Build and validates the body", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-crew-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const changes: unknown[] = [];
+  const builds = {
+    projection: () => { throw new Error("Unknown build runtime run_crew"); },
+    changeCrew: async (runId: string, crew: unknown, idempotencyKey: string) => {
+      changes.push({ runId, crew, idempotencyKey });
+      return { runId, status: "paused", lastSequence: 9 };
+    },
+  } as unknown as BuildControlPlane;
+  const server = new ControlServer({ supervisor, token, checkGit: async () => gitReady, bootstrapRun, builds });
+  const address = await server.start(0);
+  const call = (body: unknown) => fetch(`${address.url}/v2/runs/run_crew/build/crew`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  try {
+    const crew = { architectRuntimeId: "openai:a", workerRuntimeIds: ["openai:w"], verifierRuntimeIds: ["openai:w", "openai:r"], reviewerRuntimeId: "openai:r" };
+    const changed = await call({ ...crew, idempotencyKey: "crew:1" });
+    assert.equal(changed.status, 200, await changed.text());
+    assert.deepEqual(changes, [{ runId: "run_crew", crew, idempotencyKey: "crew:1" }]);
+    for (const invalid of [
+      { ...crew, workerRuntimeIds: [], idempotencyKey: "crew:2" },
+      { ...crew, reviewerRuntimeId: "openai:a", idempotencyKey: "crew:3" },
+      { ...crew, verifierRuntimeIds: ["openai:r", "openai:r"], idempotencyKey: "crew:4" },
+      { ...crew },
+    ]) {
+      assert.equal((await call(invalid)).status, 400, JSON.stringify(invalid));
+    }
+    assert.equal(changes.length, 1);
+  } finally {
+    await server.close();
+    supervisor.close();
+  }
+});
+
 test("live model output SSE is authenticated and delivers isolated transient deltas", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-live-output-"));
   const fixture = await createSteeringControlFixture(directory);

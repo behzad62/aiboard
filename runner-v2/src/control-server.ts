@@ -142,6 +142,14 @@ interface ArchitectHandoffBody {
   requiredSequence: number;
 }
 
+interface BuildCrewBody {
+  architectRuntimeId: string;
+  workerRuntimeIds: string[];
+  verifierRuntimeIds: string[];
+  reviewerRuntimeId?: string;
+  idempotencyKey: string;
+}
+
 interface RepairCyclesBody {
   additionalRepairPlans: number;
   idempotencyKey: string;
@@ -820,6 +828,38 @@ export class ControlServer {
             body.idempotencyKey,
             body.requiredSequence
           )
+        );
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "crew" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<BuildCrewBody>(request);
+        assertExactBodyKeys(body, ["architectRuntimeId", "workerRuntimeIds", "verifierRuntimeIds", "reviewerRuntimeId", "idempotencyKey"]);
+        if (
+          !isNonEmptyString(body.idempotencyKey) ||
+          !isNonEmptyString(body.architectRuntimeId) ||
+          !Array.isArray(body.workerRuntimeIds) || body.workerRuntimeIds.length < 1 ||
+          body.workerRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId)) ||
+          !Array.isArray(body.verifierRuntimeIds) || body.verifierRuntimeIds.length < 1 ||
+          body.verifierRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId) || runtimeId !== runtimeId.trim()) ||
+          new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length ||
+          (body.reviewerRuntimeId !== undefined && (!isNonEmptyString(body.reviewerRuntimeId) || !body.verifierRuntimeIds.includes(body.reviewerRuntimeId)))
+        ) invalidBody();
+        const builds = this.requireBuilds();
+        if (!builds.changeCrew) throw new HttpError(409, "unsupported", "This runner cannot change a Build's models.");
+        sendJson(
+          response,
+          200,
+          await builds.changeCrew(runId, {
+            architectRuntimeId: body.architectRuntimeId,
+            workerRuntimeIds: [...body.workerRuntimeIds],
+            verifierRuntimeIds: [...body.verifierRuntimeIds],
+            ...(body.reviewerRuntimeId !== undefined ? { reviewerRuntimeId: body.reviewerRuntimeId } : {}),
+          }, body.idempotencyKey),
         );
         return;
       }

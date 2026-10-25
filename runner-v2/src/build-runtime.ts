@@ -7,6 +7,7 @@ import type { NativeTool, ToolExecutionContext } from "./agent-contracts.js";
 import { createArchitectTools, type ArchitectToolsOptions } from "./architect-tools.js";
 import { ANSWER_PATH_LIFECYCLE_TOOLS, ARCHITECT_LIFECYCLE_TOOLS } from "./role-capabilities.js";
 import type {
+  NativeBuildCrew,
   NativeBuildPlanningPolicy,
   NativeBuildRunPolicy,
 } from "./build-spec.js";
@@ -1216,6 +1217,21 @@ export class BuildRuntime {
         },
       });
     }
+    // An owner resume while an Architect handoff is pending keeps the current Architect: record
+    // that as the owner's handoff answer. Before, the resumed run went on with the same Architect
+    // but the handoff stayed open forever, and the UI kept asking (tunnel run: "fetch failed").
+    const handoff = projection.runtime.architect.handoff;
+    const currentArchitect = projection.runtime.architect.runtimeId;
+    if (handoff && currentArchitect && handoff.candidateRuntimeIds.includes(currentArchitect) && handoff.requiredSequence !== undefined) {
+      this.store.append({
+        runId: this.runId,
+        type: "architect.handoff_selected",
+        occurredAt,
+        actor: { role: "user", id: "local-user" },
+        idempotencyKey: `${idempotencyKey}:keep-architect`,
+        payload: { runtimeId: currentArchitect, requiredSequence: handoff.requiredSequence },
+      });
+    }
     this.store.append({
       runId: this.runId,
       type: "run.resumed",
@@ -1223,6 +1239,24 @@ export class BuildRuntime {
       actor: { role: "user", id: "local-user" },
       idempotencyKey,
       payload: {},
+    });
+    return this.projection();
+  }
+
+  /** Records the owner's new role models; the manager rewrites the spec and rebuilds the runtime. */
+  recordCrewChange(crew: NativeBuildCrew, idempotencyKey: string): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "run.crew_changed",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: {
+        architectRuntimeId: crew.architectRuntimeId,
+        workerRuntimeIds: [...crew.workerRuntimeIds],
+        verifierRuntimeIds: [...crew.verifierRuntimeIds],
+        ...(crew.reviewerRuntimeId !== undefined ? { reviewerRuntimeId: crew.reviewerRuntimeId } : {}),
+      },
     });
     return this.projection();
   }

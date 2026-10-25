@@ -12,7 +12,15 @@ import type {
   BuildControlPlane,
   UserGuidanceControlInput,
 } from "./build-runtime-registry.js";
-import { validateBuildSpec, type BuildSpecStore, type NativeBuildSpec } from "./build-spec.js";
+import {
+  buildSpecCrew,
+  sameBuildCrew,
+  validateBuildSpec,
+  withBuildCrew,
+  type BuildSpecStore,
+  type NativeBuildCrew,
+  type NativeBuildSpec,
+} from "./build-spec.js";
 import {
   stableProvisioningRequestsMatch,
   type ApprovedSourceInputV1,
@@ -94,6 +102,8 @@ export interface NativeBuildManagerOptions {
   ): Promise<NativeBuildSpec>;
   /** Rejects a stored spec before recovery can construct its runtime or model clients. */
   validateRecoveredSpec?(spec: NativeBuildSpec): Promise<void>;
+  /** Rejects a crew-changed spec whose runtimes the runner cannot construct (no provider config). */
+  validateCrewSpec?(spec: NativeBuildSpec): void | Promise<void>;
   /** Allows callers with an authoritative lifecycle store to omit settled runs from recovery. */
   shouldRecoverSpec?(spec: NativeBuildSpec): boolean | Promise<boolean>;
   /** Opens storage-backed terminal projections without constructing a live runtime. */
@@ -533,6 +543,35 @@ export class NativeBuildManager implements BuildControlPlane {
     return await this.withRuntimeActivity(async () =>
       handle.runtime.continue(idempotencyKey)
     );
+  }
+
+  /**
+   * The owner's new role models for a paused run. The change is recorded on the run, the stored
+   * spec is rewritten, and the run's runtimes are rebuilt from it exactly as a runner restart would;
+   * the next resume continues with the new crew. Before this the crew was fixed at creation, and
+   * changing models in the session settings silently did nothing for the running Build.
+   */
+  async changeCrew(runId: string, crew: NativeBuildCrew, idempotencyKey: string): Promise<SchedulerProjection> {
+    return await this.serialized(async () => {
+      const handle = this.requireMutable(runId);
+      const spec = this.options.specs.get(runId);
+      if (sameBuildCrew(buildSpecCrew(spec), crew)) return handle.runtime.projection();
+      if (!this.options.specs.replace) throw new Error("This runner cannot change a Build's models.");
+      const next = withBuildCrew(spec, crew);
+      await this.options.validateCrewSpec?.(next);
+      if (this.pumps.has(runId) || handle.runtime.projection().status !== "paused") {
+        throw new Error("Pause the Build and let its current step stop before changing its models.");
+      }
+      await this.withRuntimeActivity(async () => {
+        handle.runtime.recordCrewChange(crew, idempotencyKey);
+      });
+      this.options.specs.replace(next);
+      this.handles.delete(runId);
+      this.handleShutdown.delete(runId);
+      await handle.close();
+      const rebuilt = await this.ensureRuntime(next);
+      return rebuilt.runtime.projection();
+    });
   }
 
   async selectArchitectHandoff(

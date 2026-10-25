@@ -15,6 +15,7 @@ import {
   NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE,
   NativeBuildFactory,
   preflightRecoveredRunnerCapabilities,
+  selectRuntimeCandidates,
   snapshotNativeBuildAmbientEnvironment,
 } from "./native-build-factory.js";
 import {
@@ -199,6 +200,9 @@ async function main(): Promise<void> {
       },
       onRecoverySpecError: (runId, error) => {
         recordRuntimeRecoveryFailure(supervisor, runId, error);
+      },
+      validateCrewSpec: (spec) => {
+        selectRuntimeCandidates(providerConfigs.load(), spec);
       },
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
       onBuildFailed: (runId, reason) => failBuildIfActive(supervisor, runId, reason),

@@ -62,6 +62,17 @@ export class SqliteBuildSpecStore implements BuildSpecStore {
     }
   }
 
+  /** Rewrites a stored spec in place (an owner crew change); its identity never changes. */
+  replace(spec: NativeBuildSpec): NativeBuildSpec {
+    validateBuildSpec(spec);
+    const normalized = cloneBuildSpec(spec);
+    const result = this.database
+      .prepare("UPDATE build_specs SET spec_json = ? WHERE run_id = ? AND idempotency_key = ?")
+      .run(JSON.stringify(normalized), spec.runId, spec.idempotencyKey);
+    if (result.changes !== 1) throw new Error(`Unknown Build spec ${spec.runId}.`);
+    return normalized;
+  }
+
   get(runId: string): NativeBuildSpec {
     const row = this.database
       .prepare("SELECT run_id, idempotency_key, spec_json FROM build_specs WHERE run_id = ?")

@@ -20,6 +20,7 @@ import {
   updateDiscussion,
 } from "./store";
 import {
+  changeNativeBuildCrew,
   commandNativeRun,
   configureNativeProviders,
   createNativeBuild,
@@ -562,6 +563,31 @@ function nativeContextWindow(modelRef: string): { contextWindowTokens?: number }
   } catch {
     return {};
   }
+}
+
+/**
+ * Gives a paused native Build the discussion's saved crew: the provider configs first, so the runner
+ * can construct the new runtimes, then the crew change itself. The runner treats the same crew as a
+ * no-op and refuses while the Build is running.
+ */
+export async function applyNativeBuildCrew(
+  connection: NativeRunnerConnection,
+  discussion: Discussion,
+  runId: string,
+): Promise<NativeBuildProjection> {
+  const crew = buildCrewFromDiscussion(discussion);
+  if (!crew) throw new Error("Build mode requires an Architect model.");
+  const selected = selectBuildCrewRuntimes(crew);
+  await configureNativeProviders(
+    connection,
+    selected.runtimes.map((runtime, index) => createNativeProviderConfig(runtime.runtimeId, index, runtime.reasoningEffort)),
+  );
+  return await changeNativeBuildCrew(connection, runId, {
+    architectRuntimeId: selected.architectRuntimeId,
+    workerRuntimeIds: selected.workerRuntimeIds,
+    verifierRuntimeIds: selected.verifierRuntimeIds,
+    ...(selected.reviewerRuntimeId ? { reviewerRuntimeId: selected.reviewerRuntimeId } : {}),
+  }, `crew:${runId}:${Date.now()}`);
 }
 
 export function createNativeProviderConfig(

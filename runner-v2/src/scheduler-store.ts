@@ -246,6 +246,7 @@ export type SchedulerEventType =
   | "cleanup.checked"
   | "repair.cycle_limit_reached"
   | "repair.cycle_limit_extended"
+  | "run.crew_changed"
   | "plan_critique.policy_configured"
   | "plan_critique.risk_assessed"
   | "plan_critique.requested"
@@ -2105,6 +2106,8 @@ const OWNER_REPAIR_ANSWERS: ReadonlySet<string> = new Set([
   "repair.issue_budget_extended",
   "repair.external_blocker_cleared",
   "repair.cycle_limit_extended",
+  // Not a repair answer, but the same kind of owner act on a paused run: it never advances work.
+  "run.crew_changed",
 ]);
 
 export function assertOpenArchitectQuestionAllowsEvent(
@@ -5638,6 +5641,20 @@ export function reduceSchedulerEvent(
         delete next.pauseReason;
       }
       break;
+    case "run.crew_changed": {
+      // The owner gives a paused run new role models; the runner rewrites the Build spec and
+      // rebuilds the run's runtimes from it. A changed Architect takes over like a handoff.
+      if (event.actor.role !== "user") throw new Error("Changing the Build crew requires the user.");
+      if (current.status !== "paused") throw new Error("The Build crew can change only while the run is paused.");
+      const architectRuntimeId = requiredString(event.payload, "architectRuntimeId");
+      if (stringArray(event.payload, "workerRuntimeIds").length === 0 || stringArray(event.payload, "verifierRuntimeIds").length === 0) {
+        throw new Error("A Build crew needs at least one worker and one verifier.");
+      }
+      if (next.runtime.architect.runtimeId !== architectRuntimeId || next.runtime.architect.handoff) {
+        next.runtime.architect = { runtimeId: architectRuntimeId };
+      }
+      break;
+    }
     case "run.resumed":
       if (recoveryBlocksRun(current.processRecovery)) throw new Error("Unresolved exceptional recovery prevents resume.");
       if (

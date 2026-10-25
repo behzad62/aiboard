@@ -3878,7 +3878,9 @@ function selectConfigs(
     ...spec.workerRuntimeIds,
     ...spec.verifierRuntimeIds,
   ]);
-  const selected = configs.filter((config) => required.has(config.runtimeId));
+  // A retired runtime is optional: without its config, only work still recorded against it fails.
+  const retired = new Set((spec.retiredRuntimeIds ?? []).filter((runtimeId) => !required.has(runtimeId)));
+  const selected = configs.filter((config) => required.has(config.runtimeId) || retired.has(config.runtimeId));
   for (const runtimeId of required) {
     if (!selected.some((config) => config.runtimeId === runtimeId)) {
       throw new Error(`Provider runtime ${runtimeId} is not configured.`);

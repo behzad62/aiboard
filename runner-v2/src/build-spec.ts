@@ -70,6 +70,12 @@ export interface NativeBuildSpec {
    * the fallback. Absent keeps the priority-order choice.
    */
   reviewerRuntimeId?: string;
+  /**
+   * Runtimes an owner crew change took out of every role. They stay configured candidates so work
+   * already recorded against them (a suspended review, a worker session) still resolves its model;
+   * they are never picked for new work.
+   */
+  retiredRuntimeIds?: string[];
   /** Strengthens low-risk qualification; it never disables the high-risk gate. */
   alwaysRequireIndependentVerifier: boolean;
   /** Kernel-counted repair plans per run; omitted means the runtime default. */
@@ -120,6 +126,8 @@ export type LegacyNativeBuildSpec = Omit<
 
 export interface BuildSpecStore {
   save(spec: NativeBuildSpec): NativeBuildSpec;
+  /** Rewrites an existing spec with the same identity (an owner crew change). */
+  replace?(spec: NativeBuildSpec): NativeBuildSpec;
   get(runId: string): NativeBuildSpec;
   list(): NativeBuildSpec[];
   close(): void;
@@ -165,6 +173,14 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
   }
   if (spec.reviewerRuntimeId !== undefined && !spec.verifierRuntimeIds.includes(spec.reviewerRuntimeId)) {
     throw new Error("Build spec reviewer runtime must be one of its verifier runtimes.");
+  }
+  if (spec.retiredRuntimeIds !== undefined) {
+    const active = new Set([spec.architectRuntimeId, ...spec.workerRuntimeIds, ...spec.verifierRuntimeIds]);
+    if (
+      !Array.isArray(spec.retiredRuntimeIds) ||
+      spec.retiredRuntimeIds.some((id) => typeof id !== "string" || !id.trim() || active.has(id)) ||
+      new Set(spec.retiredRuntimeIds).size !== spec.retiredRuntimeIds.length
+    ) throw new Error("Build spec retired runtimes must be distinct runtimes outside every role.");
   }
   if (
     spec.repairPlanLimit !== undefined &&
@@ -327,11 +343,62 @@ export function recoverLegacyBuildSpec(
   return recovered;
 }
 
+/** The role models of a run: who plans, who implements, who reviews. */
+export interface NativeBuildCrew {
+  architectRuntimeId: string;
+  workerRuntimeIds: string[];
+  verifierRuntimeIds: string[];
+  reviewerRuntimeId?: string;
+}
+
+export function buildSpecCrew(spec: NativeBuildSpec): NativeBuildCrew {
+  return {
+    architectRuntimeId: spec.architectRuntimeId,
+    workerRuntimeIds: [...spec.workerRuntimeIds],
+    verifierRuntimeIds: [...spec.verifierRuntimeIds],
+    ...(spec.reviewerRuntimeId !== undefined ? { reviewerRuntimeId: spec.reviewerRuntimeId } : {}),
+  };
+}
+
+export function sameBuildCrew(left: NativeBuildCrew, right: NativeBuildCrew): boolean {
+  return left.architectRuntimeId === right.architectRuntimeId &&
+    left.reviewerRuntimeId === right.reviewerRuntimeId &&
+    JSON.stringify(left.workerRuntimeIds) === JSON.stringify(right.workerRuntimeIds) &&
+    JSON.stringify(left.verifierRuntimeIds) === JSON.stringify(right.verifierRuntimeIds);
+}
+
+/**
+ * The spec with the owner's new crew. Every runtime the run used before stays a retired candidate
+ * unless it keeps a role, and concurrency follows the worker count as it does at creation.
+ */
+export function withBuildCrew(spec: NativeBuildSpec, crew: NativeBuildCrew): NativeBuildSpec {
+  const active = new Set([crew.architectRuntimeId, ...crew.workerRuntimeIds, ...crew.verifierRuntimeIds]);
+  const retired = [...new Set([
+    ...(spec.retiredRuntimeIds ?? []),
+    spec.architectRuntimeId,
+    ...spec.workerRuntimeIds,
+    ...spec.verifierRuntimeIds,
+  ])].filter((id) => !active.has(id));
+  const { reviewerRuntimeId: _previousReviewer, retiredRuntimeIds: _previousRetired, ...rest } = cloneBuildSpec(spec);
+  const next: NativeBuildSpec = {
+    ...rest,
+    architectRuntimeId: crew.architectRuntimeId,
+    workerRuntimeIds: [...crew.workerRuntimeIds],
+    verifierRuntimeIds: [...crew.verifierRuntimeIds],
+    ...(crew.reviewerRuntimeId !== undefined ? { reviewerRuntimeId: crew.reviewerRuntimeId } : {}),
+    ...(retired.length > 0 ? { retiredRuntimeIds: retired } : {}),
+    maxConcurrency: Math.max(1, Math.min(4, crew.workerRuntimeIds.length)),
+  };
+  validateBuildSpec(next);
+  return next;
+}
+
 export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
   return {
     ...spec,
     workerRuntimeIds: [...spec.workerRuntimeIds],
     verifierRuntimeIds: [...spec.verifierRuntimeIds],
+    ...(spec.retiredRuntimeIds !== undefined ? { retiredRuntimeIds: [...spec.retiredRuntimeIds] } : {}),
     budgetLimits: { ...spec.budgetLimits },
     ...(spec.capabilityContract
       ? { capabilityContract: cloneRunnerCapabilityContract(spec.capabilityContract) }

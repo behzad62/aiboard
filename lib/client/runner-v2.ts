@@ -1810,6 +1810,30 @@ export async function selectNativeArchitectHandoff(
   );
 }
 
+/**
+ * The owner's new role models for a paused Build. The runner records the change, rewrites the run's
+ * spec and rebuilds its runtimes; the same crew is a no-op, and a running Build refuses.
+ */
+export async function changeNativeBuildCrew(
+  connection: NativeRunnerConnection,
+  runId: string,
+  crew: { architectRuntimeId: string; workerRuntimeIds: string[]; verifierRuntimeIds: string[]; reviewerRuntimeId?: string },
+  idempotencyKey: string,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeBuildProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/crew`,
+    {
+      method: "POST",
+      body: JSON.stringify({ ...crew, idempotencyKey }),
+      signal,
+    },
+    fetchImpl
+  );
+}
+
 export async function selectNativeVerifierRuntime(
   connection: NativeRunnerConnection,
   runId: string,

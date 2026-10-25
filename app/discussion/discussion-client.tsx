@@ -1012,6 +1012,19 @@ function DiscussionPageInner() {
         const fresh = getDiscussionData(discussion.id);
         setModelNames(fresh?.modelNames ?? {});
         setError(null);
+        // A paused native Build takes the new models at once; a running one gets them on Resume.
+        if (updated.mode === "build" && updated.runnerUrl && updated.runnerToken && updated.nativeBuildRunId) {
+          const connection = { url: updated.runnerUrl, token: updated.runnerToken };
+          const runId = updated.nativeBuildRunId;
+          void (async () => {
+            if ((await getNativeRun(connection, runId)).state !== "paused") return;
+            const { applyNativeBuildCrew } = await import("@/lib/client/native-build-engine");
+            await applyNativeBuildCrew(connection, updated, runId);
+            nativeAttachmentControllerRef.current?.wake();
+          })().catch((crewError) => {
+            setError(`Saved, but the Build kept its models: ${crewError instanceof Error ? crewError.message : String(crewError)}`);
+          });
+        }
         return true;
       } catch (err) {
         const message =
@@ -1459,6 +1472,9 @@ function DiscussionPageInner() {
           discussion.nativeBuildRunId
         );
         if (nativeRun.state === "paused") {
+          // Models changed while the Build was running apply now, before it continues.
+          const { applyNativeBuildCrew } = await import("@/lib/client/native-build-engine");
+          await applyNativeBuildCrew(connection, discussion, discussion.nativeBuildRunId);
           await commandNativeRun(
             connection,
             discussion.nativeBuildRunId,

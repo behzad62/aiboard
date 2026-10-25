@@ -41,6 +41,8 @@ export interface BuildControlPlane {
     idempotencyKey: string,
     requiredSequence?: number,
   ): Promise<SchedulerProjection>;
+  /** The owner's new role models for a paused run (absent on registries without stored specs). */
+  changeCrew?(runId: string, crew: import("./build-spec.js").NativeBuildCrew, idempotencyKey: string): Promise<SchedulerProjection>;
   selectVerifierRuntime(
     runId: string,
     runtimeId: string,
