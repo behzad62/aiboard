@@ -320,6 +320,8 @@ interface HarnessOptions {
   boundaryOutcome?: (taskId: string, call: number) => "passed" | "failed" | "unknown";
   /** Simulates an interrupted boundary run on the first call for this task. */
   boundaryThrowsOnceFor?: string;
+  /** The owner pauses during this task's first boundary check, whose commands then cannot start. */
+  boundaryPausedOnceFor?: string;
   loadInputsError?: string;
   defectClassesFor?: () => readonly string[];
   depth?: DeliveryDepthRunner;
@@ -443,7 +445,9 @@ function createHarness(options: HarnessOptions = {}): Harness {
       boundaryCalls.push(`${taskId}@${integrationRevision}`);
       boundaryAttempts.push(`${taskId}#${attempt}`);
       if (options.boundaryThrowsOnceFor === taskId && call === 1) throw new Error("runner interrupted mid-boundary");
-      const outcome = options.boundaryOutcome?.(taskId, call) ?? "passed";
+      const pausedMidCheck = options.boundaryPausedOnceFor === taskId && call === 1;
+      if (pausedMidCheck) harness.runtime.pause("user", "pause-mid-boundary");
+      const outcome = pausedMidCheck ? "unknown" : options.boundaryOutcome?.(taskId, call) ?? "passed";
       const passedReport = await junitReport(artifacts, 2, 0);
       const checks: DeliveryBoundaryCheck[] = (["build", "tests"] as const).map((checkId) => {
         const report = checkId === "tests"
@@ -1073,6 +1077,25 @@ test("N-R4-3: an interrupted boundary run retries under a fresh durable attempt 
     assert.equal(boundaries[0]!.passed, true);
     assert.deepEqual(harness.boundaryAttempts.filter((entry) => entry.startsWith("T1#")), ["T1#1", "T1#2"]);
     assert.equal(projection.delivery!.boundaryStarts![boundaries[0]!.boundaryId], 2);
+  } finally {
+    harness.close();
+  }
+});
+
+test("a boundary check cut short by the owner's pause records no failure and runs again after resume", async () => {
+  const harness = createHarness({ boundaryPausedOnceFor: "T1" });
+  try {
+    await assert.rejects(harness.until(accepted("T1"), 150), /Run paused \(user\).*delivery_boundary_interrupted/);
+    let projection = harness.projection();
+    assert.equal(projection.delivery?.boundaries.T1?.length ?? 0, 0, "the cut-short check recorded no verdict");
+    assert.equal(Object.keys(projection.repair?.issues ?? {}).length, 0, "no repair issue was opened");
+    harness.runtime.resume("resume-after-pause");
+    await harness.until(accepted("T1"), 40);
+    projection = harness.projection();
+    const boundaries = projection.delivery!.boundaries.T1!;
+    assert.equal(boundaries.length, 1);
+    assert.equal(boundaries[0]!.attempt, 2, "resume checks the boundary under a fresh attempt");
+    assert.equal(boundaries[0]!.passed, true);
   } finally {
     harness.close();
   }

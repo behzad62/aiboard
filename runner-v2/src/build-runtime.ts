@@ -4647,6 +4647,17 @@ export class BuildRuntime {
       const boundaryRiskTier = projection.delivery?.reviews[task.id]?.risk?.tier;
       const boundaryMilestoneGate = boundaryWouldClosePhaseWithTestsGate({ projection, taskId: task.id });
       let outcome: Awaited<ReturnType<DeliveryBoundaryDriver["check"]>>;
+      const boundarySignal = this.activeLifecycleSignal();
+      // A pause or stop during the check cuts its commands short ("Process launch was not
+      // proven"); recording that as a failed boundary opened a repair issue and spent an Architect
+      // turn on a recheck (tunnel run). The started attempt stays open and resume checks anew.
+      const boundaryInterrupted = async (): Promise<BuildStepResult> => {
+        await this.recordCleanupSearch("verification");
+        return {
+          status: this.projection().status === "paused" ? "paused" : "progressed",
+          action: "delivery_boundary_interrupted",
+        };
+      };
       try {
         outcome = await this.deliveryBoundary.check({
           runId: this.runId,
@@ -4654,16 +4665,18 @@ export class BuildRuntime {
           boundaryId,
           attempt,
           integrationRevision,
-          signal: this.activeLifecycleSignal(),
+          signal: boundarySignal,
           // R2-F1: explicit structured full stays separate from the milestone gate.
           // The boundary driver runs slow-tier for milestones (full when slow is absent).
           forceFullSuite: executionPolicy.forceFullSuite,
           ...(boundaryRiskTier || boundaryMilestoneGate ? { validationTierInput: { changeRisk: boundaryRiskTier ?? "high", isMilestoneGate: boundaryMilestoneGate } } : {}),
         });
       } catch (error) {
+        if (boundarySignal.aborted) return await boundaryInterrupted();
         await this.recordCleanupSearch("verification");
         return this.pauseForDeliveryGate(task.id, "delivery_boundary_unavailable", error instanceof Error ? error.message : String(error));
       }
+      if (boundarySignal.aborted) return await boundaryInterrupted();
       this.store.append({
         runId: this.runId,
         type: "delivery.boundary_checked",
