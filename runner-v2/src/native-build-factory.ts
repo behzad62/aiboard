@@ -1323,9 +1323,11 @@ export class NativeBuildFactory {
     });
     const verifierWorkspaceProvider = {
       workspaceKind: "independent-verifier" as const,
+      // Checkout preparation proves the snapshot chain (minutes after a restart): show it in the UI.
       create: async (targetRevision: string) =>
-        await verifierWorkspace.create(targetRevision),
-      createBaseline: (revision: string) => verifierBaselineWorkspace.create(revision),
+        await runActivity.track("Preparing the verifier checkout", () => verifierWorkspace.create(targetRevision)),
+      createBaseline: (revision: string) =>
+        runActivity.track("Preparing the verifier baseline checkout", () => verifierBaselineWorkspace.create(revision)),
       cleanupBaseline: () => verifierBaselineWorkspace.cleanup(),
     };
     const nativeVerifier = new NativeVerifierRuntime({
