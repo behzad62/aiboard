@@ -95,6 +95,14 @@ async function fixture(options: { refuseCrew?: string; closeFailures?: number } 
         integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "a".repeat(40) }) },
         maxConcurrency: current.maxConcurrency,
         workspaceFor: async () => "unused",
+        // As in production: the verifier policy is configured from the spec on every construction.
+        independentVerifier: {
+          candidateRuntimeIds: [...current.verifierRuntimeIds],
+          alwaysRequireIndependentVerifier: current.alwaysRequireIndependentVerifier,
+          twoPass: true,
+          assessRisk: async () => { throw new Error("unused"); },
+          verify: async () => { throw new Error("unused"); },
+        },
       });
       const store = scheduler;
       return {
@@ -139,6 +147,8 @@ test("the owner changes a paused run's models: recorded, spec rewritten, runtime
     assert.equal(f.created.length, 2, "the runtime was rebuilt");
     assert.deepEqual(f.created[1]!.workerRuntimeIds, newCrew.workerRuntimeIds);
     assert.deepEqual(f.specs.get(spec.runId).retiredRuntimeIds, ["deepseek:flash"]);
+    assert.deepEqual(projection.verifierPolicy?.candidateRuntimeIds, newCrew.verifierRuntimeIds, "the recorded verifier policy follows the crew");
+    assert.equal(projection.verifierPolicy?.twoPass, true);
     const changes = f.manager.events(spec.runId).filter((event) => event.type === "run.crew_changed");
     assert.equal(changes.length, 1);
     assert.equal(changes[0]!.actor.role, "user");

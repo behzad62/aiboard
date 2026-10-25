@@ -5647,11 +5647,24 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "user") throw new Error("Changing the Build crew requires the user.");
       if (current.status !== "paused") throw new Error("The Build crew can change only while the run is paused.");
       const architectRuntimeId = requiredString(event.payload, "architectRuntimeId");
-      if (stringArray(event.payload, "workerRuntimeIds").length === 0 || stringArray(event.payload, "verifierRuntimeIds").length === 0) {
+      const verifierRuntimeIds = stringArray(event.payload, "verifierRuntimeIds");
+      if (stringArray(event.payload, "workerRuntimeIds").length === 0 || verifierRuntimeIds.length === 0) {
         throw new Error("A Build crew needs at least one worker and one verifier.");
       }
       if (next.runtime.architect.runtimeId !== architectRuntimeId || next.runtime.architect.handoff) {
         next.runtime.architect = { runtimeId: architectRuntimeId };
+      }
+      // The recorded verifier policy names the run's verifier candidates; the rebuilt runtime
+      // configures it from the new spec, so the policy follows the crew.
+      if (next.verifierPolicy) {
+        next.verifierPolicy = parseVerifierPolicy({ ...next.verifierPolicy, candidateRuntimeIds: verifierRuntimeIds });
+      }
+      const selection = next.verifierSelection;
+      if (selection?.status === "required") {
+        next.verifierSelection = { ...selection, candidateRuntimeIds: [...verifierRuntimeIds] };
+      } else if (selection?.selectedRuntimeId && !verifierRuntimeIds.includes(selection.selectedRuntimeId)) {
+        // The owner removed the verifier they had picked; the next risky review asks again.
+        delete next.verifierSelection;
       }
       break;
     }
