@@ -402,8 +402,19 @@ export class ControlServer {
       if (request.method === "PUT") {
         const body = await readJson<ProviderConfigsBody>(request);
         if (!Array.isArray(body.configs)) invalidBody();
-        const merged = mergeProviderConfigs(store.load(), body.configs);
+        const previous = store.load();
+        const merged = mergeProviderConfigs(previous, body.configs);
         store.save(merged);
+        const changes = credentialChanges(previous, merged);
+        if (changes.length > 0 && this.builds?.providerCredentialsChanged) {
+          // Saving succeeded; a paused Build that cannot take the new credentials keeps running on
+          // the old ones until restart, which the log names.
+          try {
+            await this.builds.providerCredentialsChanged(changes);
+          } catch (error) {
+            console.warn(`[runner] provider credentials saved; a paused Build kept its old session: ${describeInternalError(error)}`);
+          }
+        }
         sendJson(response, 200, merged.map(redactProviderConfig));
         return;
       }
@@ -1449,6 +1460,23 @@ export class ControlServer {
     request.once("close", cleanup);
     response.once("close", cleanup);
   }
+}
+
+/** Runtimes whose request credentials (key, account-runner token, endpoint) differ after a save. */
+function credentialChanges(
+  previous: readonly RunnerProviderConfig[],
+  next: readonly RunnerProviderConfig[],
+): { runtimeId: string; providerId: string }[] {
+  const before = new Map(previous.map((config) => [config.runtimeId, config]));
+  return next
+    .filter((config) => {
+      const old = before.get(config.runtimeId);
+      return old !== undefined && (
+        old.secret !== config.secret || old.runnerToken !== config.runnerToken ||
+        old.baseUrl !== config.baseUrl || old.transport !== config.transport
+      );
+    })
+    .map((config) => ({ runtimeId: config.runtimeId, providerId: config.providerId }));
 }
 
 function mergeProviderConfigs(

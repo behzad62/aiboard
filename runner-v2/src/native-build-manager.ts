@@ -566,22 +566,60 @@ export class NativeBuildManager implements BuildControlPlane {
         handle.runtime.recordCrewChange(crew, idempotencyKey);
       });
       this.options.specs.replace(next);
-      this.handles.delete(runId);
-      this.handleShutdown.delete(runId);
-      try {
-        await handle.close();
-      } catch (error) {
-        // Keep the half-closed handle registered so runner shutdown retries its teardown; the
-        // recorded crew and rewritten spec make the restarted runner build the new runtimes.
-        this.handles.set(runId, handle);
-        throw new Error(
-          "The new models are saved, but the Build's previous session did not shut down cleanly. Restart the runner to apply them.",
-          { cause: error },
-        );
-      }
-      const rebuilt = await this.ensureRuntime(next);
+      const rebuilt = await this.rebuildRuntime(runId, handle, next, "The new models are saved");
       return rebuilt.runtime.projection();
     });
+  }
+
+  /**
+   * The owner saved new credentials for these runtimes' providers. Runtimes read provider configs
+   * once, at construction, so every paused Build that uses one is rebuilt on the new config, and a
+   * cooldown its provider earned under the old credential ends. A running Build keeps its session;
+   * a credential failure pauses it, and the owner's fix then lands here.
+   */
+  async providerCredentialsChanged(changes: readonly { runtimeId: string; providerId: string }[]): Promise<string[]> {
+    if (changes.length === 0) return [];
+    return await this.serialized(async () => {
+      const refreshed: string[] = [];
+      for (const [runId, handle] of [...this.handles.entries()]) {
+        if (handle.historical || this.pumps.has(runId)) continue;
+        if (handle.runtime.projection().status !== "paused") continue;
+        const spec = this.options.specs.get(runId);
+        const used = new Set([
+          spec.architectRuntimeId, ...spec.workerRuntimeIds, ...spec.verifierRuntimeIds, ...(spec.retiredRuntimeIds ?? []),
+        ]);
+        const providerIds = [...new Set(changes.filter((change) => used.has(change.runtimeId)).map((change) => change.providerId))];
+        if (providerIds.length === 0) continue;
+        await this.withRuntimeActivity(async () => {
+          handle.runtime.clearProviderCooldowns(providerIds, `provider-credentials:${Date.now()}`);
+        });
+        await this.rebuildRuntime(runId, handle, spec, "The new credentials are saved");
+        refreshed.push(runId);
+      }
+      return refreshed;
+    });
+  }
+
+  private async rebuildRuntime(
+    runId: string,
+    handle: NativeBuildRuntimeHandle,
+    spec: NativeBuildSpec,
+    saved: string,
+  ): Promise<NativeBuildRuntimeHandle> {
+    this.handles.delete(runId);
+    this.handleShutdown.delete(runId);
+    try {
+      await handle.close();
+    } catch (error) {
+      // Keep the half-closed handle registered so runner shutdown retries its teardown; the
+      // durable records make the restarted runner build the run's runtimes the new way.
+      this.handles.set(runId, handle);
+      throw new Error(
+        `${saved}, but the Build's previous session did not shut down cleanly. Restart the runner to apply them.`,
+        { cause: error },
+      );
+    }
+    return await this.ensureRuntime(spec);
   }
 
   async selectArchitectHandoff(

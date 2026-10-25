@@ -1261,6 +1261,26 @@ export class BuildRuntime {
     return this.projection();
   }
 
+  /**
+   * The owner replaced a provider's credentials: a cooldown recorded against the old credential
+   * (an authentication refusal, a spent key) no longer describes the provider, so it ends now.
+   */
+  clearProviderCooldowns(providerIds: readonly string[], idempotencyKey: string): SchedulerProjection {
+    const health = this.projection().runtime.providerHealth;
+    for (const providerId of providerIds) {
+      if (health[providerId]?.status !== "cooldown") continue;
+      this.store.append({
+        runId: this.runId,
+        type: "provider.health_changed",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "provider-configs" },
+        idempotencyKey: `${idempotencyKey}:${providerId}`,
+        payload: { state: { providerId, status: "healthy", consecutiveFailures: 0, updatedAt: Date.parse(this.clock()) } },
+      });
+    }
+    return this.projection();
+  }
+
   selectArchitectHandoff(runtimeId: string, idempotencyKey: string, requiredSequence?: number): SchedulerProjection {
     return this.selectRuntimeOffer("architect.handoff_selected", runtimeId, idempotencyKey, requiredSequence);
   }

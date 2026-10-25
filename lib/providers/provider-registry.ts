@@ -70,7 +70,7 @@ export interface ProviderDefinition {
   runtimeBehavior: ModelRuntimeBehavior;
 }
 
-export const ACCOUNT_RUNNER_VERSION = 28;
+export const ACCOUNT_RUNNER_VERSION = 29;
 const ACCOUNT_RUNNER_DOWNLOAD_HREF = "/aiboard-account-provider-runner.zip";
 const ACCOUNT_RUNNER_COMMAND = "npm install\nnpm start";
 const ACCOUNT_RUNNER_SETUP_HINT = "Download the account runner ZIP and extract every file into its own folder, separate from Runner V2. In that folder, run npm install, then npm start. One running instance serves ChatGPT, GitHub Copilot, and NVIDIA: reuse its printed URL and session token in each provider's settings and save.";

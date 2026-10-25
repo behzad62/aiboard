@@ -1946,6 +1946,43 @@ test("the crew route passes the owner's new role models to the Build and validat
   }
 });
 
+test("a provider-config save that changes a credential refreshes the paused Builds; a resend changes nothing", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-credentials-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  let configs: RunnerProviderConfig[] = [];
+  const refreshes: unknown[] = [];
+  const builds = {
+    projection: () => { throw new Error("unused"); },
+    providerCredentialsChanged: async (changes: unknown) => { refreshes.push(changes); return ["run_paused"]; },
+  } as unknown as BuildControlPlane;
+  const server = new ControlServer({
+    supervisor, token, checkGit: async () => gitReady, bootstrapRun, builds,
+    providerConfigs: {
+      load: () => configs.map((config) => ({ ...config })),
+      save: (next) => { configs = next.map((config) => ({ ...config })); },
+      close: () => undefined,
+    },
+  });
+  const chatgpt = {
+    runtimeId: "chatgpt:gpt-6.1-sol", providerId: "chatgpt", modelId: "gpt-6.1-sol", transport: "account-runner",
+    baseUrl: "http://127.0.0.1:1455", secret: "account", runnerToken: "token-before-restart", capabilities: ["*"], priority: 1,
+  };
+  try {
+    const { url } = await server.start(0);
+    const put = (config: unknown) => fetch(`${url}/v2/provider-configs`, authorized({ method: "PUT", body: JSON.stringify({ configs: [config] }) }));
+    assert.equal((await put(chatgpt)).status, 200);
+    assert.equal((await put(chatgpt)).status, 200);
+    assert.deepEqual(refreshes, [], "a first save and an identical resend (every resume) never rebuild a Build");
+    assert.equal((await put({ ...chatgpt, runnerToken: "token-after-restart" })).status, 200);
+    assert.deepEqual(refreshes, [[{ runtimeId: "chatgpt:gpt-6.1-sol", providerId: "chatgpt" }]]);
+    assert.equal((await put({ ...chatgpt, runnerToken: "token-after-restart", priority: 3 })).status, 200);
+    assert.equal(refreshes.length, 1, "a non-credential change does not rebuild");
+  } finally {
+    await server.close();
+    supervisor.close();
+  }
+});
+
 test("live model output SSE is authenticated and delivers isolated transient deltas", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-live-output-"));
   const fixture = await createSteeringControlFixture(directory);

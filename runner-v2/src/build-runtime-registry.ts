@@ -43,6 +43,8 @@ export interface BuildControlPlane {
   ): Promise<SchedulerProjection>;
   /** The owner's new role models for a paused run (absent on registries without stored specs). */
   changeCrew?(runId: string, crew: import("./build-spec.js").NativeBuildCrew, idempotencyKey: string): Promise<SchedulerProjection>;
+  /** Rebuilds paused Builds whose providers' credentials changed; returns the refreshed run ids. */
+  providerCredentialsChanged?(changes: readonly { runtimeId: string; providerId: string }[]): Promise<string[]>;
   selectVerifierRuntime(
     runId: string,
     runtimeId: string,

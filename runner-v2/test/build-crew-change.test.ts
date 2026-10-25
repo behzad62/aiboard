@@ -183,6 +183,34 @@ test("a crew change whose old session will not close keeps the session for shutd
   }
 });
 
+test("new credentials for a paused Build's provider end its cooldown and rebuild its runtimes", async () => {
+  const f = await fixture();
+  try {
+    // The tunnel run's shape: the account runner restarted with a new token and the Architect's call was refused.
+    f.scheduler().append({
+      runId: spec.runId, type: "provider.health_changed", occurredAt: "2026-10-25T00:00:03.000Z",
+      actor: { role: "runner", id: "runtime-router" }, idempotencyKey: "provider-health:auth",
+      payload: { state: { providerId: "deepseek", status: "cooldown", consecutiveFailures: 1, updatedAt: 1, failureKind: "authentication", failureMessage: "Unauthorized runner token", cooldownUntil: Date.now() + 86_400_000 } },
+    });
+    assert.equal(f.manager.projection(spec.runId).runtime.providerHealth.deepseek?.status, "cooldown");
+
+    assert.deepEqual(await f.manager.providerCredentialsChanged([{ runtimeId: "openai:other", providerId: "openai" }]), [], "a provider the Build does not use changes nothing");
+    assert.equal(f.created.length, 1);
+
+    assert.deepEqual(await f.manager.providerCredentialsChanged([{ runtimeId: "deepseek:flash", providerId: "deepseek" }]), [spec.runId]);
+    assert.equal(f.created.length, 2, "the runtimes were rebuilt on the saved config");
+    const projection = f.manager.projection(spec.runId);
+    assert.equal(projection.runtime.providerHealth.deepseek?.status, "healthy");
+    assert.equal(projection.status, "paused", "new credentials never resume the run");
+
+    await f.manager.resume(spec.runId, "resume:1");
+    assert.deepEqual(await f.manager.providerCredentialsChanged([{ runtimeId: "deepseek:flash", providerId: "deepseek" }]), [], "a running Build keeps its session");
+    assert.equal(f.created.length, 2);
+  } finally {
+    await f.close();
+  }
+});
+
 test("a crew the runner cannot construct is refused before anything changes", async () => {
   const f = await fixture({ refuseCrew: "openai:worker-b" });
   try {
