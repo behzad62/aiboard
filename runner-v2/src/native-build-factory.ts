@@ -4525,6 +4525,8 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
   if (authoritativeRevision === undefined) refuse("no authoritative revision is recorded");
   if (authoritativeRevision !== targetRevision) refuse(`target is not the authoritative revision ${authoritativeRevision!.slice(0, 12)}`);
   if (canonicalRevision === targetRevision) return;
+  const chainKey = `${targetRevision}..${canonicalRevision}`;
+  if (provenSnapshotAdvances.get(integrationManager)?.has(chainKey)) return;
   const ancestor = await input.execute({ cwd: integrationManager.path, args: ["merge-base", "--is-ancestor", targetRevision, canonicalRevision], allowFailure: true });
   if (ancestor.exitCode !== 0) refuse("target is not an ancestor of the canonical checkout");
   const history = await input.execute({ cwd: integrationManager.path, args: ["log", "--reverse", "--format=%H%x00%P%x00", `${targetRevision}..${canonicalRevision}`] });
@@ -4554,7 +4556,20 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
     count += 1;
   }
   if (count === 0 || parent !== canonicalRevision) refuse("the snapshot chain does not reach the canonical checkout");
+  let proven = provenSnapshotAdvances.get(integrationManager);
+  if (!proven) provenSnapshotAdvances.set(integrationManager, proven = new Set());
+  proven.add(chainKey);
 }
+
+/**
+ * Snapshot chains already proven, per integration manager. Commits are immutable and receipts are
+ * append-only, so a proven target..canonical chain stays proven while the target is still the
+ * authoritative revision, which every call checks first. Re-proving it walked every snapshot commit
+ * (several supervised git calls each, the history lookup repeated per commit) on every verification
+ * workspace create, resume and ownership check: about 30 s each with six snapshots, so final
+ * verification spent ~16 of its 18 minutes between checks (tunnel run). Only successes are cached.
+ */
+const provenSnapshotAdvances = new WeakMap<object, Set<string>>();
 
 // Observability is polled every few seconds; `git log` is a supervised process (~1s on Windows), and
 // the history only changes when the integration revision moves.

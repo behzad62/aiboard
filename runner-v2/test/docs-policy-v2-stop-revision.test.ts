@@ -1426,3 +1426,48 @@ test("docs-v2 plan critique targets the authoritative revision, never a stop-sna
   );
   assert.equal(verifierTargetRevision({ docsV2: false, projection: { integrationRevision: landed } as never, liveRevision: live }), live);
 });
+
+test("docs-v2 proves a kernel snapshot chain once, and authority is still checked on every call", async () => {
+  const target = "a".repeat(40);
+  const snapshot = "b".repeat(40);
+  let gitCalls = 0;
+  let snapshotReads = 0;
+  const execute = (async (options: { args: readonly string[] }) => {
+    gitCalls += 1;
+    if (options.args[0] === "merge-base") return { exitCode: 0, stdout: "", stderr: "" };
+    if (options.args[0] === "log") return { exitCode: 0, stdout: `${snapshot}\0${target}\0\n`, stderr: "" };
+    throw new Error(`unexpected git ${options.args.join(" ")}`);
+  }) as unknown as Parameters<typeof validateKernelSnapshotVerificationAdvance>[0]["execute"];
+  const integrationManager = {
+    path: "/integration",
+    findHandoffSnapshotCommit: async () => { snapshotReads += 1; return { commit: snapshot, parent: target }; },
+    readHandoffSnapshotFile: async () => { snapshotReads += 1; return { content: null, paths: ["docs/project/STATE.md"] }; },
+  } as unknown as Parameters<typeof validateKernelSnapshotVerificationAdvance>[0]["integrationManager"];
+  const projection = {
+    projectDocsPolicyVersion: 2,
+    integrationRevision: target,
+    projectDocs: {
+      pending: [],
+      snapshots: [{ commit: snapshot, parent: target, stopSequence: 1, paths: ["docs/project/STATE.md"], stateSkippedReason: "fixture" }],
+    },
+  } as unknown as SchedulerProjection;
+  const validate = (input: { projection: SchedulerProjection }) => validateKernelSnapshotVerificationAdvance({
+    targetRevision: target,
+    canonicalRevision: snapshot,
+    projection: input.projection,
+    integrationManager,
+    execute,
+  });
+
+  await validate({ projection });
+  assert.ok(gitCalls > 0 && snapshotReads > 0, "the first call proves the chain");
+  const proved = { gitCalls, snapshotReads };
+  await validate({ projection });
+  await validate({ projection });
+  assert.deepEqual({ gitCalls, snapshotReads }, proved, "a proven chain is not walked again");
+  await assert.rejects(
+    () => validate({ projection: { ...projection, integrationRevision: "c".repeat(40) } as SchedulerProjection }),
+    /target is not the authoritative revision/,
+    "a cached proof never outlives the target's authority",
+  );
+});
