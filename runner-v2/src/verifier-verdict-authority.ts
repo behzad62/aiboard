@@ -66,22 +66,32 @@ implements VerifierVerdictAuthority {
 
   requestReview(input: RequestVerifierReviewInput): VerifierReviewProjection {
     const current = this.currentReview(input.runId);
+    // The caller derives the id from the reviewer and its context, so choosing a verifier again
+    // after its review was superseded derives that old id; a re-request is that id plus ":r<n>".
+    const sameReview = (reviewId: string) =>
+      reviewId === input.reviewId || reviewId.startsWith(`${input.reviewId}:r`);
     // The same review re-requested (a restart or resume retrying the step) is already durable.
     // Re-appending it would drop the supersedesReviewId the original carried, and the changed
     // payload failed as an idempotency conflict that paused the run (tunnel run).
-    if (current?.reviewId === input.reviewId) return current;
+    if (current && sameReview(current.reviewId)) return current;
+    // A superseded review is never revived: its id is taken, and re-appending it with the new
+    // supersedesReviewId was an idempotency conflict that paused the run (tunnel run).
+    const earlierRequests = this.store.readRun(input.runId).filter((event) =>
+      event.type === "verifier.review_requested" &&
+      typeof event.payload.reviewId === "string" &&
+      sameReview(event.payload.reviewId)
+    ).length;
+    const reviewId = earlierRequests === 0 ? input.reviewId : `${input.reviewId}:r${earlierRequests}`;
     const supersedesReviewId =
-      current?.status === "requested" && current.reviewId !== input.reviewId
-        ? current.reviewId
-        : undefined;
+      current?.status === "requested" ? current.reviewId : undefined;
     this.store.append({
       runId: input.runId,
       type: "verifier.review_requested",
       occurredAt: input.occurredAt,
       actor: { role: "runner", id: this.runnerId },
-      idempotencyKey: `verifier:review:${input.reviewId}`,
+      idempotencyKey: `verifier:review:${reviewId}`,
       payload: {
-        reviewId: input.reviewId,
+        reviewId,
         targetRevision: input.targetRevision,
         finalVerificationGenerationId: input.finalVerificationGenerationId,
         runtime: { ...input.runtime },
@@ -94,7 +104,7 @@ implements VerifierVerdictAuthority {
       },
     });
     const review = this.currentReview(input.runId);
-    if (!review || review.reviewId !== input.reviewId) {
+    if (!review || review.reviewId !== reviewId) {
       throw new Error("Requested verifier review was not durably projected.");
     }
     return review;

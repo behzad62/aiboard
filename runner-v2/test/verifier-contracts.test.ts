@@ -887,6 +887,56 @@ test("a verifier call cancelled by a pause the owner already resumed retries, ne
   }
 });
 
+test("choosing a verifier whose review was superseded opens a new review, never revives the old id", () => {
+  const fixture = createFixture("runtime-reselect-superseded");
+  try {
+    const authority = new SchedulerVerifierVerdictAuthority(fixture.store);
+    const google = {
+      reviewId: "review-google",
+      runtimeId: "google:verifier",
+      providerId: "google",
+      modelId: "google/verifier-model",
+      sessionId: "session-google",
+    };
+    requestReviewFor(authority, google);
+    requestReviewFor(authority, {
+      reviewId: "review-fallback",
+      runtimeId: "fallback:verifier",
+      providerId: "fallback",
+      modelId: "fallback/independent-model",
+      sessionId: "session-fallback",
+    });
+    // Tunnel run: the fallback hit a usage limit and the owner chose the first verifier again. Its
+    // id is derived from the same reviewer and context, so it matched the superseded review.
+    requestReviewFor(authority, google);
+    const reselected = authority.currentReview(RUN_ID);
+    assert.equal(reselected?.reviewId, "review-google:r1");
+    assert.equal(reselected?.status, "requested");
+    // A restart retries the step with the derived id: it resumes the re-request.
+    requestReviewFor(authority, google);
+    const requests = fixture.store.readRun(RUN_ID).filter((event) => event.type === "verifier.review_requested");
+    assert.deepEqual(requests.map((event) => event.payload.reviewId), ["review-google", "review-fallback", "review-google:r1"]);
+    assert.equal(requests[2]!.payload.supersedesReviewId, "review-fallback");
+    authority.submitVerdict({
+      runId: RUN_ID,
+      reviewId: "review-google:r1",
+      targetRevision: REVISION,
+      sessionId: "session-google",
+      actor: { role: "verifier", id: "google:verifier" },
+      criterionVerdicts: completeVerdicts(fixture.evidenceIds),
+      occurredAt: "2026-08-27T00:00:05.000Z",
+    });
+    const projection = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(projection.verifier?.current?.verdict?.satisfied, true);
+    assert.deepEqual(projection.verifier?.history.map((review) => [review.reviewId, review.state, review.supersededByReviewId]), [
+      ["review-google", "superseded", "review-fallback"],
+      ["review-fallback", "superseded", "review-google:r1"],
+    ]);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("provider failure supersedes a pending review with an independent fallback", async () => {
   const fixture = createFixture("runtime-provider-fallback");
   let calls = 0;
