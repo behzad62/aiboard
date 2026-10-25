@@ -2306,7 +2306,9 @@ export class NativeBuildFactory {
           activeIsolationLeaseCount: executionIsolation.activeLeases().length,
           grantStates: executionGrants.activeSnapshots().flatMap((grant) =>
             grant.state === "revoked" ? [] : [grant.state]),
-          processes: processRecoveryRuntime.list?.() ?? [],
+          processes: processRecoveryRuntime.listGradually
+            ? await processRecoveryRuntime.listGradually()
+            : processRecoveryRuntime.list?.() ?? [],
           recovery: processRecovery.records(),
         });
         const finalGeneration = schedulerProjection.finalVerification?.current;

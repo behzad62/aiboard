@@ -319,10 +319,47 @@ test("process recovery: list skips ownership reads for unchanged non-recoverable
       executionGrants, permissionProfile: "full", workspacePath: root,
     });
     runtime.list!();
+    assert.deepEqual(ownershipChecks, ["orphan-1"], "a cold list never re-reads a non-recoverable record for ownership");
     ownershipChecks.length = 0;
     const listed = runtime.list!();
     assert.deepEqual(ownershipChecks, ["orphan-1"], "only recoverable-state records re-check live ownership");
     assert.deepEqual(listed.map((target) => [target.scope.invocationId, target.owned]), [["cleaned-1", false], ["orphan-1", true]]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("process recovery: a cold gradual list yields to the event loop, matches list, and shares one scan", async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "aiboard-recovery-list-gradual-"));
+  const executionGrants = createExecutionGrantAuthority({ clock: () => now });
+  const ids = Array.from({ length: 450 }, (_, index) => `proc-${String(index).padStart(3, "0")}`);
+  let reads = 0;
+  try {
+    const runtime = createSubprocessProcessRecoveryRuntime({
+      runtime: { recoverExceptional: async () => { throw Error("must not execute"); } },
+      store: {
+        readByInvocation: (id: string) => {
+          reads += 1;
+          return {
+            runId: "run", invocationId: id, logicalProcessId: id, revision: 1, ownerId: "owner", fencingToken: 1,
+            leaseExpiresAt: now.toISOString(), state: "cleaned", pendingEffects: [], cleanup: { state: "pending" }, requiredCapabilities: [],
+          } as never;
+        },
+        listRowRevisions: () => ids.map((invocationId) => ({ invocationId, revision: 1 })),
+      },
+      canRecoverExceptional: () => false,
+      isRecoverableState: (state) => state === "orphaned",
+      executionGrants, permissionProfile: "full", workspacePath: root,
+    });
+    let polled = false;
+    setImmediate(() => { polled = true; });
+    const [first, second] = await Promise.all([runtime.listGradually!(), runtime.listGradually!()]);
+    assert.equal(polled, true, "other work runs while the cold scan is in progress");
+    assert.equal(first, second, "overlapping callers share one scan");
+    assert.equal(reads, ids.length, "each record is read once");
+    assert.deepEqual(first.map((target) => target.scope.invocationId), ids);
+    assert.deepEqual(runtime.list!().map((target) => target.scope.invocationId), ids);
+    assert.equal(reads, ids.length, "the gradual scan fills the same cache list uses");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

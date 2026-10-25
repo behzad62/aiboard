@@ -528,8 +528,7 @@ class InMemoryDurableProcessStore extends AuthorityStore {
   }
   listRowRevisions(): Array<{ invocationId: string; revision: number }> {
     return [...this.records.values()]
-      .map((record) => ({ invocationId: record.invocationId, revision: record.revision }))
-      .sort((left, right) => left.invocationId.localeCompare(right.invocationId));
+      .map((record) => ({ invocationId: record.invocationId, revision: record.revision }));
   }
   close(): void {}
 }
@@ -674,7 +673,8 @@ class SqliteDurableProcessStore extends AuthorityStore {
     return (
       this.database
         .prepare(
-          "SELECT invocation_id, revision FROM durable_processes ORDER BY invocation_id",
+          // Insertion order: observability lists the latest settled processes.
+          "SELECT invocation_id, revision FROM durable_processes ORDER BY rowid",
         )
         .all() as unknown as Array<{ invocation_id: string; revision: number }>
     ).map((row) => ({ invocationId: row.invocation_id, revision: Number(row.revision) }));

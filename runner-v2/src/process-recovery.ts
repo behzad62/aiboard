@@ -34,9 +34,18 @@ export interface RecoveryExecutionResult {
 class RecoveryEffectNotDispatchedError extends Error {
   constructor(cause: unknown) { super("Recovery effect was not dispatched.", { cause }); this.name = "RecoveryEffectNotDispatchedError"; }
 }
+/** Records inspected between event-loop yields in `listGradually`. */
+const LIST_BATCH = 200;
+
 export interface ProcessRecoveryRuntime {
   inspect(invocationId: string): RecoveryTarget | undefined;
   list?(): readonly RecoveryTarget[];
+  /**
+   * `list`, yielding to the event loop between batches. A runner restart has no inspected cache,
+   * and the first list read every durable record (17k records, 900 MB on the tunnel run) in one
+   * synchronous pass that left the HTTP server unanswered for 94 s.
+   */
+  listGradually?(): Promise<readonly RecoveryTarget[]>;
   execute(request: RecoveryAuditRecord, authority: RecoveryExecutionAuthority): Promise<RecoveryExecutionResult>;
 }
 /**
@@ -85,7 +94,11 @@ export function createSubprocessProcessRecoveryRuntime(options: {
         backendIdentity: binding ? durableBackendIdentityFingerprint(binding) : "",
         birthFingerprint: binding ? durableBirthFingerprint(binding) : "",
       }),
-      owned: options.canRecoverExceptional(record.invocationId),
+      // The kernel predicate re-reads the record and is false outside the recoverable states; on a
+      // cold list that second read doubled the cost of every settled record.
+      owned: options.isRecoverableState && !options.isRecoverableState(record.state)
+        ? false
+        : options.canRecoverExceptional(record.invocationId),
       pendingEffects: record.pendingEffects.length > 0,
       capabilities: options.capabilities?.(record) ?? binding?.capabilities ?? {
         tree_termination: "unverified", crash_cleanup: "unverified",
@@ -108,6 +121,24 @@ export function createSubprocessProcessRecoveryRuntime(options: {
   // fixed for a given revision, so reuse the inspected view until the revision changes; `owned` is
   // live kernel authority and is always re-evaluated.
   const inspected = new Map<string, { revision: number; target: RecoveryTarget }>();
+  const listRow = ({ invocationId, revision }: { invocationId: string; revision: number }): RecoveryTarget | undefined => {
+    const cached = inspected.get(invocationId);
+    if (cached && cached.revision === revision) {
+      if (options.isRecoverableState && !options.isRecoverableState(cached.target.scope.state) && !cached.target.owned) {
+        return cached.target;
+      }
+      const owned = options.canRecoverExceptional(invocationId);
+      return owned === cached.target.owned ? cached.target : Object.freeze({ ...cached.target, owned }) as RecoveryTarget;
+    }
+    const value = inspect(invocationId);
+    if (!value) { inspected.delete(invocationId); return undefined; }
+    inspected.set(invocationId, { revision: value.scope.revision, target: value });
+    return value;
+  };
+  const forgetUnseen = (rows: readonly { invocationId: string }[]): void => {
+    const seen = new Set(rows.map((row) => row.invocationId));
+    for (const invocationId of inspected.keys()) if (!seen.has(invocationId)) inspected.delete(invocationId);
+  };
   const listInspected = (): readonly RecoveryTarget[] => {
     const rows = options.store.listRowRevisions?.();
     if (!rows) {
@@ -115,28 +146,32 @@ export function createSubprocessProcessRecoveryRuntime(options: {
         const value = inspect(invocationId); return value ? [value] : [];
       });
     }
-    const seen = new Set<string>();
-    const targets = rows.flatMap(({ invocationId, revision }) => {
-      seen.add(invocationId);
-      const cached = inspected.get(invocationId);
-      if (cached && cached.revision === revision) {
-        if (options.isRecoverableState && !options.isRecoverableState(cached.target.scope.state) && !cached.target.owned) {
-          return [cached.target];
-        }
-        const owned = options.canRecoverExceptional(invocationId);
-        return [owned === cached.target.owned ? cached.target : Object.freeze({ ...cached.target, owned }) as RecoveryTarget];
+    const targets = rows.flatMap((row) => { const value = listRow(row); return value ? [value] : []; });
+    forgetUnseen(rows);
+    return targets;
+  };
+  let gradualList: Promise<readonly RecoveryTarget[]> | undefined;
+  const listInspectedGradually = async (): Promise<readonly RecoveryTarget[]> => {
+    const rows = options.store.listRowRevisions?.();
+    if (!rows) return listInspected();
+    const targets: RecoveryTarget[] = [];
+    for (let start = 0; start < rows.length; start += LIST_BATCH) {
+      if (start > 0) await new Promise<void>((resolve) => setImmediate(resolve));
+      for (const row of rows.slice(start, start + LIST_BATCH)) {
+        const value = listRow(row);
+        if (value) targets.push(value);
       }
-      const value = inspect(invocationId);
-      if (!value) { inspected.delete(invocationId); return []; }
-      inspected.set(invocationId, { revision: value.scope.revision, target: value });
-      return [value];
-    });
-    for (const invocationId of inspected.keys()) if (!seen.has(invocationId)) inspected.delete(invocationId);
+    }
+    forgetUnseen(rows);
     return targets;
   };
   return Object.freeze({
     inspect,
     list: () => Object.freeze(listInspected()),
+    // Overlapping polls share one scan instead of each walking every record.
+    listGradually: () => gradualList ??= listInspectedGradually()
+      .then((targets) => Object.freeze(targets))
+      .finally(() => { gradualList = undefined; }),
     async execute(
       request: RecoveryAuditRecord,
       authority: RecoveryExecutionAuthority,
@@ -330,6 +365,10 @@ export function combineProcessRecoveryRuntimes(
   return Object.freeze({
     inspect,
     list: () => Object.freeze([...(subprocess.list?.() ?? []), ...(streaming.list?.() ?? [])]),
+    listGradually: async () => Object.freeze([
+      ...(subprocess.listGradually ? await subprocess.listGradually() : subprocess.list?.() ?? []),
+      ...(streaming.listGradually ? await streaming.listGradually() : streaming.list?.() ?? []),
+    ]),
     execute: async (request: RecoveryAuditRecord, authority: RecoveryExecutionAuthority) => {
       const target = inspect(request.scope.invocationId);
       if (!target || !sameRecoveryScope(target.scope, request.scope))
