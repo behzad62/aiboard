@@ -6,6 +6,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { ACCOUNT_RUNNER_VERSION } from "../lib/providers/provider-registry";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -402,8 +403,8 @@ try {
   const healthResponse = await fetch(`${baseUrl}/health`);
   const health = await healthResponse.json();
   check(
-    "account-provider runner reports version 28",
-    healthResponse.ok && health.version === 28,
+    "account-provider runner reports the published version",
+    healthResponse.ok && health.version === ACCOUNT_RUNNER_VERSION,
     health
   );
 
@@ -576,6 +577,32 @@ try {
     "prompt_cache_key differs per topic",
     turnOneKey !== otherTopic?.body.prompt_cache_key,
     { turnOneKey, otherTopicKey: otherTopic?.body.prompt_cache_key }
+  );
+
+  // A Build session is a multi-turn tool conversation: each turn appends assistant and tool
+  // messages, so a message-derived key changed every turn (a 234k-token Architect turn cached 4%).
+  const buildTurn = (sessionId: string, extra: Array<{ role: string; content: string }>) => captureChat({
+    model: "gpt-5.5",
+    sessionId,
+    runtimeMode: "build",
+    messages: [{ role: "system", content: "You are the Architect." }, { role: "user", content: "Plan the build." }, ...extra],
+  });
+  const buildOne = await buildTurn("architect:run_1", []);
+  const buildTwo = await buildTurn("architect:run_1", [
+    { role: "assistant", content: "Reading the plan." },
+    { role: "user", content: "Tool result: plan.md contents" },
+  ]);
+  const otherSession = await buildTurn("worker:run_1:task_a", []);
+  check(
+    "a Build session keeps one prompt_cache_key as its tool conversation grows",
+    typeof buildOne?.body.prompt_cache_key === "string" && buildOne.body.prompt_cache_key === buildTwo?.body.prompt_cache_key,
+    { buildOneKey: buildOne?.body.prompt_cache_key, buildTwoKey: buildTwo?.body.prompt_cache_key }
+  );
+  check(
+    "Build sessions get distinct, bounded prompt_cache_keys",
+    buildOne?.body.prompt_cache_key !== otherSession?.body.prompt_cache_key &&
+      String(buildOne?.body.prompt_cache_key).length <= 64,
+    { buildOneKey: buildOne?.body.prompt_cache_key, otherSessionKey: otherSession?.body.prompt_cache_key }
   );
 
   // The runner ships standalone and cannot import the orchestrator constant, so
