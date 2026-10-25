@@ -887,6 +887,33 @@ test("a verifier call cancelled by a pause the owner already resumed retries, ne
   }
 });
 
+test("a verdict citing unknown evidence is told exactly which ids do not resolve", () => {
+  const fixture = createFixture("verdict-unknown-evidence");
+  try {
+    const authority = new SchedulerVerifierVerdictAuthority(fixture.store);
+    requestReviewFor(authority, {
+      reviewId: "review-google",
+      runtimeId: "google:verifier",
+      providerId: "google",
+      modelId: "google/verifier-model",
+      sessionId: "session-google",
+    });
+    const cited = [fixture.evidenceIds[0]!, "evidence_invented", fixture.evidenceIds[2]!];
+    // Tunnel run: the bare message sent the verifier re-inspecting every task's evidence.
+    assert.throws(() => authority.submitVerdict({
+      runId: RUN_ID,
+      reviewId: "review-google",
+      targetRevision: REVISION,
+      sessionId: "session-google",
+      actor: { role: "verifier", id: "google:verifier" },
+      criterionVerdicts: completeVerdicts(cited),
+      occurredAt: "2026-08-27T00:00:05.000Z",
+    }), /^Error: Verifier verdict cites missing or foreign evidence: evidence_invented\. Cite only evidence recorded for this run\.$/);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("choosing a verifier whose review was superseded opens a new review, never revives the old id", () => {
   const fixture = createFixture("runtime-reselect-superseded");
   try {

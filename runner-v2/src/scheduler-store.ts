@@ -2736,6 +2736,24 @@ function latestProjectStateCommit(
  * must resolve to durable command evidence in this run, and the last cited
  * command's exit code must be the recorded exit code (exit code governs).
  */
+/**
+ * Throws naming every cited evidence id no record answers for. The bare "cites missing or foreign
+ * evidence" left the verifier re-inspecting every task's evidence to find which one (tunnel run).
+ */
+function assertEvidenceResolved(
+  label: string,
+  ids: readonly string[],
+  records: readonly { id: string }[],
+  scope: string,
+): void {
+  const found = new Set(records.map((record) => record.id));
+  const missing = [...new Set(ids)].filter((id) => !found.has(id));
+  if (missing.length === 0) return;
+  throw new Error(
+    `${label} cites missing or foreign evidence: ${missing.join(", ")}. Cite only evidence recorded for ${scope}.`,
+  );
+}
+
 function validateDeliveryCommandEvidence(
   event: SchedulerEvent,
   evidenceStore: EvidenceStore,
@@ -2772,9 +2790,7 @@ function validateDeliveryCommandEvidence(
     if (outcome.evidenceIds.length === 0) continue;
     const unique = [...new Set(outcome.evidenceIds)];
     const records = evidenceStore.getByIds({ runId: event.runId, ids: unique });
-    if (records.length !== unique.length) {
-      throw new Error(`The ${outcome.label} cites missing or foreign evidence.`);
-    }
+    assertEvidenceResolved(`The ${outcome.label}`, unique, records, "this run");
     const byId = new Map(records.map((record) => [record.id, record]));
     for (const id of unique) {
       if (byId.get(id)?.fact.kind !== "command") {
@@ -2857,11 +2873,9 @@ export function validateSchedulerEvidenceEvent(
   if (event.type === "user.guidance_acknowledged") {
     const resolution = event.payload.resolution;
     if (isRecord(resolution) && resolution.type === "no_plan_change") {
-      const evidenceIds = stringArray(resolution, "evidenceIds");
+      const evidenceIds = [...new Set(stringArray(resolution, "evidenceIds"))];
       const records = evidenceStore.getByIds({ runId: event.runId, ids: evidenceIds });
-      if (records.length !== evidenceIds.length) {
-        throw new Error("No-plan-change acknowledgement cites missing or foreign evidence.");
-      }
+      assertEvidenceResolved("No-plan-change acknowledgement", evidenceIds, records, "this run");
     }
     return;
   }
@@ -2902,9 +2916,7 @@ export function validateSchedulerEvidenceEvent(
       taskId: current.taskId,
       ids: [...new Set(evidenceIds)],
     });
-    if (records.length !== new Set(evidenceIds).size) {
-      throw new Error("Final verification repair plan cites missing or foreign evidence.");
-    }
+    assertEvidenceResolved("Final verification repair plan", evidenceIds, records, "this final-verification task");
     return;
   }
   if (
@@ -2940,9 +2952,7 @@ export function validateSchedulerEvidenceEvent(
       taskId: current.taskId,
       ids: [...new Set(evidenceIds)],
     });
-    if (records.length !== new Set(evidenceIds).size) {
-      throw new Error("Final verification review cites missing or foreign evidence.");
-    }
+    assertEvidenceResolved("Final verification review", evidenceIds, records, "this final-verification task");
     return;
   }
   if (event.type === "verifier.verdict_submitted") {
@@ -2960,9 +2970,7 @@ export function validateSchedulerEvidenceEvent(
       runId: event.runId,
       ids: uniqueEvidenceIds,
     });
-    if (records.length !== uniqueEvidenceIds.length) {
-      throw new Error("Verifier verdict cites missing or foreign evidence.");
-    }
+    assertEvidenceResolved("Verifier verdict", uniqueEvidenceIds, records, "this run");
     assertSatisfiedVerdictsCiteGreenEvidence(
       event.payload.criterionVerdicts as GreenEvidenceVerdict[],
       records,
@@ -2983,9 +2991,7 @@ export function validateSchedulerEvidenceEvent(
       runId: event.runId,
       ids: uniqueEvidenceIds,
     });
-    if (records.length !== uniqueEvidenceIds.length) {
-      throw new Error("Verifier repair plan cites missing or foreign evidence.");
-    }
+    assertEvidenceResolved("Verifier repair plan", uniqueEvidenceIds, records, "this run");
     return;
   }
   if (event.type === "task.transitioned" && event.payload.status === "submitted") {
