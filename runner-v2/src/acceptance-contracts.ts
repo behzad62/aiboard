@@ -74,29 +74,36 @@ export function assertSatisfiedVerdictsCiteGreenEvidence(
   label: string,
 ): void {
   const failing = new Set(failingCommandEvidenceIds(records));
+  // Every violation is reported at once: one per rejection made the verifier resubmit a 40 KB
+  // verdict per mistake (tunnel run). Each rule names its own remedy.
+  const issues: string[] = [];
   for (const verdict of verdicts) {
     const accepted = new Map(
       (verdict.acceptedFailures ?? []).map((failure) => [failure.evidenceId, failure]),
     );
     for (const failure of accepted.values()) {
       if (!failure.rationale.trim()) {
-        throw new Error(`${label} accepted failure ${failure.evidenceId} requires a rationale.`);
-      }
-      if (!failing.has(failure.evidenceId) || !verdict.evidenceIds.includes(failure.evidenceId)) {
-        throw new Error(
-          `${label} accepted failure ${failure.evidenceId} is not failing command evidence cited by that verdict.`,
+        issues.push(`${label} accepted failure ${failure.evidenceId} requires a rationale.`);
+      } else if (!verdict.evidenceIds.includes(failure.evidenceId)) {
+        issues.push(
+          `${label} accepted failure ${failure.evidenceId} is not cited by that verdict: add it to the verdict's evidenceIds, or remove the accepted failure.`,
+        );
+      } else if (!failing.has(failure.evidenceId)) {
+        issues.push(
+          `${label} accepted failure ${failure.evidenceId} is not failing command evidence: only a failed, signalled, timed-out or cancelled command can be accepted; remove the accepted failure.`,
         );
       }
     }
     if (verdict.verdict !== "satisfied") continue;
     for (const evidenceId of verdict.evidenceIds) {
       if (failing.has(evidenceId) && !accepted.has(evidenceId)) {
-        throw new Error(
-          `${label} cites failing command evidence ${evidenceId} for a satisfied verdict without an accepted failure.`,
+        issues.push(
+          `${label} cites failing command evidence ${evidenceId} for a satisfied verdict without an accepted failure: add an accepted failure with a rationale, or cite passing evidence instead.`,
         );
       }
     }
   }
+  if (issues.length > 0) throw new Error([...new Set(issues)].join("\n"));
 }
 
 export interface AcceptanceContractValidation {

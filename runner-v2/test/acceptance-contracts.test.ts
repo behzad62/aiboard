@@ -205,7 +205,38 @@ test("a satisfied verdict may cite failing command evidence only with an explici
       records,
       "Review decision",
     ),
-    /accepted failure green is not failing command evidence cited by that verdict/,
+    /accepted failure green is not failing command evidence: only a failed, signalled, timed-out or cancelled command can be accepted; remove the accepted failure\./,
+  );
+  // Tunnel run: a failing command accepted but left out of the verdict's own evidence.
+  assert.throws(
+    () => assertSatisfiedVerdictsCiteGreenEvidence(
+      [{
+        verdict: "satisfied",
+        evidenceIds: ["green"],
+        acceptedFailures: [{ evidenceId: "red", rationale: "probed before the build" }],
+      }],
+      records,
+      "Verifier verdict",
+    ),
+    /Verifier verdict accepted failure red is not cited by that verdict: add it to the verdict's evidenceIds, or remove the accepted failure\./,
+  );
+  // Every violation in one rejection, so a long verdict is resubmitted once, not once per mistake.
+  assert.throws(
+    () => assertSatisfiedVerdictsCiteGreenEvidence(
+      [
+        { verdict: "satisfied", evidenceIds: ["green"], acceptedFailures: [{ evidenceId: "red", rationale: "probed early" }] },
+        { verdict: "satisfied", evidenceIds: ["red"] },
+      ],
+      records,
+      "Verifier verdict",
+    ),
+    (error: Error) => {
+      assert.deepEqual(error.message.split("\n"), [
+        "Verifier verdict accepted failure red is not cited by that verdict: add it to the verdict's evidenceIds, or remove the accepted failure.",
+        "Verifier verdict cites failing command evidence red for a satisfied verdict without an accepted failure: add an accepted failure with a rationale, or cite passing evidence instead.",
+      ]);
+      return true;
+    },
   );
 });
 
