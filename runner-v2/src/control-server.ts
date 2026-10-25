@@ -333,7 +333,7 @@ export class ControlServer {
       const httpError = toHttpError(error);
       if (httpError.status >= 500) {
         // Operator diagnostics only: the response stays generic for internal errors.
-        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        const detail = describeInternalError(error);
         console.error(`[runner] ${request.method ?? "?"} ${(request.url ?? "/").split("?")[0]} -> ${httpError.status} ${httpError.code}: ${detail.slice(0, 2000)}`);
       }
       sendJson(response, httpError.status, {
@@ -1724,6 +1724,16 @@ function readAfterSequence(url: URL): number {
     throw new HttpError(400, "invalid_after", "after must be a non-negative integer.");
   }
   return value;
+}
+
+/** Operator log text, with an AggregateError's causes so a failed teardown names what failed. */
+function describeInternalError(error: unknown, depth = 0): string {
+  const head = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  if (depth > 2) return head;
+  const causes = error instanceof AggregateError
+    ? error.errors
+    : error instanceof Error && error.cause !== undefined ? [error.cause] : [];
+  return [head, ...causes.map((cause) => `  ${"  ".repeat(depth)}- ${describeInternalError(cause, depth + 1)}`)].join("\n");
 }
 
 function toHttpError(error: unknown): HttpError {

@@ -568,7 +568,17 @@ export class NativeBuildManager implements BuildControlPlane {
       this.options.specs.replace(next);
       this.handles.delete(runId);
       this.handleShutdown.delete(runId);
-      await handle.close();
+      try {
+        await handle.close();
+      } catch (error) {
+        // Keep the half-closed handle registered so runner shutdown retries its teardown; the
+        // recorded crew and rewritten spec make the restarted runner build the new runtimes.
+        this.handles.set(runId, handle);
+        throw new Error(
+          "The new models are saved, but the Build's previous session did not shut down cleanly. Restart the runner to apply them.",
+          { cause: error },
+        );
+      }
       const rebuilt = await this.ensureRuntime(next);
       return rebuilt.runtime.projection();
     });

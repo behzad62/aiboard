@@ -59,7 +59,8 @@ interface Fixture {
   close(): Promise<void>;
 }
 
-async function fixture(options: { refuseCrew?: string } = {}): Promise<Fixture> {
+async function fixture(options: { refuseCrew?: string; closeFailures?: number } = {}): Promise<Fixture> {
+  let closeFailures = options.closeFailures ?? 0;
   const root = mkdtempSync(join(tmpdir(), "aiboard-crew-change-"));
   const schedulerPath = join(root, "scheduler.sqlite");
   const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
@@ -105,7 +106,13 @@ async function fixture(options: { refuseCrew?: string } = {}): Promise<Fixture> 
         compact: async () => undefined,
         projectHandoff: async () => { throw new Error("unused"); },
         cleanup: async () => undefined,
-        close: async () => { store.close(); },
+        close: async () => {
+          if (closeFailures > 0) {
+            closeFailures -= 1;
+            throw new AggregateError([new Error("Subprocess inv-1 cleanup remains unverified in orphaned.")], "Could not close all native Build handle resources.");
+          }
+          store.close();
+        },
       };
     },
   });
@@ -145,6 +152,22 @@ test("the owner changes a paused run's models: recorded, spec rewritten, runtime
       f.manager.changeCrew(spec.runId, { ...newCrew, workerRuntimeIds: ["openai:worker-a"] }, "crew:3"),
       /Pause the Build/,
     );
+  } finally {
+    await f.close();
+  }
+});
+
+test("a crew change whose old session will not close keeps the session for shutdown and says how to apply", async () => {
+  const f = await fixture({ closeFailures: 1 });
+  try {
+    await assert.rejects(f.manager.changeCrew(spec.runId, newCrew, "crew:1"), (error: Error) => {
+      assert.match(error.message, /new models are saved.*Restart the runner/);
+      assert.match(String((error.cause as Error).message), /Could not close all/);
+      return true;
+    });
+    assert.deepEqual(f.specs.get(spec.runId).workerRuntimeIds, newCrew.workerRuntimeIds, "the restarted runner builds the new crew");
+    assert.equal(f.created.length, 1, "no second runtime was built over the unclosed one");
+    assert.equal(f.manager.projection(spec.runId).status, "paused", "the old session stays registered so shutdown retries its teardown");
   } finally {
     await f.close();
   }

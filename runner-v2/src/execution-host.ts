@@ -34,7 +34,7 @@ import {
 } from "./process-backend.js";
 import { createPosixProcessBackend } from "./posix-process-backend.js";
 import { NativeOwnedProcessBackend } from "./native-process-backend.js";
-import { InspectionConstructionOwner, assertSubprocessCleanupSettled, assertStreamingCleanupSettled, awaitInspectionConstruction } from "./inspection-cleanup.js";
+import { InspectionConstructionOwner, assertSubprocessCleanupSettled, assertStreamingCleanupSettled, awaitInspectionConstruction, inheritedSubprocessResidue } from "./inspection-cleanup.js";
 import {
   probeProcessHostSemantics,
   selectWindowsProcessBackendKinds,
@@ -591,6 +591,8 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
     let cleanupDutiesSettled = false;
     let streamingStoreClosed = false;
     let subprocessStoreClosed = false;
+    // Set by the first recover(): records only an exceptional recovery could settle.
+    let subprocessResidue: ReadonlyMap<string, number> | undefined;
     const managedRuntimeRegistration: { detach?: () => void } = {};
 
     const git = createRunGitExecutionContext({
@@ -630,6 +632,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
         }
         const streaming = await streamingRuntime.reconcileStartup(recoveryInput);
         const subprocess = await subprocessKernel.runtime.reconcileStartup();
+        subprocessResidue ??= inheritedSubprocessResidue(subprocessKernel.readOnlyStore);
         const isolationRecovery = await isolation.recoverOwnedLeases();
         return Object.freeze({
           subprocess: Object.freeze([...subprocess]),
@@ -707,7 +710,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
             }
             try {
               await subprocessKernel.runtime.reconcileStartup();
-              assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore);
+              assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore, subprocessResidue);
             } catch (error) { failures.push(error); }
             try {
               await input.cleanupFault?.({

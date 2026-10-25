@@ -44,10 +44,35 @@ export class InspectionConstructionOwner {
   }
 }
 
+/** States startup reconciliation never acts on: only an owner-approved exceptional recovery can. */
+const INERT_SUBPROCESS_STATES = new Set(["orphaned", "identity_mismatch", "backend_unavailable", "outcome_unknown"]);
+
+/**
+ * Records a run binding inherits that no routine reconciliation can settle: a launch a hard stop
+ * orphaned before it gained durable identity, or an effect whose outcome died with the old process.
+ * Captured after the binding's startup reconciliation, keyed to the revision it saw. Construction
+ * already accepts these; teardown exempts them too, but only while they stay exactly as inherited.
+ */
+export function inheritedSubprocessResidue(store: DurableProcessStore): ReadonlyMap<string, number> {
+  const residue = new Map<string, number>();
+  for (const invocationId of store.listRowIds()) {
+    let record;
+    try { record = store.readByInvocation(invocationId); } catch { continue; }
+    if (record && (INERT_SUBPROCESS_STATES.has(record.state) || record.pendingEffects.length > 0)) {
+      residue.set(invocationId, record.revision);
+    }
+  }
+  return residue;
+}
+
 /** Workload exit alone does not settle output, release, or unresolved effects. */
-export function assertSubprocessCleanupSettled(store: DurableProcessStore): void {
+export function assertSubprocessCleanupSettled(
+  store: DurableProcessStore,
+  inherited: ReadonlyMap<string, number> = new Map(),
+): void {
   for (const invocationId of store.listRowIds()) {
     const record = store.readByInvocation(invocationId);
+    if (record && inherited.get(invocationId) === record.revision) continue;
     const noLaunch = record && !record.backendBinding &&
       (record.state === "reused" || record.state === "launch_not_proven") &&
       record.cleanup.state === "not_required";

@@ -250,7 +250,7 @@ import { createPosixProcessBackend } from "./posix-process-backend.js";
 import { probeProcessHostSemantics, selectWindowsProcessBackendKinds, type ProcessHostSemanticFacts } from "./process-host-semantic-probes.js";
 import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "./windows-process-backend.js";
 import { NativeOwnedProcessBackend } from "./native-process-backend.js";
-import { assertSubprocessCleanupSettled } from "./inspection-cleanup.js";
+import { assertSubprocessCleanupSettled, inheritedSubprocessResidue } from "./inspection-cleanup.js";
 import { createWindowsProcessSemanticProbeSource } from "./windows-process-semantic-probes.js";
 import { createSubprocessRuntimeKernel, isExceptionalRecoveryState } from "./subprocess-runtime.js";
 import { providerProtocolProfile } from "./provider-protocol-profiles.js";
@@ -1108,15 +1108,17 @@ export class NativeBuildFactory {
       }),
     });
     subprocessWorkloadsSettled = false;
+    let subprocessResidue: ReadonlyMap<string, number> | undefined;
     // Register immediately: startup reconciliation and grant construction may fail.
     constructionResources.add("subprocess_runtime", async () => {
       await executionGrants?.revokeAll("cleanup");
       await subprocessKernel.runtime.reconcileStartup();
-      assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore);
+      assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore, subprocessResidue);
       subprocessKernel.readOnlyStore.close();
       subprocessWorkloadsSettled = true;
     }, true);
     await subprocessKernel.runtime.reconcileStartup();
+    subprocessResidue = inheritedSubprocessResidue(subprocessKernel.readOnlyStore);
     executionGrants = createExecutionGrantAuthority();
     commandExecution = createRuntimeBackedOneShotCommandExecutor({
       runtime: subprocessKernel.runtime,
