@@ -150,7 +150,9 @@ const verifierCard = discussionClientSource.slice(
   discussionClientSource.indexOf("Choose an independent verifier to continue"),
   discussionClientSource.indexOf("Select the Architect runtime to continue"),
 );
-assert.match(verifierCard, /disabled=\{verifierSelectionPending !== null\}/, "verifier buttons disable while one is pending");
+assert.match(verifierCard, /disabled=\{verifierSelectionPending !== null \|\| cooldown !== null\}/, "verifier buttons disable while one is pending or its provider cools down");
+assert.match(verifierCard, /verifierCandidateCooldown\(nativeProjection, runtimeId,/, "the card reads each candidate's provider cooldown");
+assert.doesNotMatch(verifierCard, /must differ from the Architect/, "the owner may choose the Architect's model; it reviews in a fresh context");
 assert.match(verifierCard, /role="alert"[^>]*>\{verifierSelectionError\}/, "the selection error renders inside the card");
 assert.match(discussionClientSource, /Choose an independent verifier to continue/);
 

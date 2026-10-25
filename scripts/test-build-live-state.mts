@@ -8,6 +8,7 @@ import {
   buildStopFallbackMessage,
   buildRunWorkflowStatus,
   durableBuildHandoffPanels,
+  verifierCandidateCooldown,
   nativeBuildTaskStatus,
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
@@ -1231,5 +1232,22 @@ assert.deepEqual(
     detail: "Canonical checkout revision changed after verification workspace creation. Resume retries from the saved checkpoint.",
   }
 );
+
+// Tunnel run: both ChatGPT models were offered as verifiers right after a usage limit, and the
+// router skips a cooling provider, so choosing one only brought the same card back.
+{
+  const now = Date.UTC(2026, 9, 25, 17, 0);
+  const projection = { runtime: { providerHealth: {
+    chatgpt: { providerId: "chatgpt", status: "cooldown", consecutiveFailures: 1, updatedAt: now - 60_000, failureKind: "usage_limit", cooldownUntil: now + 3_540_000 },
+    google: { providerId: "google", status: "healthy", consecutiveFailures: 0, updatedAt: now },
+    deepseek: { providerId: "deepseek", status: "cooldown", consecutiveFailures: 1, updatedAt: now - 7_200_000, failureKind: "rate_limit", cooldownUntil: now - 1 },
+  } } } as unknown as Parameters<typeof verifierCandidateCooldown>[0];
+  assert.deepEqual(verifierCandidateCooldown(projection, "chatgpt:gpt-6.1-sol", now), { until: now + 3_540_000, failureKind: "usage_limit" });
+  assert.deepEqual(verifierCandidateCooldown(projection, "chatgpt:gpt-6-luna", now), { until: now + 3_540_000, failureKind: "usage_limit" });
+  assert.equal(verifierCandidateCooldown(projection, "google:gemini-4-argon", now), null, "a healthy provider is selectable");
+  assert.equal(verifierCandidateCooldown(projection, "deepseek:deepseek-flash", now), null, "an expired cooldown is selectable again");
+  assert.equal(verifierCandidateCooldown(projection, "openai:gpt-6", now), null, "a provider with no recorded health is selectable");
+  assert.equal(verifierCandidateCooldown(null, "chatgpt:gpt-6.1-sol", now), null);
+}
 
 console.log("PASS Build live discussion state");

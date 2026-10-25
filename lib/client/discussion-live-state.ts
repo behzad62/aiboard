@@ -15,6 +15,7 @@ import type {
 } from "@/lib/client/runner-v2";
 import { mapNativeBuildUsageModels } from "@/lib/client/native-model-usage";
 import type { ModelPricing } from "@/lib/providers/pricing";
+import { parseModelId } from "@/lib/providers/base";
 
 export function applyDiscussionLiveStatus(
   discussion: Discussion,
@@ -670,6 +671,27 @@ export function createNativeBuildAttachmentController<
       generation += 1;
       if (scheduled !== undefined) options.cancelScheduled(scheduled);
     },
+  };
+}
+
+/**
+ * The cooldown that keeps the runner from using a verifier candidate. The runner offers every
+ * candidate but its router skips a provider still cooling down, so choosing one only brought the
+ * same card back (tunnel run: both ChatGPT models were offered right after a usage limit).
+ */
+export function verifierCandidateCooldown(
+  projection: Pick<NativeBuildProjection, "runtime"> | null,
+  runtimeId: string,
+  now: number,
+): { until: number; failureKind?: string } | null {
+  const health = projection?.runtime.providerHealth[parseModelId(runtimeId).providerId] as
+    | { status?: unknown; cooldownUntil?: unknown; failureKind?: unknown }
+    | undefined;
+  if (health?.status !== "cooldown" || typeof health.cooldownUntil !== "number") return null;
+  if (health.cooldownUntil <= now) return null;
+  return {
+    until: health.cooldownUntil,
+    ...(typeof health.failureKind === "string" ? { failureKind: health.failureKind } : {}),
   };
 }
 

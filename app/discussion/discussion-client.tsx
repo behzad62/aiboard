@@ -123,6 +123,7 @@ import {
   createNativeBuildAttachmentController,
   createNativeBuildFileLoader,
   durableBuildHandoffPanels,
+  verifierCandidateCooldown,
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
   nativeBuildPauseDescription,
@@ -333,6 +334,13 @@ function DiscussionPageInner() {
     requiredCapabilities: string[];
     candidateRuntimeIds: string[];
   } | null>(null);
+  // Re-reads provider cooldowns while the verifier card is open, so a candidate re-enables when its cooldown ends.
+  const [verifierCooldownClock, setVerifierCooldownClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!verifierSelection) return;
+    const timer = window.setInterval(() => setVerifierCooldownClock(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, [verifierSelection]);
   const [projectHandoff, setProjectHandoff] = useState<{
     summary: string;
     options: NativeProjectHandoffChoice[];
@@ -2495,18 +2503,29 @@ function DiscussionPageInner() {
         node: (
           <DecisionCard
             title="Choose an independent verifier to continue"
-            actions={verifierSelection.candidateRuntimeIds.map((runtimeId) => (
-              <Button
-                key={runtimeId}
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={verifierSelectionPending !== null}
-                onClick={() => void handleVerifierSelection(runtimeId)}
-              >
-                {verifierSelectionPending === runtimeId ? "Selecting…" : getModelDisplayName(runtimeId)}
-              </Button>
-            ))}
+            actions={verifierSelection.candidateRuntimeIds.map((runtimeId) => {
+              const cooldown = verifierCandidateCooldown(nativeProjection, runtimeId, verifierCooldownClock);
+              return (
+                <Button
+                  key={runtimeId}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={verifierSelectionPending !== null || cooldown !== null}
+                  title={cooldown
+                    ? `${cooldown.failureKind === "usage_limit" ? "Usage limit reached" : "Provider failed"}; the runner retries it after ${new Date(cooldown.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`
+                    : undefined}
+                  onClick={() => void handleVerifierSelection(runtimeId)}
+                >
+                  {verifierSelectionPending === runtimeId ? "Selecting…" : getModelDisplayName(runtimeId)}
+                  {cooldown && (
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      (until {new Date(cooldown.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})
+                    </span>
+                  )}
+                </Button>
+              );
+            })}
           >
             <p>{verifierSelectionReasonText(verifierSelection.reason)}</p>
             {verifierSelection.requiredCapabilities.length > 0 && (
@@ -2515,7 +2534,7 @@ function DiscussionPageInner() {
               </p>
             )}
             <p className="text-xs">
-              It must differ from the Architect and every accepted change author.
+              It must not have authored an accepted change. The Architect&apos;s own model is allowed and reviews in a fresh context.
             </p>
             {verifierSelectionError && (
               <p role="alert" className="text-destructive">{verifierSelectionError}</p>
