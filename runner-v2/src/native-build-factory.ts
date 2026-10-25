@@ -925,6 +925,7 @@ export class NativeBuildFactory {
     const deliveryReviewWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-review"));
     const deliveryBoundaryWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-boundary"));
     const testIntegrityBaselineWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("test-integrity-baseline"));
+    const finalVerificationProfileWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("fv-profile"));
     constructionResources.add(
       "independent_verifier_workspace",
       async () => {
@@ -938,7 +939,10 @@ export class NativeBuildFactory {
               await deliveryReviewWorkspace.cleanup();
             } finally {
               try { await deliveryBoundaryWorkspace.cleanup(); }
-              finally { await testIntegrityBaselineWorkspace.cleanup(); }
+              finally {
+                try { await testIntegrityBaselineWorkspace.cleanup(); }
+                finally { await finalVerificationProfileWorkspace.cleanup(); }
+              }
             }
           }
         }
@@ -2103,12 +2107,21 @@ export class NativeBuildFactory {
           }
         },
       },
-      finalVerificationProfileFor: async (targetRevision) =>
-        await finalVerificationProfiles.inspectAndPersist({
-          execute: requireGitRunner(gitContext).lifecycle("verification").run,
-          repositoryRoot: integrationManager.path,
-          targetRevision,
-        }),
+      // Stop snapshots advance the integration tip past the canonical revision, so inspecting the
+      // tip refused every final verification plan after a pause (tunnel run). Inspect an exact
+      // checkout of the target instead, as the delivery boundary does.
+      finalVerificationProfileFor: async (targetRevision) => {
+        const workspace = await finalVerificationProfileWorkspace.create(targetRevision);
+        try {
+          return await finalVerificationProfiles.inspectAndPersist({
+            execute: requireGitRunner(gitContext).lifecycle("verification").run,
+            repositoryRoot: workspace.path,
+            targetRevision,
+          });
+        } finally {
+          await finalVerificationProfileWorkspace.cleanup();
+        }
+      },
       discardFinalVerificationProfile: async (profile) => {
         if (profile.portLease) {
           await finalVerificationPorts.release(profile.portLease, spec.runId, profile.targetRevision);
@@ -4349,6 +4362,7 @@ export function nativeBuildCleanupRoots(stateDirectory: string, runId: string): 
     at("delivery-boundary", "independent-verifier"),
     at("test-integrity-baseline", "independent-verifier"),
     at("baseline", "independent-verifier"),
+    at("fv-profile", "independent-verifier"),
   ];
 }
 

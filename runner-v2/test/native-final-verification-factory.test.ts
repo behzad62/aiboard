@@ -183,3 +183,91 @@ function safeSegment(value: string): string {
   const readable = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "run";
   return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
 }
+
+test("the final-verification profile inspects the canonical revision after a stop snapshot advanced the integration tip", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard native final verification snapshot tip "));
+  const project = join(root, "user project");
+  const state = join(root, "runner state");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(project, "package.json"), JSON.stringify({
+    name: "snapshot-tip-fixture",
+    scripts: { build: "node build.mjs", test: "node --test" },
+  }, null, 2));
+  writeFileSync(join(project, "build.mjs"), "console.log('built');\n");
+  const runId = "native-factory-snapshot-tip";
+  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
+  const config: RunnerProviderConfig = {
+    runtimeId: "fixture:model",
+    providerId: "fixture",
+    modelId: "model",
+    transport: "openai-compatible",
+    baseUrl: "http://127.0.0.1:9",
+    secret: "unused",
+    capabilities: ["code"],
+    priority: 1,
+  };
+  const executionHost = createExecutionHost({
+    projectRoot: project,
+    stateDirectory: state,
+    artifacts: new ArtifactStore(join(state, "artifacts")),
+    ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
+  });
+  const factory = new NativeBuildFactory({
+    projectRoot: project,
+    stateDirectory: state,
+    providerConfigs: { load: () => [config], save: () => undefined, close: () => undefined },
+    executionHost,
+    baselineFor: () => baseline.revision,
+  });
+  let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  try {
+    handle = await factory.create(await factory.prepareSpec({
+      version: 2,
+      runId,
+      projectId: "fixture-project",
+      objective: "Verify after a pause.",
+      architectRuntimeId: config.runtimeId,
+      workerRuntimeIds: [config.runtimeId],
+      verifierRuntimeIds: [config.runtimeId],
+      alwaysRequireIndependentVerifier: false,
+      maxConcurrency: 1,
+      permissionProfile: "full",
+      runPolicy: "finish",
+      budgetLimits: {},
+      createdAt: "2026-10-25T00:00:00.000Z",
+      idempotencyKey: "native-factory-snapshot-tip",
+    }));
+    // A stop snapshot commits handoff docs on top of the canonical revision in the integration
+    // worktree without changing the scheduler's integration revision.
+    const worktrees = spawnSync("git", ["-C", project, "worktree", "list", "--porcelain"], { encoding: "utf8" }).stdout;
+    const integrationPath = worktrees.split(/\r?\n/)
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => line.slice("worktree ".length))
+      .find((path) => /integration/i.test(path));
+    assert.ok(integrationPath, worktrees);
+    mkdirSync(join(integrationPath, "docs", "project"), { recursive: true });
+    writeFileSync(join(integrationPath, "docs", "project", "STATE.md"), "# Stop snapshot\n");
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", ["-C", integrationPath, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", ...args], { encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    };
+    git("add", "docs/project/STATE.md");
+    git("commit", "-m", "AIBoard stop snapshot (paused)");
+    assert.notEqual(git("rev-parse", "HEAD"), baseline.revision);
+
+    const profileFor = (handle.runtime as unknown as {
+      finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
+    }).finalVerificationProfileFor;
+    assert.ok(profileFor);
+    const profile = await profileFor(baseline.revision);
+    assert.equal(profile.targetRevision, baseline.revision);
+    assert.deepEqual(profile.detectedSignals.map((signal) => signal.category).sort(), ["build", "tests"]);
+  } finally {
+    await handle?.close();
+    await factory.close();
+    await executionHost.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});

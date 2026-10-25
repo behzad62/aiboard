@@ -249,6 +249,8 @@ export function gitWorkingRootsForRun(projectRoot: string, stateDirectory: strin
     // their exact roots every post-snapshot verifier run is refused.
     join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("baseline")}`),
     join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("architect-commands")}`),
+    // The exact-revision checkout the final-verification profile is inspected on.
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("fv-profile")}`),
     join(resolve(stateDirectory), "git-baselines", segment(40, "run")),
   ]);
 }
