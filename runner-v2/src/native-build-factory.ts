@@ -1,6 +1,7 @@
 import { RunActivityBoard } from "./run-activity.js";
 import { workingTreeForRunner } from "./command-evidence-identity.js";
 import { projectPlanningReadiness, buildPlanningExportDocument } from "./planning-controls.js";
+import { openProvenSnapshotLinks } from "./proven-snapshot-links.js";
 import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
 import { testIntegrityPinDigest, testIntegrityProfileFindings } from "./test-integrity.js";
 import { explicitStartBlocked } from "./scheduler-store.js";
@@ -864,6 +865,13 @@ export class NativeBuildFactory {
     await integrationManager.initialize();
     await this.options.runtimeConstructionHooks?.afterAcquire?.("integration_workspace");
     const docsV2 = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).projectDocsPolicyVersion === 2;
+    if (docsV2) {
+      restoreProvenSnapshotLinks(
+        integrationManager,
+        join(runRoot, "proven-snapshot-links.jsonl"),
+        await loadOrCreateProcessStateKey(join(runRoot, "subprocess-runtime.key")),
+      );
+    }
     const snapshotVerificationOptions = docsV2 ? {
       validateCanonicalState: async (input: { targetRevision: string; canonicalRevision: string }) =>
         validateKernelSnapshotVerificationAdvance({
@@ -4649,6 +4657,11 @@ const provenSnapshotAdvances = new WeakMap<object, Set<string>>();
  * The cheap receipt and parent checks still run for every link on every call.
  */
 const provenSnapshotLinks = new WeakMap<object, Set<string>>();
+
+/** Seeds an integration manager's audited links from the run's durable record of them. */
+export function restoreProvenSnapshotLinks(integrationManager: object, path: string, key: Uint8Array): void {
+  provenSnapshotLinks.set(integrationManager, openProvenSnapshotLinks(path, key));
+}
 
 // Observability is polled every few seconds; `git log` is a supervised process (~1s on Windows), and
 // the history only changes when the integration revision moves.

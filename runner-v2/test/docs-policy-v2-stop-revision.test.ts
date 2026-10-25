@@ -36,7 +36,7 @@ import type { ChangeSet } from "../src/change-set.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
-import { snapshotNativeBuildAmbientEnvironment, validateKernelSnapshotVerificationAdvance, validatePinnedKernelSnapshotAdvance, verifierTargetRevision } from "../src/native-build-factory.js";
+import { snapshotNativeBuildAmbientEnvironment, restoreProvenSnapshotLinks, validateKernelSnapshotVerificationAdvance, validatePinnedKernelSnapshotAdvance, verifierTargetRevision } from "../src/native-build-factory.js";
 import {
   NativeBuildFactory,
   IntegrationManager,
@@ -1521,6 +1521,66 @@ test("docs-v2 audits each snapshot link once: a new stop snapshot re-audits only
   // A pinned checkout recorded at the first snapshot proves the same link without re-auditing it.
   await validatePinnedKernelSnapshotAdvance({ canonicalRevision: second, recordedCanonicalRevision: first, projection, integrationManager, execute });
   assert.deepEqual(audits, []);
+});
+
+test("docs-v2 audited snapshot links survive a runner restart; a damaged record is re-audited", async () => {
+  const target = "a".repeat(40);
+  const first = "b".repeat(40);
+  const second = "c".repeat(40);
+  const audits: string[] = [];
+  const execute = (async (options: { args: readonly string[] }) => {
+    if (options.args[0] === "merge-base") return { exitCode: 0, stdout: "", stderr: "" };
+    if (options.args[0] === "log") return { exitCode: 0, stdout: `${first}\0${target}\0\n${second}\0${first}\0\n`, stderr: "" };
+    throw new Error(`unexpected git ${options.args.join(" ")}`);
+  }) as unknown as Parameters<typeof validateKernelSnapshotVerificationAdvance>[0]["execute"];
+  const parents: Record<string, string> = { [first]: target, [second]: first };
+  const commits: Record<string, string> = { "stop-snapshot:1": first, "stop-snapshot:2": second };
+  // A restart builds a new integration manager, which the in-memory caches never knew.
+  const manager = () => ({
+    path: "/integration",
+    findHandoffSnapshotCommit: async (input: { snapshotKey: string }) => {
+      audits.push(`find:${input.snapshotKey}`);
+      const commit = commits[input.snapshotKey];
+      return commit ? { commit, parent: parents[commit] } : undefined;
+    },
+    readHandoffSnapshotFile: async () => ({ content: null, paths: ["docs/project/STATE.md"] }),
+  }) as unknown as Parameters<typeof validateKernelSnapshotVerificationAdvance>[0]["integrationManager"];
+  const receipt = (commit: string, stopSequence: number) => ({ commit, parent: parents[commit], stopSequence, paths: ["docs/project/STATE.md"], stateSkippedReason: "fixture" });
+  const projection = {
+    projectDocsPolicyVersion: 2,
+    integrationRevision: target,
+    projectDocs: { pending: [], snapshots: [receipt(first, 1), receipt(second, 2)] },
+  } as unknown as SchedulerProjection;
+  const root = mkdtempSync(join(tmpdir(), "aiboard-proven-links-"));
+  const path = join(root, "proven-snapshot-links.jsonl");
+  const key = new Uint8Array(32).fill(7);
+  const prove = async () => {
+    const integrationManager = manager();
+    restoreProvenSnapshotLinks(integrationManager as object, path, key);
+    audits.length = 0;
+    await validateKernelSnapshotVerificationAdvance({ targetRevision: target, canonicalRevision: second, projection, integrationManager, execute });
+    return [...audits];
+  };
+  try {
+    assert.deepEqual(await prove(), ["find:stop-snapshot:1", "find:stop-snapshot:2"]);
+    assert.deepEqual(await prove(), [], "a restart re-audits nothing already proven");
+    // An edited line fails its HMAC: that link alone is audited again, then recorded anew.
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    assert.equal(lines.length, 2);
+    const edited = JSON.parse(lines[0]!) as { link: string; mac: string };
+    edited.link = edited.link.replace(first, "d".repeat(40));
+    writeFileSync(path, `${JSON.stringify(edited)}\n${lines[1]}\nnot json\n`);
+    assert.deepEqual(await prove(), ["find:stop-snapshot:1"]);
+    assert.deepEqual(await prove(), []);
+    // A record signed under another key proves nothing.
+    const foreign = manager();
+    restoreProvenSnapshotLinks(foreign as object, path, new Uint8Array(32).fill(8));
+    audits.length = 0;
+    await validateKernelSnapshotVerificationAdvance({ targetRevision: target, canonicalRevision: second, projection, integrationManager: foreign, execute });
+    assert.deepEqual(audits, ["find:stop-snapshot:1", "find:stop-snapshot:2"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("docs-v2 pinned verification workspaces survive a kernel stop snapshot, never foreign movement", async () => {
