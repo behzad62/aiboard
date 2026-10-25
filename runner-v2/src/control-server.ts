@@ -705,6 +705,12 @@ export class ControlServer {
         builds.projection(runId);
         sendJson(response, 200, { schedule: builds.planningSchedule?.(runId) ?? null }); return;
       }
+      if (segments.length === 5 && segments[3] === "build" && segments[4] === "activity" && request.method === "GET") {
+        const builds = this.requireBuilds();
+        builds.projection(runId);
+        sendJson(response, 200, { activity: builds.activity?.(runId) ?? [] });
+        return;
+      }
       if (segments.length === 5 && segments[3] === "build" && segments[4] === "context-manifests" && request.method === "GET") {
         const builds = this.requireBuilds();
         builds.projection(runId);

@@ -1,3 +1,4 @@
+import { RunActivityBoard } from "./run-activity.js";
 import { workingTreeForRunner } from "./command-evidence-identity.js";
 import { projectPlanningReadiness, buildPlanningExportDocument } from "./planning-controls.js";
 import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
@@ -926,6 +927,7 @@ export class NativeBuildFactory {
     const deliveryBoundaryWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-boundary"));
     const testIntegrityBaselineWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("test-integrity-baseline"));
     const finalVerificationProfileWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("fv-profile"));
+    const runActivity = new RunActivityBoard();
     constructionResources.add(
       "independent_verifier_workspace",
       async () => {
@@ -1735,6 +1737,7 @@ export class NativeBuildFactory {
         cleanup: () => deliveryReviewWorkspace.cleanup(),
       },
       depth: createDeliveryDepthRunner({
+        activity: runActivity,
         runId: spec.runId,
         git: deliveryGit,
         artifacts: this.artifacts,
@@ -1778,6 +1781,7 @@ export class NativeBuildFactory {
       },
     };
     const deliveryBoundaryDriver: DeliveryBoundaryDriver = createDeliveryBoundaryDriver({
+      activity: runActivity,
       runId: spec.runId,
       git: deliveryGit,
       artifacts: this.artifacts,
@@ -1919,6 +1923,7 @@ export class NativeBuildFactory {
         }) : verificationWorkspace;
         const verification = new FinalVerificationRuntime({
           git: requireGitRunner(gitContext).lifecycle("verification").run,
+          activity: runActivity,
           workspaceManager: generationWorkspace,
           artifacts: this.artifacts,
           evidenceStore,
@@ -2003,6 +2008,7 @@ export class NativeBuildFactory {
         assertCurrentVerificationGeneration(input);
         const rerunVerification = new FinalVerificationRuntime({
           git: requireGitRunner(gitContext).lifecycle("verification").run,
+          activity: runActivity,
           workspaceManager: docsV2 ? new VerificationWorkspaceManager({
             execute: requireGitRunner(gitContext).lifecycle("verification").run,
             repositoryRoot: integrationManager.path,
@@ -2354,6 +2360,7 @@ export class NativeBuildFactory {
         };
       },
       contextManifests: () => contextManifests.listRun(spec.runId),
+      activity: () => runActivity.list(),
       transcript: async (afterSequence = 0) =>
         await sessions.transcript(spec.runId, afterSequence),
       files: async () => {

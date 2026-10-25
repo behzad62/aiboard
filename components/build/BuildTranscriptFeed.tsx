@@ -21,6 +21,22 @@ export interface BuildFeedMessage {
 
 export type BuildActorRole = "architect" | "worker" | "subagent" | "verifier" | "model";
 
+/** A runner step in progress outside model turns: a verification checkout, an install, a check. */
+export interface RunnerActivityRow {
+  id: number;
+  label: string;
+  startedAt: string;
+  taskId?: string;
+  taskTitle?: string;
+}
+
+/** "45s", "3m 12s": how long a runner step has been going. */
+export function runnerActivityElapsed(startedAt: string, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1000));
+  if (!Number.isFinite(seconds)) return "";
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 export interface ActiveBuildActor {
   id: string;
   role: BuildActorRole;
@@ -189,17 +205,26 @@ export function BuildTranscriptFeed({
   messages,
   active,
   activeActors = [],
+  runnerActivity = [],
   runtimeEfforts = {},
   onDownload,
 }: {
   messages: BuildFeedMessage[];
   active: boolean;
   activeActors?: ActiveBuildActor[];
+  runnerActivity?: RunnerActivityRow[];
   runtimeEfforts?: Readonly<Record<string, string>>;
   onDownload: () => void;
 }) {
   const sorted = useMemo(() => sortedBuildFeed(messages), [messages]);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [now, setNow] = useState(() => Date.now());
+  const hasRunnerActivity = runnerActivity.length > 0;
+  useEffect(() => {
+    if (!hasRunnerActivity) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [hasRunnerActivity]);
   const [manualExpansion, setManualExpansion] = useState<Record<string, boolean>>({});
   const tailRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
@@ -250,7 +275,7 @@ export function BuildTranscriptFeed({
           <Download className="h-3.5 w-3.5" /> Export
         </button>
       </div>
-      {sorted.length === 0 && activeActors.length === 0 ? (
+      {sorted.length === 0 && activeActors.length === 0 && runnerActivity.length === 0 ? (
         <div className="rounded-xl border border-dashed bg-card/30 px-6 py-14 text-center">
           <Sparkles className="mx-auto mb-3 h-7 w-7 text-primary/70" aria-hidden="true" />
           <h3 className="text-sm font-semibold">{active ? "Waiting for the first model turn" : "No transcript recorded yet"}</h3>
@@ -326,6 +351,19 @@ export function BuildTranscriptFeed({
               {actor.taskId && <TaskContextChip taskId={actor.taskId} taskTitle={actor.taskTitle} />}
               {actor.taskTitle && <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={actor.taskTitle}>{actor.taskTitle}</span>}
               <span className="ml-auto shrink-0 text-xs">Working…</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {runnerActivity.length > 0 && (
+        <div className={cn("mt-2 space-y-2", activeActors.length === 0 && "border-t pt-4")} aria-label="Runner steps in progress">
+          {runnerActivity.map((step) => (
+            <div key={step.id} className="flex min-w-0 flex-nowrap items-center gap-2 pl-2 text-sm text-muted-foreground">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground motion-safe:animate-pulse" aria-hidden="true" />
+              <span className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">runner</span>
+              {step.taskId && <TaskContextChip taskId={step.taskId} taskTitle={step.taskTitle} />}
+              <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={step.label}>{step.label}</span>
+              <span className="ml-auto shrink-0 text-xs tabular-nums">{runnerActivityElapsed(step.startedAt, now)}</span>
             </div>
           ))}
         </div>

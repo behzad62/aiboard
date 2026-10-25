@@ -48,6 +48,7 @@ import {
   type FinalVerificationReportDescriptor,
 } from "./final-verification-profile.js";
 import type { FinalVerificationPortLease } from "./final-verification-port-authority.js";
+import type { RunActivityTracker } from "./run-activity.js";
 import {
   captureFinalVerificationBrowserFailures,
   evaluateFinalVerificationBrowserPolicy,
@@ -207,6 +208,8 @@ export interface FinalVerificationRuntimeOptions {
    * verification workspace; the temp search later removes them.
    */
   tempRecorders?: Pick<TempRecordSink, "recorded">;
+  /** Reports the checkout, install and check steps to the owner's live view. */
+  activity?: RunActivityTracker;
 }
 
 export interface FinalVerificationRunInput {
@@ -393,6 +396,7 @@ export class FinalVerificationRuntime {
   private readonly ambientNodeOptions?: string;
   private readonly testNamePattern?: string;
   private readonly tempRecorders?: Pick<TempRecordSink, "recorded">;
+  private readonly activity?: RunActivityTracker;
   // Restarted at 0 in every runner process, a re-run after a restart reused the previous process's
   // call ids and failed with "Process idempotency conflict" (tunnel run).
   private runOrdinal: number;
@@ -408,6 +412,7 @@ export class FinalVerificationRuntime {
     this.ambientNodeOptions = options.ambientNodeOptions;
     this.testNamePattern = options.testNamePattern;
     this.tempRecorders = options.tempRecorders;
+    this.activity = options.activity;
     this.workspaceManager = options.workspaceManager;
     this.artifacts = options.artifacts;
     this.evidenceStore = options.evidenceStore;
@@ -533,7 +538,7 @@ export class FinalVerificationRuntime {
     const plan = planFinalVerification(input.plan);
     const check = plan.checks.find((entry) => entry.category === category);
     if (!check) throw new Error(`Final verification category ${category} is not planned.`);
-    const workspace = await this.createOrResumeCategoryWorkspace();
+    const workspace = await this.tracked("Preparing the verification checkout", () => this.createOrResumeCategoryWorkspace());
     await this.assertCurrentRevision(workspace);
     const execution = authoritativeExecutionInput(input, workspace.targetRevision);
     if (input.executionProfile.portLease && this.validatePortLease) {
@@ -542,7 +547,7 @@ export class FinalVerificationRuntime {
     const runOrdinal = ++this.runOrdinal;
     const generationId = this.generationId ?? generationFor(this.runId, workspace.targetRevision);
     const startedAt = this.clock();
-    const result = await this.runCheck({
+    const result = await this.tracked(`Running the ${categoryActivityName(category)} check`, () => this.runCheck({
       check,
       commands: category === "build" || category === "tests"
         ? execution.commands[category]
@@ -556,7 +561,7 @@ export class FinalVerificationRuntime {
       generationId,
       runOrdinal,
       signal: input.signal,
-    });
+    }));
     await this.assertCurrentRevision(workspace);
     const finishedAt = this.clock();
     return {
@@ -570,6 +575,10 @@ export class FinalVerificationRuntime {
       finishedAt,
       check: freezeCheck(result),
     };
+  }
+
+  private async tracked<T>(label: string, work: () => Promise<T>): Promise<T> {
+    return this.activity ? await this.activity.track(label, work, this.taskId) : await work();
   }
 
   private async assertCurrentRevision(workspace: VerificationWorkspace): Promise<void> {
@@ -638,12 +647,13 @@ export class FinalVerificationRuntime {
       return { ...base, green: true };
     }
     if (input.provisioning) {
-      const issue = await this.provisionDependencies(
-        input.provisioning,
+      const provisioning = input.provisioning;
+      const issue = await this.tracked(`Installing dependencies (${provisioning.manager})`, () => this.provisionDependencies(
+        provisioning,
         input.workspace,
         input.signal,
         `${input.generationId}:${check.category}:${input.runOrdinal}`,
-      );
+      ));
       if (issue) {
         base.issues.push(issue);
         return { ...base, green: false };
@@ -2454,4 +2464,8 @@ class BrowserBackendSessionAdapter implements FinalVerificationBrowserSession {
   async close(): Promise<void> {
     await this.backend.close(this.sessionId);
   }
+}
+
+function categoryActivityName(category: FinalVerificationCategory): string {
+  return category === "runtime_smoke" ? "runtime smoke" : category;
 }

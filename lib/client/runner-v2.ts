@@ -1597,6 +1597,35 @@ export async function getNativeBuildObservability(
   );
 }
 
+/** A runner step in progress outside model turns (verification checkout, dependency install, check). */
+export interface NativeBuildActivity {
+  id: number;
+  label: string;
+  startedAt: string;
+  taskId?: string;
+}
+
+/** Runner steps in progress; empty from a runner that predates the activity route. */
+export async function getNativeBuildActivity(
+  connection: NativeRunnerConnection,
+  runId: string,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
+): Promise<NativeBuildActivity[]> {
+  try {
+    const body = await request<{ activity?: NativeBuildActivity[] }>(
+      connection,
+      `/v2/runs/${encodeURIComponent(runId)}/build/activity`,
+      { signal },
+      fetchImpl
+    );
+    return Array.isArray(body.activity) ? body.activity : [];
+  } catch (error) {
+    if (error instanceof NativeRunnerError && error.status === 404) return [];
+    throw error;
+  }
+}
+
 export async function getNativeProcessRecovery(
   connection: NativeRunnerConnection,
   runId: string,

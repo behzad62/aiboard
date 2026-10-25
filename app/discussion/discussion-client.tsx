@@ -155,6 +155,7 @@ import {
   getNativeBuildEvents,
   getNativeBuildFiles,
   getNativeBuildObservability,
+  getNativeBuildActivity,
   registerNativePlanningSource,
   getNativeBuildTranscript,
   getNativeBuildUsage,
@@ -169,6 +170,7 @@ import {
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
   type NativeBuildObservability,
+  type NativeBuildActivity,
   type NativeBuildProjection,
 } from "@/lib/client/runner-v2";
 import { nativeBuildActivityEntries } from "@/lib/client/native-build-activity";
@@ -297,6 +299,7 @@ function DiscussionPageInner() {
   const [buildUsage, setBuildUsage] = useState<BuildUsageWindow | null>(null);
   const [nativeObservability, setNativeObservability] =
     useState<NativeBuildObservability | null>(null);
+  const [nativeActivity, setNativeActivity] = useState<NativeBuildActivity[]>([]);
   const [nativeProjection, setNativeProjection] =
     useState<NativeBuildProjection | null>(null);
   const [specificationBusy, setSpecificationBusy] = useState(false);
@@ -1136,7 +1139,7 @@ function DiscussionPageInner() {
         // Observability is a large safety/audit snapshot; it does not need the 2s status cadence.
         const reuseObservability = cachedObservability?.runId === runId &&
           Date.now() - cachedObservability.at < OBSERVABILITY_REFRESH_MS;
-        const [projection, usage, run, events, observability, transcript] =
+        const [projection, usage, run, events, observability, transcript, activity] =
           await Promise.all([
             getNativeBuild(connection, runId),
             getNativeBuildUsage(connection, runId),
@@ -1149,6 +1152,8 @@ function DiscussionPageInner() {
                   return value;
                 }),
             getNativeBuildTranscript(connection, runId, cursor),
+            // Checkouts, installs and checks run for minutes with no event; show them as they run.
+            getNativeBuildActivity(connection, runId).catch(() => [] as NativeBuildActivity[]),
           ]);
         // Files are slow on large repositories (and can fail transiently); they must never hold back
         // the run status. Use the cached snapshot now and apply a fresh one when it arrives.
@@ -1179,10 +1184,11 @@ function DiscussionPageInner() {
           events,
           observability,
           transcript,
+          activity,
           files,
         };
       },
-      apply: ({ runId, projection, usage, run, events, observability, transcript, files }) => {
+      apply: ({ runId, projection, usage, run, events, observability, transcript, activity, files }) => {
         setNativeAttach(null);
         if (runId !== persistedRunId || hasPendingProvenance) {
           const updatedAt = new Date().toISOString();
@@ -1235,6 +1241,7 @@ function DiscussionPageInner() {
         const handoffs = durableBuildHandoffPanels(projection, run.state);
         setNativeProjection(projection);
         setNativeObservability(observability);
+        setNativeActivity(activity);
         setArchitectHandoff(handoffs.architect);
         setVerifierSelection(handoffs.verifier);
         setProjectHandoff(handoffs.project);
@@ -2722,6 +2729,12 @@ function DiscussionPageInner() {
                 ...(identity?.taskTitle ? { taskTitle: identity.taskTitle } : {}),
               };
             }) : []}
+          runnerActivity={isActive ? nativeActivity.map((step) => ({
+            ...step,
+            ...(step.taskId && nativeProjection?.tasks[step.taskId]
+              ? { taskTitle: nativeProjection.tasks[step.taskId]!.objective }
+              : {}),
+          })) : []}
           onDownload={downloadTranscript}
         />
         {discussion.nativeBuildRunId && !nativeProjection && (

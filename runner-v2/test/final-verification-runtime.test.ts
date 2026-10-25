@@ -19,6 +19,7 @@ import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { type FinalVerificationCommand, type FinalVerificationPlan } from "../src/final-verification-runtime.js";
 import { FinalVerificationRuntime } from "./support/git-fixture.js";
 import { VerificationWorkspaceManager } from "./support/git-fixture.js";
+import { RunActivityBoard } from "../src/run-activity.js";
 import { createProductionOneShotCommandFixture, createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
 
@@ -742,3 +743,58 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
     await delay(25);
   }
 }
+
+test("a verification category reports its checkout, install and check steps while they run", async (t) => {
+  const fixture = await createFixture("activity");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    integrationManager: fixture.integration,
+  });
+  const board = new RunActivityBoard();
+  const seen: string[][] = [];
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    taskId: "final-verification-task",
+    generationId: "activity-generation",
+    attempt: 1,
+    currentIntegrationRevision: () => fixture.integration.revision,
+    execution: createTestOneShotCommandExecutor(t, { artifacts }),
+    activity: {
+      track: (label, work, taskId) => board.track(label, async () => {
+        seen.push(board.list().map((activity) => `${activity.taskId}: ${activity.label}`));
+        return await work();
+      }, taskId),
+    },
+  });
+  try {
+    const build = { label: "build", executable: process.execPath, args: ["-e", "process.stdout.write('built')"] };
+    const provisioning = {
+      manager: "npm" as const,
+      lockfile: "package-lock.json",
+      command: { label: "install dependencies", executable: process.execPath, args: ["-e", "process.stdout.write('installed')"] },
+    };
+    const category = await runtime.runCategory({
+      plan: buildOnlyPlan(),
+      executionProfile: { ...commandProfile(fixture.integration.revision, { build: [build] }), provisioning },
+      commands: { build: [build] },
+    }, "build");
+    assert.equal(category.check.green, true, category.check.issues.join("\n"));
+    assert.deepEqual(seen, [
+      ["final-verification-task: Preparing the verification checkout"],
+      ["final-verification-task: Running the build check"],
+      ["final-verification-task: Running the build check", "final-verification-task: Installing dependencies (npm)"],
+    ]);
+    assert.deepEqual(board.list(), [], "finished steps leave the board");
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});

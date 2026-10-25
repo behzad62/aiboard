@@ -1,3 +1,4 @@
+import type { RunActivityTracker } from "./run-activity.js";
 import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import { randomUUID, createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -940,6 +941,7 @@ async function readRunReportOnce(
 export async function runDeliveryCategory(input: {
   category: "tests" | "build";
   ambientNodeOptions?: string;
+  activity?: RunActivityTracker;
   profile: FinalVerificationExecutionProfile;
   manager: VerificationWorkspaceManager;
   runId: string;
@@ -980,6 +982,7 @@ export async function runDeliveryCategory(input: {
     generationId: input.generationId,
     checkCategory: input.category,
     execution: input.execution,
+    ...(input.activity ? { activity: input.activity } : {}),
   });
   const profile: FinalVerificationExecutionProfile = { ...input.profile, commands: { ...input.profile.commands } };
   delete profile.runtimeSmoke;
@@ -1133,6 +1136,7 @@ export interface DeliveryExecutionOptions {
   clock?: () => string;
   /** IV-2: explicit structured validation mandates (default: none). */
   validationMandates?: TaskValidationMandates;
+  activity?: RunActivityTracker;
 }
 
 /**
@@ -1169,6 +1173,7 @@ export function createDeliveryDepthRunner(options: DeliveryExecutionOptions): De
         ? tierCommandsForTier(profile.tiers, selectValidationTier({ changeRisk: input.changeRisk, isMilestoneGate: false, isFinalCandidate: false }))
         : undefined;
       const tests = await runDeliveryCategory({
+        ...(options.activity ? { activity: options.activity } : {}),
         ...(depthTier && input.changeRisk ? { tierCommands: depthTier, validationTier: selectValidationTier({ changeRisk: input.changeRisk, isMilestoneGate: false, isFinalCandidate: false }) } : {}),
         ...(ambientNodeOptions !== undefined ? { ambientNodeOptions } : {}),
         category: "tests",
@@ -1337,6 +1342,7 @@ async function runDeliveryProbe(input: {
  */
 export function createDeliveryBoundaryDriver(options: {
   runId: string;
+  activity?: RunActivityTracker;
   git: GitRunner;
   artifacts: ArtifactStore;
   evidenceStore: EvidenceStore;
@@ -1453,6 +1459,7 @@ export function createDeliveryBoundaryDriver(options: {
           const ambientNodeOptions = options.ambientNodeOptions?.();
           const run = await runDeliveryCategory({
             ...(ambientNodeOptions !== undefined ? { ambientNodeOptions } : {}),
+            ...(options.activity ? { activity: options.activity } : {}),
             category,
             profile,
             manager: workspace.manager,
