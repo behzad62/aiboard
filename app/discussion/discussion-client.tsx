@@ -223,6 +223,7 @@ const ACTIVE_STATUSES = new Set(["completed", "failed", "stopped"]);
 // Activity-log persistence is tab-session only by design: it survives
 // navigating away and back, but closing the tab clears it (sessionStorage).
 const ACTIVITY_LOG_CAP = 40;
+const VERIFIER_SELECTION_TIMEOUT_MS = 60_000;
 const activityKey = (discussionId: string) => `activity-log:${discussionId}`;
 
 function loadDiagnostics(discussionId: string): DiagnosticEntry[] {
@@ -324,6 +325,8 @@ function DiscussionPageInner() {
   // The owner's pick on the handoff card: which runtime is being applied, and why the last try failed.
   const [architectHandoffPending, setArchitectHandoffPending] = useState<string | null>(null);
   const [architectHandoffError, setArchitectHandoffError] = useState<string | null>(null);
+  const [verifierSelectionPending, setVerifierSelectionPending] = useState<string | null>(null);
+  const [verifierSelectionError, setVerifierSelectionError] = useState<string | null>(null);
   const [verifierSelection, setVerifierSelection] = useState<{
     requiredSequence?: number;
     reason: string;
@@ -1564,25 +1567,42 @@ function DiscussionPageInner() {
       !discussion?.runnerUrl ||
       !discussion.runnerToken ||
       !discussion.nativeBuildRunId
-    ) return;
+    ) {
+      // Never a silent no-op: the owner clicked and must see why nothing happened (tunnel run).
+      setVerifierSelectionError("This session has no runner connection; reconnect the runner and try again.");
+      return;
+    }
+    setVerifierSelectionPending(runtimeId);
+    setVerifierSelectionError(null);
     try {
+      // Same as the Architect handoff: credentials and models saved since the pause reach the run first.
+      const { applyNativeBuildCrew } = await import("@/lib/client/native-build-engine");
+      await applyNativeBuildCrew(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        discussion,
+        discussion.nativeBuildRunId,
+      );
+      // A busy runner must not leave the button hanging; the answer is idempotent, so a retry is safe.
       const projection = await selectNativeVerifierRuntime(
         { url: discussion.runnerUrl, token: discussion.runnerToken },
         discussion.nativeBuildRunId,
         runtimeId,
         `verifier-handoff:${discussion.nativeBuildRunId}:${runtimeId}`,
-        fetch, undefined, verifierSelection?.requiredSequence,
+        fetch, AbortSignal.timeout(VERIFIER_SELECTION_TIMEOUT_MS), verifierSelection?.requiredSequence,
       );
       setNativeProjection(projection);
       setVerifierSelection(null);
-      setError(null);
       nativeAttachmentControllerRef.current?.wake();
     } catch (selectionError) {
-      setError(
-        selectionError instanceof Error
-          ? selectionError.message
-          : "Could not select the independent verifier runtime."
+      setVerifierSelectionError(
+        selectionError instanceof DOMException && selectionError.name === "TimeoutError"
+          ? "The runner did not answer in time; it may still be busy. Try again."
+          : selectionError instanceof Error
+            ? selectionError.message
+            : "Could not select the independent verifier runtime."
       );
+    } finally {
+      setVerifierSelectionPending(null);
     }
   };
 
@@ -2481,9 +2501,10 @@ function DiscussionPageInner() {
                 type="button"
                 size="sm"
                 variant="outline"
+                disabled={verifierSelectionPending !== null}
                 onClick={() => void handleVerifierSelection(runtimeId)}
               >
-                {getModelDisplayName(runtimeId)}
+                {verifierSelectionPending === runtimeId ? "Selecting…" : getModelDisplayName(runtimeId)}
               </Button>
             ))}
           >
@@ -2496,6 +2517,9 @@ function DiscussionPageInner() {
             <p className="text-xs">
               It must differ from the Architect and every accepted change author.
             </p>
+            {verifierSelectionError && (
+              <p role="alert" className="text-destructive">{verifierSelectionError}</p>
+            )}
           </DecisionCard>
         ),
       });

@@ -138,6 +138,20 @@ assert.doesNotMatch(
   /handleResume\s*\(/,
   "verifier selection already wakes the durable Runner pump and must not issue a second resume"
 );
+assert.doesNotMatch(
+  verifierSelectionHandler.slice(0, verifierSelectionHandler.indexOf("const handleExtendRepairCycles")),
+  /\)\s*return;/,
+  "a verifier click must never be a silent no-op (tunnel run: the owner clicked and nothing happened)"
+);
+assert.match(verifierSelectionHandler, /setVerifierSelectionPending\(runtimeId\)/, "the clicked verifier shows it is pending");
+assert.match(verifierSelectionHandler, /setVerifierSelectionError\(/, "a failed selection is reported on its card");
+assert.match(verifierSelectionHandler, /AbortSignal\.timeout\(/, "a busy runner cannot leave the selection hanging");
+const verifierCard = discussionClientSource.slice(
+  discussionClientSource.indexOf("Choose an independent verifier to continue"),
+  discussionClientSource.indexOf("Select the Architect runtime to continue"),
+);
+assert.match(verifierCard, /disabled=\{verifierSelectionPending !== null\}/, "verifier buttons disable while one is pending");
+assert.match(verifierCard, /role="alert"[^>]*>\{verifierSelectionError\}/, "the selection error renders inside the card");
 assert.match(discussionClientSource, /Choose an independent verifier to continue/);
 
 console.log("PASS native Build pause gates");
