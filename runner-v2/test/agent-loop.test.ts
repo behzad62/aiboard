@@ -1293,7 +1293,7 @@ test("model working context compacts deterministically without deleting raw sess
         type: "tool_call",
         callId: `call-${index}`,
         name: "fs.read",
-        arguments: index === 40
+        arguments: index === 20
           ? {
               path: `file-${index}.ts`,
               content: `${"😀".repeat(5_000)}END`,
@@ -1316,7 +1316,7 @@ test("model working context compacts deterministically without deleting raw sess
   const compacted = compactAgentMessages(messages, {
     maxMessages: 30,
     maxBytes: 64 * 1024,
-    retainRecent: 6, // 102 - 6 = 96 sits on the 16-message compaction grid
+    retainRecent: 6,
   });
   assert.equal(messages.length, 102, "raw checkpoint history is untouched");
   assert.equal(compacted.length < messages.length, true);
@@ -1331,9 +1331,9 @@ test("model working context compacts deterministically without deleting raw sess
     "ordinary tool arguments survive working-set compaction"
   );
   assert.match(summary.content, /argumentsSummary/);
-  assert.match(summary.content, /file-40\.ts/);
+  assert.match(summary.content, /file-20\.ts/);
   const oversizedArgumentBytes = Buffer.byteLength(JSON.stringify({
-    path: "file-40.ts",
+    path: "file-20.ts",
     content: `${"😀".repeat(5_000)}END`,
     apiKey: "[REDACTED]",
   }));
@@ -1646,4 +1646,38 @@ test("working-set compaction keeps a byte-identical prefix across consecutive tu
   }
   const changes = prefixes.filter((prefix, index) => index > 0 && prefix !== prefixes[index - 1]).length;
   assert.ok(changes <= 1, `the compacted prefix changed ${changes} times in 8 turns; it must stay stable within a grid window`);
+});
+
+test("a session that lives at the byte limit compacts well below it, so its prefix is rarely rewritten", () => {
+  const messages: AgentMessage[] = [
+    { id: "system", role: "system", content: "Stable policy" },
+    { id: "intent", role: "user", content: "Build it" },
+  ];
+  const pushTurn = (index: number) => {
+    messages.push({
+      id: `assistant-${index}`,
+      role: "assistant",
+      content: [{ type: "tool_call", callId: `call-${index}`, name: "fs.read", arguments: { path: `f${index}` } }],
+    });
+    messages.push({
+      id: `tool-${index}`,
+      role: "tool",
+      content: { callId: `call-${index}`, toolName: "fs.read", isError: false, content: [{ type: "text", text: "x".repeat(4_000) }] },
+    });
+  };
+  // Bytes, not message count, are the binding limit, as for a large-context Architect.
+  const limits = { maxMessages: 1_000, maxBytes: 200 * 1024, retainRecent: 24 };
+  for (let index = 0; index < 60; index += 1) pushTurn(index);
+  const prefixOf = (list: AgentMessage[]) => JSON.stringify(list.slice(0, list.findIndex((message) => message.id.startsWith("compacted-history:")) + 1));
+  const prefixes: string[] = [];
+  for (let turn = 0; turn < 40; turn += 1) {
+    pushTurn(60 + turn);
+    const working = compactAgentMessages(messages, limits);
+    const bytes = Buffer.byteLength(JSON.stringify(working));
+    assert.ok(bytes <= limits.maxBytes, `turn ${turn}: ${bytes} bytes exceeds the limit`);
+    assert.ok(working.some((message) => message.id.startsWith("compacted-history:")));
+    prefixes.push(prefixOf(working));
+  }
+  const changes = prefixes.filter((prefix, index) => index > 0 && prefix !== prefixes[index - 1]).length;
+  assert.ok(changes <= 4, `the compacted prefix changed ${changes} times in 40 turns at the limit`);
 });

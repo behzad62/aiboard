@@ -602,25 +602,87 @@ export function compactAgentMessages(
 
   const fits = (list: readonly AgentMessage[]) =>
     list.length <= limits.maxMessages && Buffer.byteLength(JSON.stringify(list)) <= limits.maxBytes;
+  const summaryBudget = Math.floor(limits.maxBytes / 2);
+  const withinSummaryBudget = (summary: AgentMessage) =>
+    Buffer.byteLength(JSON.stringify(summary)) <= summaryBudget;
+
+  // Prompt-cache stability: provider caches reuse only an identical prefix. Compacting to just under
+  // the limit left a session that lives near it (a 230k-token Architect) overflowing again on the
+  // next turn, so the prefix was rewritten every few turns: 0-4% cache hits (tunnel run). The cutoff
+  // now moves only when the working set overflows, and then drops to a low-water mark, so the turns
+  // that follow append to a byte-identical prefix. Fall back to the exact sliding compaction when
+  // nothing on the grid can fit.
+  const cutoff = hysteresisCutoff(currentMessages, limits, summaryBudget);
+  if (cutoff > 0) {
+    const anchored = compactAtCutoff(currentMessages, cutoff, withinSummaryBudget);
+    if (anchored && fits(anchored)) return anchored;
+  }
+
   const naiveCutoff = Math.max(0, currentMessages.length - limits.retainRecent);
-
-  // Prompt-cache stability: provider caches reuse only an identical prefix, and the compacted
-  // prefix (protected messages + summary) used to change on every turn as the cutoff slid by one
-  // message and the summary was trimmed to whatever room the recent window left. Anchor the cutoff
-  // to a coarse grid and bound the summary by its own budget, so the prefix stays byte-identical
-  // for COMPACTION_GRID messages. Fall back to the exact sliding compaction when that cannot fit.
-  const anchored = compactAtCutoff(
-    currentMessages,
-    Math.floor(naiveCutoff / COMPACTION_GRID) * COMPACTION_GRID,
-    (summary) => Buffer.byteLength(JSON.stringify(summary)) <= Math.floor(limits.maxBytes / 2)
-  );
-  if (anchored && fits(anchored)) return anchored;
-
   return compactAtCutoff(currentMessages, naiveCutoff, (_summary, result) => fits(result)) ??
     currentMessages;
 }
 
 const COMPACTION_GRID = 16;
+/** After an overflow the working set drops to this share of its byte limit. */
+const COMPACTION_LOW_WATER = 0.55;
+
+/**
+ * Replays the history in order and moves the cutoff only where the working set first overflowed,
+ * each time to the earliest grid point that brings it under the low-water mark. Every decision
+ * depends only on the messages up to its overflow, so appending messages never moves an earlier
+ * cutoff and the compacted prefix stays byte-identical until the next overflow. Sizes are estimated
+ * from per-message bytes and the summary's own budget, so the scan stays linear.
+ */
+function hysteresisCutoff(
+  messages: readonly AgentMessage[],
+  limits: AgentWorkingSetLimits,
+  summaryBudget: number,
+): number {
+  const count = messages.length;
+  const bytePrefix = new Array<number>(count + 1).fill(0);
+  const keptPrefix = new Array<number>(count + 1).fill(0);
+  const keptCountPrefix = new Array<number>(count + 1).fill(0);
+  const factPrefix = new Array<number>(count + 1).fill(0);
+  messages.forEach((message, index) => {
+    const bytes = Buffer.byteLength(JSON.stringify(message)) + 1;
+    const kept = message.role === "system" || message.role === "user";
+    bytePrefix[index + 1] = bytePrefix[index]! + bytes;
+    keptPrefix[index + 1] = keptPrefix[index]! + (kept ? bytes : 0);
+    keptCountPrefix[index + 1] = keptCountPrefix[index]! + (kept ? 1 : 0);
+    factPrefix[index + 1] = factPrefix[index]! + (kept ? 0 : Buffer.byteLength(JSON.stringify(historyFact(message))) + 1);
+  });
+  // The working set with history before `cutoff` compacted, through message `last`.
+  const size = (cutoff: number, last: number) => {
+    const summary = cutoff === 0 ? 0 : Math.min(summaryBudget, 512 + factPrefix[cutoff]!);
+    return keptPrefix[cutoff]! + summary + bytePrefix[last + 1]! - bytePrefix[cutoff]!;
+  };
+  const messageCount = (cutoff: number, last: number) =>
+    keptCountPrefix[cutoff]! + (cutoff === 0 ? 0 : 1) + last + 1 - cutoff;
+  const lowWater = Math.floor(limits.maxBytes * COMPACTION_LOW_WATER);
+  const lowWaterMessages = Math.max(3, Math.floor(limits.maxMessages * COMPACTION_LOW_WATER));
+
+  let cutoff = 0;
+  for (let last = 0; last < count; last += 1) {
+    if (size(cutoff, last) <= limits.maxBytes && messageCount(cutoff, last) <= limits.maxMessages) continue;
+    let fallback: number | undefined;
+    let chosen: number | undefined;
+    for (let grid = (Math.floor(cutoff / COMPACTION_GRID) + 1) * COMPACTION_GRID; grid <= last; grid += COMPACTION_GRID) {
+      // Never split a tool result from the assistant turn that issued it.
+      let candidate = grid;
+      while (candidate > cutoff && messages[candidate]?.role === "tool") candidate -= 1;
+      if (candidate <= cutoff) continue;
+      const bytes = size(candidate, last);
+      const total = messageCount(candidate, last);
+      if (bytes <= lowWater && total <= lowWaterMessages) { chosen = candidate; break; }
+      if (fallback === undefined && bytes <= limits.maxBytes && total <= limits.maxMessages) fallback = candidate;
+    }
+    const next = chosen ?? fallback;
+    if (next === undefined) return cutoff; // nothing on the grid fits; the sliding fallback takes over
+    cutoff = next;
+  }
+  return cutoff;
+}
 
 /** Settled tool-call arguments and lifecycle echoes above this size are stubbed in the working set. */
 export const SETTLED_BULK_STUB_BYTES = 32 * 1024;
