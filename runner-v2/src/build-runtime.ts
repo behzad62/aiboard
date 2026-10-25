@@ -2117,6 +2117,8 @@ export class BuildRuntime {
       }, projection);
       const planned = this.projection().finalVerification?.current;
       if (!planned || planned.targetRevision !== projection.integrationRevision) {
+        const stopped = await this.architectStoppedFor("final_verification_plan_required");
+        if (stopped) return stopped;
         throw new Error(
           "Architect returned from final_verification_plan_required without a typed action."
         );
@@ -2211,6 +2213,8 @@ export class BuildRuntime {
         );
         const completed = this.projection();
         if (completed.projectHandoff?.status !== "requested") {
+          const stopped = await this.architectStoppedFor("completion_decision_required");
+          if (stopped) return stopped;
           throw new Error(
             "Architect returned from completion_decision_required without a typed action.",
           );
@@ -2303,6 +2307,8 @@ export class BuildRuntime {
         reviewed.review?.status === "requested" ||
         !reviewed.review
       ) {
+        const stopped = await this.architectStoppedFor("final_verification_review_required");
+        if (stopped) return stopped;
         throw new Error(
           "Architect returned from final_verification_review_required without a typed action.",
         );
@@ -4775,6 +4781,15 @@ export class BuildRuntime {
     return { status: "paused", action: reason.startsWith("delivery_") ? reason : `delivery_${reason}` };
   }
 
+  /**
+   * A turn that had to record a typed action but ended in a pause (a runtime handoff after a usage
+   * limit) stopped for the owner; it is not a missing action. Three sites checked (T6b repair B3);
+   * the others threw, and the run logged a runner error on top of the handoff (tunnel run).
+   */
+  private async architectStoppedFor(action: string): Promise<BuildStepResult | undefined> {
+    return this.projection().status === "paused" ? await this.afterArchitect(action) : undefined;
+  }
+
   private async afterArchitect(action: string): Promise<BuildStepResult> {
     const events = this.store.readRun(this.runId);
     if (events.length === 0) {
@@ -5319,6 +5334,8 @@ export class BuildRuntime {
         blockingFindingIds: [...current.blockingFindingIds!],
       }, projection);
       if (this.projection().planCritique?.current?.status !== "resolved") {
+        const stopped = await this.architectStoppedFor("plan_critique_resolution_required");
+        if (stopped) return stopped;
         throw new Error("Architect returned from plan_critique_resolution_required without a typed action.");
       }
       return this.afterArchitect("plan_critique_resolution_required");

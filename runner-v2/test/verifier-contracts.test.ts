@@ -662,6 +662,40 @@ test("risk assessment is recomputed by the kernel and cannot be lowered for one 
   }
 });
 
+test("an Architect turn that ends in a runtime handoff pauses for the owner, never fails the step", async () => {
+  const fixture = createFixture("runtime-completion-handoff");
+  try {
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async () => {
+        appendVerifierRequest(fixture.store);
+        fixture.store.append(verdictEvent({ criterionVerdicts: completeVerdicts(fixture.evidenceIds) }));
+        return { status: "verdict_submitted" };
+      },
+    };
+    // Tunnel run: the Architect's provider hit its usage limit on the completion decision; the
+    // handoff paused the run, and the step then threw "returned ... without a typed action".
+    const runtime = createRuntime(fixture.store, verifier, async (request) => {
+      assert.equal(request.reason.type, "completion_decision_required");
+      fixture.store.append({
+        runId: RUN_ID,
+        type: "architect.handoff_required",
+        occurredAt: "2026-08-27T00:00:06.000Z",
+        actor: { role: "runner", id: "runtime-router" },
+        idempotencyKey: "architect-handoff:usage-limit",
+        payload: { reason: "usage limit", requiredCapabilities: ["code"], candidateRuntimeIds: ["google:other"] },
+      });
+    });
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    assert.equal((await runtime.step()).action, "verifier_verdict_submitted");
+    assert.deepEqual(await runtime.step(), { status: "paused", action: "completion_decision_required" });
+    assert.equal(runtime.projection().runtime.architect.handoff?.reason, "usage limit");
+  } finally {
+    fixture.close();
+  }
+});
+
 test("high-risk runtime assesses, verifies, and only then requests completion", async () => {
   const fixture = createFixture("runtime-positive");
   let verifierCalls = 0;
