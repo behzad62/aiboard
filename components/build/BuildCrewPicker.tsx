@@ -47,46 +47,49 @@ interface BuildCrewPickerProps {
 
 const MAX_PARALLEL_WORKERS = 4;
 
-/** What the Reviewer does in this run, given the planning options (mirrors runner-v2 policy). */
+/** Explain each independent review gate without conflating task and final-build verification. */
 export function reviewerDuties(planning: BuildCrewPlanningContext): Array<{ step: string; detail: string; runs: boolean }> {
   const strict = planning.alwaysRequireIndependentVerifier;
   const planOnly = planning.runPolicy === "plan_only";
   return [
-    planning.evidenceGatedPlanning
-      ? {
-          step: "Plan review",
-          detail: "Checks the plan against your request, requirement by requirement, and judges its quality before you approve it.",
-          runs: true,
-        }
-      : {
-          step: "Plan critique",
-          detail: planOnly
-            ? "Skipped: plan-only runs stop at the plan."
-            : strict
-              ? "Critiques every plan once before workers start."
-              : "Critiques risky plans once before workers start; low-risk plans skip it.",
-          runs: !planOnly,
-        },
     ...(planning.evidenceGatedPlanning
       ? [{
-          step: "Separate plan critique",
-          detail: "Not needed: the plan review above already covers it.",
-          runs: false,
+          step: "Requirement coverage",
+          detail: "An independent model checks whether the plan covers your request, before you approve it.",
+          runs: true,
         }]
       : []),
     {
-      step: "Task verification",
+      step: "Plan critique",
       detail: planOnly
-        ? "Skipped: no code is written in a plan-only run."
+        ? "Skipped in plan-only runs."
         : strict
-          ? "Checks every finished task's changes."
-          : "Checks risky tasks' changes; low-risk tasks are accepted on the Architect's review.",
+          ? "Independent critique runs for every executable plan before workers start."
+          : "Independent critique runs for risky executable plans; low-risk plans skip it.",
+      runs: !planOnly,
+    },
+    {
+      step: "Independent task review",
+      detail: planOnly
+        ? "Skipped: plan-only runs do not start workers."
+        : planning.evidenceGatedPlanning
+          ? "Every submitted task is checked. Low-risk tasks get lighter inspection; high-risk tasks get deeper checks and tests."
+          : "Off: the Architect reviews submitted tasks; no mandatory separate task Reviewer runs.",
+      runs: !planOnly && planning.evidenceGatedPlanning,
+    },
+    {
+      step: "Final integrated verification",
+      detail: planOnly
+        ? "Skipped: there is no implemented build to verify."
+        : strict
+          ? "Runs even for low-risk builds, after integration and final checks."
+          : "Runs after integration for high-risk builds; low-risk builds skip this extra check.",
       runs: !planOnly,
     },
     ...(planning.evidenceGatedPlanning && planning.answerReview
       ? [{
           step: "Answer review",
-          detail: "Checks the answer when your request turns out to be a question rather than a build.",
+          detail: "If your request produces an answer instead of code, an independent model checks the answer.",
           runs: true,
         }]
       : []),
@@ -256,8 +259,8 @@ export function BuildCrewPicker({
         </div>
         <p className="text-xs text-muted-foreground">
           {full
-            ? "Checks work it did not write, so mistakes the Architect and workers share get caught. A different model from the Architect catches the most; the strongest model you can spare after the Architect is a good pick."
-            : "Reviews the plan and finished work; always tried first."}
+            ? "Preferred model for independent plan checks, task reviews when plan approval is enabled, and final integrated-build verification when required. It reports findings; the Architect decides on repairs and acceptance."
+            : "Preferred for enabled independent review gates; reports findings but does not approve work."}
         </p>
         <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,14rem)]">
           <ModelSelect
@@ -280,7 +283,7 @@ export function BuildCrewPicker({
         {reviewerSharesArchitect && (
           <p className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
             {planning.alwaysRequireIndependentVerifier
-              ? `${nameOf(value.architect.modelId)} is also the Architect, and "Always run independent verification" is on, so reviews go to a different model in this build whenever one is available. ${nameOf(value.architect.modelId)} reviews only when no other model is.`
+              ? `${nameOf(value.architect.modelId)} is also the Architect, and "Independently verify the final build" is on, so reviews go to a different model in this build whenever one is available. ${nameOf(value.architect.modelId)} reviews only when no other model is.`
               : `${nameOf(value.architect.modelId)} is also the Architect. It reviews in a fresh session with no memory of the planning, which catches less than a different model would.`}
           </p>
         )}
@@ -290,7 +293,7 @@ export function BuildCrewPicker({
           </p>
         )}
         <details className="rounded-md bg-muted/40 px-3 py-2 text-xs" open={full}>
-          <summary className="cursor-pointer select-none font-medium">What the Reviewer does in this build</summary>
+          <summary className="cursor-pointer select-none font-medium">Which review checks will run?</summary>
           <ul className="mt-2 space-y-1.5">
             {duties.map((duty) => (
               <li key={duty.step} className={duty.runs ? "" : "text-muted-foreground"}>

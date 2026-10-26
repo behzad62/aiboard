@@ -3,9 +3,7 @@
 import React, { useEffect, useState } from "react";
 import type { BuildRunPolicy, BuildSkillMode } from "@/lib/db/schema";
 import {
-  buildSkillModeLabel,
   buildRunPolicyLabel,
-  DEFAULT_BUILD_SKILL_MODE,
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
 } from "@/lib/orchestrator/build-policy";
 import { Input } from "@/components/ui/input";
@@ -20,37 +18,15 @@ const POLICIES: Array<{
 }> = [
   {
     value: "finish",
-    description: "Continues until completed, blocked, or explicitly stopped.",
+    description: "Plan, code, review and test until the job is done, blocked, or you stop it. No user-set cost or time cap.",
   },
   {
     value: "budgeted",
-    description: "Stop cleanly when the active USD or time window is consumed.",
+    description: "Do the same work, but stop when the estimated USD spend or active-time limit is reached, even if unfinished.",
   },
   {
     value: "plan_only",
-    description: "Plan tasks and GitHub work without implementation.",
-  },
-];
-
-const SKILL_MODES: Array<{
-  value: BuildSkillMode;
-  description: string;
-}> = [
-  {
-    value: "fast",
-    description: "Use compact overlays and light evidence gates.",
-  },
-  {
-    value: "balanced",
-    description: "Route skills by phase and task with default review discipline.",
-  },
-  {
-    value: "strict",
-    description: "Use strict TDD, worktree guidance, and stronger review gates.",
-  },
-  {
-    value: "safe",
-    description: "Keep security and trust-boundary checks active for runner work.",
+    description: "Create a plan and tasks, then stop. No workers run and no implementation code is written.",
   },
 ];
 
@@ -115,7 +91,7 @@ export function BuildRunPolicyControl({
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <Label>Run policy</Label>
+        <Label>When should AIBoard stop?</Label>
         <div className="grid gap-2 sm:grid-cols-3">
           {POLICIES.map((policy) => {
             const selected = value.runPolicy === policy.value;
@@ -144,43 +120,20 @@ export function BuildRunPolicyControl({
         </div>
       </div>
 
-      <div className="space-y-2">
-        <Label>Skill mode</Label>
-        <div className="grid gap-2 md:grid-cols-4">
-          {SKILL_MODES.map((mode) => {
-            const selected =
-              (value.skillMode ?? DEFAULT_BUILD_SKILL_MODE) === mode.value;
-            return (
-              <button
-                key={mode.value}
-                type="button"
-                disabled={disabled}
-                onClick={() => onChange({ ...value, skillMode: mode.value })}
-                className={cn(
-                  "rounded-lg border px-3 py-3 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60",
-                  selected
-                    ? "border-primary bg-primary/5 ring-2 ring-primary"
-                    : "border-border hover:bg-accent"
-                )}
-              >
-                <div className="font-medium">{buildSkillModeLabel(mode.value)}</div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {mode.description}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <p className="text-xs text-muted-foreground" role="note">
+        Skill presets (Fast, Balanced, Strict, Safe) are not offered for Native Builds yet:
+        the current runner does not apply them. They will return when they change execution.
+      </p>
 
       <div className="flex items-start justify-between gap-4 rounded-lg border bg-muted/20 p-4">
         <div className="space-y-1">
           <Label htmlFor="build-always-independent-verifier">
-            Always run independent verification
+            Independently verify the final build
           </Label>
           <p className="text-xs text-muted-foreground">
-            High-risk builds always require an independent verifier. Enable this
-            to verify low-risk builds too.
+            The final Verifier checks the integrated result against the requirements, separately
+            from individual task reviews. Off: this extra check runs for high-risk builds only.
+            On: low-risk builds get it too.
           </p>
         </div>
         <Switch
@@ -190,23 +143,32 @@ export function BuildRunPolicyControl({
           onCheckedChange={(alwaysRequireIndependentVerifier) =>
             onChange({ ...value, alwaysRequireIndependentVerifier })
           }
-          aria-label="Always run independent verification"
+          aria-label="Independently verify the final build"
         />
       </div>
 
       {planningOptionsLocked ? <p className="rounded border p-3 text-xs text-muted-foreground">This run uses its recorded planning options. See the planning panel for the runner&apos;s saved policy, specification-copy and handoff settings.</p> : <fieldset className="space-y-3 rounded-lg border p-3" disabled={disabled}>
         <div className="flex items-center justify-between gap-3">
-          <Label htmlFor="build-evidence-planning">Evidence-gated planning</Label>
+          <Label htmlFor="build-evidence-planning">Approve the plan and independently review tasks</Label>
           <Switch id="build-evidence-planning" checked={value.evidenceGatedPlanning === true} onCheckedChange={(checked) => onChange({ ...value, evidenceGatedPlanning: checked })} />
         </div>
-        <p className="text-xs text-muted-foreground">Your request becomes the approved specification. The Architect maps it to requirements, an independent model reviews the plan, and workers start only after you approve the plan.</p>
+        <p className="text-xs text-muted-foreground">
+          On: your request becomes the specification, a separate model checks requirement coverage,
+          and you approve the plan before coding starts. Each submitted worker task then gets its own
+          independent review; higher-risk changes receive deeper checks and tests. Plan-only runs do
+          not start workers.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Off: the Architect plans and reviews tasks without this mandatory independent task-review
+          gate. Risky plans can still receive a separate critique.
+        </p>
         {planningOptionsLocked && <p className="text-xs">This run uses its saved planning policy and options. Start a new run to choose different options.</p>}
         {value.evidenceGatedPlanning && <>
           <div className="flex items-center justify-between gap-3">
             <Label htmlFor="build-answer-review">Review answers independently</Label>
             <Switch id="build-answer-review" checked={value.answerReview === true} onCheckedChange={(checked) => onChange({ ...value, answerReview: checked })} />
           </div>
-          <p className="text-xs text-muted-foreground">Optional extra review if the request produces an answer rather than a build. May add model calls; choose before the run starts.</p>
+          <p className="text-xs text-muted-foreground">When AIBoard answers a question instead of changing code, a separate model checks the answer. Off skips this additional check. It may require extra model calls.</p>
           <div className="flex items-center justify-between gap-3">
             <Label htmlFor="build-spec-copy">Save approved specification in project</Label>
             <Switch id="build-spec-copy" checked={value.specCopy !== false} disabled={disabled || planningOptionsLocked || value.handoffFiles === "export_only"} onCheckedChange={(checked) => onChange({ ...value, specCopy: checked })} />
@@ -236,7 +198,7 @@ export function BuildRunPolicyControl({
               onChange={(event) => setBudgetUsdInput(event.target.value)}
               onBlur={commitBudgetUsd}
             />
-            <p className="text-xs text-muted-foreground">0 means unlimited.</p>
+            <p className="text-xs text-muted-foreground">0 removes the USD limit. This is an estimated-cost guardrail, not an exact billing cap.</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="build-time-minutes">Time budget, minutes</Label>
@@ -252,8 +214,7 @@ export function BuildRunPolicyControl({
               onBlur={commitTimeLimitMinutes}
             />
             <p className="text-xs text-muted-foreground">
-              0 means unlimited. Default is {DEFAULT_BUILD_TIME_LIMIT_MINUTES}{" "}
-              minutes.
+              0 removes the active-time limit. At least one limit (USD or active time) must be greater than 0. Default: {DEFAULT_BUILD_TIME_LIMIT_MINUTES} minutes.
             </p>
           </div>
         </div>

@@ -78,17 +78,32 @@ assert.equal(parseBuildWorkers("not json"), null);
 // Reviewer duties follow the planning options.
 const gated = reviewerDuties({ evidenceGatedPlanning: true, answerReview: true, alwaysRequireIndependentVerifier: false, runPolicy: "finish" });
 assert.deepEqual(gated.map((duty) => [duty.step, duty.runs]), [
-  ["Plan review", true],
-  ["Separate plan critique", false],
-  ["Task verification", true],
+  ["Requirement coverage", true],
+  ["Plan critique", true],
+  ["Independent task review", true],
+  ["Final integrated verification", true],
   ["Answer review", true],
 ]);
+assert.match(gated[2]!.detail, /Every submitted task is checked/);
+assert.match(gated[3]!.detail, /high-risk builds/);
 const classic = reviewerDuties({ evidenceGatedPlanning: false, answerReview: true, alwaysRequireIndependentVerifier: true, runPolicy: "finish" });
-assert.deepEqual(classic.map((duty) => duty.step), ["Plan critique", "Task verification"]);
-assert.match(classic[0]!.detail, /every plan/);
-assert.match(classic[1]!.detail, /every finished task/);
+assert.deepEqual(classic.map((duty) => [duty.step, duty.runs]), [
+  ["Plan critique", true],
+  ["Independent task review", false],
+  ["Final integrated verification", true],
+]);
+assert.match(classic[0]!.detail, /every executable plan/);
+assert.match(classic[1]!.detail, /no mandatory separate task Reviewer/);
+assert.match(classic[2]!.detail, /even for low-risk builds/);
 const planOnly = reviewerDuties({ evidenceGatedPlanning: false, answerReview: false, alwaysRequireIndependentVerifier: false, runPolicy: "plan_only" });
 assert.ok(planOnly.every((duty) => !duty.runs));
+const gatedPlanOnly = reviewerDuties({ evidenceGatedPlanning: true, answerReview: false, alwaysRequireIndependentVerifier: true, runPolicy: "plan_only" });
+assert.deepEqual(gatedPlanOnly.map((duty) => [duty.step, duty.runs]), [
+  ["Requirement coverage", true],
+  ["Plan critique", false],
+  ["Independent task review", false],
+  ["Final integrated verification", false],
+]);
 
 // The picker: full guidance on the composer, compact in session settings.
 const models = [
@@ -111,8 +126,10 @@ assert.match(full, /A Build has three roles/);
 assert.match(full, /pick your most capable model/);
 assert.match(full, /DeepSeek Flash is also the Architect\. It reviews in a fresh session/);
 assert.match(full, /DeepSeek Flash is also a worker\. It never reviews its own tasks/);
-assert.match(full, /Plan review:/);
-assert.match(full, /Not needed: the plan review above already covers it\./);
+assert.match(full, /Requirement coverage:/);
+assert.match(full, /Independent task review:/);
+assert.match(full, /Final integrated verification:/);
+assert.match(full, /Which review checks will run/);
 assert.match(full, /Every worker is used: each new task goes to the least busy one/);
 assert.match(full, /Build probe failed/);
 assert.match(full, /Up to 3 tasks run at a time/);
