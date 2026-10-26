@@ -211,6 +211,19 @@ assert.notEqual(
   null,
   "a failed/recoverable automatic handoff remains actionable once the run pauses",
 );
+// Tunnel run: the headline said "Waiting for you: choose the handoff" while the card was hidden
+// and the runner applied the result itself.
+{
+  const paused = { ...(automaticHandoffProjection as object), status: "paused" } as never;
+  const finishing = nativeBuildPauseDescription(paused, "running");
+  assert.equal(finishing?.waitingForOwner, false, "an automatic handoff in flight does not wait for the owner");
+  assert.equal(finishing?.title, "Finishing: applying the result to your project");
+  assert.equal(
+    nativeBuildPauseDescription(paused, "paused")?.title,
+    "Waiting for you: choose the handoff",
+    "once the automatic apply fails and the run pauses, the owner chooses",
+  );
+}
 assert.equal(nativeBuildTaskStatus("integrated"), "done");
 assert.equal(nativeBuildTaskStatus("running"), "in_progress");
 assert.equal(nativeBuildTaskStatus("submitted"), "review");

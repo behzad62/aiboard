@@ -174,6 +174,7 @@ import {
   type NativeBuildObservability,
   type NativeBuildActivity,
   type NativeBuildProjection,
+  type NativeRunProjection,
 } from "@/lib/client/runner-v2";
 import { nativeBuildActivityEntries } from "@/lib/client/native-build-activity";
 import { followNativeLiveModelOutput, type NativeLiveModelEvent } from "@/lib/client/native-model-output";
@@ -305,6 +306,7 @@ function DiscussionPageInner() {
   const [nativeActivity, setNativeActivity] = useState<NativeBuildActivity[]>([]);
   const [nativeProjection, setNativeProjection] =
     useState<NativeBuildProjection | null>(null);
+  const [nativeRunState, setNativeRunState] = useState<NativeRunProjection["state"] | undefined>(undefined);
   const [specificationBusy, setSpecificationBusy] = useState(false);
   const [repairIssueBusy, setRepairIssueBusy] = useState(false);
   const [repairIssueError, setRepairIssueError] = useState<string | null>(null);
@@ -1252,6 +1254,7 @@ function DiscussionPageInner() {
 
         const handoffs = durableBuildHandoffPanels(projection, run.state);
         setNativeProjection(projection);
+        setNativeRunState(run.state);
         setNativeObservability(observability);
         setNativeActivity(activity);
         setArchitectHandoff(handoffs.architect);
@@ -2236,7 +2239,7 @@ function DiscussionPageInner() {
         !(discussion?.nativeBuildRunId && !nativeProjection) && (
         <>
           {/* An owner gate (plan/spec approval) is resolved in "Needs you"; Resume cannot pass it. */}
-          {!nativeBuildPauseDescription(nativeProjection)?.waitingForOwner && <Button
+          {!nativeBuildPauseDescription(nativeProjection, nativeRunState)?.waitingForOwner && <Button
             size="sm"
             onClick={handleResume}
             disabled={
@@ -2284,7 +2287,7 @@ function DiscussionPageInner() {
 
   if (discussion.mode === "build") {
     const steeringView = runnerSteeringLedgerView(nativeProjection);
-    const pause = nativeBuildPauseDescription(nativeProjection);
+    const pause = nativeBuildPauseDescription(nativeProjection, nativeRunState);
     // Until the first runner snapshot arrives, the saved discussion status may be stale.
     const nativeLoading = Boolean(discussion.nativeBuildRunId && !nativeProjection);
     const nativeConnection = discussion.runnerUrl && discussion.runnerToken

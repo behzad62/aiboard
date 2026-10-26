@@ -39,12 +39,36 @@ export interface NativeBuildPauseDescription {
   detail: string;
 }
 
+/**
+ * A finish/budgeted run hands its result to the project itself: while the run is still running the
+ * runner is saving the handoff snapshot and will apply it, so the owner has nothing to choose. Once
+ * the run pauses (the automatic apply failed) the choice is the owner's again.
+ */
+export function projectHandoffAppliesAutomatically(
+  projection: Partial<Pick<NativeBuildProjection, "projectHandoff" | "runPolicy">>,
+  runState?: NativeRunProjection["state"]
+): boolean {
+  return projection.projectHandoff?.status === "requested" &&
+    runState === "running" &&
+    (projection.runPolicy === "finish" || projection.runPolicy === "budgeted");
+}
+
 /** Plain-language explanation of why a native Build is paused, or null when it is not paused. */
 export function nativeBuildPauseDescription(
   projection: (Pick<NativeBuildProjection, "status" | "pauseReason"> &
-    Partial<Pick<NativeBuildProjection, "verifierSelection" | "runtime" | "projectHandoff">>) | null | undefined
+    Partial<Pick<NativeBuildProjection, "verifierSelection" | "runtime" | "projectHandoff" | "runPolicy">>) | null | undefined,
+  runState?: NativeRunProjection["state"]
 ): NativeBuildPauseDescription | null {
   if (!projection || projection.status !== "paused") return null;
+  if (projectHandoffAppliesAutomatically(projection, runState)) {
+    // Tunnel run: the headline said "Waiting for you: choose the handoff" for two minutes while the
+    // card was (rightly) hidden and the runner applied the result itself.
+    return {
+      waitingForOwner: false,
+      title: "Finishing: applying the result to your project",
+      detail: "The Build finished. The runner is saving the handoff snapshot and then applies the result to your project; nothing is needed from you.",
+    };
+  }
   // Typed owner gates can hold a paused run without a pause reason; they take precedence.
   if (projection.verifierSelection?.status === "required") {
     return {
@@ -733,10 +757,7 @@ export function durableBuildHandoffPanels(
 } {
   const projectHandoff = projection.projectHandoff;
   if (projectHandoff?.status === "requested") {
-    if (
-      runState === "running" &&
-      (projection.runPolicy === "finish" || projection.runPolicy === "budgeted")
-    ) {
+    if (projectHandoffAppliesAutomatically(projection, runState)) {
       return { architect: null, verifier: null, project: null };
     }
     return {
