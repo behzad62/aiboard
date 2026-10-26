@@ -49,6 +49,19 @@ export const ROLE_CAPABILITY_BROKERS = [
   { role: "worker", broker: "task" },
 ] as const satisfies readonly { role: RoleCapabilityRole; broker: RoleCapabilityBroker }[];
 
+/**
+ * Background processes for the verifiers that may run commands: they start the built product in
+ * their own checkout and exercise it live. Tunnel run: a verifier limited to run-to-exit commands
+ * could not start the relay, so the documented pair/connect/call workflow was never run end to end.
+ * Registered only when the runner wires a managed-process service.
+ */
+const VERIFIER_LIVE_PROCESS_TOOLS = [
+  "process.list",
+  "process.poll",
+  "process.signal",
+  "process.start",
+] as const;
+
 const ARCHITECT_INSPECTION_BROWSER_TOOLS = [
   "browser.click",
   "browser.close",
@@ -136,7 +149,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "git.status",
     "inspect_evidence",
     "run_evidence_command",
-  ], ["submit_verifier_verdict"]),
+  ], [...VERIFIER_LIVE_PROCESS_TOOLS, "submit_verifier_verdict"]),
   "verifier:expectations": surface("verifier", "expectations", "none", [
     "artifact.read",
     "fs.list",
@@ -186,8 +199,9 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
   // kernel-ordered pass. The high-tier obligations pass sees criteria only and
   // has no inspection tools. The findings pass inspects the task-revision
   // checkout read-only; at high tier it may also run audited evidence
-  // commands. The verdict pass is read-only. No filesystem mutation, process
-  // control, or MCP; each pass registers exactly one optional lifecycle tool.
+  // commands and, like the final verifier, run the product live in its own
+  // checkout. The verdict pass is read-only. No filesystem mutation or MCP;
+  // each pass registers exactly one optional lifecycle tool.
   "verifier:delivery_obligations": surface("verifier", "delivery_obligations", "none", [], [
     "record_deliverable_obligations",
   ]),
@@ -215,7 +229,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "git.status",
     "inspect_evidence",
     "run_evidence_command",
-  ], ["record_deliverable_findings"]),
+  ], [...VERIFIER_LIVE_PROCESS_TOOLS, "record_deliverable_findings"]),
   "plan-critic:inspection": surface("plan-critic", "inspection", "none", [
     "artifact.read",
     "fs.list",

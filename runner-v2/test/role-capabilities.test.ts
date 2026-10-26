@@ -204,8 +204,27 @@ const VERIFIER_INSPECTION_REQUIRED = [
   "run_evidence_command",
 ] as const;
 
+// The command-capable verifiers also run the product live in their own checkout.
+const VERIFIER_LIVE_PROCESS = [
+  "process.list",
+  "process.poll",
+  "process.signal",
+  "process.start",
+] as const;
+
 const VERIFIER_INSPECTION_FULL = [
-  ...VERIFIER_INSPECTION_REQUIRED,
+  "artifact.read",
+  "fs.list",
+  "fs.read",
+  "fs.search",
+  "fs.stat",
+  "git.diff",
+  "git.log",
+  "git.show",
+  "git.status",
+  "inspect_evidence",
+  ...VERIFIER_LIVE_PROCESS,
+  "run_evidence_command",
   "submit_verifier_verdict",
 ] as const;
 
@@ -263,7 +282,7 @@ const VERIFIER_ANSWER_FULL = [
 
 // T6a (OA-3/OA-4/OA-10): the deliverable reviewer. The findings and verdict
 // passes inspect read-only; only the high-tier findings pass adds
-// run_evidence_command. Each pass registers exactly one lifecycle tool.
+// run_evidence_command and live processes. Each pass registers exactly one lifecycle tool.
 const VERIFIER_DELIVERY_REQUIRED = [...VERIFIER_ANSWER_REQUIRED] as const;
 
 const VERIFIER_DELIVERY_FULL = [
@@ -288,6 +307,7 @@ const VERIFIER_DELIVERY_COMMANDS_FULL = [
   "git.show",
   "git.status",
   "inspect_evidence",
+  ...VERIFIER_LIVE_PROCESS,
   "record_deliverable_findings",
   "run_evidence_command",
 ] as const;
@@ -564,6 +584,7 @@ test("constructed brokers match the derived surfaces and an unlisted probe fails
     assert.deepEqual(names(verifier), [...VERIFIER_INSPECTION_REQUIRED]);
     const verdict = createVerifierReviewBroker({
       ...inspectionInput(root, artifacts),
+      managedProcesses: {} as ManagedProcessService,
       lifecycleTool: createSubmitVerifierVerdictTool({
         authority: {} as VerifierVerdictAuthority,
         runId: "run",

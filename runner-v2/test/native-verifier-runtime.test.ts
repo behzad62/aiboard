@@ -28,6 +28,7 @@ import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import type { ManagedProcessService } from "../src/managed-process.js";
 import type {
   VerifierReviewProjection,
   VerifierVerdictProjection,
@@ -444,6 +445,49 @@ test("verifier submits one typed criterion-complete lifecycle verdict with kerne
     assert.equal(definition.effect, "none");
     const schema = JSON.stringify(definition.inputSchema);
     assert.doesNotMatch(schema, /runtimeId|providerId|modelId|modelIdentity|sessionId|targetRevision/);
+  } finally {
+    fixture.close();
+  }
+});
+
+// Tunnel run: limited to run-to-exit commands, the verifier could not start the relay, and the
+// documented pairing workflow was never run live. The verdict pass gets background processes in its
+// own checkout, is told to build and exercise the product, and its processes end with its session.
+test("the verdict pass can run the product live and its processes end with its session", async () => {
+  const closed: unknown[] = [];
+  const managedProcesses = {
+    closeAgent: async (owner: unknown) => { closed.push(owner); },
+  } as unknown as ManagedProcessService;
+  const fixture = createFixture("live", [{
+    blocks: [{
+      type: "tool_call",
+      callId: "verdict-1",
+      name: "submit_verifier_verdict",
+      arguments: {
+        criterionVerdicts: [{
+          taskId: "task_ui",
+          criterionId: "criterion_ui",
+          verdict: "satisfied",
+          rationale: "Exercised live.",
+          evidenceIds: ["evidence_ui"],
+        }],
+      },
+    }],
+    stopReason: "tool_calls",
+  }], TARGET_REVISION, new FakeVerifierVerdictAuthority(), false, false, { managedProcesses });
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_live"));
+    assert.equal(result.status, "verdict_submitted");
+    const request = fixture.model.requests[0]!;
+    for (const name of ["process.start", "process.poll", "process.list", "process.signal", "run_evidence_command"]) {
+      assert.ok(request.tools.some((tool) => tool.name === name), `${name} is offered to the verifier`);
+    }
+    assert.match(JSON.stringify(request.messages[0]), /start long-running programs/);
+    assert.deepEqual(closed, [{
+      runId: "run_live",
+      sessionId: result.sessionId,
+      actor: { role: "verifier", id: "google:verifier" },
+    }]);
   } finally {
     fixture.close();
   }
@@ -910,8 +954,12 @@ function createFixture(
     twoPass?: boolean;
     recordContextPackText?: boolean;
     verifierRuntimeIds?: readonly string[];
+    managedProcesses?: ManagedProcessService;
   } = false,
 ) {
+  const managedProcesses = typeof recordContextPackTextOrOptions === "boolean"
+    ? undefined
+    : recordContextPackTextOrOptions.managedProcesses;
   const recordContextPackText = typeof recordContextPackTextOrOptions === "boolean"
     ? recordContextPackTextOrOptions
     : recordContextPackTextOrOptions.recordContextPackText === true;
@@ -996,6 +1044,7 @@ function createFixture(
       recordContextPackText,
       ...(budgetLedger ? { budgetLedger } : {}),
       ...(verdictAuthority ? { verdictAuthority } : {}),
+      ...(managedProcesses ? { managedProcesses } : {}),
       clock: () => "2026-08-27T00:00:00.000Z",
     }),
     close: () => {

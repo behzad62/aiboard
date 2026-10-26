@@ -291,16 +291,31 @@ export const VERIFIER_INSPECTION_ONLY_FINISH =
 const VERIFIER_VERDICT_FINISH =
   "Inspect the exact revision, then finish by calling submit_verifier_verdict exactly once with every protected task/criterion pair, a satisfied or unsatisfied verdict, a non-empty rationale, and durable evidence IDs. The kernel derives the overall result.";
 
+/**
+ * Sent when the verifier has managed background processes. Tunnel run: a verifier's smoke attempt
+ * ran against a checkout with no build output and "never exercised the application", and the
+ * documented pairing workflow was never run as a user would run it.
+ */
+export const VERIFIER_LIVE_CHECK_INSTRUCTIONS = [
+  "Your checkout is a clean tree: build outputs and installed dependencies are absent until you create them, so install and build with run_evidence_command before running compiled entry points.",
+  "Verify behaviour live, the way a user would: start long-running programs (servers, daemons, connectors) with process.start, drive them with run_evidence_command (CLIs, HTTP requests, client scripts), read their output with process.poll, and stop them with process.signal.",
+  "Follow the documented workflows literally, including commands the product itself prints; a documented or printed command that fails is a defect.",
+].join("\n");
+
 export type VerifierSystemPromptMode = "expectations" | "verdict" | "inspection";
 
 /** Authority invariants once, plus the line for this pass. Inspection-only finish only when no verdict tool is registered. */
-export function verifierSystemPrompt(mode: VerifierSystemPromptMode): string {
+export function verifierSystemPrompt(
+  mode: VerifierSystemPromptMode,
+  options: { liveProcesses?: boolean } = {},
+): string {
   if (mode === "expectations") {
     return [VERIFIER_AUTHORITY_INVARIANTS, VERIFIER_EXPECTATIONS_PASS_INSTRUCTIONS].join("\n");
   }
   return [
     VERIFIER_AUTHORITY_INVARIANTS,
     VERIFIER_VERDICT_PASS_INSTRUCTIONS,
+    ...(options.liveProcesses ? [VERIFIER_LIVE_CHECK_INSTRUCTIONS] : []),
     mode === "verdict" ? VERIFIER_VERDICT_FINISH : VERIFIER_INSPECTION_ONLY_FINISH,
   ].join("\n");
 }

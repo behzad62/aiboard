@@ -36,6 +36,8 @@ import { createEvidenceTools } from "./evidence-tools.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import type { ManagedProcessService } from "./managed-process.js";
+import { createManagedProcessTools } from "./managed-process-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import type { FinalVerificationCheckResult } from "./final-verification-runtime.js";
@@ -211,6 +213,8 @@ export interface NativeVerifierRuntimeOptions {
   permissionProfile?: PermissionProfile;
   permissions?: SqlitePermissionStore;
   execution?: OneShotCommandExecutor;
+  /** Background processes for the verdict pass's live checks; stopped when its session ends. */
+  managedProcesses?: ManagedProcessService;
 }
 
 export class NativeVerifierRuntime {
@@ -417,7 +421,9 @@ export class NativeVerifierRuntime {
     const systemMessage: AgentMessage = {
       id: "verifier-system",
       role: "system",
-      content: verifierSystemPrompt(durableReview ? "verdict" : "inspection"),
+      content: verifierSystemPrompt(durableReview ? "verdict" : "inspection", {
+        liveProcesses: this.options.managedProcesses !== undefined,
+      }),
     };
     const contextMessage: AgentMessage = {
       id: `verifier-context:${context.digest}`,
@@ -503,6 +509,7 @@ export class NativeVerifierRuntime {
       clock: this.clock,
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       ...(this.options.execution ? { execution: this.options.execution } : {}),
+      ...(this.options.managedProcesses ? { managedProcesses: this.options.managedProcesses } : {}),
       ...(durableReview && this.options.verdictAuthority
         ? {
             lifecycleTool: createSubmitVerifierVerdictTool({
@@ -540,13 +547,12 @@ export class NativeVerifierRuntime {
           clock: this.clock,
         })
       : model;
+    const owner = { runId: request.runId, sessionId, actor: { role: "verifier" as const, id: candidate.runtimeId } };
     const result = await runAgentLoop({
       model: runtimeModel,
       registry: tools,
       context: {
-        runId: request.runId,
-        sessionId,
-        actor: { role: "verifier", id: candidate.runtimeId },
+        ...owner,
         workspacePath: workspace.path,
         signal: request.signal,
       },
@@ -570,6 +576,9 @@ export class NativeVerifierRuntime {
       onCheckpoint: async (checkpoint) => {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
       },
+    }).finally(async () => {
+      // A server the verifier started for a live check never outlives its session.
+      await this.options.managedProcesses?.closeAgent(owner);
     });
 
     if (result.status === "verifier_verdict_submitted") {
@@ -919,6 +928,8 @@ export interface InspectionToolsInput {
   execution?: OneShotCommandExecutor;
   /** Test double. Production uses `run_evidence_command` from `createEvidenceTools`. */
   commandTool?: NativeTool<unknown>;
+  /** Registers process.start/poll/list/signal so the verifier can run the product live. */
+  managedProcesses?: ManagedProcessService;
   /**
    * The evidence scope this session records into and lists by default. A deliverable review uses
    * `delivery:<task>`, which its verdict pass can inspect and cite; the generic "verifier" scope was
@@ -966,6 +977,9 @@ export function createVerifierCommandBroker(
     throw new Error("Verifier command broker only registers run_evidence_command.");
   }
   broker.register(tool);
+  if (input.managedProcesses) {
+    for (const processTool of createManagedProcessTools(input.managedProcesses)) broker.register(processTool);
+  }
   return broker;
 }
 

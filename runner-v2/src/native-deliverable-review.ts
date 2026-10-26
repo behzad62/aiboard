@@ -32,11 +32,13 @@ import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
 import {
   READER_KERNEL_INVARIANTS_V2,
   REVIEWER_CONTRACT_SECTION_ID,
+  VERIFIER_LIVE_CHECK_INSTRUCTIONS,
   buildReviewerContractBlock,
   compactJson,
   defectClassBrief,
 } from "./agent-prompts.js";
 import type { ReviewDefectRecorder } from "./defect-history.js";
+import type { ManagedProcessService } from "./managed-process.js";
 import { modelTrackRecordSnapshot } from "./defect-history.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { BudgetLedger, ModelCostBasisSnapshot } from "./budget-ledger.js";
@@ -239,6 +241,8 @@ export interface NativeDeliverableReviewRuntimeOptions {
   execution?: OneShotCommandExecutor;
   permissionProfile?: PermissionProfile;
   permissions?: SqlitePermissionStore;
+  /** Background processes for the command-capable findings pass; stopped when its session ends. */
+  managedProcesses?: ManagedProcessService;
   router: Pick<RuntimeRouter, "selectVerifier">;
   candidates: readonly AgentRuntimeCandidate[];
   models: ReadonlyMap<string, AgentModel>;
@@ -638,7 +642,10 @@ export class NativeDeliverableReviewRuntime {
       recordedAt: this.clock(),
     });
     const messages: AgentMessage[] = [
-      { id: `delivery-${pass}-system`, role: "system", content: deliveryReviewerSystemPrompt(pass, context.tier, context.reviewIntegrityPolicyVersion, context.inputs.fixDelta !== undefined) },
+      { id: `delivery-${pass}-system`, role: "system", content: [
+        deliveryReviewerSystemPrompt(pass, context.tier, context.reviewIntegrityPolicyVersion, context.inputs.fixDelta !== undefined),
+        ...(this.liveProcessPass(context, pass) ? [VERIFIER_LIVE_CHECK_INSTRUCTIONS] : []),
+      ].join("\n") },
       { id: `context:${pack.digest}`, role: "user", content: pack.text },
     ];
     // Fresh-context device: every pass opens a new session whose event list
@@ -689,19 +696,27 @@ export class NativeDeliverableReviewRuntime {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
       },
     };
-    let result = await runAgentLoop(loopOptions);
-    // A verdict model ended a turn with reasoning only and the whole build paused (tunnel run). Like a
-    // worker, a pass that stops without its lifecycle call continues in the same session with a
-    // reminder naming the call, at most twice, before it suspends as before.
-    for (let continuation = 0; continuation < 2 && result.status === "suspended" && result.reason === "model_ended_without_lifecycle"; continuation += 1) {
-      result = await runAgentLoop({
-        ...loopOptions,
-        initialMessages: [...result.messages, {
-          id: `delivery-${pass}-continue-${continuation + 1}`,
-          role: "user",
-          content: `You ended your turn without calling ${lifecycleToolForPass(pass)}. Continue the ${pass} pass and finish it by calling ${lifecycleToolForPass(pass)} exactly once.`,
-        }],
-      });
+    let result: AgentLoopResult;
+    try {
+      result = await runAgentLoop(loopOptions);
+      // A verdict model ended a turn with reasoning only and the whole build paused (tunnel run). Like a
+      // worker, a pass that stops without its lifecycle call continues in the same session with a
+      // reminder naming the call, at most twice, before it suspends as before.
+      for (let continuation = 0; continuation < 2 && result.status === "suspended" && result.reason === "model_ended_without_lifecycle"; continuation += 1) {
+        result = await runAgentLoop({
+          ...loopOptions,
+          initialMessages: [...result.messages, {
+            id: `delivery-${pass}-continue-${continuation + 1}`,
+            role: "user",
+            content: `You ended your turn without calling ${lifecycleToolForPass(pass)}. Continue the ${pass} pass and finish it by calling ${lifecycleToolForPass(pass)} exactly once.`,
+          }],
+        });
+      }
+    } finally {
+      // A server the reviewer started for a live check never outlives its session.
+      if (this.liveProcessPass(context, pass)) {
+        await this.options.managedProcesses!.closeAgent({ runId: request.runId, sessionId, actor: { role: "verifier", id: candidate.runtimeId } });
+      }
     }
     const durable = this.projection(request.runId).delivery?.reviews[context.inputs.taskId];
     if (passEnded(result, pass, reviewId) && durable?.reviewId === reviewId && durable.stage === expectedStageForPass(pass)) {
@@ -982,7 +997,7 @@ export class NativeDeliverableReviewRuntime {
       registry.register(lifecycle);
       runtime = registry;
     } else {
-      const commands = pass === "findings" && deliveryReviewDepthForTier(context.tier).affectedTests;
+      const commands = this.commandPass(context, pass);
       broker = commands ? "delivery_commands" : "delivery";
       const base = {
         git: this.options.git,
@@ -1007,6 +1022,7 @@ export class NativeDeliverableReviewRuntime {
             ...base,
             ...(this.options.execution ? { execution: this.options.execution } : {}),
             ...(this.options.permissionProfile ? { permissionProfile: this.options.permissionProfile } : {}),
+            ...(this.options.managedProcesses ? { managedProcesses: this.options.managedProcesses } : {}),
           }))
         : inspection;
     }
@@ -1020,6 +1036,15 @@ export class NativeDeliverableReviewRuntime {
         })
       : runtime;
     return new InspectionCountingRuntime(budgeted, counter);
+  }
+
+  /** The high-tier findings pass runs audited commands in the task-revision checkout. */
+  private commandPass(context: PassContext, pass: Pass): boolean {
+    return pass === "findings" && deliveryReviewDepthForTier(context.tier).affectedTests;
+  }
+
+  private liveProcessPass(context: PassContext, pass: Pass): boolean {
+    return this.options.managedProcesses !== undefined && this.commandPass(context, pass);
   }
 
   private lifecycleOptions(context: PassContext, pass: Pass, sessionId: string): DeliveryLifecycleToolOptions {
