@@ -39,13 +39,14 @@ assert.ok(gates.includes("The Architect has finished"), "final project handoff i
 // Guidance goes through the pinned composer.
 const composer = slice("const composer = (", "const overview = (");
 assert.ok(composer.includes("<BuildNoteDraftField"), "composer holds the guidance field");
-assert.ok(composer.includes("Send guidance"), "composer sends durable guidance");
+assert.ok(composer.includes("submitNote()"), "composer sends durable guidance");
 
-// Run-level progress lives in Overview; budget and stats in Run details.
-const overview = slice("const overview = (", "const fileCount =");
-assert.ok(overview.includes("<RunnerV2ObservabilityPanel"), "Overview shows build activity");
-assert.ok(overview.includes("<NativePlanningPanel"), "Overview shows planning");
-assert.ok(overview.includes('section="ledger"'), "Overview shows the steering ledger");
+// Run-level progress lives in the Activity view (moved from Overview in 36a6b03a); budget and
+// stats in Run details.
+const activity = slice("        activity={", "        settings={");
+assert.ok(activity.includes("<RunnerV2ObservabilityPanel"), "Activity shows build activity");
+assert.ok(activity.includes("<NativePlanningPanel"), "Activity shows planning");
+assert.ok(activity.includes('section="ledger"'), "Activity shows the steering ledger");
 const details = slice("details={", "\n      />");
 assert.ok(details.includes("<BuildRunStats"), "Run details show build stats");
 
