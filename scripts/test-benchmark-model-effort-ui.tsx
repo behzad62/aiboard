@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
-  AdvancedModelEffortControl,
-  WorkBenchTeamBuilder,
+  CertifiedRunPanel,
+  HarnessBenchModelPicker,
 } from "../components/benchmark/certified/CertifiedRunPanel";
 import { ModelChecklist } from "../components/benchmark/run/ModelChecklist";
-import { TeamCompositionBuilder } from "../components/benchmark/teamiq/TeamCompositionBuilder";
 import { ReasoningControl } from "../components/ReasoningControl";
 import type { SelectedModel } from "../lib/providers/base";
 
@@ -58,43 +57,9 @@ assert.doesNotMatch(
   /aria-label="Reasoning effort for Plain Chat"[\s\S]*?<option value="(low|medium|high|xhigh|max)"/
 );
 
-const teamMarkup = renderToStaticMarkup(
-  <TeamCompositionBuilder
+const harnessMarkup = renderToStaticMarkup(
+  <HarnessBenchModelPicker
     models={models}
-    selectedModelIds={[
-      "openai:gpt-5.6-terra",
-      "custom:plain-chat",
-      "openai:gpt-5.6-terra",
-    ]}
-    effortByModelId={effortByModelId}
-    strategy="architect_worker_reviewer"
-    onChange={() => undefined}
-    onEffortChange={() => undefined}
-    onStrategyChange={() => undefined}
-  />
-);
-assert.match(teamMarkup, /Reasoning effort for GPT-5\.6/);
-assert.match(teamMarkup, />Extra high<\/option>/);
-assert.match(
-  teamMarkup,
-  /aria-label="Reasoning effort for Plain Chat"[^>]*disabled=""/
-);
-
-const advancedMarkup = renderToStaticMarkup(
-  <AdvancedModelEffortControl
-    models={models}
-    modelId="openai:gpt-5.6-terra"
-    effortByModelId={effortByModelId}
-    onEffortChange={() => undefined}
-  />
-);
-assert.match(advancedMarkup, /Reasoning effort for GPT-5\.6/);
-assert.match(advancedMarkup, />Extra high<\/option>/);
-
-const workBenchTeamMarkup = renderToStaticMarkup(
-  <WorkBenchTeamBuilder
-    models={models}
-    roleMode="architect_worker_reviewer"
     selectedModelIds={[
       "openai:gpt-5.6-terra",
       "custom:plain-chat",
@@ -106,35 +71,24 @@ const workBenchTeamMarkup = renderToStaticMarkup(
   />
 );
 assert.equal(
-  workBenchTeamMarkup.match(/aria-label="Reasoning effort for /g)?.length,
+  harnessMarkup.match(/aria-label="Reasoning effort for /g)?.length,
   3,
-  "every occupied WorkBench role must render an effort selector"
+  "every occupied HarnessBench role must render an effort selector"
 );
 assert.equal(
-  workBenchTeamMarkup.match(/aria-label="Reasoning effort for GPT-5\.6"/g)
+  harnessMarkup.match(/aria-label="Reasoning effort for GPT-5\.6"/g)
     ?.length,
   2,
-  "repeated WorkBench models must render from the same model-keyed effort"
+  "repeated HarnessBench models must render from the same model-keyed effort"
 );
-assert.match(workBenchTeamMarkup, />Extra high<\/option>/);
-assert.doesNotMatch(workBenchTeamMarkup, /<option value="(?:solo|architect_worker|architect_worker_reviewer)"/);
-assert.match(workBenchTeamMarkup, /Reviewer\/Verifier/);
+assert.match(harnessMarkup, />Extra high<\/option>/);
+assert.doesNotMatch(harnessMarkup, /<option value="(?:solo|architect_worker|architect_worker_reviewer)"/);
+assert.match(harnessMarkup, /Reviewer\/Verifier/);
 
-const workBenchSoloMarkup = renderToStaticMarkup(
-  <WorkBenchTeamBuilder
-    models={models}
-    roleMode="solo"
-    selectedModelIds={["openai:gpt-5.6-terra"]}
-    effortByModelId={effortByModelId}
-    onChange={() => undefined}
-    onEffortChange={() => undefined}
-  />
-);
-assert.match(
-  workBenchSoloMarkup,
-  /aria-label="Reasoning effort for GPT-5\.6"/,
-  "an Advanced WorkBench solo model remains configurable without preset checklist membership"
-);
-assert.match(workBenchSoloMarkup, />Extra high<\/option>/);
+const runMarkup = renderToStaticMarkup(<CertifiedRunPanel onComplete={async () => {}} setMessage={() => {}} />);
+assert.match(runMarkup, /Run HarnessBench/);
+assert.match(runMarkup, /Configure ToolBench/);
+assert.doesNotMatch(runMarkup, /Advanced|integration smoke|experimental suites|Run selected benchmark|Run certified benchmark/);
+assert.equal((runMarkup.match(/type="radio"/g) ?? []).length, 2, "Only the two primary benchmarks can be selected.");
 
 console.log("benchmark model effort UI: PASS");

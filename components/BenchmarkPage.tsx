@@ -50,7 +50,6 @@ export function BenchmarkPage() {
           <DashboardGate locked={locked} loading={loading}>
             {message && <MessageBanner message={message} />}
             <CertifiedRunPanel
-              track="all"
               onComplete={refresh}
               setMessage={setMessage}
             />

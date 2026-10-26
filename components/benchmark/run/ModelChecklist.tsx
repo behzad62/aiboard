@@ -9,14 +9,8 @@ import {
 import type { ReasoningEffort } from "@/lib/db/schema";
 import { ModelEffortSelect } from "./ModelEffortSelect";
 
-// Promoted from CertifiedRunPanel's old per-track model checklist (2026-07-17 benchmark
-// UX overhaul, Task 4 Step 4) into the ONE model-selection widget used for
-// every preset on the Run tab. Selection persistence lives here (helpers
-// below) so any caller can read/write the same localStorage-backed list; the
-// panel owns the actual React state and calls these at the right points
-// (initial read, and on every change) rather than this component reaching
-// into localStorage itself, keeping it a plain presentational component like
-// TeamCompositionBuilder.
+// ToolBench's model checklist and persistence helpers. The panel owns React state;
+// this component only renders the selected solo models and their reasoning effort.
 const MODEL_CHECKLIST_STORAGE_KEY = "aiboard:benchmark:run:model-checklist";
 
 export interface PersistedBenchmarkModelSelectionV2 {

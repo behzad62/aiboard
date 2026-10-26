@@ -516,9 +516,10 @@ check(
   runnerStatusSource
 );
 check(
-  "certified WorkBench readiness requires the managed Runner V2 capability",
+  "both primary benchmarks check their native runner capabilities",
   certifiedRunPanelSource.includes("getTrustedBenchRunnerReadiness") &&
-    certifiedRunPanelSource.includes("selectedWorkBenchReadiness.ready"),
+    certifiedRunPanelSource.includes("toolBenchRunnerReady") &&
+    certifiedRunPanelSource.includes("harnessBenchRunnerReady"),
   certifiedRunPanelSource
 );
 check(
@@ -552,14 +553,16 @@ check(
   runExecutionSource
 );
 check(
-  "certified WorkBench UI derives harness profile from role mode",
-  certifiedRunPanelSource.includes("workBenchHarnessProfileForRoleMode(workBenchRoleMode)") &&
-    !certifiedRunPanelSource.includes("profiles={WORKBENCH_HARNESS_PROFILES}"),
+  "HarnessBench UI exposes its fixed model-role picker without an Advanced launcher",
+  certifiedRunPanelSource.includes("HarnessBenchModelPicker") &&
+    !certifiedRunPanelSource.includes("Run selected benchmark") &&
+    !certifiedRunPanelSource.includes("<details") &&
+    !certifiedRunPanelSource.includes("runSelectedTrack"),
   certifiedRunPanelSource
 );
 check(
-  "certified WorkBench UI runs packs instead of individual cases",
-  certifiedRunPanelSource.includes("getNativeBenchmarkPack(selectedTrack, suiteId)") &&
+  "primary benchmark UI runs packs instead of individual cases",
+  certifiedRunPanelSource.includes("getNativeBenchmarkPack(focusedPreset.legs[0].track, focusedPreset.legs[0].suiteId)") &&
     runExecutionSource.includes("selectedWorkBenchPack.cases.map") &&
     runExecutionSource.includes("caseRecords.map((caseRecord) => caseRecord.id)") &&
     runExecutionSource.includes("cases: selectedWorkBenchPack.cases.map") &&
