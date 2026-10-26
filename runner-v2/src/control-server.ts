@@ -1,4 +1,5 @@
 import { ExecutionIsolationError } from "./execution-isolation-provider.js";
+import type { ToolBenchSessions, ToolBenchSessionRequest } from "./toolbench-session.js";
 import { NativeBuildRuntimeInitializationError, createProviderModel } from "./native-build-factory.js";
 import { BuildUserMediaStore, validateVisualInputs, type UserMediaInput } from "./build-user-media.js";
 import { classifyBuildMessage, respondToBuildMessage, describeVisualEvidence } from "./build-message-intent.js";
@@ -55,6 +56,7 @@ const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
 ]);
 
 export interface ControlServerOptions {
+  toolBench?: ToolBenchSessions;
   supervisor: RunSupervisor;
   token: string;
   checkGit?: () => Promise<GitPreflightResult>;
@@ -229,6 +231,7 @@ export class ControlServer {
   private readonly builds?: BuildControlPlane;
   private readonly buildProvisioner?: ControlServerOptions["buildProvisioner"];
   private readonly providerConfigs?: ProviderConfigStore;
+  private readonly toolBench?: ToolBenchSessions;
   private readonly userMedia?: BuildUserMediaStore;
   private readonly runnerInfo?: ControlServerOptions["runnerInfo"];
   private readonly mcp?: ControlServerOptions["mcp"];
@@ -252,6 +255,7 @@ export class ControlServer {
     this.builds = options.builds;
     this.buildProvisioner = options.buildProvisioner;
     this.providerConfigs = options.providerConfigs;
+    this.toolBench = options.toolBench;
     this.userMedia = options.userMediaDirectory ? new BuildUserMediaStore(options.userMediaDirectory) : undefined;
     this.runnerInfo = options.runnerInfo;
     this.mcp = options.mcp;
@@ -294,6 +298,7 @@ export class ControlServer {
   }
 
   async close(): Promise<void> {
+    await this.toolBench?.close();
     const server = this.server;
     if (!server) return;
     this.server = undefined;
@@ -349,6 +354,21 @@ export class ControlServer {
     url: URL
   ): Promise<void> {
     const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    if (segments[1] === "toolbench-sessions") {
+      if (!this.toolBench) throw new HttpError(404, "toolbench_unavailable", "Solo ToolBench sessions are unavailable; update the runner.");
+      if (segments.length === 2 && request.method === "POST") {
+        const git = await this.gitPreflight();
+        if (!git.available) throw new HttpError(412, git.code, git.reason);
+        sendJson(response, 200, await this.toolBench.start(await readJson<ToolBenchSessionRequest>(request))); return;
+      }
+      if (segments.length === 3 && request.method === "GET") {
+        sendJson(response, 200, await this.toolBench.get(segments[2])); return;
+      }
+      if (segments.length === 4 && segments[3] === "stop" && request.method === "POST") {
+        sendJson(response, 200, await this.toolBench.stop(segments[2])); return;
+      }
+      throw new HttpError(404, "not_found", "Unknown ToolBench session endpoint.");
+    }
     if (segments.length === 2 && segments[1] === "health" && request.method === "GET") {
       if (!this.runnerInfo) {
         throw new HttpError(503, "runner_info_unavailable", "Runner information is unavailable.");
@@ -356,6 +376,7 @@ export class ControlServer {
       sendJson(response, 200, {
         ok: true,
         protocolVersion: 2,
+        capabilities: { soloToolBench: Boolean(this.toolBench) },
         projectPath: this.runnerInfo.projectPath,
         nodeVersion: this.runnerInfo.nodeVersion,
         mcpServers: this.mcp?.status().length ?? 0,

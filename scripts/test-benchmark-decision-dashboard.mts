@@ -769,13 +769,13 @@ check(
   "WorkBench verdict names teams and requests a team pack when empty",
   verdictByKey.workbench?.label === "Best HarnessBench team" &&
     verdictByKey.workbench?.emptyHint ===
-      "Run HarnessBench with a team and matched solo baselines.",
+      "Run HarnessBench with different models assigned to its Build roles.",
   verdictByKey.workbench
 );
 check(
   "team-lift verdict requests comparable solo and team tracks when empty",
   verdictByKey.teamLift?.emptyHint ===
-    "Run the same HarnessBench profile solo and as a team to measure added value.",
+    "Team lift requires matched HarnessBench baselines with each member filling all Build roles.",
   verdictByKey.teamLift
 );
 check(

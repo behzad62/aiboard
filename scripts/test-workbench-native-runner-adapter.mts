@@ -209,6 +209,7 @@ const result = await runNativeWorkBenchBuild(
     allowedCommands: ["npm test"],
     runner: { url: "http://127.0.0.1:8797", token: "bench-token" },
     case: {
+      benchmarkTrack: "harnessbench",
       id: "case_1",
       title: "Native fixture",
       description: "Edit the fixture",
@@ -225,13 +226,15 @@ const result = await runNativeWorkBenchBuild(
     models: [{ modelId: "chatgpt:gpt-5.4-mini", providerId: "chatgpt", displayName: "GPT" }],
     teamComposition: {
       roles: [{
+        role: "architect", slot: "architect", modelId: "chatgpt:gpt-5.4-mini", providerId: "chatgpt", displayName: "GPT", reasoningEffort: "xhigh",
+      }, {
         role: "worker",
         slot: "worker",
         modelId: "chatgpt:gpt-5.4-mini",
         providerId: "chatgpt",
         displayName: "GPT",
         reasoningEffort: "xhigh",
-      }],
+      }, { role: "reviewer", slot: "reviewer", modelId: "chatgpt:gpt-5.4-mini", providerId: "chatgpt", displayName: "GPT", reasoningEffort: "xhigh" }],
     },
     context: {
       recordTrace: async (trace: unknown) => { recordedTraces.push(trace); },
@@ -349,6 +352,42 @@ assert.equal(recordedTraces.length, 1);
 assert.equal((recordedTraces[0] as { reasoningEffort?: unknown }).reasoningEffort, "xhigh");
 assert.equal(recordedTools.length, 2);
 assert.equal(recordedArtifacts.length, 1);
+const fullBuild = createdBuild!.build as { architectRuntimeId: string; workerRuntimeIds: string[]; reviewerRuntimeId: string; verifierRuntimeIds: string[]; alwaysRequireIndependentVerifier: boolean };
+assert.equal(fullBuild.architectRuntimeId, "chatgpt:gpt-5.4-mini");
+assert.deepEqual(fullBuild.workerRuntimeIds, [fullBuild.architectRuntimeId]);
+assert.equal(fullBuild.reviewerRuntimeId, fullBuild.architectRuntimeId);
+assert.deepEqual(fullBuild.verifierRuntimeIds, [fullBuild.reviewerRuntimeId]);
+assert.equal(fullBuild.alwaysRequireIndependentVerifier, true, "HarnessBench always requires its reviewer, including when one model fills all roles");
+
+for (const scenario of ["question", "pump-error", "wall-clock", "idle"] as const) {
+  const commands: string[] = [];
+  let stopped = false;
+  let now = 0;
+  const expectedCode = scenario === "question" ? "architect_question_pending" : scenario === "pump-error" ? "autonomous_pump_error" : scenario === "idle" ? "runner_no_progress" : "wall_clock_limit";
+  await assert.rejects(runNativeWorkBenchBuild({ attemptId: scenario, runId: scenario, teamCompositionId: "team", harnessProfile: "aiboard-build-multi-worker", allowedCommands: ["npm test"], runner: { url: "http://test", token: "test" },
+    case: { id: scenario, title: scenario, prompt: { userRequest: "Implement" }, budget: { maxWallClockSeconds: scenario === "wall-clock" ? .02 : 60 } },
+    models: [{ modelId: "test:model", providerId: "test", displayName: "Test" }],
+    context: { recordTrace: async () => {}, recordToolCall: async () => {}, recordArtifact: async () => {} },
+  } as never, {
+    startManagedAttemptRunner: async () => ({ running: true, url: "http://test", token: "test", projectPath: "C:/fixture", statePath: "C:/state" }),
+    restoreManagedAttemptOracle: async () => ({}), stopManagedAttemptRunner: async () => { stopped = true; return {}; },
+    getNativeRunnerHealth: async () => ({ projectPath: "C:/fixture" }), createProviderConfigs: () => [], configureNativeProviders: async () => {}, createNativeBuild: async () => {},
+    commandNativeRun: async (_connection: unknown, _id: unknown, command: string) => { commands.push(command); },
+    getNativeRun: async (_connection: unknown, _id: unknown, _fetch: unknown, signal: AbortSignal) => {
+      if (scenario === "wall-clock") return new Promise((_resolve, reject) => {
+        const fallback = setTimeout(() => reject(new Error("Wall-clock guard did not abort the request.")), 1000);
+        signal.addEventListener("abort", () => { clearTimeout(fallback); reject(signal.reason); }, { once: true });
+      });
+      return { state: "running" };
+    },
+    getNativeBuild: async () => scenario === "question" ? { status: "running", blockingArchitectQuestionId: "scope-conflict", lastSequence: 85 } : scenario === "idle" ? { status: "running", lastSequence: 88 } : { status: "paused", pauseReason: { reason: "autonomous_pump_error" }, runtime: { architect: {} }, lastSequence: 87 },
+    getNativeBuildActivity: async () => [], now: () => now,
+    getNativeBuildAudit: async () => nativeAudit, wait: async () => { now += 301_000; },
+    selectNativeArchitectHandoff: async () => {}, selectNativeProjectHandoff: async () => {},
+  } as never), (error: unknown) => error instanceof NativeWorkBenchExecutionError && error.certifiedCode === expectedCode && error.certifiedStatus === (scenario === "wall-clock" ? "failed_budget" : "invalid_harness") && Boolean(error.buildResult?.traceIds?.length));
+  assert.equal(stopped, true, `${scenario}: managed child must stop`);
+  assert.deepEqual(commands, ["start"], `${scenario}: no blind continuation after a typed blocker or harness error`);
+}
 
 async function verifyNativeCancellation(phase: "start" | "poll"): Promise<void> {
   const controller = new AbortController();
@@ -358,6 +397,7 @@ async function verifyNativeCancellation(phase: "start" | "poll"): Promise<void> 
   const stopEntered = deferred<void>();
   const stopGate = deferred<void>();
   const activeSignals: AbortSignal[] = [];
+  const cleanupSignals: AbortSignal[] = [];
   let settled = false;
 
   const stall = (signal: AbortSignal | undefined): Promise<never> => {
@@ -482,7 +522,7 @@ async function verifyNativeCancellation(phase: "start" | "poll"): Promise<void> 
         throw new Error("unexpected handoff");
       },
       getNativeBuildAudit: async (...args: unknown[]) => {
-        if (args[3] instanceof AbortSignal) activeSignals.push(args[3]);
+        if (args[3] instanceof AbortSignal) cleanupSignals.push(args[3]);
         throw new Error("audit unavailable after cancellation");
       },
       wait: async () => undefined,
@@ -507,9 +547,10 @@ async function verifyNativeCancellation(phase: "start" | "poll"): Promise<void> 
   await assert.rejects(pending, (error) => error === cancellation);
   assert.ok(activeSignals.length > 0);
   assert.ok(
-    activeSignals.every((signal) => signal === controller.signal),
-    `${phase} control-plane requests receive the exact parent signal`
+    activeSignals.every((signal) => signal.aborted && signal.reason === cancellation),
+    `${phase} control-plane requests inherit parent cancellation through the wall-clock guard`
   );
+  assert.ok(cleanupSignals.every(signal => !signal.aborted), "final accounting gets a fresh bounded signal after cancellation");
 }
 
 await verifyNativeCancellation("start");

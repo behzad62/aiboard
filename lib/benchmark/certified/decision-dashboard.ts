@@ -170,7 +170,7 @@ export function buildDecisionVerdicts(rows: DecisionRow[]): DecisionVerdict[] {
       workBenchQuality,
       workBenchAttempts,
       "HarnessBench attempt",
-      "Run HarnessBench with a team and matched solo baselines."
+      "Run HarnessBench with different models assigned to its Build roles."
     ),
     verdict(
       "reliability",
@@ -206,7 +206,7 @@ export function buildDecisionVerdicts(rows: DecisionRow[]): DecisionVerdict[] {
       (row) => row.teamLift,
       (row) => row.attempts,
       "team attempt",
-      "Run the same HarnessBench profile solo and as a team to measure added value."
+      "Team lift requires matched HarnessBench baselines with each member filling all Build roles."
     ),
   ];
 }

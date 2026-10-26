@@ -1394,6 +1394,31 @@ test("architect context recording failure pauses with one note and no worker dis
   }
 });
 
+test("a completion question returns blocked without a missing-action error or extra model calls", async () => {
+  const fixture = createFixture("completion-question");
+  let calls = 0;
+  try {
+    const runtime = new BuildRuntime({
+      runId: RUN_ID, runPolicy: "finish", store: fixture.store,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: { run: async request => {
+        calls++;
+        assert.equal(request.reason.type, "completion_decision_required");
+        const result = await request.tools.invoke({ type: "tool_call", callId: "question", name: "ask_user", arguments: {
+          questionId: "scope-conflict", version: 1, decisionKind: "requirement_conflict", question: "Which conflicting scope should apply?",
+        } }, request.context);
+        assert.equal(result.isError, false, result.error?.message ?? "ask_user failed");
+      } },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: REVISION }) },
+      maxConcurrency: 1, workspaceFor: async () => "C:/unused", clock: () => "2026-09-23T00:00:00.000Z",
+    });
+    assert.deepEqual(await runtime.step(), { status: "blocked", action: "architect_question_pending" });
+    assert.equal(runtime.projection().blockingArchitectQuestionId, "scope-conflict");
+    assert.deepEqual(await runtime.step(), { status: "blocked", action: "architect_question_pending" });
+    assert.equal(calls, 1);
+  } finally { fixture.close(); }
+});
+
 test("a completion-ready finish run refuses complete_run until the context recording note is resolved", async () => {
   const fixture = createFixture("recording-completion");
   const failure = new ContextManifestRecordingError({

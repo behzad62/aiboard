@@ -173,10 +173,10 @@ export function ModelChecklist({
       </div>
       <p className="text-xs text-muted-foreground">
         {selectedModelIds.length === 0
-          ? "Select at least one model. Every preset below runs against this checklist."
+          ? "Select at least one model for ToolBench."
           : `${selectedModelIds.length} model${
               selectedModelIds.length === 1 ? "" : "s"
-            } selected. Every preset below runs against this checklist.`}
+            } selected. ToolBench runs each selected model alone.`}
       </p>
     </div>
   );

@@ -156,7 +156,7 @@ async function main() {
   );
 
   const runButtons = markup.match(/<button\b[^>]*>/g) ?? [];
-  assert.equal(runButtons.length, 3);
+  assert.equal(runButtons.length, 2);
   assert.ok(runButtons.every((button) => button.includes("disabled=\"\"")));
 
   const emptyRunningMarkup = renderToStaticMarkup(

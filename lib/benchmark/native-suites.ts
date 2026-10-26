@@ -4,7 +4,7 @@ import { getWorkBenchCasePack } from "./workbench/corpus";
 import { createRecoverableJobServiceCasePack } from "./workbench/recoverable-job-service/case-pack";
 
 export { NATIVE_TOOLBENCH_SUITE };
-export const HARNESSBENCH_SUITE = "harnessbench-recoverable-job-service-v2";
+export const HARNESSBENCH_SUITE = "harnessbench-recoverable-job-service-v3";
 export const WORKBENCH_SMOKE_SUITE = "workbench-native-smoke-v1";
 
 export function isNativeBenchmarkTrack(track: BenchmarkTrack): boolean {

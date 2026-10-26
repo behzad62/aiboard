@@ -15,11 +15,8 @@ export interface PresetCardGate {
   note?: string;
 }
 
-// Three preset cards, each with its OWN Run button. Choosing a card (a radio,
-// so it is keyboard reachable without nesting buttons) focuses it — the panel
-// shows the shared team builder while a team-leg preset is focused, and the
-// bench-runner controls while Full is focused. Gates come from the panel,
-// which owns the checklist / team selection / runner health.
+// Selecting a benchmark reveals its configuration. Only the focused card can
+// launch a run, so hidden model/role settings cannot start accidentally.
 export function PresetCards({
   busy,
   runningPresetId,
@@ -39,7 +36,7 @@ export function PresetCards({
     <div
       role="radiogroup"
       aria-label="Benchmark preset"
-      className="grid gap-3 md:grid-cols-3"
+      className="grid gap-3 md:grid-cols-2"
     >
       {BENCHMARK_PRESETS.map((preset) => {
         const gate = gates[preset.id];
@@ -74,10 +71,10 @@ export function PresetCards({
               <Button
                 className="w-full"
                 variant={focused ? "default" : "outline"}
-                disabled={gate.disabled || busy}
+                disabled={busy || (focused && gate.disabled)}
                 onClick={() => {
                   onFocus(preset.id);
-                  onRun(preset);
+                  if (focused) onRun(preset);
                 }}
               >
                 {isRunningThis ? (
@@ -85,7 +82,7 @@ export function PresetCards({
                 ) : (
                   <Play className="h-4 w-4" aria-hidden="true" />
                 )}
-                Run {preset.title}
+                {focused ? "Run" : "Configure"} {preset.title}
               </Button>
               {gate.disabled && gate.reason && (
                 <p className="text-xs text-muted-foreground">{gate.reason}</p>

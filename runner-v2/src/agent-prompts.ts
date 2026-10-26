@@ -1571,7 +1571,10 @@ function renderArchitectProjectDocs(input: BuildArchitectContextInput): string {
   const stateCommit = [...committed].reverse().find((commit) => commit.path === "docs/project/STATE.md");
   const lines = [
     `stateCurrent: ${projectDocsStateCurrent(input.projection)}`,
-    `entryPoint: readme=${latest?.readme ?? false} agentsMarkedSection=${latest?.agentsMarkedSection ?? false} claudePointer=${latest?.claudePointer ?? false}`,
+    `entryPoint at STATE commit (completion gate): readme=${stateCommit?.readme ?? false} agentsMarkedSection=${stateCommit?.agentsMarkedSection ?? false} claudePointer=${stateCommit?.claudePointer ?? false}`,
+    `entryPoint at latest document commit: readme=${latest?.readme ?? false} agentsMarkedSection=${latest?.agentsMarkedSection ?? false} claudePointer=${latest?.claudePointer ?? false}`,
+    ...(stateCommit && latest && latest.sequence > stateCommit.sequence
+      ? ["Documents changed after STATE.md. Commit STATE.md last to capture the current entry-point facts; changing marker formats cannot refresh the STATE snapshot."] : []),
     "committed:",
     ...(committed.length === 0
       ? ["(none)"]

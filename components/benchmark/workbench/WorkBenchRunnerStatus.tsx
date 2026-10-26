@@ -47,7 +47,7 @@ export function WorkBenchRunnerStatus({
         "Managed Runner V2 unavailable. Restart bench-runner with --runner-v2-dir C:\\path\\to\\aiboard-runner-v2.";
   const BenchStatusIcon = health?.ok ? CheckCircle2 : health ? XCircle : RefreshCw;
   const ManagedStatusIcon = managedReady ? CheckCircle2 : health ? XCircle : RefreshCw;
-  const trustedReadiness = workBenchCase?.trustedPolicy
+  const trustedReadiness = workBenchCase
     ? getTrustedBenchRunnerReadiness(health, workBenchCase)
     : null;
   const TrustedStatusIcon = trustedReadiness?.ready
@@ -55,10 +55,11 @@ export function WorkBenchRunnerStatus({
     : health
       ? XCircle
       : RefreshCw;
+  const runtimeLabel = workBenchCase?.trustedPolicy ? "Recoverable Job Service" : workBenchCase?.benchmarkTrack === "toolreliability" ? "Solo ToolBench" : "Native Build";
   const trustedStatusText = !health
-    ? "Recoverable Job Service runtime not checked"
+    ? `${runtimeLabel} runtime not checked`
     : trustedReadiness?.ready
-      ? `Recoverable Job Service runtime ready (${health.rjs?.profile ?? "profile unavailable"})`
+      ? `${runtimeLabel} runtime ready${workBenchCase?.trustedPolicy ? ` (${health.rjs?.profile ?? "profile unavailable"})` : ""}`
       : trustedReadiness?.error;
   const recoverableJobService = workBenchCase?.trustedPolicy?.kind === "recoverable-job-service";
   const download = recoverableJobService

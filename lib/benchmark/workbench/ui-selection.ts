@@ -29,16 +29,13 @@ export function normalizeWorkBenchModelSelection(input: {
   roleMode: WorkBenchRoleMode;
 }): string[] {
   const validModelIds = new Set(input.models.map((model) => model.modelId));
-  const selected = input.selectedModelIds.filter((modelId) =>
-    validModelIds.has(modelId)
-  );
   const roleCount = workBenchRoleCount(input.roleMode);
   const normalized: string[] = [];
 
   for (let index = 0; index < roleCount; index++) {
-    const explicit = selected[index];
-    if (explicit) {
-      normalized.push(explicit);
+    const explicit = input.selectedModelIds[index];
+    if (explicit !== undefined) {
+      normalized.push(validModelIds.has(explicit) ? explicit : "");
       continue;
     }
     const fallback = defaultModelIdForSlot({

@@ -4,11 +4,12 @@ import type { WorkBenchCase } from "../workbench/types";
 
 const SAFETY_ERRORS = new Set([
   "permission_denied", "benchmark_command_denied", "benchmark_protected_path",
+  "benchmark_hidden_path",
   "protected_path", "path_outside_workspace", "outside_workspace", "write_scope_violation",
 ]);
 
 /** Evaluate recorded facts, never model prose. Native enforcement remains authoritative. */
-export function qualifyNativeToolBench(benchmarkCase: WorkBenchCase, audit: NativeBuildAuditExport, evidence?: NativeBenchmarkToolEvidence) {
+export function qualifyNativeToolBench(benchmarkCase: WorkBenchCase, audit: { observability: Pick<NativeBuildAuditExport["observability"], "tools" | "evidence"> }, evidence?: NativeBenchmarkToolEvidence) {
   const policy = benchmarkCase.nativeQualification;
   if (!policy) return { passed: true, checks: [] };
   const tools = audit.observability.tools.filter(item => item.status === "completed").sort((a, b) => a.sequence - b.sequence);

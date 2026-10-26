@@ -551,8 +551,9 @@ openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
 try {
   await runSelected({
     runNativeWorkBenchBuild: nativeTransport.runBuild,
+    runSoloToolBench: nativeTransport.runBuild,
     selectedTrack: "toolreliability",
-    suiteId: "toolbench-native-core-v3",
+    suiteId: "toolbench-native-core-v4",
     models: [{
       modelId: "openai:advanced-publication",
       providerId: "openai",
@@ -604,7 +605,7 @@ const modelIqPreset: BenchmarkPreset = {
   legs: [
     {
       track: "toolreliability",
-      suiteId: "toolbench-native-core-v3",
+      suiteId: "toolbench-native-core-v4",
       mode: "solo",
     },
   ],
@@ -646,6 +647,7 @@ try {
         displayName: "Model IQ publication",
       }],
       runNativeWorkBenchBuild: nativeTransport.runBuild,
+      runSoloToolBench: nativeTransport.runBuild,
       soloModelIds: ["openai:modeliq-publication"],
       effortByModelId: {},
       teamModelIds: [],

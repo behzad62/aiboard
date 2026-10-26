@@ -591,10 +591,11 @@ function materializeSnapshotRow(
   const caseById = new Map(cases.map((item) => [item.id, item]));
   const modelIds = getTeamCompositionModelIds(team);
   const modelVariantKeys = getTeamCompositionModelVariantKeys(team);
-  const memberComparisonKeys = resultSet.configuration.roles
+  const roleComparisonKeys = resultSet.configuration.roles
     .map(benchmarkMemberComparisonKey)
     .sort();
   const isTeam = resultSet.configuration.subjectKind === "team";
+  const memberComparisonKeys = isTeam ? roleComparisonKeys : [...new Set(roleComparisonKeys)];
   const soloRole = !isTeam ? team.roles[0] : undefined;
   const displayName = soloRole
     ? benchmarkVariantLabel(

@@ -1,11 +1,5 @@
-// Certified run execution — extracted VERBATIM from CertifiedRunPanel.tsx
-// (2026-07-17 benchmark UX overhaul, Task 4 Step 1). No behavior changes: the
-// entry point (`runSelected`) and its pure
-// helpers moved out of the component unchanged; component-local reads/setters
-// that they used as closures became explicit `ctx` fields instead. Several
-// helpers below are *shared* with CertifiedRunPanel.tsx's render code (e.g.
-// TRACK_OPTIONS, workBenchModelsForRun, DIRECT_MODEL_HARNESS) —
-// they live here as the single source of truth and the panel imports them back.
+// Certified execution and publication: solo ToolBench sessions, full HarnessBench
+// crews, and separately scoped legacy experiments/integration smoke.
 "use client";
 
 import type { MutableRefObject } from "react";
@@ -62,6 +56,7 @@ import {
 } from "@/lib/benchmark/workbench";
 import { getNativeBenchmarkPack, isNativeBenchmarkTrack } from "@/lib/benchmark/native-suites";
 import { runNativeWorkBenchBuild } from "@/lib/benchmark/workbench/native-runner-adapter";
+import { runSoloToolBench } from "@/lib/benchmark/toolreliability/solo-runner-adapter";
 import type { SelectedModel } from "@/lib/providers/base";
 import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
 import {
@@ -168,6 +163,7 @@ export interface RunSelectedContext extends CertifiedRunActions {
   workBenchRunnerUrl: string;
   workBenchRunnerToken: string;
   runNativeWorkBenchBuild?: typeof runNativeWorkBenchBuild;
+  runSoloToolBench?: typeof runSoloToolBench;
   effectiveHarnessProfile: HarnessProfile;
   certification: HarnessCertificationResult;
   effortByModelId: BenchmarkModelEffortMap;
@@ -177,6 +173,13 @@ export interface RunSelectedContext extends CertifiedRunActions {
 }
 
 export async function runSelected(ctx: RunSelectedContext): Promise<void> {
+  // Public benchmark contracts are fixed; legacy callers cannot opt either track into another topology.
+  if (ctx.selectedTrack === "harnessbench" && (ctx.workBenchModelIds.length !== 3 || ctx.workBenchModelIds.some(id => !ctx.models.some(model => model.modelId === id)))) {
+    ctx.setMessage("Select a model for Architect, Worker, and Reviewer/Verifier.");
+    return;
+  }
+  if (ctx.selectedTrack === "toolreliability") ctx = { ...ctx, workBenchRoleMode: "solo", includeSoloBaselines: false, effectiveHarnessProfile: DIRECT_MODEL_HARNESS, certification: runHarnessCertification(DIRECT_MODEL_HARNESS) };
+  if (ctx.selectedTrack === "harnessbench") ctx = { ...ctx, workBenchRoleMode: "architect_worker_reviewer", includeSoloBaselines: false, effectiveHarnessProfile: workBenchHarnessProfileForRoleMode("architect_worker_reviewer"), certification: runHarnessCertification(workBenchHarnessProfileForRoleMode("architect_worker_reviewer")) };
   const {
     selectedTrack,
     suiteId,
@@ -191,6 +194,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     workBenchRunnerToken,
     runNativeWorkBenchBuild: executeNativeWorkBenchBuild =
       runNativeWorkBenchBuild,
+    runSoloToolBench: executeSoloToolBench = runSoloToolBench,
     effectiveHarnessProfile,
     certification,
     effortByModelId,
@@ -305,7 +309,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             suiteId,
             "teamiq"
           )
-        : isNativeBenchmarkTrack(selectedTrack) && includeSoloBaselines
+        : selectedTrack === "workbench" && includeSoloBaselines
           ? expandTeamIqTeamsBeforeExecution(
               initialTeams,
               true,
@@ -411,7 +415,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
                 teams.find(
                   (team) => team.id === buildInput.teamCompositionId
                 ) ?? primaryTeam;
-              return executeNativeWorkBenchBuild({
+              return (selectedTrack === "toolreliability" ? executeSoloToolBench : executeNativeWorkBenchBuild)({
                 expectedRunnerEnvironment: runnerEnvironment,
                 ...buildInput,
                 context,
@@ -444,7 +448,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     setMessage(
       result.status === "completed"
         ? isNativeBenchmarkTrack(selectedTrack)
-          ? `Certified WorkBench pack completed (${caseRecords.length} cases).`
+          ? `${selectedWorkBenchPack?.label ?? trackLabel(selectedTrack)} completed (${caseRecords.length} cases).`
           : `Certified ${trackLabel(selectedTrack)} run completed.`
         : result.error ?? `Certified ${trackLabel(selectedTrack)} run failed.`
     );
@@ -644,6 +648,12 @@ function teamWithEffectiveMaxTokens(
   });
 }
 
+export function signatureBenchmarkModel(team: BenchmarkTeamComposition, track: RunnableTrack): BenchmarkTeamCompositionRole | undefined {
+  if (track !== "harnessbench" || team.roles.length !== 3) return undefined;
+  const first = team.roles[0];
+  return team.roles.every(role => role.providerId === first.providerId && role.modelId === first.modelId && normalizeBenchmarkReasoningEffort(role.reasoningEffort) === normalizeBenchmarkReasoningEffort(first.reasoningEffort)) ? first : undefined;
+}
+
 async function planResultSetsForRun(input: {
   runnerEnvironment?: BenchmarkResultConfiguration["executionEnvironment"];
   executionId: string;
@@ -659,6 +669,7 @@ async function planResultSetsForRun(input: {
   const byTeamCompositionId: Record<string, string> = {};
   const resultSetIds: string[] = [];
   for (const team of input.teams) {
+    const signatureModel = signatureBenchmarkModel(team, input.track);
     const id = [
       "result",
       slugForRunId(input.executionId),
@@ -669,11 +680,11 @@ async function planResultSetsForRun(input: {
     const configuration = {
       ...(input.runnerEnvironment ? { executionEnvironment: input.runnerEnvironment } : {}),
       subjectKind:
-        team.strategy === "solo" || team.roles.length === 1
+        signatureModel || team.strategy === "solo" || team.roles.length === 1
           ? ("model" as const)
           : ("team" as const),
-      displayName: team.name,
-      ...(team.roles.length === 1
+      displayName: signatureModel ? `${signatureModel.displayName} · all Build roles` : team.name,
+      ...(signatureModel || team.roles.length === 1
         ? {
             providerId: team.roles[0]!.providerId,
             modelId: team.roles[0]!.modelId,
@@ -1046,6 +1057,7 @@ export type PresetProgressEvent =
 // WorkBench run itself.
 export interface RunPresetContext {
   runNativeWorkBenchBuild?: typeof runNativeWorkBenchBuild;
+  runSoloToolBench?: typeof runSoloToolBench;
   models: SelectedModel[];
   /** Model ids checked in the shared ModelChecklist; drives every solo leg. */
   soloModelIds: string[];
@@ -1200,6 +1212,7 @@ async function runSoloLeg(
       try {
         await runSelected({
           runNativeWorkBenchBuild: ctx.runNativeWorkBenchBuild,
+          runSoloToolBench: ctx.runSoloToolBench,
           selectedTrack: leg.track,
           suiteId: leg.suiteId,
           models: ctx.models,
@@ -1318,6 +1331,7 @@ async function runTeamLeg(
   try {
     await runSelected({
       runNativeWorkBenchBuild: ctx.runNativeWorkBenchBuild,
+      runSoloToolBench: ctx.runSoloToolBench,
       selectedTrack: leg.track,
       suiteId: leg.suiteId,
       models: ctx.models,

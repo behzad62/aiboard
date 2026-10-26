@@ -167,6 +167,7 @@ async function assertNoCertifiedPersistence(): Promise<void> {
   try {
     await runSelected({
       runNativeWorkBenchBuild: nativeBuildForTests,
+      runSoloToolBench: nativeBuildForTests,
       selectedTrack: "toolreliability",
       suiteId: toolReliabilityLeg.suiteId,
       models: [model],
@@ -224,6 +225,7 @@ for (const boundary of [
   try {
     const pending = runSelected({
       runNativeWorkBenchBuild: nativeBuildForTests,
+      runSoloToolBench: nativeBuildForTests,
       selectedTrack: "toolreliability",
       suiteId: toolReliabilityLeg.suiteId,
       models: [model],
@@ -320,6 +322,7 @@ for (const boundary of [
       {
         models,
         runNativeWorkBenchBuild: nativeBuildForTests,
+        runSoloToolBench: nativeBuildForTests,
         soloModelIds: models.map((model) => model.modelId),
         effortByModelId: {},
         teamModelIds: [],
@@ -405,6 +408,7 @@ for (const boundary of [
       {
         models,
         runNativeWorkBenchBuild: nativeBuildForTests,
+        runSoloToolBench: nativeBuildForTests,
         soloModelIds: models.map((model) => model.modelId),
         effortByModelId: {},
         teamModelIds: [],

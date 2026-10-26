@@ -2,6 +2,7 @@ export interface CommandInvocationInput {
   command?: string;
   args?: readonly string[];
   script?: string;
+  env?: Readonly<Record<string, string>>;
 }
 
 export function renderedBenchmarkCommand(input: CommandInvocationInput): string {
@@ -17,6 +18,9 @@ export function isBenchmarkCommandAllowed(
   allowedCommands: readonly string[] | undefined
 ): boolean {
   if (allowedCommands === undefined) return true;
+  // A fixed public command must not preload a hidden evaluator through NODE_OPTIONS,
+  // PYTHONPATH, or another caller-supplied environment override.
+  if (input.env && Object.keys(input.env).length > 0) return false;
   const rendered = renderedBenchmarkCommand(input);
   return allowedCommands.some((allowed) => allowed.trim() === rendered);
 }

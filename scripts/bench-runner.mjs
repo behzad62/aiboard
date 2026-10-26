@@ -166,7 +166,7 @@ async function route(pathname, body, signal) {
         port,
         root,
         mcp: false,
-        nativeCapabilities: { browser: await nativeBrowserAvailable() },
+        nativeCapabilities: { browser: await nativeBrowserAvailable(), soloToolBench: Boolean(runnerV2Launcher && existsSync(join(dirname(resolve(runnerV2Launcher.directory, runnerV2Launcher.cli)), "toolbench-session.ts"))) },
         rjs: await inspectRjsRuntime(),
         runnerV2: runnerV2Launcher
           ? { ready: true, source: runnerV2Launcher.source, sourceDigest: await runnerSourceDigest(runnerV2Launcher) }

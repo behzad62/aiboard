@@ -33,6 +33,7 @@ import {
   getNativeBuild,
   getNativeBuildAudit,
   getNativeBuildUsage,
+  getNativeBuildActivity,
   getNativeRun,
   getNativeRunnerHealth,
   selectNativeArchitectHandoff,
@@ -67,6 +68,8 @@ export interface NativeWorkBenchBuildInput extends WorkBenchBuildAdapterInput {
 }
 
 export interface NativeWorkBenchDependencies {
+  now?: () => number;
+  getNativeBuildActivity?: typeof getNativeBuildActivity;
   getNativeBuildUsage?: typeof getNativeBuildUsage;
   getNativeBenchmarkToolEvidence?: typeof getNativeBenchmarkToolEvidence;
   startManagedAttemptRunner: typeof startManagedAttemptRunner;
@@ -123,6 +126,7 @@ class NativeWorkBenchRunFailure extends Error {
 }
 
 const DEFAULT_DEPENDENCIES: NativeWorkBenchDependencies = {
+  getNativeBuildActivity,
   getNativeBuildUsage,
   startManagedAttemptRunner,
   restoreManagedAttemptOracle,
@@ -188,6 +192,11 @@ export async function runNativeWorkBenchBuild(
   input: NativeWorkBenchBuildInput,
   dependencies: NativeWorkBenchDependencies = DEFAULT_DEPENDENCIES
 ): Promise<WorkBenchBuildExecutionResult> {
+  if (input.case.benchmarkTrack === "toolreliability") throw new Error("ToolBench must use the solo tool-session adapter.");
+  if (input.case.benchmarkTrack === "harnessbench" && ["architect", "worker", "reviewer"].some(role => input.teamComposition?.roles.filter(candidate => candidate.role === role).length !== 1)) throw new Error("HarnessBench requires Architect, Worker, and Reviewer/Verifier models.");
+  const parentSignal = input.signal;
+  const deadline = AbortSignal.timeout((input.case.budget.maxWallClockSeconds ?? 3600) * 1_000);
+  input = { ...input, signal: input.signal ? AbortSignal.any([input.signal, deadline]) : deadline };
   const startedMs = Date.now();
   let managed: ManagedAttemptRunnerResult | undefined;
   let audit: NativeBuildAuditExport | undefined;
@@ -269,14 +278,15 @@ export async function runNativeWorkBenchBuild(
           objective: workBenchObjective(input),
           architectRuntimeId: roleMapping.architectRuntimeId,
           workerRuntimeIds: roleMapping.workerRuntimeIds,
-          verifierRuntimeIds: configuredRuntimeIds,
-          alwaysRequireIndependentVerifier: false,
+          verifierRuntimeIds: roleMapping.reviewerRuntimeId ? [roleMapping.reviewerRuntimeId] : configuredRuntimeIds,
+          ...(roleMapping.reviewerRuntimeId ? { reviewerRuntimeId: roleMapping.reviewerRuntimeId } : {}),
+          alwaysRequireIndependentVerifier: input.case.benchmarkTrack === "harnessbench" || Boolean(roleMapping.reviewerRuntimeId),
           maxConcurrency: Math.max(1, Math.min(4, roleMapping.workerRuntimeIds.length)),
           runPolicy: Object.keys(budgetLimits).length > 0 ? "budgeted" : "finish",
           budgetLimits,
           benchmark: {
             attemptId: input.attemptId,
-            allowedCommands: uniqueStrings([...input.allowedCommands, "git diff --check"]),
+            allowedCommands: uniqueStrings([...input.allowedCommands.filter(command => command.trim() !== input.case.verifier?.command?.trim()), "git diff --check"]),
             hiddenPaths: uniqueStrings([
               ...WORKBENCH_HIDDEN_PATHS,
               ...(input.case.trustedPolicy?.hiddenPaths ?? []),
@@ -312,12 +322,24 @@ export async function runNativeWorkBenchBuild(
     const continuationCounts = new Map<string, number>();
     const recordedUsageIds = new Set<string>();
     let lastUsagePoll = 0;
+    const progressNow = dependencies.now ?? Date.now;
+    let lastProgressAt = progressNow();
+    let lastProgressKey = "";
     for (;;) {
       throwIfAborted(input.signal);
       const [run, projection] = await Promise.all([
         dependencies.getNativeRun(connection, nativeRunId, undefined, input.signal),
         dependencies.getNativeBuild(connection, nativeRunId, undefined, input.signal),
       ]);
+      const progressKey = JSON.stringify([projection.lastSequence, projection.status]);
+      if (progressKey !== lastProgressKey) { lastProgressKey = progressKey; lastProgressAt = progressNow(); }
+      if (projection.blockingArchitectQuestionId) {
+        throw new NativeWorkBenchRunFailure("invalid_harness", "architect_question_pending", "Benchmark requires user input from the Architect. Inspect the recorded question; unattended execution cannot continue.");
+      }
+      if (progressNow() - lastProgressAt > 300_000) {
+        const activity = await dependencies.getNativeBuildActivity?.(connection, nativeRunId, undefined, input.signal);
+        if (activity && activity.length === 0) throw new NativeWorkBenchRunFailure("invalid_harness", "runner_no_progress", "Runner made no durable progress for five minutes with no active operation; the benchmark was stopped to preserve credits.");
+      }
       throwIfAborted(input.signal);
       if (dependencies.getNativeBuildUsage && Date.now() - lastUsagePoll >= 3_000) {
         lastUsagePoll = Date.now();
@@ -428,7 +450,7 @@ export async function runNativeWorkBenchBuild(
             connection,
             nativeRunId,
             undefined,
-            input.signal
+            AbortSignal.timeout(15_000)
           );
           buildResult = nativeAuditResult(input, audit, managed, startedMs);
           try {
@@ -440,8 +462,8 @@ export async function runNativeWorkBenchBuild(
           // Preserve the original failure when the Runner audit itself is unavailable.
         }
       }
-      throwIfAborted(input.signal);
-      const metadata = nativeFailureMetadata(error);
+      throwIfAborted(parentSignal);
+      const metadata = deadline.aborted ? { certifiedStatus: "failed_budget" as const, certifiedCode: "wall_clock_limit" } : nativeFailureMetadata(error);
       throw new NativeWorkBenchExecutionError(
         error instanceof Error ? error.message : String(error),
         managed.projectPath,
@@ -456,7 +478,7 @@ export async function runNativeWorkBenchBuild(
         }
       );
     }
-    throwIfAborted(input.signal);
+    throwIfAborted(parentSignal);
     throw error;
   } finally {
     if (managedStartIssued) {
@@ -532,14 +554,7 @@ export function nativePauseDisposition(
     };
   }
   if (normalized === "autonomous_pump_error") {
-    return {
-      action: "continue",
-      key: "autonomous-pump-recovery",
-      limit: 4,
-      certifiedStatus: "invalid_harness",
-      certifiedCode: "autonomous_pump_error",
-      message: "Runner V2 autonomous pump remained paused after bounded recovery.",
-    };
+    return pauseFailure("invalid_harness", "autonomous_pump_error", normalized);
   }
   if (normalized.startsWith("provider_error:")) {
     return pauseFailure("provider_unavailable", "provider_unavailable", normalized);
@@ -776,7 +791,7 @@ function usageSource(
 function nativeWorkBenchRoles(
   team: BenchmarkTeamComposition | undefined,
   models: SelectedModel[]
-): { architectRuntimeId: string; workerRuntimeIds: string[] } {
+): { architectRuntimeId: string; workerRuntimeIds: string[]; reviewerRuntimeId?: string } {
   if (!team) {
     const runtimeIds = uniqueStrings(models.map((model) => model.modelId));
     const architectRuntimeId = runtimeIds[0] ?? "";
@@ -802,6 +817,7 @@ function nativeWorkBenchRoles(
   return {
     architectRuntimeId: architect?.modelId ?? "",
     workerRuntimeIds,
+    reviewerRuntimeId: team.roles.find((role) => role.role === "reviewer")?.modelId,
   };
 }
 

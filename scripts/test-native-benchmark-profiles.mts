@@ -45,7 +45,7 @@ assert.equal(toBenchmarkCaseV2(signature.cases[0].case).track, "harnessbench");
 assert.equal(signature.cases[0].case.budget.maxModelCalls, 120);
 assert.equal(signature.cases[0].case.scoring.scoringVersion, "recoverable-job-service-binary-v2");
 assert.equal(getNativeBenchmarkPack("workbench", signature.id), null);
-assert.ok(BENCHMARK_PRESETS.every(preset => preset.legs.every(leg => leg.requires === "bench-runner" && leg.mode === "solo")));
+assert.ok(BENCHMARK_PRESETS.every(preset => preset.legs.every(leg => leg.requires === "bench-runner" && leg.mode === (leg.track === "harnessbench" ? "team" : "solo"))));
 assert.ok(BENCHMARK_PRESETS.every(preset => !preset.legs.some(leg => leg.track === "teamiq" || leg.track === "workbench")));
 const smoke = getNativeBenchmarkPack("workbench", WORKBENCH_SMOKE_SUITE)!;
 assert.equal(smoke.caseCount, 3);

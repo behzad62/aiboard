@@ -4787,6 +4787,7 @@ export class BuildRuntime {
    * the others threw, and the run logged a runner error on top of the handoff (tunnel run).
    */
   private async architectStoppedFor(action: string): Promise<BuildStepResult | undefined> {
+    if (this.projection().blockingArchitectQuestionId) return { status: "blocked", action: "architect_question_pending" };
     return this.projection().status === "paused" ? await this.afterArchitect(action) : undefined;
   }
 
@@ -4796,6 +4797,7 @@ export class BuildRuntime {
       throw new Error(`Architect returned from ${action} without a typed action.`);
     }
     const projection = rebuildSchedulerProjection(events);
+    if (projection.blockingArchitectQuestionId) return { status: "blocked", action: "architect_question_pending" };
     // C2a repair (B1): commit the kernel snapshot in the same step that
     // recorded `project.handoff_requested`, before returning `paused` --
     // the production flow never takes another step from the handoff stop.

@@ -520,7 +520,15 @@ test("Architect context carries committed STATE.md text, stateCurrent, and recor
   });
   assert.match(current.text, /PF1_COMMITTED_STATE_MARKER/);
   assert.match(current.text, /stateCurrent: true/);
-  assert.match(current.text, /entryPoint: readme=true agentsMarkedSection=true claudePointer=false/);
+  assert.match(current.text, /entryPoint at STATE commit \(completion gate\): readme=true agentsMarkedSection=true claudePointer=false/);
+  const refreshedEntryPoints = buildArchitectContext({
+    ...base, reason: { type: "plan_required" }, projectDocsStateText: committed,
+    projection: { ...projection, projectDocs: { ...projection.projectDocs, committed: [...projection.projectDocs.committed,
+      { ...projection.projectDocs.committed[0], path: "CLAUDE.md", sequence: 8, claudePointer: true }] } },
+  });
+  assert.match(refreshedEntryPoints.text, /entryPoint at STATE commit \(completion gate\): readme=true agentsMarkedSection=true claudePointer=false/);
+  assert.match(refreshedEntryPoints.text, /entryPoint at latest document commit: readme=true agentsMarkedSection=true claudePointer=true/);
+  assert.match(refreshedEntryPoints.text, /Commit STATE.md last/);
   assert.match(current.text, /docs\/project\/STATE.md sequence=6/);
   assert.match(current.text, /abandoned:\ndocs\/project\/decisions.md sequence=7 Project document summary is invalid\./);
   const stale = buildArchitectContext({

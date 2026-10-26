@@ -101,7 +101,6 @@ const workBenchTeamMarkup = renderToStaticMarkup(
       "openai:gpt-5.6-terra",
     ]}
     effortByModelId={effortByModelId}
-    onRoleModeChange={() => undefined}
     onChange={() => undefined}
     onEffortChange={() => undefined}
   />
@@ -118,6 +117,8 @@ assert.equal(
   "repeated WorkBench models must render from the same model-keyed effort"
 );
 assert.match(workBenchTeamMarkup, />Extra high<\/option>/);
+assert.doesNotMatch(workBenchTeamMarkup, /<option value="(?:solo|architect_worker|architect_worker_reviewer)"/);
+assert.match(workBenchTeamMarkup, /Reviewer\/Verifier/);
 
 const workBenchSoloMarkup = renderToStaticMarkup(
   <WorkBenchTeamBuilder
@@ -125,7 +126,6 @@ const workBenchSoloMarkup = renderToStaticMarkup(
     roleMode="solo"
     selectedModelIds={["openai:gpt-5.6-terra"]}
     effortByModelId={effortByModelId}
-    onRoleModeChange={() => undefined}
     onChange={() => undefined}
     onEffortChange={() => undefined}
   />

@@ -22,11 +22,49 @@ export interface NativeRunnerConnection {
   token: string;
 }
 
+export interface NativeToolBenchSnapshot {
+  sessionId: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  reason: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  result?: { status: string; reason?: string; error?: string; errorCode?: string; turns: number };
+  usage?: NativeBuildUsageProjection;
+  tools: Array<{ sequence: number; sessionId: string; callId: string; toolName: string; status: "started" | "completed"; occurredAt: string; isError?: boolean; errorCode?: string }>;
+  evidence: NativeBuildObservability["evidence"];
+  toolEvidence: { runId: string; tools: Array<{ sequence: number; callId: string; toolName: string; isError: boolean; errorCode?: string; input: { path?: string; startLine?: number; endLine?: number; editCount?: number }; outputText: string }> };
+}
+export interface NativeToolBenchSessionInput {
+  sessionId: string;
+  runtimeId: string;
+  prompt: string;
+  allowedCommands: string[];
+  hiddenPaths: string[];
+  protectedPaths: string[];
+  editablePaths: string[];
+  budget: { maxInputTokens?: number; maxOutputTokens?: number; maxModelCalls?: number; maxToolCalls?: number; maxEstimatedCostMicros?: number };
+  maxWallClockMs: number;
+  browser?: boolean;
+  skills?: boolean;
+}
+
+export function startNativeToolBenchSession(connection: NativeRunnerConnection, input: NativeToolBenchSessionInput, signal?: AbortSignal): Promise<NativeToolBenchSnapshot> {
+  return request(connection, "/v2/toolbench-sessions", { method: "POST", body: JSON.stringify(input), signal }, fetch);
+}
+export function getNativeToolBenchSession(connection: NativeRunnerConnection, sessionId: string, signal?: AbortSignal): Promise<NativeToolBenchSnapshot> {
+  return request(connection, `/v2/toolbench-sessions/${encodeURIComponent(sessionId)}`, { method: "GET", signal }, fetch);
+}
+export function stopNativeToolBenchSession(connection: NativeRunnerConnection, sessionId: string, signal?: AbortSignal): Promise<NativeToolBenchSnapshot> {
+  return request(connection, `/v2/toolbench-sessions/${encodeURIComponent(sessionId)}/stop`, { method: "POST", body: "{}", signal }, fetch);
+}
+
 export interface NativeRunnerHealth {
   ok: true;
   protocolVersion: 2;
   projectPath: string;
   nodeVersion: string;
+  capabilities?: { soloToolBench?: boolean };
 }
 
 export interface NativeProviderConfig {

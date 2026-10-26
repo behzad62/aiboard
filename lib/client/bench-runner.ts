@@ -25,7 +25,7 @@ export class BenchRunnerRequestError extends Error {
 }
 
 export interface BenchRunnerHealth {
-  nativeCapabilities?: { browser: boolean };
+  nativeCapabilities?: { browser: boolean; soloToolBench?: boolean };
   platform?: string;
   nodeVersion?: string;
   ok: boolean;
@@ -110,6 +110,7 @@ export function getTrustedBenchRunnerReadiness(
     };
   }
   const policy = workBenchCase?.trustedPolicy;
+  if (workBenchCase?.benchmarkTrack === "toolreliability" && !health.nativeCapabilities?.soloToolBench) return { ready: false, error: "This ToolBench requires solo native sessions. Download the current benchmark runner bundle and check it again." };
   if (workBenchCase?.nativeQualification?.requiresBrowser && !health.nativeCapabilities?.browser) {
     return { ready: false, error: "This optional ToolBench profile requires the runner browser. Run npm run setup:browser in the benchmark runner folder, then check again." };
   }

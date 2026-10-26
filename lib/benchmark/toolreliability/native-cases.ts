@@ -2,12 +2,12 @@ import { createWorkBenchCaseHash } from "../workbench/case-loader";
 import type { WorkBenchCaseOption, WorkBenchCasePackOption } from "../workbench/corpus";
 import type { WorkBenchCase } from "../workbench/types";
 
-export const NATIVE_TOOLBENCH_VERSION = "3.0.0";
-export const NATIVE_TOOLBENCH_SCORING = "native-toolbench-v3";
-export const NATIVE_TOOLBENCH_SUITE = "toolbench-native-core-v3";
-export const NATIVE_TOOLBENCH_VARIANT_SUITE = "toolbench-native-core-variant-b-v3";
-export const NATIVE_TOOLBENCH_BROWSER_SUITE = "toolbench-native-browser-v3";
-export const NATIVE_TOOLBENCH_SKILLS_SUITE = "toolbench-native-skills-v3";
+export const NATIVE_TOOLBENCH_VERSION = "4.0.0";
+export const NATIVE_TOOLBENCH_SCORING = "solo-toolbench-v4";
+export const NATIVE_TOOLBENCH_SUITE = "toolbench-native-core-v4";
+export const NATIVE_TOOLBENCH_VARIANT_SUITE = "toolbench-native-core-variant-b-v4";
+export const NATIVE_TOOLBENCH_BROWSER_SUITE = "toolbench-native-browser-v4";
+export const NATIVE_TOOLBENCH_SKILLS_SUITE = "toolbench-native-skills-v4";
 const CREATE_TOOLS = ["fs.write", "openrouter.apply_patch"];
 const PATCH_TOOLS = ["fs.patch", "openrouter.apply_patch"];
 
@@ -159,11 +159,11 @@ function option(fixture: Fixture): WorkBenchCaseOption {
     "package.json": JSON.stringify({private:true, type:"module", scripts:{test:"node check.mjs"}}, null, 2) + "\n",
   }};
   const workBenchCase: WorkBenchCase = {
-    schemaVersion: 1, benchmarkTrack: "toolreliability", id: `toolbench-native-${fixture.id}-v3`,
+    schemaVersion: 1, benchmarkTrack: "toolreliability", id: `toolbench-native-${fixture.id}-v4`,
     title: fixture.title, description: "Native Runner V2 tool qualification with executed behavioral checks and durable tool evidence.",
     difficulty: "medium", tags: ["toolbench", "native", fixture.id], caseVersion: NATIVE_TOOLBENCH_VERSION,
-    prompt: { userRequest: fixture.request, publicContext: "Use production native tools. Scope violations disqualify the attempt. This is a small isolated tool exercise. Public verification is node check.mjs (also npm test); no install or compile is needed. Core fixtures have no service or browser surface. Use native git.status/git.diff for inspection rather than inventing shell commands. The hidden final verifier checks behavior, fixture integrity and native tool evidence after integration. Report concise evidence and stop when the requested behavior is verified." },
-    repo: { url: "fixture://inline", baseCommit: "toolbench-native-v3", shallowClone: true },
+    prompt: { userRequest: fixture.request, publicContext: "Use production native tools directly as the only model. Scope violations disqualify the attempt. Public verification is node check.mjs (also npm test); no install or compile is needed. Core fixtures have no service or browser surface. Use fs.search/fs.read for inspection rather than inventing shell commands. Finish with finish_toolbench when the requested task is complete. External hidden scoring runs only after your session ends; it checks saved behavior, fixture integrity, and recorded tool actions. No planning, review, documentation, integration or project handoff is required." },
+    repo: { url: "fixture://inline", baseCommit: "toolbench-native-v4", shallowClone: true },
     environment: { type: "local-runner", timeoutSeconds: 4_500, network: "dependency-only" },
     verifier: { command: "node verifier.mjs", resultFile: "verifier-result.json", timeoutSeconds: 30 },
     budget: { maxWallClockSeconds: 4_500, maxModelCalls: 300, maxToolCalls: 900, maxInputTokens: 5_000_000, maxOutputTokens: 750_000 },
@@ -186,7 +186,7 @@ export function getNativeToolBenchPack(id: string): WorkBenchCasePackOption | nu
 
 /** Test controls stay outside model-visible fixtures. */
 export function nativeToolBenchReferenceFiles(caseId: string): Record<string, string> {
-  const fixture = [...fixtures, ...variantFixtures(), browserFixture, skillFixture].find(item => `toolbench-native-${item.id}-v3` === caseId);
+  const fixture = [...fixtures, ...variantFixtures(), browserFixture, skillFixture].find(item => `toolbench-native-${item.id}-v4` === caseId);
   if (!fixture) throw new Error(`Unknown native ToolBench case ${caseId}`);
   return { ...fixture.reference };
 }

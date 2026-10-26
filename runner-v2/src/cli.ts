@@ -4,6 +4,7 @@ import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
+import { ToolBenchSessions } from "./toolbench-session.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildUserMediaStore } from "./build-user-media.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
@@ -233,7 +234,10 @@ async function main(): Promise<void> {
         );
       },
     }]);
+    const toolBench = new ToolBenchSessions({ projectRoot: options.projectPath, stateDirectory: options.stateDirectory, providerConfigs, executionHost, capabilitiesConfig });
+    await toolBench.recover();
     const server = new ControlServer({
+      toolBench,
       supervisor,
       builds,
       buildProvisioner: builds,
