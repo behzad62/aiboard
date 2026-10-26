@@ -16,6 +16,8 @@ The planning panel shows source revisions, requirement references and acceptance
 
 Inspect unread source sections and recorded blockers. Worker candidates are advisory: capacity, claim conflicts, current owner approval, source verification, worktree allocation and the runtime's other gates still apply. A displayed dependency graph or copy-ready card grants no assignment authority.
 
+Tasks should deliver coherent, independently reviewable outcomes, with coding steps kept inside the task. Planning reviewers check for unnecessary fragmentation and unrelated outcomes as well as oversized work. Small fixes and bounded evidence-only tasks remain valid. See [task cohesion and decomposition diagnostics](./task-cohesion.md) for the planning rule, audit qualifications and recorded metrics.
+
 For an executable build, **Start current plan** approves exactly the displayed plan revision/digest, source manifest/artifact digest and policy versions. A stale choice is refused. Refresh and make a new explicit choice when these change. Plan-only runs never expose an execution start. If you amend the source, supply the replacement original file, reason and added/retired section/requirement IDs, then approve the exact displayed predecessor. Source changes require fresh consent and planning reconciliation.
 
 Model-pass records distinguish reported/estimated usage from estimated context-pack sizes. Missing or ambiguous per-pass attribution is shown as unavailable; account-backed calls do not imply a metered API cost. Historical reviews remain labelled separately from current records. A notice identifies a STATE snapshot edited outside the runner; durable runner records continue to determine readiness and completion.

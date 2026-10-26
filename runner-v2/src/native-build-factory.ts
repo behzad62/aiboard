@@ -1,4 +1,5 @@
 import { RunActivityBoard } from "./run-activity.js";
+import { projectTaskDecompositionObservability } from "./task-decomposition-observability.js";
 import { workingTreeForRunner } from "./command-evidence-identity.js";
 import { projectPlanningReadiness, buildPlanningExportDocument } from "./planning-controls.js";
 import { openProvenSnapshotLinks } from "./proven-snapshot-links.js";
@@ -2333,9 +2334,13 @@ export class NativeBuildFactory {
               targetRevision: finalGeneration.targetRevision,
             })
           : undefined;
+        const observedBudget = budgetLedger.snapshot(spec.runId);
         return {
           runId: spec.runId,
-          budget: budgetLedger.snapshot(spec.runId),
+          taskDecomposition: projectTaskDecompositionObservability(
+            schedulerProjection, schedulerEvents, observedBudget,
+          ),
+          budget: observedBudget,
           toolCallCount: toolCalls.length,
           agents: agentSessions.map((session) => ({
             sessionId: session.sessionId,
@@ -2810,9 +2815,15 @@ export class NativeBuildFactory {
           const skillSnapshot = historicalSkills();
           const integrationRevision = schedulerProjection.projectHandoff?.integrationRevision
             ?? schedulerProjection.integrationRevision;
+          const observedBudget = historicalUsage();
           return {
             runId: spec.runId,
-            budget: historicalUsage(),
+            ...(schedulerStore ? {
+              taskDecomposition: projectTaskDecompositionObservability(
+                schedulerProjection, schedulerEvents, budgetLedger ? observedBudget : undefined,
+              ),
+            } : {}),
+            budget: observedBudget,
             toolCallCount: toolCalls.length,
             agents: agentSessions.map((session) => ({
               sessionId: session.sessionId,

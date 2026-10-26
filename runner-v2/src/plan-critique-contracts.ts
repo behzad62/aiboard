@@ -75,6 +75,8 @@ export const PLAN_CRITIQUE_CATEGORIES = [
   "missing_failure_mode",
   "unproven_assumption",
   "oversized_task",
+  "undersized_task",
+  "incoherent_task",
   "missing_integration_task",
 ] as const;
 export type PlanCritiqueCategory = (typeof PLAN_CRITIQUE_CATEGORIES)[number];

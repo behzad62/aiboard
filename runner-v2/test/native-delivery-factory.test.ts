@@ -4,9 +4,15 @@ import test from "node:test";
 import { runDeliveryFactoryScenario, LOW_CONTENT, HIGH_CONTENT, BUILD_SCRIPTS } from "./support/delivery-factory-scenario.js";
 
 test("B9: NativeBuildFactory wires the deliverable review and boundary checks from submission to task and phase acceptance", async () => {
-  const { review } = await runDeliveryFactoryScenario(LOW_CONTENT);
+  const { review, taskDecomposition } = await runDeliveryFactoryScenario(LOW_CONTENT);
   assert.equal(review.risk!.tier, "medium");
   assert.equal(review.depth!.affectedTests, undefined);
+  assert.ok(taskDecomposition, "live diagnostics expose task decomposition");
+  assert.equal(taskDecomposition.taskCount, 1);
+  assert.equal(taskDecomposition.submissions, 1);
+  assert.equal(taskDecomposition.uniqueChangedFileCount, 1);
+  assert.equal(taskDecomposition.tasks[0]?.independentReviews, 1);
+  assert.ok((taskDecomposition.reviewUsage?.settledCalls ?? 0) > 0);
 });
 
 test("R4-B1: a project with a build script reaches task and phase acceptance at high tier (depth runs the real tests)", async () => {

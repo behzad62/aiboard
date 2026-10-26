@@ -414,7 +414,7 @@ export async function runDeliveryFactoryScenario(
     if (options.expect === "not_accepted") {
       assert.equal(boundary.passed, false, JSON.stringify(boundary));
       assert.equal(projection.tasks.T1!.status, "integrated");
-      return { review, boundary, projection, manifests: handle!.contextManifests?.() ?? [] };
+      return { review, boundary, projection, manifests: handle!.contextManifests?.() ?? [], taskDecomposition: (await handle.observability()).taskDecomposition };
     }
     const testsCheck = boundary.checks.find((check) => check.checkId === "tests")!;
     assert.equal(testsCheck.report?.status, "passed", JSON.stringify(testsCheck));
@@ -430,7 +430,7 @@ export async function runDeliveryFactoryScenario(
     assert.deepEqual(phase.exitChecks.map((check) => check.checkId), ["tests"]);
     const readiness = buildCompletionReadiness(projection);
     assert.equal(readiness.issues.some((issue) => /acceptance|conditional_pending|coverage/i.test(issue)), false, readiness.issues.join(" | "));
-    return { review, boundary, projection, manifests: handle!.contextManifests?.() ?? [] };
+    return { review, boundary, projection, manifests: handle!.contextManifests?.() ?? [], taskDecomposition: (await handle.observability()).taskDecomposition };
   } finally {
     await handle?.close();
     await factory?.close();

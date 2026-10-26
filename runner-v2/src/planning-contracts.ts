@@ -1442,7 +1442,7 @@ export function assertEvidenceApplicabilityDecision(decision: EvidenceApplicabil
 export const COVERAGE_VERDICT_VALUES = ["covered", "weakened", "missing"] as const;
 export type CoverageVerdictValue = (typeof COVERAGE_VERDICT_VALUES)[number];
 
-/** OA-2: four additive finding categories, on top of the existing eight plan-critique categories. */
+/** OA-2: coverage finding categories, in addition to the shared plan-critique categories. */
 export const PLANNING_ADDITIVE_FINDING_CATEGORIES = [
   "missing_coverage",
   "weakened_obligation",

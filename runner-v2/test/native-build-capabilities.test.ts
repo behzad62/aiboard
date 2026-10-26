@@ -1448,6 +1448,8 @@ test("NativeBuildFactory serves a terminal legacy Build from read-only durable s
     assert.equal(handle.usage().scopeId, runId);
     const snapshot = await handle.observability();
     assert.equal(snapshot.runId, runId);
+    assert.equal(snapshot.taskDecomposition?.taskCount, 0, "present durable stores can prove an empty task history");
+    assert.equal(snapshot.taskDecomposition?.reviewUsage?.settledCalls, 0);
     assert.deepEqual(snapshot.capabilities?.historicalContract, {
       version: prepared.capabilityContract!.version,
       executionSafetyVersion: prepared.capabilityContract!.executionSafetyVersion,
@@ -1512,7 +1514,9 @@ test("NativeBuildFactory keeps missing terminal stores absent and projects empty
 
     assert.equal(handle.runtime.projection().status, "completed");
     assert.equal(handle.usage().scopeId, runId);
-    assert.deepEqual((await handle.observability()).events, []);
+    const snapshot = await handle.observability();
+    assert.deepEqual(snapshot.events, []);
+    assert.equal(snapshot.taskDecomposition, undefined, "missing scheduler history is not a measured empty decomposition");
     assert.deepEqual(await handle.transcript(), {
       turns: [],
       cursor: 0,

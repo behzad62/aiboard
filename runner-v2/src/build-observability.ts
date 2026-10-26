@@ -8,6 +8,7 @@ import type {
   HistoricalReadProvenanceBySurface,
 } from "./historical-read-provenance.js";
 import type { BudgetProjection } from "./budget-ledger.js";
+import type { TaskDecompositionObservability } from "./task-decomposition-contracts.js";
 import type { EvidenceRecord } from "./evidence-store.js";
 import type { ManagedProcessObservation } from "./managed-process.js";
 import type { IntegrationCommit } from "./integration-manager.js";
@@ -336,6 +337,8 @@ export type BuildTranscriptPage = AgentTranscriptPage;
 
 export interface BuildObservabilitySnapshot {
   runId: string;
+  /** Derived from durable task/submission/review history; absent when that history is unavailable. */
+  taskDecomposition?: TaskDecompositionObservability;
   budget: BudgetProjection;
   toolCallCount: number;
   agents: BuildAgentObservation[];

@@ -29,6 +29,8 @@ import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./plan
 import { evaluatePhaseAcceptance, phaseAcceptanceKey, type ReviewTaskPrefill } from "./delivery-acceptance.js";
 import type { FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
 import type { ValidationScope } from "./validation-scope.js";
+import { PLAN_CRITIQUE_CATEGORIES } from "./plan-critique-contracts.js";
+import { TASK_COHESION_GUIDELINE, TASK_COHESION_REVIEW_INSTRUCTIONS } from "./task-cohesion.js";
 
 export const RUNNER_KERNEL_INVARIANTS = [
   "Use native tools for actions and lifecycle changes.",
@@ -264,7 +266,7 @@ export function buildArchitectSystemPrompt(options: {
       ARCHITECT_REASON_GUIDANCE.plan_critique_resolution_required,
     ].join("\n");
   }
-  return [...ARCHITECT_SYSTEM_GENERAL_LINES, REPAIR_APPROACH_DECISION_INSTRUCTIONS].join("\n");
+  return [...ARCHITECT_SYSTEM_GENERAL_LINES, TASK_COHESION_GUIDELINE, REPAIR_APPROACH_DECISION_INSTRUCTIONS].join("\n");
 }
 
 export const VERIFIER_AUTHORITY_INVARIANTS = [
@@ -796,6 +798,7 @@ export function buildVerifierContext(
 export const PLAN_CRITIC_INVARIANTS = [
   "You are an independent AIBoard plan critic inspecting one task graph before any worker starts.",
   "The repository you can read is the exact baseline revision; nothing has been implemented yet.",
+  TASK_COHESION_REVIEW_INSTRUCTIONS,
   "Check the plan rigorously but do not presume it is flawed: report only real defects, each naming a concrete way a task would fail its criteria, deliver the wrong behavior, or leave required work unowned. A sound plan gets no findings and an empty findings list is a valid result; never manufacture findings or restate preferences. Every finding costs a plan revision. For every task ask: is each criterion objectively testable; do tasks overlap in file ownership; are dependencies complete and acyclic in meaning, not just in graph shape; which failure modes are omitted; which assumptions about the repository are unproven (check them with the read-only tools); is any task too large for one worker; can each task be verified independently; is the wiring that connects separately built parts (registration, entry points, configuration) owned by some task? (Merging branches is the runner's job, not a task.)",
   "A blocking finding must cite concrete evidence: a criterion text, a file path, a symbol, or a dependency pair. Advisory findings record concrete risks a worker would otherwise miss; omit style, sizing preferences and nice-to-haves.",
   "You have no authority to edit files, change the plan, assign work, or complete the run. Finish by calling submit_plan_critique exactly once.",
@@ -843,10 +846,11 @@ export const COVERAGE_DERIVE_INSTRUCTIONS = [
 /** Verdict pass: the plan is judged against the already-recorded obligations. */
 export const COVERAGE_VERDICT_INSTRUCTIONS = [
   "Judge the delivered plan against ONLY your recorded obligations: one verdict per obligation (covered, weakened, or missing).",
-  "Finding categories are missing_coverage, weakened_obligation, scope_creep, unverified_claim, plus the eight plan-critique categories; a verdict word is never a category.",
+  `Finding categories are missing_coverage, weakened_obligation, scope_creep, unverified_claim, plus the shared plan-critique categories (${PLAN_CRITIQUE_CATEGORIES.join(", ")}); a verdict word is never a category.`,
   "Finding ids must be unique across every review of the run: never reuse a prior finding id (the kernel refuses reused ids).",
   "A vague task, an untestable criterion, and an investigation that cannot resolve its unknown are findings, not coverage.",
   "You are the plan's only independent reviewer, so also check plan quality, reporting each defect under its category: overlapping_scope (two tasks own the same files), missing_dependency (a dependency missing in meaning, or a task that cannot pass its criteria when it completes), missing_integration_task (unowned wiring between separately built parts: registration, routes, entry points), unproven_assumption (an assumption about the repository; check it with the read-only tools), missing_failure_mode (a failure mode the source requires but no criterion covers), untestable_criterion, ambiguous_criterion, oversized_task. Report only real defects with concrete evidence; a sound plan gets no findings, and each blocking finding costs a plan revision.",
+  TASK_COHESION_REVIEW_INSTRUCTIONS,
   "Finish by calling submit_coverage_verdict exactly once.",
 ].join("\n");
 

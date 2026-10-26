@@ -9,6 +9,7 @@
  */
 
 import { PHASE_VALIDATION_CHECKS } from "./planning-contracts.js";
+import { TASK_COHESION_GUIDELINE } from "./task-cohesion.js";
 
 type Schema = Record<string, unknown>;
 
@@ -92,7 +93,7 @@ export const PHASE_SCHEMA: Schema = {
 
 export const TASK_CONTRACT_SCHEMA: Schema = {
   type: "object",
-  description: "A complete task contract. requiredBase, accountablePhaseId and requirementIds may be omitted (kernel-derived).",
+  description: `A complete task contract. requiredBase, accountablePhaseId and requirementIds may be omitted (kernel-derived). ${TASK_COHESION_GUIDELINE}`,
   properties: {
     id: text(),
     lineage: texts("Prior task ids this task replaces or splits from; [] for new tasks."),
@@ -110,7 +111,7 @@ export const TASK_CONTRACT_SCHEMA: Schema = {
     dependencies: texts("Task ids that must finish first."),
     inputs: texts(),
     outputs: texts(),
-    steps: texts(),
+    steps: texts("Implementation actions within this task's coherent outcome, including necessary wiring and targeted validation; these are not separate scheduling tasks."),
     acceptance: {
       type: "object",
       properties: {

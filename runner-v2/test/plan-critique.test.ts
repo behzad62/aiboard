@@ -196,6 +196,33 @@ const ADVISORY_FINDING = {
   evidence: ["E criteria never mention empty input"],
 };
 
+for (const category of ["undersized_task", "incoherent_task"] as const) {
+  test(`a blocking ${category} finding survives replay and holds the existing plan-critique gate`, () => {
+    withStore((store, append, projection) => {
+      configurePolicy(append);
+      configureRisk(append, projection);
+      requestCritiqueEvent(append);
+      append("plan_critique.submitted", "critique:cohesion", {
+        critiqueId: "critique-1", planRevision: 1, sessionId: "plan-critic:s1",
+        findings: [{
+          ...BLOCKING_FINDING, category,
+          claim: category === "undersized_task"
+            ? "Merge A and B: exporting A's function in B adds no distinct acceptance boundary."
+            : "Split A's cache behavior from its unrelated notification behavior into independently accepted tasks.",
+        }],
+      }, CRITIC);
+      const replayed = rebuildSchedulerProjection(store.readRun(RUN_ID));
+      assert.equal(replayed.planCritique?.current?.findings?.[0]?.category, category);
+      assert.deepEqual(replayed.planCritique?.current?.blockingFindingIds, ["F-1"]);
+      assert.equal(planCritiquePending(projection()), true);
+      assert.throws(() => append("plan_critique.resolved", "critique:missing-resolution", {
+        critiqueId: "critique-1", planRevision: 1, planRevisionAfter: 1,
+        resolvedBy: "architect", resolutions: [],
+      }, ARCHITECT), /blocking|resolution|finding/i);
+    });
+  });
+}
+
 test("plan.created records architect risk declarations and defaults legacy plans to low", () => {
   withStore((_, append, projection) => {
     assert.deepEqual(projection().planRiskDeclaration, {

@@ -1,4 +1,5 @@
 import type { ApprovedSourceInputV1 } from "../../runner-v2/src/planning-control-contracts.js";
+import type { TaskDecompositionObservability } from "../../runner-v2/src/task-decomposition-contracts.js";
 import type { ExplicitStartRequestV1, PlanningReadinessSnapshot, PlanningExportDocument, SourceAmendmentImpactV1 } from "../../runner-v2/src/planning-control-contracts.js";
 export type { ApprovedSourceInputV1, ExplicitStartRequestV1, PlanningReadinessSnapshot, PlanningExportDocument };
 
@@ -525,6 +526,8 @@ export interface NativePlanCritiqueFinding {
     | "missing_failure_mode"
     | "unproven_assumption"
     | "oversized_task"
+    | "undersized_task"
+    | "incoherent_task"
     | "missing_integration_task";
   taskIds: string[];
   criterionIds?: Array<{ taskId: string; criterionId: string }>;
@@ -1051,6 +1054,8 @@ export type NativeBuildExecutionSafetyObservability =
   | { availability: "unavailable"; reason: "historical_execution_safety_unavailable" };
 
 export interface NativeBuildObservability {
+  /** Optional on older runners and when durable scheduler history is unavailable. */
+  taskDecomposition?: TaskDecompositionObservability;
   /** Optional for older runner projections; never inferred on attachment. */
   planning?: {
     optedIn: boolean;

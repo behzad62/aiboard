@@ -1079,7 +1079,7 @@ test("T3b record-before-verdict: a verdict without recorded obligations is refus
 // Vocabulary: verdict words and finding categories are separate.
 // ---------------------------------------------------------------------------
 
-test("T3b vocabulary round-trip: cross-vocabulary use is rejected, all twelve categories validate", async () => {
+test("T3b vocabulary round-trip: cross-vocabulary use is rejected, all planning categories validate", async () => {
   const store = new MemorySchedulerStore();
   const runId = "run_t3b_vocab";
   const source = buildCoverageSource();
@@ -1131,8 +1131,8 @@ test("T3b vocabulary round-trip: cross-vocabulary use is rejected, all twelve ca
     });
     assert.equal(categoryWord.ok, false);
     assert.match((categoryWord as { ok: false; issues: string[] }).issues.join(" "), /not a valid finding category/);
-    // The four additive plus the eight existing categories all validate.
-    const allTwelve = submit(["obligation-audit"]).validate({
+    // Coverage and shared plan-quality categories all validate through the actual tool.
+    const allCategories = submit(["obligation-audit"]).validate({
       obligationVerdicts: [{
         obligationId: "obligation-audit",
         verdict: "covered",
@@ -1152,6 +1152,8 @@ test("T3b vocabulary round-trip: cross-vocabulary use is rejected, all twelve ca
         "missing_failure_mode",
         "unproven_assumption",
         "oversized_task",
+        "undersized_task",
+        "incoherent_task",
         "missing_integration_task",
       ].map((category, index) => ({
         id: `finding-${index}`,
@@ -1161,7 +1163,7 @@ test("T3b vocabulary round-trip: cross-vocabulary use is rejected, all twelve ca
         evidenceRefs: [`evidence:${category}`],
       })),
     });
-    assert.equal(allTwelve.ok, true, JSON.stringify(allTwelve));
+    assert.equal(allCategories.ok, true, JSON.stringify(allCategories));
   } finally {
     store.close();
   }
@@ -1351,6 +1353,39 @@ test("T3b omitted obligation: a syntactically perfect plan that omits a source o
     harness.close();
   }
 });
+
+for (const category of ["undersized_task", "incoherent_task"] as const) {
+  test(`a blocking ${category} coverage finding holds readiness even when every obligation is covered`, async () => {
+    const source = buildCoverageSource();
+    const harness = createCoverageHarness(`cohesion-${category}`, [
+      recordTurn([AUDIT_OBLIGATION, RETRY_OBLIGATION, TAIL_OBLIGATION]),
+      verdictTurn(coveredVerdicts(["obligation-audit", "obligation-retry", "obligation-purge"]), [{
+        id: "finding-cohesion", category, severity: "blocking",
+        claim: category === "undersized_task"
+          ? "Merge T-AUDIT's implementation fragments: necessary exports and tests belong to its audit-delivery outcome."
+          : "Split unrelated outcomes in T-AUDIT into separately accepted tasks with explicit ownership.",
+      }]),
+    ], { sourceBytes: source.bytes });
+    const runId = `run_cohesion_${category}`;
+    try {
+      const plan = seedReviewableRun(harness.store, runId, { manifest: source.manifest, reviewId: "coverage_1" });
+      const result = await harness.runtime.review(coverageReviewRequest(runId, "coverage_1", source, plan));
+      assert.equal(result.status, "reviewed");
+      if (result.status !== "reviewed") throw new Error("unreachable");
+      assert.ok(result.review.obligationVerdicts.every((verdict) => verdict.verdict === "covered"));
+      assert.equal(result.review.findings[0]?.category, category);
+      seedDurableSourceReads(harness.store, runId, source.manifest, CLOCK);
+      assert.throws(() => harness.store.append({
+        runId, type: "planning.plan_ready", occurredAt: CLOCK,
+        actor: { role: "runner", id: "runner" }, idempotencyKey: "ready:cohesion",
+        payload: { hostCapabilities: plan.hostCapabilities },
+      }), /blocking/i);
+      assert.equal(projectionOf(harness.store, runId).planning!.readiness, "not_ready");
+    } finally {
+      harness.close();
+    }
+  });
+}
 
 test("T3b never-exercised criterion is expressible as weakened, and scope_creep reports outside verdicts", async () => {
   const source = buildCoverageSource();

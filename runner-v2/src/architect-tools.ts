@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { TASK_COHESION_GUIDELINE } from "./task-cohesion.js";
 
 import type {
   NativeTool,
@@ -2203,7 +2204,7 @@ function planTasksTool(
 ): NativeTool<PlanTasksInput> {
   return lifecycleTool({
     name: "plan_tasks",
-    description: "Create the Architect-owned task graph; only graph mechanics are validated; declare riskDeclaration low or high with a rationale",
+    description: `Create the Architect-owned task graph; only graph mechanics are validated; declare riskDeclaration low or high with a rationale. ${TASK_COHESION_GUIDELINE}`,
     schema: {
       type: "object",
       properties: {
