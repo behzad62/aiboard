@@ -14,6 +14,8 @@ import {
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
   nativeBuildPauseDescription,
+  nativeTaskRetirement,
+  nativeTaskVerificationState,
   shouldShowBuildPauseAction,
   nativeBuildRunPolicy,
   nativeBuildPolicyChange,
@@ -243,6 +245,33 @@ assert.equal(nativeBuildTaskStatus("planned", {
   kind: "final_verification",
   generation: { categories: [{ status: "passed" }], cleanup: { status: "succeeded" }, review: { status: "approved" }, repairs: [] },
 }), "done");
+// Tunnel run, completed: the approved verification read "Queued" (the poll path passed no
+// generation), the superseded one read "Queued", and the cancelled split task read "Done".
+{
+  const projection = {
+    tasks: {
+      "fv-1": { id: "fv-1", kind: "final_verification", status: "planned" },
+      "fv-2": { id: "fv-2", kind: "final_verification", status: "planned" },
+      "split": { id: "split", kind: "implementation", status: "cancelled" },
+      "built": { id: "built", kind: "implementation", status: "integrated" },
+    },
+    finalVerification: {
+      current: {
+        taskId: "fv-2",
+        completedChecks: [{ green: true }, { green: true }],
+        cleanup: { status: "succeeded" },
+        review: { status: "approved" },
+      },
+      history: [{ generationId: "g-1", taskId: "fv-1", targetRevision: "r", state: "invalidated" }],
+    },
+  } as unknown as Parameters<typeof nativeTaskVerificationState>[0];
+  const task = (id: string) => (projection.tasks as Record<string, Parameters<typeof nativeTaskVerificationState>[1]>)[id]!;
+  assert.equal(nativeBuildTaskStatus("planned", nativeTaskVerificationState(projection, task("fv-2"))), "done");
+  assert.equal(nativeTaskRetirement(projection as never, task("fv-2")), undefined);
+  assert.equal(nativeTaskRetirement(projection as never, task("fv-1")), "superseded");
+  assert.equal(nativeTaskRetirement(projection as never, task("split")), "cancelled");
+  assert.equal(nativeTaskRetirement(projection as never, task("built")), undefined);
+}
 assert.equal(nativeBuildDiscussionStatus({ status: "running" } as never), "running");
 assert.equal(nativeBuildDiscussionStatus({ status: "paused" } as never), "stopped");
 assert.equal(nativeBuildDiscussionStatus({ status: "completed" } as never), "completed");

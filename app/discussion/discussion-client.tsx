@@ -131,6 +131,8 @@ import {
   nativeBuildFileIdentity,
   nativeBuildRestorationPolicyPatch,
   nativeBuildTaskStatus,
+  nativeTaskRetirement,
+  nativeTaskVerificationState,
   nativeBuildUsageWindow,
   nativeActorModelIdentity,
   reconcileNativeBuildFiles,
@@ -1264,7 +1266,8 @@ function DiscussionPageInner() {
           Object.values(projection.tasks).map((task) => ({
             id: task.id,
             title: task.objective,
-            status: nativeBuildTaskStatus(task.status),
+            // The poll path left out the generation, so an approved final verification read "Queued".
+            status: nativeBuildTaskStatus(task.status, nativeTaskVerificationState(projection, task)),
             worker: task.assignedWorkerId,
             acceptanceCriteria: task.acceptanceCriteria?.map((criterion) => {
               const evidence = task.criterionEvidenceLinks?.find(
@@ -2139,6 +2142,7 @@ function DiscussionPageInner() {
           // Worker ids are runner-internal; show only the model behind one.
           worker: runtimeId ? getModelDisplayName(runtimeId) : undefined,
           kind: task.kind ?? native?.kind,
+          retired: native && nativeProjection ? nativeTaskRetirement(nativeProjection, native) : undefined,
           dependencies: native?.dependencies ?? [],
           attempt: native?.attempt,
           failureReason: native?.failureReason,

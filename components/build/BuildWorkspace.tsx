@@ -28,6 +28,8 @@ export interface WorkspaceTask {
   status: BuildTaskView["status"];
   worker?: string;
   kind?: BuildTaskView["kind"];
+  /** Retired by the runner without being done: shown as such and left out of the done count. */
+  retired?: "cancelled" | "superseded";
   dependencies: string[];
   attempt?: number;
   failureReason?: string;
@@ -76,6 +78,18 @@ const TASK_STATUS: Record<
   done: { word: "Done", dot: "bg-success", tone: "text-success" },
   failed: { word: "Failed", dot: "bg-destructive", tone: "text-destructive" },
 };
+
+const RETIRED_STATUS: Record<
+  NonNullable<WorkspaceTask["retired"]>,
+  { word: string; dot: string; tone: string }
+> = {
+  cancelled: { word: "Cancelled", dot: "border-2 border-muted-foreground/30", tone: "text-muted-foreground" },
+  superseded: { word: "Superseded", dot: "border-2 border-muted-foreground/30", tone: "text-muted-foreground" },
+};
+
+function taskMeta(task: Pick<WorkspaceTask, "status" | "retired">) {
+  return task.retired ? RETIRED_STATUS[task.retired] : TASK_STATUS[task.status];
+}
 
 export function taskStatusWord(status: BuildTaskView["status"]): string {
   return TASK_STATUS[status].word;
@@ -182,7 +196,7 @@ export function BuildWorkspace({
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const wide = useMediaQuery("(min-width: 1280px)");
 
-  const implementation = tasks.filter((task) => task.kind !== "final_verification");
+  const implementation = tasks.filter((task) => task.kind !== "final_verification" && !task.retired);
   const doneCount = implementation.filter((task) => task.status === "done").length;
   const attentionCount = tasks.filter(needsAttention).length;
   const visibleTasks = attentionOnly ? tasks.filter(needsAttention) : tasks;
@@ -653,7 +667,7 @@ function TaskList({
   return (
     <ul className="space-y-0.5">
       {tasks.map((task) => {
-        const meta = TASK_STATUS[task.status];
+        const meta = taskMeta(task);
         const selected = task.id === selectedId;
         return (
           <li key={task.id}>
@@ -693,7 +707,7 @@ function TaskDetail({
   tasks: WorkspaceTask[];
   onSelect: (taskId: string) => void;
 }) {
-  const meta = TASK_STATUS[task.status];
+  const meta = taskMeta(task);
   const satisfied = task.criteria.filter((criterion) => criterion.verdict?.verdict === "satisfied").length;
   return (
     <article aria-labelledby="task-detail-title" className="space-y-5">
@@ -814,7 +828,7 @@ function TaskDetail({
                     <span
                       className={cn(
                         "h-1.5 w-1.5 rounded-full",
-                        dependency ? TASK_STATUS[dependency.status].dot : "bg-muted-foreground"
+                        dependency ? taskMeta(dependency).dot : "bg-muted-foreground"
                       )}
                       aria-hidden="true"
                     />

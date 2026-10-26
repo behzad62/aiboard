@@ -47,6 +47,7 @@ import { buildCrewFromDiscussion, runtimeModelId, selectBuildCrewRuntimes } from
 import {
   nativeBuildAttachmentIdentityPatch,
   nativeBuildTaskStatus,
+  nativeTaskVerificationState,
   createNativeBuildPolicySynchronizer,
   nativeBuildUsageWindow,
 } from "./discussion-live-state";
@@ -800,19 +801,8 @@ function buildObjective(discussion: Discussion): string {
 }
 
 function emitTaskProjection(projection: NativeBuildProjection, emit: Emit): void {
-  const verificationState = (task: NativeBuildProjection["tasks"][string]) => {
-    if (task.kind !== "final_verification") return { kind: task.kind };
-    const current = projection.finalVerification?.current;
-    return {
-      kind: task.kind,
-      ...(current && current.taskId === task.id ? { generation: {
-        categories: (current.completedChecks ?? []).map((check) => ({ status: check.green ? "passed" : "failed" })),
-        cleanup: { status: current.cleanup?.status ?? "pending" },
-        review: { status: current.review?.status ?? "pending" },
-        repairs: (current.repairTaskIds ?? []).map((taskId) => ({ status: projection.tasks[taskId]?.status ?? "missing" })),
-      } } : {}),
-    };
-  };
+  const verificationState = (task: NativeBuildProjection["tasks"][string]) =>
+    nativeTaskVerificationState(projection, task);
   emit({
     type: "build_plan",
     cycle: projection.planRevision,

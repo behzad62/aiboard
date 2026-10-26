@@ -828,6 +828,44 @@ export function nativeBuildTaskStatus(
   return "failed";
 }
 
+type NativeBuildTask = NativeBuildProjection["tasks"][string];
+
+/** What nativeBuildTaskStatus needs to know about a final-verification task's generation. */
+export function nativeTaskVerificationState(
+  projection: Pick<NativeBuildProjection, "finalVerification" | "tasks">,
+  task: NativeBuildTask
+): NonNullable<Parameters<typeof nativeBuildTaskStatus>[1]> {
+  if (task.kind !== "final_verification") return { kind: task.kind };
+  const current = projection.finalVerification?.current;
+  return {
+    kind: task.kind,
+    ...(current && current.taskId === task.id ? { generation: {
+      categories: (current.completedChecks ?? []).map((check) => ({ status: check.green ? "passed" : "failed" })),
+      cleanup: { status: current.cleanup?.status ?? "pending" },
+      review: { status: current.review?.status ?? "pending" },
+      repairs: (current.repairTaskIds ?? []).map((taskId) => ({ status: projection.tasks[taskId]?.status ?? "missing" })),
+    } } : {}),
+  };
+}
+
+/**
+ * A task the runner retired without doing it: a cancelled task, or the task of a final-verification
+ * generation that a later generation replaced. Tunnel run: a cancelled split task read "Done" and a
+ * superseded verification read "Queued" on a completed Build.
+ */
+export function nativeTaskRetirement(
+  projection: Pick<NativeBuildProjection, "finalVerification">,
+  task: Pick<NativeBuildTask, "id" | "kind" | "status">
+): "cancelled" | "superseded" | undefined {
+  if (task.status === "cancelled") return "cancelled";
+  if (task.kind !== "final_verification") return undefined;
+  const verification = projection.finalVerification;
+  return verification?.current?.taskId !== task.id &&
+    verification?.history.some((generation) => generation.taskId === task.id)
+    ? "superseded"
+    : undefined;
+}
+
 export function nativeBuildDiscussionStatus(
   projection: Pick<NativeBuildProjection, "status">
 ): DiscussionStatus {
