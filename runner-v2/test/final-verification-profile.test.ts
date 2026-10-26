@@ -858,7 +858,10 @@ test("an Architect-named runtime smoke runs on a runner-leased port, and is refu
       ? { category, status: "required" }
       : { category, status: "not_applicable", rationale: `The fixture has no ${category}.`, repositoryInspection: { paths: ["package.json"], summary: `No ${category}.` } }),
   };
-  const smoke = { label: "relay server", executable: "node", args: ["dist/cli.js", "serve", "--port", "{port}"], readinessPath: "/healthz" };
+  const smoke = {
+    label: "relay server", executable: "node", args: ["dist/cli.js", "serve", "--port", "{port}"], readinessPath: "/healthz",
+    steps: [{ label: "pair a connector", executable: "node", args: ["packages/connector/dist/cli.js", "pair", "--relay", "http://127.0.0.1:{port}"] }],
+  };
   const context = { runId, sessionId: "architect:smoke", actor: { role: "architect" as const, id: "architect" } };
   const toolsWith = (runtimeSmoke: boolean) => {
     const tools = new ToolRegistry();
@@ -883,6 +886,9 @@ test("an Architect-named runtime smoke runs on a runner-leased port, and is refu
     assert.equal(unrunnable.error?.code, "final_verification_check_not_runnable");
     assert.match(unrunnable.error?.message ?? "", /Name the program with runtimeSmoke/);
 
+    const badStep = await plan(toolsWith(true), "bad-step", { plan: smokePlan, runtimeSmoke: { ...smoke, steps: [{ label: "pair", args: [] }] } });
+    assert.equal(badStep.isError, true, "a step without an executable is refused");
+
     const restricted = await plan(toolsWith(false), "restricted", { plan: smokePlan, runtimeSmoke: smoke });
     assert.equal(restricted.error?.code, "runtime_smoke_spec_unavailable");
     assert.match(restricted.error?.message ?? "", /needs full access/);
@@ -901,6 +907,11 @@ test("an Architect-named runtime smoke runs on a runner-leased port, and is refu
     assert.equal(spec.executable, process.execPath);
     assert.deepEqual(spec.args, ["dist/cli.js", "serve", "--port", String(lease.port)]);
     assert.equal(spec.endpoint, `http://127.0.0.1:${lease.port}/healthz`);
+    // The user's workflow travels with the smoke into the persisted, validated profile.
+    assert.deepEqual(spec.steps, [{
+      label: "pair a connector", executable: process.execPath,
+      args: ["packages/connector/dist/cli.js", "pair", "--relay", `http://127.0.0.1:${lease.port}`],
+    }]);
     assert.ok(current?.executionProfile.detectedSignals.some((signal) => signal.category === "runtime_smoke" && signal.source === "plan_final_verification runtimeSmoke"));
     await ports.validate(lease, runId, integration.revision);
   } finally {

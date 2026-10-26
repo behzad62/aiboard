@@ -74,7 +74,11 @@ export function assertFinalVerificationCheckSemantics(
     if (!specification) {
       throw new Error("Required final verification runtime_smoke has no runner-inspected specification.");
     }
-    assertCommandFacts(facts, [specification], category, input, check.green);
+    // The program's own fact comes first, then one per workflow step against it.
+    assertCommandFacts(facts, [
+      specification,
+      ...(specification.steps ?? []).map((step) => ({ ...step, label: `${specification.label} › ${step.label}` })),
+    ], category, input, check.green);
     return;
   }
 
@@ -177,6 +181,9 @@ function assertCommandFacts(
         throw new Error("Final verification runtime_smoke endpoint conflicts with the runner-inspected endpoint.");
       }
     }
+    if ((fact.workflowStep === true) !== (category === "runtime_smoke" && index > 0)) {
+      throw new Error("Final verification runtime_smoke workflow step facts are out of place.");
+    }
     if (green === true) assertGreenCommand(fact, category);
   }
 }
@@ -187,13 +194,13 @@ function assertGreenCommand(
 ): void {
   if (
     fact.signal !== null || fact.timedOut || fact.cancelled || fact.outputTruncated ||
-    (category === "runtime_smoke"
+    (category === "runtime_smoke" && fact.workflowStep !== true
       ? fact.exitCode !== null && fact.exitCode !== 0
       : fact.exitCode !== 0)
   ) {
     throw new Error(`Green final verification ${category} has non-green process semantics.`);
   }
-  if (category === "runtime_smoke" &&
+  if (category === "runtime_smoke" && fact.workflowStep !== true &&
     (fact.readinessSatisfied !== true || fact.cleanupRequested !== true || fact.cleanupSucceeded !== true)) {
     throw new Error("Green runtime_smoke lacks readiness or successful cleanup proof.");
   }
@@ -252,7 +259,10 @@ export function assertFinalVerificationFactSchema(
     if (value.repositoryRevision !== targetRevision) {
       throw new Error(`Final verification ${category} repository revision is invalid.`);
     }
-    if (category === "runtime_smoke" &&
+    if (value.workflowStep !== undefined && (value.workflowStep !== true || category !== "runtime_smoke")) {
+      throw new Error(`Final verification ${category} workflowStep is invalid.`);
+    }
+    if (category === "runtime_smoke" && value.workflowStep !== true &&
       (typeof value.readinessSatisfied !== "boolean" || typeof value.cleanupRequested !== "boolean" ||
         typeof value.cleanupSucceeded !== "boolean")) {
       throw new Error("Final verification runtime_smoke readiness and cleanup facts are invalid.");

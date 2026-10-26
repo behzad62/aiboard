@@ -20,6 +20,7 @@ import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { type FinalVerificationPlan, type FinalVerificationRuntimeSmokeInput } from "../src/final-verification-runtime.js";
 import { FinalVerificationRuntime } from "./support/git-fixture.js";
+import { assertFinalVerificationCheckSemantics } from "../src/final-verification-semantics.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { VerificationWorkspaceManager } from "./support/git-fixture.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
@@ -280,6 +281,7 @@ function smokeProfile(targetRevision: string, smoke: FinalVerificationRuntimeSmo
         ...(smoke.readiness.pollIntervalMs ? { pollIntervalMs: smoke.readiness.pollIntervalMs } : {}),
         ...(smoke.readiness.expectedStatus ? { expectedStatus: smoke.readiness.expectedStatus } : {}),
       },
+      ...(smoke.steps ? { steps: smoke.steps.map((step) => ({ ...step, args: [...step.args] })) } : {}),
     },
   };
 }
@@ -420,6 +422,107 @@ test("an Architect-named smoke spec runs on its leased port and is ready only wh
     const check = runtimeCheck(run);
     assert.equal(check.green, true, check.issues.join("\n"));
     assert.equal((check.facts[0] as unknown as { endpoint: string }).endpoint, `http://127.0.0.1:${port}/healthz`);
+    await assertPortReusable(port);
+  } finally {
+    await managedOwner.close();
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+// Tunnel run: the relay's smoke proved only that /healthz answered, and the pairing command it
+// printed failed for every user. The smoke now runs the user's workflow against the live program.
+const PAIRING_RELAY = [
+  "const http=require('node:http');",
+  "http.createServer((req,res)=>{res.statusCode=req.url==='/healthz'||req.url==='/pair'?200:404; res.end();})",
+  ".listen(Number(process.argv[1]),'127.0.0.1',()=>console.log('relay listening'));",
+].join("");
+const PAIR_STEP = "fetch(process.argv[1]).then((r)=>{if(r.status!==200)throw new Error('pair answered '+r.status);console.log('paired');})";
+
+test("runtime smoke runs the user's workflow against the live program, and records each step", async (t) => {
+  const fixture = await createFixture("smoke workflow");
+  const port = await freePort();
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const managedOwner = await createManagedExecution(fixture);
+  const workspace = workspaceFor(fixture);
+  const runtime = new FinalVerificationRuntime({
+    execution: createTestOneShotCommandExecutor(t),
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    integrationRevision: () => fixture.integration.revision,
+    managedProcessService: managedOwner.service,
+    managedProcessAuthority: managedOwner.authority,
+  });
+  try {
+    const smoke = architectRuntimeSmokeSpec({
+      label: "relay server", executable: "node", args: ["-e", PAIRING_RELAY, "{port}"], readinessPath: "/healthz", timeoutMs: 5_000,
+      steps: [{ label: "pair a connector", executable: "node", args: ["-e", PAIR_STEP, "http://127.0.0.1:{port}/pair"] }],
+    }, port);
+    assert.deepEqual(smoke.steps?.[0]?.args, ["-e", PAIR_STEP, `http://127.0.0.1:${port}/pair`]);
+    const profile = smokeProfile(fixture.integration.revision, smoke);
+    const run = await runtime.run({ plan: smokePlan(), executionProfile: profile, runtimeSmoke: smoke });
+    const check = runtimeCheck(run);
+    assert.equal(check.green, true, check.issues.join("\n"));
+    assert.equal(check.facts.length, 2);
+    assert.equal(check.evidenceIds.length, 2);
+    const step = check.facts[1] as unknown as { label: string; exitCode: number; workflowStep: true; stdoutArtifactHash: string };
+    assert.equal(step.label, "relay server › pair a connector");
+    assert.equal(step.exitCode, 0);
+    assert.equal(step.workflowStep, true);
+    assert.match((await artifacts.get(step.stdoutArtifactHash)).toString(), /paired/);
+    assert.doesNotThrow(() => assertFinalVerificationCheckSemantics({
+      check, profile: profile as never, targetRevision: fixture.integration.revision, workspacePath: run.workspacePath,
+    }));
+    await assertPortReusable(port);
+  } finally {
+    await managedOwner.close();
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("a failing workflow step makes the runtime smoke non-green with its output, and later steps do not run", async (t) => {
+  const fixture = await createFixture("smoke workflow failure");
+  const port = await freePort();
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const managedOwner = await createManagedExecution(fixture);
+  const workspace = workspaceFor(fixture);
+  const runtime = new FinalVerificationRuntime({
+    execution: createTestOneShotCommandExecutor(t),
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    integrationRevision: () => fixture.integration.revision,
+    managedProcessService: managedOwner.service,
+    managedProcessAuthority: managedOwner.authority,
+  });
+  try {
+    const smoke = architectRuntimeSmokeSpec({
+      label: "relay server", executable: "node", args: ["-e", PAIRING_RELAY, "{port}"], readinessPath: "/healthz", timeoutMs: 5_000,
+      steps: [
+        { label: "printed pairing command", executable: "node", args: ["-e", "console.error('error: unknown option --url'); process.exit(2)"] },
+        { label: "call a tool", executable: "node", args: ["-e", PAIR_STEP, "http://127.0.0.1:{port}/pair"] },
+      ],
+    }, port);
+    const profile = smokeProfile(fixture.integration.revision, smoke);
+    const run = await runtime.run({ plan: smokePlan(), executionProfile: profile, runtimeSmoke: smoke });
+    const check = runtimeCheck(run);
+    assert.equal(check.green, false);
+    assert.equal(run.green, false);
+    assert.equal(check.facts.length, 2, "the step after the failure must not run");
+    assert.ok(check.issues.some((issue) =>
+      issue.includes("relay server › printed pairing command exited with non-zero code 2") && issue.includes("unknown option --url")),
+    check.issues.join("\n"));
+    assert.doesNotThrow(() => assertFinalVerificationCheckSemantics({
+      check, profile: profile as never, targetRevision: fixture.integration.revision, workspacePath: run.workspacePath,
+    }));
     await assertPortReusable(port);
   } finally {
     await managedOwner.close();

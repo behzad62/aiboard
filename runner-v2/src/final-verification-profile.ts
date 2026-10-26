@@ -83,10 +83,13 @@ export interface ArchitectRuntimeSmokeRequest {
   args: string[];
   readinessPath: string;
   timeoutMs?: number;
+  /** The user's workflow against the live program, in order; {port} is substituted as in args. */
+  steps?: Array<{ label: string; executable: string; args: string[]; timeoutMs?: number }>;
 }
 
 export const ARCHITECT_RUNTIME_SMOKE_PORT = "{port}";
 const ARCHITECT_RUNTIME_SMOKE_MAX_TIMEOUT_MS = 300_000;
+const ARCHITECT_RUNTIME_SMOKE_MAX_STEPS = 8;
 
 /** Issues with a requested Architect runtime smoke; empty when it is usable. */
 export function architectRuntimeSmokeIssues(request: ArchitectRuntimeSmokeRequest): string[] {
@@ -101,20 +104,41 @@ export function architectRuntimeSmokeIssues(request: ArchitectRuntimeSmokeReques
   if (request.timeoutMs !== undefined && (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 1_000 || request.timeoutMs > ARCHITECT_RUNTIME_SMOKE_MAX_TIMEOUT_MS)) {
     issues.push(`runtimeSmoke.timeoutMs must be an integer from 1000 to ${ARCHITECT_RUNTIME_SMOKE_MAX_TIMEOUT_MS}.`);
   }
+  if ((request.steps?.length ?? 0) > ARCHITECT_RUNTIME_SMOKE_MAX_STEPS) {
+    issues.push(`runtimeSmoke.steps allows at most ${ARCHITECT_RUNTIME_SMOKE_MAX_STEPS} steps; drive a longer workflow from one smoke script.`);
+  }
+  for (const [index, step] of (request.steps ?? []).entries()) {
+    if (!step.label.trim()) issues.push(`runtimeSmoke.steps[${index}].label must name the step.`);
+    if (!step.executable.trim() || step.executable.includes("\0")) issues.push(`runtimeSmoke.steps[${index}].executable must be a program name such as node.`);
+    if (step.args.some((arg) => arg.includes("\0"))) issues.push(`runtimeSmoke.steps[${index}].args must not contain NUL characters.`);
+    if (step.timeoutMs !== undefined && (!Number.isSafeInteger(step.timeoutMs) || step.timeoutMs < 1_000 || step.timeoutMs > ARCHITECT_RUNTIME_SMOKE_MAX_TIMEOUT_MS)) {
+      issues.push(`runtimeSmoke.steps[${index}].timeoutMs must be an integer from 1000 to ${ARCHITECT_RUNTIME_SMOKE_MAX_TIMEOUT_MS}.`);
+    }
+  }
   return issues;
 }
 
 /** The exact runner-owned smoke spec for a validated request and leased port. */
 export function architectRuntimeSmokeSpec(request: ArchitectRuntimeSmokeRequest, port: number): FinalVerificationRuntimeSmokeInput {
   const timeoutMs = request.timeoutMs ?? 120_000;
+  // node is the runner's own executable, so the smoke runs on the runtime the evidence identifies.
+  const executable = (name: string) => name === "node" ? process.execPath : name;
+  const args = (values: string[]) => values.map((arg) => arg.replaceAll(ARCHITECT_RUNTIME_SMOKE_PORT, String(port)));
   return {
     label: request.label.trim(),
-    // node is the runner's own executable, so the smoke runs on the runtime the evidence identifies.
-    executable: request.executable === "node" ? process.execPath : request.executable,
-    args: request.args.map((arg) => arg.replaceAll(ARCHITECT_RUNTIME_SMOKE_PORT, String(port))),
+    executable: executable(request.executable),
+    args: args(request.args),
     endpoint: `http://127.0.0.1:${port}${request.readinessPath}`,
     timeoutMs,
     readiness: { timeoutMs, pollIntervalMs: 100, expectedStatus: 200 },
+    ...(request.steps?.length ? {
+      steps: request.steps.map((step) => ({
+        label: step.label.trim(),
+        executable: executable(step.executable),
+        args: args(step.args),
+        ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
+      })),
+    } : {}),
   };
 }
 
@@ -837,6 +861,7 @@ function validSmoke(value: unknown): value is FinalVerificationRuntimeSmokeInput
   if (typeof (smoke.readiness as Record<string, unknown>).healthCheck === "function" ||
     typeof smoke.releasePort === "function") return false;
   if (typeof smoke.endpoint !== "string") return false;
+  if (smoke.steps !== undefined && (!Array.isArray(smoke.steps) || !smoke.steps.every(validCommand))) return false;
   try { const url = new URL(smoke.endpoint); return url.protocol === "http:" || url.protocol === "https:"; }
   catch { return false; }
 }
@@ -893,7 +918,12 @@ function cloneCommand(command: FinalVerificationCommand): FinalVerificationComma
   return { ...command, args: [...command.args], ...(command.environment ? { environment: { ...command.environment } } : {}) };
 }
 function cloneSmoke(smoke: FinalVerificationRuntimeSmokeInput): FinalVerificationRuntimeSmokeInput {
-  return { ...smoke, args: [...smoke.args], readiness: { ...smoke.readiness } };
+  return {
+    ...smoke,
+    args: [...smoke.args],
+    readiness: { ...smoke.readiness },
+    ...(smoke.steps ? { steps: smoke.steps.map(cloneCommand) } : {}),
+  };
 }
 function cloneBrowser(browser: FinalVerificationBrowserInput): FinalVerificationBrowserInput {
   return {

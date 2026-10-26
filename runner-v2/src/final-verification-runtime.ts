@@ -123,6 +123,12 @@ export interface FinalVerificationRuntimeSmokeInput {
   timeoutMs?: number;
   readiness: FinalVerificationReadiness;
   releasePort?: (endpoint?: string) => void | Promise<void>;
+  /**
+   * The user's workflow, run in order against the live program once it is ready; each must exit 0.
+   * Tunnel run: the smoke only proved the relay answered /healthz, and the pairing command it
+   * printed failed for every user.
+   */
+  steps?: FinalVerificationCommand[];
 }
 
 export interface FinalVerificationBrowserInput {
@@ -236,6 +242,8 @@ export interface FinalVerificationCommandFact extends CommandEvidenceFact {
   readinessSatisfied?: boolean;
   cleanupRequested?: boolean;
   cleanupSucceeded?: boolean;
+  /** A runtime_smoke workflow step run against the live program (facts after the program's own). */
+  workflowStep?: true;
   /** Machine-readable test-report identities used for OA-14 rerun selection. */
   report?: {
     readonly failingTestIds?: readonly string[];
@@ -1042,6 +1050,7 @@ export class FinalVerificationRuntime {
     let timedOut = false;
     let cancelled = false;
     let startError: Error | undefined;
+    const steps: Array<{ fact: FinalVerificationCommandFact; issues: string[]; passed: boolean }> = [];
 
     try {
       if (input.signal?.aborted) {
@@ -1067,6 +1076,20 @@ export class FinalVerificationRuntime {
           timedOut = readiness.timedOut;
           cancelled = readiness.cancelled;
           if (readiness.issue) input.base.issues.push(readiness.issue);
+        }
+        if (observation && readinessSatisfied && smoke.steps?.length) {
+          for (const [index, step] of smoke.steps.entries()) {
+            const run = await this.runSmokeStep(smoke, step, index, input);
+            steps.push(run);
+            if (!run.passed) break;
+          }
+          observation = await this.managedProcess.poll(observation.processId).catch(() => observation!);
+          if (observation.status !== "running") {
+            input.base.issues.push(
+              `runtime_smoke command ${smoke.label} stopped while its workflow steps ran` +
+                `${observation.exitCode !== null ? ` (exit code ${String(observation.exitCode)})` : ""}.`,
+            );
+          }
         }
       }
     } finally {
@@ -1167,10 +1190,108 @@ export class FinalVerificationRuntime {
     );
     if (evidenceId) input.base.evidenceIds.push(evidenceId);
     else input.base.issues.push(`runtime_smoke command ${smoke.label} has no durable evidence record.`);
+    for (const [index, step] of steps.entries()) {
+      input.base.facts.push(step.fact);
+      input.base.issues.push(...step.issues);
+      const stepEvidenceId = this.recordEvidence(
+        step.fact,
+        input.generationId,
+        "runtime_smoke",
+        index + 1,
+        step.fact.finishedAt,
+        input.runOrdinal,
+      );
+      if (stepEvidenceId) input.base.evidenceIds.push(stepEvidenceId);
+      else input.base.issues.push(`runtime_smoke step ${step.fact.label} has no durable evidence record.`);
+    }
     return {
       ...input.base,
       green: input.base.issues.length === 0 && input.base.evidenceIds.length === input.base.facts.length,
     };
+  }
+
+  /** One user-workflow command against the live runtime_smoke program; never reused from an earlier run. */
+  private async runSmokeStep(
+    smoke: FinalVerificationRuntimeSmokeInput,
+    step: FinalVerificationCommand,
+    index: number,
+    input: { workspace: VerificationWorkspace; generationId: string; runOrdinal: number; signal?: AbortSignal },
+  ): Promise<{ fact: FinalVerificationCommandFact; issues: string[]; passed: boolean }> {
+    const label = `${smoke.label} › ${step.label}`;
+    const startState = await repositoryState(input.workspace.path, this.git);
+    const workingTreeIdentity = await workingTreeForRunner(this.git, input.workspace.path);
+    const startedAt = this.clock();
+    const execution = await executeCommand(
+      step,
+      input.workspace.path,
+      input.signal,
+      this.defaultTimeoutMs,
+      this.maximumTimeoutMs,
+      this.execution,
+      {
+        runId: this.runId,
+        sessionId: this.taskId,
+        actor: this.actor,
+        taskId: this.taskId,
+        callId: `${input.generationId}:runtime_smoke:step${index}:${input.runOrdinal}`,
+        // A step's result depends on the live program, so it must never be reused from an earlier run.
+        toolName: "final-verification.runtime_smoke_step",
+      },
+    );
+    const finishedAt = this.clock();
+    const endState = await repositoryState(input.workspace.path, this.git);
+    const [stdoutArtifact, stderrArtifact] = await Promise.all([
+      artifactForFinalOutput(this.artifacts, execution, "stdout", `runtime_smoke ${label} stdout`),
+      artifactForFinalOutput(this.artifacts, execution, "stderr", `runtime_smoke ${label} stderr`),
+    ]);
+    const executionErrorCode = stableExecutionErrorCode(execution.startError);
+    const fact: FinalVerificationCommandFact = {
+      kind: "command",
+      workingTreeIdentity: settleWorkingTreeIdentity(workingTreeIdentity, await workingTreeForRunner(this.git, input.workspace.path)),
+      childEnvironmentIdentity: execution.routed?.childEnvironmentIdentity ?? unknownChildEnvironment(),
+      ...(execution.routed?.childEnvironmentAudit ? {childEnvironmentAudit: execution.routed.childEnvironmentAudit} : {}),
+      category: "runtime_smoke",
+      label,
+      executable: step.executable,
+      command: step.executable,
+      args: [...step.args],
+      cwd: input.workspace.path,
+      startedAt,
+      finishedAt,
+      exitCode: execution.exitCode,
+      signal: execution.signal,
+      timedOut: execution.timedOut,
+      cancelled: execution.cancelled,
+      outputTruncated: execution.outputTruncated,
+      ...(executionErrorCode ? { errorCode: executionErrorCode } : {}),
+      stdoutArtifactHash: stdoutArtifact.hash,
+      stderrArtifactHash: stderrArtifact.hash,
+      repositoryRevision: input.workspace.targetRevision,
+      targetRevision: input.workspace.targetRevision,
+      startState,
+      endState,
+      ...(smoke.endpoint ? { endpoint: smoke.endpoint } : {}),
+      workflowStep: true,
+    };
+    const issues: string[] = [];
+    if (execution.startError) issues.push(`runtime_smoke step ${label} could not start: ${execution.startError.message}.`);
+    if (execution.cancelled) issues.push(`runtime_smoke step ${label} was cancelled.`);
+    if (execution.timedOut) issues.push(`runtime_smoke step ${label} timed out.`);
+    if (execution.signal) issues.push(`runtime_smoke step ${label} ended by ${execution.signal}.`);
+    if (!execution.startError && !execution.cancelled && !execution.timedOut && execution.exitCode !== 0) {
+      const detail = (execution.stderr.length ? execution.stderr : execution.stdout).toString("utf8").trim().slice(-400);
+      issues.push(
+        `runtime_smoke step ${label} exited with non-zero code ${String(execution.exitCode)}` +
+          `${detail ? `: ${detail}` : ""}.`,
+      );
+    }
+    if (endState.revision !== input.workspace.targetRevision) {
+      issues.push(
+        `runtime_smoke step ${label} changed the verification revision from ` +
+          `${input.workspace.targetRevision} to ${endState.revision}.`,
+      );
+    }
+    return { fact, issues, passed: issues.length === 0 };
   }
 
   private async runBrowserCheck(input: {
@@ -1692,7 +1813,13 @@ function sameSmokeBinding(
 ): boolean {
   return Boolean(right) && left.label === right!.label && left.executable === right!.executable &&
     left.endpoint === right!.endpoint && left.timeoutMs === right!.timeoutMs &&
-    sameStringArray(left.args, right!.args);
+    sameStringArray(left.args, right!.args) &&
+    (left.steps ?? []).length === (right!.steps ?? []).length &&
+    (left.steps ?? []).every((step, index) => {
+      const other = right!.steps![index]!;
+      return step.label === other.label && step.executable === other.executable &&
+        step.timeoutMs === other.timeoutMs && sameStringArray(step.args, other.args);
+    });
 }
 
 function sameBrowserBinding(
@@ -1958,6 +2085,7 @@ async function executeCommand(  command: FinalVerificationCommand,
     actor: AgentActor;
     taskId: string;
     callId: string;
+    toolName?: string;
   },
   junit?: { destination: string; ambientNodeOptions?: string },
 ): Promise<ProcessResult> {
@@ -2007,7 +2135,7 @@ async function executeCommand(  command: FinalVerificationCommand,
         actor: identity.actor,
         taskId: identity.taskId,
         callId: identity.callId,
-        toolName: "final-verification.command",
+        toolName: identity.toolName ?? "final-verification.command",
         runnerInternal: true,
         ...(signal ? { signal } : {}),
       },
@@ -2264,6 +2392,10 @@ function validateRuntimeSmoke(
     }
   }
   validateTimeout(input.timeoutMs, maximumTimeoutMs, "runtime_smoke timeoutMs");
+  if (input.steps !== undefined) {
+    if (!Array.isArray(input.steps)) throw new Error("runtime_smoke steps must be an array.");
+    input.steps.forEach((step, index) => validateCommand(step, "runtime_smoke", index, maximumTimeoutMs));
+  }
   if (!input.readiness || typeof input.readiness !== "object") {
     throw new Error("runtime_smoke readiness is required.");
   }
