@@ -16,6 +16,7 @@ import {
   nativeBuildPauseDescription,
   nativeTaskRetirement,
   nativeTaskVerificationState,
+  orderVerifierCandidates,
   shouldShowBuildPauseAction,
   nativeBuildRunPolicy,
   nativeBuildPolicyChange,
@@ -272,6 +273,13 @@ assert.equal(nativeBuildTaskStatus("planned", {
   assert.equal(nativeTaskRetirement(projection as never, task("split")), "cancelled");
   assert.equal(nativeTaskRetirement(projection as never, task("built")), undefined);
 }
+// Tunnel run: Gemini was the configured verifier, but the card led with the Architect's gpt-6.1-sol.
+assert.deepEqual(
+  orderVerifierCandidates(["chatgpt:gpt-6.1-sol", "google:gemini-4-argon", "deepseek:deepseek-flash"], "google:gemini-4-argon"),
+  ["google:gemini-4-argon", "chatgpt:gpt-6.1-sol", "deepseek:deepseek-flash"],
+);
+assert.deepEqual(orderVerifierCandidates(["a", "b"], "missing"), ["a", "b"], "an unoffered configured verifier changes nothing");
+assert.deepEqual(orderVerifierCandidates(["a", "b"], null), ["a", "b"]);
 assert.equal(nativeBuildDiscussionStatus({ status: "running" } as never), "running");
 assert.equal(nativeBuildDiscussionStatus({ status: "paused" } as never), "stopped");
 assert.equal(nativeBuildDiscussionStatus({ status: "completed" } as never), "completed");

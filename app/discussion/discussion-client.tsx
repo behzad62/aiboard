@@ -133,6 +133,7 @@ import {
   nativeBuildTaskStatus,
   nativeTaskRetirement,
   nativeTaskVerificationState,
+  orderVerifierCandidates,
   nativeBuildUsageWindow,
   nativeActorModelIdentity,
   reconcileNativeBuildFiles,
@@ -2051,6 +2052,13 @@ function DiscussionPageInner() {
     ));
   }, [discussion]);
 
+  // The verifier the owner set in Settings, as a runner runtime id.
+  const configuredVerifierRuntimeId = useMemo<string | null>(() => {
+    if (!discussion || discussion.mode !== "build") return null;
+    const crew = buildCrewFromDiscussion(discussion);
+    return crew ? selectBuildCrewRuntimes(crew).reviewerRuntimeId : null;
+  }, [discussion]);
+
   const accentMap = useMemo(
     () => buildAccentMap(participantIds),
     [participantIds]
@@ -2511,7 +2519,7 @@ function DiscussionPageInner() {
         node: (
           <DecisionCard
             title="Choose an independent verifier to continue"
-            actions={verifierSelection.candidateRuntimeIds.map((runtimeId) => {
+            actions={orderVerifierCandidates(verifierSelection.candidateRuntimeIds, configuredVerifierRuntimeId).map((runtimeId) => {
               const cooldown = verifierCandidateCooldown(nativeProjection, runtimeId, verifierCooldownClock);
               return (
                 <Button
@@ -2526,6 +2534,9 @@ function DiscussionPageInner() {
                   onClick={() => void handleVerifierSelection(runtimeId)}
                 >
                   {verifierSelectionPending === runtimeId ? "Selecting…" : getModelDisplayName(runtimeId)}
+                  {runtimeId === configuredVerifierRuntimeId && (
+                    <span className="ml-1 text-xs text-muted-foreground">(your verifier)</span>
+                  )}
                   {cooldown && (
                     <span className="ml-1 text-xs text-muted-foreground">
                       (until {new Date(cooldown.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})

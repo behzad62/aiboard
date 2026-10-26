@@ -828,6 +828,20 @@ export function nativeBuildTaskStatus(
   return "failed";
 }
 
+/**
+ * The runner lists verifier candidates in crew order, the Architect's model first. Tunnel run: the
+ * owner had set Gemini as the verifier in Settings, but the card offered gpt-6.1-sol first with
+ * nothing marking Gemini, and the Architect's model was picked. The configured verifier leads.
+ */
+export function orderVerifierCandidates(
+  candidates: readonly string[],
+  configured: string | null | undefined
+): string[] {
+  return configured && candidates.includes(configured)
+    ? [configured, ...candidates.filter((runtimeId) => runtimeId !== configured)]
+    : [...candidates];
+}
+
 type NativeBuildTask = NativeBuildProjection["tasks"][string];
 
 /** What nativeBuildTaskStatus needs to know about a final-verification task's generation. */
