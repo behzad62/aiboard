@@ -1947,6 +1947,9 @@ export async function switchStorageLocation(
 ): Promise<StorageSwitchResult> {
   await flush();
   const nextAdapter = await createAdapter(next);
+  if (nextAdapter.kind !== next.kind) {
+    throw new Error("The selected folder is not accessible with read/write permission. Your storage location has not changed.");
+  }
   return switchClientStoreAdapter(nextAdapter, next, true);
 }
 

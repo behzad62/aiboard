@@ -32,6 +32,7 @@ import {
   unlock,
 } from "@/lib/client/crypto-box";
 import { FolderOpen, HardDrive, Lock, ShieldCheck } from "lucide-react";
+import { mergeSettingsImport, parseSettingsImport } from "@/lib/client/storage-import";
 
 export function StorageSettings({
   onChanged,
@@ -98,7 +99,14 @@ export function StorageSettings({
 
   const useFolder = () =>
     run(async () => {
-      await pickDirectory();
+      try {
+        await pickDirectory();
+      } catch (error) {
+        if (error instanceof Error && ["AbortError", "NotAllowedError"].includes(error.name)) {
+          throw new Error("Folder access was not granted. If you selected a folder, the browser may have refused read/write access. To copy saved settings, use Import settings below and select the folder's store.json.", { cause: error });
+        }
+        throw error;
+      }
       const result = await switchStorageLocation({
         ...getConfig(),
         kind: "filesystem",
@@ -144,6 +152,16 @@ export function StorageSettings({
     });
 
   const fileRef = useRef<HTMLInputElement>(null);
+  const settingsFileRef = useRef<HTMLInputElement>(null);
+
+  const importSettings = (file: File) =>
+    run(async () => {
+      const imported = parseSettingsImport(await file.text());
+      replaceStore(mergeSettingsImport(exportStore(), imported));
+      await flush();
+      await onChanged?.();
+      setMessage("Imported provider settings, custom models, and app defaults. Your existing chats and benchmark history were preserved.");
+    });
 
   const exportToFile = () =>
     run(async () => {
@@ -161,6 +179,10 @@ export function StorageSettings({
 
   const importFromFile = (file: File) =>
     run(async () => {
+      const parsed = JSON.parse(await file.text());
+      if (parsed && typeof parsed === "object" && "encrypted" in parsed) {
+        throw new Error("This is a local-folder store.json. Use Import settings to copy its configuration. For a full restore, export a backup from the original browser first.");
+      }
       if (
         !window.confirm(
           "Import this file? It replaces the current data in this browser."
@@ -168,7 +190,6 @@ export function StorageSettings({
       ) {
         return;
       }
-      const parsed = JSON.parse(await file.text());
       replaceStore(parsed.store ?? parsed);
       await flush();
       await onChanged?.();
@@ -319,11 +340,28 @@ export function StorageSettings({
         <CardHeader>
           <CardTitle>Backup &amp; restore</CardTitle>
           <CardDescription>
-            Export everything to a JSON file, or import it into another browser
-            or device — a portable backup without a shared folder.
+            Import settings from a local folder&apos;s store.json or an exported
+            backup to copy providers, custom models, and defaults into this
+            browser. Existing chats and benchmark history stay in place.
+            Export or restore a full backup with the other actions.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => settingsFileRef.current?.click()} disabled={busy}>
+            Import settings
+          </Button>
+          <input
+            ref={settingsFileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            aria-label="Import AI Board settings file"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) importSettings(file);
+              e.target.value = "";
+            }}
+          />
           <Button variant="outline" onClick={exportToFile} disabled={busy}>
             Export to file
           </Button>
