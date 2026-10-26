@@ -1486,6 +1486,7 @@ function condenseSettledTaskGraph(
   const finalVerification = graph.finalVerification
     ? {
         ...graph.finalVerification,
+        ...(graph.finalVerification.current ? { current: leanCurrentGeneration(graph.finalVerification.current) } : {}),
         history: graph.finalVerification.history.map((generation) => ({
           ...generation,
           ...(generation.completedChecks
@@ -1508,6 +1509,40 @@ function condenseSettledTaskGraph(
     reviews,
     finalVerification,
     condensed: `Settled (integrated or cancelled) tasks, their reviews and earlier final-verification generations are condensed; artifact.read ${fullGraphArtifact} for the full graph.`,
+  };
+}
+
+type FinalVerificationGeneration = NonNullable<NonNullable<ReturnType<typeof architectTaskGraph>["finalVerification"]>["current"]>;
+
+/**
+ * The current generation's check facts carried each command's reuse snapshot (its full output tail)
+ * and child-environment audit, and the submission repeated every check: 137k chars of a final
+ * verification review turn for a one-task run (tunnel run). inspect_evidence already strips the same
+ * two fields; the output stays in the stdout/stderr artifacts the facts name.
+ */
+function leanCurrentGeneration(generation: FinalVerificationGeneration) {
+  const leanFacts = (facts: readonly unknown[]) => facts.map((fact) => {
+    if (!fact || typeof fact !== "object") return fact;
+    const { executionSnapshot: _snapshot, childEnvironmentAudit: _audit, ...lean } = fact as Record<string, unknown>;
+    return lean;
+  });
+  const submission = generation.submissionResult;
+  return {
+    ...generation,
+    ...(generation.completedChecks
+      ? { completedChecks: generation.completedChecks.map((check) => ({ ...check, facts: leanFacts(check.facts) })) }
+      : {}),
+    ...(submission
+      ? {
+          submissionResult: {
+            ...submission,
+            plan: undefined,
+            executionProfile: undefined,
+            checks: submission.checks.map(({ facts: _facts, ...check }) => check),
+            condensed: "The plan, execution profile and check facts are the generation's own, listed above.",
+          },
+        }
+      : {}),
   };
 }
 

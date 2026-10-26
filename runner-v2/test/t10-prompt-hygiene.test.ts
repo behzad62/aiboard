@@ -789,6 +789,18 @@ test("docs-v2 Architect task graph condenses settled work and points at the full
       },
       reviews: { "review-done": review("done"), "review-active": review("active"), "review-focus": review("focus") },
       finalVerification: {
+        current: {
+          generationId: "gen-2", targetRevision: "s".repeat(40), state: "current", plan: { checks: [] }, executionProfile: { note: "profile" },
+          completedChecks: [{
+            category: "tests", status: "required", green: true, attempt: 1, issues: [], evidenceIds: ["ev2"], workspacePath: "/w", startedAt: AT, finishedAt: AT,
+            facts: [{ kind: "command", exitCode: 0, stdoutArtifactHash: "a".repeat(64), executionSnapshot: { note: heavy }, childEnvironmentAudit: { note: heavy } }],
+          }],
+          submissionResult: {
+            kind: "final_verification_submission", generationId: "gen-2", plan: { checks: [] }, executionProfile: { note: heavy },
+            checks: [{ category: "tests", status: "required", green: true, evidenceIds: ["ev2"], facts: [{ note: heavy }] }],
+            evidenceIds: ["ev2"], green: true,
+          },
+        },
         history: [{
           generationId: "gen-1", targetRevision: "r".repeat(40), state: "superseded",
           completedChecks: [{ category: "tests", status: "passed", green: true, attempt: 1, issues: [], facts: [{ note: heavy }], evidenceIds: ["ev"], workspacePath: "/w", startedAt: AT, finishedAt: AT }],
@@ -819,6 +831,12 @@ test("docs-v2 Architect task graph condenses settled work and points at the full
     assert.equal(graph.reviews["review-done"].summary, "done approved.");
     assert.ok(graph.reviews["review-active"].criterionVerdicts);
     assert.deepEqual(graph.finalVerification.history[0].completedChecks, [{ category: "tests", status: "passed", green: true, attempt: 1 }]);
+    const current = graph.finalVerification.current;
+    assert.deepEqual(current.completedChecks[0].facts, [{ kind: "command", exitCode: 0, stdoutArtifactHash: "a".repeat(64) }], "the current check keeps its facts without output snapshots or environment audits");
+    assert.deepEqual(current.submissionResult.checks, [{ category: "tests", status: "required", green: true, evidenceIds: ["ev2"] }], "the submission does not repeat the checks' facts");
+    assert.equal(current.submissionResult.executionProfile, undefined);
+    assert.deepEqual(current.executionProfile, { note: "profile" });
+    assert.ok(full.includes("executionSnapshot"), "the full graph artifact keeps the raw facts");
     assert.ok(graph.condensed.includes(`artifact.read ${hash}`), graph.condensed);
     assert.ok(Buffer.byteLength(section) < Buffer.byteLength(full) / 2, "the condensed section is much smaller");
   } finally {
