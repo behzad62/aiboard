@@ -422,7 +422,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
 
   async reconcileStartup(): Promise<ReconciliationOutcome[]> {
     const outcomes: ReconciliationOutcome[] = [];
-    for (const invocationId of this.options.store.listRowIds()) {
+    const store = this.options.store;
+    for (const invocationId of store.listUnsettledRowIds?.() ?? store.listRowIds()) {
       let snapshot: DurableSubprocessRecord;
       try {
         const decoded = this.options.store.readByInvocation(invocationId);

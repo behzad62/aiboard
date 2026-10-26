@@ -55,7 +55,7 @@ const INERT_SUBPROCESS_STATES = new Set(["orphaned", "identity_mismatch", "backe
  */
 export function inheritedSubprocessResidue(store: DurableProcessStore): ReadonlyMap<string, number> {
   const residue = new Map<string, number>();
-  for (const invocationId of store.listRowIds()) {
+  for (const invocationId of store.listUnsettledRowIds?.() ?? store.listRowIds()) {
     let record;
     try { record = store.readByInvocation(invocationId); } catch { continue; }
     if (record && (INERT_SUBPROCESS_STATES.has(record.state) || record.pendingEffects.length > 0)) {

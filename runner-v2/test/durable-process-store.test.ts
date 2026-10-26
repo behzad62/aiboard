@@ -1240,6 +1240,40 @@ test("a stop requested while launching survives a launch that is then not proven
   assert.equal(failed.result?.outcome, "launch_failed");
 });
 
+test("startup scans skip integrity-verified settled rows but keep unsettled and tampered ones", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-process-store-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const path = join(root, "process.sqlite");
+  const kernel = openSqliteDurableProcessKernel(path, stateKey);
+  const writer = writerFor(kernel);
+  const settle = (invocationId: string) => {
+    writer.claim(prepared({ invocationId, logicalProcessId: `proc-${invocationId}`, outputOwnerId: `output-${invocationId}` }));
+    let revision = 0;
+    for (const command of [
+      { type: "mark_output_prepared", at: "2026-01-01T00:00:00.500Z" },
+      { type: "record_environment", at: "2026-01-01T00:00:00.600Z", environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] } },
+      { type: "mark_launching", at: "2026-01-01T00:00:01.000Z" },
+      { type: "fail_launch", at: "2026-01-01T00:00:03.000Z", detail: "not launched" },
+    ]) revision = writer.apply({ invocationId, expectedRevision: revision, ...command } as never).revision;
+  };
+  settle("invoke-settled");
+  settle("invoke-tampered");
+  writer.claim(prepared({ invocationId: "invoke-open", logicalProcessId: "proc-open", outputOwnerId: "output-open" }));
+  assert.equal(kernel.store.readByInvocation("invoke-settled")?.state, "launch_not_proven");
+  kernel.store.close();
+  const raw = new DatabaseSync(path);
+  const row = raw.prepare("SELECT record_json FROM durable_processes WHERE invocation_id = ?").get("invoke-tampered") as { record_json: string };
+  raw.prepare("UPDATE durable_processes SET record_json = ? WHERE invocation_id = ?")
+    .run(row.record_json.replace("not launched", "forged detail"), "invoke-tampered");
+  raw.close();
+  const reopened = openSqliteDurableProcessKernel(path, stateKey, { readOnly: true });
+  assert.deepEqual(reopened.store.listRowIds(), ["invoke-open", "invoke-settled", "invoke-tampered"]);
+  assert.deepEqual(reopened.store.listUnsettledRowIds?.(), ["invoke-open", "invoke-tampered"],
+    "a settled row is skipped only while its integrity holds");
+  assert.throws(() => reopened.store.readByInvocation("invoke-tampered"), /corrupt|integrity/i);
+  reopened.store.close();
+});
+
 test("SQLite prepare is atomic across concurrent store instances and divergent requests conflict", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "runner-v2-process-store-"));
   t.after(async () => rm(root, { recursive: true, force: true }));

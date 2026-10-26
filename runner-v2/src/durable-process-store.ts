@@ -438,7 +438,24 @@ export interface DurableProcessStore {
   listRowIds(): string[];
   /** Cheap change detector for read-only observers: every record id with its current revision. */
   listRowRevisions?(): Array<{ invocationId: string; revision: number }>;
+  /**
+   * Startup scans: every row id except rows whose integrity-verified record is settled with no pending
+   * effect. A row that fails integrity or JSON parsing stays listed, so the full read reports it.
+   */
+  listUnsettledRowIds?(): string[];
   close(): void;
+}
+
+/**
+ * States startup reconciliation and residue capture never act on once no effect is pending. Fully
+ * re-validating every such row made a restart re-derive a finished run's whole process history: 19k
+ * cleaned rows (906 MB) took 49s per pass and the runner took 2.5 minutes to listen (tunnel run).
+ */
+export const SETTLED_SUBPROCESS_STATES: ReadonlySet<DurableSubprocessState> = new Set(["reused", "cleaned", "launch_not_proven"]);
+
+function isSettledRecord(record: { readonly state?: unknown; readonly pendingEffects?: unknown }): boolean {
+  return SETTLED_SUBPROCESS_STATES.has(record.state as DurableSubprocessState) &&
+    Array.isArray(record.pendingEffects) && record.pendingEffects.length === 0;
 }
 export interface DurableProcessStoreKernel {
   readonly store: DurableProcessStore;
@@ -484,6 +501,7 @@ abstract class AuthorityStore implements DurableProcessStore {
   ): DurableSubprocessRecord | undefined;
   abstract listRowIds(): string[];
   abstract listRowRevisions(): Array<{ invocationId: string; revision: number }>;
+  abstract listUnsettledRowIds(): string[];
   abstract close(): void;
 }
 
@@ -529,6 +547,9 @@ class InMemoryDurableProcessStore extends AuthorityStore {
   listRowRevisions(): Array<{ invocationId: string; revision: number }> {
     return [...this.records.values()]
       .map((record) => ({ invocationId: record.invocationId, revision: record.revision }));
+  }
+  listUnsettledRowIds(): string[] {
+    return this.listRowIds().filter((id) => !isSettledRecord(this.records.get(id)!));
   }
   close(): void {}
 }
@@ -679,6 +700,22 @@ class SqliteDurableProcessStore extends AuthorityStore {
         .all() as unknown as Array<{ invocation_id: string; revision: number }>
     ).map((row) => ({ invocationId: row.invocation_id, revision: Number(row.revision) }));
   }
+  listUnsettledRowIds(): string[] {
+    const ids: string[] = [];
+    // Iterate: materializing every row held the whole store in memory (1.6 GB for the tunnel run).
+    const rows = this.database
+      .prepare("SELECT * FROM durable_processes ORDER BY invocation_id")
+      .iterate() as Iterable<ProcessRow>;
+    for (const row of rows) {
+      let settled = false;
+      try {
+        settled = safeEqual(this.sign(row.invocation_id, row.revision, row.record_json), row.integrity) &&
+          isSettledRecord(JSON.parse(row.record_json) as Record<string, unknown>);
+      } catch {}
+      if (!settled) ids.push(row.invocation_id);
+    }
+    return ids;
+  }
   close(): void {
     this.database.close();
   }
@@ -734,6 +771,7 @@ function kernelFor(store: AuthorityStore): DurableProcessStoreKernel {
     readByInvocation: store.readByInvocation.bind(store),
     listRowIds: store.listRowIds.bind(store),
     listRowRevisions: store.listRowRevisions.bind(store),
+    listUnsettledRowIds: store.listUnsettledRowIds.bind(store),
     close: store.close.bind(store),
   });
   const kernel = { store: publicStore };
