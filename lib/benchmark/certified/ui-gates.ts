@@ -1,6 +1,8 @@
 import type { HarnessCertificationResult } from "@/lib/benchmark/types";
+import { isNativeBenchmarkTrack } from "@/lib/benchmark/native-suites";
 
 export type CertifiedRunnableTrack =
+  | "harnessbench"
   | "toolreliability"
   | "teamiq"
   | "workbench";
@@ -38,7 +40,7 @@ export function getCertifiedRunGate(
     if (input.teamModelIds.length < 1) {
       return blocked("Select at least one model for TeamIQ.");
     }
-  } else if (input.selectedTrack === "workbench") {
+  } else if (isNativeBenchmarkTrack(input.selectedTrack)) {
     const roleMode = input.workBenchRoleMode ?? "solo";
     const selected = input.workBenchModelIds?.length
       ? input.workBenchModelIds
@@ -54,15 +56,15 @@ export function getCertifiedRunGate(
     if (selected.length < required) {
       return blocked(
         required === 1
-          ? "Select a WorkBench model."
-          : `Select ${required} WorkBench role models.`
+          ? "Select a benchmark model."
+          : `Select ${required} benchmark role models.`
       );
     }
   } else if (!input.modelId) {
     return blocked("Select a model.");
   }
-  if (input.selectedTrack === "workbench" && !input.workBenchRunnerReady) {
-    return blocked("Connect the WorkBench bench runner before running.");
+  if (isNativeBenchmarkTrack(input.selectedTrack) && !input.workBenchRunnerReady) {
+    return blocked("Connect the benchmark runner before running.");
   }
   if (!input.certification.passed) {
     const failed = input.certification.checks.find((check) => !check.passed);

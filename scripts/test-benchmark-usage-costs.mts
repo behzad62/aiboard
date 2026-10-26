@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { OpenAICompatibleModel } from "../runner-v2/src/openai-compatible-model";
+import { providerReportedCostUsd } from "../runner-v2/src/provider-model-utils";
+import { BudgetedAgentModel } from "../runner-v2/src/budgeted-model";
+import { SqliteBudgetLedger } from "../runner-v2/src/sqlite-budget-ledger";
+import { mapNativeUsageToBenchmarkTraces } from "../lib/benchmark/workbench/native-runner-adapter";
+import { buildBenchmarkUsageCosts } from "../lib/benchmark/usage-costs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { BenchmarkUsageCosts } from "../components/benchmark/results/BenchmarkUsageCosts";
+import type { BenchmarkModelCallTrace, BenchmarkRun, BenchmarkResultSet } from "../lib/benchmark/types";
+
+const root = mkdtempSync(join(tmpdir(), "benchmark-cost-control-"));
+const path = join(root, "budget.sqlite");
+let ledger = new SqliteBudgetLedger(path, { limitsFor: () => ({}) });
+try {
+  const traces: BenchmarkModelCallTrace[] = [];
+  for (const [index, cost] of [0.0012, 0, undefined].entries()) {
+    const runId = `cost-${index}`;
+    const model = new OpenAICompatibleModel({ providerId: "openrouter", protocol: "responses", modelId: "test-only", apiKey: "test-only", baseUrl: "https://test.invalid", fetch: async () => new Response(JSON.stringify({ output: [], usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 40 }, output_tokens: 20, ...(cost === undefined ? {} : { cost }) } }), { headers: { "content-type": "application/json" } }) });
+    const budgeted = new BudgetedAgentModel({ model, ledger, scopeId: runId, attribution: { runtimeId: "test-only", modelId: "test-only", providerId: "openrouter", role: "worker", sessionId: "s" }, outputTokenReserve: 100, estimateCostMicros: () => 1000, costBasis: { kind: "api_estimate", inputCostMicrosPerMillion: 1, outputCostMicrosPerMillion: 1, cachedInputCostMicrosPerMillion: 1, cacheWriteInputCostMicrosPerMillion: 1 } });
+    await budgeted.complete({ runId, sessionId: "s", messages: [], tools: [] });
+    const usage = ledger.snapshot(runId);
+    assert.equal(usage.reservations["model:s:1"].providerReportedCostUsd, cost);
+    assert.equal(usage.effective.estimatedCostMicros, 1000, "provider cost is comparison metadata and cannot change budget accounting");
+    const [trace] = mapNativeUsageToBenchmarkTraces({ attemptId: `attempt-${index}`, runId: "benchmark", caseId: `case-${index}`, usage });
+    assert.equal(trace.estimatedUsd, 0.001);
+    assert.equal(trace.providerReportedCostUsd, cost);
+    assert.equal(trace.providerCost, cost, "only actual API-reported USD can occupy providerCost");
+    assert.equal(trace.usageSource, "reported");
+    traces.push(trace);
+  }
+  ledger.close();
+  ledger = new SqliteBudgetLedger(path, { limitsFor: () => ({}) });
+  assert.equal(ledger.snapshot("cost-1").reservations["model:s:1"].providerReportedCostUsd, 0, "reported zero survives durable replay");
+  assert.deepEqual(providerReportedCostUsd("deepseek", { cost: 1 }), {}, "do not assume undocumented currency fields are dollars");
+  for (const value of [-1, NaN, Infinity, "1", null]) assert.deepEqual(providerReportedCostUsd("openrouter", { cost: value }), {});
+  const run = { id: "benchmark", suiteId: "toolbench-test", status: "completed", startedAt: new Date(0).toISOString(), modelIds: ["test-only"] } as BenchmarkRun;
+  const [row] = buildBenchmarkUsageCosts([run], [...traces, traces[0]]);
+  assert.equal(row.calls, 3, "repeated trace snapshots do not double-count usage");
+  assert.equal(row.inputTokens, 300);
+  assert.equal(row.cachedInputTokens, 120);
+  assert.equal(row.outputTokens, 60);
+  assert.equal(row.calculatedUsd, 0.003);
+  assert.equal(row.providerUsd, 0.0012);
+  assert.equal(row.providerCalls, 2);
+  const [empty] = buildBenchmarkUsageCosts([{ ...run, status: "running" }], []);
+  assert.equal(empty.calculatedUsd, null);
+  assert.equal(empty.providerUsd, null);
+  const [cancelled] = buildBenchmarkUsageCosts([{ ...run, status: "running" }], [], [{ runIds: [run.id], status: "cancelled" } as BenchmarkResultSet]);
+  assert.equal(cancelled.status, "cancelled", "terminal subject state takes precedence over an interrupted running summary");
+  const [unpriced] = buildBenchmarkUsageCosts([{ ...run, status: "cancelled" }], [{ ...traces[0], estimatedUsd: null, providerReportedCostUsd: undefined }]);
+  assert.equal(unpriced.calculatedUsd, null);
+  assert.equal(unpriced.providerUsd, null);
+  assert.equal(unpriced.status, "cancelled");
+  const markup = renderToStaticMarkup(createElement(BenchmarkUsageCosts, { certified: { usageCosts: [row, empty, unpriced] } }));
+  for (const label of ["Cost per benchmark run", "Calculated API cost", "Provider-reported USD", "Unavailable"]) assert.ok(markup.includes(label));
+  assert.ok(!markup.includes("Estimate − provider") && !markup.includes("matched calls"), "cost columns remain side by side without a difference column");
+  ledger.reserve({ scopeId: "tool-only", reservationId: "tool", kind: "tool", estimate: {}, occurredAt: new Date(0).toISOString(), idempotencyKey: "reserve-tool" });
+  assert.throws(() => ledger.settle({ scopeId: "tool-only", reservationId: "tool", actual: {}, providerReportedCostUsd: 0, occurredAt: new Date(0).toISOString(), idempotencyKey: "settle-tool" }), /cannot carry provider model charges/);
+  assert.equal(ledger.snapshot("tool-only").reservations.tool.status, "reserved");
+  console.log("PASS provider-returned USD transport → durable ledger → trace → per-benchmark costs; zero/missing/invalid costs and partial coverage");
+} finally { ledger.close(); rmSync(root, { recursive: true, force: true }); }

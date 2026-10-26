@@ -27,31 +27,31 @@ const CARD_META: Record<
   { label: string; icon: LucideIcon; accent: string; bar: string }
 > = {
   overall: {
-    label: "Best overall model",
+    label: "Best HarnessBench model",
     icon: Sparkles,
     accent: "text-emerald-600 dark:text-emerald-400",
     bar: "bg-emerald-500",
   },
   workbench: {
-    label: "Best WorkBench team",
+    label: "Best HarnessBench team",
     icon: Gauge,
     accent: "text-violet-600 dark:text-violet-400",
     bar: "bg-violet-500",
   },
   reliability: {
-    label: "Most reliable",
+    label: "Best ToolBench qualification",
     icon: ShieldCheck,
     accent: "text-sky-600 dark:text-sky-400",
     bar: "bg-sky-500",
   },
   leanest: {
-    label: "Leanest successful model",
+    label: "Leanest HarnessBench success",
     icon: Feather,
     accent: "text-cyan-600 dark:text-cyan-400",
     bar: "bg-cyan-500",
   },
   fastest: {
-    label: "Fastest successful model",
+    label: "Fastest HarnessBench success",
     icon: Timer,
     accent: "text-amber-600 dark:text-amber-400",
     bar: "bg-amber-500",
@@ -131,7 +131,7 @@ function formatEvidence(verdict: DecisionVerdict): string {
 function formatVerdictMetric(verdict: DecisionVerdict): string {
   if (verdict.metric == null) return "Unavailable";
   if (verdict.key === "overall") {
-    return `${formatNormalizedScore(verdict.metric)} overall index`;
+    return `${formatNormalizedScore(verdict.metric)} HarnessBench quality`;
   }
   if (verdict.key === "workbench") {
     return `${formatNormalizedScore(verdict.metric)} verified quality`;

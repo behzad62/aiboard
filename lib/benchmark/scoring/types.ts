@@ -20,6 +20,7 @@ import type {
 export type NullableNumber = number | null | undefined;
 
 export interface WorkBenchScoreInput {
+  targetToolCalls?: number;
   verifierScore: number;
   verifierPassed: boolean;
   actualCostUsd: NullableNumber;
@@ -103,6 +104,9 @@ export interface CertifiedAggregateInput {
 }
 
 export interface CertifiedRunScore {
+  suiteIds?: string[];
+  comparisonProfileKey?: string;
+  comparisonProfileLabel?: string;
   id: string;
   teamCompositionId: string;
   /** All persisted composition ids represented by this canonical read-time row. */
@@ -249,6 +253,8 @@ export interface CertifiedBenchmarkDashboardInput {
 }
 
 export interface CertifiedBenchmarkDashboardData {
+  usageCosts?: import("../usage-costs").BenchmarkUsageCostRow[];
+  runOutcomes?: import("../run-outcomes").BenchmarkRunOutcome[];
   summary: {
     certifiedRuns: number;
     certifiedAttempts: number;

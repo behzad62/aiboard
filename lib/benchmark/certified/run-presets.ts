@@ -1,3 +1,4 @@
+import { HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE } from "@/lib/benchmark/native-suites";
 import type { CertifiedRunnableTrack } from "./suite-options";
 
 export interface BenchmarkPresetLeg {
@@ -19,64 +20,28 @@ export interface BenchmarkPreset {
   legs: BenchmarkPresetLeg[];
 }
 
-// Each leg names a REAL listCertifiedSuiteOptions(track) id:
-// - toolreliability "toolreliability-current-pack" — the only ToolReliability
-//   suite (the stateful pack in lib/benchmark/toolreliability/cases.ts).
-// - teamiq "teamiq-toolreliability-current-all-modes" — every team strategy
-//   plus solo baselines over the stateful ToolReliability sample, so one click
-//   yields the solo-vs-team comparison.
-// - workbench "workbench-current-all" — every current WorkBench case.
+// Solo presets use one selected model for all native roles; team experiments
+// remain available through Advanced and never enter the default qualification.
 export const BENCHMARK_PRESETS: BenchmarkPreset[] = [
   {
-    id: "model-iq",
-    title: "Models",
-    description:
-      "Each checked model runs the stateful Tool Reliability pack on its own. No runner needed.",
-    legs: [
-      {
-        track: "toolreliability",
-        suiteId: "toolreliability-current-pack",
-        mode: "solo",
-      },
-    ],
+    id: "team-benchmark",
+    title: "HarnessBench",
+    description: "AI Board's signature benchmark: each checked model implements Recoverable Job Service. All 69 modeled families and 302 variants must pass. Budget: up to 60 minutes per model.",
+    legs: [{ track: "harnessbench", suiteId: HARNESSBENCH_SUITE, mode: "solo", requires: "bench-runner" }],
   },
   {
-    id: "team-benchmark",
-    title: "Teams",
-    description:
-      "Your team compositions against their own members solo: team lift, quality, and cost per pass.",
-    legs: [
-      {
-        track: "teamiq",
-        suiteId: "teamiq-toolreliability-current-all-modes",
-        mode: "team",
-        includeSoloBaselines: true,
-      },
-    ],
+    id: "model-iq",
+    title: "ToolBench",
+    description: "Qualify native tool use: repository investigation, safe edits, revision recovery, bounded output, and real command evidence.",
+    legs: [{ track: "toolreliability", suiteId: NATIVE_TOOLBENCH_SUITE, mode: "solo", requires: "bench-runner" }],
   },
   {
     id: "full-certified",
-    title: "Full",
-    description:
-      "Models + Teams + WorkBench builds. WorkBench runs only while the bench runner is connected.",
+    title: "Both benchmarks",
+    description: "Run ToolBench and the signature HarnessBench for each checked model. Each suite keeps its own score and evidence.",
     legs: [
-      {
-        track: "toolreliability",
-        suiteId: "toolreliability-current-pack",
-        mode: "solo",
-      },
-      {
-        track: "teamiq",
-        suiteId: "teamiq-toolreliability-current-all-modes",
-        mode: "team",
-        includeSoloBaselines: true,
-      },
-      {
-        track: "workbench",
-        suiteId: "workbench-current-all",
-        mode: "team",
-        requires: "bench-runner",
-      },
+      { track: "toolreliability", suiteId: NATIVE_TOOLBENCH_SUITE, mode: "solo", requires: "bench-runner" },
+      { track: "harnessbench", suiteId: HARNESSBENCH_SUITE, mode: "solo", requires: "bench-runner" },
     ],
   },
 ];

@@ -69,14 +69,14 @@ const relevantSuiteOptions = [
 ];
 check(
   "ToolReliability UI option uses current pack id and label",
-  toolReliabilityOptions.length === 1 &&
-    toolReliabilityOptions[0]?.id === "toolreliability-current-pack" &&
-    toolReliabilityOptions[0]?.label === "ToolReliability: Current challenge pack",
+  toolReliabilityOptions.length >= 3 &&
+    toolReliabilityOptions[0]?.id === "toolbench-native-core-v3" &&
+    toolReliabilityOptions[0]?.label === "ToolBench: native core",
   toolReliabilityOptions
 );
 check(
   "suite option labels avoid legacy version wording",
-  relevantSuiteOptions.every((option) => !/(?:v0\.[12]|legacy)/i.test(option.label)),
+  relevantSuiteOptions.every((option) => option.id.startsWith("teamiq-") ? option.label.startsWith("Experimental TeamIQ") : !/(?:v0\.[12]|legacy)/i.test(option.label)),
   relevantSuiteOptions
 );
 check(
@@ -89,7 +89,7 @@ check(
   relevantSuiteOptions.some(
     (option) =>
       option.id === "teamiq-toolreliability-current-quick" &&
-      option.label === "TeamIQ: ToolReliability quick"
+      option.label === "Experimental TeamIQ: legacy scripted tool sample"
   ),
   relevantSuiteOptions
 );

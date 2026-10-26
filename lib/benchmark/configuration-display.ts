@@ -51,6 +51,10 @@ export function benchmarkConfigurationDisplay(
       cases ? ` · ${cases}` : ""
     }`;
   });
+  if (configuration.executionEnvironment) {
+    const env = configuration.executionEnvironment;
+    tracks.push(`Runner ${env.runnerSourceDigest.slice(0, 12)} · Node ${env.nodeVersion} · ${env.platform}`);
+  }
   return {
     subject,
     identity,
@@ -77,9 +81,9 @@ function formatMaxTokens(value: number | null): string {
 }
 
 function trackLabel(track: string): string {
-  if (track === "teamiq") return "TeamIQ";
-  if (track === "workbench") return "WorkBench";
-  if (track === "toolreliability") return "Tool Reliability";
+  if (track === "teamiq") return "TeamIQ (experimental)";
+  if (track === "workbench") return "WorkBench (integration smoke)";
+  if (track === "toolreliability") return "ToolBench";
   if (track === "harnessbench") return "HarnessBench";
   return sanitizeBenchmarkDisplayText(track);
 }

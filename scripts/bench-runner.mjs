@@ -7,6 +7,7 @@ import { mkdir, readFile, rm, stat, lstat, open, writeFile, readdir, cp } from "
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { specializeTrustedModule } from "./workbench-rjs-support.mjs";
+import { readNativeToolEvidence } from "./bench-native-tool-evidence.mjs";
 
 const VERSION = 1;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -160,12 +161,15 @@ async function route(pathname, body, signal) {
         service: "aiboard-bench-runner",
         version: VERSION,
         host,
+        platform: process.platform,
+        nodeVersion: process.versions.node,
         port,
         root,
         mcp: false,
+        nativeCapabilities: { browser: await nativeBrowserAvailable() },
         rjs: await inspectRjsRuntime(),
         runnerV2: runnerV2Launcher
-          ? { ready: true, source: runnerV2Launcher.source }
+          ? { ready: true, source: runnerV2Launcher.source, sourceDigest: await runnerSourceDigest(runnerV2Launcher) }
           : {
               ready: false,
               ...(runnerV2Discovery?.source ? { source: runnerV2Discovery.source } : {}),
@@ -227,6 +231,11 @@ async function route(pathname, body, signal) {
       return cleanup(body);
     case "/bench/attempt-runner/start":
       return startAttemptRunner(body);
+    case "/bench/attempt-runner/tool-evidence": {
+      const managed = managedAttemptRunners.get(validateAttemptId(requiredString(body, "attemptId")));
+      if (!managed || managed.starting) throw new HttpError(409, "Managed benchmark runner is unavailable.");
+      return readNativeToolEvidence(managed.statePath, requiredString(body, "runId"));
+    }
     case "/bench/attempt-runner/status":
       return statusAttemptRunner(body);
     case "/bench/attempt-runner/restore-oracle":
@@ -793,12 +802,13 @@ async function startAttemptRunner(body) {
   await mkdir(statePath, { recursive: true });
   const token = randomBytes(32).toString("hex");
   const invocation = runnerV2Invocation(runnerV2Launcher, attemptRoot, statePath, token);
+  const sourceDigest = await runnerSourceDigest(runnerV2Launcher);
   const child = trackBenchChild(spawn(invocation.command, invocation.args, {
     cwd: runnerV2Launcher.directory,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   }));
-  const managed = { attemptId, child, token, projectPath: attemptRoot, statePath, starting: true };
+  const managed = { attemptId, child, token, projectPath: attemptRoot, statePath, starting: true, sourceDigest, platform: process.platform };
   managedAttemptRunners.set(attemptId, managed);
   child.once("exit", () => { managed.exited = true; });
   try {
@@ -874,6 +884,7 @@ function attemptWorkspacePath(attemptId) {
 
 function managedRunnerResult(managed, running) {
   return {
+    ...(managed.sourceDigest ? { sourceDigest: managed.sourceDigest, platform: managed.platform } : {}),
     attemptId: managed.attemptId,
     running,
     ...(running ? { url: managed.url, token: managed.token } : {}),
@@ -1359,6 +1370,38 @@ function runnerV2Candidate(candidate, cli) {
       `Runner V2 source was found at ${candidate.directory}, but launcher dependencies are missing. ` +
       `Run "npm install" in ${candidate.directory}.`,
   };
+}
+
+async function runnerSourceDigest(launcher) {
+  const sourceRoot = dirname(resolve(launcher.directory, launcher.cli));
+  const digest = createHash("sha256");
+  async function visit(directory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name, "en"));
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) throw new HttpError(409, "Runner source identity cannot include symbolic links.");
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile()) {
+        digest.update(relative(sourceRoot, path).split(sep).join("/") + "\0");
+        digest.update(createHash("sha256").update(await readFile(path)).digest());
+      }
+    }
+  }
+  await visit(sourceRoot);
+  const dependencies = join(launcher.directory, "package-lock.json");
+  if (existsSync(dependencies)) digest.update(createHash("sha256").update(await readFile(dependencies)).digest());
+  return digest.digest("hex");
+}
+
+async function nativeBrowserAvailable() {
+  if (!runnerV2Launcher) return false;
+  const entry = join(runnerV2Launcher.directory, "node_modules", "playwright", "index.mjs");
+  if (!existsSync(entry)) return false;
+  try {
+    const { chromium } = await import(pathToFileURL(entry).href);
+    return existsSync(chromium.executablePath());
+  } catch { return false; }
 }
 
 function runnerV2Invocation(launcher, projectPath, statePath, runnerToken) {

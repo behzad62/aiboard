@@ -9,8 +9,9 @@ import type {
 } from "@/lib/benchmark/certified/decision-dashboard";
 
 export const EMPTY_DECISION_FILTERS: DecisionFilterState = {
+  profile: "auto",
   query: "",
-  track: "all",
+  track: "harnessbench",
   kind: "all",
   provider: "all",
   effort: "all",
@@ -33,7 +34,7 @@ export function DecisionFilters({
 
   return (
     <div className="rounded-xl border bg-card p-4">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1.6fr)_repeat(5,minmax(120px,1fr))_auto]">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
           Search evidence
           <span className="relative block">
@@ -49,13 +50,20 @@ export function DecisionFilters({
         <FilterSelect
           label="Track"
           value={value.track}
-          options={[{ value: "all", label: "All tracks" }, ...tracks.map(option)]}
+          options={[{ value: "harnessbench", label: "HarnessBench — signature" }, { value: "toolreliability", label: "ToolBench — native tools" }, ...tracks.filter(track => track !== "harnessbench" && track !== "toolreliability").map(option)]}
           onChange={(track) =>
             onChange({
               ...value,
               track: track as DecisionFilterState["track"],
+              profile: "auto",
             })
           }
+        />
+        <FilterSelect
+          label="Measured profile"
+          value={value.profile ?? "auto"}
+          options={[{ value: "auto", label: "Latest measured profile" }, ...Array.from(new Map(rows.filter(row => row.tracks.includes(value.track) && row.comparisonProfileKey).map(row => [row.comparisonProfileKey!, { value: row.comparisonProfileKey!, label: row.comparisonProfileLabel ?? row.comparisonProfileKey! }])).values())]}
+          onChange={profile => onChange({ ...value, profile })}
         />
         <FilterSelect
           label="Run type"
@@ -165,9 +173,9 @@ function option(value: string): { value: string; label: string } {
 }
 
 function formatOption(value: string): string {
-  if (value === "teamiq") return "TeamIQ";
-  if (value === "workbench") return "WorkBench";
-  if (value === "toolreliability") return "Tool Reliability";
+  if (value === "teamiq") return "TeamIQ (experimental)";
+  if (value === "workbench") return "WorkBench (integration smoke)";
+  if (value === "toolreliability") return "ToolBench";
   if (value === "harnessbench") return "HarnessBench";
   if (value === "chatgpt") return "ChatGPT";
   if (value === "xhigh") return "Extra high";

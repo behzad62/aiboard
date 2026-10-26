@@ -92,6 +92,7 @@ export interface StatefulToolReliabilityCase extends BaseToolReliabilityCase {
   expectedFinalFiles?: Record<string, { content: string; acceptable?: string[] }>;
   /** For `redundant-read`: the final free-text answer must state this value. */
   groundTruthAnswer?: { mustInclude: string[] };
+  requiredReadRanges?: Array<{ path: string; startLine: number; endLine: number }>;
   /** Doc-comment-style citation of the mined failure class/count/models. */
   provenance: string;
 }

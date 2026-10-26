@@ -121,7 +121,7 @@ export function CertifiedLeaderboard({
                 <th className="px-3 py-2 font-medium">Track</th>
                 <th className="px-3 py-2 text-right font-medium">Scored</th>
                 <th className="px-3 py-2 text-right font-medium">
-                  {sortKey === "overall" ? "Overall index" : "Verified quality"}
+                  {sortKey === "overall" ? "Benchmark score" : "Verified quality"}
                 </th>
                 <th className="px-3 py-2 text-right font-medium">Pass</th>
                 <th className="px-3 py-2 text-right font-medium">Efficiency</th>
@@ -347,7 +347,7 @@ function CaseTitlesCell({ titles }: { titles: string[] }) {
 // of without opening the leaderboard math.
 function overallScoreTooltip(row: CertifiedLeaderboardRow): string {
   if (row.trackBreakdown.length === 0) {
-    return "Overall index averages each track's quality equally.";
+    return "Benchmark score averages each track's quality equally.";
   }
   const parts = row.trackBreakdown.map(
     (entry) =>

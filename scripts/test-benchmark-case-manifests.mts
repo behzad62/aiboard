@@ -57,7 +57,7 @@ check("ToolReliability pack covers required metrics", toolValidation.valid, tool
 check("ToolReliability canonical pack has 8 cases (stateful-only, 2026-07-22 cut)", TOOL_RELIABILITY_CASES.length === 8, TOOL_RELIABILITY_CASES.length);
 
 const workBenchCases = listWorkBenchCaseOptions();
-check("WorkBench current picker has generated challenge cases", workBenchCases.length >= 19, workBenchCases.map((item) => item.id));
+check("WorkBench picker contains the bounded behavioral smoke pack", workBenchCases.length === 3, workBenchCases.map((item) => item.id));
 check(
   "WorkBench current picker has no legacy case ids or labels",
   workBenchCases.every((item) => !item.id.includes("-v1-") && !/\bv[12]\b/i.test(item.label)),
@@ -68,12 +68,7 @@ const workBenchLanguages = workBenchCases.reduce<Record<string, number>>((counts
   counts[item.fixtureLanguage] = (counts[item.fixtureLanguage] ?? 0) + 1;
   return counts;
 }, {});
-check("WorkBench current corpus includes C#", workBenchLanguages.csharp === 2, workBenchLanguages);
-check("WorkBench current corpus includes C++", workBenchLanguages.cpp === 2, workBenchLanguages);
-check("WorkBench current corpus includes Go", workBenchLanguages.go === 2, workBenchLanguages);
-check("WorkBench current corpus includes Rust", workBenchLanguages.rust === 1, workBenchLanguages);
-check("WorkBench current corpus includes Python", workBenchLanguages.python === 2, workBenchLanguages);
-check("WorkBench current corpus includes React UI", workBenchLanguages["react-ui"] === 2, workBenchLanguages);
+check("WorkBench smoke excludes static-only language fixtures", Object.keys(workBenchLanguages).join(",") === "javascript" && workBenchLanguages.javascript === 3, workBenchLanguages);
 
 for (const option of workBenchCases) {
   const caseV2 = toBenchmarkCaseV2(option.case, "2026-06-27T10:00:00.000Z");

@@ -8,6 +8,7 @@ export function effectiveCertifiedTrackMaxTokens(
   configured?: number | null
 ): number | null {
   if (configured !== undefined && configured !== null) return configured;
+  if (track === "toolreliability" && suiteId.startsWith("toolbench-native-")) return null;
   if (track === "toolreliability" || track === "teamiq") {
     return TOOL_RELIABILITY_EFFECTIVE_MAX_TOKENS;
   }

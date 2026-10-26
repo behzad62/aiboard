@@ -29,7 +29,7 @@ export function BenchmarkReportSummary({
     ["Certified attempts", counts.certifiedAttempts],
     ["Verifier results", counts.verifierResults],
     ["Team compositions", counts.teamCompositions],
-    ["Harness certifications", counts.harnessCertifications],
+    ["Harness self-checks", counts.harnessCertifications],
   ] as const;
 
   return (

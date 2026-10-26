@@ -12,7 +12,13 @@ import type { CertifiedBenchmarkDashboardInput } from "@/lib/benchmark/scoring/t
 // set that blended a GameIQ pack into its score is no longer comparable with
 // one that did not.
 const RETIRED_TRACKS = new Set<string>(["gameiq"]);
-const RETIRED_SUITE_PREFIXES = ["gameiq-", "fireworks-"];
+const RETIRED_SUITE_PREFIXES = ["gameiq-", "fireworks-", "toolreliability-current-", "workbench-current-"];
+
+function isHistoricalCase(track: string, id: string, version?: string): boolean {
+  if (track === "toolreliability" && id.startsWith("toolrel-")) return true;
+  if (track === "workbench" && (id.includes("recoverable-job-service") || Number.parseInt(version ?? "0", 10) < 4)) return true;
+  return false;
+}
 
 export function isRetiredBenchmarkSuite(suiteId: string | undefined): boolean {
   return Boolean(
@@ -29,12 +35,14 @@ export function isRetiredBenchmarkResultSet(resultSet: BenchmarkResultSet): bool
     resultSet.configuration.tracks.some(
       (track) =>
         isRetiredBenchmarkTrack(track.track) ||
-        isRetiredBenchmarkSuite(track.suiteId)
+        isRetiredBenchmarkSuite(track.suiteId) ||
+        track.caseManifest.some(item => isHistoricalCase(track.track, item.caseId, item.caseVersion))
     ) ||
     resultSet.expectedAttempts.some(
       (attempt) =>
         isRetiredBenchmarkTrack(attempt.track) ||
-        isRetiredBenchmarkSuite(attempt.suiteId)
+        isRetiredBenchmarkSuite(attempt.suiteId) ||
+        isHistoricalCase(attempt.track, attempt.caseId, attempt.caseVersion)
     )
   );
 }
@@ -42,7 +50,8 @@ export function isRetiredBenchmarkResultSet(resultSet: BenchmarkResultSet): bool
 export function isRetiredBenchmarkCase(caseRecord: BenchmarkCaseV2): boolean {
   return (
     isRetiredBenchmarkTrack(caseRecord.track) ||
-    isRetiredBenchmarkSuite(caseRecord.id)
+    isRetiredBenchmarkSuite(caseRecord.id) ||
+    isHistoricalCase(caseRecord.track, caseRecord.id, caseRecord.caseVersion)
   );
 }
 

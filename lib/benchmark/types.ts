@@ -242,11 +242,18 @@ export interface BenchmarkResultTrackConfiguration {
     caseId: string;
     caseVersion: string;
     scoringVersion: string;
+    fixtureHash?: string;
+    budget?: BenchmarkCaseV2["budget"];
   }>;
   maxTokens: number | null;
 }
 
 export interface BenchmarkResultConfiguration {
+  executionEnvironment?: {
+    runnerSourceDigest: string;
+    nodeVersion: string;
+    platform: string;
+  };
   subjectKind: "model" | "team";
   displayName: string;
   providerId?: string;
@@ -565,6 +572,8 @@ export interface BenchmarkModelCallTrace {
   outputAudioTokens?: number;
   providerCost?: number;
   providerCostUnit?: "usd" | "credits" | "unknown";
+  /** API-returned USD, never populated from our local rate calculation. */
+  providerReportedCostUsd?: number;
   estimatedUsd?: number | null;
   rawResponse?: string;
   parsedResponseJson?: string;

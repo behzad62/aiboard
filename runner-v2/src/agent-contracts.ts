@@ -72,6 +72,8 @@ export interface ModelTurn {
     cachedInputTokens?: number;
     cacheWriteInputTokens?: number;
     outputTokens?: number;
+    /** Dollar usage returned by the provider, kept separate from local pricing. */
+    providerReportedCostUsd?: number;
   };
 }
 

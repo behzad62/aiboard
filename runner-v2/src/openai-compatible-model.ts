@@ -15,6 +15,7 @@ import {
   joinEndpoint,
   safeToolArguments,
   serializedInputUsage,
+  providerReportedCostUsd,
   toolResultText,
 } from "./provider-model-utils.js";
 import { createHash } from "node:crypto";
@@ -52,6 +53,7 @@ interface OpenAIResponse {
     };
   }>;
   usage?: {
+    cost?: number;
     prompt_tokens?: number;
     prompt_tokens_details?: { cached_tokens?: number };
     completion_tokens?: number;
@@ -80,6 +82,7 @@ interface OpenAIResponsesResponse {
     | { type: "reasoning"; content?: Array<{ type?: string; text?: string }>; summary?: Array<{ type?: string; text?: string }> }
   >;
   usage?: {
+    cost?: number;
     input_tokens?: number;
     input_tokens_details?: { cached_tokens?: number };
     output_tokens?: number;
@@ -191,6 +194,7 @@ export class OpenAICompatibleModel implements AgentModel {
       ...(response.id ? { providerRequestId: response.id } : {}),
       usage: {
         ...serializedInputUsage(body, response.usage?.prompt_tokens),
+        ...providerReportedCostUsd(this.options.providerId, response.usage),
         ...(response.usage?.prompt_tokens_details?.cached_tokens !== undefined
           ? { cachedInputTokens: response.usage.prompt_tokens_details.cached_tokens }
           : {}),
@@ -314,6 +318,7 @@ export class OpenAICompatibleModel implements AgentModel {
       ...(response.id ? { providerRequestId: response.id } : {}),
       usage: {
         ...serializedInputUsage(body, response.usage?.input_tokens),
+        ...providerReportedCostUsd(this.options.providerId, response.usage),
         ...(response.usage?.input_tokens_details?.cached_tokens !== undefined
           ? { cachedInputTokens: response.usage.input_tokens_details.cached_tokens }
           : {}),

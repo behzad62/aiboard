@@ -40,7 +40,7 @@ export type LeaderboardSortKey =
 
 export const SORT_OPTIONS: Array<{ key: LeaderboardSortKey; label: string }> = [
   { key: "quality", label: "Quality" },
-  { key: "overall", label: "Overall (all tracks)" },
+  { key: "overall", label: "Benchmark score" },
   { key: "teamLift", label: "Team lift" },
   { key: "costPerPass", label: "Cost or tokens/pass" },
   { key: "speedPerPass", label: "Speed/pass" },
@@ -72,7 +72,7 @@ export const SORT_SOURCE_KEY: Record<
 export const SORT_BASIS_TEXT: Record<LeaderboardSortKey, string> = {
   quality: "Ranked by verified quality.",
   overall:
-    "Ranked by overall index — each track's quality weighted equally, then averaged across the tracks the row ran.",
+    "Ranked by the selected benchmark score; compare matching suites and configurations.",
   teamLift: "Ranked by team lift over the best solo member.",
   costPerPass:
     "Ranked by cost per passed case (lowest first). Rows without pricing (account or custom providers) fall back to tokens per passed case and rank after priced rows.",
@@ -115,6 +115,9 @@ export interface CertifiedFailureDetail {
 }
 
 export interface CertifiedLeaderboardRow {
+  suiteIds?: string[];
+  comparisonProfileKey?: string;
+  comparisonProfileLabel?: string;
   id: string;
   label: string;
   detail?: string;
@@ -446,6 +449,9 @@ export function readLeaderboardRow(value: unknown): CertifiedLeaderboardRow | nu
 
   return {
     id,
+    suiteIds: readStringList(row.suiteIds),
+    comparisonProfileKey: readString(row.comparisonProfileKey) ?? undefined,
+    comparisonProfileLabel: readString(row.comparisonProfileLabel) ?? undefined,
     label:
       readString(row.name) ??
       readString(row.teamName) ??

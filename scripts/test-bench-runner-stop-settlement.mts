@@ -246,6 +246,7 @@ for (const phase of ["startup", "health"] as const) {
     const start = runInNewContext(`(() => { ${functionText("startAttemptRunner")}; return startAttemptRunner; })()`, {
       validateAttemptId: (id: string) => id, requiredString: (body: { attemptId: string }) => body.attemptId,
       attemptWorkspacePath: () => "workspace", readMeta: async () => ({}), runnerV2Launcher: { directory: "launcher" },
+      runnerSourceDigest: async () => "a".repeat(64), process: { platform: "win32" },
       managedAttemptRunners: managed, benchChildStops: stops, hasSettledBenchChild: () => false,
       runnerStatePath: () => "state", rm: async () => { removals += 1; }, mkdir: async () => undefined,
       randomBytes: () => ({ toString: () => "opaque-test-token" }), runnerV2Invocation: () => ({ command: "fixture", args: [] }),

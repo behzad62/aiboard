@@ -252,7 +252,7 @@ export function BenchmarkResultSetAudit({
                     <span className="text-xs text-muted-foreground">
                       {row.statusLabel === "Legacy evidence"
                         ? "Use clear all to remove"
-                        : "Deletion in progress"}
+                        : row.statusLabel === "Running" ? "Run in progress" : "Deletion in progress"}
                     </span>
                   )}
                 </div>

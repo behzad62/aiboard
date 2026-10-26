@@ -6,7 +6,7 @@ interface ChatResult {
   choices: Array<{ message: {
     content: string; reasoning_content?: string; tool_calls: Array<{ id: string; function: { name: string; arguments: string } }>;
   }; finish_reason?: string }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+  usage?: { cost?: number; prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
 }
 export async function streamOpenAIChat(
   fetchImpl: typeof fetch, url: string, init: RequestInit, onText: (delta: string, channel?: LiveOutputChannel) => void

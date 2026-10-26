@@ -52,16 +52,16 @@ export function DecisionTradeoffCharts({ rows }: { rows: DecisionRow[] }) {
   return (
     <div className="grid min-w-0 gap-4 xl:grid-cols-2">
       <TradeoffChart
-        title="Overall index vs tokens per successful case"
-        description="Closer to the upper-left means a stronger cross-track overall index with less token use."
+        title="Benchmark score vs tokens per successful case"
+        description="Closer to the upper-left means a stronger cross-track benchmark score with less token use."
         points={tokenPoints}
         xLabel="Tokens per successful case"
         formatX={(value) => Math.round(value).toLocaleString()}
         empty="No successful results include token measurements."
       />
       <TradeoffChart
-        title="Overall index vs time per successful case"
-        description="Closer to the upper-left means a stronger cross-track overall index with less elapsed time."
+        title="Benchmark score vs time per successful case"
+        description="Closer to the upper-left means a stronger cross-track benchmark score with less elapsed time."
         points={timePoints}
         xLabel="Time per successful case"
         formatX={(value) => `${value.toFixed(value >= 10 ? 0 : 1)}s`}
@@ -164,7 +164,7 @@ function TradeoffChart({
                   <YAxis
                     dataKey="quality"
                     type="number"
-                    name="Overall index"
+                    name="Benchmark score"
                     domain={[0, 100]}
                     tickFormatter={(value) => `${value}`}
                     tick={{
@@ -209,7 +209,7 @@ function TradeoffChart({
                   <thead>
                     <tr className="text-left text-muted-foreground">
                       <th className="px-3 py-2 font-medium">Model or team</th>
-                      <th className="px-3 py-2 text-right font-medium">Overall index</th>
+                      <th className="px-3 py-2 text-right font-medium">Benchmark score</th>
                       <th className="px-3 py-2 text-right font-medium">{xLabel}</th>
                       <th className="px-3 py-2 text-right font-medium">Attempts</th>
                     </tr>
@@ -343,7 +343,7 @@ export function decisionTradeoffPointAriaLabel(
     point.kind,
     `Chart key: ${point.visualKey}`,
     `Tracks: ${formatTrackNames(point.tracks)}`,
-    `Overall index: ${point.quality.toFixed(1)}`,
+    `Benchmark score: ${point.quality.toFixed(1)}`,
     `${xLabel}: ${formatX(point.x)}`,
     `Attempts: ${point.attempts}`,
   ].join(". ");
@@ -485,7 +485,7 @@ export function DecisionTradeoffTooltip({
         {point.kind} · {formatTrackNames(point.tracks)}
       </div>
       <dl className="mt-2 grid grid-cols-[auto_auto] gap-x-3 gap-y-1">
-        <dt className="text-muted-foreground">Overall index</dt>
+        <dt className="text-muted-foreground">Benchmark score</dt>
         <dd className="text-right tabular-nums">{point.quality.toFixed(1)}</dd>
         <dt className="text-muted-foreground">{xLabel}</dt>
         <dd className="text-right tabular-nums">{formatX(point.x)}</dd>

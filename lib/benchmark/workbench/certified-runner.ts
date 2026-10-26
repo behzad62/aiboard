@@ -48,7 +48,7 @@ export async function runCertifiedWorkBench(
     const models = modelsForWorkBenchTeam(teamComposition, input.models ?? []);
     for (const workBenchCase of input.cases) {
       throwIfCertifiedRunAborted(input.signal);
-      const plannedAttemptId = attemptIdFor(
+      const plannedAttemptId = await attemptIdFor(
         input.context.runId,
         workBenchCase.id,
         teamCompositionId
@@ -119,9 +119,13 @@ function uniqueModels(models: SelectedModel[]): SelectedModel[] {
   return result;
 }
 
-function attemptIdFor(runId: string, caseId: string, teamCompositionId: string): string {
-  return `workbench-${safeId(runId)}-${safeId(caseId)}-${safeId(teamCompositionId)}`.slice(0, 120);
+export async function nativeBenchmarkAttemptId(runId: string, caseId: string, teamCompositionId: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([runId, caseId, teamCompositionId])));
+  const identity = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("").slice(0, 32);
+  return `workbench-${safeId(runId).slice(0, 24)}-${safeId(caseId).slice(0, 36)}-${identity}`;
 }
+
+const attemptIdFor = nativeBenchmarkAttemptId;
 
 function safeId(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "id";

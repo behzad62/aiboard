@@ -22,6 +22,7 @@ const SCOREABLE_STATUSES = new Set<BenchmarkAttemptV2["status"]>([
   "failed_model",
   "failed_verifier",
   "failed_tool_use",
+  "failed_budget",
 ]);
 
 export interface BenchmarkResultSetBinding {

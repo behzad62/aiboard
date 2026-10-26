@@ -133,12 +133,12 @@ function resultSet(id: string, runIds: string[], tracks: Array<[string, string]>
 // --- Pure filter -----------------------------------------------------------
 const gameRun = run("run-game", "gameiq", "gameiq-all-packs");
 const fireworksRun = run("run-fw", "teamiq", "fireworks-teamiq-full-v0.1");
-const toolRun = run("run-tool", "toolreliability", "toolreliability-current-pack");
+const toolRun = run("run-tool", "toolreliability", "toolbench-native-core-v3");
 const blended = resultSet("blended", ["run-game", "run-tool"], [
   ["gameiq", "gameiq-all-packs"],
-  ["toolreliability", "toolreliability-current-pack"],
+  ["toolreliability", "toolbench-native-core-v3"],
 ]);
-const clean = resultSet("clean", ["run-tool"], [["toolreliability", "toolreliability-current-pack"]]);
+const clean = resultSet("clean", ["run-tool"], [["toolreliability", "toolbench-native-core-v3"]]);
 assert.equal(isRetiredBenchmarkResultSet(blended), true);
 assert.equal(isRetiredBenchmarkResultSet(clean), false);
 
@@ -148,12 +148,12 @@ const input: CertifiedBenchmarkDashboardInput = {
   caseV2: [
     benchmarkCase("gameiq-v0.2-chess", "gameiq"),
     benchmarkCase("fireworks-teamiq-full-v0.1", "teamiq"),
-    benchmarkCase("toolreliability-current-pack", "toolreliability"),
+    benchmarkCase("toolbench-native-core-v3", "toolreliability"),
   ],
   attemptsV2: [
     attempt("a-game", "run-game", "gameiq-v0.2-chess", "gameiq", "blended"),
     attempt("a-fw", "run-fw", "fireworks-teamiq-full-v0.1", "teamiq"),
-    attempt("a-tool", "run-tool", "toolreliability-current-pack", "toolreliability", "clean"),
+    attempt("a-tool", "run-tool", "toolbench-native-core-v3", "toolreliability", "clean"),
   ],
   verifierResults: [],
   artifacts: [],
@@ -168,7 +168,7 @@ const filtered = withoutRetiredBenchmarkEvidence(input);
 assert.deepEqual(filtered.resultSets.map((set) => set.id), ["clean"]);
 assert.deepEqual(filtered.runs.map((item) => item.id), ["run-tool"]);
 assert.deepEqual(filtered.attemptsV2.map((item) => item.id), ["a-tool"]);
-assert.deepEqual(filtered.caseV2.map((item) => item.id), ["toolreliability-current-pack"]);
+assert.deepEqual(filtered.caseV2.map((item) => item.id), ["toolbench-native-core-v3"]);
 console.log("PASS retired tracks, suites, and blended result sets are filtered");
 
 const untouched = { ...input, resultSets: [clean], runs: [toolRun], attemptsV2: [input.attemptsV2[2]!] };

@@ -1,5 +1,6 @@
 {
   "verifiedAt": "2026-09-22",
+  "documentationUpdatedAt": "2026-10-26",
   "qualification": "accepted",
   "method": "rjs-simplification-audit-1",
   "contractVersion": "rjs-contract-2.0.1",
@@ -32,7 +33,7 @@
     },
     {
       "path": "docs/benchmarks/recoverable-job-service/README.md",
-      "sha256": "abf59aa9a5e6dda5e4e63d6f8c96f989789a958c5ee14616a3b1f3afaea497dd"
+      "sha256": "4edc620650d3451c501c68becd9a3ca2cdde9f215d16d647e124a2af6f5412fd"
     },
     {
       "path": "docs/benchmarks/recoverable-job-service/problem.md",

@@ -8,7 +8,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { BenchmarkLab } from "@/components/BenchmarkLab";
-import { BuildLeaderboard } from "@/components/benchmark/BuildLeaderboard";
 import { CertifiedBenchmarkOverview } from "@/components/benchmark/certified/CertifiedBenchmarkOverview";
 import { CertifiedRunPanel } from "@/components/benchmark/certified/CertifiedRunPanel";
 import { BenchmarkDecisionDashboard } from "@/components/benchmark/results/BenchmarkDecisionDashboard";
@@ -35,7 +34,7 @@ export function BenchmarkPage() {
           Benchmark
         </h1>
         <p className="mt-1 max-w-2xl text-muted-foreground">
-          Find which models and teams work best for your chats and builds.
+          Compare models with HarnessBench and qualify their native tool use with ToolBench.
           Runs use your own keys; results stay on this device.
         </p>
       </header>
@@ -44,7 +43,6 @@ export function BenchmarkPage() {
         <TabsList className="flex h-auto flex-wrap justify-start gap-1">
           <TabsTrigger value="results">Results</TabsTrigger>
           <TabsTrigger value="run">Run</TabsTrigger>
-          <TabsTrigger value="build">Live builds</TabsTrigger>
           <TabsTrigger value="data">Data</TabsTrigger>
         </TabsList>
 
@@ -96,9 +94,6 @@ export function BenchmarkPage() {
           <BenchmarkLab />
         </TabsContent>
 
-        <TabsContent value="build" className="space-y-6">
-          <BuildLeaderboard />
-        </TabsContent>
       </Tabs>
     </div>
   );

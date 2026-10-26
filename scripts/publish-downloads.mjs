@@ -40,6 +40,7 @@ const accountSdkSource = path.join(root, "lib", "account-provider-copilot-sdk.mj
 const downloads = [
   [accountRunnerSource, path.join(publicDirectory, "account-provider-runner.mjs")],
   [path.join(scripts, "bench-runner.mjs"), path.join(publicDirectory, "bench-runner.mjs")],
+  [path.join(scripts, "bench-native-tool-evidence.mjs"), path.join(publicDirectory, "bench-native-tool-evidence.mjs")],
   [path.join(scripts, "workbench-rjs-support.mjs"), path.join(publicDirectory, "workbench-rjs-support.mjs")],
   [path.join(scripts, "workbench-rjs-verifier-adapter.mjs"), path.join(publicDirectory, "workbench-rjs-verifier-adapter.mjs")],
 ];
@@ -201,7 +202,7 @@ async function publishNativeRunner() {
 
 async function publishWorkBenchRunner() {
   const zip = new JSZip();
-  for (const name of ["bench-runner.mjs", "workbench-rjs-support.mjs", "workbench-rjs-verifier-adapter.mjs"]) {
+  for (const name of ["bench-runner.mjs", "bench-native-tool-evidence.mjs", "workbench-rjs-support.mjs", "workbench-rjs-verifier-adapter.mjs"]) {
     zip.file(name, archiveFileContent(path.join(scripts, name)), {
       date: new Date(0),
       createFolders: false,
@@ -274,6 +275,7 @@ async function publishRjsWorkBenchRunner() {
   }
   const trustedScripts = [
     "scripts/bench-runner.mjs",
+    "scripts/bench-native-tool-evidence.mjs",
     "scripts/workbench-rjs-support.mjs",
     "scripts/workbench-rjs-verifier-adapter.mjs",
   ];

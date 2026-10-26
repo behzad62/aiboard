@@ -68,8 +68,8 @@ const readinessHtml = renderToStaticMarkup(
     checking: false,
     workBenchCase: benchmarkCase,
     health: {
-      ok: true,
-      runnerV2: { ready: true, nodeVersion: "24.18.0" },
+      ok: true, platform: "win32", nodeVersion: "24.18.0",
+      runnerV2: { ready: true, nodeVersion: "24.18.0", sourceDigest: "a".repeat(64) },
       rjs: {
         ready: true,
         nodeVersion: "24.18.0",

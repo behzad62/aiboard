@@ -1,4 +1,7 @@
 import { withoutRetiredBenchmarkEvidence } from "@/lib/benchmark/retired";
+import { benchmarkComparisonProfileKey } from "@/lib/benchmark/certified/result-set-identity";
+import { buildBenchmarkUsageCosts } from "@/lib/benchmark/usage-costs";
+import { buildBenchmarkRunOutcomes } from "@/lib/benchmark/run-outcomes";
 import type {
   BenchmarkCase,
   BenchmarkAttemptV2,
@@ -435,6 +438,7 @@ export function buildCertifiedBenchmarkDashboardData(
             overallDelta: series?.overallDelta ?? null,
             passRateDelta: series?.passRateDelta ?? null,
             historyCount: series?.older.length ?? 0,
+            preliminary: (series?.older.length ?? 0) + 1 < MIN_CONFIDENT_ATTEMPTS,
           }
         : row;
       })
@@ -493,6 +497,8 @@ export function buildCertifiedBenchmarkDashboardData(
   );
 
   return {
+    usageCosts: buildBenchmarkUsageCosts(suppliedInput.runs, suppliedInput.traces, suppliedInput.resultSets),
+    runOutcomes: buildBenchmarkRunOutcomes(suppliedInput, new Set(publishableResultSets.map(result => result.id))),
     summary: {
       certifiedRuns: new Set(
         latestResultSets.flatMap((resultSet) => resultSet.runIds)
@@ -598,6 +604,9 @@ function materializeSnapshotRow(
     : resultSet.configuration.displayName;
   return {
     id: resultSet.id,
+    suiteIds: resultSet.configuration.tracks.map(track => track.suiteId),
+    comparisonProfileKey: benchmarkComparisonProfileKey(resultSet.configuration),
+    comparisonProfileLabel: [resultSet.configuration.tracks.map(track => track.suiteId).join(" + "), resultSet.configuration.executionEnvironment?.platform, resultSet.configuration.executionEnvironment?.nodeVersion, resultSet.configuration.executionEnvironment?.runnerSourceDigest.slice(0, 12)].filter(Boolean).join(" · "),
     teamCompositionId: compositionId,
     teamCompositionIds: [compositionId],
     teamName: resultSet.configuration.displayName,
@@ -749,6 +758,7 @@ function resultSetTrackComparisonKeys(
         track.track,
         JSON.stringify({
           executionId: resultSet.executionId,
+          executionEnvironment: resultSet.configuration.executionEnvironment,
           suiteId: track.suiteId,
           maxTokens: track.maxTokens,
           caseManifest: [...track.caseManifest].sort((left, right) =>

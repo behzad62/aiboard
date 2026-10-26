@@ -2,20 +2,25 @@ import type {
   BenchmarkArtifact,
   BenchmarkModelCallTrace,
   BenchmarkTeamComposition,
+  BenchmarkResultConfiguration,
   BenchmarkToolCallTrace,
   CertifiedAttemptStatus,
 } from "@/lib/benchmark/types";
 import { createJsonArtifact } from "@/lib/benchmark/artifacts";
+import { qualifyNativeToolBench } from "@/lib/benchmark/toolreliability/native-qualification";
 import type { CertifiedRunContext } from "@/lib/benchmark/certified/run-context";
 import {
   startManagedAttemptRunner,
   restoreManagedAttemptOracle,
   stopManagedAttemptRunner,
   type ManagedAttemptRunnerResult,
+  getNativeBenchmarkToolEvidence,
+  type NativeBenchmarkToolEvidence,
 } from "@/lib/client/bench-runner";
 import { createNativeProviderConfig } from "@/lib/client/native-build-engine";
 import type {
   NativeBuildAuditExport,
+  NativeBuildProjection,
   NativeBuildObservability,
   NativeBuildUsageProjection,
   NativeProviderConfig,
@@ -27,6 +32,7 @@ import {
   createNativeBuild,
   getNativeBuild,
   getNativeBuildAudit,
+  getNativeBuildUsage,
   getNativeRun,
   getNativeRunnerHealth,
   selectNativeArchitectHandoff,
@@ -53,12 +59,16 @@ const WORKBENCH_PROTECTED_PATHS = [
 ];
 
 export interface NativeWorkBenchBuildInput extends WorkBenchBuildAdapterInput {
+  nativeToolEvidence?: NativeBenchmarkToolEvidence;
+  expectedRunnerEnvironment?: BenchmarkResultConfiguration["executionEnvironment"];
   context: CertifiedRunContext;
   models: SelectedModel[];
   teamComposition?: BenchmarkTeamComposition;
 }
 
 export interface NativeWorkBenchDependencies {
+  getNativeBuildUsage?: typeof getNativeBuildUsage;
+  getNativeBenchmarkToolEvidence?: typeof getNativeBenchmarkToolEvidence;
   startManagedAttemptRunner: typeof startManagedAttemptRunner;
   restoreManagedAttemptOracle: typeof restoreManagedAttemptOracle;
   stopManagedAttemptRunner: typeof stopManagedAttemptRunner;
@@ -113,6 +123,7 @@ class NativeWorkBenchRunFailure extends Error {
 }
 
 const DEFAULT_DEPENDENCIES: NativeWorkBenchDependencies = {
+  getNativeBuildUsage,
   startManagedAttemptRunner,
   restoreManagedAttemptOracle,
   stopManagedAttemptRunner,
@@ -193,6 +204,11 @@ export async function runNativeWorkBenchBuild(
     if (!managed.running || !managed.url || !managed.token) {
       throw new Error("Bench Runner did not return a live managed Runner V2 connection.");
     }
+    if (input.expectedRunnerEnvironment && (
+      managed.sourceDigest !== input.expectedRunnerEnvironment.runnerSourceDigest ||
+      managed.platform !== input.expectedRunnerEnvironment.platform ||
+      managed.nodeVersion !== input.expectedRunnerEnvironment.nodeVersion
+    )) throw new Error("Benchmark runner identity changed after preflight; recheck the runner before measuring models.");
     connection = {
       url: managed.url,
       token: managed.token,
@@ -264,13 +280,15 @@ export async function runNativeWorkBenchBuild(
             hiddenPaths: uniqueStrings([
               ...WORKBENCH_HIDDEN_PATHS,
               ...(input.case.trustedPolicy?.hiddenPaths ?? []),
+              ...(input.case.executionPolicy?.hiddenPaths ?? []),
             ]),
             protectedPaths: uniqueStrings([
               ...WORKBENCH_PROTECTED_PATHS,
               ...(input.case.trustedPolicy?.protectedPaths ?? []),
+              ...(input.case.executionPolicy?.protectedPaths ?? []),
             ]),
-            ...(input.case.trustedPolicy
-              ? { editablePaths: [...input.case.trustedPolicy.editablePaths] }
+            ...(input.case.trustedPolicy || input.case.executionPolicy
+              ? { editablePaths: [...(input.case.trustedPolicy?.editablePaths ?? input.case.executionPolicy!.editablePaths)] }
               : {}),
           },
         },
@@ -292,6 +310,8 @@ export async function runNativeWorkBenchBuild(
 
     const eligibleRuntimes = new Set(configuredRuntimeIds);
     const continuationCounts = new Map<string, number>();
+    const recordedUsageIds = new Set<string>();
+    let lastUsagePoll = 0;
     for (;;) {
       throwIfAborted(input.signal);
       const [run, projection] = await Promise.all([
@@ -299,6 +319,21 @@ export async function runNativeWorkBenchBuild(
         dependencies.getNativeBuild(connection, nativeRunId, undefined, input.signal),
       ]);
       throwIfAborted(input.signal);
+      if (dependencies.getNativeBuildUsage && Date.now() - lastUsagePoll >= 3_000) {
+        lastUsagePoll = Date.now();
+        try {
+          const usage = await dependencies.getNativeBuildUsage(connection, nativeRunId, undefined, input.signal);
+          for (const trace of mapNativeUsageToBenchmarkTraces({ attemptId: input.attemptId, runId: input.runId, caseId: input.case.id, usage,
+            effortByRuntimeId: nativeWorkBenchEffortByRuntimeId(input.teamComposition, input.models) })) {
+            if (recordedUsageIds.has(trace.id)) continue;
+            await input.context.recordTrace(trace);
+            recordedUsageIds.add(trace.id);
+          }
+        } catch {
+          // Live usage is best effort; final audit remains authoritative.
+          throwIfAborted(input.signal);
+        }
+      }
       if (run.state === "failed" || run.state === "stopped") {
         throw new Error(`Managed Runner V2 Build terminated in state ${run.state}.`);
       }
@@ -335,10 +370,7 @@ export async function runNativeWorkBenchBuild(
           throwIfAborted(input.signal);
           continue;
         }
-        const disposition = nativePauseDisposition(
-          projection.pauseReason?.reason,
-          projection.pauseReason?.taskId
-        );
+        const disposition = nativeProjectionPauseDisposition(projection);
         const continuationCount = continuationCounts.get(disposition.key) ?? 0;
         if (disposition.action === "continue" && continuationCount < disposition.limit) {
           continuationCounts.set(disposition.key, continuationCount + 1);
@@ -357,7 +389,7 @@ export async function runNativeWorkBenchBuild(
         throw new NativeWorkBenchRunFailure(
           disposition.certifiedStatus,
           disposition.certifiedCode,
-          disposition.message
+          `${disposition.message}${projection.pauseReason?.detail ? ` (${projection.pauseReason.detail})` : ""}`
         );
       }
       await dependencies.wait(500, input.signal);
@@ -370,7 +402,23 @@ export async function runNativeWorkBenchBuild(
       input.signal
     );
     throwIfAborted(input.signal);
-    return await recordNativeAudit(input, audit, managed, startedMs);
+    if (input.case.nativeQualification?.requiredReadText || input.case.nativeQualification?.minimumAtomicEdits) {
+      try {
+        input = { ...input, nativeToolEvidence: await (dependencies.getNativeBenchmarkToolEvidence ?? getNativeBenchmarkToolEvidence)(input.runner, { attemptId: input.attemptId, runId: nativeRunId }, input.signal) };
+        if (input.nativeToolEvidence?.runId !== nativeRunId) throw new Error("Native benchmark tool evidence belongs to a different run.");
+      } catch (error) {
+        throwIfAborted(input.signal);
+        throw new NativeWorkBenchRunFailure("invalid_harness", "native_tool_evidence_unavailable",
+          `Native benchmark tool evidence could not be verified: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const result = await recordNativeAudit(input, audit, managed, startedMs);
+    const qualification = qualifyNativeToolBench(input.case, audit, input.nativeToolEvidence);
+    if (!qualification.passed) {
+      throw new NativeWorkBenchRunFailure("failed_tool_use", "native_tool_qualification_failed",
+        `Native tool qualification failed: ${qualification.checks.filter(item => !item.passed).map(item => item.id).join(", ")}`);
+    }
+    return result;
   } catch (error) {
     if (managed) {
       let buildResult: Partial<WorkBenchBuildExecutionResult> | undefined;
@@ -440,6 +488,9 @@ export function nativePauseDisposition(
   if (normalized.startsWith("budget_exhausted:")) {
     return pauseFailure("failed_budget", "budget_exhausted", normalized);
   }
+  if (normalized.startsWith("verifier_unavailable:")) {
+    return pauseFailure("provider_unavailable", "verifier_unavailable", normalized);
+  }
   if (normalized === "task_attempt_budget") {
     return pauseFailure("failed_budget", "task_attempt_budget", normalized);
   }
@@ -501,6 +552,14 @@ export function nativePauseDisposition(
     normalized ? "unrecognized_runner_pause" : "runner_pause_reason_missing",
     normalized || "Runner V2 paused without a structured reason."
   );
+}
+
+export function nativeProjectionPauseDisposition(projection: NativeBuildProjection): NativePauseDisposition {
+  const selection = projection.verifierSelection;
+  const reason = projection.pauseReason?.reason ?? (selection?.status === "required"
+    ? selection.reason === "budget_exhausted" ? "budget_exhausted:verifier_selection" : `verifier_unavailable:${selection.reason}`
+    : undefined);
+  return nativePauseDisposition(reason, projection.pauseReason?.taskId);
 }
 
 function nativeProtocolErrorCode(reason: string): string {
@@ -611,7 +670,8 @@ function nativeAuditResult(
     outputTokens: lifetime.outputTokens,
     modelCalls: traces.length,
     toolCalls: toolTraces.length,
-    validToolCalls: toolTraces.filter((trace) => trace.status === "ok").length,
+    validToolCalls: toolTraces.filter((trace) => trace.status === "ok" ||
+      trace.error === "process_exit" || input.case.nativeQualification?.requiredRecoveryErrors?.includes(trace.error ?? "")).length,
     durationMs: Math.max(0, Date.now() - startedMs),
     runnerProjectPath: managed.projectPath,
     runnerStatePath: managed.statePath,
@@ -665,9 +725,10 @@ export function mapNativeUsageToBenchmarkTraces(input: {
         outputTokens,
         totalTokens: inputTokens + outputTokens,
         usageSource: usageSource(reservation.tokenSources),
-        ...(priced
+        ...(reservation.providerReportedCostUsd !== undefined
           ? {
-              providerCost: estimatedUsd!,
+              providerReportedCostUsd: reservation.providerReportedCostUsd,
+              providerCost: reservation.providerReportedCostUsd,
               providerCostUnit: "usd" as const,
             }
           : {}),
@@ -764,8 +825,17 @@ function nativeBudgetLimits(input: NativeWorkBenchBuildInput): {
 }
 
 function workBenchObjective(input: NativeWorkBenchBuildInput): string {
+  if (input.case.nativeQualification) return [
+    `Native tool exercise: ${input.case.title}`,
+    input.case.prompt.userRequest,
+    input.case.prompt.publicContext,
+    "Create one small implementation task covering the requested tools and its evidence; do not add separate investigation or verification tasks.",
+    "Task evidence: record the requested command where specified, then node check.mjs after the edit. git diff --check is optional hygiene, not the only permitted evidence.",
+    "Final verification: package.json defines npm test (node check.mjs). Use the runner-detected test profile. No build step exists. Do not search repeatedly for absent infrastructure or create it. Keep reviews concise and grounded in the recorded tool results.",
+    "Budgets are emergency spending guards; token count, elapsed time and action count remain measured efficiency outcomes.",
+  ].filter(Boolean).join("\n\n");
   return [
-    `Certified WorkBench case: ${input.case.title}`,
+    `Native benchmark case: ${input.case.title}`,
     input.case.description,
     input.case.prompt.userRequest,
     input.case.prompt.publicContext,
@@ -787,7 +857,7 @@ function nativeAuditArtifact(
     attemptId: input.attemptId,
     caseId: input.case.id,
     label: "Runner V2 audit",
-    content: audit,
+    content: { ...audit, nativeToolEvidence: input.nativeToolEvidence, benchmarkQualification: qualifyNativeToolBench(input.case, audit, input.nativeToolEvidence) },
   });
 }
 

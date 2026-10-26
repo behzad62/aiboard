@@ -98,6 +98,7 @@ export interface BudgetReservationProjection {
   actual?: BudgetAmount;
   tokenSources?: ModelTokenSources;
   costBasis?: ModelCostBasisSnapshot;
+  providerReportedCostUsd?: number;
   settledAt?: string;
   status: "reserved" | "settled";
   windowIndex: number;
@@ -155,6 +156,7 @@ export interface SettleBudgetInput {
   actual: BudgetAmount;
   tokenSources?: ModelTokenSources;
   costBasis?: ModelCostBasisSnapshot;
+  providerReportedCostUsd?: number;
   occurredAt: string;
   idempotencyKey: string;
 }
@@ -259,6 +261,9 @@ export function reduceBudgetEvent(
       ...(event.payload.costBasis === undefined
         ? {}
         : { costBasis: modelCostBasisSnapshot(event.payload.costBasis) }),
+      ...(event.payload.providerReportedCostUsd === undefined
+        ? {}
+        : { providerReportedCostUsd: checkedProviderReportedCostUsd(event.payload.providerReportedCostUsd) }),
     };
     adjustAmount(projection.lifetime, reservation.estimate, -1);
     adjustAmount(projection.lifetime, actual, 1);
@@ -298,6 +303,11 @@ export function reduceBudgetEvent(
     }
   }
   projection.lastSequence = event.sequence;
+}
+
+export function checkedProviderReportedCostUsd(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("Provider-reported USD cost must be a finite non-negative number.");
+  return value;
 }
 
 function adjustAmount(

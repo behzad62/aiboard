@@ -70,7 +70,7 @@ export function WorkBenchRunnerStatus({
     : {
         href: "/aiboard-workbench-runner.zip",
         filename: "aiboard-workbench-runner.zip",
-        label: "Download WorkBench runner bundle",
+        label: "Download benchmark runner bundle",
       };
 
   return (

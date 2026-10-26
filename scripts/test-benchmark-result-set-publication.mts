@@ -1,3 +1,4 @@
+import { installNativeBenchmarkTestTransport } from "./native-benchmark-test-support";
 import assert from "node:assert/strict";
 import {
   __clearClientStoreForTests,
@@ -525,6 +526,7 @@ assert.equal(
 );
 assert.equal((await listBenchmarkResultSets())[0]?.status, "failed");
 
+const nativeTransport = installNativeBenchmarkTestTransport(false);
 // Real Advanced orchestration: the pending manifest must be observable from
 // inside the first provider admission, and honest failed_tool_use output still
 // publishes as a complete scoreable subject.
@@ -548,8 +550,9 @@ openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
 };
 try {
   await runSelected({
+    runNativeWorkBenchBuild: nativeTransport.runBuild,
     selectedTrack: "toolreliability",
-    suiteId: "toolreliability-current-pack",
+    suiteId: "toolbench-native-core-v3",
     models: [{
       modelId: "openai:advanced-publication",
       providerId: "openai",
@@ -561,8 +564,8 @@ try {
     includeSoloBaselines: false,
     workBenchModelIds: [],
     workBenchRoleMode: "solo",
-    workBenchRunnerUrl: "",
-    workBenchRunnerToken: "",
+    workBenchRunnerUrl: "http://native-benchmark.test",
+    workBenchRunnerToken: "test",
     effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
     certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
     effortByModelId: {},
@@ -601,7 +604,7 @@ const modelIqPreset: BenchmarkPreset = {
   legs: [
     {
       track: "toolreliability",
-      suiteId: "toolreliability-current-pack",
+      suiteId: "toolbench-native-core-v3",
       mode: "solo",
     },
   ],
@@ -642,13 +645,14 @@ try {
         providerId: "openai",
         displayName: "Model IQ publication",
       }],
+      runNativeWorkBenchBuild: nativeTransport.runBuild,
       soloModelIds: ["openai:modeliq-publication"],
       effortByModelId: {},
       teamModelIds: [],
       teamIqStrategy: "panel",
       workBenchRoleMode: "solo",
-      workBenchRunnerUrl: "",
-      workBenchRunnerToken: "",
+      workBenchRunnerUrl: "http://native-benchmark.test",
+      workBenchRunnerToken: "test",
       signal: new AbortController().signal,
       onComplete: async () => {},
     },
@@ -706,3 +710,5 @@ await refreshBenchmarkDashboardStorage();
 assert.equal((await listBenchmarkResultSets())[0]?.status, "failed");
 
 console.log("PASS benchmark result-set publication");
+
+nativeTransport.restore();

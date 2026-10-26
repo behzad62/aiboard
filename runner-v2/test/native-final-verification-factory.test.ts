@@ -16,6 +16,7 @@ import { FinalVerificationPortAuthority } from "../src/final-verification-port-a
 import { NativeBuildFactory } from "./support/git-fixture.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
+import type { FinalVerificationCheckDriver } from "../src/build-runtime.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 
@@ -264,6 +265,29 @@ test("the final-verification profile inspects the canonical revision after a sto
     const profile = await profileFor(baseline.revision);
     assert.equal(profile.targetRevision, baseline.revision);
     assert.deepEqual(profile.detectedSignals.map((signal) => signal.category).sort(), ["build", "tests"]);
+
+    // The legacy (docs-v1) benchmark path must execute the exact profile revision,
+    // even when a runner-owned documentation commit advanced the physical tip.
+    const runRoot = join(state, "builds", safeSegment(runId));
+    const authority = new FinalVerificationProfileAuthority({stateDirectory:state, runId, ambientEnvironment:executionHost.filteredEnvironmentSource()});
+    const scheduler = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"), {validateExecutionProfile:input=>authority.validate(input.profile,input.targetRevision)});
+    try {
+      seedPlanningState(scheduler, runId, baseline.revision);
+      const tools = new ToolRegistry();
+      for (const tool of createArchitectTools({store:scheduler, finalVerificationPlanAvailable:true, finalVerificationProfileFor:profileFor})) tools.register(tool);
+      const planned = await tools.invoke({type:"tool_call", callId:"plan-pinned-check", name:"plan_final_verification", arguments:{plan:{checks:[
+        {category:"build",status:"required"}, {category:"tests",status:"required"},
+        ...["runtime_smoke","browser"].map(category=>({category,status:"not_applicable",rationale:"A plain command-line fixture has no service or web surface.",repositoryInspection:{paths:["package.json"],summary:"Only build and test scripts exist; no server or browser entry point."}})),
+      ]}}}, {runId,sessionId:"architect",actor:{role:"architect",id:"fixture"}});
+      assert.equal(planned.isError,false,planned.error?.message ?? "verification plan failed");
+      const generation = handle.runtime.projection().finalVerification!.current!;
+      const driver = (handle.runtime as unknown as {finalVerificationDriver:FinalVerificationCheckDriver}).finalVerificationDriver;
+      const result = await driver.executeCheck({runId,taskId:generation.taskId,generationId:generation.generationId,targetRevision:generation.targetRevision,attempt:1,plan:generation.plan,category:"build",executionProfile:generation.executionProfile,signal:new AbortController().signal});
+      assert.equal(result.check.green,true);
+      assert.equal(spawnSync("git",["-C",result.workspacePath,"rev-parse","HEAD"],{encoding:"utf8"}).stdout.trim(),baseline.revision);
+      assert.notEqual(git("rev-parse","HEAD"),baseline.revision,"physical checkout remains untouched");
+      await assert.rejects(driver.executeCheck({runId,taskId:generation.taskId,generationId:generation.generationId,targetRevision:git("rev-parse","HEAD"),attempt:1,plan:generation.plan,category:"build",executionProfile:generation.executionProfile,signal:new AbortController().signal}),/authoritative canonical revision/);
+    } finally { scheduler.close(); }
   } finally {
     await handle?.close();
     await factory.close();

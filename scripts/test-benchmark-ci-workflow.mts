@@ -45,9 +45,8 @@ check(
 for (const expected of [
   "npm ci",
   "npm run publish-downloads",
-  "npm run test:certified",
   "npm run test:benchmark",
-  "npm run test:benchmark:recoverable-job-service",
+  "npm run test:benchmark:rjs-qualification",
   "npm run build",
   "actions/upload-artifact",
 ]) {
@@ -55,6 +54,8 @@ for (const expected of [
     workflowPath,
   });
 }
+check("benchmark CI does not replay the certified groups already included by test:benchmark",
+  !workflow.includes("npm run test:certified"));
 
 check(
   "benchmark CI runs on pull requests and main pushes",

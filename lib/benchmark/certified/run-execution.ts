@@ -17,10 +17,8 @@ import {
 } from "@/lib/benchmark/store";
 import { certifiedRunBudgetForCase } from "@/lib/benchmark/certified/run-budget";
 import type { CertifiedRunBudget } from "@/lib/benchmark/certified/run-context";
-import type { BenchmarkAttemptV2 as BenchmarkAttempt } from "@/lib/benchmark/types";
 import { runCertifiedBenchmark } from "@/lib/benchmark/certified/run-engine";
 import { throwIfCertifiedRunAborted } from "@/lib/benchmark/certified/model-call";
-import { persistReturnedAttempts } from "@/lib/benchmark/certified/model-runner";
 import type { CertifiedRunnableTrack } from "@/lib/benchmark/certified/suite-options";
 import { runHarnessCertification } from "@/lib/benchmark/certified/certification";
 import type { CertifiedRunSummary } from "@/lib/benchmark/certified/run-status";
@@ -32,6 +30,7 @@ import {
 import type { BenchmarkPreset, BenchmarkPresetLeg } from "./run-presets";
 import type {
   BenchmarkCaseV2,
+  BenchmarkResultConfiguration,
   BenchmarkTeamComposition,
   BenchmarkTeamCompositionRole,
   HarnessCertificationResult,
@@ -51,12 +50,9 @@ import {
   type TeamIqRoleAssignment,
 } from "@/lib/benchmark/teamiq";
 import {
-  TOOL_RELIABILITY_CASES,
   TOOL_RELIABILITY_CASE_PACK_VERSION,
-  runCertifiedToolReliability,
 } from "@/lib/benchmark/toolreliability";
 import {
-  getWorkBenchCasePack,
   normalizeWorkBenchModelSelection,
   runCertifiedWorkBench,
   workBenchCaseToBenchmarkCaseV2,
@@ -64,6 +60,7 @@ import {
   workBenchRoleCount,
   type WorkBenchRoleMode,
 } from "@/lib/benchmark/workbench";
+import { getNativeBenchmarkPack, isNativeBenchmarkTrack } from "@/lib/benchmark/native-suites";
 import { runNativeWorkBenchBuild } from "@/lib/benchmark/workbench/native-runner-adapter";
 import type { SelectedModel } from "@/lib/providers/base";
 import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
@@ -96,9 +93,10 @@ export type TeamIqUiStrategy = Exclude<TeamIqStrategy, "solo">;
 export type CertifiedRunPhase = "idle" | "certifying" | "running" | "persisting" | "done";
 
 export const TRACK_OPTIONS: Array<{ id: RunnableTrack; label: string }> = [
-  { id: "toolreliability", label: "Tool Reliability" },
-  { id: "teamiq", label: "TeamIQ" },
-  { id: "workbench", label: "WorkBench" },
+  { id: "harnessbench", label: "HarnessBench — Recoverable Job Service" },
+  { id: "toolreliability", label: "ToolBench — native tools" },
+  { id: "teamiq", label: "TeamIQ (experimental)" },
+  { id: "workbench", label: "WorkBench (integration smoke)" },
 ];
 
 // Per-model progress inside a preset leg. "partial" is kept for legs whose
@@ -208,6 +206,10 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     onComplete,
     onRetry,
   } = ctx;
+  if (signal?.aborted) {
+    setMessage(abortReasonMessage(signal));
+    return;
+  }
   if (!suiteId) return;
   const model = models.find((candidate) => candidate.modelId === modelId);
   const workBenchSelectedModels = workBenchModelsForRun(
@@ -217,16 +219,17 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
   );
   if (
     selectedTrack !== "teamiq" &&
-    selectedTrack !== "workbench" &&
+    !isNativeBenchmarkTrack(selectedTrack) &&
     !model
   ) return;
-  if (selectedTrack === "workbench" && workBenchSelectedModels.length < workBenchRoleCount(workBenchRoleMode)) {
+  if (isNativeBenchmarkTrack(selectedTrack) && workBenchSelectedModels.length < workBenchRoleCount(workBenchRoleMode)) {
     return;
   }
   const selectedWorkBenchPack =
-    selectedTrack === "workbench" ? getWorkBenchCasePack(suiteId) : null;
-  if (selectedTrack === "workbench" && !selectedWorkBenchPack) return;
-  if (selectedTrack === "workbench") {
+    isNativeBenchmarkTrack(selectedTrack) ? getNativeBenchmarkPack(selectedTrack, suiteId) : null;
+  let runnerEnvironment: BenchmarkResultConfiguration["executionEnvironment"];
+  if (isNativeBenchmarkTrack(selectedTrack) && !selectedWorkBenchPack) return;
+  if (isNativeBenchmarkTrack(selectedTrack)) {
     const health = await checkBenchRunnerForLeg(
       {
         url: workBenchRunnerUrl,
@@ -235,6 +238,11 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
       signal,
       selectedWorkBenchPack?.cases[0]?.case
     );
+    runnerEnvironment = health.environment;
+    if (signal?.aborted) {
+      setMessage(abortReasonMessage(signal));
+      return;
+    }
     if (!health.ok) {
       setMessage(
         health.error
@@ -270,7 +278,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             effortByModelId,
           })
         : [
-            selectedTrack === "workbench"
+            isNativeBenchmarkTrack(selectedTrack)
               ? createWorkBenchTeamComposition({
                   models: workBenchSelectedModels,
                   roleMode: workBenchRoleMode,
@@ -297,7 +305,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             suiteId,
             "teamiq"
           )
-        : selectedTrack === "workbench" && includeSoloBaselines
+        : isNativeBenchmarkTrack(selectedTrack) && includeSoloBaselines
           ? expandTeamIqTeamsBeforeExecution(
               initialTeams,
               true,
@@ -315,15 +323,22 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     await saveHarnessCertificationResult(certification);
     throwIfCertifiedRunAborted(abortController.signal);
     setRunPhase("running");
-    const runId = plannedRunId ?? `ui-${selectedTrack}-${Date.now()}`;
+    const runId = plannedRunId ?? `ui-${selectedTrack}-${crypto.randomUUID()}`;
     const caseRecords =
-      selectedTrack === "workbench"
+      isNativeBenchmarkTrack(selectedTrack)
         ? selectedWorkBenchPack
           ? selectedWorkBenchPack.cases.map((caseOption) =>
               workBenchCaseToBenchmarkCaseV2(caseOption)
             )
           : []
         : [caseForSelection(selectedTrack, suiteId)];
+    if (selectedWorkBenchPack) {
+      for (const caseRecord of caseRecords) {
+        const nativeCase = selectedWorkBenchPack.cases.find(item => item.id === caseRecord.id)!.case;
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(nativeCase)));
+        caseRecord.repo!.fixtureHash = `sha256:${Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("")}`;
+      }
+    }
     for (const caseRecord of caseRecords) {
       throwIfCertifiedRunAborted(abortController.signal);
       await saveBenchmarkCaseV2(caseRecord);
@@ -336,6 +351,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
             resultSetIds: uniqueResultSetIds(plannedOwnership),
           }
         : await planResultSetsForRun({
+            runnerEnvironment,
             executionId: runExecutionId,
             runId,
             suiteId,
@@ -348,7 +364,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
       runId,
       suiteId,
       name:
-        selectedTrack === "workbench" && selectedWorkBenchPack
+        isNativeBenchmarkTrack(selectedTrack) && selectedWorkBenchPack
           ? selectedWorkBenchPack.label
           : undefined,
       track: selectedTrack,
@@ -376,17 +392,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
         if (resultSetId) await publishBenchmarkResultSetIfComplete(resultSetId);
       },
       runner: async (context, options) => {
-        if (selectedTrack === "toolreliability") {
-          return runCertifiedToolReliability({
-            context,
-            models: [model!],
-            teamCompositionIds: [primaryTeam.id],
-            teamCompositions: [primaryTeam],
-            casePack: TOOL_RELIABILITY_CASES,
-            signal: options?.signal,
-          });
-        }
-        if (selectedTrack === "workbench") {
+        if (isNativeBenchmarkTrack(selectedTrack)) {
           if (!selectedWorkBenchPack) {
             throw new Error(`Unknown WorkBench case pack: ${suiteId}`);
           }
@@ -406,6 +412,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
                   (team) => team.id === buildInput.teamCompositionId
                 ) ?? primaryTeam;
               return executeNativeWorkBenchBuild({
+                expectedRunnerEnvironment: runnerEnvironment,
                 ...buildInput,
                 context,
                 models: workBenchSelectedModels.filter((candidate) =>
@@ -436,7 +443,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
     setSummary(result);
     setMessage(
       result.status === "completed"
-        ? selectedTrack === "workbench"
+        ? isNativeBenchmarkTrack(selectedTrack)
           ? `Certified WorkBench pack completed (${caseRecords.length} cases).`
           : `Certified ${trackLabel(selectedTrack)} run completed.`
         : result.error ?? `Certified ${trackLabel(selectedTrack)} run failed.`
@@ -638,6 +645,7 @@ function teamWithEffectiveMaxTokens(
 }
 
 async function planResultSetsForRun(input: {
+  runnerEnvironment?: BenchmarkResultConfiguration["executionEnvironment"];
   executionId: string;
   runId: string;
   suiteId: string;
@@ -654,9 +662,12 @@ async function planResultSetsForRun(input: {
     const id = [
       "result",
       slugForRunId(input.executionId),
+      slugForRunId(input.track),
+      slugForRunId(input.suiteId),
       slugForRunId(team.id),
     ].join("-");
     const configuration = {
+      ...(input.runnerEnvironment ? { executionEnvironment: input.runnerEnvironment } : {}),
       subjectKind:
         team.strategy === "solo" || team.roles.length === 1
           ? ("model" as const)
@@ -690,6 +701,8 @@ async function planResultSetsForRun(input: {
             caseId: item.id,
             caseVersion: item.caseVersion,
             scoringVersion: item.scoring.scoringVersion,
+            fixtureHash: item.repo?.fixtureHash,
+            budget: item.budget,
           })),
           maxTokens: effectiveCertifiedTrackMaxTokens(
             input.track,
@@ -1032,6 +1045,7 @@ export type PresetProgressEvent =
 // connection used both for the `requires: "bench-runner"` gate and the
 // WorkBench run itself.
 export interface RunPresetContext {
+  runNativeWorkBenchBuild?: typeof runNativeWorkBenchBuild;
   models: SelectedModel[];
   /** Model ids checked in the shared ModelChecklist; drives every solo leg. */
   soloModelIds: string[];
@@ -1064,7 +1078,7 @@ export async function runPreset(
       const health = await checkBenchRunnerForLeg({
         url: ctx.workBenchRunnerUrl,
         token: ctx.workBenchRunnerToken,
-      }, ctx.signal);
+      }, ctx.signal, getNativeBenchmarkPack(leg.track, leg.suiteId)?.cases[0]?.case);
       if (ctx.signal.aborted) {
         onProgress({ type: "leg", legIndex, leg, status: "skipped", detail: "Cancelled." });
         continue;
@@ -1124,12 +1138,18 @@ async function checkBenchRunnerForLeg(
   config: BenchRunnerConfig,
   signal?: AbortSignal,
   workBenchCase?: import("@/lib/benchmark/workbench/types").WorkBenchCase
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; environment?: BenchmarkResultConfiguration["executionEnvironment"] }> {
   if (!config.url.trim() || !config.token.trim()) {
     return { ok: false, error: "Bench runner not configured." };
   }
   const health = await checkBenchRunner(config, signal);
   const readiness = getTrustedBenchRunnerReadiness(health, workBenchCase);
+  if (readiness.ready && workBenchCase?.benchmarkTrack) {
+    if (!health.runnerV2?.sourceDigest || !health.platform || !health.nodeVersion) {
+      return { ok: false, error: "Update the benchmark runner to record native source, Node, and platform identity." };
+    }
+    return { ok: true, environment: { runnerSourceDigest: health.runnerV2.sourceDigest, platform: health.platform, nodeVersion: health.nodeVersion } };
+  }
   return readiness.ready ? { ok: true } : { ok: false, error: readiness.error };
 }
 
@@ -1179,6 +1199,7 @@ async function runSoloLeg(
       };
       try {
         await runSelected({
+          runNativeWorkBenchBuild: ctx.runNativeWorkBenchBuild,
           selectedTrack: leg.track,
           suiteId: leg.suiteId,
           models: ctx.models,
@@ -1186,12 +1207,12 @@ async function runSoloLeg(
           teamModelIds: [],
           teamIqStrategy: ctx.teamIqStrategy,
           includeSoloBaselines: true,
-          workBenchModelIds: [],
-          workBenchRoleMode: ctx.workBenchRoleMode,
+          workBenchModelIds: [model.modelId],
+          workBenchRoleMode: "solo",
           workBenchRunnerUrl: ctx.workBenchRunnerUrl,
           workBenchRunnerToken: ctx.workBenchRunnerToken,
-          effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
-          certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+          effectiveHarnessProfile: isNativeBenchmarkTrack(leg.track) ? workBenchHarnessProfileForRoleMode("solo") : DIRECT_MODEL_HARNESS,
+          certification: runHarnessCertification(isNativeBenchmarkTrack(leg.track) ? workBenchHarnessProfileForRoleMode("solo") : DIRECT_MODEL_HARNESS),
           effortByModelId: ctx.effortByModelId,
           signal: ctx.signal,
           runAbortRef: { current: null },
@@ -1227,7 +1248,8 @@ async function runSoloLeg(
         ctx.signal.aborted
           ? "cancelled"
           : outcome.summary?.status === "completed"
-            ? "passed"
+            ? outcome.summary.passedAttemptCount === outcome.summary.attemptCount && outcome.summary.attemptCount > 0 ? "passed"
+              : (outcome.summary.passedAttemptCount ?? 0) > 0 ? "partial" : "failed"
             : "failed";
       modelStatuses[index] = status;
       onProgress({
@@ -1285,7 +1307,7 @@ async function runTeamLeg(
     return { status: "skipped", detail: "No team composition selected." };
   }
   const effectiveHarnessProfile =
-    leg.track === "workbench"
+    isNativeBenchmarkTrack(leg.track)
       ? workBenchHarnessProfileForRoleMode(ctx.workBenchRoleMode)
       : TEAM_HARNESS;
   // A plain `let` here gets over-narrowed by TS across the nested setSummary
@@ -1295,6 +1317,7 @@ async function runTeamLeg(
   };
   try {
     await runSelected({
+      runNativeWorkBenchBuild: ctx.runNativeWorkBenchBuild,
       selectedTrack: leg.track,
       suiteId: leg.suiteId,
       models: ctx.models,
@@ -1345,7 +1368,8 @@ async function runTeamLeg(
     ctx.signal.aborted
       ? "skipped"
       : outcome.summary?.status === "completed"
-        ? "passed"
+        ? outcome.summary.passedAttemptCount === outcome.summary.attemptCount && outcome.summary.attemptCount > 0 ? "passed"
+          : (outcome.summary.passedAttemptCount ?? 0) > 0 ? "partial" : "failed"
         : "failed";
   if (ctx.signal.aborted) return { status, detail: "Cancelled." };
   return { status, detail: status === "failed" ? outcome.error : undefined };

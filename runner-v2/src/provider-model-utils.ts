@@ -48,6 +48,14 @@ export function serializedInputUsage(
       };
 }
 
+/** OpenRouter documents usage.cost in USD; do not guess units for other gateways. */
+export function providerReportedCostUsd(providerId: string | undefined, usage: { cost?: unknown } | undefined): { providerReportedCostUsd?: number } {
+  const value = usage?.cost;
+  return providerId === "openrouter" && typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? { providerReportedCostUsd: value }
+    : {};
+}
+
 export function providerReportedTokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value

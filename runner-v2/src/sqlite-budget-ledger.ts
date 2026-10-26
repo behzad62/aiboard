@@ -8,6 +8,7 @@ import {
   modelCallAttribution,
   modelCostBasisSnapshot,
   modelTokenSources,
+  checkedProviderReportedCostUsd,
   reduceBudgetEvent,
   usageAmount,
   type BudgetEvent,
@@ -123,6 +124,7 @@ export class SqliteBudgetLedger implements BudgetLedger {
           ? { tokenSources, settledAt: input.occurredAt }
           : {}),
         ...(costBasis ? { costBasis } : {}),
+        ...(input.providerReportedCostUsd === undefined ? {} : { providerReportedCostUsd: checkedProviderReportedCostUsd(input.providerReportedCostUsd) }),
       },
       (projection) => {
         const reservation = projection.reservations[input.reservationId];
@@ -131,6 +133,9 @@ export class SqliteBudgetLedger implements BudgetLedger {
         }
         if (reservation?.kind === "tool" && tokenSources) {
           throw new Error("Tool budget settlements cannot carry model token sources.");
+        }
+        if (reservation?.kind === "tool" && input.providerReportedCostUsd !== undefined) {
+          throw new Error("Tool budget settlements cannot carry provider model charges.");
         }
         if (
           reservation?.kind === "model" &&

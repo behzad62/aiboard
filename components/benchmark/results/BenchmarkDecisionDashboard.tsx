@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { BenchmarkIndexRibbon } from "./BenchmarkIndexRibbon";
+import { BenchmarkUsageCosts } from "./BenchmarkUsageCosts";
+import { BenchmarkRunOutcomes } from "./BenchmarkRunOutcomes";
 import {
   DecisionFilters,
   EMPTY_DECISION_FILTERS,
@@ -17,6 +19,7 @@ import {
 import {
   filterDecisionRows,
   sortDecisionRows,
+  selectDecisionProfileRows,
   type DecisionFilters as DecisionFilterState,
   type DecisionRow,
 } from "@/lib/benchmark/certified/decision-dashboard";
@@ -75,9 +78,9 @@ export function BenchmarkDecisionDashboard({
     promotableResultSetIds,
   });
 
-  if (allRows.length === 0 && !hasBenchmarkRawEvidence(certified)) {
+  if (allRows.length === 0) {
     return (
-      <section
+      <div className="space-y-8"><BenchmarkUsageCosts certified={certified} /><BenchmarkRunOutcomes certified={certified} /><section
         aria-labelledby="benchmark-empty-heading"
         className="glass rounded-2xl border px-6 py-12 text-center"
       >
@@ -85,24 +88,25 @@ export function BenchmarkDecisionDashboard({
           id="benchmark-empty-heading"
           className="font-display text-2xl font-semibold tracking-tight"
         >
-          No results yet
+          {hasBenchmarkRawEvidence(certified) ? "No published ranking" : "No results yet"}
         </h2>
         <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
-          Run a preset to see which of your models handles tools most
-          reliably, whether a team beats its best member, and what each
-          success costs in tokens and time.
+          {hasBenchmarkRawEvidence(certified) ? "Recorded case outcomes and costs appear above. A ranking requires a complete batch with valid evidence for every case. Raw records and exports are available in Data."
+            : "Run HarnessBench to compare models on Recoverable Job Service, or ToolBench to qualify native tool use. Costs, tokens, time, and capability coverage stay separate."}
         </p>
         {onStartRun && (
           <Button className="mt-6" onClick={onStartRun}>
             Run a benchmark
           </Button>
         )}
-      </section>
+      </section></div>
     );
   }
 
   return (
     <div className="space-y-8">
+      <BenchmarkUsageCosts certified={certified} />
+      <BenchmarkRunOutcomes certified={certified} />
       <section aria-labelledby="benchmark-decide-heading" className="space-y-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-600 dark:text-emerald-400">
@@ -112,7 +116,7 @@ export function BenchmarkDecisionDashboard({
             What the evidence says
           </h2>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Compare verified task outcomes first. Sample size, coverage, tokens, and time stay visible so a thin win never looks definitive.
+            HarnessBench is AI Board’s signature benchmark: Recoverable Job Service, with 69 modeled families and 302 variants. ToolBench measures native tool use. Compare results within the same suite and configuration.
           </p>
         </div>
         <DecisionVerdicts rows={allRows} />
@@ -212,7 +216,8 @@ export function readDecisionDashboardRows(
     filters.track,
     sortKey
   ) as DecisionRow[];
-  const filtered = filterDecisionRows(scopedRows, filters);
+  const profileRows = filters.track === "all" ? scopedRows : selectDecisionProfileRows(scopedRows, filters.track, filters.profile);
+  const filtered = filterDecisionRows(profileRows, { ...filters, profile: "auto" });
   return filters.track === "all"
     ? filtered
     : sortDecisionRows(filtered, sortKey);

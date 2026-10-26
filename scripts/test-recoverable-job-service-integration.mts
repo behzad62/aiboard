@@ -7,7 +7,9 @@ import {
   getWorkBenchCasePack,
   listWorkBenchCaseOptions,
   listWorkBenchCasePacks,
+  listWorkBenchChallenges,
 } from "../lib/benchmark/workbench/corpus";
+import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, WORKBENCH_SMOKE_SUITE } from "../lib/benchmark/native-suites";
 import {
   RECOVERABLE_JOB_SERVICE_CASE_ID,
   RECOVERABLE_JOB_SERVICE_CONTRACT_VERSION,
@@ -38,18 +40,17 @@ const baseline = JSON.parse(
 
 const currentCases = listWorkBenchCaseOptions();
 assert.deepEqual(
-  currentCases.map(({ id, caseHash }) => ({ id, caseHash })),
-  baseline.cases,
-  "the 19 standard case identities stay byte-for-byte stable"
+  listWorkBenchChallenges().map(({ id }) => id).sort(),
+  baseline.cases.map(({ id }: { id: string }) => id).sort(),
+  "legacy challenge definitions remain available to regression controls"
 );
-
-const baselinePackIds = new Set(baseline.packs.map((pack: { id: string }) => pack.id));
-const standardPacks = listWorkBenchCasePacks().filter((pack) => baselinePackIds.has(pack.id));
 assert.deepEqual(
-  standardPacks.map(({ id, caseIds }) => ({ id, caseIds })),
-  baseline.packs,
-  "the 19 standard pack compositions stay stable"
+  currentCases.map(({ id }) => id),
+  ["workbench-pipeline-0001", "workbench-pipeline-cache-0001", "workbench-pipeline-inventory-0001"],
+  "current WorkBench contains only three executed behavioral integration fixtures"
 );
+assert.deepEqual(listWorkBenchCasePacks().map(({ id }) => id), [WORKBENCH_SMOKE_SUITE]);
+assert.equal(getWorkBenchCaseOption("workbench-react-a11y-0001"), null, "static-only cases cannot enter a current run");
 
 const option = getWorkBenchCaseOption(RECOVERABLE_JOB_SERVICE_CASE_ID);
 const pack = getWorkBenchCasePack(RECOVERABLE_JOB_SERVICE_PACK_ID);
@@ -64,6 +65,8 @@ assert.equal(
 );
 
 const workBenchCase = option.case as typeof option.case & { trustedPolicy?: unknown };
+assert.equal(workBenchCase.benchmarkTrack, "harnessbench");
+assert.deepEqual(getNativeBenchmarkPack("harnessbench", HARNESSBENCH_SUITE)?.caseIds, [RECOVERABLE_JOB_SERVICE_CASE_ID]);
 assert.equal(workBenchCase.caseVersion, RECOVERABLE_JOB_SERVICE_SUITE_VERSION);
 assert.equal(workBenchCase.budget.maxUsd, undefined);
 assert.deepEqual(workBenchCase.budget, {
@@ -159,7 +162,8 @@ assert.match(contractSnapshot.families[0].contract, /^acceptance-contract\.md#/)
 
 const exactHealth = {
   ok: true,
-  runnerV2: { ready: true },
+  nodeVersion: "24.18.0", platform: "win32",
+  runnerV2: { ready: true, sourceDigest: "a".repeat(64) },
   rjs: {
     ready: true,
     nodeVersion: "24.18.0",

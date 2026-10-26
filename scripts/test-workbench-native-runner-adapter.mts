@@ -4,6 +4,7 @@ import {
   mapNativeToolsToBenchmarkTraces,
   mapNativeUsageToBenchmarkTraces,
   nativePauseDisposition,
+  nativeProjectionPauseDisposition,
   NativeWorkBenchExecutionError,
   runNativeWorkBenchBuild,
 } from "../lib/benchmark/workbench/native-runner-adapter";
@@ -46,6 +47,8 @@ assert.equal(
   nativePauseDisposition("unexpected_new_pause").certifiedStatus,
   "invalid_harness"
 );
+assert.equal(nativeProjectionPauseDisposition({status:"paused", verifierSelection:{status:"required", reason:"budget_exhausted", requiredCapabilities:["code"], candidateRuntimeIds:[]}} as never).certifiedStatus, "failed_budget", "verifier budget exhaustion has a structured selection reason even without pauseReason");
+assert.equal(nativeProjectionPauseDisposition({status:"paused", verifierSelection:{status:"required", reason:"no_eligible_runtime", requiredCapabilities:["code"], candidateRuntimeIds:[]}} as never).certifiedStatus, "provider_unavailable");
 
 const usage = {
   scopeId: "native-attempt",
@@ -130,8 +133,6 @@ assert.deepEqual(traces[0], {
   outputTokens: 30,
   totalTokens: 150,
   usageSource: "reported",
-  providerCost: 0.0025,
-  providerCostUnit: "usd",
   estimatedUsd: 0.0025,
   retryHistory: [],
   reasoningEffort: "xhigh",
@@ -343,7 +344,7 @@ assert.ok(benchmarkPolicy.hiddenPaths?.includes("case-meta.json"));
 assert.ok(benchmarkPolicy.protectedPaths?.includes("verifier.mjs"));
 assert.equal(result.modelCalls, 1);
 assert.equal(result.toolCalls, 2);
-assert.equal(result.validToolCalls, 1);
+assert.equal(result.validToolCalls, 2, "a real command returning a test failure is still a valid tool invocation");
 assert.equal(recordedTraces.length, 1);
 assert.equal((recordedTraces[0] as { reasoningEffort?: unknown }).reasoningEffort, "xhigh");
 assert.equal(recordedTools.length, 2);
@@ -619,5 +620,42 @@ assert.equal(failureTraces.length, 1);
 assert.equal((failureTraces[0] as { reasoningEffort?: unknown }).reasoningEffort, "xhigh");
 assert.equal(failureTools.length, 2);
 assert.equal(failureArtifacts.length, 1);
+
+// Missing infrastructure evidence must not be charged to the model. A valid
+// export with an unread target is, however, a measured tool-use failure.
+for (const mode of ["unavailable", "wrong-owner", "unread-target", "delivered"] as const) {
+  let stopped = false;
+  const execution = runNativeWorkBenchBuild({
+    attemptId: "attempt_evidence", runId: "run_evidence", teamCompositionId: "solo",
+    harnessProfile: "raw-single-model", allowedCommands: [],
+    runner: { url: "http://127.0.0.1:8797", token: "test-token" },
+    case: {
+      id: "evidence-control", title: "Evidence control", prompt: {}, budget: {},
+      nativeQualification: { requiredToolGroups: [["fs.read"]], requiredReadText: { path: "target.mjs", text: "observed-value" } },
+    },
+    models: [{ modelId: "test-model", providerId: "test", displayName: "Test" }],
+    context: { recordTrace: async () => {}, recordToolCall: async () => {}, recordArtifact: async () => {} },
+  } as never, {
+    startManagedAttemptRunner: async () => ({ attemptId: "attempt_evidence", running: true, url: "http://127.0.0.1:18889", token: "native-token", projectPath: "C:\\fixture", statePath: "C:\\state" }),
+    restoreManagedAttemptOracle: async () => ({ attemptId: "attempt_evidence", restored: true }),
+    stopManagedAttemptRunner: async () => { stopped = true; return { attemptId: "attempt_evidence", running: false } as never; },
+    getNativeRunnerHealth: async () => ({ ok: true, protocolVersion: 2, projectPath: "C:\\fixture", nodeVersion: "24.18.0" }),
+    createProviderConfigs: () => [] as never,
+    configureNativeProviders: async () => {}, createNativeBuild: async () => {}, commandNativeRun: async () => {},
+    getNativeRun: async () => ({ state: "running" }) as never,
+    getNativeBuild: async () => ({ status: "completed", runtime: { architect: {} } }) as never,
+    selectNativeArchitectHandoff: async () => { throw new Error("unexpected"); },
+    selectNativeProjectHandoff: async () => { throw new Error("unexpected"); },
+    getNativeBuildAudit: async () => nativeAudit, wait: async () => {},
+    getNativeBenchmarkToolEvidence: async (_runner, request) => {
+      if (mode === "unavailable") throw new Error("ledger unavailable");
+      return { runId: mode === "wrong-owner" ? "unrelated-run" : request.runId, tools: mode === "delivered" ? [{ sequence: 3, callId: "read_1", toolName: "fs.read", input: { path: "target.mjs" }, isError: false, outputText: "observed-value" }] : [] };
+    },
+  });
+  if (mode === "delivered") await execution;
+  else await assert.rejects(execution, error => error instanceof NativeWorkBenchExecutionError &&
+    error.certifiedStatus === (mode === "unread-target" ? "failed_tool_use" : "invalid_harness"));
+  assert.equal(stopped, true, `managed runner settles after ${mode} evidence`);
+}
 
 console.log("PASS");

@@ -206,6 +206,7 @@ export async function executeWorkBenchVerifierOnly(
     const scoreDurationMs =
       buildResult.durationMs ?? Math.max(0, Date.now() - startedMs);
     const score = scoreWorkBenchAttempt({
+      targetToolCalls: input.case.scoring.toolCallTarget,
       verifierScore: parsedVerifierResult.score,
       verifierPassed: parsedVerifierResult.passed,
       actualCostUsd: buildResult.costUsd ?? input.costUsd ?? null,
@@ -280,7 +281,7 @@ export async function executeWorkBenchVerifierOnly(
       caseId: input.case.id,
       teamCompositionId: input.teamCompositionId,
       mode: "certified",
-      track: "workbench",
+      track: input.case.benchmarkTrack ?? "workbench",
       harnessProfile,
       status:
         parsedVerifierResult.failureClass === "invalid_environment" ||
@@ -305,8 +306,8 @@ export async function executeWorkBenchVerifierOnly(
       artifactIds,
       traceIds,
       failureIds: [],
-      harnessVersion: "workbench-runner-v0.1",
-      promptSetVersion: "workbench-prompts-v0.1",
+      harnessVersion: input.case.benchmarkTrack ? "native-benchmark-runner-v1" : "workbench-runner-v0.1",
+      promptSetVersion: input.case.benchmarkTrack ? "native-benchmark-prompts-v1" : "workbench-prompts-v0.1",
       scoringVersion: input.case.scoring.scoringVersion,
     };
     cleanupEligible = attempt.status === "passed";
@@ -441,6 +442,7 @@ export function createFailedWorkBenchAttempt(
     artifactIds: failureArtifactIds,
   };
   const score = scoreWorkBenchAttempt({
+    targetToolCalls: input.case.scoring.toolCallTarget,
     verifierScore: 0,
     verifierPassed: false,
     actualCostUsd: context.buildResult?.costUsd ?? input.costUsd ?? null,
@@ -459,7 +461,7 @@ export function createFailedWorkBenchAttempt(
     caseId: input.case.id,
     teamCompositionId: input.teamCompositionId,
     mode: "certified",
-    track: "workbench",
+    track: input.case.benchmarkTrack ?? "workbench",
     harnessProfile,
     status,
     startedAt,
@@ -478,8 +480,8 @@ export function createFailedWorkBenchAttempt(
     artifactIds: failureArtifactIds,
     traceIds: context.buildResult?.traceIds ?? [],
     failureIds: [`${attemptId}:failure:${code}`],
-    harnessVersion: "workbench-runner-v0.1",
-    promptSetVersion: "workbench-prompts-v0.1",
+    harnessVersion: input.case.benchmarkTrack ? "native-benchmark-runner-v1" : "workbench-runner-v0.1",
+    promptSetVersion: input.case.benchmarkTrack ? "native-benchmark-prompts-v1" : "workbench-prompts-v0.1",
     scoringVersion: input.case.scoring.scoringVersion,
   };
   return {

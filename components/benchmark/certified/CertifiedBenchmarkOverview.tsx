@@ -251,9 +251,9 @@ function OverallScoresTable({ rows }: { rows: ModelIntelligenceRow[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Overall index (all tracks)</CardTitle>
+        <CardTitle>Benchmark score (all tracks)</CardTitle>
         <CardDescription>
-          Every model ranked by its cross-track overall index — each track&apos;s
+          Every model ranked by its cross-track benchmark score — each track&apos;s
           quality weighted equally so breadth counts as much as any single track.
           Solo attempts only.
         </CardDescription>
@@ -348,7 +348,7 @@ function OverallScoresTable({ rows }: { rows: ModelIntelligenceRow[] }) {
           </button>
         )}
         <p className="text-xs text-muted-foreground">
-          Overall index averages each track&apos;s quality equally — run more
+          Benchmark score averages each track&apos;s quality equally — run more
           tracks to firm it up.
         </p>
       </CardContent>

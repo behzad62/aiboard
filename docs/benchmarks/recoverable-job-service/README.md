@@ -1,10 +1,10 @@
 # Recoverable Job Service benchmark
 
-Recoverable Job Service is a standalone coding benchmark in AI Board's WorkBench track. A model receives a fresh, app-independent service contract and implements the missing core in `service.js`. The trusted evaluator then tests recovery, concurrency, durable evidence, source attachment, capacity, cleanup, and safe refusal under uncertainty.
+Recoverable Job Service is AI Board's signature **HarnessBench** benchmark. A model receives a fresh, app-independent service contract and implements the missing core in `service.js`. The trusted evaluator then tests recovery, concurrency, durable evidence, source attachment, capacity, cleanup, and safe refusal under uncertainty. The frozen contract, evaluator, and budgets are unchanged by this promotion.
 
 ## Run it in AI Board
 
-1. Open **Benchmark**, expand **Advanced: run a single suite or pack**, choose **WorkBench**, and select **Recoverable Job Service**.
+1. Open **Benchmark → Run**, select the models to compare, and choose **HarnessBench**. Advanced also supports team runs with matched solo baselines.
 2. Download **Recoverable Job Service runner**. Use Node.js 24.18.0 in the extracted directory, then run `npm ci`, `npm run setup:browser`, and `npm start`.
 3. Copy the printed local URL and token into AI Board and select **Check**. This verifies the Bench service, launchable Runner V2 source, and exact trusted RJS runtime. After an attempt is prepared, AI Board separately starts and authenticates the managed child against that attempt's project, protocol, and Node identity.
 4. Choose the model or team and run the selected benchmark. `service.js` is the only accepted submission change. AI Board supplies the other ten model-visible files as contract context, then rejects any final workspace that changes or removes them or adds another entry.

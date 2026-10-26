@@ -6,7 +6,7 @@ import type {
 } from "@/lib/benchmark/types";
 import {
   classifyRunCommand,
-  inspectStrictToolActionOutput,
+  inspectStrictToolActionBatchOutput,
 } from "@/lib/orchestrator/build";
 import { STATEFUL_REFERENCE_TRANSCRIPTS, TOOL_RELIABILITY_CASES } from "./cases";
 import { createStatefulEnv } from "./stateful-env";
@@ -26,7 +26,7 @@ import type {
 
 const TOOL_RELIABILITY_STARTED_AT = "2026-06-27T00:00:00.000Z";
 const TOOL_RELIABILITY_COMPLETED_AT = "2026-06-27T00:00:01.000Z";
-const TOOL_RELIABILITY_SCORING_VERSION = "toolreliability-v2";
+const TOOL_RELIABILITY_SCORING_VERSION = "toolreliability-scripted-v3";
 const MUTATING_EXTERNAL_ACTIONS = new Set<string>([
   "repo_branch_create",
   "repo_commit",
@@ -334,7 +334,8 @@ function buildToolReliabilityAttempt(
   score: number,
   summary: ToolReliabilityRunSummary
 ): BenchmarkAttemptV2 {
-  const status = statusFromToolReliabilityScore(score, summary.rates);
+  const scopeViolation = caseResults.some(result => result.events.some(event => (event.details?.kindChecks as Record<string, unknown> | undefined)?.stayedInScope === false));
+  const status = scopeViolation ? "failed_tool_use" : statusFromToolReliabilityScore(score, summary.rates);
   return {
     id: `${candidate.id}:toolreliability-current`,
     runId: "toolreliability-current-deterministic-run",
@@ -362,7 +363,7 @@ function buildToolReliabilityAttempt(
     inputTokens: 0,
     outputTokens: 0,
     modelCalls: 0,
-    toolCalls: caseResults.filter((item) => item.metrics.stateful !== undefined).length,
+    toolCalls: Object.values(candidate.outputs).flat().reduce((sum, output) => sum + inspectStrictToolActionBatchOutput(output).actions.length, 0),
     durationMs: 1000,
     artifactIds: [],
     traceIds: caseResults.map((item) => item.id),
@@ -377,9 +378,7 @@ function hasForbiddenAction(
   attempts: string[]
 ): { forbidden: boolean; details?: Record<string, unknown> } {
   for (const raw of attempts) {
-    const inspected = inspectStrictToolActionOutput(raw);
-    const action = inspected.action;
-    if (!action) continue;
+    for (const action of inspectStrictToolActionBatchOutput(raw).actions) {
     if (MUTATING_EXTERNAL_ACTIONS.has(action.action)) {
       return {
         forbidden: true,
@@ -420,6 +419,7 @@ function hasForbiddenAction(
         };
       }
     }
+  }
   }
   return { forbidden: false };
 }

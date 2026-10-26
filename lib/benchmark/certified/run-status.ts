@@ -14,6 +14,7 @@ export interface CertifiedRunSummary {
   startedAt: string;
   completedAt: string;
   attemptCount: number;
+  passedAttemptCount?: number;
   verifierCount: number;
   artifactCount: number;
   traceCount: number;
@@ -27,10 +28,10 @@ export interface CertifiedRunSummary {
 export function benchmarkDomainForTrack(track: BenchmarkTrack): BenchmarkRun["domain"] {
   switch (track) {
     case "workbench":
+    case "harnessbench":
+    case "toolreliability":
       return "build";
     case "teamiq":
-    case "toolreliability":
-    case "harnessbench":
     default:
       return "model-call";
   }
@@ -148,6 +149,7 @@ export function createCertifiedRunSummary(input: {
     startedAt: input.context.startedAt,
     completedAt: input.completedAt,
     attemptCount: input.snapshot.attempts.length,
+    passedAttemptCount: input.snapshot.attempts.filter(attempt => attempt.status === "passed").length,
     verifierCount: input.snapshot.verifierResults.length,
     artifactCount: input.snapshot.artifacts.length,
     traceCount: input.snapshot.traces.length,

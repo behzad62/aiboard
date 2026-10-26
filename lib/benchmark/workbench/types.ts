@@ -58,6 +58,7 @@ export interface WorkBenchBudget {
 }
 
 export interface WorkBenchScoring {
+  toolCallTarget?: number;
   scoringVersion: string;
   costTargetUsd?: number;
   timeTargetSeconds?: number;
@@ -83,6 +84,23 @@ export interface WorkBenchContamination {
 }
 
 export interface WorkBenchCase {
+  /** Execution is shared; evidence identity remains specific to the benchmark. */
+  benchmarkTrack?: "workbench" | "harnessbench" | "toolreliability";
+  executionPolicy?: {
+    editablePaths: string[];
+    protectedPaths: string[];
+    hiddenPaths?: string[];
+  };
+  nativeQualification?: {
+    requiresBrowser?: boolean;
+    requiredToolSequence?: string[][];
+    profile: string;
+    requiredToolGroups: string[][];
+    requiredRecoveryErrors?: string[];
+    requiredReadText?: { path: string; text: string; maxLines?: number };
+    minimumAtomicEdits?: number;
+    requiredCommand?: { command: string; args: string[]; failureBeforeSuccess?: boolean };
+  };
   schemaVersion: 1;
   id: string;
   title: string;

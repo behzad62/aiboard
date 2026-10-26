@@ -37,14 +37,14 @@ function check(name: string, ok: boolean, detail?: unknown): void {
 
 const cases = listWorkBenchCaseOptions();
 const casePacks = listWorkBenchCasePacks();
-const allCasePack = casePacks.find((pack) => pack.id === "workbench-current-all");
+const allCasePack = casePacks.find((pack) => pack.id === "workbench-native-smoke-v1");
 const workBenchSuiteOptions = listCertifiedSuiteOptions("workbench");
 const languageCounts = new Map<string, number>();
 for (const item of cases) {
   languageCounts.set(item.fixtureLanguage, (languageCounts.get(item.fixtureLanguage) ?? 0) + 1);
 }
 
-check("WorkBench UI loader exposes current generated cases", cases.length >= 19, cases.map((item) => item.case.id));
+check("WorkBench UI loader exposes current generated cases", cases.length === 3, cases.map((item) => item.case.id));
 check(
   "WorkBench UI loader exposes all-cases pack",
   allCasePack?.caseCount === cases.length &&
@@ -55,7 +55,7 @@ check(
 );
 check(
   "WorkBench suite options expose packs instead of individual cases",
-  workBenchSuiteOptions[0]?.id === "workbench-current-all" &&
+  workBenchSuiteOptions[0]?.id === "workbench-native-smoke-v1" &&
     casePacks.every((pack) =>
       workBenchSuiteOptions.some(
         (option) => option.id === pack.id && option.label === pack.label
@@ -77,36 +77,9 @@ check(
   }),
   casePacks.map((pack) => ({ id: pack.id, caseIds: pack.caseIds }))
 );
-check(
-  "WorkBench UI loader exposes language packs",
-  ["typescript", "python", "go", "rust", "react-ui", "json", "csharp", "cpp"].every((language) =>
-    casePacks.some(
-      (pack) =>
-        pack.id === `workbench-current-language-${language}` &&
-        pack.caseCount === languageCounts.get(language)
-    )
-  ),
-  casePacks.map((pack) => ({ id: pack.id, caseCount: pack.caseCount }))
-);
-check(
-  "WorkBench UI loader exposes non-empty challenge-kind packs",
-  casePacks
-    .filter((pack) => pack.id.startsWith("workbench-current-kind-"))
-    .length >= 6 &&
-    casePacks.every((pack) => pack.caseCount > 0 && pack.cases.length === pack.caseCount),
-  casePacks.map((pack) => ({ id: pack.id, caseCount: pack.caseCount }))
-);
+check("WorkBench exposes a single bounded smoke pack", casePacks.length === 1 && casePacks[0]?.caseCount === 3, casePacks);
 check("WorkBench UI loader labels cases", cases.every((item) => item.label.includes(item.case.title)), cases);
-check(
-  "WorkBench UI loader exposes current language mix",
-  languageCounts.get("csharp") === 2 &&
-    languageCounts.get("cpp") === 2 &&
-    languageCounts.get("python") === 2 &&
-    languageCounts.get("go") === 2 &&
-    languageCounts.get("rust") === 1 &&
-    languageCounts.get("react-ui") === 2,
-  Object.fromEntries(languageCounts)
-);
+check("Static-only language fixtures are absent from current runs", languageCounts.size === 1 && languageCounts.get("javascript") === 3, Object.fromEntries(languageCounts));
 const workBenchSelectionModels = [
   { modelId: "openai:gpt-a" },
   { modelId: "anthropic:claude-b" },
@@ -289,7 +262,7 @@ const detailCase: BenchmarkCaseV2 = {
   description: "A case with complete details.",
   difficulty: "easy",
   tags: ["detail"],
-  caseVersion: "0.1.0",
+  caseVersion: "4.0.0",
   createdAt: "2026-06-28T10:00:00.000Z",
   updatedAt: "2026-06-28T10:00:00.000Z",
   prompt: { userRequest: "Fix the detail fixture.", publicContext: "Use the public docs." },
@@ -528,7 +501,7 @@ check(
     runnerStatusSource.includes('filename: "aiboard-workbench-runner.zip"') &&
     runnerStatusSource.includes('href: "/aiboard-rjs-workbench-runner.zip"') &&
     runnerStatusSource.includes('filename: "aiboard-rjs-workbench-runner.zip"') &&
-    runnerStatusSource.includes("Download WorkBench runner bundle") &&
+    runnerStatusSource.includes("Download benchmark runner bundle") &&
     runnerStatusSource.includes("Download Recoverable Job Service runner") &&
     runnerStatusSource.includes("npm ci") &&
     runnerStatusSource.includes("Node.js 24.18.0") &&
@@ -556,9 +529,9 @@ check(
 );
 check(
   "selected Full certified preset uses shared runner controls outside its card",
-  certifiedRunPanelSource.includes('focusedPresetId === "full-certified"') &&
+  certifiedRunPanelSource.includes('focusedPreset.legs.some((leg) => leg.requires === "bench-runner")') &&
     certifiedRunPanelSource.includes("<WorkBenchRunnerStatus") &&
-    !presetCardsSource.includes("Download WorkBench runner bundle") &&
+    !presetCardsSource.includes("Download benchmark runner bundle") &&
     !presetCardsSource.includes("/aiboard-workbench-runner.zip"),
   presetCardsSource
 );
@@ -586,7 +559,7 @@ check(
 );
 check(
   "certified WorkBench UI runs packs instead of individual cases",
-  certifiedRunPanelSource.includes("getWorkBenchCasePack(suiteId)") &&
+  certifiedRunPanelSource.includes("getNativeBenchmarkPack(selectedTrack, suiteId)") &&
     runExecutionSource.includes("selectedWorkBenchPack.cases.map") &&
     runExecutionSource.includes("caseRecords.map((caseRecord) => caseRecord.id)") &&
     runExecutionSource.includes("cases: selectedWorkBenchPack.cases.map") &&

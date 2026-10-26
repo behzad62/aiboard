@@ -15,6 +15,7 @@ export function canonicalBenchmarkResultConfiguration(
   input: BenchmarkResultConfiguration
 ): CanonicalResultConfiguration {
   return {
+    ...(input.executionEnvironment ? { executionEnvironment: input.executionEnvironment } : {}),
     subjectKind: input.subjectKind,
     providerId: input.providerId ?? null,
     modelId: input.modelId ?? null,
@@ -78,4 +79,12 @@ export function benchmarkResultConfigurationKey(
   return `result-config-v1:${fnv1a(
     canonicalBenchmarkResultConfigurationString(input)
   )}`;
+}
+
+/** Model-independent identity for fair comparisons within one measured profile. */
+export function benchmarkComparisonProfileKey(input: BenchmarkResultConfiguration): string {
+  return benchmarkResultConfigurationKey({
+    subjectKind: "model", displayName: "", roles: [], tracks: input.tracks,
+    ...(input.executionEnvironment ? { executionEnvironment: input.executionEnvironment } : {}),
+  });
 }

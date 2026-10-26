@@ -334,7 +334,7 @@ check(
     '<h3 class="break-words text-base font-semibold">A deliberately long solo model identity that must wrap in full</h3>'
   ) &&
     [
-      "Overall index",
+      "Benchmark score",
       "Pass \u00b7 95% range",
       "Coverage",
       "Reliability",
@@ -428,7 +428,7 @@ const explanatoryProfileMarkup = renderToStaticMarkup(
 );
 check(
   "evidence profile names and explains the certified index",
-  explanatoryProfileMarkup.includes("Overall index") &&
+  explanatoryProfileMarkup.includes("Benchmark score") &&
     !explanatoryProfileMarkup.includes("Overall quality") &&
     explanatoryProfileMarkup.includes(
       "Certified Index v1.0 averages these per-track scores with equal weight."
@@ -467,7 +467,7 @@ const missingEvidenceProfileMarkup = renderToStaticMarkup(
     onClose: () => undefined
   })
 );
-const overallIndexMetricStart = missingEvidenceProfileMarkup.indexOf(">Overall index<");
+const overallIndexMetricStart = missingEvidenceProfileMarkup.indexOf(">Benchmark score<");
 const overallIndexMetricMarkup = missingEvidenceProfileMarkup.slice(
   overallIndexMetricStart,
   missingEvidenceProfileMarkup.indexOf("</div></div>", overallIndexMetricStart)
@@ -478,7 +478,7 @@ const passRateMetricMarkup = missingEvidenceProfileMarkup.slice(
   missingEvidenceProfileMarkup.indexOf("</div></div>", passRateMetricStart)
 );
 check(
-  "profile does not substitute verified quality for a missing overall index",
+  "profile does not substitute verified quality for a missing benchmark score",
   overallIndexMetricMarkup.includes("Unavailable") && !overallIndexMetricMarkup.includes("91"),
   overallIndexMetricMarkup
 );
@@ -605,6 +605,7 @@ check(
 const teamDecisionRow: DecisionRow = {
   ...variantRow,
   id: "team-winner",
+  tracks: ["harnessbench"],
   label: "Winning team",
   teamCompositionId: "team-winner",
   modelIds: ["openai:architect", "openai:worker"],
@@ -612,7 +613,7 @@ const teamDecisionRow: DecisionRow = {
   teamLift: 24,
   trackBreakdown: [
     {
-      track: "workbench",
+      track: "harnessbench",
       attempts: 8,
       passed: 7,
       verifiedPassRate: 0.875,
@@ -628,7 +629,7 @@ const teamDecisionRow: DecisionRow = {
 };
 const verdictMarkup = renderToStaticMarkup(
   React.createElement(DecisionVerdicts, {
-    rows: [variantRow, teamDecisionRow]
+    rows: [{ ...variantRow, tracks: ["harnessbench"], trackBreakdown: variantRow.trackBreakdown.map(part => ({ ...part, track: "harnessbench" })) }, teamDecisionRow]
   })
 );
 check(
@@ -640,7 +641,7 @@ check(
 );
 check(
   "WorkBench verdict renders the team winner and normalized verified quality",
-  verdictMarkup.includes("Best WorkBench team") &&
+  verdictMarkup.includes("Best HarnessBench team") &&
     verdictMarkup.includes("Winning team") &&
     verdictMarkup.includes("90 verified quality"),
   verdictMarkup
@@ -648,7 +649,7 @@ check(
 check(
   "verdict winner identities wrap and overall support is labelled as an index",
   verdictMarkup.includes("break-words text-lg font-semibold") &&
-    verdictMarkup.includes("overall index") &&
+    verdictMarkup.includes("HarnessBench quality") &&
     !verdictMarkup.includes("truncate text-lg font-semibold"),
   verdictMarkup
 );
@@ -659,10 +660,10 @@ const emptyTeamVerdictMarkup = renderToStaticMarkup(
 );
 check(
   "empty WorkBench and team-lift cards request comparable team evidence",
-    emptyTeamVerdictMarkup.includes("Run a team WorkBench pack to compare verified coding work.") &&
+    emptyTeamVerdictMarkup.includes("Run HarnessBench with a team and matched solo baselines.") &&
     emptyTeamVerdictMarkup.includes("Not comparable") &&
     emptyTeamVerdictMarkup.includes(
-      "Run the same certified track solo and as a team to measure added value."
+      "Run the same HarnessBench profile solo and as a team to measure added value."
     ),
   emptyTeamVerdictMarkup
 );
@@ -703,8 +704,8 @@ const auditOverallMarkup = renderToStaticMarkup(
   })
 );
 check(
-  "Audit leaderboard labels the certified aggregate as Overall index",
-  auditOverallMarkup.includes("Overall index") &&
+  "Audit leaderboard labels the certified aggregate as Benchmark score",
+  auditOverallMarkup.includes("Benchmark score") &&
     !/overall score/i.test(auditOverallMarkup),
   auditOverallMarkup
 );
@@ -991,7 +992,7 @@ check(
   displacedPointMarkup
 );
 check(
-  "trade-off projections prefer overall index and fall back to verified quality",
+  "trade-off projections prefer benchmark score and fall back to verified quality",
   tokenProjection[0]?.quality === 84 && tokenProjection[1]?.quality === 77,
   tokenProjection
 );
@@ -1006,7 +1007,7 @@ check(
     teamPointLabel.includes("Team") &&
     teamPointLabel.includes("WorkBench") &&
     teamPointLabel.includes("TeamIQ") &&
-    teamPointLabel.includes("Overall index: 77.0") &&
+    teamPointLabel.includes("Benchmark score: 77.0") &&
     teamPointLabel.includes("Tokens per successful case: 5,678 tokens") &&
     teamPointLabel.includes("Attempts: 8"),
   teamPointLabel
@@ -1025,9 +1026,9 @@ check(
 );
 check(
   "trade-off charts expose overall-index terminology and full identity legend",
-  decisionChartMarkup.includes("Overall index vs tokens per successful case") &&
-    decisionChartMarkup.includes("Overall index vs time per successful case") &&
-    decisionChartMarkup.includes("Overall index") &&
+  decisionChartMarkup.includes("Benchmark score vs tokens per successful case") &&
+    decisionChartMarkup.includes("Benchmark score vs time per successful case") &&
+    decisionChartMarkup.includes("Benchmark score") &&
     decisionChartMarkup.includes("Alpha Model · Low") &&
     decisionChartMarkup.includes("Beta Builder Team") &&
     decisionChartMarkup.includes("Solo model") &&
@@ -1111,7 +1112,7 @@ check(
   pointShapeMarkup.includes('tabindex="0"') &&
     pointShapeMarkup.includes('aria-label="') &&
     pointShapeMarkup.includes("Beta Builder Team") &&
-    pointShapeMarkup.includes("Overall index: 77.0") &&
+    pointShapeMarkup.includes("Benchmark score: 77.0") &&
     pointShapeMarkup.includes("Tokens per successful case: 5,678 tokens") &&
     pointShapeMarkup.includes('stroke="hsl(var(--foreground))"') &&
     pointShapeMarkup.includes('data-marker="') &&
@@ -1128,7 +1129,7 @@ const tooltipMarkup = renderToStaticMarkup(
       {
         graphicalItemId: "decision-tradeoff",
         dataKey: "quality",
-        name: "Overall index",
+        name: "Benchmark score",
         value: tokenProjection[1]!.quality,
         color: tokenProjection[1]!.color,
         payload: tokenProjection[1]
@@ -1144,7 +1145,7 @@ check(
     tooltipMarkup.includes("architect: Architect · Low") &&
     tooltipMarkup.includes("Team") &&
     tooltipMarkup.includes("WorkBench, TeamIQ") &&
-    tooltipMarkup.includes("Overall index") &&
+    tooltipMarkup.includes("Benchmark score") &&
     tooltipMarkup.includes("77.0") &&
     tooltipMarkup.includes("Tokens per successful case") &&
     tooltipMarkup.includes("5,678 tokens") &&
@@ -1339,8 +1340,8 @@ check(
   overallMarkup
 );
 check(
-  "Audit overview uses Overall index terminology",
-  overallMarkup.includes("Overall index") &&
+  "Audit overview uses Benchmark score terminology",
+  overallMarkup.includes("Benchmark score") &&
     !overallMarkup.includes("Overall scores") &&
     !overallMarkup.includes("Overall score averages"),
   overallMarkup
@@ -1354,11 +1355,11 @@ check(
 );
 
 for (const label of [
-  "Best overall model",
-  "Best WorkBench team",
-  "Most reliable",
-  "Leanest successful model",
-  "Fastest successful model",
+  "Best HarnessBench model",
+  "Best HarnessBench team",
+  "Best ToolBench qualification",
+  "Leanest HarnessBench success",
+  "Fastest HarnessBench success",
   "Best team lift"
 ]) {
   check(`decision verdict exposes ${label}`, verdicts.includes(label), label);
@@ -1367,9 +1368,9 @@ for (const label of [
 check(
   "index ribbon names and explains Certified Index v1.0",
   ribbon.includes("CERTIFIED_INDEX_VERSION") &&
-    decisionModel.includes('CERTIFIED_INDEX_VERSION = "Certified Index v1.0"') &&
-    ribbon.includes("Equal weight per represented track") &&
-    ribbon.includes("Missing tracks are not scored as zero"),
+    decisionModel.includes('CERTIFIED_INDEX_VERSION = "AI Board Benchmarks v2"') &&
+    ribbon.includes("Separate scores for each benchmark") &&
+    ribbon.includes("Case counts are not independent repeats"),
   ribbon
 );
 
@@ -1412,8 +1413,8 @@ check(
 );
 check(
   "understand layer contains both decision trade-off charts",
-  charts.includes("Overall index vs tokens per successful case") &&
-    charts.includes("Overall index vs time per successful case") &&
+  charts.includes("Benchmark score vs tokens per successful case") &&
+    charts.includes("Benchmark score vs time per successful case") &&
     charts.includes("Accessible data"),
   charts
 );

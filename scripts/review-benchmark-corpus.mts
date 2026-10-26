@@ -59,17 +59,12 @@ for (const legacyPath of [
 }
 
 const workBenchCases = listWorkBenchCaseOptions();
-check("WorkBench current corpus has at least 19 generated challenges", workBenchCases.length >= 19, workBenchCases.map((item) => item.id));
+check("WorkBench current corpus is the bounded behavioral smoke pack", workBenchCases.length === 3, workBenchCases.map((item) => item.id));
 const workBenchLanguageCounts = workBenchCases.reduce<Record<string, number>>((counts, item) => {
   counts[item.fixtureLanguage] = (counts[item.fixtureLanguage] ?? 0) + 1;
   return counts;
 }, {});
-check("WorkBench current corpus includes C# cases", workBenchLanguageCounts.csharp === 2, workBenchLanguageCounts);
-check("WorkBench current corpus includes C++ cases", workBenchLanguageCounts.cpp === 2, workBenchLanguageCounts);
-check("WorkBench current corpus includes Go cases", workBenchLanguageCounts.go === 2, workBenchLanguageCounts);
-check("WorkBench current corpus includes Rust cases", workBenchLanguageCounts.rust === 1, workBenchLanguageCounts);
-check("WorkBench current corpus includes Python cases", workBenchLanguageCounts.python === 2, workBenchLanguageCounts);
-check("WorkBench current corpus includes React UI cases", workBenchLanguageCounts["react-ui"] === 2, workBenchLanguageCounts);
+check("Static-only language fixtures do not enter model rankings", Object.keys(workBenchLanguageCounts).join(",") === "javascript" && workBenchLanguageCounts.javascript === 3, workBenchLanguageCounts);
 check(
   "WorkBench current cases carry inline verifier fixtures",
   workBenchCases.every((item) => item.case.fixtureFiles?.["verifier.mjs"] && item.case.fixtureFiles?.["case-meta.json"]),

@@ -279,6 +279,7 @@ try {
     "scripts/publish-downloads.mjs",
     "scripts/pinned-rjs-runner-source.mjs",
     "scripts/bench-runner.mjs",
+    "scripts/bench-native-tool-evidence.mjs",
     "benchmarks/recoverable-job-service/bundle/package.json",
     "benchmarks/recoverable-job-service/bundle/package-lock.json",
   ]) {

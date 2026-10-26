@@ -40,6 +40,7 @@ function row(
     attempts: 10,
     passed: 8,
     preliminary: false,
+    historyCount: 2,
     verifiedQuality: 0.8,
     overallScore: 0.8,
     trackBreakdown: [
@@ -113,6 +114,7 @@ const rows: DecisionRow[] = [
     caseTitles: ["Chess tactics"],
     attempts: 2,
     preliminary: true,
+    historyCount: 0,
     providerIds: ["chatgpt"],
     reasoningEfforts: ["high"],
   }),
@@ -744,30 +746,36 @@ const verdictRows: DecisionRow[] = [
   row("fast", { speedPerPassMs: 750, passed: 5 }),
   row("lift", { modelIds: ["a", "b"], isTeam: true, teamLift: 18 }),
 ];
+for (const item of verdictRows) {
+  if (item.id === "workbench-solo") continue; // high-scoring smoke evidence must not win signature comparisons
+  const track = item.id === "reliable" ? "toolreliability" : "harnessbench";
+  item.tracks = [track]; item.trackBreakdown = item.trackBreakdown.map(part => ({ ...part, track }));
+  if (item.id === "reliable") item.verifiedQuality = .99;
+}
 const verdicts = buildDecisionVerdicts(verdictRows);
 const winners = Object.fromEntries(verdicts.map((verdict) => [verdict.key, verdict.winner?.id]));
-check("best overall winner uses solo overall score", winners.overall === "overall", winners);
+check("signature winner uses HarnessBench quality and excludes smoke/tool scores", winners.overall === "overall", winners);
 check(
   "best WorkBench winner uses team quality and ignores a higher-scoring solo row",
   winners.workbench === "workbench",
   winners
 );
-check("most reliable winner uses tool reliability", winners.reliability === "reliable", winners);
+check("native ToolBench verdict uses verified task completion", winners.reliability === "reliable", winners);
 check("leanest winner minimizes tokens per pass", winners.leanest === "lean", winners);
 check("fastest winner minimizes time per pass", winners.fastest === "fast", winners);
 check("best team lift only considers teams", winners.teamLift === "lift", winners);
 const verdictByKey = Object.fromEntries(verdicts.map((verdict) => [verdict.key, verdict]));
 check(
   "WorkBench verdict names teams and requests a team pack when empty",
-  verdictByKey.workbench?.label === "Best WorkBench team" &&
+  verdictByKey.workbench?.label === "Best HarnessBench team" &&
     verdictByKey.workbench?.emptyHint ===
-      "Run a team WorkBench pack to compare verified coding work.",
+      "Run HarnessBench with a team and matched solo baselines.",
   verdictByKey.workbench
 );
 check(
   "team-lift verdict requests comparable solo and team tracks when empty",
   verdictByKey.teamLift?.emptyHint ===
-    "Run the same certified track solo and as a team to measure added value.",
+    "Run the same HarnessBench profile solo and as a team to measure added value.",
   verdictByKey.teamLift
 );
 check(

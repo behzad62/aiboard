@@ -7,21 +7,16 @@ import {
   type PresetProgressEvent,
 } from "../lib/benchmark/certified/run-execution";
 import { BENCHMARK_PRESETS } from "../lib/benchmark/certified/run-presets";
+import { installNativeBenchmarkTestTransport } from "./native-benchmark-test-support";
 import { runHarnessCertification } from "../lib/benchmark/certified/certification";
 import {
   __resetBenchmarkStoreForTests,
   __setAdapterForTests,
-  listBenchmarkArtifacts,
   listBenchmarkAttemptsV2,
   listBenchmarkCaseV2,
-  listBenchmarkFailures,
-  listBenchmarkRunEvents,
   listBenchmarkRuns,
   listBenchmarkResultSets,
   listBenchmarkTeamCompositions,
-  listBenchmarkToolCallTraces,
-  listBenchmarkTraces,
-  listBenchmarkVerifierResults,
   listHarnessCertificationResults,
 } from "../lib/benchmark/store";
 import type { StorageAdapter } from "../lib/client/storage-adapter";
@@ -109,11 +104,15 @@ function selectedModel(name: string): SelectedModel {
   };
 }
 
-const toolReliabilityLeg = BENCHMARK_PRESETS[0]!.legs.find(
+
+const nativeTransport = installNativeBenchmarkTestTransport();
+const nativeBuildForTests = nativeTransport.runBuild;
+
+const toolReliabilityLeg = BENCHMARK_PRESETS.find(preset => preset.id === "model-iq")!.legs.find(
   (leg) => leg.track === "toolreliability"
 )!;
 const toolReliabilityPreset = {
-  ...BENCHMARK_PRESETS[0]!,
+  ...BENCHMARK_PRESETS.find(preset => preset.id === "model-iq")!,
   legs: [toolReliabilityLeg],
 };
 
@@ -167,6 +166,7 @@ async function assertNoCertifiedPersistence(): Promise<void> {
   };
   try {
     await runSelected({
+      runNativeWorkBenchBuild: nativeBuildForTests,
       selectedTrack: "toolreliability",
       suiteId: toolReliabilityLeg.suiteId,
       models: [model],
@@ -176,8 +176,8 @@ async function assertNoCertifiedPersistence(): Promise<void> {
       includeSoloBaselines: true,
       workBenchModelIds: [],
       workBenchRoleMode: "solo",
-      workBenchRunnerUrl: "",
-      workBenchRunnerToken: "",
+      workBenchRunnerUrl: "http://native-benchmark.test",
+      workBenchRunnerToken: "test",
       effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
       certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
       effortByModelId: {},
@@ -223,6 +223,7 @@ for (const boundary of [
   };
   try {
     const pending = runSelected({
+      runNativeWorkBenchBuild: nativeBuildForTests,
       selectedTrack: "toolreliability",
       suiteId: toolReliabilityLeg.suiteId,
       models: [model],
@@ -232,8 +233,8 @@ for (const boundary of [
       includeSoloBaselines: true,
       workBenchModelIds: [],
       workBenchRoleMode: "solo",
-      workBenchRunnerUrl: "",
-      workBenchRunnerToken: "",
+      workBenchRunnerUrl: "http://native-benchmark.test",
+      workBenchRunnerToken: "test",
       effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
       certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
       effortByModelId: {},
@@ -318,13 +319,14 @@ for (const boundary of [
       toolReliabilityPreset,
       {
         models,
+        runNativeWorkBenchBuild: nativeBuildForTests,
         soloModelIds: models.map((model) => model.modelId),
         effortByModelId: {},
         teamModelIds: [],
         teamIqStrategy: "panel",
         workBenchRoleMode: "solo",
-        workBenchRunnerUrl: "",
-        workBenchRunnerToken: "",
+        workBenchRunnerUrl: "http://native-benchmark.test",
+        workBenchRunnerToken: "test",
         signal: parent.signal,
         onComplete: async () => {},
       },
@@ -402,13 +404,14 @@ for (const boundary of [
       toolReliabilityPreset,
       {
         models,
+        runNativeWorkBenchBuild: nativeBuildForTests,
         soloModelIds: models.map((model) => model.modelId),
         effortByModelId: {},
         teamModelIds: [],
         teamIqStrategy: "panel",
         workBenchRoleMode: "solo",
-        workBenchRunnerUrl: "",
-        workBenchRunnerToken: "",
+        workBenchRunnerUrl: "http://native-benchmark.test",
+        workBenchRunnerToken: "test",
         signal: parent.signal,
         onComplete: async () => {},
       },
@@ -438,7 +441,8 @@ for (const boundary of [
           event.modelId === model.modelId &&
           event.status === "passed"
       ),
-      true
+      true,
+      JSON.stringify(progress.filter(event => event.type === "model"))
     );
   }
   assert.equal(
@@ -492,9 +496,7 @@ for (const boundary of [
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
-  const workBenchLeg = BENCHMARK_PRESETS[2]!.legs.find(
-    (leg) => leg.track === "workbench"
-  )!;
+  const workBenchLeg = { track: "workbench" as const, suiteId: "workbench-native-smoke-v1", mode: "team" as const, requires: "bench-runner" as const };
   const workBenchPreset = {
     ...BENCHMARK_PRESETS[2]!,
     legs: [workBenchLeg],
@@ -554,3 +556,5 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
   });
   response.end(payload);
 }
+
+nativeTransport.restore();

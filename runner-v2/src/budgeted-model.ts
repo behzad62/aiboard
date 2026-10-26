@@ -109,7 +109,8 @@ export class BudgetedAgentModel implements AgentModel {
         cachedInput,
         cacheWriteInput,
         actualInput.source,
-        actualOutput.source
+        actualOutput.source,
+        turn.usage?.providerReportedCostUsd
       );
       return turn;
     } catch (error) {
@@ -149,7 +150,8 @@ export class BudgetedAgentModel implements AgentModel {
     cachedInputTokens: number,
     cacheWriteInputTokens: number,
     inputTokenSource: ModelTokenSource,
-    outputTokenSource: ModelTokenSource
+    outputTokenSource: ModelTokenSource,
+    providerReportedCostUsd?: number
   ): void {
     const settledAt = this.clock();
     this.ledger.settle({
@@ -167,6 +169,7 @@ export class BudgetedAgentModel implements AgentModel {
         outputTokens: outputTokenSource,
       },
       costBasis: this.costBasis,
+      ...(providerReportedCostUsd === undefined ? {} : { providerReportedCostUsd }),
       occurredAt: settledAt,
       idempotencyKey: `settle:${reservationId}`,
     });

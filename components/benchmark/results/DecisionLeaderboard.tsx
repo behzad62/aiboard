@@ -378,7 +378,7 @@ export function DecisionLeaderboard({
                     </div>
                     <dl className="mt-4 grid grid-cols-2 gap-x-5 gap-y-3">
                       <MobileMetric
-                        label="Overall index"
+                        label="Benchmark score"
                         value={formatQualityScore(row.overallScore)}
                       />
                       <MobileMetric
@@ -572,7 +572,7 @@ function passInterval(row: DecisionRow) {
 
 function rankMetricLabel(sortKey: LeaderboardSortKey): string {
   if (sortKey === "quality") return "Verified quality";
-  if (sortKey === "overall") return "Overall index";
+  if (sortKey === "overall") return "Benchmark score";
   if (sortKey === "teamLift") return "Team lift";
   if (sortKey === "costPerPass") return "Cost or tokens/pass";
   if (sortKey === "speedPerPass") return "Time/pass";

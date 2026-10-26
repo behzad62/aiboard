@@ -210,7 +210,7 @@ interface EnvState {
   finalAnswerText: string | null;
   // redundant-read
   anyRedundantRead: boolean;
-  targetRangesCovered: Array<{ start: number; end: number }>;
+  targetRangesCovered: Array<{ path: string; start: number; end: number }>;
   // stale-patch / write-scope / truncation-recovery
   hadRejectedPatch: boolean;
   // write-scope (strict)
@@ -314,7 +314,7 @@ function processRedundantReadAction(
     action.lineCount
   );
   recordToolCall(state.tracker, action, { startLine: deliveredStart, endLine: deliveredEnd });
-  state.targetRangesCovered.push({ start: deliveredStart, end: deliveredEnd });
+  state.targetRangesCovered.push({ path: action.path, start: deliveredStart, end: deliveredEnd });
   return { label, status: "served", result: rendered };
 }
 
@@ -333,7 +333,8 @@ function verdictRedundantRead(
   // that AT LEAST ONE non-redundant read happened — combined with the
   // no-redundancy gate and the ground-truth substring check, a model cannot
   // pass by inaction or by guessing without ever reading.
-  const readSomething = state.targetRangesCovered.length > 0;
+  const readSomething = state.targetRangesCovered.length > 0 &&
+    (c.requiredReadRanges ?? []).every(required => state.targetRangesCovered.some(read => read.path === required.path && read.start <= required.startLine && read.end >= required.endLine));
   const kindChecks = {
     noRedundantReads: !state.anyRedundantRead,
     targetRead: readSomething,
@@ -399,7 +400,7 @@ function processStaleRefAction(
   state: EnvState,
   action: ArchitectAction
 ): ActionOutcome {
-  if (action.action !== "tool" || action.server.toLowerCase() !== "playwright") {
+  if (action.action !== "tool" || action.server.toLowerCase() !== "playwright" || action.tool !== "browser_click") {
     return { label: actionLabel(action), status: "skipped", reason: "action type not applicable to this task" };
   }
   const generations = c.snapshotPlan?.generations ?? [];
@@ -646,6 +647,7 @@ function processVerifyPersistenceAction(
     return { label, status: "served", result: `Edit applied to ${path}.` };
   }
   if (action.action === "run" && plan) {
+    if (action.command.trim() !== plan.command) return { label: actionLabel(action), status: "skipped", reason: "This is not the requested verification command." };
     const label = actionLabel(action);
     const isVerbatimRepeat =
       state.lastRunCommand === action.command.trim() && !state.editedSinceLastRun;
@@ -655,10 +657,12 @@ function processVerifyPersistenceAction(
       plan.fixPredicate.mustInclude.every((needle) =>
         (state.files.get(plan.fixPredicate.path) ?? "").includes(needle)
       );
-    state.lastRunWasGreen = holds;
+    const expected = c.expectedFinalFiles?.[plan.fixPredicate.path];
+    const contentMatches = !expected || normalizePatchContent(state.files.get(plan.fixPredicate.path) ?? "") === normalizePatchContent(expected.content);
+    state.lastRunWasGreen = holds && contentMatches;
     state.lastRunCommand = action.command.trim();
     state.editedSinceLastRun = false;
-    return { label, status: "served", result: holds ? plan.greenOutput : plan.redOutput };
+    return { label, status: "served", result: state.lastRunWasGreen ? plan.greenOutput : plan.redOutput };
   }
   if (action.action === "read_range" || action.action === "read") {
     return processGenericRead(state, action);

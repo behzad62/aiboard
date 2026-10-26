@@ -255,7 +255,7 @@ if (archive) {
   });
   check(
     "source-present dependencies-absent health does not pass the WorkBench run gate",
-    !runGate.canRun && runGate.reason === "Connect the WorkBench bench runner before running.",
+    !runGate.canRun && runGate.reason === "Connect the benchmark runner before running.",
     runGate
   );
 }
@@ -302,7 +302,7 @@ check(
   "shared runner status downloads the complete WorkBench runner bundle",
   runnerStatusMarkup.includes('href="/aiboard-workbench-runner.zip"') &&
     runnerStatusMarkup.includes('download="aiboard-workbench-runner.zip"') &&
-    runnerStatusMarkup.includes("Download WorkBench runner bundle") &&
+    runnerStatusMarkup.includes("Download benchmark runner bundle") &&
     runnerStatusMarkup.includes("Runner V2") &&
     runnerStatusMarkup.includes("npm install") &&
     runnerStatusMarkup.includes("npm run setup:browser"),
@@ -310,7 +310,7 @@ check(
 );
 check(
   "Full certified preset card leaves runner setup to the shared panel",
-  !presetMarkup.includes("Download WorkBench runner bundle") &&
+  !presetMarkup.includes("Download benchmark runner bundle") &&
     !presetMarkup.includes("/aiboard-workbench-runner.zip"),
   presetMarkup
 );
@@ -359,8 +359,8 @@ const certifiedRunPanelSource = await readFile(
   "utf8"
 );
 check(
-  "Full certified focus renders shared runner controls immediately after preset cards",
-  /<PresetCards[\s\S]*?\/>\s*\{focusedPresetId === "full-certified" && \(\s*<WorkBenchRunnerStatus/.test(
+  "Every native preset renders shared runner controls immediately after preset cards",
+  /<PresetCards[\s\S]*?\/>\s*\{focusedPreset\.legs\.some\(\(leg\) => leg\.requires === "bench-runner"\) && \(\s*<WorkBenchRunnerStatus/.test(
     certifiedRunPanelSource
   ),
   certifiedRunPanelSource
@@ -380,6 +380,7 @@ const isolatedDirectory = await mkdtemp(join(tmpdir(), "aiboard-bench-runner-iso
 try {
   const isolatedScript = join(isolatedDirectory, "bench-runner.mjs");
   await copyFile(join(repoRoot, "scripts", "bench-runner.mjs"), isolatedScript);
+  await copyFile(join(repoRoot, "scripts", "bench-native-tool-evidence.mjs"), join(isolatedDirectory, "bench-native-tool-evidence.mjs"));
   await copyFile(
     join(repoRoot, "scripts", "workbench-rjs-support.mjs"),
     join(isolatedDirectory, "workbench-rjs-support.mjs")

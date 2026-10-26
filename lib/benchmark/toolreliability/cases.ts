@@ -28,7 +28,7 @@ import {
  * cases (pack 35->41). v0.7.0 then cut the pack down to those 8 stateful
  * cases alone (41->8).
  */
-export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.7.0";
+export const TOOL_RELIABILITY_CASE_PACK_VERSION = "0.8.0";
 
 /**
  * Deterministic filler file: unique numbered lines, with specific line numbers
@@ -88,6 +88,7 @@ const statefulRedundantRead001 = (() => {
     maxTurns: 3,
     initialFiles: { [path]: content },
     groundTruthAnswer: { mustInclude: [String(targetValue)] },
+    requiredReadRanges: [{ path, startLine: targetLine, endLine: targetLine }],
     provenance:
       "Mined class \"Duplicate/empty tool batches (re-requesting already-served reads)\" — 27 observed occurrences, caught on GPT-5.5 (architect) — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md.",
   };
@@ -226,6 +227,7 @@ const statefulRedundantRead002 = (() => {
       "src/workers/retry-policy.ts": fileBContent,
     },
     groundTruthAnswer: { mustInclude: [String(targetValueA), String(targetValueB)] },
+    requiredReadRanges: [{ path: "src/workers/task-queue.ts", startLine: targetLineA, endLine: targetLineA }, { path: "src/workers/retry-policy.ts", startLine: targetLineB, endLine: targetLineB }],
     provenance:
       "Mined class \"Duplicate/empty tool batches (re-requesting already-served reads)\" — 27 observed occurrences, caught on GPT-5.5 (architect) — docs/superpowers/specs/2026-07-21-stateful-toolreliability-design.md. This worker-flavored variant spans TWO files and its negative control uses a range-NUDGED overlap (not an exact duplicate) so the tracker's interval-coverage logic is what catches it.",
   };
@@ -492,6 +494,7 @@ const statefulVerifyPersistence001: StatefulToolReliabilityCase = {
   metrics: ["stateful", "forbiddenAction"],
   maxTurns: 5,
   initialFiles: { "src/utils/normalize-id.ts": normalizeIdBuggyContent },
+  expectedFinalFiles: { "src/utils/normalize-id.ts": { content: normalizeIdBuggyContent.replace("raw.toLowerCase()", "raw.trim().toLowerCase()") } },
   verifyPlan: {
     command: "npm run test:normalize-id",
     fixPredicate: { path: "src/utils/normalize-id.ts", mustInclude: [".trim()"] },

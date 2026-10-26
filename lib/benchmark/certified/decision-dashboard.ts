@@ -4,12 +4,22 @@ import type {
   LeaderboardSortKey,
 } from "./dashboard-selectors";
 
-export const CERTIFIED_INDEX_VERSION = "Certified Index v1.0";
+export const CERTIFIED_INDEX_VERSION = "AI Board Benchmarks v2";
 export const MIN_MATURE_ATTEMPTS = 3;
 
 export type DecisionRow = CertifiedLeaderboardRow;
 
+export function selectDecisionProfileRows(rows: DecisionRow[], track: string, profile = "auto"): DecisionRow[] {
+  const scoped = rows.filter(row => row.tracks.includes(track));
+  if (profile !== "auto") return scoped.filter(row => row.comparisonProfileKey === profile);
+  const core = track === "toolreliability" ? scoped.filter(row => row.suiteIds?.includes("toolbench-native-core-v3")) : [];
+  const candidates = core.length > 0 ? core : scoped;
+  const latest = [...candidates].filter(row => row.comparisonProfileKey).sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""))[0];
+  return latest ? candidates.filter(row => row.comparisonProfileKey === latest.comparisonProfileKey) : candidates;
+}
+
 export interface DecisionFilters {
+  profile?: string;
   query: string;
   track: CertifiedTrackView;
   kind: "all" | "solo" | "team";
@@ -73,6 +83,7 @@ export function filterDecisionRows(
 ): DecisionRow[] {
   const query = filters.query.trim().toLocaleLowerCase();
   return rows.flatMap((row) => {
+    if (filters.profile && filters.profile !== "auto" && row.comparisonProfileKey !== filters.profile) return [];
     if (filters.track !== "all" && !row.tracks.includes(filters.track)) {
       return [];
     }
@@ -97,13 +108,13 @@ export function filterDecisionRows(
     if (!scoped) return [];
     if (
       filters.evidence === "mature" &&
-      scoped.attempts < MIN_MATURE_ATTEMPTS
+      (scoped.historyCount ?? 0) + 1 < MIN_MATURE_ATTEMPTS
     ) {
       return [];
     }
     if (
       filters.evidence === "preliminary" &&
-      scoped.attempts >= MIN_MATURE_ATTEMPTS
+      (scoped.historyCount ?? 0) + 1 >= MIN_MATURE_ATTEMPTS
     ) {
       return [];
     }
@@ -139,61 +150,63 @@ export function sortDecisionRows(
 
 export function buildDecisionVerdicts(rows: DecisionRow[]): DecisionVerdict[] {
   const soloRows = rows.filter((row) => !isTeam(row));
-  const teamRows = rows.filter(isTeam);
+  const signatureRows = selectDecisionProfileRows(soloRows, "harnessbench");
+  const toolRows = selectDecisionProfileRows(soloRows, "toolreliability");
+  const teamRows = selectDecisionProfileRows(rows.filter(isTeam), "harnessbench");
   return [
     verdict(
       "overall",
-      "Best overall model",
-      pickMaximum(soloRows, (row) => row.overallScore ?? row.verifiedQuality),
-      (row) => row.overallScore ?? row.verifiedQuality,
+      "Best HarnessBench model",
+      pickMaximum(signatureRows, (row) => row.verifiedQuality),
+      (row) => row.verifiedQuality,
       (row) => row.attempts,
       "scored attempt",
-      "Run one model across certified tracks to establish an overall result."
+      "Run Recoverable Job Service to compare models on the signature HarnessBench."
     ),
     verdict(
       "workbench",
-      "Best WorkBench team",
+      "Best HarnessBench team",
       pickMaximum(teamRows, workBenchQuality),
       workBenchQuality,
       workBenchAttempts,
-      "WorkBench attempt",
-      "Run a team WorkBench pack to compare verified coding work."
+      "HarnessBench attempt",
+      "Run HarnessBench with a team and matched solo baselines."
     ),
     verdict(
       "reliability",
-      "Most reliable",
-      pickMaximum(soloRows, (row) => row.toolReliabilityScore),
-      (row) => row.toolReliabilityScore,
+      "Best ToolBench qualification",
+      pickMaximum(toolRows, (row) => row.verifiedQuality),
+      (row) => row.verifiedQuality == null ? null : row.verifiedQuality * 100,
       (row) => row.toolReliabilitySamples,
       "reliability sample",
-      "Run Tool Reliability to compare multi-turn tool-use discipline."
+      "Run native ToolBench to compare verified completion with real tool evidence."
     ),
     verdict(
       "leanest",
       "Leanest successful model",
-      pickMinimum(soloRows, (row) => row.tokensPerPass),
+      pickMinimum(signatureRows, (row) => row.tokensPerPass),
       (row) => row.tokensPerPass,
       (row) => row.passed,
       "successful case",
-      "Complete at least one successful measured attempt to compare token use."
+      "Complete a successful HarnessBench attempt to compare token use."
     ),
     verdict(
       "fastest",
       "Fastest successful model",
-      pickMinimum(soloRows, (row) => row.speedPerPassMs),
+      pickMinimum(signatureRows, (row) => row.speedPerPassMs),
       (row) => row.speedPerPassMs,
       (row) => row.passed,
       "successful case",
-      "Complete at least one successful measured attempt to compare speed."
+      "Complete a successful HarnessBench attempt to compare speed."
     ),
     verdict(
       "teamLift",
       "Best team lift",
-      pickMaximum(teamRows, (row) => row.teamLift),
+      pickMaximum(teamRows.filter(row => row.tracks.length === 1 && row.tracks.includes("harnessbench")), (row) => row.teamLift),
       (row) => row.teamLift,
       (row) => row.attempts,
       "team attempt",
-      "Run the same certified track solo and as a team to measure added value."
+      "Run the same HarnessBench profile solo and as a team to measure added value."
     ),
   ];
 }
@@ -217,21 +230,19 @@ function verdict(
     evidenceLabel,
     preliminary:
       winner != null &&
-      (evidenceCount == null
-        ? winner.preliminary
-        : evidenceCount > 0 && evidenceCount < MIN_MATURE_ATTEMPTS),
+      (winner.historyCount ?? 0) + 1 < MIN_MATURE_ATTEMPTS,
     emptyHint,
   };
 }
 
 function workBenchQuality(row: DecisionRow): number | null {
-  const track = row.trackBreakdown.find((item) => item.track === "workbench");
+  const track = row.trackBreakdown.find((item) => item.track === "harnessbench");
   return track ? finite(track.averageVerifiedQuality) : null;
 }
 
 function workBenchAttempts(row: DecisionRow): number | null {
   return (
-    row.trackBreakdown.find((item) => item.track === "workbench")?.attempts ??
+    row.trackBreakdown.find((item) => item.track === "harnessbench")?.attempts ??
     null
   );
 }
@@ -309,7 +320,7 @@ function scopeToTrack(row: DecisionRow, trackId: string): DecisionRow | null {
     attempts: track.attempts,
     passed: track.passed,
     preliminary:
-      track.attempts > 0 && track.attempts < MIN_MATURE_ATTEMPTS,
+      (row.historyCount ?? 0) + 1 < MIN_MATURE_ATTEMPTS,
     verifiedQuality: track.averageVerifiedQuality,
     overallScore: track.averageVerifiedQuality,
     passRate: track.verifiedPassRate,

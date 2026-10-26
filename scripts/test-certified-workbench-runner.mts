@@ -55,9 +55,9 @@ async function startPassingBenchRunner(preparedAttemptId: string): Promise<{
     switch (path) {
       case "/bench/health":
         sendJsonResponse(res, 200, {
-          ok: true,
+          ok: true, platform: "win32", nodeVersion: "24.18.0",
           version: 2,
-          runnerV2: { ready: true },
+          runnerV2: { ready: true, sourceDigest: "a".repeat(64) },
         });
         return;
       case "/bench/prepare":
@@ -222,7 +222,7 @@ const roleTeam: BenchmarkTeamComposition = {
   ],
 };
 
-const runner = await startPassingBenchRunner("prepared-workbench-attempt");
+const runner = await startPassingBenchRunner("echo-request-attempt");
 try {
   const models: SelectedModel[] = [{
     modelId: "openai:gpt-workbench",
@@ -235,7 +235,7 @@ try {
     runId: string
   ): RunSelectedContext => ({
     selectedTrack: "workbench",
-    suiteId: "workbench-current-language-json",
+    suiteId: "workbench-native-smoke-v1",
     models,
     modelId: models[0]!.modelId,
     teamModelIds: [],
@@ -313,12 +313,12 @@ try {
       attempt?.resultSetId === resultSet.id,
     { pendingObservedBeforeWorkBenchAdmission, resultSet, attempt }
   );
-  check("certified WorkBench attempt persists verifier score", attempt?.id === "prepared-workbench-attempt" && attempt.status === "passed" && attempt.verifiedQuality === 1, attempt);
+  check("certified WorkBench attempt persists verifier score", attempt?.id.startsWith("workbench-") && attempt.status === "passed" && attempt.verifiedQuality === 1, attempt);
   check("certified WorkBench verifier persists", verifiers[0]?.attemptId === attempt?.id && verifiers[0]?.passed, verifiers[0]);
   check("certified WorkBench artifacts persist", bundle.artifacts.some((artifact) => artifact.attemptId === attempt?.id && artifact.kind === "patch"), bundle.artifacts);
   check(
     "certified WorkBench dashboard updates",
-    latestSummary?.dashboard.summary.certifiedAttempts === 1 &&
+    latestSummary?.dashboard.summary.certifiedAttempts === 3 &&
       latestSummary.dashboard.summary.verifiedPassRate === 1,
     latestSummary?.dashboard.summary
   );
@@ -345,7 +345,7 @@ try {
     }> = [];
     const baselineContext: RunSelectedContext = {
       selectedTrack: "workbench",
-      suiteId: "workbench-current-language-json",
+      suiteId: "workbench-native-smoke-v1",
       models: teamModels,
       modelId: teamModels[0]!.modelId,
       teamModelIds: teamModels.map((item) => item.modelId),
@@ -416,10 +416,10 @@ try {
             set.status === "completed" &&
             set.executionId === "execution-real-workbench-baselines"
         ) &&
-        baselineAttempts.length === 3 &&
-        buildScopes.length === 3 &&
-        buildScopes.filter((scope) => scope.modelIds.length === 1).length === 2 &&
-        buildScopes.filter((scope) => scope.modelIds.length === 2).length === 1,
+        baselineAttempts.length === 9 &&
+        buildScopes.length === 9 &&
+        buildScopes.filter((scope) => scope.modelIds.length === 1).length === 6 &&
+        buildScopes.filter((scope) => scope.modelIds.length === 2).length === 3,
       { baselineSets, baselineAttempts, buildScopes }
     );
     check(

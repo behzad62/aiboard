@@ -94,7 +94,7 @@ export function toBenchmarkCaseV2(
   return {
     id: workBenchCase.id,
     schemaVersion: 2,
-    track: "workbench",
+    track: workBenchCase.benchmarkTrack ?? "workbench",
     title: workBenchCase.title,
     description: workBenchCase.description,
     difficulty: workBenchCase.difficulty,
@@ -103,7 +103,7 @@ export function toBenchmarkCaseV2(
     createdAt: timestamp,
     updatedAt: timestamp,
     prompt: { ...workBenchCase.prompt },
-    repo: { ...workBenchCase.repo },
+    repo: { ...workBenchCase.repo, fixtureHash: workBenchCase.repo.fixtureHash ?? createWorkBenchCaseHash(workBenchCase) },
     environment: {
       type: "local-runner",
       setupCommand: workBenchCase.environment.setupCommand,

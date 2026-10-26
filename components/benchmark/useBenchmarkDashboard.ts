@@ -133,8 +133,8 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
     useState<BenchmarkResultSetAuditRow[]>([]);
   const [corruptRunFileCount, setCorruptRunFileCount] = useState(0);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
     const ready = await ensureReady();
     if (ready.needsPassphrase) {
       setLocked(true);
@@ -270,6 +270,16 @@ export function useBenchmarkDashboard(): BenchmarkDashboardState {
       setMessage(error instanceof Error ? error.message : String(error));
       setLoading(false);
     });
+  }, [load]);
+
+  useEffect(() => {
+    let pending = false;
+    const timer = setInterval(() => {
+      if (pending || certifiedTabRunCoordinator.getSnapshot().owner === null) return;
+      pending = true;
+      void load(true).catch(() => {}).finally(() => { pending = false; });
+    }, 5_000);
+    return () => clearInterval(timer);
   }, [load]);
 
   return {

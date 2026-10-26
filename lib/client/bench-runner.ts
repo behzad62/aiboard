@@ -25,6 +25,9 @@ export class BenchRunnerRequestError extends Error {
 }
 
 export interface BenchRunnerHealth {
+  nativeCapabilities?: { browser: boolean };
+  platform?: string;
+  nodeVersion?: string;
   ok: boolean;
   version?: number;
   host?: string;
@@ -34,6 +37,7 @@ export interface BenchRunnerHealth {
   runnerV2?: {
     ready: boolean;
     source?: string;
+    sourceDigest?: string;
     nodeVersion?: string;
     error?: string;
   };
@@ -49,6 +53,8 @@ export interface BenchRunnerHealth {
 }
 
 export interface ManagedAttemptRunnerResult {
+  sourceDigest?: string;
+  platform?: string;
   attemptId: string;
   running: boolean;
   url?: string;
@@ -57,6 +63,15 @@ export interface ManagedAttemptRunnerResult {
   statePath: string;
   pid?: number | null;
   nodeVersion?: string;
+}
+
+export interface NativeBenchmarkToolEvidence {
+  runId: string;
+  tools: Array<{ sequence: number; callId: string; toolName: string; input: { path?: string; startLine?: number; endLine?: number; editCount?: number }; isError: boolean; errorCode?: string; outputText: string }>;
+}
+
+export function getNativeBenchmarkToolEvidence(config: BenchRunnerConfig, input: BenchAttemptInput & { runId: string }, signal?: AbortSignal): Promise<NativeBenchmarkToolEvidence> {
+  return requestJson(config, "/bench/attempt-runner/tool-evidence", input, signal);
 }
 
 export interface RestoreAttemptOracleResult {
@@ -95,6 +110,12 @@ export function getTrustedBenchRunnerReadiness(
     };
   }
   const policy = workBenchCase?.trustedPolicy;
+  if (workBenchCase?.nativeQualification?.requiresBrowser && !health.nativeCapabilities?.browser) {
+    return { ready: false, error: "This optional ToolBench profile requires the runner browser. Run npm run setup:browser in the benchmark runner folder, then check again." };
+  }
+  if (workBenchCase?.benchmarkTrack && (!health.runnerV2.sourceDigest || !health.nodeVersion || !health.platform)) {
+    return { ready: false, error: "Update the benchmark runner to record native source, Node, and platform identity." };
+  }
   if (!policy) return { ready: true };
 
   const trusted = health.rjs;

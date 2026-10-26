@@ -836,6 +836,7 @@ export interface NativeBuildUsageProjection {
 }
 
 export interface NativeBudgetReservationProjection {
+  providerReportedCostUsd?: number;
   reservationId: string;
   kind: "model" | "tool";
   attribution?: {

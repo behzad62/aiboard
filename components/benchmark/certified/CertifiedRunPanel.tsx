@@ -43,6 +43,7 @@ import {
   type BenchRunnerHealth,
 } from "@/lib/client/bench-runner";
 import { getEnabledModels } from "@/lib/client/providers";
+import { getNativeBenchmarkPack, isNativeBenchmarkTrack, HARNESSBENCH_SUITE } from "@/lib/benchmark/native-suites";
 import { runHarnessCertification } from "@/lib/benchmark/certified/certification";
 import {
   listCertifiedSuiteOptions,
@@ -75,7 +76,6 @@ import {
   teamIqRoleSlotsForStrategy,
 } from "@/lib/benchmark/teamiq";
 import {
-  getWorkBenchCasePack,
   normalizeWorkBenchModelSelection,
   workBenchHarnessProfileForRoleMode,
   workBenchRoleCount,
@@ -98,7 +98,7 @@ export function CertifiedRunPanel({
   setMessage: (message: string | null) => void;
 }) {
   const lockedTrack = track === "all" ? null : (track as RunnableTrack);
-  const initialTrack: RunnableTrack = lockedTrack ?? "toolreliability";
+  const initialTrack: RunnableTrack = lockedTrack ?? "harnessbench";
 
   // --- Shared: which provider models exist, at all -------------------------
   const [models, setModels] = useState<SelectedModel[]>([]);
@@ -122,7 +122,7 @@ export function CertifiedRunPanel({
   const [sharedTeamIqStrategy, setSharedTeamIqStrategy] =
     useState<TeamIqUiStrategy>("architect_worker_reviewer");
   const [focusedPresetId, setFocusedPresetId] =
-    useState<BenchmarkPreset["id"]>("model-iq");
+    useState<BenchmarkPreset["id"]>("team-benchmark");
   const [presetRunning, setPresetRunning] = useState(false);
   const [runningPresetId, setRunningPresetId] =
     useState<BenchmarkPreset["id"] | null>(null);
@@ -161,11 +161,11 @@ export function CertifiedRunPanel({
 
   const suites = useMemo(() => listCertifiedSuiteOptions(selectedTrack), [selectedTrack]);
   const selectedWorkBenchPack = useMemo(
-    () => (selectedTrack === "workbench" ? getWorkBenchCasePack(suiteId) : null),
+    () => (isNativeBenchmarkTrack(selectedTrack) ? getNativeBenchmarkPack(selectedTrack, suiteId) : null),
     [selectedTrack, suiteId]
   );
   const effectiveHarnessProfile =
-    selectedTrack === "workbench"
+    isNativeBenchmarkTrack(selectedTrack)
       ? workBenchHarnessProfileForRoleMode(workBenchRoleMode)
       : harnessProfile;
   const executionMode = executionModeCopy(
@@ -245,7 +245,7 @@ export function CertifiedRunPanel({
   }, [suites]);
 
   useEffect(() => {
-    if (selectedTrack === "workbench") {
+    if (isNativeBenchmarkTrack(selectedTrack)) {
       const derivedProfile = workBenchHarnessProfileForRoleMode(workBenchRoleMode);
       if (harnessProfile !== derivedProfile) {
         setHarnessProfile(derivedProfile);
@@ -274,7 +274,7 @@ export function CertifiedRunPanel({
     workBenchModelIds,
     workBenchRoleMode,
     workBenchRunnerReady:
-      selectedTrack !== "workbench" ||
+      !isNativeBenchmarkTrack(selectedTrack) ||
       Boolean(workBenchRunnerUrl.trim() && workBenchRunnerToken.trim()) &&
       selectedWorkBenchReadiness.ready,
     certification,
@@ -297,6 +297,7 @@ export function CertifiedRunPanel({
     soloModelIds,
     sharedTeamModelIds,
     workBenchRunnerReady,
+    harnessBenchRunnerReady: getTrustedBenchRunnerReadiness(workBenchRunnerHealth, getNativeBenchmarkPack("harnessbench", HARNESSBENCH_SUITE)?.cases[0]?.case).ready,
   });
   const handleEffortChange = (
     changedModelId: string,
@@ -370,9 +371,10 @@ export function CertifiedRunPanel({
             onFocus={setFocusedPresetId}
             onRun={(preset) => void runPresetFromUi(preset)}
           />
-          {focusedPresetId === "full-certified" && (
+          {focusedPreset.legs.some((leg) => leg.requires === "bench-runner") && (
             <WorkBenchRunnerStatus
-              idPrefix="full-certified"
+              idPrefix="preset-runner"
+              workBenchCase={getNativeBenchmarkPack(focusedPreset.legs.some((leg) => leg.track === "harnessbench") ? "harnessbench" : "toolreliability", focusedPreset.legs.find((leg) => leg.track === "harnessbench")?.suiteId ?? focusedPreset.legs[0]!.suiteId)?.cases[0]?.case}
               url={workBenchRunnerUrl}
               token={workBenchRunnerToken}
               health={workBenchRunnerHealth}
@@ -406,7 +408,7 @@ export function CertifiedRunPanel({
 
       <details className="glass rounded-xl border">
         <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium">
-          Advanced: run a single suite or pack
+          Advanced: teams, integration smoke, and experimental suites
         </summary>
         <div className="grid gap-4 border-t p-4 xl:grid-cols-[1.1fr_0.9fr]">
           <Card>
@@ -433,7 +435,7 @@ export function CertifiedRunPanel({
                   value={suiteId}
                   options={suites}
                   ariaLabel={
-                    selectedTrack === "workbench" ? "WorkBench case pack" : "Case suite"
+                    isNativeBenchmarkTrack(selectedTrack) ? "Benchmark case pack" : "Case suite"
                   }
                   onChange={setSuiteId}
                 />
@@ -447,7 +449,7 @@ export function CertifiedRunPanel({
                       strategy: teamIqStrategy,
                     })}
                   />
-                ) : selectedTrack === "workbench" ? (
+                ) : isNativeBenchmarkTrack(selectedTrack) ? (
                   <StaticField
                     label="Models"
                     value={workBenchRoleSummary(
@@ -459,7 +461,7 @@ export function CertifiedRunPanel({
                 ) : (
                   <ModelTeamPicker value={modelId} models={models} onChange={setModelId} />
                 )}
-                {selectedTrack === "workbench" ? (
+                {isNativeBenchmarkTrack(selectedTrack) ? (
                   <StaticField
                     label="Harness"
                     value={executionMode.title}
@@ -474,7 +476,7 @@ export function CertifiedRunPanel({
                 )}
               </div>
               {selectedTrack !== "teamiq" &&
-                selectedTrack !== "workbench" && (
+                !isNativeBenchmarkTrack(selectedTrack) && (
                   <AdvancedModelEffortControl
                     models={models}
                     modelId={modelId}
@@ -496,7 +498,7 @@ export function CertifiedRunPanel({
                   />
                 </div>
               )}
-              {selectedTrack === "workbench" && (
+              {isNativeBenchmarkTrack(selectedTrack) && (
                 <div className="space-y-4">
                   <WorkBenchRunPanel
                     selectedPack={selectedWorkBenchPack}
@@ -708,6 +710,7 @@ function presetCardGates(input: {
   soloModelIds: string[];
   sharedTeamModelIds: string[];
   workBenchRunnerReady: boolean;
+  harnessBenchRunnerReady: boolean;
 }): Record<BenchmarkPreset["id"], PresetCardGate> {
   // With no models at all the panel shows one empty state instead of a
   // reason under every card.
@@ -717,25 +720,16 @@ function presetCardGates(input: {
     : input.soloModelIds.length === 0
       ? { disabled: true, reason: "Select at least one model above." }
       : { disabled: false };
-  const teamGate: PresetCardGate = noModels
-    ? { disabled: true }
-    : input.sharedTeamModelIds.length === 0
-      ? { disabled: true, reason: "Choose a team composition." }
-      : { disabled: false };
-  const fullGate: PresetCardGate = soloGate.disabled
-    ? soloGate
-    : teamGate.disabled
-      ? teamGate
-      : {
-          disabled: false,
-          note: input.workBenchRunnerReady
-            ? "Bench runner connected — every leg will run."
-            : "Bench runner offline — the WorkBench leg will be skipped.",
-        };
+  const nativeGate: PresetCardGate = soloGate.disabled ? soloGate
+    : input.workBenchRunnerReady ? { disabled: false }
+    : { disabled: true, reason: "Connect and check the benchmark runner below." };
+  const signatureGate: PresetCardGate = nativeGate.disabled ? nativeGate
+    : input.harnessBenchRunnerReady ? { disabled: false }
+    : { disabled: true, reason: "The runner must include the qualified Recoverable Job Service runtime." };
   return {
-    "model-iq": soloGate,
-    "team-benchmark": teamGate,
-    "full-certified": fullGate,
+    "model-iq": nativeGate,
+    "team-benchmark": signatureGate,
+    "full-certified": signatureGate,
   };
 }
 
@@ -765,20 +759,18 @@ function executionModeCopy(track: RunnableTrack, harnessProfile: HarnessProfile)
   description: string;
 } {
   if (track === "toolreliability") {
-    return {
-      title: "Direct tool-use session",
-      description: "Each case is a scripted multi-turn tool session scored by deterministic verifiers.",
-    };
+    return { title: "Native ToolBench", description: "Runner V2 tools and provider adapters, executed behavioral checks, and recorded tool-use qualification." };
   }
   if (track === "teamiq") {
     return {
-      title: "AI Board team harness",
-      description: "Models are assigned team roles, then compared against required solo baselines when applicable.",
+      title: "Experimental TeamIQ",
+      description: "A small legacy scripted role/synthesis experiment; it does not measure the live Build crew.",
     };
   }
+  if (track === "harnessbench") return { title: "HarnessBench — Recoverable Job Service", description: "The signature model benchmark: complete the modeled service contract using Runner V2. Every mandatory family and variant must pass." };
   return {
     title: workBenchHarnessProfileLabel(harnessProfile),
-    description: "WorkBench uses the local bench runner and Build-mode tool protocol.",
+    description: "Three behavioral fixtures exercise native Build integration. Smoke results are separate from model qualification.",
   };
 }
 

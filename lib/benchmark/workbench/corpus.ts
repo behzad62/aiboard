@@ -63,7 +63,7 @@ export function listWorkBenchChallenges(): WorkBenchChallenge[] {
 }
 
 export function listWorkBenchCaseOptions(): WorkBenchCaseOption[] {
-  return listWorkBenchChallenges().map(
+  return listWorkBenchChallenges().filter((challenge) => ["workbench-pipeline-0001", "workbench-pipeline-cache-0001", "workbench-pipeline-inventory-0001"].includes(challenge.id)).map(
     (challenge) => {
       const fixtureLanguage = languageForChallenge(challenge);
       const workBenchCase = workBenchCaseForChallenge(challenge, fixtureLanguage);
@@ -92,33 +92,12 @@ export function getWorkBenchCaseOption(
 
 export function listWorkBenchCasePacks(): WorkBenchCasePackOption[] {
   const cases = listWorkBenchCaseOptions();
-  return [
-    createWorkBenchCasePack({
-      id: "workbench-current-all",
-      label: `All current WorkBench cases (${cases.length})`,
-      description: "Runs every current certified WorkBench fixture case.",
-      cases,
-    }),
-    ...groupWorkBenchCasePacks({
-      cases,
-      idPrefix: "workbench-current-language",
-      groupKey: (item) => item.fixtureLanguage,
-      labelForGroup: (language, count) =>
-        `${workBenchLanguageLabel(language)} cases (${count})`,
-      descriptionForGroup: (language) =>
-        `Runs current WorkBench cases using ${workBenchLanguageLabel(language)} fixtures.`,
-    }),
-    ...groupWorkBenchCasePacks({
-      cases,
-      idPrefix: "workbench-current-kind",
-      groupKey: (item) => item.challengeKind,
-      labelForGroup: (kind, count) =>
-        `${workBenchChallengeKindLabel(kind)} cases (${count})`,
-      descriptionForGroup: (kind) =>
-        `Runs current WorkBench ${workBenchChallengeKindLabel(kind).toLowerCase()} cases.`,
-    }),
-    createRecoverableJobServiceCasePack(),
-  ];
+  return [createWorkBenchCasePack({
+    id: "workbench-native-smoke-v1",
+    label: "WorkBench: native integration smoke",
+    description: "Three behavioral pipeline fixtures for Runner V2 integration regression. Report separately from model qualification.",
+    cases,
+  })];
 }
 
 export function getWorkBenchCasePack(
@@ -169,6 +148,7 @@ function workBenchCaseForChallenge(
 
   return {
     schemaVersion: 1,
+    benchmarkTrack: "workbench",
     id: challenge.id,
     title: challenge.title,
     description: `WorkBench ${challenge.kind} challenge with a deterministic verifier: executed behavioral checks for JavaScript/JSON fixtures, comment-aware static checks elsewhere, and surgical-diff limits.`,
@@ -179,7 +159,7 @@ function workBenchCaseForChallenge(
       challenge.kind,
       ...challenge.tags.filter((tag) => tag !== fixtureLanguage),
     ],
-    caseVersion: "3.0.0",
+    caseVersion: "4.0.0",
     prompt: {
       userRequest: challenge.prompt,
       publicContext:
@@ -212,7 +192,7 @@ function workBenchCaseForChallenge(
       maxOutputTokens: 1000000,
     },
     scoring: {
-      scoringVersion: "certified-workbench-current",
+      scoringVersion: "workbench-smoke-v1",
       costTargetUsd: 2,
       timeTargetSeconds: 420,
     },
@@ -225,28 +205,6 @@ function workBenchCaseForChallenge(
     allowedCommands: ["node verifier.mjs"],
     fixtureFiles,
   };
-}
-
-function groupWorkBenchCasePacks<T extends string>(input: {
-  cases: WorkBenchCaseOption[];
-  idPrefix: string;
-  groupKey: (item: WorkBenchCaseOption) => T;
-  labelForGroup: (group: T, count: number) => string;
-  descriptionForGroup: (group: T) => string;
-}): WorkBenchCasePackOption[] {
-  const grouped = new Map<T, WorkBenchCaseOption[]>();
-  for (const item of input.cases) {
-    const key = input.groupKey(item);
-    grouped.set(key, [...(grouped.get(key) ?? []), item]);
-  }
-  return [...grouped.entries()].map(([group, cases]) =>
-    createWorkBenchCasePack({
-      id: `${input.idPrefix}-${group}`,
-      label: input.labelForGroup(group, cases.length),
-      description: input.descriptionForGroup(group),
-      cases,
-    })
-  );
 }
 
 function createWorkBenchCasePack(input: {
@@ -263,56 +221,6 @@ function createWorkBenchCasePack(input: {
     caseIds: input.cases.map((item) => item.id),
     cases: input.cases,
   };
-}
-
-function workBenchLanguageLabel(language: WorkBenchFixtureLanguage): string {
-  switch (language) {
-    case "typescript":
-      return "TypeScript";
-    case "javascript":
-      return "JavaScript";
-    case "python":
-      return "Python";
-    case "go":
-      return "Go";
-    case "rust":
-      return "Rust";
-    case "react-ui":
-      return "React UI";
-    case "json":
-      return "JSON";
-    case "csharp":
-      return "C#";
-    case "cpp":
-      return "C++";
-    default:
-      return language;
-  }
-}
-
-function workBenchChallengeKindLabel(kind: WorkBenchChallengeKind): string {
-  switch (kind) {
-    case "large-file-surgical-patch":
-      return "Large-file surgical patch";
-    case "multi-file-contract":
-      return "Multi-file contract";
-    case "parser-edge-case":
-      return "Parser edge case";
-    case "react-accessibility":
-      return "React accessibility";
-    case "large-json-config":
-      return "Large JSON config";
-    case "no-whole-file-rewrite":
-      return "No whole-file rewrite";
-    case "input-validation":
-      return "Input validation";
-    case "error-handling":
-      return "Error handling";
-    case "numeric-safety":
-      return "Numeric safety";
-    default:
-      return kind;
-  }
 }
 
 function languageForChallenge(

@@ -1136,6 +1136,8 @@ export class NativeBuildFactory {
       }),
     });
     subprocessWorkloadsSettled = false;
+    // Cleanup is registered before reconciliation can throw; the snapshot is assigned only after it succeeds.
+    // eslint-disable-next-line prefer-const
     let subprocessResidue: ReadonlyMap<string, number> | undefined;
     // Register immediately: startup reconciliation and grant construction may fail.
     constructionResources.add("subprocess_runtime", async () => {
@@ -1924,7 +1926,6 @@ export class NativeBuildFactory {
     const canonicalIntegrationRevision = (): string =>
       rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).integrationRevision ?? "";
     const assertCurrentVerificationGeneration = (input: { generationId: string; targetRevision: string }): void => {
-      if (!docsV2) return;
       const projection = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
       const generation = projection.finalVerification?.current;
       if (!projection.integrationRevision || projection.integrationRevision !== input.targetRevision ||
@@ -1934,19 +1935,20 @@ export class NativeBuildFactory {
     };
     const finalVerificationDriver: FinalVerificationCheckDriver = {
       executeCheck: async (input) => {
-        // C3c/F1: pin the workspace to the scheduler-authorized generation
-        // target. The shared manager resolves the live physical tip, which
-        // kernel snapshots advance mid-verification; remaining checks must
-        // still execute on the exact canonical revision.
+        // Pin every policy version to the scheduler-authorized generation.
+        // Both legacy documentation commits and v2 kernel snapshots can
+        // advance the physical tip without changing the profile target.
+        // Reopening the shared live-tip checkout then makes a valid profile
+        // appear stale. Ownership and canonical-state validation still apply.
         assertCurrentVerificationGeneration(input);
-        const generationWorkspace = docsV2 ? new VerificationWorkspaceManager({
+        const generationWorkspace = new VerificationWorkspaceManager({
           execute: requireGitRunner(gitContext).lifecycle("verification").run,
           repositoryRoot: integrationManager.path,
           stateDirectory: this.options.stateDirectory,
           runId: spec.runId,
           targetRevision: input.targetRevision,
           ...snapshotVerificationOptions,
-        }) : verificationWorkspace;
+        });
         const verification = new FinalVerificationRuntime({
           git: requireGitRunner(gitContext).lifecycle("verification").run,
           activity: runActivity,
@@ -1960,7 +1962,7 @@ export class NativeBuildFactory {
           ambientNodeOptions: ambientNodeOptions(),
           ...policyTempRecorders(),
           checkCategory: input.category,
-          currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return docsV2 ? canonicalIntegrationRevision() : integrationManager.revision; },
+          currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return canonicalIntegrationRevision(); },
           managedProcessService: this.liveManagedProcesses(),
           managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
           browserBackend: this.browserBackend,
@@ -2035,14 +2037,14 @@ export class NativeBuildFactory {
         const rerunVerification = new FinalVerificationRuntime({
           git: requireGitRunner(gitContext).lifecycle("verification").run,
           activity: runActivity,
-          workspaceManager: docsV2 ? new VerificationWorkspaceManager({
+          workspaceManager: new VerificationWorkspaceManager({
             execute: requireGitRunner(gitContext).lifecycle("verification").run,
             repositoryRoot: integrationManager.path,
             stateDirectory: this.options.stateDirectory,
             runId: spec.runId,
             targetRevision: input.targetRevision,
             ...snapshotVerificationOptions,
-          }) : verificationWorkspace,
+          }),
           artifacts: this.artifacts,
           evidenceStore,
           runId: input.runId,
@@ -2053,7 +2055,7 @@ export class NativeBuildFactory {
           ...(testNamePattern !== undefined ? { testNamePattern } : {}),
           ...policyTempRecorders(),
           checkCategory: "tests",
-          currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return docsV2 ? canonicalIntegrationRevision() : integrationManager.revision; },
+          currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return canonicalIntegrationRevision(); },
           managedProcessService: this.liveManagedProcesses(),
           managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
           browserBackend: this.browserBackend,

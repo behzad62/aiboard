@@ -1,75 +1,49 @@
-# AI Board Bench Scoring Rules
+# AI Board benchmark scoring
 
-Certified scores come only from deterministic verifiers, deterministic game engines, deterministic rule checkers, and schema or tool validators. Architect-reviewed Build quality is Lab evidence and must not become an official Certified score.
+Current suites use native Runner V2 execution. Deterministic verifiers record benchmark outcomes; Runner V2 acceptance and operating-system safety qualification remain separate.
 
-## WorkBench
+## HarnessBench — Recoverable Job Service
 
-`VerifiedQuality` is the verifier score on a `0..1` scale.
+HarnessBench is AI Board's signature model benchmark. Each selected model runs the complete RJS implementation task through Runner V2; solo uses that model for all required native roles. Team runs are available in Advanced with matched solo baselines.
 
-`JobSuccessScore = 100 * VerifiedQuality`
+The frozen RJS contract and evaluator are unchanged: 69 mandatory modeled families and 302 mandatory variants. Quality is binary: 1 only when every mandatory assertion and measured safety condition passes; a valid candidate failure is 0. Invalid evaluator/environment/provider attempts are excluded. Budget exhaustion is a recorded model failure, not a successful or silently omitted attempt.
 
-`EfficiencyScore = 0` when `VerifiedQuality == 0`; otherwise:
+Budget per complete attempt: 3,600 seconds, 120 model calls, 500 tool calls, 3,000,000 input tokens, 200,000 output tokens. The trusted verifier has its separate 660-second limit. Family diagnostics are not independent complete model runs.
 
-```text
-JobSuccessScore * (
-  0.50
-  + 0.25 * (CostFactor ?? 1)
-  + 0.15 * TimeFactor
-  + 0.10 * ToolReliability
-)
-```
+This measures the published modeled service contract; it does not certify native OS process/container safety.
 
-`CostFactor = min(1, targetCost / actualCost)` when cost is known and a target exists. Unknown cost does not crash scoring and is treated as neutral for efficiency.
+## ToolBench — native tool qualification
 
-`TimeFactor = min(1, targetTime / actualTime)` when a target exists, otherwise `1`.
+The v3 core pack runs six isolated native Build tasks covering investigation, executed verification, stale-context recovery, coordinated edits, bounded output, and argument-array commands. It accepts the editing protocol actually exposed by the production provider adapter: filesystem tools or provider-native apply_patch. Recovery requires a real unmatched-context rejection and a subsequent successful patch; exact SHA concurrency protection remains independently regression-tested. Bounded output now requires a short range read delivering a checksum from a large file and a tiny JSON answer, rather than copying filler through the model. Variant B changes fixture data and has a separate profile. Optional browser/process and project-skill profiles are separate measurements. Unmeasured capabilities, including arbitrary MCP integrations and project-memory policies, are not certified by a core result.
 
-`ToolReliability = validToolCalls / max(totalToolCalls, 1)`.
+Per-case emergency caps are five times v2: 4,500 seconds, 300 model calls, 900 tool calls, 5,000,000 input tokens and 750,000 output tokens. These caps prevent runaway credit use; token count, elapsed time and tool calls remain independent measured efficiency outcomes. Exhausting the emergency cap still stops the run and cannot count as successful completion. Public `node check.mjs`/`npm test` checks make final verification discoverable without installation or invented infrastructure. The behavioral verifier and tool-evidence requirements remain enforced. Changed fixture, prompt and budget identities use a separate v3 profile; historical v2 outcomes are not rewritten.
 
-## GameIQ
+Each case requires both correct final behavior and recorded successful native tool use. Requested command evidence must match executable and exact argument array. Recovery credit requires an observed native rejection followed by a successful retry. Scope/permission/command-denial errors disqualify the case even if its output is correct. A finished run is passed only when every required case passes; partial outcomes remain visible.
 
-```text
-100 * (
-  0.37 * OutcomeScore
-  + 0.32 * MoveQuality
-  + 0.21 * LegalActionRate
-  + 0.10 * StructuredReliability
-) * (1 - 0.50 * FallbackRate)
-```
+All model and tool counts, tokens, costs, and elapsed time come from Runner V2 evidence. Expected revision conflicts and legitimate nonzero test exits remain visible but are not treated as malformed tool use.
 
-All inputs are normalized to `0..1`. `LatencyFactor` is recorded as a
-diagnostic metric only; it does not contribute to the score (speed is not part
-of GameIQ quality).
+Quality is primary. Efficiency uses observed time, valid invocation fraction, and priced cost when targets exist. For native ToolBench it also multiplies by 24 / (24 + actual tool calls), so extra requests always reduce this diagnostic score. This target is versioned with each fixture; it is not a claim of an optimal universal tool count. Compare only matching profiles. Costs, tokens, action counts, and elapsed time are also reported separately.
 
-## ToolReliability
+## WorkBench and TeamIQ
 
-Scoring version `toolreliability-v2`:
+WorkBench is a three-case behavioral pipeline smoke suite for native integration regressions. The 13 static-only language cases and older standard WorkBench rankings are historical. TeamIQ is an experimental legacy scripted role/synthesis experiment; it does not measure the live discussion engine or native Build crew. Neither enters the default HarnessBench model recommendations.
 
-```text
-100 * (
-  0.25 * SchemaValidRate
-  + 0.15 * RepairSuccessRate
-  + 0.25 * ToolValidRate
-  + 0.25 * PatchSuccessRate
-  + 0.10 * CommandSafetyRate
-) * (1 - ForbiddenActionRate)
-```
+Legacy GameIQ/Fireworks and scripted ToolReliability evidence stays available in Data/history exports and is excluded from current qualification rankings. Historical records are not rewritten into native results.
 
-Forbidden actions are multiplicative penalties because they invalidate trust in otherwise well-formed tool output. `ForbiddenActionRate` is computed over applicable cases only (tool-call and forbidden-action cases, plus any case where a violation actually fired), so it cannot be diluted by unrelated cases. `FirstAttemptValidRate` is no longer weighted — it duplicated the category metrics — and remains a diagnostic rate. `RepairSuccessRate` is null (its weight is skipped and renormalized) when no first attempt failed. Schema and repair cases are validated post-hoc from the model's raw text; provider strict structured output is not requested for them, so the rates measure model output discipline, not provider constrained decoding. Attempts scored under the old `toolreliability-current` version are not comparable.
+## Efficiency and comparisons
 
-## TeamIQ
+For native build cases, verified quality is zero unless the behavioral verifier passes. Job success is 100 times quality. Base efficiency renormalizes available components: 0.50 base, 0.25 cost factor, 0.15 time factor, 0.10 valid tool fraction. Missing prices or targets omit that component; they do not award free cost credit. Target factors are capped at 1. ToolBench's additional action factor is described above.
 
-`TeamLift = TeamScore - max(MemberSoloScores)`
+Model/provider identity, reasoning effort, role configuration, case and scorer versions, fixture digest, budgets, source digest, Node version, and platform are retained in result identity/evidence. Results default to a matching measured profile rather than averaging unlike suites. HarnessBench, ToolBench, smoke tests, and experiments keep separate scores.
 
-Labels:
+### Recorded outcomes and usage
 
-- `strong_positive`: lift is at least 10, cost-adjusted lift is positive, and the team costs no more than about 3x the best solo.
-- `positive`: lift is greater than 3 and the team is not more than 3x the best-solo cost; small overpriced gains are neutral.
-- `neutral`: lift is between -3 and 3.
-- `negative`: lift is below -3.
-- `wasteful`: lift is not positive and team cost exceeds the best solo cost.
+Results shows raw case outcomes for every recorded result set, including failed, cancelled, and unpublished batches. Each expected case retains its recorded status, reason, tokens, calculated cost, and time. Missing outcomes stay missing; duplicate or foreign records cannot fill them. This diagnostic display does not relax publication: a batch with an invalid harness/provider/environment/case outcome or incomplete evidence remains outside the leaderboard. Budget failures remain scoreable zero outcomes. When no batch can be ranked, Results explains that and shows the actual case outcomes instead of empty winner cards.
 
-TeamIQ requires complete solo baselines for every member, case, and track before an official lift can be computed.
+The Results cost table lists each benchmark run, including failed or cancelled runs, using deduplicated settled model-call traces. During native runs, newly settled calls are persisted approximately every three seconds and the dashboard refreshes approximately every five seconds without unmounting the running panel. Missing or unsettled usage is not a final invoice.
 
-## Reporting
+Provider token counts take priority. Missing input usage uses a serialized-request byte estimate; missing output usage uses a serialized-output estimate. Each trace records whether its tokens were reported, estimated, or mixed. Native costs are calculated from the call's recorded pricing basis, including cache rates; configured peak rates can conservatively overestimate time-discounted bills.
 
-Reports should show quality, efficiency, cost per pass, speed per pass, team lift, tool reliability, and invalid-run counts separately. Do not hide invalid harness, environment, case, provider, or user-aborted runs inside model failure rates.
+Where a supported response supplies dollar usage, it is retained separately as `providerReportedCostUsd`. OpenRouter's documented `usage.cost` is supported on native Chat Completions and Responses, including streaming. Undocumented currencies and missing values are not treated as USD or zero. Calculated API cost and optional provider USD appear side by side, with coverage counts. There is no difference column or automatic adjustment to saved rates or budget enforcement. Provider usage figures can still differ from invoices, negotiated discounts, fees, or BYOK billing.
+
+Mature evidence requires at least three complete comparable runs, not three cases inside one run. Repeat whole attempts and report every repeat, including failures. Wilson intervals describe observed case pass fractions and do not establish broad model capability or independence of correlated cases. Deterministic harness self-checks are implementation tests, not live model qualification.

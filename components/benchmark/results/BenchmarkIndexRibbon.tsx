@@ -8,10 +8,8 @@ import {
 } from "@/lib/benchmark/certified/decision-dashboard";
 
 const TRACKS = [
-  { id: "toolreliability", label: "Tool Reliability" },
-  { id: "workbench", label: "WorkBench" },
-  { id: "teamiq", label: "TeamIQ" },
-  { id: "harnessbench", label: "HarnessBench" },
+  { id: "harnessbench", label: "HarnessBench — Recoverable Job Service" },
+  { id: "toolreliability", label: "ToolBench — native tool qualification" },
 ] as const;
 
 export function BenchmarkIndexRibbon({ rows }: { rows: DecisionRow[] }) {
@@ -20,7 +18,7 @@ export function BenchmarkIndexRibbon({ rows }: { rows: DecisionRow[] }) {
     observedTracks.has(track.id)
   ).length;
   const matureRows = rows.filter(
-    (row) => row.attempts >= MIN_MATURE_ATTEMPTS
+    (row) => (row.historyCount ?? 0) + 1 >= MIN_MATURE_ATTEMPTS
   ).length;
   const latest = latestCompletion(rows);
 
@@ -43,9 +41,9 @@ export function BenchmarkIndexRibbon({ rows }: { rows: DecisionRow[] }) {
         <div className="flex gap-3 p-4">
           <Scale className="mt-0.5 h-5 w-5 shrink-0 text-sky-600 dark:text-sky-400" aria-hidden="true" />
           <div>
-            <p className="text-sm font-semibold">Equal weight per represented track</p>
+            <p className="text-sm font-semibold">Separate scores for each benchmark</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Quality is averaged within each track, then each represented track contributes equally.
+              HarnessBench is the signature coding benchmark. ToolBench qualifies native tool use. Integration smoke and TeamIQ experiments are reported separately.
             </p>
           </div>
         </div>
@@ -54,7 +52,7 @@ export function BenchmarkIndexRibbon({ rows }: { rows: DecisionRow[] }) {
           <div>
             <p className="text-sm font-semibold">{matureRows} mature result{matureRows === 1 ? "" : "s"}</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Mature means {MIN_MATURE_ATTEMPTS}+ scored attempts. Missing tracks are not scored as zero.
+              Mature means {MIN_MATURE_ATTEMPTS}+ complete comparable runs. Case counts are not independent repeats.
             </p>
           </div>
         </div>

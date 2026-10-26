@@ -18,6 +18,7 @@ import {
 
 export function createRecoverableJobServiceCase(): WorkBenchCase {
   return {
+    benchmarkTrack: "harnessbench",
     schemaVersion: 1,
     id: RECOVERABLE_JOB_SERVICE_CASE_ID,
     title: "Recoverable Job Service",

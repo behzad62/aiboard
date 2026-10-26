@@ -32,11 +32,11 @@ export function WorkBenchRunPanel({
             Selected pack
           </div>
           <div className="mt-1 font-medium leading-snug">
-            {selectedPack?.label ?? "Select a WorkBench pack"}
+            {selectedPack?.label ?? "Select a benchmark pack"}
           </div>
         </div>
         <div className="rounded-md border px-3 py-2 text-sm text-muted-foreground">
-          {selectedPack?.caseCount ?? 0} certified fixture cases
+          {selectedPack?.caseCount ?? 0} benchmark fixture cases
         </div>
       </div>
       <WorkBenchRunnerStatus

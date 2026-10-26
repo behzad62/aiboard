@@ -33,8 +33,10 @@ export function scoreWorkBenchAttempt(input: WorkBenchScoreInput): WorkBenchScor
     (costFactor == null ? 0 : 0.25) +
     (toolReliability == null ? 0 : 0.1);
   const efficiencyMultiplier = weightedScore / availableWeight;
+  const callTarget = finiteOrNull(input.targetToolCalls);
+  const actionFactor = callTarget != null && callTarget > 0 ? callTarget / (callTarget + totalToolCalls) : 1;
   const efficiencyScore =
-    verifiedQuality === 0 ? 0 : round(jobSuccessScore * efficiencyMultiplier);
+    verifiedQuality === 0 ? 0 : round(jobSuccessScore * efficiencyMultiplier * actionFactor);
 
   return {
     verifiedQuality,
