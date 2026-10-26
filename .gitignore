@@ -24,6 +24,13 @@
 /benchmarks/recoverable-job-service/private/calibration/qualification-20*/
 /benchmarks/recoverable-job-service/private/calibration/probes-20*/
 
+# benchmark audit generated artifacts (keep README/probes scripts committed)
+/docs/bench/audit-*/**/*.log
+/docs/bench/audit-*/**/probe-results.json
+/docs/bench/audit-*/**/artifact-checks.json
+/docs/bench/audit-*/**/tool-test-results.json
+/docs/bench/audit-*/**/workbench-test-results.json
+
 # next.js
 /.next/
 /out/
