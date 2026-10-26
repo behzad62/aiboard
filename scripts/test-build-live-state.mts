@@ -8,6 +8,7 @@ import {
   buildStopFallbackMessage,
   buildRunWorkflowStatus,
   durableBuildHandoffPanels,
+  knownDefectRepairNote,
   nativeSessionIsWorking,
   verifierCandidateCooldown,
   nativeBuildTaskStatus,
@@ -226,6 +227,24 @@ assert.notEqual(
     "Waiting for you: choose the handoff",
     "once the automatic apply fails and the run pauses, the owner chooses",
   );
+}
+// Tunnel run: a defect the reviewer named shipped silently. A build completed with known defects
+// is held for the owner, who sees them and can ask for a repair first.
+{
+  const defect = { taskId: "task-7-readme", findingId: "pair-hint", claim: "The printed pairing command is not runnable.", location: "packages/relay/src/cli.ts:88", rationale: "Out of scope." };
+  const withDefects = {
+    ...(automaticHandoffProjection as object),
+    status: "paused",
+    projectHandoff: { ...(automaticHandoffProjection as { projectHandoff: object }).projectHandoff, knownDefects: [defect] },
+  } as never;
+  assert.deepEqual(durableBuildHandoffPanels(withDefects, "running").project?.knownDefects, [defect],
+    "a handoff with known defects is shown to the owner even while the run is live");
+  const pause = nativeBuildPauseDescription(withDefects, "running");
+  assert.equal(pause?.waitingForOwner, true);
+  assert.equal(pause?.title, "Waiting for you: the Build finished with 1 known defect");
+  assert.equal(knownDefectRepairNote([defect]),
+    "Repair these known defects before handing off, and prove each fix the way a user would hit it:\n" +
+    "- The printed pairing command is not runnable. (packages/relay/src/cli.ts:88)");
 }
 assert.equal(nativeBuildTaskStatus("integrated"), "done");
 assert.equal(nativeBuildTaskStatus("running"), "in_progress");

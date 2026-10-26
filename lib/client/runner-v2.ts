@@ -694,6 +694,8 @@ export interface NativeBuildProjection {
     integrationBranch?: string;
     appliedToProject?: boolean;
     projectRevision?: string;
+    /** Review findings the Architect completed with unrepaired; the runner then never applies the result itself. */
+    knownDefects?: NativeProjectHandoffKnownDefect[];
   };
   verifierPolicy?: NativeIndependentVerifierObservability["policy"];
   buildRisk?: {
@@ -778,6 +780,14 @@ export interface NativeAcceptanceContractProjection {
 export type NativeProjectHandoffChoice =
   | "keep_integration_branch"
   | "apply_to_project";
+
+export interface NativeProjectHandoffKnownDefect {
+  taskId: string;
+  findingId: string;
+  claim: string;
+  location?: string;
+  rationale: string;
+}
 
 export interface NativeBuildEvent {
   sequence: number;

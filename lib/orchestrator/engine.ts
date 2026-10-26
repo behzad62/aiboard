@@ -238,6 +238,7 @@ export type OrchestratorEvent =
       type: "project_handoff_required";
       summary: string;
       options: Array<"keep_integration_branch" | "apply_to_project">;
+      knownDefects?: Array<{ taskId: string; findingId: string; claim: string; location?: string; rationale: string }>;
     }
   | {
       type: "native_permission_required";

@@ -123,6 +123,7 @@ import {
   createNativeBuildAttachmentController,
   createNativeBuildFileLoader,
   durableBuildHandoffPanels,
+  knownDefectRepairNote,
   nativeSessionIsWorking,
   verifierCandidateCooldown,
   nativeBuildAttachmentIdentityPatch,
@@ -174,6 +175,7 @@ import {
   clearNativeRepairExternalBlocker,
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
+  type NativeProjectHandoffKnownDefect,
   type NativeBuildObservability,
   type NativeBuildActivity,
   type NativeBuildProjection,
@@ -350,6 +352,7 @@ function DiscussionPageInner() {
   const [projectHandoff, setProjectHandoff] = useState<{
     summary: string;
     options: NativeProjectHandoffChoice[];
+    knownDefects?: NativeProjectHandoffKnownDefect[];
   } | null>(null);
   const [nativePermissions, setNativePermissions] = useState<Array<{
     requestId: string;
@@ -707,6 +710,7 @@ function DiscussionPageInner() {
           setProjectHandoff({
             summary: event.summary,
             options: [...event.options],
+            ...(event.knownDefects?.length ? { knownDefects: event.knownDefects.map((defect) => ({ ...defect })) } : {}),
           });
           break;
         case "native_permission_required":
@@ -2590,14 +2594,26 @@ function DiscussionPageInner() {
       });
     }
     if (projectHandoff) {
+      const knownDefects = projectHandoff.knownDefects ?? [];
       decisions.push({
         id: "project-handoff",
         node: (
           <DecisionCard
-            title="The Architect has finished — choose the handoff"
-            tone="success"
+            title={knownDefects.length
+              ? `The Architect has finished with ${knownDefects.length} known defect${knownDefects.length === 1 ? "" : "s"}`
+              : "The Architect has finished — choose the handoff"}
+            tone={knownDefects.length ? "warn" : "success"}
             actions={
               <>
+                {knownDefects.length > 0 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setNoteDraft(knownDefectRepairNote(knownDefects))}
+                  >
+                    Repair first
+                  </Button>
+                )}
                 {projectHandoff.options.includes("apply_to_project") && (
                   <Button type="button" size="sm" onClick={() => void handleProjectHandoff("apply_to_project")}>
                     Apply to project
@@ -2617,6 +2633,21 @@ function DiscussionPageInner() {
             }
           >
             <p className="whitespace-pre-wrap">{projectHandoff.summary}</p>
+            {knownDefects.length > 0 && (
+              <div className="space-y-1">
+                <p className="font-medium">Shipped unrepaired:</p>
+                <ul className="list-disc space-y-1 pl-5">
+                  {knownDefects.map((defect) => (
+                    <li key={`${defect.taskId}/${defect.findingId}`}>
+                      {defect.claim}
+                      {defect.location && <span className="text-muted-foreground"> ({defect.location})</span>}
+                      <span className="block text-xs text-muted-foreground">Architect: {defect.rationale}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs">Repair first puts a repair request in the guidance box for you to send.</p>
+              </div>
+            )}
             <p className="text-xs">
               Applying first performs a Git dry run. If your project has conflicting
               local changes, Runner V2 leaves it untouched and keeps this decision open.

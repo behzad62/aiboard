@@ -11,6 +11,7 @@ import type {
   NativeBuildTranscriptPage,
   NativeBuildUsageProjection,
   NativeProjectHandoffChoice,
+  NativeProjectHandoffKnownDefect,
   NativeRunProjection,
 } from "@/lib/client/runner-v2";
 import { mapNativeBuildUsageModels } from "@/lib/client/native-model-usage";
@@ -50,7 +51,17 @@ export function projectHandoffAppliesAutomatically(
 ): boolean {
   return projection.projectHandoff?.status === "requested" &&
     runState === "running" &&
-    (projection.runPolicy === "finish" || projection.runPolicy === "budgeted");
+    (projection.runPolicy === "finish" || projection.runPolicy === "budgeted") &&
+    // The runner holds a result with known defects for the owner.
+    !projection.projectHandoff.knownDefects?.length;
+}
+
+/** The owner's guidance asking the Architect to repair the known defects it completed with. */
+export function knownDefectRepairNote(defects: readonly NativeProjectHandoffKnownDefect[]): string {
+  return [
+    "Repair these known defects before handing off, and prove each fix the way a user would hit it:",
+    ...defects.map((defect) => `- ${defect.claim}${defect.location ? ` (${defect.location})` : ""}`),
+  ].join("\n");
 }
 
 /** Plain-language explanation of why a native Build is paused, or null when it is not paused. */
@@ -83,6 +94,14 @@ export function nativeBuildPauseDescription(
     return { waitingForOwner: true, title: "Waiting for you: choose the Architect", detail: "The Architect's model call failed. Pick a runtime below to continue." };
   }
   if (projection.projectHandoff?.status === "requested") {
+    const defects = projection.projectHandoff.knownDefects?.length ?? 0;
+    if (defects > 0) {
+      return {
+        waitingForOwner: true,
+        title: `Waiting for you: the Build finished with ${defects} known defect${defects === 1 ? "" : "s"}`,
+        detail: "The Architect completed without repairing them, so the result was not applied. Ask for a repair first, or hand it off as it is.",
+      };
+    }
     return { waitingForOwner: true, title: "Waiting for you: choose the handoff", detail: "The Build finished. Choose how to hand the result to your project." };
   }
   const reason = projection.pauseReason?.reason ?? "";
@@ -753,6 +772,7 @@ export function durableBuildHandoffPanels(
   project: {
     summary: string;
     options: NativeProjectHandoffChoice[];
+    knownDefects?: NativeProjectHandoffKnownDefect[];
   } | null;
 } {
   const projectHandoff = projection.projectHandoff;
@@ -766,6 +786,7 @@ export function durableBuildHandoffPanels(
       project: {
         summary: projectHandoff.summary,
         options: [...projectHandoff.options],
+        ...(projectHandoff.knownDefects?.length ? { knownDefects: projectHandoff.knownDefects.map((defect) => ({ ...defect })) } : {}),
       },
     };
   }

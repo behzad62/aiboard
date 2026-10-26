@@ -1137,7 +1137,9 @@ export class NativeBuildManager implements BuildControlPlane {
     const projection = handle.runtime.projection();
     if (
       projection.projectHandoff?.status === "requested" &&
-      (projection.runPolicy === "finish" || projection.runPolicy === "budgeted")
+      (projection.runPolicy === "finish" || projection.runPolicy === "budgeted") &&
+      // A build completed with known defects waits for the owner instead of applying itself.
+      !projection.projectHandoff.knownDefects?.length
     ) {
       if (this.settledRuns.has(runId)) {
         return {

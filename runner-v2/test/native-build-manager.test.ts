@@ -1943,6 +1943,48 @@ test("public step auto-applies Finish handoff and finalizes cleanup once", async
   }
 });
 
+test("a Finish handoff with known defects waits for the owner instead of applying itself", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-known-defects-"));
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let handoffCalls = 0;
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    createRuntime: async () => ({
+      ...handleProjections("run_1"),
+      runtime: {
+        ...fakeRuntime("run_1"),
+        projection: () => projection,
+        step: async () => {
+          const requested = requestedHandoffProjection("finish");
+          projection = {
+            ...requested,
+            projectHandoff: {
+              ...requested.projectHandoff!,
+              knownDefects: [{ taskId: "readme", findingId: "pair-hint", claim: "The printed pairing command is not runnable.", rationale: "Owner decides." }],
+            },
+          };
+          return { status: "paused" as const, action: "completion_decision_required" };
+        },
+        selectProjectHandoff: () => { throw new Error("must not select automatically"); },
+      } as unknown as BuildRuntime,
+      usage: () => emptyBudget("run_1"),
+      observability: async () => emptyObservability("run_1"),
+      projectHandoff: async () => { handoffCalls += 1; throw new Error("must not apply automatically"); },
+      cleanup: () => undefined,
+      close: () => undefined,
+    }),
+  });
+  try {
+    await manager.create({ ...spec, runPolicy: "finish", budgetLimits: {} });
+    assert.deepEqual(await manager.step("run_1"), { status: "paused", action: "completion_decision_required" });
+    assert.equal(handoffCalls, 0);
+    assert.equal(projection.projectHandoff?.status, "requested");
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a settled run is read through the historical reader, never its closed live handle", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-settled-reads-"));
   let projection: SchedulerProjection = fakeRuntime("run_1").projection();

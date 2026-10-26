@@ -16,6 +16,7 @@ import {
   reduceSchedulerEvent,
   type SchedulerEvent,
   type SchedulerProjection,
+  undisposedCompletionFindings,
 } from "../src/scheduler-store.js";
 import type { FinalVerificationPlan } from "../src/final-verification-contracts.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -224,6 +225,62 @@ test("complete_run rejects early and an approved current generation requests one
   } finally {
     ready.close();
   }
+});
+
+// Tunnel run: the delivery reviewer's "the printed pairing command is not runnable" stayed an
+// advisory note, was carried as a "limitation", and shipped. Completion now says what became of
+// every open review finding, and a known defect stops the result from applying itself.
+function withOpenFindings(projection: SchedulerProjection): SchedulerProjection {
+  const finding = (id: string, severity: "advisory" | "blocking", resolution?: "deferred" | "rejected") => ({
+    id, category: "documentation", severity, claim: `claim ${id}`, location: "README.md:12", evidenceRefs: [],
+    ...(resolution ? { disposition: { resolution, rationale: "r", resolvedAt: "2026-08-26T00:00:00.000Z" } } : {}),
+  });
+  projection.delivery = {
+    reviews: {
+      implementation: {
+        taskId: "implementation",
+        findings: [
+          finding("adv-pair-hint", "advisory"),
+          finding("blocking-deferred", "blocking", "deferred"),
+          finding("blocking-rejected", "blocking", "rejected"),
+          finding("mutation-survivor:0", "blocking"),
+        ],
+      },
+    },
+  } as unknown as SchedulerProjection["delivery"];
+  return projection;
+}
+
+test("completion lists every open review finding until each is disposed of", () => {
+  const projection = withOpenFindings(validProjection());
+  assert.deepEqual(undisposedCompletionFindings(projection), [
+    "implementation/adv-pair-hint [advisory] at README.md:12: claim adv-pair-hint",
+    "implementation/blocking-deferred [blocking] at README.md:12: claim blocking-deferred",
+  ]);
+  assert.deepEqual(undisposedCompletionFindings(projection, [
+    { taskId: "implementation", findingId: "adv-pair-hint", disposition: "known_defect", rationale: "Owner decides." },
+    { taskId: "implementation", findingId: "blocking-deferred", disposition: "fixed", rationale: "Repaired in repair-1." },
+  ]), []);
+  projection.tasks.implementation!.status = "cancelled";
+  assert.deepEqual(undisposedCompletionFindings(projection), [], "a cancelled task's findings shipped nothing");
+});
+
+test("a handoff with known defects carries them, and the reducer refuses an unknown finding", () => {
+  const projection = withOpenFindings(validProjection());
+  const event = terminalEvent(projection, "project.handoff_requested");
+  const requested = reduceSchedulerEvent(projection, { ...event, payload: { ...event.payload, findingDispositions: [
+    { taskId: "implementation", findingId: "adv-pair-hint", disposition: "known_defect", rationale: "The hint is wrong; the owner decides." },
+    { taskId: "implementation", findingId: "blocking-deferred", disposition: "not_a_defect", rationale: "Intended." },
+  ] } });
+  assert.deepEqual(requested.projectHandoff?.knownDefects, [{
+    taskId: "implementation", findingId: "adv-pair-hint", claim: "claim adv-pair-hint", location: "README.md:12",
+    rationale: "The hint is wrong; the owner decides.",
+  }]);
+  assert.throws(() => reduceSchedulerEvent(withOpenFindings(validProjection()), { ...event, payload: { ...event.payload, findingDispositions: [
+    { taskId: "implementation", findingId: "invented", disposition: "fixed", rationale: "?" },
+  ] } }), /not a recorded review finding/);
+  assert.equal(reduceSchedulerEvent(validProjection(), event).projectHandoff?.knownDefects, undefined,
+    "a log written before completion dispositions replays unchanged");
 });
 
 test("guidance withdraws a pending handoff and its approved verification across WAL reopen", () => {

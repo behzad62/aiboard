@@ -71,7 +71,7 @@ import { cloneValidationScope, parseValidationScope, type ValidationScope } from
 import { cloneValidationBudgetSubmission, parseValidationBudgetSubmission, type ValidationBudgetSubmission } from "./validation-budget.js";
 import { validateReviewSignals } from "./review-integrity.js";
 import { validateEncodingSubmission, encodingFindingFacts } from "./encoding-safety.js";
-import type { ExecutionPlanRevision, ExecutionTaskContract } from "./planning-contracts.js";
+import type { ExecutionPlanRevision, ExecutionTaskContract, PlanningFinding } from "./planning-contracts.js";
 import {
   planFinalVerification,
   validateFinalVerificationPlan,
@@ -517,6 +517,25 @@ export interface ProjectHandoffProjection {
   integrationBranch?: string;
   appliedToProject?: boolean;
   projectRevision?: string;
+  /** Review findings the Architect completed with unrepaired; the owner decides, so the result is never applied automatically. */
+  knownDefects?: ProjectHandoffKnownDefect[];
+}
+
+export interface ProjectHandoffKnownDefect {
+  taskId: string;
+  findingId: string;
+  claim: string;
+  location?: string;
+  rationale: string;
+}
+
+export type CompletionFindingDisposition = "fixed" | "not_a_defect" | "known_defect";
+
+export interface CompletionFindingDispositionInput {
+  taskId: string;
+  findingId: string;
+  disposition: CompletionFindingDisposition;
+  rationale: string;
 }
 
 export interface WithdrawnProjectHandoffProjection
@@ -2448,6 +2467,38 @@ function deliveryCompletionIssues(projection: SchedulerProjection): string[] {
 export interface BuildCompletionReadiness {
   ready: boolean;
   issues: string[];
+}
+
+/**
+ * Deliverable-review findings nobody has disposed of: advisory findings acceptance let through, and
+ * blocking ones it deferred. Completion must say what became of each. Tunnel run: the reviewer's
+ * "the printed pairing command is not runnable" stayed an advisory note until the build shipped.
+ */
+export function findingsAwaitingCompletionDisposition(
+  projection: SchedulerProjection,
+): Array<{ taskId: string; finding: PlanningFinding }> {
+  const open: Array<{ taskId: string; finding: PlanningFinding }> = [];
+  for (const [taskId, review] of Object.entries(projection.delivery?.reviews ?? {})) {
+    if (projection.tasks[taskId]?.status === "cancelled") continue;
+    for (const finding of review.findings ?? []) {
+      // Mutation survivors have the reviewer's own disposition; scope facts are reconciled at acceptance.
+      if (isMutationSurvivorFindingId(finding.id) || finding.id.startsWith("submission-scope:")) continue;
+      if (finding.disposition === undefined || finding.disposition.resolution === "deferred") open.push({ taskId, finding });
+    }
+  }
+  return open;
+}
+
+/** One line per open review finding the completion dispositions leave out. */
+export function undisposedCompletionFindings(
+  projection: SchedulerProjection,
+  dispositions: readonly CompletionFindingDispositionInput[] = [],
+): string[] {
+  const given = new Set(dispositions.map((entry) => `${entry.taskId}/${entry.findingId}`));
+  return findingsAwaitingCompletionDisposition(projection)
+    .filter(({ taskId, finding }) => !given.has(`${taskId}/${finding.id}`))
+    .map(({ taskId, finding }) =>
+      `${taskId}/${finding.id} [${finding.severity}]${finding.location ? ` at ${finding.location}` : ""}: ${finding.claim}`);
 }
 
 /**
@@ -5729,11 +5780,13 @@ export function reduceSchedulerEvent(
       } else {
         assertBuildCompletionReady(current);
       }
+      const knownDefects = projectHandoffKnownDefects(current, event.payload.findingDispositions);
       next.projectHandoff = {
         status: "requested",
         summary: requiredString(event.payload, "summary"),
         requestedSequence: event.sequence,
         options: ["keep_integration_branch", "apply_to_project"],
+        ...(knownDefects.length ? { knownDefects } : {}),
       };
       next.status = "paused";
       delete next.pauseReason;
@@ -7973,6 +8026,36 @@ function validatedW3ReadProofs(value: unknown, runId: string, sessionId: string,
       throw new Error(`${label} carries an invalid Architect read proof: ${error instanceof Error ? error.message : String(error)}`);
     }
   });
+}
+
+/**
+ * The Architect's completion dispositions of review findings, as known defects for the handoff.
+ * Absent on logs written before completion asked for them; coverage is the complete_run tool's gate.
+ */
+function projectHandoffKnownDefects(current: SchedulerProjection, value: unknown): ProjectHandoffKnownDefect[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Completion findingDispositions must be an array.");
+  const seen = new Set<string>();
+  const knownDefects: ProjectHandoffKnownDefect[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) throw new Error("Completion finding disposition is invalid.");
+    const taskId = requiredString(raw, "taskId");
+    const findingId = requiredString(raw, "findingId");
+    const rationale = requiredString(raw, "rationale");
+    const disposition = raw.disposition;
+    if (disposition !== "fixed" && disposition !== "not_a_defect" && disposition !== "known_defect") {
+      throw new Error(`Completion finding ${taskId}/${findingId} disposition must be fixed, not_a_defect or known_defect.`);
+    }
+    const key = `${taskId}/${findingId}`;
+    if (seen.has(key)) throw new Error(`Completion finding ${key} is disposed of twice.`);
+    seen.add(key);
+    const finding = current.delivery?.reviews[taskId]?.findings?.find((candidate) => candidate.id === findingId);
+    if (!finding) throw new Error(`Completion finding ${key} is not a recorded review finding.`);
+    if (disposition === "known_defect") {
+      knownDefects.push({ taskId, findingId, claim: finding.claim, ...(finding.location ? { location: finding.location } : {}), rationale });
+    }
+  }
+  return knownDefects;
 }
 
 function applyDeliveryDispositions(

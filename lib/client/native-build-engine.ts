@@ -861,6 +861,7 @@ function emitProjectHandoffPause(
     type: "project_handoff_required",
     summary: handoff.summary,
     options: [...handoff.options],
+    ...(handoff.knownDefects?.length ? { knownDefects: handoff.knownDefects.map((defect) => ({ ...defect })) } : {}),
   });
   const now = new Date().toISOString();
   updateDiscussion(discussion.id, {

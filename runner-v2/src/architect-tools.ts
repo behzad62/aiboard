@@ -15,6 +15,8 @@ import {
   readyPlanIdentity,
   rebuildSchedulerProjection,
   repairParentContractId,
+  undisposedCompletionFindings,
+  type CompletionFindingDispositionInput,
   type SchedulerActor,
   type SchedulerStore,
 } from "./scheduler-store.js";
@@ -207,7 +209,7 @@ interface ReviewTaskInput {
 }
 
 interface TaskIdInput { taskId: string }
-interface CompleteRunInput { summary: string }
+interface CompleteRunInput { summary: string; findingDispositions?: CompletionFindingDispositionInput[] }
 interface PlanFinalVerificationInput { plan: FinalVerificationPlan; runtimeSmoke?: ArchitectRuntimeSmokeRequest }
 interface FinalVerificationCategoryReviewInput {
   category: FinalVerificationCategory;
@@ -1920,6 +1922,13 @@ function sameSemanticReview(
     JSON.stringify(decision.categoryReviews) === JSON.stringify(input.categoryReviews);
 }
 
+function validSmokeStep(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const step = value as Record<string, unknown>;
+  return nonEmpty(step.label) && nonEmpty(step.executable) && Array.isArray(step.args) &&
+    step.args.every((arg) => typeof arg === "string") && (step.timeoutMs === undefined || Number.isSafeInteger(step.timeoutMs));
+}
+
 function planFinalVerificationTool(
   store: SchedulerStore,
   clock: () => string,
@@ -1929,7 +1938,7 @@ function planFinalVerificationTool(
 ): NativeTool<PlanFinalVerificationInput> {
   return lifecycleTool({
     name: "plan_final_verification",
-    description: "Create the kernel-owned final-verification generation for the current canonical integration revision. For a required runtime_smoke the runner does not detect itself, pass runtimeSmoke: the runner starts that program on a leased loopback port (args carry {port}) and expects HTTP 200 from readinessPath.",
+    description: "Create the kernel-owned final-verification generation for the current canonical integration revision. For a required runtime_smoke the runner does not detect itself, pass runtimeSmoke: the runner starts that program on a leased loopback port (args carry {port}) and expects HTTP 200 from readinessPath. A server answering its health path proves little: script the user's workflow from the acceptance criteria and README as runtimeSmoke.steps, run in order against the live program, each of which must exit 0 — the documented commands exactly as a user types them, or a smoke script in the repository that drives the whole workflow.",
     schema: objectSchema({
       plan: finalVerificationPlanSchema(),
       runtimeSmoke: objectSchema({
@@ -1938,6 +1947,17 @@ function planFinalVerificationTool(
         args: { type: "array", items: { type: "string" }, description: "Arguments; one must contain {port}, the runner-leased port." },
         readinessPath: { type: "string", minLength: 1, description: "HTTP path probed on 127.0.0.1:{port} until it answers 200, e.g. /healthz." },
         timeoutMs: { type: "integer", minimum: 1000, maximum: 300000 },
+        steps: {
+          type: "array",
+          maxItems: 8,
+          description: "The user's workflow against the live program, in order; each step must exit 0. {port} in args is the program's port.",
+          items: objectSchema({
+            label: { type: "string", minLength: 1, description: "What the step proves, e.g. pair a connector." },
+            executable: { type: "string", minLength: 1, description: "Program to run in the verification checkout, e.g. node." },
+            args: { type: "array", items: { type: "string" } },
+            timeoutMs: { type: "integer", minimum: 1000, maximum: 300000 },
+          }, ["label", "executable", "args"]),
+        },
       }, ["label", "executable", "args", "readinessPath"]),
     }, ["plan"]),
     validate: (input) => validateObject(input, (value) => {
@@ -1947,15 +1967,20 @@ function planFinalVerificationTool(
       if (smoke !== undefined && (typeof smoke !== "object" || smoke === null || Array.isArray(smoke) ||
           !nonEmpty(smoke.label) || !nonEmpty(smoke.executable) || !nonEmpty(smoke.readinessPath) ||
           !Array.isArray(smoke.args) || smoke.args.some((arg) => typeof arg !== "string") ||
-          (smoke.timeoutMs !== undefined && !Number.isSafeInteger(smoke.timeoutMs)))) return null;
+          (smoke.timeoutMs !== undefined && !Number.isSafeInteger(smoke.timeoutMs)) ||
+          (smoke.steps !== undefined && (!Array.isArray(smoke.steps) || !smoke.steps.every(validSmokeStep))))) return null;
       return {
         plan: canonicalFinalVerificationPlan(planFinalVerification(value.plan)),
         ...(smoke ? { runtimeSmoke: {
           label: smoke.label as string, executable: smoke.executable as string, args: [...smoke.args as string[]],
           readinessPath: smoke.readinessPath as string, ...(smoke.timeoutMs !== undefined ? { timeoutMs: smoke.timeoutMs as number } : {}),
+          ...(Array.isArray(smoke.steps) ? { steps: (smoke.steps as Array<Record<string, unknown>>).map((step) => ({
+            label: step.label as string, executable: step.executable as string, args: [...step.args as string[]],
+            ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs as number } : {}),
+          })) } : {}),
         } } : {}),
       };
-    }, "plan must explicitly and validly represent build, tests, runtime_smoke, and browser; runtimeSmoke, when given, needs label, executable, args (strings) and readinessPath"),
+    }, "plan must explicitly and validly represent build, tests, runtime_smoke, and browser; runtimeSmoke, when given, needs label, executable, args (strings) and readinessPath, and each of its steps label, executable and args"),
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
@@ -2668,14 +2693,38 @@ function completeRunTool(
     name: "complete_run",
     description: runPolicy === "plan_only"
       ? "Record the Architect's semantic decision that the plan is complete and request explicit project handoff"
-      : "Record the Architect's semantic decision that the build is complete",
+      : "Record the Architect's semantic decision that the build is complete. Every review finding still open must be disposed of in findingDispositions: fixed (say where), not_a_defect (say why), or known_defect (it ships unrepaired, so the owner decides before the result is applied). A real defect in what users run or read is repaired before completion, not shipped as known.",
     schema: objectSchema(
-      { summary: { type: "string", minLength: 1 } },
+      {
+        summary: { type: "string", minLength: 1 },
+        findingDispositions: {
+          type: "array",
+          description: "One entry per open review finding the runner lists; complete_run refuses while any is missing.",
+          items: objectSchema({
+            taskId: { type: "string", minLength: 1 },
+            findingId: { type: "string", minLength: 1 },
+            disposition: { type: "string", enum: ["fixed", "not_a_defect", "known_defect"] },
+            rationale: { type: "string", minLength: 1 },
+          }, ["taskId", "findingId", "disposition", "rationale"]),
+        },
+      },
       ["summary"]
     ),
-    validate: (input) => validateObject(input, (value) =>
-      nonEmpty(value.summary) ? value as unknown as CompleteRunInput : null,
-    "summary is required"),
+    validate: (input) => validateObject(input, (value) => {
+      if (!nonEmpty(value.summary)) return null;
+      const dispositions = value.findingDispositions;
+      if (dispositions === undefined) return { summary: value.summary };
+      if (!Array.isArray(dispositions) || !dispositions.every((entry) => isRecord(entry) &&
+        nonEmpty(entry.taskId) && nonEmpty(entry.findingId) && nonEmpty(entry.rationale) &&
+        (entry.disposition === "fixed" || entry.disposition === "not_a_defect" || entry.disposition === "known_defect"))) return null;
+      return {
+        summary: value.summary,
+        findingDispositions: (dispositions as Array<Record<string, unknown>>).map((entry) => ({
+          taskId: entry.taskId as string, findingId: entry.findingId as string,
+          disposition: entry.disposition as CompletionFindingDispositionInput["disposition"], rationale: entry.rationale as string,
+        })),
+      };
+    }, "summary is required; each findingDispositions entry needs taskId, findingId, disposition (fixed, not_a_defect or known_defect) and rationale"),
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
@@ -2697,6 +2746,14 @@ function completeRunTool(
           readiness.issues,
         );
       }
+      const lines = undisposedCompletionFindings(projection, input.findingDispositions);
+      if (lines.length > 0) {
+        return errorOutput(
+          "findings_undisposed",
+          `Say what became of every open review finding before completing: pass findingDispositions with fixed, not_a_defect or known_defect and a rationale for each. A real defect in what users run or read should be repaired first (reconcile_plan with a repair task); known_defect ships it, and the owner decides before the result is applied. Open: ${lines.join(" | ")}`,
+          lines,
+        );
+      }
       // FX-2 (CR-1): key each handoff request by the withdrawals it follows.
       // Guidance withdraws a requested handoff into projectHandoffHistory
       // (history only grows), so its length is durable log state that is
@@ -2713,7 +2770,10 @@ function completeRunTool(
         occurredAt: clock(),
         actor: { role: "architect", id: context.actor.id },
         idempotencyKey: handoffRequestKey,
-        payload: { summary: input.summary },
+        payload: {
+          summary: input.summary,
+          ...(input.findingDispositions?.length ? { findingDispositions: input.findingDispositions } : {}),
+        },
       }, { type: "architect_action", action: "run_completed" });
     },
   });
