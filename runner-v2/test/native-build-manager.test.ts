@@ -1785,12 +1785,15 @@ test("recovery compacts every non-running Build, skips active Builds, and contin
   }
 });
 
-test("recovery reports a global reachability scan failure and still activates recoverable work", async () => {
+async function recoverWithFailingReachabilityScan(pendingCleanup: boolean) {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recover-scan-error-"));
   const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
   specs.save({ ...spec, idempotencyKey: "build:scan-error" });
   const errors: Array<{ runId: string; message: string }> = [];
   let pumpCalls = 0;
+  // Compaction only looks at runs that are not running: the run is paused for startup compaction and
+  // running again once compaction has asked about its cleanup, so recovery still activates it.
+  let status: "paused" | "running" = "paused";
   const manager = new NativeBuildManager({
     specs,
     shouldAutoRun: () => true,
@@ -1806,6 +1809,7 @@ test("recovery reports a global reachability scan failure and still activates re
       ...handleProjections("run_1"),
       runtime: {
         ...fakeRuntime("run_1"),
+        projection: () => ({ ...fakeRuntime("run_1").projection(), status }),
         runUntilBlocked: async () => {
           pumpCalls += 1;
           return { status: "paused" as const };
@@ -1822,6 +1826,10 @@ test("recovery reports a global reachability scan failure and still activates re
         files: [],
       }),
       compact: () => undefined,
+      hasPendingArtifactCleanup: () => {
+        status = "running";
+        return pendingCleanup;
+      },
       projectHandoff: async () => { throw new Error("not awaiting handoff"); },
       cleanup: () => undefined,
       close: () => undefined,
@@ -1830,15 +1838,26 @@ test("recovery reports a global reachability scan failure and still activates re
   try {
     await manager.recover();
     await manager.awaitIdle();
-    assert.equal(pumpCalls, 1);
-    assert.deepEqual(errors, [{
-      runId: "startup-artifact-reachability",
-      message: "reachability scan failed",
-    }]);
+    return { pumpCalls, errors };
   } finally {
     await manager.close();
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+test("recovery reports a global reachability scan failure and still activates recoverable work", async () => {
+  const { pumpCalls, errors } = await recoverWithFailingReachabilityScan(true);
+  assert.equal(pumpCalls, 1);
+  assert.deepEqual(errors, [{
+    runId: "startup-artifact-reachability",
+    message: "reachability scan failed",
+  }]);
+});
+
+test("recovery skips the global reachability scan when compaction left no artifact waiting on it", async () => {
+  const { pumpCalls, errors } = await recoverWithFailingReachabilityScan(false);
+  assert.equal(pumpCalls, 1);
+  assert.deepEqual(errors, [], "the scan never ran, so its failure could not surface");
 });
 
 test("settlement requests live compaction after releasing its own activity lease", async () => {

@@ -769,9 +769,11 @@ test("compaction retains candidates without global proof and retries false decis
       "2026-07-14T02:00:02.000Z"
     );
     const candidateHash = store.events(sessionId)[1]!.artifactHash!;
+    assert.equal(store.hasPendingArtifactCleanup(), false, "nothing is queued before compaction");
 
     await store.compactRun("run_1");
     await artifacts.verify(candidateHash);
+    assert.equal(store.hasPendingArtifactCleanup(), true, "the superseded checkpoint waits on a reachability proof");
     store.close();
 
     store = new SqliteAgentSessionStore(database, artifacts, {
@@ -792,6 +794,7 @@ test("compaction retains candidates without global proof and retries false decis
       artifacts.get(candidateHash),
       (error: unknown) => error instanceof ArtifactNotFoundError
     );
+    assert.equal(store.hasPendingArtifactCleanup(), false, "a proven deletion clears the queue");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

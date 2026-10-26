@@ -2409,6 +2409,7 @@ export class NativeBuildFactory {
       compact: async () => {
         await sessions.compactRun(spec.runId);
       },
+      hasPendingArtifactCleanup: () => sessions.hasPendingArtifactCleanup(),
       projectHandoff: async (choice) =>
         choice === "apply_to_project"
           ? await integrationManager.applyToProject()

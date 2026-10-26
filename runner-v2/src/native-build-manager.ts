@@ -62,6 +62,8 @@ export interface NativeBuildRuntimeHandle {
   transcript(afterSequence?: number): Promise<BuildTranscriptPage>;
   files(): Promise<IntegrationFileSnapshot>;
   compact(): void | Promise<void>;
+  /** After compact(): whether an artifact still waits on a reachability proof. Absent means assume yes. */
+  hasPendingArtifactCleanup?(): boolean;
   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
   /** Exceptional process recovery exists only on live handles, never historical readers. */
   processRecovery?: ProcessRecoveryCoordinator;
@@ -274,7 +276,7 @@ export class NativeBuildManager implements BuildControlPlane {
     });
     const compactAndCleanup = async () => {
       await this.compactEligibleRuns();
-      if (this.options.prepareArtifactCleanup) {
+      if (this.options.prepareArtifactCleanup && this.eligibleRunsAwaitArtifactCleanup()) {
         try {
           await this.options.prepareArtifactCleanup();
           await this.compactEligibleRuns();
@@ -1203,6 +1205,7 @@ export class NativeBuildManager implements BuildControlPlane {
       try {
         await this.options.runArtifactCompaction!(async () => {
           await this.compactEligibleRuns();
+          if (!this.eligibleRunsAwaitArtifactCleanup()) return;
           await this.options.prepareArtifactCleanup!();
           await this.compactEligibleRuns();
         });
@@ -1297,11 +1300,29 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   private async compactEligibleRuns(): Promise<void> {
-    await this.compactRuns(
-      [...this.handles.entries()].filter(
-        ([, handle]) => !handle.historical && handle.runtime.projection().status !== "running"
-      )
+    await this.compactRuns(this.compactionEligibleRuns());
+  }
+
+  private compactionEligibleRuns(): Array<[string, NativeBuildRuntimeHandle]> {
+    return [...this.handles.entries()].filter(
+      ([, handle]) => !handle.historical && handle.runtime.projection().status !== "running"
     );
+  }
+
+  /**
+   * The reachability index walks the whole state directory and every reachable artifact: about 70s
+   * of a 110s tunnel-run startup, rebuilt on every start though no artifact was waiting on it. Build
+   * it only when compaction left one.
+   */
+  private eligibleRunsAwaitArtifactCleanup(): boolean {
+    return this.compactionEligibleRuns().some(([runId, handle]) => {
+      try {
+        return handle.hasPendingArtifactCleanup?.() ?? true;
+      } catch (error) {
+        this.options.onPumpError?.(runId, error);
+        return true;
+      }
+    });
   }
 
   /**

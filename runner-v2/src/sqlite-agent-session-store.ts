@@ -790,6 +790,18 @@ export class SqliteAgentSessionStore {
     });
   }
 
+  /** True while compaction left an unreferenced artifact waiting on a global reachability proof. */
+  hasPendingArtifactCleanup(): boolean {
+    return Boolean(
+      this.database
+        .prepare(
+          `SELECT 1 FROM agent_artifact_cleanup c
+           WHERE NOT EXISTS (SELECT 1 FROM agent_session_events e WHERE e.artifact_hash = c.hash) LIMIT 1`
+        )
+        .get()
+    );
+  }
+
   private async drainArtifactCleanup(): Promise<void> {
     const deleteArtifact = this.options.deleteArtifactIfGloballyUnreachable;
     if (!deleteArtifact) return;
