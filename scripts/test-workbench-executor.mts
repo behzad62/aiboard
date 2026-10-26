@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkBenchRunner, runBenchCommand } from "../lib/client/bench-runner";
-import { executeWorkBenchVerifierOnly } from "../lib/benchmark/workbench/executor";
+import { createFailedWorkBenchAttempt, executeWorkBenchVerifierOnly } from "../lib/benchmark/workbench/executor";
 import { isScoredCertifiedAttempt } from "../lib/benchmark/metrics";
 import { createRecoverableJobServiceCase } from "../lib/benchmark/workbench/recoverable-job-service/case-pack";
 import {
@@ -1100,6 +1100,35 @@ try {
   check("WorkBench timeFactor build-time contract did not throw", false, error instanceof Error ? error.message : String(error));
 } finally {
   await timeScoreRunner.stop();
+}
+
+const soloTimeRunner = await startCanonicalAttemptRunner("solo-time-attempt", {
+  prepareDelayMs: 50,
+  verifierDelayMs: 50,
+});
+try {
+  const soloInput: WorkBenchExecutionInput = {
+    case: { ...caseRecord, benchmarkTrack: "toolreliability" },
+    runner: { url: soloTimeRunner.url, token: soloTimeRunner.token },
+    attemptId: "input-solo-time-attempt",
+    runId: "run-solo-time",
+    teamCompositionId: "solo-model",
+    cleanup: true,
+    runBuild: async () => ({ traceIds: ["solo-trace"], modelCalls: 1, toolCalls: 1, validToolCalls: 1, durationMs: 5 }),
+  };
+  const result = await executeWorkBenchVerifierOnly(soloInput);
+  check("ToolBench saved duration excludes delayed setup and external verification", result.attempt.durationMs === 5, result.attempt);
+  check("ToolBench attempt timestamps still retain total orchestration elapsed time", Date.parse(result.attempt.completedAt!) - Date.parse(result.attempt.startedAt) >= 100, result.attempt);
+  const failed = createFailedWorkBenchAttempt(soloInput, {
+    startedMs: Date.now() - 10_000,
+    status: "failed_tool_use",
+    buildResult: { durationMs: 12, modelCalls: 1 },
+  });
+  check("ToolBench failed attempt retains measured session time", failed.attempt.durationMs === 12, failed.attempt);
+  const noSession = createFailedWorkBenchAttempt(soloInput, { startedMs: Date.now() - 10_000 });
+  check("ToolBench startup failure cannot be reported as model execution time", noSession.attempt.durationMs === 0, noSession.attempt);
+} finally {
+  await soloTimeRunner.stop();
 }
 
 const slowBuildTimeRunner = await startCanonicalAttemptRunner("slow-build-time-attempt");

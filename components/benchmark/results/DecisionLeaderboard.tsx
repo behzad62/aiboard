@@ -134,7 +134,7 @@ export function DecisionLeaderboard({
       {rows.length === 0 ? (
         <CardContent className="py-10 text-center text-sm text-muted-foreground">
           {hasRawEvidence
-            ? "Benchmark evidence is stored, but no fully completed snapshot qualifies for Results. Open Data to inspect incomplete runs."
+            ? "No completed benchmark results match these filters. Change the track or filters; saved evidence is available in Data."
             : "No certified results match these filters. Reset a filter or run the missing benchmark track."}
         </CardContent>
       ) : (

@@ -142,8 +142,8 @@ export async function executeWorkBenchVerifierOnly(
       });
     }
 
-    // Budget checks use model-attributable build time; attempt.durationMs below
-    // still reports the full prepare -> verifier wall clock.
+    // Budget checks use model-attributable build time. Solo ToolBench also
+    // publishes that duration so runner setup and external scoring cannot skew speed.
     const buildDurationMs =
       buildResult.durationMs ?? Math.max(0, Date.now() - startedMs);
     const budgetFailure = findBudgetFailure(input, buildResult, buildDurationMs);
@@ -239,7 +239,7 @@ export async function executeWorkBenchVerifierOnly(
     );
     throwIfCertifiedRunAborted(input.signal);
     const completedAt = new Date().toISOString();
-    const durationMs = Math.max(0, Date.now() - startedMs);
+    const durationMs = attemptDurationMs(input, buildResult, startedMs);
     const artifacts = [
       createWorkBenchVerifierArtifact({
         id: `${attemptId}:verifier-result`,
@@ -346,6 +346,19 @@ function assertTrustedVerifierEnvelope(
   }
 }
 
+function attemptDurationMs(
+  input: WorkBenchExecutionInput,
+  buildResult: Partial<WorkBenchBuildExecutionResult> | undefined,
+  startedMs: number,
+): number {
+  if (input.case.benchmarkTrack === "toolreliability") {
+    // No session means no model work was timed. Keep legacy/full Build timing intact.
+    const measured = buildResult?.durationMs;
+    return typeof measured === "number" && Number.isFinite(measured) ? Math.max(0, measured) : 0;
+  }
+  return Math.max(0, Date.now() - startedMs);
+}
+
 interface FailedWorkBenchAttemptContext {
   attemptId?: string;
   startedAt?: string;
@@ -370,7 +383,7 @@ export function createFailedWorkBenchAttempt(
   const startedAt = context.startedAt ?? new Date().toISOString();
   const startedMs = context.startedMs ?? Date.now();
   const completedAt = new Date().toISOString();
-  const durationMs = Math.max(0, Date.now() - startedMs);
+  const durationMs = attemptDurationMs(input, context.buildResult, startedMs);
   const harnessProfile = context.harnessProfile ?? input.harnessProfile ?? "aiboard-build-multi-worker";
   const logArtifact = createWorkBenchLogArtifact({
     id: `${attemptId}:failure-log`,

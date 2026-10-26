@@ -31,7 +31,7 @@ export function BenchmarkRunOutcomes({ certified }: { certified: unknown }) {
                 <td className="whitespace-nowrap px-3 py-3 text-xs">{outcomeLabel(item.status, row.status === "pending")}</td>
                 <td className="px-3 py-3 text-right text-xs tabular-nums">{item.inputTokens === null ? "—" : `${item.inputTokens.toLocaleString()} / ${item.outputTokens?.toLocaleString()}`}</td>
                 <td className="px-3 py-3 text-right tabular-nums">{item.costUsd === null ? "Unavailable" : `$${item.costUsd.toFixed(6)}`}</td>
-                <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums">{item.durationMs === null ? "—" : `${(item.durationMs / 60000).toFixed(1)} min`}</td>
+                <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums">{item.durationMs === null ? "—" : `${(item.durationMs / 1000).toFixed(1)} s`}</td>
               </tr>)}</tbody>
             </table>
           </div>

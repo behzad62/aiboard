@@ -2,8 +2,8 @@ import { createWorkBenchCaseHash } from "../workbench/case-loader";
 import type { WorkBenchCaseOption, WorkBenchCasePackOption } from "../workbench/corpus";
 import type { WorkBenchCase } from "../workbench/types";
 
-export const NATIVE_TOOLBENCH_VERSION = "4.0.0";
-export const NATIVE_TOOLBENCH_SCORING = "solo-toolbench-v4";
+export const NATIVE_TOOLBENCH_VERSION = "4.0.1";
+export const NATIVE_TOOLBENCH_SCORING = "solo-toolbench-v4.1";
 export const NATIVE_TOOLBENCH_SUITE = "toolbench-native-core-v4";
 export const NATIVE_TOOLBENCH_VARIANT_SUITE = "toolbench-native-core-variant-b-v4";
 export const NATIVE_TOOLBENCH_BROWSER_SUITE = "toolbench-native-browser-v4";
