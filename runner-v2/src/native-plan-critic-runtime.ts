@@ -218,13 +218,15 @@ export class NativePlanCriticRuntime {
       request.architectRuntimeId,
       [],
     );
+    const critiqueId = planCritiqueId(request.runId, request.planRevision, sessionId);
+    const priorCritique = this.options.critiqueAuthority.currentCritique(request.runId);
+    // An already requested session retains its recorded contract on resume.
+    const findingEvidencePolicyVersion = priorCritique?.critiqueId === critiqueId
+      ? priorCritique.findingEvidencePolicyVersion
+      : 1;
     const durableCritique = this.options.critiqueAuthority.requestCritique({
       runId: request.runId,
-      critiqueId: planCritiqueId(
-        request.runId,
-        request.planRevision,
-        sessionId,
-      ),
+      critiqueId,
       planRevision: request.planRevision,
       runtime: {
         runtimeId: candidate.runtimeId,
@@ -235,6 +237,7 @@ export class NativePlanCriticRuntime {
       },
       excludedModels,
       independence: selection.independence,
+      ...(findingEvidencePolicyVersion === undefined ? {} : { findingEvidencePolicyVersion }),
       occurredAt: this.clock(),
     });
     assertBoundPlanCritique({
@@ -245,6 +248,9 @@ export class NativePlanCriticRuntime {
       excludedModels,
       independence: selection.independence,
     });
+    if (durableCritique.findingEvidencePolicyVersion !== findingEvidencePolicyVersion) {
+      throw new Error("Plan critique finding evidence policy conflicts with its kernel-selected request.");
+    }
     const systemMessage: AgentMessage = {
       id: "plan-critic-system",
       role: "system",
@@ -328,6 +334,8 @@ export class NativePlanCriticRuntime {
         runtimeId: candidate.runtimeId,
         sessionId,
         tasks: critiqueTasks,
+        findingEvidencePolicyVersion: durableCritique.findingEvidencePolicyVersion,
+        objective: request.objective,
         clock: this.clock,
       }),
       ...(this.options.ledger ? { ledger: this.options.ledger } : {}),

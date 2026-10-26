@@ -1,5 +1,6 @@
 import type { ApprovedSourceInputV1 } from "../../runner-v2/src/planning-control-contracts.js";
 import type { TaskDecompositionObservability } from "../../runner-v2/src/task-decomposition-contracts.js";
+import type { PlanningFindingEvidence } from "../../runner-v2/src/planning-finding-evidence.js";
 import type { ExplicitStartRequestV1, PlanningReadinessSnapshot, PlanningExportDocument, SourceAmendmentImpactV1 } from "../../runner-v2/src/planning-control-contracts.js";
 export type { ApprovedSourceInputV1, ExplicitStartRequestV1, PlanningReadinessSnapshot, PlanningExportDocument };
 
@@ -533,9 +534,11 @@ export interface NativePlanCritiqueFinding {
   criterionIds?: Array<{ taskId: string; criterionId: string }>;
   claim: string;
   evidence: string[];
+  blockingEvidence?: PlanningFindingEvidence;
 }
 
 export interface NativePlanCritiqueProjection {
+  findingEvidencePolicyVersion?: 1;
   critiqueId: string;
   planRevision: number;
   runtime: NativeVerifierRuntimeBinding;

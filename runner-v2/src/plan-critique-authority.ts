@@ -14,6 +14,7 @@ import type {
 } from "./verifier-contracts.js";
 
 export interface RequestPlanCritiqueInput {
+  findingEvidencePolicyVersion?: 1;
   runId: string;
   critiqueId: string;
   planRevision: number;
@@ -63,6 +64,7 @@ export class SchedulerPlanCritiqueAuthority implements PlanCritiqueAuthority {
         runtime: { ...input.runtime },
         excludedModels: input.excludedModels.map((model) => ({ ...model })),
         ...(input.independence ? { independence: input.independence } : {}),
+        ...(input.findingEvidencePolicyVersion === undefined ? {} : { findingEvidencePolicyVersion: input.findingEvidencePolicyVersion }),
         ...(supersedesCritiqueId ? { supersedesCritiqueId } : {}),
       },
     });

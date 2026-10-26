@@ -164,6 +164,7 @@ function requestCritiqueEvent(
     excludedModels?: ReturnType<typeof architectExclusion>;
     supersedesCritiqueId?: string;
     key?: string;
+    findingEvidencePolicyVersion?: 1;
   } = {},
 ): void {
   append(
@@ -175,6 +176,7 @@ function requestCritiqueEvent(
       runtime: options.runtime ?? criticRuntime(),
       excludedModels: options.excludedModels ?? architectExclusion(),
       ...(options.supersedesCritiqueId ? { supersedesCritiqueId: options.supersedesCritiqueId } : {}),
+      ...(options.findingEvidencePolicyVersion === undefined ? {} : { findingEvidencePolicyVersion: options.findingEvidencePolicyVersion }),
     },
   );
 }
@@ -195,6 +197,37 @@ const ADVISORY_FINDING = {
   claim: "E ignores empty input.",
   evidence: ["E criteria never mention empty input"],
 };
+
+test("new plan-critique requests enforce grounded blockers at the durable event boundary", () => {
+  withStore((store, append, projection) => {
+    configurePolicy(append);
+    configureRisk(append, projection);
+    requestCritiqueEvent(append, { findingEvidencePolicyVersion: 1 });
+    assert.throws(() => requestCritiqueEvent(append, {
+      critiqueId: "downgraded-critique", supersedesCritiqueId: "critique-1", key: "downgrade-grounding-policy",
+    }), /downgrade.*evidence policy/);
+    const submission = {
+      critiqueId: "critique-1", planRevision: 1, sessionId: "plan-critic:s1",
+      findings: [{ ...BLOCKING_FINDING, category: "missing_dependency" }],
+    };
+    assert.throws(() => append("plan_critique.submitted", "ungrounded", submission, CRITIC), /blockingEvidence/);
+    const proof = {
+      taskIds: ["A", "B"], criteria: [{ kind: "task", taskId: "A", criterionId: "AC-1", text: "A works." }],
+      requiredContract: "The B interface consumed by A.",
+      failureWithoutChange: "Running A first cannot satisfy AC-1 because the required B interface is absent.",
+      proposedFix: "Add B to A.dependencies.", dependency: { taskId: "A", missingDependency: "B" },
+    };
+    assert.throws(() => append("plan_critique.submitted", "invented-criterion", {
+      ...submission, findings: [{ ...submission.findings[0], blockingEvidence: { ...proof, criteria: [{ ...proof.criteria[0], text: "Invented criterion." }] } }],
+    }, CRITIC), /criterion.*text/);
+    assert.equal(projection().planCritique!.current!.status, "requested");
+    append("plan_critique.submitted", "grounded", { ...submission, findings: [{ ...submission.findings[0], blockingEvidence: proof }] }, CRITIC);
+    const replay = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(replay.planCritique?.current?.findingEvidencePolicyVersion, 1);
+    assert.deepEqual(replay.planCritique?.current?.findings?.[0]?.blockingEvidence, proof);
+    assert.equal(planCritiquePending(replay), true);
+  });
+});
 
 for (const category of ["undersized_task", "incoherent_task"] as const) {
   test(`a blocking ${category} finding survives replay and holds the existing plan-critique gate`, () => {

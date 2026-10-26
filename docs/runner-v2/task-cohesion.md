@@ -57,6 +57,12 @@ merge or split with a reason. Blocking findings flow through the existing
 resolution/readiness gates. Sound small changes and evidence-only tasks do
 not require artificial code or additional tasks.
 
+New planning reviews also require [structured evidence for every blocking
+finding](./planning-finding-evidence.md). In particular, a dependency finding
+must name the actual consumed output, cite the consumer's existing criterion
+and explain a concrete failure if the producer has not run. Related features
+and optional enhancements alone do not justify serializing tasks.
+
 Planning without evidence gating retains its existing risk-based/always/off
 critique policy. This change does not introduce a mandatory model call for
 each low-risk plan or change the owner's selected review policy.

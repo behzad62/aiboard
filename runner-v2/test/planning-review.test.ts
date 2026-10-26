@@ -25,6 +25,7 @@ import {
   NativeCoverageReviewRuntime,
   SchedulerCoverageReviewAuthority,
   type CoverageReviewDriver,
+  type CoverageFindingToolInput,
   type NativeCoverageReviewRequest,
 } from "../src/planning-review.js";
 import {
@@ -379,7 +380,7 @@ function ownViewTurn(correctionView: string): ModelTurn {
 
 function verdictTurn(
   verdicts: { obligationId: string; verdict: string; severity: "blocking" | "advisory"; rationale: string }[],
-  findings: { id: string; category: string; severity: "blocking" | "advisory"; claim: string; requirementId?: string }[] = [],
+  findings: Omit<CoverageFindingToolInput, "evidenceRefs">[] = [],
   priorFindingChecks?: { priorFindingId: string; status: "resolved" | "outstanding"; rationale: string }[],
 ): ModelTurn {
   return {
@@ -487,6 +488,7 @@ function seedReviewableRun(
     priorReviewId?: string;
     runPolicy?: "finish" | "plan_only";
     planOpts?: Parameters<typeof buildCoveragePlan>[2];
+    findingEvidencePolicyVersion?: 1;
   },
 ): {
   revision: ExecutionPlanRevision;
@@ -524,6 +526,7 @@ function seedReviewableRun(
     manifest: input.manifest,
     ...(input.priorReviewId !== undefined ? { priorReviewId: input.priorReviewId } : {}),
     occurredAt: CLOCK,
+    ...(input.findingEvidencePolicyVersion === undefined ? {} : { findingEvidencePolicyVersion: input.findingEvidencePolicyVersion }),
   });
   return { revision: plan.revision, requirements: plan.requirements, phases: plan.phases, hostCapabilities: scenario.hostCapabilities };
 }
@@ -931,6 +934,12 @@ test("T3b request tool appends a review request, derives the re-review binding, 
     });
     const requested = await tool.execute({}, architect);
     assert.equal(requested.isError, false, JSON.stringify(requested.error));
+    assert.equal(projectionOf(store, runId).planning!.coverageRequests["coverage_revision_1"]?.findingEvidencePolicyVersion, 1);
+    assert.throws(() => store.append({
+      runId, type: "planning.coverage_review_requested", occurredAt: CLOCK,
+      actor: { role: "architect", id: "architect_1" }, idempotencyKey: "downgrade-coverage-proof-policy",
+      payload: { reviewId: "coverage_revision_1", planRevisionId: plan.revision.revisionId, planRevisionDigest: plan.revision.digest, sourceManifestId: source.manifest.manifestId, requestedAt: CLOCK },
+    }), /conflicts with the recorded request/);
     assert.deepEqual(requested.lifecycle, {
       type: "architect_action",
       action: "plan_reconciled",
@@ -1386,6 +1395,81 @@ for (const category of ["undersized_task", "incoherent_task"] as const) {
     }
   });
 }
+
+test("new coverage reviews reject invented dependency criteria and allow optional suggestions", async () => {
+  const source = buildCoverageSource();
+  const runId = "run_coverage_grounded_dependency";
+  const reference = buildCoveragePlan(source.manifest, runId).revision.tasks.find((task) => task.id === "T-AUDIT")!;
+  const finding = {
+    id: "invented-presence", category: "missing_dependency", severity: "blocking" as const,
+    claim: "Audit must wait for retries to sort online friends first.",
+    blockingEvidence: {
+      taskIds: ["T-AUDIT", "T-RETRY"],
+      criteria: [{ kind: "task" as const, taskId: "T-AUDIT", criterionId: reference.acceptance.criteria[0]!.id, text: "Show online friends first." }],
+      requiredContract: "A presence API not required by this criterion.",
+      failureWithoutChange: "The audit task cannot show online friends first without it.",
+      proposedFix: "Add T-RETRY to T-AUDIT.dependencies.", dependency: { taskId: "T-AUDIT", missingDependency: "T-RETRY" },
+    },
+  };
+  const { blockingEvidence: _proof, ...suggestion } = finding;
+  const verdicts = coveredVerdicts(["obligation-audit", "obligation-retry", "obligation-purge"]);
+  const harness = createCoverageHarness("grounded-dependency", [
+    recordTurn([AUDIT_OBLIGATION, RETRY_OBLIGATION, TAIL_OBLIGATION]),
+    verdictTurn(verdicts, [finding]),
+    verdictTurn(verdicts, [{ ...suggestion, severity: "advisory" }]),
+  ], { sourceBytes: source.bytes });
+  try {
+    const plan = seedReviewableRun(harness.store, runId, { manifest: source.manifest, reviewId: "coverage_1", findingEvidencePolicyVersion: 1 });
+    const result = await harness.runtime.review(coverageReviewRequest(runId, "coverage_1", source, plan));
+    assert.equal(result.status, "reviewed");
+    if (result.status !== "reviewed") throw new Error("unreachable");
+    assert.equal(result.review.findings[0]?.severity, "advisory");
+    assert.equal(harness.model.requests.length, 3);
+    assert.match(JSON.stringify(harness.model.requests[2]?.messages), /text does not match the existing acceptance criterion/);
+    seedDurableSourceReads(harness.store, runId, source.manifest, CLOCK);
+    harness.store.append({ runId, type: "planning.plan_ready", occurredAt: CLOCK, actor: { role: "runner", id: "runner" }, idempotencyKey: "ready:optional-suggestion", payload: { hostCapabilities: plan.hostCapabilities } });
+    assert.equal(projectionOf(harness.store, runId).planning!.readiness, "ready");
+  } finally { harness.close(); }
+});
+
+test("a grounded coverage blocker holds readiness and the reducer refuses proof bypasses", async () => {
+  const source = buildCoverageSource();
+  const runId = "run_coverage_grounded_blocker";
+  const planOpts = { purgeCriterionText: "Purge works." };
+  const task = buildCoveragePlan(source.manifest, runId, planOpts).revision.tasks.find((task) => task.id === "T-PURGE")!;
+  const proof = {
+    taskIds: [task.id], criteria: [{ kind: "task" as const, taskId: task.id, criterionId: task.acceptance.criteria[0]!.id, text: "Purge works." }],
+    requiredContract: "The source-required one-hour expiry boundary.",
+    failureWithoutChange: "Run purge against expired and unexpired sessions: this criterion supplies no expiry cutoff to distinguish correct removal from deleting every session.",
+    proposedFix: "Specify and exercise the one-hour expiry cutoff required by the purge obligation.",
+  };
+  const harness = createCoverageHarness("grounded-blocker", [
+    recordTurn([AUDIT_OBLIGATION, RETRY_OBLIGATION, TAIL_OBLIGATION]),
+    verdictTurn(coveredVerdicts(["obligation-audit", "obligation-retry", "obligation-purge"]), [{
+      id: "vague-purge", category: "untestable_criterion", severity: "blocking", claim: "Purge works has no observable expiry boundary.", blockingEvidence: proof,
+    }]),
+  ], { sourceBytes: source.bytes });
+  try {
+    const plan = seedReviewableRun(harness.store, runId, { manifest: source.manifest, reviewId: "coverage_1", findingEvidencePolicyVersion: 1, planOpts });
+    const result = await harness.runtime.review(coverageReviewRequest(runId, "coverage_1", source, plan));
+    assert.equal(result.status, "reviewed");
+    if (result.status !== "reviewed") throw new Error("unreachable");
+    assert.deepEqual(result.review.findings[0]?.blockingEvidence, proof);
+    const planningStatus = JSON.parse(renderPlanningStatus(projectionOf(harness.store, runId))!);
+    assert.deepEqual(planningStatus.openBlockingFindings[0]?.blockingEvidence, proof, "the Architect can inspect the verified criterion and failure evidence");
+    const before = harness.store.readRun(runId).length;
+    for (const invalid of [undefined, { ...proof, criteria: [{ ...proof.criteria[0]!, text: "An invented requirement." }] }]) {
+      assert.throws(() => harness.store.append({
+        runId, type: "planning.coverage_review_recorded", occurredAt: CLOCK, actor: { role: "verifier", id: result.review.reviewerRuntimeId }, idempotencyKey: `bypass:${invalid === undefined ? "missing" : "invented"}`,
+        payload: { review: { ...result.review, findings: [{ ...result.review.findings[0]!, id: "bypass-proof", blockingEvidence: invalid }] } },
+      }), /blockingEvidence/);
+    }
+    assert.equal(harness.store.readRun(runId).length, before);
+    seedDurableSourceReads(harness.store, runId, source.manifest, CLOCK);
+    assert.throws(() => harness.store.append({ runId, type: "planning.plan_ready", occurredAt: CLOCK, actor: { role: "runner", id: "runner" }, idempotencyKey: "ready:grounded-blocker", payload: { hostCapabilities: plan.hostCapabilities } }), /blocking/);
+    assert.equal(projectionOf(harness.store, runId).planning!.coverageRequests.coverage_1?.findingEvidencePolicyVersion, 1);
+  } finally { harness.close(); }
+});
 
 test("T3b never-exercised criterion is expressible as weakened, and scope_creep reports outside verdicts", async () => {
   const source = buildCoverageSource();
@@ -2764,6 +2848,13 @@ test("T3b blocking review returns control to the Architect, and the loop reaches
         category: "missing_coverage",
         severity: "blocking",
         claim: "The plan omits the purge obligation.",
+        blockingEvidence: {
+          taskIds: [],
+          criteria: [{ kind: "obligation", obligationId: "obligation-purge", text: OBLIGATION_TAIL_TEXT }],
+          requiredContract: "Expiry-based session purge within one hour.",
+          failureWithoutChange: "Expired sessions remain after one hour because no task proves the source-required purge behavior.",
+          proposedFix: "Add the missing purge coverage to the plan and verify its expiry boundary.",
+        },
       }],
     ),
     ownViewTurn(

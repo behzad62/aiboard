@@ -49,6 +49,7 @@ export function seedCoverageRequest(
     revision: ExecutionPlanRevision;
     manifest: ApprovedSourceManifest;
     priorReviewId?: string;
+    findingEvidencePolicyVersion?: 1;
     occurredAt?: string;
   },
 ): void {
@@ -64,6 +65,7 @@ export function seedCoverageRequest(
       planRevisionDigest: input.revision.digest,
       sourceManifestId: input.manifest.manifestId,
       ...(input.priorReviewId !== undefined ? { priorReviewId: input.priorReviewId } : {}),
+      ...(input.findingEvidencePolicyVersion === undefined ? {} : { findingEvidencePolicyVersion: input.findingEvidencePolicyVersion }),
       requestedAt: input.occurredAt ?? SEED_CLOCK,
     },
   });

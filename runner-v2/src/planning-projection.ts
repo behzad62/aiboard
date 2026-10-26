@@ -1,4 +1,5 @@
 import {
+  assertCoverageFindingEvidence,
   computeDigest,
   computePlanReadiness,
   coverageReviewHoldsReadiness,
@@ -241,6 +242,8 @@ export interface PlanningSourceReadRecord {
 
 /** T3b: the Architect's durable request for a coverage review of one plan revision. */
 export interface CoverageReviewRequestRecord {
+  /** Absent on historical requests; version 1 requires grounded blocking planning findings. */
+  readonly findingEvidencePolicyVersion?: 1;
   readonly reviewId: string;
   readonly planRevisionId: string;
   readonly planRevisionDigest: string;
@@ -1242,6 +1245,7 @@ function sameCoverageReviewRequest(
     left.planRevisionDigest === right.planRevisionDigest &&
     left.sourceManifestId === right.sourceManifestId &&
     left.priorReviewId === right.priorReviewId &&
+    left.findingEvidencePolicyVersion === right.findingEvidencePolicyVersion &&
     left.requestedAt === right.requestedAt;
 }
 
@@ -1794,6 +1798,10 @@ export function reducePlanningProjection(
       const planRevisionDigest = requiredString(event.payload, "planRevisionDigest");
       const sourceManifestId = requiredString(event.payload, "sourceManifestId");
       const requestedAt = requiredString(event.payload, "requestedAt");
+      const findingEvidencePolicyVersion = event.payload.findingEvidencePolicyVersion;
+      if (findingEvidencePolicyVersion !== undefined && findingEvidencePolicyVersion !== 1) {
+        throw new Error("Invalid coverage finding evidence policy version.");
+      }
       const priorReviewId = event.payload.priorReviewId === undefined
         ? undefined
         : requiredString(event.payload, "priorReviewId");
@@ -1815,6 +1823,7 @@ export function reducePlanningProjection(
         sourceManifestId,
         ...(priorReviewId === undefined ? {} : { priorReviewId }),
         requestedAt,
+        ...(findingEvidencePolicyVersion === undefined ? {} : { findingEvidencePolicyVersion }),
         // T9 repair cycle 3 (B4-r3): stamp the requesting event's sequence so
         // plan_ready can refuse a review that predates a folded acknowledgement.
         ...(event.sequence === undefined ? {} : { requestedSequence: event.sequence }),
@@ -2090,6 +2099,7 @@ export function reducePlanningProjection(
         throw new Error(`Coverage verdict ${review.id} is bound to a stale source manifest.`);
       }
       assertObligationSetsMatch(effective.obligations, review);
+      assertCoverageFindingEvidence(review, revision, effective.obligations, request.findingEvidencePolicyVersion === 1);
       let priorChecks: Record<string, readonly CoveragePriorFindingCheck[]> = {};
       if (review.priorReviewId !== undefined) {
         if (next.coveragePriorFindingsReleased[review.id] !== review.priorReviewId) {

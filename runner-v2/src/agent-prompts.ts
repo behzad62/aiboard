@@ -31,6 +31,7 @@ import type { FinalVerificationPlanPrefill } from "./final-verification-contract
 import type { ValidationScope } from "./validation-scope.js";
 import { PLAN_CRITIQUE_CATEGORIES } from "./plan-critique-contracts.js";
 import { TASK_COHESION_GUIDELINE, TASK_COHESION_REVIEW_INSTRUCTIONS } from "./task-cohesion.js";
+import { PLANNING_FINDING_GROUNDING_INSTRUCTIONS, type PlanningFindingEvidence } from "./planning-finding-evidence.js";
 
 export const RUNNER_KERNEL_INVARIANTS = [
   "Use native tools for actions and lifecycle changes.",
@@ -799,6 +800,7 @@ export const PLAN_CRITIC_INVARIANTS = [
   "You are an independent AIBoard plan critic inspecting one task graph before any worker starts.",
   "The repository you can read is the exact baseline revision; nothing has been implemented yet.",
   TASK_COHESION_REVIEW_INSTRUCTIONS,
+  PLANNING_FINDING_GROUNDING_INSTRUCTIONS,
   "Check the plan rigorously but do not presume it is flawed: report only real defects, each naming a concrete way a task would fail its criteria, deliver the wrong behavior, or leave required work unowned. A sound plan gets no findings and an empty findings list is a valid result; never manufacture findings or restate preferences. Every finding costs a plan revision. For every task ask: is each criterion objectively testable; do tasks overlap in file ownership; are dependencies complete and acyclic in meaning, not just in graph shape; which failure modes are omitted; which assumptions about the repository are unproven (check them with the read-only tools); is any task too large for one worker; can each task be verified independently; is the wiring that connects separately built parts (registration, entry points, configuration) owned by some task? (Merging branches is the runner's job, not a task.)",
   "A blocking finding must cite concrete evidence: a criterion text, a file path, a symbol, or a dependency pair. Advisory findings record concrete risks a worker would otherwise miss; omit style, sizing preferences and nice-to-haves.",
   "You have no authority to edit files, change the plan, assign work, or complete the run. Finish by calling submit_plan_critique exactly once.",
@@ -851,6 +853,7 @@ export const COVERAGE_VERDICT_INSTRUCTIONS = [
   "A vague task, an untestable criterion, and an investigation that cannot resolve its unknown are findings, not coverage.",
   "You are the plan's only independent reviewer, so also check plan quality, reporting each defect under its category: overlapping_scope (two tasks own the same files), missing_dependency (a dependency missing in meaning, or a task that cannot pass its criteria when it completes), missing_integration_task (unowned wiring between separately built parts: registration, routes, entry points), unproven_assumption (an assumption about the repository; check it with the read-only tools), missing_failure_mode (a failure mode the source requires but no criterion covers), untestable_criterion, ambiguous_criterion, oversized_task. Report only real defects with concrete evidence; a sound plan gets no findings, and each blocking finding costs a plan revision.",
   TASK_COHESION_REVIEW_INSTRUCTIONS,
+  PLANNING_FINDING_GROUNDING_INSTRUCTIONS,
   "Finish by calling submit_coverage_verdict exactly once.",
 ].join("\n");
 
@@ -1245,11 +1248,14 @@ export function renderPlanningStatus(projection: SchedulerProjection): string {
     .map((finding) => ({ id: finding.id, category: finding.category, claim: finding.claim }));
   // B3: cumulative open blocking findings across all reviews, with the
   // latest outstanding rationale when one was recorded.
-  const findingById = new Map<string, { reviewId: string; category: string; claim: string }>();
+  const findingById = new Map<string, { reviewId: string; category: string; claim: string; blockingEvidence?: PlanningFindingEvidence; evidenceRefs?: readonly string[] }>();
   for (const recorded of [...planning.coverageReviewHistory, ...(review ? [review] : [])]) {
     for (const finding of recorded.findings) {
       if (!findingById.has(finding.id)) {
-        findingById.set(finding.id, { reviewId: recorded.id, category: finding.category, claim: finding.claim });
+        findingById.set(finding.id, {
+          reviewId: recorded.id, category: finding.category, claim: finding.claim,
+          ...(finding.blockingEvidence ? { blockingEvidence: finding.blockingEvidence, evidenceRefs: finding.evidenceRefs } : {}),
+        });
       }
     }
   }
@@ -1266,6 +1272,11 @@ export function renderPlanningStatus(projection: SchedulerProjection): string {
     reviewId: findingById.get(entry.findingId)?.reviewId ?? entry.reviewId,
     category: findingById.get(entry.findingId)?.category ?? null,
     claim: findingById.get(entry.findingId)?.claim ?? null,
+    // Keep checked evidence visible once, including blockers carried across correction reviews.
+    ...(findingById.get(entry.findingId)?.blockingEvidence ? {
+      blockingEvidence: findingById.get(entry.findingId)!.blockingEvidence,
+      evidenceRefs: findingById.get(entry.findingId)!.evidenceRefs,
+    } : {}),
     ...(outstandingRationaleById.has(entry.findingId)
       ? { outstandingRationale: outstandingRationaleById.get(entry.findingId)! }
       : {}),
@@ -1358,6 +1369,7 @@ export function renderPlanningStatus(projection: SchedulerProjection): string {
     coverageRequests: Object.values(planning.coverageRequests).map((request) => ({
       reviewId: request.reviewId,
       planRevisionId: request.planRevisionId,
+      ...(request.findingEvidencePolicyVersion === undefined ? {} : { findingEvidencePolicyVersion: request.findingEvidencePolicyVersion }),
       ...(request.priorReviewId !== undefined ? { priorReviewId: request.priorReviewId } : {}),
     })),
     obligationsRecorded: Object.keys(planning.coverageObligations),

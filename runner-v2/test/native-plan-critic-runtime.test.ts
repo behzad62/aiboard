@@ -19,7 +19,7 @@ import type {
   RequestPlanCritiqueInput,
   SubmitPlanCritiqueInput,
 } from "../src/plan-critique-authority.js";
-import type { PlanCritiqueProjection } from "../src/plan-critique-contracts.js";
+import type { PlanCritiqueFinding, PlanCritiqueProjection } from "../src/plan-critique-contracts.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import {
   RuntimeRouter,
@@ -87,6 +87,52 @@ test("plan critic context does not repeat critic invariants", () => {
   assert.match(PLAN_CRITIC_INVARIANTS, /wiring that connects separately built parts/);
   assert.match(PLAN_CRITIC_INVARIANTS, /Merging branches is the runner's job, not a task/);
   assert.doesNotMatch(PLAN_CRITIC_INVARIANTS, /is integration explicitly owned by a task/);
+});
+
+test("fresh critics reject ungrounded blockers and can resubmit an advisory without forcing a plan revision", async () => {
+  const { blockingEvidence: _proof, ...bare } = BLOCKING_FINDING;
+  const invalid: ModelTurn = {
+    blocks: [{ type: "tool_call", callId: "unproven-blocker", name: "submit_plan_critique", arguments: { findings: [bare] } }],
+    stopReason: "tool_calls",
+  };
+  const fixture = createFixture("evidence-required", [invalid, submitTurn({ ...bare, severity: "advisory" })]);
+  try {
+    const result = await fixture.runtime.critique(critiqueRequest("run_evidence_required"));
+    assert.equal(result.status, "submitted");
+    assert.equal(fixture.authority.requests[0]?.findingEvidencePolicyVersion, 1);
+    assert.equal(fixture.authority.submissions.length, 1);
+    assert.equal(fixture.authority.submissions[0]?.findings[0]?.severity, "advisory");
+    assert.equal(fixture.model.requests.length, 2);
+    assert.match(JSON.stringify(fixture.model.requests[1]?.messages), /blockingEvidence/);
+  } finally { fixture.close(); }
+});
+
+test("a missing durable grounding-policy stamp cannot silently downgrade a new critic request", async () => {
+  const authority = new FakePlanCritiqueAuthority();
+  authority.afterRequest = ({ findingEvidencePolicyVersion: _lost, ...request }) => request;
+  const fixture = createFixture("evidence-policy-downgrade", [submitTurn()], { authority });
+  try {
+    await assert.rejects(() => fixture.runtime.critique(critiqueRequest("run_evidence_downgrade")), /finding evidence policy/);
+    assert.equal(fixture.model.requests.length, 0);
+  } finally { fixture.close(); }
+});
+
+test("resuming a historical requested critic retains its unversioned finding contract", async () => {
+  const { blockingEvidence: _proof, ...legacyFinding } = BLOCKING_FINDING;
+  const fixture = createFixture("evidence-legacy-resume", [
+    { blocks: [{ type: "text", text: "Inspection paused." }], stopReason: "end_turn" },
+    submitTurn(legacyFinding),
+  ]);
+  try {
+    const request = critiqueRequest("run_legacy_evidence_resume");
+    assert.equal((await fixture.runtime.critique(request)).status, "suspended");
+    // Reconstitute the same requested identity as a pre-policy durable request.
+    const { findingEvidencePolicyVersion: _newPolicy, ...legacyRequest } = fixture.authority.requests[0]!;
+    fixture.authority.requestCritique(legacyRequest);
+    assert.equal((await fixture.runtime.critique(request)).status, "submitted");
+    assert.equal(fixture.authority.requests.at(-1)?.findingEvidencePolicyVersion, undefined);
+    assert.equal(fixture.authority.submissions[0]?.findings[0]?.blockingEvidence, undefined);
+  } finally { fixture.close(); }
 });
 
 test("critic receives the task graph at the baseline revision with read-only tools plus submit_plan_critique", async () => {
@@ -837,6 +883,13 @@ const BLOCKING_FINDING = {
   criterionIds: [{ taskId: "task_ui", criterionId: "criterion_ui" }],
   claim: "The UI criterion is not objectively testable.",
   evidence: ["criterion_ui: The UI matches the request."],
+  blockingEvidence: {
+    taskIds: ["task_ui"],
+    criteria: [{ kind: "task" as const, taskId: "task_ui", criterionId: "criterion_ui", text: "The UI matches the request." }],
+    requiredContract: "An observable expected UI behavior for criterion_ui.",
+    failureWithoutChange: "Two differing UI implementations cannot be compared against a specified observable result; criterion_ui supplies none.",
+    proposedFix: "Replace criterion_ui with the required observable UI behavior and its verification procedure.",
+  },
 };
 
 const ADVISORY_FINDING = {
@@ -869,7 +922,7 @@ function critiqueRequest(runId: string) {
   };
 }
 
-function submitTurn(finding?: typeof BLOCKING_FINDING | typeof ADVISORY_FINDING): ModelTurn {
+function submitTurn(finding?: PlanCritiqueFinding): ModelTurn {
   return {
     blocks: [{
       type: "tool_call",
@@ -1009,6 +1062,7 @@ class FakePlanCritiqueAuthority implements PlanCritiqueAuthority {
       runtime: { ...input.runtime },
       excludedModels: input.excludedModels.map((model) => ({ ...model })),
       ...(input.independence ? { independence: input.independence } : {}),
+      ...(input.findingEvidencePolicyVersion === undefined ? {} : { findingEvidencePolicyVersion: input.findingEvidencePolicyVersion }),
       status: "requested",
       requestedAt: input.occurredAt,
     };

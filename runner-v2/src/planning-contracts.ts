@@ -14,6 +14,7 @@ import {
   type PlanCritiqueSeverity,
 } from "./plan-critique-contracts.js";
 import type { ReviewerIndependence } from "./verifier-contracts.js";
+import { parsePlanningFindingEvidence, type PlanningFindingEvidence, type PlanningFindingEvidenceContext } from "./planning-finding-evidence.js";
 
 /**
  * Evidence-gated planning contracts (Runner V2 P6.6, T1). Section 3 of
@@ -1518,10 +1519,41 @@ export interface PlanningFinding {
   readonly location?: string;
   readonly claim: string;
   readonly evidenceRefs: readonly string[];
+  /** Structured planning proof; deliverable reviews retain their separate evidence policy. */
+  readonly blockingEvidence?: PlanningFindingEvidence;
   /** Present once the finding has been resolved by a later review/revision. */
   readonly disposition?: PlanningFindingDisposition;
   /** W2 (AR-R28): reviewer-asserted late-finding exception basis, if any. */
   readonly lateFinding?: LateFindingBasis;
+}
+
+export function executionPlanFindingEvidenceContext(
+  revision: ExecutionPlanRevision,
+  obligations: readonly Pick<DerivedObligation, "id" | "description">[],
+): PlanningFindingEvidenceContext {
+  return {
+    tasks: revision.tasks.map((task) => ({
+      id: task.id, dependencies: task.dependencies, criteria: task.acceptance.criteria,
+      writableSurfaces: task.writableSurfaces,
+    })),
+    requirements: revision.requirements,
+    obligations,
+  };
+}
+
+/** Only coverage planning reviews use this policy; it never reinterprets historical deliverable findings. */
+export function assertCoverageFindingEvidence(
+  review: CoverageReview,
+  revision: ExecutionPlanRevision,
+  obligations: readonly Pick<DerivedObligation, "id" | "description">[],
+  required: boolean,
+): void {
+  const context = executionPlanFindingEvidenceContext(revision, obligations);
+  for (const finding of review.findings) {
+    parsePlanningFindingEvidence(finding.blockingEvidence, {
+      category: finding.category, severity: finding.severity, references: finding.evidenceRefs,
+    }, context, required);
+  }
 }
 
 function validateDerivedObligations(obligations: readonly DerivedObligation[]): PlanningIssue[] {

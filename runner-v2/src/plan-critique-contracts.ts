@@ -1,5 +1,6 @@
 import type { BuildTask } from "./task-contracts.js";
 import { isFinalVerificationTask } from "./task-contracts.js";
+import { parsePlanningFindingEvidence, type PlanningFindingEvidence } from "./planning-finding-evidence.js";
 import type {
   ReviewerIndependence,
   VerifierExcludedModel,
@@ -89,6 +90,7 @@ export interface PlanCritiqueFinding {
   criterionIds?: Array<{ taskId: string; criterionId: string }>;
   claim: string;
   evidence: string[];
+  blockingEvidence?: PlanningFindingEvidence;
 }
 
 export interface PlanCritiqueResolutionItem {
@@ -105,6 +107,8 @@ export interface PlanCritiqueResolutionItem {
 }
 
 export interface PlanCritiqueProjection {
+  /** Absent on historical requests; new requests require grounded blocking findings. */
+  findingEvidencePolicyVersion?: 1;
   critiqueId: string;
   planRevision: number;
   runtime: VerifierRuntimeBinding;
@@ -150,6 +154,7 @@ export type PlanCritiqueSkipReason = "policy_off" | "low_plan_risk" | "critic_fa
 export function parsePlanCritiqueFindings(
   value: unknown,
   tasks: Readonly<Record<string, BuildTask>>,
+  options: { requireBlockingEvidence?: boolean; objective?: string } = {},
 ): PlanCritiqueFinding[] {
   if (!Array.isArray(value)) throw new Error("Plan critique findings must be an array.");
   if (value.length > PLAN_CRITIQUE_MAX_FINDINGS) {
@@ -183,6 +188,13 @@ export function parsePlanCritiqueFindings(
       ? undefined
       : parseCriterionRefs(record.criterionIds, findingId, tasks);
     const evidence = textArray(record, "evidence", findingId, 1);
+    const blockingEvidence = parsePlanningFindingEvidence(record.blockingEvidence, {
+      category, severity, taskIds, references: evidence,
+    }, {
+      tasks: Object.values(tasks).filter((task) => task.status !== "cancelled" && !isFinalVerificationTask(task))
+        .map((task) => ({ id: task.id, dependencies: task.dependencies, criteria: task.acceptanceCriteria ?? [] })),
+      objective: options.objective,
+    }, options.requireBlockingEvidence === true);
     return {
       findingId,
       severity,
@@ -191,6 +203,7 @@ export function parsePlanCritiqueFindings(
       ...(criterionIds ? { criterionIds } : {}),
       claim: requiredText(record, "claim"),
       evidence,
+      ...(blockingEvidence ? { blockingEvidence } : {}),
     };
   });
 }

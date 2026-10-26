@@ -42,6 +42,7 @@ import {
 } from "./plan-critique-contracts.js";
 import {
   COVERAGE_VERDICT_VALUES,
+  executionPlanFindingEvidenceContext,
   PLANNING_FINDING_CATEGORIES,
   T1A_SEEDED_HOST_PLANNING_CAPABILITIES,
   type CoverageReview,
@@ -52,6 +53,7 @@ import {
   type PlanningFinding,
   type SourceRequirement,
 } from "./planning-contracts.js";
+import { parsePlanningFindingEvidence, planningFindingEvidenceSchema, type PlanningFindingEvidence } from "./planning-finding-evidence.js";
 import { planRevisionDiff } from "./plan-revision-diff.js";
 import type {
   CoverageCorrectionViewRecord,
@@ -853,6 +855,7 @@ export interface CoverageFindingToolInput {
   evidenceRefs: string[];
   requirementId?: string;
   location?: string;
+  blockingEvidence?: PlanningFindingEvidence;
 }
 
 export interface CoveragePriorFindingCheckInput {
@@ -868,6 +871,8 @@ export interface SubmitCoverageVerdictToolInput {
 }
 
 export interface SubmitCoverageVerdictToolOptions {
+  /** Full reviewed snapshot used to resolve exact task/requirement criterion citations. */
+  planRevision?: ExecutionPlanRevision;
   authority: CoverageReviewAuthority;
   runId: string;
   reviewId: string;
@@ -937,6 +942,7 @@ export function createSubmitCoverageVerdictTool(
                 evidenceRefs: { type: "array", items: { type: "string", minLength: 1 } },
                 requirementId: { type: "string", minLength: 1 },
                 location: { type: "string", minLength: 1 },
+                blockingEvidence: planningFindingEvidenceSchema("coverage"),
               },
               required: ["id", "category", "severity", "claim", "evidenceRefs"],
               additionalProperties: false,
@@ -1147,7 +1153,7 @@ function validateSubmitCoverageVerdict(
     const entryUnknown = Object.keys(entry).filter(
       (key) =>
         key !== "id" && key !== "category" && key !== "severity" && key !== "claim" &&
-        key !== "evidenceRefs" && key !== "requirementId" && key !== "location",
+        key !== "evidenceRefs" && key !== "requirementId" && key !== "location" && key !== "blockingEvidence",
     );
     if (entryUnknown.length > 0) {
       return { ok: false, issues: [`Coverage finding ${index} has unknown fields: ${entryUnknown.join(", ")}.`] };
@@ -1187,6 +1193,22 @@ function validateSubmitCoverageVerdict(
     if (location !== undefined && (typeof location !== "string" || location.trim().length === 0)) {
       return { ok: false, issues: [`Finding ${id} has an invalid location.`] };
     }
+    let blockingEvidence: PlanningFindingEvidence | undefined;
+    try {
+      const request = options.authority.coverageRequest(options.runId, options.reviewId);
+      const required = request?.findingEvidencePolicyVersion === 1;
+      if ((required && severity === "blocking") || entry.blockingEvidence !== undefined) {
+        if (!options.planRevision || options.planRevision.revisionId !== options.planRevisionId || options.planRevision.digest !== options.planRevisionDigest) {
+          throw new Error("Blocking finding evidence requires the exact reviewed plan snapshot for criterion checks.");
+        }
+        const recorded = options.authority.recordedObligations(options.runId, options.reusedFromReviewId ?? options.reviewId);
+        blockingEvidence = parsePlanningFindingEvidence(entry.blockingEvidence, {
+          category: category as string, severity, references: evidenceRefs as string[],
+        }, executionPlanFindingEvidenceContext(options.planRevision, recorded?.obligations ?? []), required);
+      }
+    } catch (error) {
+      return { ok: false, issues: [`Finding ${id}: ${error instanceof Error ? error.message : String(error)}`] };
+    }
     findings.push({
       id,
       category: category as string,
@@ -1195,6 +1217,7 @@ function validateSubmitCoverageVerdict(
       evidenceRefs: [...(evidenceRefs as string[])],
       ...(requirementId === undefined ? {} : { requirementId: requirementId as string }),
       ...(location === undefined ? {} : { location: location as string }),
+      ...(blockingEvidence ? { blockingEvidence } : {}),
     });
   }
   if (options.priorReviewId !== undefined) {
@@ -1388,6 +1411,7 @@ export function createRequestCoverageReviewTool(
             planRevisionId: revisionId,
             planRevisionDigest: digest,
             sourceManifestId: manifest.manifestId,
+            findingEvidencePolicyVersion: 1,
             ...(priorReviewId !== undefined ? { priorReviewId } : {}),
             requestedAt: clock(),
           },
@@ -2184,6 +2208,7 @@ export class NativeCoverageReviewRuntime {
         sourceReadManifestId: request.manifest.manifestId,
         planRevisionId: request.planRevision.revisionId,
         planRevisionDigest: request.planRevision.digest,
+        planRevision: request.planRevision,
         obligationIds: obligations.map((obligation) => obligation.id),
         ...(request.priorReview !== undefined
           ? {

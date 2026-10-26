@@ -10,12 +10,15 @@ import {
   type PlanCritiqueFinding,
 } from "./plan-critique-contracts.js";
 import type { BuildTask } from "./task-contracts.js";
+import { planningFindingEvidenceSchema } from "./planning-finding-evidence.js";
 
 export interface SubmitPlanCritiqueToolInput {
   findings: PlanCritiqueFinding[];
 }
 
 export interface SubmitPlanCritiqueToolOptions {
+  findingEvidencePolicyVersion?: 1;
+  objective?: string;
   authority: PlanCritiqueAuthority;
   runId: string;
   critiqueId: string;
@@ -69,6 +72,7 @@ export function createSubmitPlanCritiqueTool(
                   },
                 },
                 claim: { type: "string", minLength: 1 },
+                blockingEvidence: planningFindingEvidenceSchema("basic"),
                 evidence: {
                   type: "array",
                   minItems: 1,
@@ -94,7 +98,7 @@ export function createSubmitPlanCritiqueTool(
       effect: "none",
       lifecycle: true,
     },
-    validate: (input) => validateSubmitPlanCritique(input, options.tasks),
+    validate: (input) => validateSubmitPlanCritique(input, options),
     assessAccess: () => ({
       capability: "plan_critique.submit",
       external: false,
@@ -135,7 +139,7 @@ export function createSubmitPlanCritiqueTool(
 
 function validateSubmitPlanCritique(
   input: unknown,
-  tasks: Readonly<Record<string, BuildTask>>,
+  options: SubmitPlanCritiqueToolOptions,
 ): ValidationResult<SubmitPlanCritiqueToolInput> {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     return { ok: false, issues: ["Plan critique input must be an object."] };
@@ -152,7 +156,10 @@ function validateSubmitPlanCritique(
     return {
       ok: true,
       value: {
-        findings: parsePlanCritiqueFindings(record.findings, tasks),
+        findings: parsePlanCritiqueFindings(record.findings, options.tasks, {
+          requireBlockingEvidence: options.findingEvidencePolicyVersion === 1,
+          objective: options.objective,
+        }),
       },
     };
   } catch (error) {

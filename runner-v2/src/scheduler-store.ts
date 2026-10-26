@@ -9362,6 +9362,10 @@ function applyPlanCritiqueRequested(
     throw new Error("Plan critique cannot start after a worker was dispatched.");
   }
   const runtime = parseRuntimeBinding(event.payload.runtime);
+  const findingEvidencePolicyVersion = event.payload.findingEvidencePolicyVersion;
+  if (findingEvidencePolicyVersion !== undefined && findingEvidencePolicyVersion !== 1) {
+    throw new Error("Invalid plan critique finding evidence policy version.");
+  }
   const excludedModels = parseExcludedModels(event.payload.excludedModels);
   const independence = parseReviewerIndependence(event.payload.independence);
   if (
@@ -9372,6 +9376,9 @@ function applyPlanCritiqueRequested(
   }
   const critiqueId = requiredString(event.payload, "critiqueId");
   const state = projection.planCritique;
+  if (state.current?.findingEvidencePolicyVersion === 1 && findingEvidencePolicyVersion !== 1) {
+    throw new Error("A grounded plan critique request cannot downgrade its finding evidence policy.");
+  }
   if (state.current?.status === "resolved" || state.history.some((entry) => entry.status === "resolved")) {
     throw new Error("Plan critique is already resolved for this run.");
   }
@@ -9391,6 +9398,7 @@ function applyPlanCritiqueRequested(
     runtime,
     excludedModels,
     ...(event.payload.independence === undefined ? {} : { independence }),
+    ...(findingEvidencePolicyVersion === undefined ? {} : { findingEvidencePolicyVersion }),
     status: "requested",
     requestedAt: event.occurredAt,
     ...(projection.planning?.plan ? { critiquedPlanningRevisionId: projection.planning.plan.currentRevisionId } : {}),
@@ -9425,7 +9433,10 @@ function applyPlanCritiqueSubmitted(
   if (sessionId !== current.runtime.sessionId) {
     throw new Error("Plan critique submission sessionId does not match the current critique session.");
   }
-  const findings = parsePlanCritiqueFindings(event.payload.findings, projection.tasks);
+  const findings = parsePlanCritiqueFindings(event.payload.findings, projection.tasks, {
+    requireBlockingEvidence: current.findingEvidencePolicyVersion === 1,
+    objective: projection.initialObjective,
+  });
   if (current.status === "submitted") {
     if (sameValue(current.findings, findings)) return;
     throw new Error("Plan critique submission conflicts with the already submitted findings.");
