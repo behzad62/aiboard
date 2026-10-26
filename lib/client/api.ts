@@ -99,6 +99,8 @@ export function restartDiscussion(id: string): Discussion | undefined {
     buildStoppedAt: null,
     nativeBuildRunId: `native-${uuidv4()}`,
     nativeBuildRequestedAt: now,
+    nativeBuildPassStartedAt: now,
+    nativeBuildNotesSince: null,
     updatedAt: now,
   });
   return getDiscussionById(id);
@@ -276,6 +278,9 @@ export function continueDiscussion(
       ? {
           nativeBuildRunId: `native-${uuidv4()}`,
           nativeBuildRequestedAt: now,
+          nativeBuildPassStartedAt: now,
+          // Without a recorded start (older sessions) every note stays new guidance, as before.
+          nativeBuildNotesSince: discussion.nativeBuildPassStartedAt ?? null,
         }
       : {}),
     updatedAt: now,
@@ -621,6 +626,7 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     runnerAccess: input.runnerAccess ?? null,
     nativeBuildRunId: input.mode === "build" ? `native-${uuidv4()}` : null,
     nativeBuildRequestedAt: input.mode === "build" ? now : null,
+    nativeBuildPassStartedAt: input.mode === "build" ? now : null,
     buildRunPolicy: input.mode === "build" ? buildSettings.runPolicy : undefined,
     buildSkillMode: input.mode === "build" ? buildSettings.skillMode : undefined,
     buildBudgetUsd: input.mode === "build" ? buildSettings.budgetUsd : undefined,

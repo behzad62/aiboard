@@ -17,6 +17,7 @@ import {
 } from "../components/RunnerV2ObservabilityPanel";
 import {
   classifyBuildNoteDelivery,
+  followUpObjective,
   nativeBuildAttachmentNotice,
   preserveEditedBuildNoteDraft,
   resolveBuildNoteSubmissionRoute,
@@ -463,6 +464,32 @@ async function main(): Promise<void> {
   assert.deepEqual(
     require("../lib/client/build-notes").drainBuildNotes(discussion.id),
     ["Keep legacy queue compatibility."],
+  );
+
+  // Tunnel run: a follow-up pass re-sent the whole original request and an earlier pass's one-off
+  // instruction as its task. A new pass remembers when the previous one started.
+  store.__resetClientStoreForTests();
+  store.insertDiscussion({
+    ...discussion,
+    status: "completed",
+    nativeBuildRequestedAt: null,
+    nativeBuildPassStartedAt: "2026-10-26T05:00:00.000Z",
+  });
+  api.continueDiscussion(discussion.id, true);
+  const continued = store.getDiscussionById(discussion.id)!;
+  assert.equal(continued.nativeBuildNotesSince, "2026-10-26T05:00:00.000Z");
+  assert.ok(continued.nativeBuildPassStartedAt! > "2026-10-26T05:00:00.000Z");
+  const followUp = followUpObjective("Build AIBoard Tunnel.", [
+    { content: "Use resolve_delivery_boundary_failure with recheck.", createdAt: "2026-10-26T04:00:00.000Z" },
+    { content: "Fix the printed pairing hint.", createdAt: "2026-10-26T07:40:00.000Z" },
+  ], continued.nativeBuildNotesSince);
+  assert.match(followUp, /^This is a follow-up pass/);
+  assert.ok(followUp.indexOf("New guidance:\n- Fix the printed pairing hint.") < followUp.indexOf("Earlier request"));
+  assert.match(followUp, /Earlier guidance \(handled by an earlier pass; context only\):\n- Use resolve_delivery_boundary_failure/);
+  assert.equal(
+    followUpObjective("Build AIBoard Tunnel.", [{ content: "Note", createdAt: "2026-10-26T04:00:00.000Z" }], null),
+    "Build AIBoard Tunnel.\n\nUser follow-up guidance:\n- Note",
+    "a session without a recorded pass start keeps every note as guidance",
   );
 
   console.log("PASS native Build steering UI contracts");

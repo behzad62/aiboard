@@ -69,6 +69,35 @@ export async function resolveBuildNoteSubmissionRoute(
   return { mode, projection: currentProjection };
 }
 
+/**
+ * The objective for a Build pass. A follow-up pass leads with the guidance sent since the previous
+ * pass started and marks the original request and older notes as already delivered: re-sending
+ * them as the task told the Architect to build the whole product again and replayed a one-off
+ * instruction ("use resolve_delivery_boundary_failure with recheck") from an earlier pass.
+ */
+export function followUpObjective(
+  topic: string,
+  notes: ReadonlyArray<{ content: string; createdAt: string }>,
+  notesSince: string | null | undefined,
+): string {
+  const bullets = (items: ReadonlyArray<{ content: string }>) =>
+    items.map((note) => `- ${note.content.trim()}`).join("\n");
+  if (!notesSince) {
+    return notes.length > 0
+      ? `${topic.trim()}\n\nUser follow-up guidance:\n${bullets(notes)}`
+      : topic.trim();
+  }
+  const fresh = notes.filter((note) => note.createdAt >= notesSince);
+  const handled = notes.filter((note) => note.createdAt < notesSince);
+  if (fresh.length === 0) return topic.trim();
+  return [
+    "This is a follow-up pass on a project that already contains the result of the earlier request below. Do what the new guidance asks; do not rebuild what is already there.",
+    `New guidance:\n${bullets(fresh)}`,
+    `Earlier request (already delivered; context only):\n${topic.trim()}`,
+    ...(handled.length > 0 ? [`Earlier guidance (handled by an earlier pass; context only):\n${bullets(handled)}`] : []),
+  ].join("\n\n");
+}
+
 export function nativeBuildAttachmentNotice(mode: BuildNoteDeliveryMode): string | null {
   if (mode !== "native_active" && mode !== "native_unknown") return null;
   return "Text files, screenshots (PNG/JPEG/WebP), and PDFs are sent to a compatible configured model. The runner rejects unsupported inputs.";

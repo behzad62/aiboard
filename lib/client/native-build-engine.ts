@@ -42,6 +42,7 @@ import {
 import { requestSpecificationSource } from "./native-planning-view";
 import { loadAttachmentPayloads } from "./attachments";
 import { initialNativeBuildTextAttachments } from "./build-guidance-files";
+import { followUpObjective } from "./build-notes";
 import { initialBuildVisualInputs } from "./build-user-attachments";
 import { buildCrewFromDiscussion, runtimeModelId, selectBuildCrewRuntimes } from "./build-crew";
 import {
@@ -782,12 +783,8 @@ export function resolveNativeProviderTransport(
 
 function buildObjective(discussion: Discussion): string {
   const notes = getMessagesForDiscussion(discussion.id)
-    .filter((message) => message.role === "user" && !message.id.startsWith("native-message:"))
-    .map((message) => message.content.trim())
-    .filter(Boolean);
-  const text = notes.length > 0
-    ? `${discussion.topic.trim()}\n\nUser follow-up guidance:\n${notes.map((note) => `- ${note}`).join("\n")}`
-    : discussion.topic.trim();
+    .filter((message) => message.role === "user" && !message.id.startsWith("native-message:") && message.content.trim());
+  const text = followUpObjective(discussion.topic, notes, discussion.nativeBuildNotesSince);
   const ids: string[] = discussion.attachmentIds ? JSON.parse(discussion.attachmentIds) : [];
   const attachments = loadAttachmentPayloads(ids);
   const unsupported = attachments.find((file) =>

@@ -432,6 +432,10 @@ export interface Discussion {
   nativeBuildRunId?: string | null;
   /** When set, the run id is reserved for an intentional not-yet-attached Build pass. */
   nativeBuildRequestedAt?: string | null;
+  /** When the current native Build pass was requested (kept after the run attaches). */
+  nativeBuildPassStartedAt?: string | null;
+  /** A follow-up pass: when the previous pass started. Notes before it were that pass's guidance. */
+  nativeBuildNotesSince?: string | null;
   buildRunPolicy?: BuildRunPolicy;
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
