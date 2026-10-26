@@ -1943,6 +1943,90 @@ test("public step auto-applies Finish handoff and finalizes cleanup once", async
   }
 });
 
+test("a settled run is read through the historical reader, never its closed live handle", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-settled-reads-"));
+  let projection: SchedulerProjection = fakeRuntime("run_1").projection();
+  let terminal: "completed" | undefined;
+  let liveClosed = 0;
+  let historicalHandles = 0;
+  let cleaned = false;
+  const closedStore = async (): Promise<never> => {
+    throw new Error(cleaned ? "database is not open" : "unexpected live read");
+  };
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+    terminalStateForHistoricalSpec: () => terminal,
+    createRuntime: async () => ({
+      ...handleProjections("run_1"),
+      runtime: {
+        ...fakeRuntime("run_1"),
+        projection: () => projection,
+        step: async () => {
+          projection = requestedHandoffProjection("finish");
+          return { status: "paused" as const, action: "completion_decision_required" };
+        },
+        selectProjectHandoff: (choice: "keep_integration_branch" | "apply_to_project") => {
+          projection = selectedHandoffProjection(projection, choice);
+          return projection;
+        },
+      } as unknown as BuildRuntime,
+      usage: () => emptyBudget("run_1"),
+      observability: closedStore,
+      transcript: closedStore,
+      files: closedStore,
+      projectHandoff: async () => ({
+        integrationRevision: "revision_final",
+        integrationBranch: "aiboard/run/integration",
+        appliedToProject: true,
+        projectRevision: "project_revision",
+      }),
+      cleanup: () => { cleaned = true; },
+      close: () => { liveClosed += 1; },
+    }),
+    createHistoricalRuntime: async () => {
+      historicalHandles += 1;
+      return {
+        runtime: { ...fakeRuntime("run_1"), projection: () => projection } as unknown as BuildRuntime,
+        historical: true,
+        usage: () => emptyBudget("run_1"),
+        observability: async () => emptyObservability("run_1"),
+        transcript: async () => ({ turns: [], cursor: 9 }),
+        files: async () => ({
+          source: "project",
+          revision: "project_revision",
+          appliedToProject: true,
+          omittedFileCount: 0,
+          files: [{ path: "done.txt", content: "applied\n" }],
+        }),
+        compact: () => undefined,
+        projectHandoff: async () => { throw new Error("Historical Builds are read-only."); },
+        cleanup: () => undefined,
+        close: () => undefined,
+      };
+    },
+  });
+  try {
+    await manager.create({ ...spec, runPolicy: "finish", budgetLimits: {} });
+    assert.equal((await manager.step("run_1")).action, "automatic_project_handoff_applied");
+    assert.equal(cleaned, true);
+
+    // Until the supervisor records the run as terminal there is no authoritative historical state.
+    await assert.rejects(manager.observability("run_1"), /database is not open/);
+    assert.equal(historicalHandles, 0);
+
+    terminal = "completed";
+    assert.equal((await manager.observability("run_1")).runId, "run_1");
+    assert.equal((await manager.files("run_1")).files[0]?.content, "applied\n");
+    assert.equal((await manager.transcript("run_1")).cursor, 9);
+    assert.equal(historicalHandles, 1, "the historical reader is opened once");
+    assert.equal(liveClosed, 1, "the settled live handle is released");
+    await assert.rejects(manager.step("run_1"), /read-only/i);
+  } finally {
+    await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("public runUntilBlocked performs live physical cleanup after completion", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-manual-run-gc-"));
   const artifacts = new ArtifactStore(join(root, "artifacts"));

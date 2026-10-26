@@ -367,6 +367,7 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async observability(runId: string): Promise<BuildObservabilitySnapshot> {
+    await this.retireSettledRuntime(runId);
     return await this.withRuntimeActivity(async () => await this.require(runId).observability());
   }
 
@@ -379,10 +380,12 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async transcript(runId: string, afterSequence = 0): Promise<BuildTranscriptPage> {
+    await this.retireSettledRuntime(runId);
     return await this.withRuntimeActivity(async () => await this.require(runId).transcript(afterSequence));
   }
 
   async files(runId: string): Promise<IntegrationFileSnapshot> {
+    await this.retireSettledRuntime(runId);
     return await this.withRuntimeActivity(async () => await this.require(runId).files());
   }
 
@@ -1297,6 +1300,41 @@ export class NativeBuildManager implements BuildControlPlane {
         ([, handle]) => !handle.historical && handle.runtime.projection().status !== "running"
       )
     );
+  }
+
+  /**
+   * Settling a live run closes its stores and execution host, but the handle stayed registered:
+   * observability then failed with "database is not open" and files with "ExecutionHost run binding
+   * is closed", so the UI could not load a finished Build until the runner restarted (tunnel run).
+   * Once the supervisor records the run as terminal, reads go through the historical reader a
+   * restart would open, and the closed live handle is released.
+   */
+  private async retireSettledRuntime(runId: string): Promise<void> {
+    const retirable = (handle: NativeBuildRuntimeHandle | undefined): handle is NativeBuildRuntimeHandle =>
+      handle !== undefined && !handle.historical && this.settledRuns.has(runId) && !this.pumps.has(runId);
+    if (!retirable(this.handles.get(runId)) || !this.options.createHistoricalRuntime) return;
+    await this.serialized(async () => {
+      const live = this.handles.get(runId);
+      if (this.closing || !retirable(live)) return;
+      const terminalState = await this.options.terminalStateForHistoricalSpec?.(
+        this.options.specs.get(runId),
+      );
+      if (!isHistoricalTerminalState(terminalState)) return;
+      const historical = await this.options.createHistoricalRuntime!(
+        this.options.specs.get(runId),
+        terminalState,
+      );
+      if (historical.runtime.id !== runId) {
+        await historical.close();
+        throw new Error(`Build runtime identity mismatch for ${runId}.`);
+      }
+      this.handles.set(runId, historical);
+      try {
+        await live.close();
+      } catch (error) {
+        this.options.onPumpError?.(runId, error);
+      }
+    });
   }
 
   private async tryCleanupSettledRun(
