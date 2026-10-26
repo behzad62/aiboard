@@ -365,6 +365,57 @@ test("transcript projects only stable assistant text turns across agent roles", 
   }
 });
 
+test("a reviewer's tool-only verdict reaches the transcript as readable text", async () => {
+  // Tunnel run: Gemini answered with only submit_deliverable_verdict, so the timeline never showed its verdict.
+  const root = mkdtempSync(join(tmpdir(), "aiboard-agent-transcript-verdict-"));
+  const store = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), new ArtifactStore(join(root, "artifacts")));
+  try {
+    await store.create({
+      sessionId: "delivery:run_v:task_1",
+      runId: "run_v",
+      actor: { role: "verifier", id: "delivery_1" },
+      occurredAt: "2026-10-26T00:00:00.000Z",
+    });
+    await store.checkpoint("delivery:run_v:task_1", {
+      messages: [
+        {
+          id: "findings",
+          role: "assistant",
+          content: [{ type: "tool_call", callId: "f", name: "record_deliverable_findings", arguments: {
+            findings: [{ id: "f1", severity: "advisory", claim: "The hint omits --command.", location: "cli.ts:416" }],
+          } }],
+        },
+        {
+          id: "verdict",
+          role: "assistant",
+          content: [{ type: "tool_call", callId: "v", name: "submit_deliverable_verdict", arguments: {
+            satisfied: false,
+            summary: "The printed command still fails.",
+            claimVerdicts: [
+              { claimId: "claim:c1", status: "verified", rationale: "ok" },
+              { claimId: "claim:c2", status: "unverified", rationale: "No live run." },
+            ],
+          } }],
+        },
+        {
+          id: "plain-tool",
+          role: "assistant",
+          content: [{ type: "tool_call", callId: "r", name: "fs.read", arguments: { path: "cli.ts" } }],
+        },
+      ],
+      turns: 3,
+      seenCallIds: [],
+    }, "2026-10-26T00:00:01.000Z");
+    assert.deepEqual((await store.transcript("run_v", 0)).turns.map((turn) => turn.text), [
+      "Findings (1):\n- [advisory] The hint omits --command. (cli.ts:416)",
+      "Verdict: not satisfied (1/2 claims verified).\nThe printed command still fails.\n- Unverified claim:c2: No live run.",
+    ]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("read-only transcript replay serves legacy checkpoints without transcript projection tables", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-agent-legacy-transcript-"));
   const database = join(root, "sessions.sqlite");

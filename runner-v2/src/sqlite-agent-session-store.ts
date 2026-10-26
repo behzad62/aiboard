@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import type { AgentActor, AgentMessage } from "./agent-contracts.js";
+import type { AgentActor, AgentMessage, AssistantBlock } from "./agent-contracts.js";
 import type { AgentLoopCheckpoint } from "./agent-loop.js";
 import type {
   AgentSessionEvent,
@@ -15,6 +15,7 @@ import type {
 import type { ArtifactStore } from "./artifact-store.js";
 import type { ChangeSet } from "./change-set.js";
 import type { HistoricalReadProvenance } from "./historical-read-provenance.js";
+import { verdictTranscriptText } from "./transcript-verdicts.js";
 
 interface EventRow {
   sequence: number;
@@ -932,7 +933,9 @@ function assistantText(message: AgentMessage): string | undefined {
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("\n");
-  return text.length > 0 ? text : undefined;
+  const verdict = verdictTranscriptText(message.content as AssistantBlock[]);
+  const combined = [text, verdict].filter((part) => part && part.length > 0).join("\n\n");
+  return combined.length > 0 ? combined : undefined;
 }
 
 function parseCheckpoint(bytes: Uint8Array, sequence: number): AgentLoopCheckpoint {

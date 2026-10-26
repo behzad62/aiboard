@@ -2370,7 +2370,9 @@ function reviewTaskTool(
 ): NativeTool<ReviewTaskInput> {
   return lifecycleTool({
     name: "review_task",
-    description: "Record the Architect semantic review decision for a submitted task",
+    // Tunnel run: an Architect re-ran the suites from the repository root for stronger evidence, then
+    // every verdict citing it was refused; say up front what a verdict may cite.
+    description: "Record the Architect semantic review decision for a submitted task. Each criterion verdict cites only the evidence and artifacts the submission mapped to that criterion (inspect_evidence with the taskId lists them); your own command runs and their outputs cannot be cited. If the mapped evidence does not prove a criterion, reject the task and name the gap.",
     schema: objectSchema({
       taskId: { type: "string", minLength: 1 },
       decision: { type: "string", enum: ["approved", "rejected"] },

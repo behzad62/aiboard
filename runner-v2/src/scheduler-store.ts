@@ -3321,7 +3321,11 @@ function assertReviewArtifactHashes(
     (hash): hash is string => typeof hash !== "string" || !available.has(hash)
   );
   if (invalid.length > 0) {
-    throw new Error(`${label} cites artifact hashes outside its durable evidence.`);
+    // Name the strays and what may be cited: the bare refusal sent an Architect into a third retry (tunnel run).
+    throw new Error(
+      `${label} cites artifact hashes outside its durable evidence (${invalid.map(String).join(", ")}); ` +
+        `it may cite only the outputs of the submission's mapped evidence: ${[...available].join(", ") || "none"}.`,
+    );
   }
 }
 
