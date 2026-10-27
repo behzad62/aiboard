@@ -14,6 +14,7 @@ import {
 type Status =
   | { state: "working"; message: string }
   | { state: "connected"; message: string }
+  | { state: "partial"; message: string; failures: Array<{ kind: string; port: number; message: string }> }
   | { state: "error"; message: string; blockedByBrowser?: boolean }
   | { state: "manual"; message?: string };
 
@@ -38,7 +39,15 @@ export default function ConnectClient() {
         return;
       }
       if (result.status === "connected") {
-        setStatus({ state: "connected", message: "Connected. Opening your workspace…" });
+        if (result.failures.length > 0) {
+          setStatus({
+            state: "partial",
+            message: "Connected: " + result.sessions.map((session) => session.kind).join(", ") + ". Some Runners did not connect:",
+            failures: result.failures.map((failure) => ({ kind: failure.kind, port: failure.port, message: failure.message })),
+          });
+          return;
+        }
+      setStatus({ state: "connected", message: "Connected. Opening your workspace…" });
         router.replace("/");
         return;
       }
@@ -55,7 +64,17 @@ export default function ConnectClient() {
     if (manualBusy) return;
     setManualBusy(true);
     try {
-      await connectManually({ code, port });
+      const combined = await connectManually({ code, port });
+      if (combined.failures.length > 0) {
+        setCode("");
+        setStatus({
+          state: "partial",
+          message: "Connected: " + combined.peerSessions.map((session) => session.kind).join(", ") + ". Some Runners did not connect:",
+          failures: combined.failures.map((failure) => ({ kind: failure.kind, port: failure.port, message: failure.message })),
+        });
+        setManualBusy(false);
+        return;
+      }
       setCode("");
       setStatus({ state: "connected", message: "Connected. Opening your workspace…" });
       router.replace("/");
@@ -90,6 +109,18 @@ export default function ConnectClient() {
       )}
       {status.state === "connected" && (
         <p role="status" className="rounded-lg border bg-muted/40 p-4 text-sm">{status.message}</p>
+      )}
+      {status.state === "partial" && (
+        <div role="status" className="space-y-2 rounded-lg border bg-muted/40 p-4 text-sm">
+          <p>{status.message}</p>
+          <ul className="list-disc space-y-1 pl-5">
+            {status.failures.map((failure) => (
+              <li key={failure.kind + "-" + failure.port}>{failure.kind} (port {failure.port}): {failure.message}</li>
+            ))}
+          </ul>
+          <p>The connected Runners work in this tab. Run <code>aiboard</code> again for a new code for the rest; used codes are never retried.</p>
+          <Button type="button" onClick={() => router.replace("/")}>Open workspace</Button>
+        </div>
       )}
       {status.state === "error" && (
         <div role="alert" className="space-y-2 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm">

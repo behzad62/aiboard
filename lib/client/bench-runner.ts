@@ -7,7 +7,20 @@ import type {
 import type { WorkBenchTrustedPolicy } from "@/lib/benchmark/workbench/types";
 import type { NativeToolEvidenceInput } from "@/lib/client/runner-v2";
 
+import { getPeerConnection } from "./local-runner-handoff";
+
 export const DEFAULT_BENCH_RUNNER_URL = "http://127.0.0.1:8797";
+
+/** Tab-scoped bench Runner connection issued by `aiboard bench`, if any. */
+export function getLauncherBenchRunnerConfig(): BenchRunnerConfig | null {
+  const connection = getPeerConnection("bench");
+  return connection ? { url: connection.url, token: connection.token } : null;
+}
+
+/** A launcher-issued bench session wins; a manual URL + token keeps working. */
+export function resolveBenchRunnerConfig(fallback?: BenchRunnerConfig | null): BenchRunnerConfig | null {
+  return getLauncherBenchRunnerConfig() ?? fallback ?? null;
+}
 
 export type BenchRunnerConfig = WorkBenchRunnerConfig;
 

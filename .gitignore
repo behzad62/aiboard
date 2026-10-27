@@ -66,6 +66,7 @@ yarn-error.log*
 /public/runner-manifest.json
 /public/account-provider-runner.mjs
 /public/bench-runner.mjs
+/public/local-pair-runner.mjs
 /public/bench-native-tool-evidence.mjs
 
 # typescript

@@ -449,7 +449,7 @@ export class ControlServer {
     if (!sessionToken) { await refuse(); return; }
     const address = this.server?.address();
     if (!address || typeof address === "string") { this.localPairing.revoke(sessionToken); await refuse(); return; }
-    sendJson(response, 200, { version: 1, instanceId: this.localPairing.instanceId, kind: "runner", port: address.port, sessionToken, peers: [] });
+    sendJson(response, 200, { version: 1, instanceId: this.localPairing.instanceId, kind: "runner", port: address.port, sessionToken, peers: this.localPairing.exchangePeers() });
   }
 
   private async route(

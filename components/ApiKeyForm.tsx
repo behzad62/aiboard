@@ -39,6 +39,7 @@ import {
   saveModelMetadataOverrides,
   getModelMetadataOverrides,
   fetchChatGPTAccountStatus,
+  getLauncherAccountRunnerConnection,
   type ChatGPTAccountStatus,
   type OpenRouterCatalogModel,
   refreshProviderModelCapabilities,
@@ -543,8 +544,9 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setDeviceLoginPrompt(null);
     try {
       const saved = getProviderKey(provider.providerId);
-      const runnerBaseURL = (baseURL || saved?.baseURL || "").trim().replace(/\/$/, "");
-      const runnerToken = (apiKey || saved?.apiKey || "").trim();
+      const launcherAccount = getLauncherAccountRunnerConnection();
+      const runnerBaseURL = (launcherAccount?.baseURL || baseURL || saved?.baseURL || "").trim().replace(/\/$/, "");
+      const runnerToken = (launcherAccount?.runnerToken || apiKey || saved?.apiKey || "").trim();
       if (!runnerBaseURL) throw new Error("Enter the account runner URL first");
       if (!runnerToken) throw new Error("Enter or save the account runner token first");
       if (provider.providerId === "chatgpt") await fetchChatGPTAccountStatus(runnerBaseURL, runnerToken);

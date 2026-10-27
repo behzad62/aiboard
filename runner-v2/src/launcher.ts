@@ -1,7 +1,8 @@
 // RUNNER_RAW_PROCESS_BOUNDARY: The launcher starts the fixed Runner V2 entrypoint and the OS URL opener.
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,11 +14,21 @@ import {
   type LauncherIdentity, type LauncherInstance,
 } from "./launcher-instance.js";
 import { requestLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
-import { createLocalPairTicket } from "./local-pairing.js";
+import { createLocalPairTicket, type LocalPairPeer } from "./local-pairing.js";
+
+export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
+const RUNNER_KINDS: readonly RunnerKind[] = ["runner", "accounts", "legacy", "bench"];
+export interface PeerInstance extends LauncherInstance { kind: RunnerKind }
+const peerEntries: Record<Exclude<RunnerKind, "runner">, string> = {
+  accounts: fileURLToPath(new URL("../../lib/account-provider-runner.mjs", import.meta.url)),
+  legacy: fileURLToPath(new URL("../../scripts/runner.mjs", import.meta.url)),
+  bench: fileURLToPath(new URL("../../scripts/bench-runner.mjs", import.meta.url)),
+};
 
 type Command = "start" | "status" | "stop" | "version" | "help";
 export interface LauncherArguments {
   command: Command;
+  runners: RunnerKind[];
   project?: string;
   stateDirectory?: string;
   runnerFlags: string[];
@@ -33,13 +44,27 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
   const args = [...raw];
   while (args[0] === "--") args.shift();
   let command: Command = "start";
-  if (args[0] && !args[0].startsWith("-")) {
-    const name = args.shift();
-    if (name !== "status" && name !== "stop" && name !== "version") throw new Error("invalid_arguments: Unknown aiboard command. See --help.");
-    command = name;
+  const selected: RunnerKind[] = [];
+  while (args[0] && !args[0].startsWith("-")) {
+    const name = args[0];
+    if (name === "status" || name === "stop" || name === "version") {
+      if (selected.length > 0) throw new Error("invalid_arguments: Unknown aiboard command. See --help.");
+      args.shift();
+      command = name;
+      break;
+    }
+    if (name !== "runner" && name !== "accounts" && name !== "legacy" && name !== "bench" && name !== "all") {
+      throw new Error("invalid_arguments: Unknown aiboard command. See --help.");
+    }
+    args.shift();
+    const expanded: RunnerKind[] = name === "all" ? [...RUNNER_KINDS] : [name];
+    for (const kind of expanded) {
+      if (selected.includes(kind)) throw new Error(`invalid_arguments: Duplicate runner ${kind}.`);
+      selected.push(kind);
+    }
   }
   const seen = new Set<string>();
-  const result: LauncherArguments = { command, runnerFlags: [] };
+  const result: LauncherArguments = { command, runners: selected.length > 0 ? selected : ["runner"], runnerFlags: [] };
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index]!;
     if (flag === "--help" || flag === "-h") { result.command = "help"; continue; }
@@ -71,6 +96,7 @@ interface LauncherRuntime {
   platform?: NodeJS.Platform;
   write?: (message: string) => void;
   spawnRunner?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+  spawnPeer?: (kind: RunnerKind, command: string, args: string[], options: SpawnOptions) => ChildProcess;
   openUrl?: (url: string) => void;
 }
 
@@ -106,115 +132,425 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   let releaseDiscovery = await acquireDiscoveryLock(stateDirectory);
   let child: ChildProcess | undefined;
   let started = false;
+  const freshChildren: ChildProcess[] = [];
+  const freshKinds = new Set<RunnerKind>();
+  const ownedKeys: Buffer[] = [];
   try {
     await assertProjectBinding(stateDirectory, identity);
     const recorded = await readInstance(stateDirectory);
     if (recorded) assertInstanceIdentity(recorded, identity);
-    const freeLifetime = tryAcquireLock(stateDirectory, "lifetime");
-    if (!freeLifetime) {
-      if (!recorded) throw new Error("instance_unverified: A Runner may still be starting or closing; retry after it settles.");
-      const key = await readControlKey(stateDirectory);
-      let releasedLifetime: (() => void) | undefined;
-      try {
-        const status = await requestLauncherControl(recorded, key, "status").catch(() => {
+    const peerRecords = await readPeerInstances(stateDirectory, identity);
+
+    if (args.command !== "start") {
+      if (!recorded && peerRecords.length === 0) {
+        const freeLifetime = tryAcquireLock(stateDirectory, "lifetime");
+        if (freeLifetime) {
+          freeLifetime();
+          if (args.command === "status") { write("No Runner is running for this project.\n"); return; }
+          throw new Error("instance_not_running: No Runner is running for this project.");
+        }
+        throw new Error("instance_unverified: A Runner may still be starting or closing; retry after it settles.");
+      }
+      const probe = tryAcquireLock(stateDirectory, "lifetime");
+      const v2Stale = probe !== null;
+      if (probe) probe();
+      if (args.command === "status") {
+        const lines: string[] = [];
+        if (recorded && !v2Stale) {
+          const key = await readControlKey(stateDirectory);
+          ownedKeys.push(key);
+          const status = await requestLauncherControl(recorded, key, "status").catch(() => {
+            throw new Error("instance_unverified: The recorded Runner cannot be verified; no process was stopped.");
+          });
+          lines.push(describe(recorded, status.healthy ? "running" : "unhealthy"));
+        }
+        for (const peer of peerRecords) {
+          const key = await readPeerControlKey(stateDirectory, peer.kind);
+          ownedKeys.push(key);
+          const status = await requestLauncherControl(peer, key, "status").catch(() => {
+            throw new Error("instance_unverified: A recorded Runner cannot be verified; no process was stopped.");
+          });
+          lines.push(describe(peer, status.healthy ? "running" : "unhealthy"));
+        }
+        write(lines.length > 0 ? lines.join("") : "No Runner is running for this project.\n");
+        return;
+      }
+      // stop: verify every recorded runner before stopping any of them.
+      if (recorded && v2Stale && peerRecords.length === 0) {
+        throw new Error("instance_stale: The recorded Runner is no longer running; no process was stopped.");
+      }
+      let v2Key: Buffer | undefined;
+      const peerKeys = new Map<RunnerKind, Buffer>();
+      if (recorded && !v2Stale) {
+        v2Key = await readControlKey(stateDirectory);
+        ownedKeys.push(v2Key);
+        await requestLauncherControl(recorded, v2Key, "status").catch(() => {
           throw new Error("instance_unverified: The recorded Runner cannot be verified; no process was stopped.");
         });
-        if (args.command === "status") { write(describe(recorded, status.healthy ? "running" : "unhealthy")); return; }
-        if (args.command === "start" && status.healthy) {
-          const ticket = createLocalPairTicket(recorded.instanceId);
-          await requestLauncherControl(recorded, key, "pair", ticket.digest);
-          write(describe(recorded, "already running"));
-          showPairing(ticket.code, recorded.port, args.noOpen === true, write, runtime);
-          return;
-        }
-        await requestLauncherControl(recorded, key, "stop");
-        releasedLifetime = await waitForLifetimeRelease(stateDirectory);
-      } finally { key.fill(0); }
-      try { await clearStaleInstance(stateDirectory, identity); } finally { releasedLifetime?.(); }
-      if (args.command === "stop") { write("Runner stopped.\n"); return; }
-    } else {
-      try { await clearStaleInstance(stateDirectory, identity); } finally { freeLifetime(); }
-      if (args.command === "status") { write("No Runner is running for this project.\n"); return; }
-      if (args.command === "stop") throw new Error(recorded ? "instance_stale: The recorded Runner is no longer running; no process was stopped." : "instance_not_running: No Runner is running for this project.");
+      }
+      for (const peer of peerRecords) {
+        const key = await readPeerControlKey(stateDirectory, peer.kind);
+        ownedKeys.push(key);
+        peerKeys.set(peer.kind, key);
+        await requestLauncherControl(peer, key, "status").catch(() => {
+          throw new Error("instance_unverified: A recorded Runner cannot be verified; no process was stopped.");
+        });
+      }
+      if (recorded && !v2Stale && v2Key) {
+        await requestLauncherControl(recorded, v2Key, "stop");
+        const releasedLifetime = await waitForLifetimeRelease(stateDirectory);
+        try { await clearStaleInstance(stateDirectory, identity); } finally { releasedLifetime(); }
+      } else if (recorded && v2Stale) {
+        await clearStaleInstance(stateDirectory, identity);
+      }
+      for (const peer of peerRecords) {
+        await requestLauncherControl(peer, peerKeys.get(peer.kind)!, "stop").catch(() => undefined);
+        await waitForControlDown(peer);
+      }
+      if (peerRecords.length > 0) await clearPeerInstances(stateDirectory);
+      write("Runner stopped.\n");
+      return;
     }
 
-    const key = await createControlKey(stateDirectory);
-    const token = randomBytes(32).toString("hex");
-    const instanceId = randomBytes(16).toString("hex");
-    const ticket = createLocalPairTicket(instanceId);
-    const handshake: LauncherHandshake = {
-      type: "aiboard-launcher-init", token, controlKey: key.toString("hex"), instanceId, pairDigest: ticket.digest, identity, stateDirectory, version,
-    };
+    const selected = args.runners;
+    const anchorKind: RunnerKind = selected.includes("runner") ? "runner" : selected[0]!;
+    const instances = new Map<RunnerKind, LauncherInstance>();
+    const tickets = new Map<RunnerKind, { code: string; digest: string }>();
+    const reused = new Set<RunnerKind>();
     const diagnostics: string[] = [];
     let diagnosticBytes = 0;
-    try {
-      const spawnRunner = runtime.spawnRunner ?? spawn;
-      child = spawnRunner(process.execPath, runnerSpawnArguments(identity, stateDirectory, args.runnerFlags), {
-        stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true,
+    const captureDiagnostics = (chunk: Buffer) => {
+      if (diagnosticBytes >= 262_144) return;
+      const text = chunk.toString("utf8").slice(0, 262_144 - diagnosticBytes);
+      diagnosticBytes += text.length;
+      diagnostics.push(text);
+    };
+
+    // Non-V2 runners first (anchor last), so the anchor learns every peer.
+    const peerOrder: RunnerKind[] = [
+      ...selected.filter((entry) => entry !== "runner" && entry !== anchorKind),
+      ...(anchorKind !== "runner" ? [anchorKind] : []),
+    ];
+    for (const kind of peerOrder) {
+      const existing = peerRecords.find((peer) => peer.kind === kind);
+      if (existing) {
+        const key = await readPeerControlKey(stateDirectory, kind).catch(() => {
+          throw new Error("instance_unverified: A recorded Runner cannot be verified; no process was stopped.");
+        });
+        ownedKeys.push(key);
+        const healthy = await requestLauncherControl(existing, key, "status").then((value) => value.healthy).catch(() => false);
+        if (healthy) {
+          instances.set(kind, existing);
+          tickets.set(kind, createLocalPairTicket(existing.instanceId));
+          reused.add(kind);
+          continue;
+        }
+        if (pidAlive(existing.pid)) throw new Error("instance_unverified: A recorded Runner cannot be verified; no process was stopped.");
+        await removePeerInstance(stateDirectory, kind, identity);
+      }
+      const port = await freePort();
+      const instanceId = randomBytes(16).toString("hex");
+      const ticket = createLocalPairTicket(instanceId);
+      tickets.set(kind, ticket);
+      const key = await createPeerControlKey(stateDirectory, kind);
+      ownedKeys.push(key);
+      const spawned = spawnPeerRunner(kind as Exclude<RunnerKind, "runner">, {
+        runtime, identity, stateDirectory, port, instanceId, ticket,
+        controlKey: key.toString("hex"), version,
+        peers: kind === anchorKind ? peerListFor(anchorKind, selected, instances, tickets) : [],
+        captureDiagnostics,
       });
-      const capturedChild = child;
-      child.stderr?.on("data", (chunk: Buffer) => {
-        if (diagnosticBytes >= 262_144) return;
-        const text = chunk.toString("utf8").slice(0, 262_144 - diagnosticBytes);
-        diagnosticBytes += text.length;
-        diagnostics.push(text);
-      });
-      child.stdout?.resume();
-      const closed = childClose(child);
-      const ready = childReady(child, handshake);
+      child ??= spawned.child;
+      freshChildren.push(spawned.child);
+      freshKinds.add(kind);
       const instance = await Promise.race([
-        ready,
-        closed.then(() => { throw new Error("runner_start_failed: Runner exited before it became ready."); }),
+        spawned.ready,
+        spawned.closed.then(() => { throw new Error("runner_start_failed: A selected Runner exited before it became ready."); }),
       ]);
-      if (instance.instanceId !== instanceId || instance.pid !== child.pid || instance.version !== version) {
+      if (instance.instanceId !== instanceId || instance.pid !== spawned.child.pid || instance.port !== port) {
         throw new Error("instance_unverified: Runner startup identity does not match its child handle.");
       }
-      assertInstanceIdentity(instance, identity);
-      const unexpectedlyFree = tryAcquireLock(stateDirectory, "lifetime");
-      if (unexpectedlyFree) { unexpectedlyFree(); throw new Error("instance_unverified: Runner did not retain its lifetime lock."); }
-      if (!(await requestLauncherControl(instance, key, "status")).healthy) throw new Error("runner_start_failed: Runner did not pass its health check.");
-      await writeInstance(stateDirectory, instance);
-      started = true;
-      releaseDiscovery();
-      releaseDiscovery = () => undefined;
-      key.fill(0);
-      write(describe(instance, "running"));
-      showPairing(ticket.code, instance.port, args.noOpen === true, write, runtime);
-      let interrupted = false;
-      const requestStop = () => { if (capturedChild.connected) capturedChild.send({ type: "aiboard-launcher-stop" }); };
-      const onInterrupt = () => { interrupted = true; requestStop(); };
-      process.once("SIGINT", onInterrupt);
-      process.once("SIGTERM", requestStop);
-      try {
-        const result = await closed;
-        if (result.code) process.exitCode = result.code;
-        else if (interrupted) process.exitCode = 130;
-        if (result.signal) process.exitCode = 1;
-        if ((result.code && result.code !== 130) || result.signal) {
-          const detail = redact(diagnostics.join(""), [token, ticket.code, ticket.digest]);
-          if (detail) process.stderr.write(`${detail}\n`);
-        }
-      } finally {
-        process.off("SIGINT", onInterrupt); process.off("SIGTERM", requestStop);
+      instances.set(kind, instance);
+    }
+
+    let v2Child: ChildProcess | undefined;
+    let v2Closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
+    let v2Token = "";
+    if (selected.includes("runner")) {
+      let reuseV2 = false;
+      const freeLifetime = tryAcquireLock(stateDirectory, "lifetime");
+      if (!freeLifetime) {
+        if (!recorded) throw new Error("instance_unverified: A Runner may still be starting or closing; retry after it settles.");
+        const key = await readControlKey(stateDirectory);
+        ownedKeys.push(key);
+        try {
+          const status = await requestLauncherControl(recorded, key, "status").catch(() => {
+            throw new Error("instance_unverified: The recorded Runner cannot be verified; no process was stopped.");
+          });
+          if (status.healthy) {
+            reuseV2 = true;
+            instances.set("runner", recorded);
+            tickets.set("runner", createLocalPairTicket(recorded.instanceId));
+            reused.add("runner");
+          } else {
+            await requestLauncherControl(recorded, key, "stop");
+            const releasedLifetime = await waitForLifetimeRelease(stateDirectory);
+            try { await clearStaleInstance(stateDirectory, identity); } finally { releasedLifetime(); }
+          }
+        } finally { key.fill(0); }
+      } else {
+        try { await clearStaleInstance(stateDirectory, identity); } finally { freeLifetime(); }
       }
-      const release = await acquireDiscoveryLock(stateDirectory);
+      if (!reuseV2) {
+        const key = await createControlKey(stateDirectory);
+        ownedKeys.push(key);
+        v2Token = randomBytes(32).toString("hex");
+        const instanceId = randomBytes(16).toString("hex");
+        const ticket = createLocalPairTicket(instanceId);
+        tickets.set("runner", ticket);
+        const handshake: LauncherHandshake = {
+          type: "aiboard-launcher-init", token: v2Token, controlKey: key.toString("hex"), instanceId,
+          pairDigest: ticket.digest, peers: peerListFor("runner", selected, instances, tickets), identity, stateDirectory, version,
+        };
+        const spawnRunner = runtime.spawnRunner ?? spawn;
+        v2Child = spawnRunner(process.execPath, runnerSpawnArguments(identity, stateDirectory, args.runnerFlags), {
+          stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true,
+        });
+        child = v2Child;
+        freshChildren.push(v2Child);
+        freshKinds.add("runner");
+        v2Child.stderr?.on("data", captureDiagnostics);
+        v2Child.stdout?.resume();
+        v2Closed = childClose(v2Child);
+        const ready = childReady(v2Child, handshake);
+        const instance = await Promise.race([
+          ready,
+          v2Closed.then(() => { throw new Error("runner_start_failed: Runner exited before it became ready."); }),
+        ]);
+        if (instance.instanceId !== instanceId || instance.pid !== v2Child.pid || instance.version !== version) {
+          throw new Error("instance_unverified: Runner startup identity does not match its child handle.");
+        }
+        assertInstanceIdentity(instance, identity);
+        const unexpectedlyFree = tryAcquireLock(stateDirectory, "lifetime");
+        if (unexpectedlyFree) { unexpectedlyFree(); throw new Error("instance_unverified: Runner did not retain its lifetime lock."); }
+        if (!(await requestLauncherControl(instance, key, "status")).healthy) throw new Error("runner_start_failed: Runner did not pass its health check.");
+        await writeInstance(stateDirectory, instance);
+        instances.set("runner", instance);
+      }
+    }
+
+    // Anchor peers are registered first, then the anchor with its peer list.
+    const anchorPeers = peerListFor(anchorKind, selected, instances, tickets);
+    for (const kind of selected) {
+      if (!reused.has(kind)) continue;
+      const instance = instances.get(kind)!;
+      const key = kind === "runner"
+        ? await readControlKey(stateDirectory)
+        : await readPeerControlKey(stateDirectory, kind);
+      ownedKeys.push(key);
       try {
+        await requestLauncherControl(instance, key, "pair", tickets.get(kind)!.digest, kind === anchorKind ? anchorPeers : undefined);
+      } finally { key.fill(0); }
+    }
+    const remainingPeers = [
+      ...peerRecords.filter((peer) => !selected.includes(peer.kind)),
+      ...selected.filter((kind) => kind !== "runner").map((kind) => ({ ...(instances.get(kind)!), kind })),
+    ];
+    if (remainingPeers.length > 0) await writePeerInstances(stateDirectory, remainingPeers);
+    else if (peerRecords.length > 0) await clearPeerInstances(stateDirectory);
+
+    started = true;
+    releaseDiscovery();
+    releaseDiscovery = () => undefined;
+    for (const kind of selected) {
+      write(describe(instances.get(kind)!, freshKinds.has(kind) ? "running" : "already running"));
+    }
+    const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
+    showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime);
+    if (freshChildren.length === 0) return;
+
+    let interrupted = false;
+    const requestStop = () => {
+      for (const fresh of freshChildren) if (fresh.connected) fresh.send({ type: "aiboard-launcher-stop" });
+    };
+    const onInterrupt = () => { interrupted = true; requestStop(); };
+    process.once("SIGINT", onInterrupt);
+    process.once("SIGTERM", requestStop);
+    const closedPromises = freshChildren.map((fresh) => childClose(fresh).catch(() => ({ code: null, signal: null })));
+    let firstSettled = false;
+    for (const closedPromise of closedPromises) {
+      void closedPromise.then(() => { if (!firstSettled) { firstSettled = true; requestStop(); } });
+    }
+    try {
+      const results = await Promise.all(closedPromises);
+      const v2Result = v2Child ? results[freshChildren.indexOf(v2Child)] : undefined;
+      if (v2Result?.code) process.exitCode = v2Result.code;
+      else if (interrupted) process.exitCode = 130;
+      if (v2Result?.signal) process.exitCode = 1;
+      if ((v2Result?.code && v2Result.code !== 130) || v2Result?.signal) {
+        const detail = redact(diagnostics.join(""), [v2Token, ...[...tickets.values()].map((ticket) => ticket.code), ...[...tickets.values()].map((ticket) => ticket.digest)]);
+        if (detail) process.stderr.write(`${detail}\n`);
+      }
+    } finally {
+      process.off("SIGINT", onInterrupt);
+      process.off("SIGTERM", requestStop);
+    }
+    const release = await acquireDiscoveryLock(stateDirectory);
+    try {
+      if (freshKinds.has("runner")) {
         const free = tryAcquireLock(stateDirectory, "lifetime");
         if (free) {
           try {
             const current = await readInstance(stateDirectory);
-            if (current?.instanceId === instance.instanceId) await clearStaleInstance(stateDirectory, identity);
+            const mine = instances.get("runner");
+            if (current && mine && current.instanceId === mine.instanceId) await clearStaleInstance(stateDirectory, identity);
           } finally { free(); }
         }
-      } finally { release(); }
-    } catch (error) {
-      if (child?.connected) child.disconnect();
-      const detail = redact(diagnostics.join(""), [token, ticket.code, ticket.digest]);
-      throw new Error(`${error instanceof Error ? error.message : String(error)}${detail ? `\n${detail}` : ""}`);
-    } finally { key.fill(0); }
+      }
+      const currentPeers = await readPeerInstances(stateDirectory, identity).catch(() => [] as PeerInstance[]);
+      const kept = currentPeers.filter((peer) => !(freshKinds.has(peer.kind) && instances.get(peer.kind)?.instanceId === peer.instanceId));
+      if (kept.length > 0) await writePeerInstances(stateDirectory, kept);
+      else if (currentPeers.length > 0) await clearPeerInstances(stateDirectory);
+      for (const kind of freshKinds) if (kind !== "runner") await removePeerControlKey(stateDirectory, kind);
+    } finally { release(); }
+  } catch (error) {
+    for (const fresh of freshChildren) if (fresh.connected) fresh.disconnect();
+    const detail = redact(diagnosticsSafe(error), []);
+    void detail;
+    throw error instanceof Error ? error : new Error(String(error));
   } finally {
+    for (const key of ownedKeys) key.fill(0);
     releaseDiscovery();
     if (child?.connected && !started) child.disconnect();
+  }
+}
+
+function diagnosticsSafe(_error: unknown): string { return ""; }
+
+function peerListFor(anchorKind: RunnerKind, selected: readonly RunnerKind[], instances: ReadonlyMap<RunnerKind, LauncherInstance>, tickets: ReadonlyMap<RunnerKind, { code: string }>): LocalPairPeer[] {
+  return selected.filter((kind) => kind !== anchorKind).map((kind) => {
+    const instance = instances.get(kind)!;
+    return { instanceId: instance.instanceId, kind, port: instance.port, code: tickets.get(kind)!.code };
+  });
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function freePort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => resolve()); });
+  const address = server.address();
+  const port = address && typeof address !== "string" ? address.port : 0;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (!port) throw new Error("runner_start_failed: No local port is available.");
+  return port;
+}
+
+function peerSpawnArguments(kind: Exclude<RunnerKind, "runner">, identity: LauncherIdentity, stateDirectory: string, port: number): string[] {
+  if (kind === "accounts") return [peerEntries.accounts, "--port", String(port), "--host", "127.0.0.1"];
+  if (kind === "legacy") return [peerEntries.legacy, identity.projectPath, "--port", String(port), "--host", "127.0.0.1"];
+  return [peerEntries.bench, "--port", String(port), "--host", "127.0.0.1", "--root", join(stateDirectory, "bench-runs")];
+}
+
+function spawnPeerRunner(kind: Exclude<RunnerKind, "runner">, input: {
+  runtime: LauncherRuntime; identity: LauncherIdentity; stateDirectory: string; port: number;
+  instanceId: string; ticket: { digest: string }; controlKey: string; version: string;
+  peers: LocalPairPeer[]; captureDiagnostics: (chunk: Buffer) => void;
+}): { child: ChildProcess; ready: Promise<PeerInstance>; closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> } {
+  const spawnPeer = input.runtime.spawnPeer ?? ((_kind, command, args, options) => spawn(command, args, options));
+  const child = spawnPeer(kind, process.execPath, peerSpawnArguments(kind, input.identity, input.stateDirectory, input.port), {
+    stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true,
+  });
+  child.stderr?.on("data", input.captureDiagnostics);
+  child.stdout?.on("data", input.captureDiagnostics);
+  const closed = childClose(child);
+  const ready = new Promise<PeerInstance>((resolve, reject) => {
+    let initialized = false;
+    const onMessage = (message: unknown) => {
+      if (typeof message !== "object" || message === null || !("type" in message)) return;
+      if (message.type === "aiboard-local-pair-awaiting-init" && !initialized) {
+        initialized = true;
+        child.send({
+          type: "aiboard-local-pair-init", kind, instanceId: input.instanceId, pairDigest: input.ticket.digest,
+          peers: input.peers, controlKey: input.controlKey, identity: input.identity, version: input.version, startedAt: Date.now(),
+        }, (error) => { if (error) reject(new Error("launcher_ipc_unavailable: Cannot send the Runner handshake.")); });
+        return;
+      }
+      if (message.type !== "aiboard-local-pair-ready" || !initialized || !("instance" in message)) return;
+      child.off("message", onMessage);
+      resolve(message.instance as PeerInstance);
+    };
+    child.on("message", onMessage);
+    child.once("error", reject);
+  });
+  return { child, ready, closed };
+}
+
+async function readPeerInstances(stateDirectory: string, identity: LauncherIdentity): Promise<PeerInstance[]> {
+  let raw: string;
+  try { raw = await readFile(join(stateDirectory, "launcher-peers.json"), "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== "object" || value === null || !("peers" in value) || !Array.isArray(value.peers)) {
+    throw new Error("instance_invalid: The launcher peer record is invalid; no process was stopped.");
+  }
+  const peers = value.peers as PeerInstance[];
+  for (const peer of peers) {
+    if (!RUNNER_KINDS.includes(peer.kind) || peer.kind === "runner") throw new Error("instance_invalid: The launcher peer record is invalid; no process was stopped.");
+    assertInstanceIdentity(peer, identity);
+  }
+  return peers;
+}
+
+async function writePeerInstances(stateDirectory: string, peers: readonly PeerInstance[]): Promise<void> {
+  const target = join(stateDirectory, "launcher-peers.json");
+  const temporary = `${target}.${randomBytes(8).toString("hex")}.tmp`;
+  await writeFile(temporary, JSON.stringify({ schemaVersion: 1, peers }), { flag: "wx", mode: 0o600 });
+  try { await rename(temporary, target); }
+  catch (error) { await unlink(temporary).catch(() => undefined); throw error; }
+}
+
+async function clearPeerInstances(stateDirectory: string): Promise<void> {
+  await unlink(join(stateDirectory, "launcher-peers.json")).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
+}
+
+async function removePeerInstance(stateDirectory: string, kind: RunnerKind, identity: LauncherIdentity): Promise<void> {
+  const peers = await readPeerInstances(stateDirectory, identity);
+  const kept = peers.filter((peer) => peer.kind !== kind);
+  if (kept.length > 0) await writePeerInstances(stateDirectory, kept);
+  else await clearPeerInstances(stateDirectory);
+  await removePeerControlKey(stateDirectory, kind);
+}
+
+function peerControlKeyPath(stateDirectory: string, kind: RunnerKind): string {
+  return join(stateDirectory, `launcher-control-${kind}.key`);
+}
+
+async function createPeerControlKey(stateDirectory: string, kind: RunnerKind): Promise<Buffer> {
+  const key = randomBytes(32);
+  await unlink(peerControlKeyPath(stateDirectory, kind)).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
+  try { await writeFile(peerControlKeyPath(stateDirectory, kind), key, { flag: "wx", mode: 0o600 }); }
+  catch (error) { key.fill(0); throw error; }
+  return key;
+}
+
+async function readPeerControlKey(stateDirectory: string, kind: RunnerKind): Promise<Buffer> {
+  const key = await readFile(peerControlKeyPath(stateDirectory, kind));
+  if (key.length !== 32) { key.fill(0); throw new Error("instance_invalid: The launcher control key is invalid."); }
+  return key;
+}
+
+async function removePeerControlKey(stateDirectory: string, kind: RunnerKind): Promise<void> {
+  await unlink(peerControlKeyPath(stateDirectory, kind)).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
+}
+
+async function waitForControlDown(instance: LauncherInstance): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (!pidAlive(instance.pid)) return;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
   }
 }
 
@@ -253,8 +589,8 @@ async function waitForLifetimeRelease(stateDirectory: string): Promise<() => voi
   throw new Error("runner_shutdown_pending: Runner cleanup is still in progress; retry status later.");
 }
 
-function showPairing(code: string, port: number, noOpen: boolean, write: (message: string) => void, runtime: LauncherRuntime): void {
-  const url = `https://aiboard.me/connect#pair=${code}&runners=${port}`;
+function showPairing(code: string, ports: readonly number[], noOpen: boolean, write: (message: string) => void, runtime: LauncherRuntime): void {
+  const url = `https://aiboard.me/connect#pair=${code}&runners=${ports.join(",")}`;
   write(`Pairing code: ${code}\nConnect: ${url}\n`);
   if (noOpen) return;
   try { (runtime.openUrl ?? ((target) => openPairUrl(target, runtime.platform ?? process.platform)))(url); }
@@ -286,8 +622,10 @@ function redact(value: string, secrets: (string | undefined)[]): string {
 }
 function help(): string {
   return [
-    "AIBoard Runner V2", "", "Usage: aiboard [status|stop|version] [options]", "",
-    "Runs the current directory in the foreground, or reuses its healthy Runner.",
+    "AIBoard Runner", "", "Usage: aiboard [runner|accounts|legacy|bench|all ...] [options]", "       aiboard [status|stop|version] [options]", "",
+    "Runs the selected runners for the current directory in the foreground, or reuses healthy ones.",
+    "With no selection only Runner V2 runs; `all` runs every runner. Runner V2 is",
+    "the pairing anchor whenever it is selected, otherwise the first listed runner is.",
     "  --no-open                 Do not open a browser (print the pairing code and URL).",
     "  --project <absolute-path> Override the current project directory.",
     "  --state-dir <path>        Use an absolute state directory outside the project.",

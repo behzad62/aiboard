@@ -4,6 +4,8 @@ import {
   clearLauncherSession,
   connectManually,
   consumeConnectFragment,
+  getPeerConnection,
+  readLauncherSessions,
   discussionNeedsLauncherReconnect,
   exchangeLocalPairCode,
   getLauncherConnection,
@@ -300,6 +302,94 @@ for (const badHash of [
   // Revoking with no session is a no-op and makes no request.
   assert.equal(await revokeLauncherSession({ fetchImpl, storage }), false);
   assert.equal(calls.length, 1);
+}
+
+// --- Combined launch: anchor exchange pairs each peer with its own ticket ---
+{
+  const PEER_INSTANCE = "peer_inst-1";
+  const PEER_SECRET = "C".repeat(43);
+  const PEER_CODE = `v1.${PEER_INSTANCE}.${PEER_SECRET}`;
+  const PEER_TOKEN = `session_${"D".repeat(43)}`;
+  const storage = memoryStorage();
+  const calls: Array<{ url: string; init?: Record<string, unknown> }> = [];
+  const fetchImpl = (async (url: string, init?: Record<string, unknown>) => {
+    calls.push({ url, init });
+    if (url.startsWith("http://127.0.0.1:8787/")) {
+      return { ok: true, status: 200, json: async () => ({ version: 1, instanceId: INSTANCE, kind: "runner", port: 8787, sessionToken: SESSION_TOKEN, peers: [{ instanceId: PEER_INSTANCE, kind: "accounts", port: 8788, code: PEER_CODE }] }) };
+    }
+    assert.equal(url, "http://127.0.0.1:8788/v1/local-pair/exchange");
+    assert.deepEqual(JSON.parse((init as { body: string }).body), { version: 1, code: PEER_CODE });
+    return { ok: true, status: 200, json: async () => ({ version: 1, instanceId: PEER_INSTANCE, kind: "accounts", port: 8788, sessionToken: PEER_TOKEN, peers: [] }) };
+  }) as FetchLike;
+  const combined = await exchangeLocalPairCode({ code: CODE, ports: [8787, 8788], fetchImpl, storage });
+  assert.equal(combined.sessionToken, SESSION_TOKEN);
+  assert.equal(combined.failures.length, 0);
+  assert.equal(combined.peerSessions.length, 2);
+  assert.deepEqual(getPeerConnection("accounts", storage), { url: "http://127.0.0.1:8788", token: PEER_TOKEN, source: "launcher" });
+  assert.equal(readLauncherSessions(storage).runner?.sessionToken, SESSION_TOKEN);
+  // Session tokens of every kind are stripped before persistence.
+  assert.equal(sanitizeRunnerTokenForPersistence(PEER_TOKEN, storage), null);
+  clearLauncherSession(storage);
+  assert.deepEqual(readLauncherSessions(storage), {});
+  assert.equal(getPeerConnection("accounts", storage), null);
+}
+
+{
+  // Partial failure: the peer refuses; the anchor connection is kept and the
+  // consumed peer ticket is attempted exactly once.
+  const PEER_INSTANCE = "peer_inst-2";
+  const PEER_CODE = `v1.${PEER_INSTANCE}.${"E".repeat(43)}`;
+  const storage = memoryStorage();
+  let peerAttempts = 0;
+  const fetchImpl = (async (url: string) => {
+    if (url.startsWith("http://127.0.0.1:8787/")) {
+      return { ok: true, status: 200, json: async () => ({ version: 1, instanceId: INSTANCE, kind: "runner", port: 8787, sessionToken: SESSION_TOKEN, peers: [{ instanceId: PEER_INSTANCE, kind: "legacy", port: 8789, code: PEER_CODE }] }) };
+    }
+    peerAttempts += 1;
+    return { ok: false, status: 400, json: async () => ({ error: "Local pairing request refused.", code: "local_pair_refused" }) };
+  }) as FetchLike;
+  const combined = await exchangeLocalPairCode({ code: CODE, ports: [8787, 8789], fetchImpl, storage });
+  assert.equal(combined.peerSessions.length, 1);
+  assert.equal(combined.failures.length, 1);
+  assert.equal(combined.failures[0]!.kind, "legacy");
+  assert.equal(combined.failures[0]!.port, 8789);
+  assert.equal(peerAttempts, 1, "a consumed peer ticket must not be retried");
+  assert.equal(getLauncherConnection(storage)?.token, SESSION_TOKEN);
+  assert.equal(getPeerConnection("legacy", storage), null);
+  clearLauncherSession(storage);
+}
+
+{
+  // A peer that returns further peers is rejected and stores nothing.
+  const PEER_INSTANCE = "peer_inst-3";
+  const PEER_CODE = `v1.${PEER_INSTANCE}.${"F".repeat(43)}`;
+  const storage = memoryStorage();
+  const fetchImpl = (async (url: string) => {
+    if (url.startsWith("http://127.0.0.1:8787/")) {
+      return { ok: true, status: 200, json: async () => ({ version: 1, instanceId: INSTANCE, kind: "runner", port: 8787, sessionToken: SESSION_TOKEN, peers: [{ instanceId: PEER_INSTANCE, kind: "bench", port: 8790, code: PEER_CODE }] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ version: 1, instanceId: PEER_INSTANCE, kind: "bench", port: 8790, sessionToken: `session_${"G".repeat(43)}`, peers: [{ instanceId: "x", kind: "legacy", port: 8790, code: PEER_CODE }] }) };
+  }) as FetchLike;
+  const combined = await exchangeLocalPairCode({ code: CODE, ports: [8787, 8790], fetchImpl, storage });
+  assert.equal(combined.failures.length, 1);
+  assert.equal(combined.failures[0]!.kind, "bench");
+  assert.equal(getPeerConnection("bench", storage), null);
+  assert.equal(getLauncherConnection(storage)?.token, SESSION_TOKEN);
+  clearLauncherSession(storage);
+}
+
+{
+  // An unknown/extra peer kind from the anchor is an invalid response.
+  const storage = memoryStorage();
+  const fetchImpl = okFetch({
+    version: 1, instanceId: INSTANCE, kind: "runner", port: 8787, sessionToken: SESSION_TOKEN,
+    peers: [{ instanceId: "peerx", kind: "runner", port: 8788, code: `v1.peerx.${"H".repeat(43)}` }],
+  });
+  await expectHandoffError(
+    exchangeLocalPairCode({ code: CODE, ports: [8787, 8788], fetchImpl, storage }),
+    "invalid_response"
+  );
+  assert.equal(readLauncherSession(storage), null);
 }
 
 console.log("PASS local runner handoff");

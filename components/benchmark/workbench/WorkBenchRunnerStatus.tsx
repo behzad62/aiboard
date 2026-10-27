@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  getLauncherBenchRunnerConfig,
   getTrustedBenchRunnerReadiness,
   type BenchRunnerHealth,
 } from "@/lib/client/bench-runner";
@@ -62,6 +63,8 @@ export function WorkBenchRunnerStatus({
       ? `${runtimeLabel} runtime ready${workBenchCase?.trustedPolicy ? ` (${health.rjs?.profile ?? "profile unavailable"})` : ""}`
       : trustedReadiness?.error;
   const recoverableJobService = workBenchCase?.trustedPolicy?.kind === "recoverable-job-service";
+  const launcherBench = getLauncherBenchRunnerConfig();
+  const launcherConnected = Boolean(launcherBench && launcherBench.url === url && launcherBench.token === token);
   const download = recoverableJobService
     ? {
         href: "/aiboard-rjs-workbench-runner.zip",
@@ -134,6 +137,9 @@ export function WorkBenchRunnerStatus({
         </div>
       </div>
       <div className="mt-3 space-y-2 text-sm text-muted-foreground">
+        {launcherConnected ? (
+          <p className="text-xs">Connected by the <code>aiboard</code> launcher in this tab. The session token is never saved; run <code>aiboard bench</code> again after a Runner restart.</p>
+        ) : null}
         <div className="flex items-center gap-2">
           <BenchStatusIcon className={health?.ok ? "h-4 w-4 text-emerald-600" : health ? "h-4 w-4 text-destructive" : "h-4 w-4"} />
           <span className="min-w-0 break-words">{benchStatusText}</span>

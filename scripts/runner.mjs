@@ -71,6 +71,7 @@ import {
   extractMcpImageContent,
   RUNNER_PUBLIC_KEY,
 } from "./runner-lib.mjs";
+import { createPairingEndpoint } from "./local-pair-runner.mjs";
 
 const VERSION = 13;
 // PANEL_HTML is replaced at build time (scripts/build-runner.mjs) with the inlined
@@ -278,9 +279,10 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+const pairing = createPairingEndpoint({ kind: "legacy", getPort: () => port, shutdown: () => { try { server.close(() => process.exit(0)); } catch { process.exit(0); } } });
 function authorized(req) {
   const provided = req.headers["x-runner-token"];
-  return typeof provided === "string" && tokensMatch(provided, token);
+  return (typeof provided === "string" && tokensMatch(provided, token)) || pairing.hasSession(provided);
 }
 
 function readBody(req) {
@@ -2181,6 +2183,7 @@ function performUpdateRestart(selfPath, preservedArgv) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (await pairing.handle(req, res)) return;
   const origin = req.headers.origin;
   const originAllowed = isAllowedOrigin(origin, allowedOrigins);
   if (origin && originAllowed) {
@@ -3090,12 +3093,14 @@ const server = http.createServer(async (req, res) => {
 
 const bindHost = host ?? "127.0.0.1";
 server.listen(port, bindHost, () => {
+  void pairing.attach();
   console.log("AI Board — local runner");
   console.log("──────────────────────────────────");
   console.log(`Version        : v${VERSION}`);
   console.log(`Project folder : ${projectDir}`);
   console.log(`URL            : http://${bindHost}:${port}`);
-  console.log(`Token          : ${token}`);
+  // A launcher-started runner never prints its reusable token; the browser pairs through aiboard instead.
+  console.log(`Token          : ${process.send ? "held by aiboard (this tab pairs automatically)" : token}`);
   console.log("");
   if (!isLoopbackHost(host)) {
     console.log(

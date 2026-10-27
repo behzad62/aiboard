@@ -357,7 +357,10 @@ async function main(): Promise<void> {
     pins.chats = chatSessions;
     await chatSessions.recover();
     const localPairing = launcher ? new LocalPairing(launcher.instanceId) : undefined;
-    if (launcher && localPairing) localPairing.register(launcher.pairDigest);
+    if (launcher && localPairing) {
+      localPairing.register(launcher.pairDigest);
+      if (launcher.peers?.length) localPairing.setPeers(launcher.peers);
+    }
     const server = new ControlServer({
       localPairing,
       allowLocalPairDevOrigin: process.env.AIBOARD_LOCAL_PAIR_DEV_ORIGIN === "1",
@@ -459,9 +462,10 @@ async function main(): Promise<void> {
         port: address.port,
         token: options.token,
         controlKey: Buffer.from(launcher.controlKey, "hex"),
-        registerPair: (digest) => {
+        registerPair: (digest, peers) => {
           if (!localPairing) throw new Error("Pairing unavailable.");
           localPairing.register(digest);
+          if (peers?.length) localPairing.setPeers(peers);
         },
         shutdown: requestLauncherShutdown,
       });

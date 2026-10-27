@@ -381,6 +381,7 @@ try {
   const isolatedScript = join(isolatedDirectory, "bench-runner.mjs");
   await copyFile(join(repoRoot, "scripts", "bench-runner.mjs"), isolatedScript);
   await copyFile(join(repoRoot, "scripts", "bench-native-tool-evidence.mjs"), join(isolatedDirectory, "bench-native-tool-evidence.mjs"));
+  await copyFile(join(repoRoot, "scripts", "local-pair-runner.mjs"), join(isolatedDirectory, "local-pair-runner.mjs"));
   await copyFile(
     join(repoRoot, "scripts", "workbench-rjs-support.mjs"),
     join(isolatedDirectory, "workbench-rjs-support.mjs")

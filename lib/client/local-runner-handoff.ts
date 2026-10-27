@@ -11,6 +11,9 @@
  */
 
 export const LOCAL_RUNNER_SESSION_STORAGE_KEY = "aiboard:local-runner-session:v1";
+export const LOCAL_RUNNER_SESSIONS_STORAGE_KEY = "aiboard:local-runner-sessions:v1";
+export type LocalRunnerKind = "runner" | "accounts" | "legacy" | "bench";
+const LOCAL_RUNNER_KINDS: readonly LocalRunnerKind[] = ["runner", "accounts", "legacy", "bench"];
 
 const PAIR_CODE = /^v1\.([A-Za-z0-9_-]{1,256})\.([A-Za-z0-9_-]{43})$/;
 const INSTANCE_ID = /^[A-Za-z0-9_-]{1,256}$/;
@@ -38,7 +41,14 @@ export class LocalRunnerHandoffError extends Error {
 export interface LocalRunnerMetadata {
   port: number;
   instanceId: string;
-  kind: "runner";
+  kind: LocalRunnerKind;
+}
+
+export interface PeerExchangeFailure { kind: LocalRunnerKind; port: number; message: string }
+
+export interface CombinedLauncherSession extends LauncherSession {
+  peerSessions: LauncherSession[];
+  failures: PeerExchangeFailure[];
 }
 
 export interface LauncherSession extends LocalRunnerMetadata {
@@ -67,6 +77,7 @@ export type FetchLike = (
 }>;
 
 let memorySession: LauncherSession | null = null;
+const memorySessions = new Map<LocalRunnerKind, LauncherSession>();
 
 function defaultStorage(): StorageLike | null {
   try {
@@ -158,27 +169,71 @@ export function parseConnectFragment(hash: string): { code: string; instanceId: 
 function validateSessionShape(value: unknown): LauncherSession | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (record.kind !== "runner") return null;
+  if (typeof record.kind !== "string" || !(LOCAL_RUNNER_KINDS as readonly string[]).includes(record.kind)) return null;
   if (typeof record.instanceId !== "string" || !INSTANCE_ID.test(record.instanceId)) return null;
   if (typeof record.port !== "number" || !isValidPort(record.port)) return null;
   if (typeof record.sessionToken !== "string" || record.sessionToken.length < 1 || record.sessionToken.length > 512) return null;
-  return { port: record.port, instanceId: record.instanceId, kind: "runner", sessionToken: record.sessionToken };
+  return { port: record.port, instanceId: record.instanceId, kind: record.kind as LocalRunnerKind, sessionToken: record.sessionToken };
+}
+
+function readStoredSessions(storage: StorageLike | null): Map<LocalRunnerKind, LauncherSession> {
+  const sessions = new Map<LocalRunnerKind, LauncherSession>();
+  try {
+    const raw = storage?.getItem(LOCAL_RUNNER_SESSIONS_STORAGE_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        for (const value of Object.values(parsed as Record<string, unknown>)) {
+          const session = validateSessionShape(value);
+          if (session) sessions.set(session.kind, session);
+        }
+      }
+    }
+  } catch { /* tab memory still applies */ }
+  for (const [kind, session] of memorySessions) sessions.set(kind, session);
+  return sessions;
+}
+
+/** Every launcher session held by this tab, keyed by runner kind. */
+export function readLauncherSessions(storage: StorageLike | null = defaultStorage()): Partial<Record<LocalRunnerKind, LauncherSession>> {
+  const sessions = readStoredSessions(storage);
+  const legacy = readLauncherSession(storage);
+  if (legacy && !sessions.has(legacy.kind)) sessions.set(legacy.kind, legacy);
+  return Object.fromEntries(sessions);
+}
+
+export function getLauncherSession(kind: LocalRunnerKind, storage: StorageLike | null = defaultStorage()): LauncherSession | null {
+  return readStoredSessions(storage).get(kind) ?? (kind === "runner" ? readLauncherSession(storage) : null);
+}
+
+export function getPeerConnection(kind: LocalRunnerKind, storage: StorageLike | null = defaultStorage()): LauncherConnection | null {
+  const session = getLauncherSession(kind, storage);
+  return session ? { url: `http://127.0.0.1:${session.port}`, token: session.sessionToken, source: "launcher" } : null;
 }
 
 export function storeLauncherSession(session: LauncherSession, storage: StorageLike | null = defaultStorage()): void {
   const valid = validateSessionShape(session);
   if (!valid) throw new LocalRunnerHandoffError("invalid_response", "The Runner returned an invalid session.");
-  memorySession = valid;
+  memorySessions.set(valid.kind, valid);
+  if (valid.kind === "runner") memorySession = valid;
   try {
-    storage?.setItem(LOCAL_RUNNER_SESSION_STORAGE_KEY, JSON.stringify(valid));
+    const sessions = readStoredSessions(storage);
+    sessions.set(valid.kind, valid);
+    storage?.setItem(LOCAL_RUNNER_SESSIONS_STORAGE_KEY, JSON.stringify(Object.fromEntries(sessions)));
   } catch {
     // Memory still holds the session for this tab even if storage is unavailable.
   }
 }
 
+export function storePeerSession(session: LauncherSession, storage: StorageLike | null = defaultStorage()): void {
+  storeLauncherSession(session, storage);
+}
+
 /** Tab-scoped only: memory first, then sessionStorage. Never persistent storage. */
 export function readLauncherSession(storage: StorageLike | null = defaultStorage()): LauncherSession | null {
   if (memorySession) return memorySession;
+  const combined = readStoredSessions(storage).get("runner");
+  if (combined) { memorySession = combined; return combined; }
   try {
     const raw = storage?.getItem(LOCAL_RUNNER_SESSION_STORAGE_KEY);
     if (!raw) return null;
@@ -192,8 +247,10 @@ export function readLauncherSession(storage: StorageLike | null = defaultStorage
 
 export function clearLauncherSession(storage: StorageLike | null = defaultStorage()): void {
   memorySession = null;
+  memorySessions.clear();
   try {
     storage?.removeItem(LOCAL_RUNNER_SESSION_STORAGE_KEY);
+    storage?.removeItem(LOCAL_RUNNER_SESSIONS_STORAGE_KEY);
   } catch {
     // Nothing else to clear; the in-memory copy is already gone.
   }
@@ -213,8 +270,8 @@ export function getLauncherConnection(storage: StorageLike | null = defaultStora
 
 export function isLauncherSessionToken(token: string | null | undefined, storage: StorageLike | null = defaultStorage()): boolean {
   if (!token) return false;
-  const session = readLauncherSession(storage);
-  return session?.sessionToken === token;
+  if (readLauncherSession(storage)?.sessionToken === token) return true;
+  return [...readStoredSessions(storage).values()].some((session) => session.sessionToken === token);
 }
 
 export function normalizeRunnerUrl(url: string): string {
@@ -270,13 +327,39 @@ export function sanitizeRunnerTokenForPersistence(
   return isLauncherSessionToken(runnerToken, storage) ? null : runnerToken;
 }
 
+interface PeerDescriptor { instanceId: string; kind: LocalRunnerKind; port: number; code: string }
+
+function parsePeerDescriptors(value: unknown, anchorKind: LocalRunnerKind, anchorPort: number, ports: readonly number[]): PeerDescriptor[] {
+  if (!Array.isArray(value) || value.length > 3) {
+    throw new LocalRunnerHandoffError("invalid_response", "The Runner returned an invalid response. Run `aiboard` again.");
+  }
+  const peers: PeerDescriptor[] = [];
+  for (const entry of value as Array<Record<string, unknown>>) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+        typeof entry.instanceId !== "string" || !INSTANCE_ID.test(entry.instanceId) ||
+        typeof entry.kind !== "string" || !(LOCAL_RUNNER_KINDS as readonly string[]).includes(entry.kind) ||
+        entry.kind === anchorKind || peers.some((peer) => peer.kind === entry.kind) ||
+        typeof entry.port !== "number" || !isValidPort(entry.port) || entry.port === anchorPort || !ports.includes(entry.port) ||
+        typeof entry.code !== "string") {
+      throw new LocalRunnerHandoffError("invalid_response", "The Runner returned an invalid response. Run `aiboard` again.");
+    }
+    const parsed = parsePairCode(entry.code);
+    if (parsed.instanceId !== entry.instanceId) {
+      throw new LocalRunnerHandoffError("invalid_response", "The Runner returned an invalid response. Run `aiboard` again.");
+    }
+    peers.push({ instanceId: entry.instanceId, kind: entry.kind as LocalRunnerKind, port: entry.port, code: entry.code });
+  }
+  return peers;
+}
+
 async function exchangeAtPort(input: {
   code: string;
   expectedInstanceId: string;
+  expectedKind?: LocalRunnerKind;
   port: number;
   ports: readonly number[];
   fetchImpl: FetchLike;
-}): Promise<LauncherSession> {
+}): Promise<{ session: LauncherSession; peers: PeerDescriptor[] }> {
   let response: { ok: boolean; status: number; json(): Promise<unknown> };
   try {
     response = await input.fetchImpl(`http://127.0.0.1:${input.port}/v1/local-pair/exchange`, {
@@ -310,7 +393,9 @@ async function exchangeAtPort(input: {
     throw new LocalRunnerHandoffError("invalid_response", "The Runner returned an invalid response. Run `aiboard` again.");
   }
   const record = body as Record<string, unknown>;
-  if (record.version !== 1 || record.kind !== "runner" ||
+  if (record.version !== 1 ||
+      typeof record.kind !== "string" || !(LOCAL_RUNNER_KINDS as readonly string[]).includes(record.kind) ||
+      (input.expectedKind !== undefined && record.kind !== input.expectedKind) ||
       typeof record.sessionToken !== "string" || record.sessionToken.length < 1 || record.sessionToken.length > 512 ||
       !Array.isArray(record.peers) || record.peers.length > 3) {
     throw new LocalRunnerHandoffError("invalid_response", "The Runner returned an invalid response. Run `aiboard` again.");
@@ -321,12 +406,13 @@ async function exchangeAtPort(input: {
       "The Runner that answered is not the one that opened this page. Close this tab and run `aiboard` again."
     );
   }
-  for (const peer of record.peers as Array<Record<string, unknown>>) {
-    if (!peer || typeof peer !== "object" || typeof peer.port !== "number" || !input.ports.includes(peer.port)) {
-      throw new LocalRunnerHandoffError("invalid_response", "The Runner returned an invalid response. Run `aiboard` again.");
-    }
+  const kind = record.kind as LocalRunnerKind;
+  const peers = parsePeerDescriptors(record.peers, kind, input.port, input.ports);
+  if (input.expectedKind !== undefined && peers.length > 0) {
+    // A peer must never hand out further runners.
+    throw new LocalRunnerHandoffError("invalid_response", "The Runner returned an invalid response. Run `aiboard` again.");
   }
-  return { port: input.port, instanceId: input.expectedInstanceId, kind: "runner", sessionToken: record.sessionToken };
+  return { session: { port: input.port, instanceId: input.expectedInstanceId, kind, sessionToken: record.sessionToken }, peers };
 }
 
 export async function exchangeLocalPairCode(input: {
@@ -334,18 +420,44 @@ export async function exchangeLocalPairCode(input: {
   ports: readonly number[];
   fetchImpl?: FetchLike;
   storage?: StorageLike | null;
-}): Promise<LauncherSession> {
+}): Promise<CombinedLauncherSession> {
   const { code, instanceId } = parsePairCode(input.code);
   const ports = validatePorts(input.ports);
-  const session = await exchangeAtPort({
+  const fetchImpl = input.fetchImpl ?? defaultFetch();
+  const storage = input.storage === undefined ? defaultStorage() : input.storage;
+  const anchor = await exchangeAtPort({
     code,
     expectedInstanceId: instanceId,
     port: ports[0]!,
     ports,
-    fetchImpl: input.fetchImpl ?? defaultFetch(),
+    fetchImpl,
   });
-  storeLauncherSession(session, input.storage === undefined ? defaultStorage() : input.storage);
-  return session;
+  storeLauncherSession(anchor.session, storage);
+  const peerSessions: LauncherSession[] = [anchor.session];
+  const failures: PeerExchangeFailure[] = [];
+  for (const peer of anchor.peers) {
+    try {
+      const exchanged = await exchangeAtPort({
+        code: peer.code,
+        expectedInstanceId: peer.instanceId,
+        expectedKind: peer.kind,
+        port: peer.port,
+        ports,
+        fetchImpl,
+      });
+      storeLauncherSession(exchanged.session, storage);
+      peerSessions.push(exchanged.session);
+    } catch (error) {
+      // Partial failure keeps the successful connections; a consumed peer
+      // ticket is never retried.
+      failures.push({
+        kind: peer.kind,
+        port: peer.port,
+        message: error instanceof LocalRunnerHandoffError ? error.message : "Could not connect to this Runner. Run `aiboard` again.",
+      });
+    }
+  }
+  return { ...anchor.session, peerSessions, failures };
 }
 
 /** Manual fallback: a pasted code plus the anchor port printed by the CLI. */
@@ -354,7 +466,7 @@ export async function connectManually(input: {
   port: string;
   fetchImpl?: FetchLike;
   storage?: StorageLike | null;
-}): Promise<LauncherSession> {
+}): Promise<CombinedLauncherSession> {
   const ports = parseRunnerPorts(input.port.trim());
   if (ports.length !== 1) {
     throw new LocalRunnerHandoffError("invalid_ports", "Enter the single Runner port printed by `aiboard`.");
@@ -371,7 +483,7 @@ export interface ConnectFragmentDeps {
 
 export type ConnectFragmentResult =
   | { status: "manual" }
-  | { status: "connected"; session: LauncherSession }
+  | { status: "connected"; session: CombinedLauncherSession; sessions: LauncherSession[]; failures: PeerExchangeFailure[] }
   | { status: "error"; error: LocalRunnerHandoffError };
 
 /**
@@ -385,7 +497,7 @@ export async function consumeConnectFragment(deps: ConnectFragmentDeps): Promise
   try {
     const { code, ports } = parseConnectFragment(hash);
     const session = await exchangeLocalPairCode({ code, ports, fetchImpl: deps.fetchImpl, storage: deps.storage });
-    return { status: "connected", session };
+    return { status: "connected", session, sessions: session.peerSessions, failures: session.failures };
   } catch (error) {
     return {
       status: "error",
@@ -396,26 +508,31 @@ export async function consumeConnectFragment(deps: ConnectFragmentDeps): Promise
   }
 }
 
-/** Revoke the tab's launcher session on the Runner and always clear it locally. */
+/** Revoke every launcher session this tab holds and always clear them locally. */
 export async function revokeLauncherSession(input: {
   fetchImpl?: FetchLike;
   storage?: StorageLike | null;
 } = {}): Promise<boolean> {
   const storage = input.storage === undefined ? defaultStorage() : input.storage;
-  const session = readLauncherSession(storage);
-  if (!session) return false;
+  const sessions = new Map<string, LauncherSession>();
+  for (const session of Object.values(readLauncherSessions(storage))) {
+    if (session) sessions.set(`${session.port}:${session.sessionToken}`, session);
+  }
+  if (sessions.size === 0) return false;
   let revoked = false;
   try {
-    const response = await (input.fetchImpl ?? defaultFetch())(`http://127.0.0.1:${session.port}/v1/local-pair/session`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${session.sessionToken}` },
-      credentials: "omit",
-      cache: "no-store",
-      referrerPolicy: "no-referrer",
-    });
-    revoked = response.ok;
-  } catch {
-    revoked = false;
+    for (const session of sessions.values()) {
+      try {
+        const response = await (input.fetchImpl ?? defaultFetch())(`http://127.0.0.1:${session.port}/v1/local-pair/session`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${session.sessionToken}` },
+          credentials: "omit",
+          cache: "no-store",
+          referrerPolicy: "no-referrer",
+        });
+        revoked = revoked || response.ok;
+      } catch { /* local state is still cleared below */ }
+    }
   } finally {
     clearLauncherSession(storage);
   }

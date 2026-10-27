@@ -3,6 +3,7 @@ import { get } from "node:http";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 
 import type { LauncherIdentity, LauncherInstance } from "./launcher-instance.js";
+import { isLocalPairPeer, type LocalPairPeer } from "./local-pairing.js";
 
 /** The inherited Node IPC pipe carries secrets; neither argv nor the environment carries them. */
 export interface LauncherHandshake {
@@ -11,6 +12,7 @@ export interface LauncherHandshake {
   controlKey: string;
   instanceId: string;
   pairDigest: string;
+  peers?: LocalPairPeer[];
   identity: LauncherIdentity;
   stateDirectory: string;
   version: string;
@@ -23,6 +25,7 @@ interface ControlRequest {
   nonce: string;
   sentAt: number;
   pairDigest?: string;
+  peers?: LocalPairPeer[];
   instance: LauncherInstance;
   mac: string;
 }
@@ -68,7 +71,8 @@ function isHandshake(value: unknown): value is LauncherHandshake {
     typeof value.pairDigest === "string" && /^[0-9a-f]{64}$/.test(value.pairDigest) &&
     typeof value.identity.projectPath === "string" && typeof value.identity.projectKey === "string" &&
     typeof value.identity.owner === "string" && typeof value.stateDirectory === "string" &&
-    typeof value.version === "string" && (value.legacyToken === undefined || typeof value.legacyToken === "string");
+    typeof value.version === "string" && (value.legacyToken === undefined || typeof value.legacyToken === "string") &&
+    (value.peers === undefined || (Array.isArray(value.peers) && value.peers.length <= 3 && value.peers.every(isLocalPairPeer)));
 }
 
 /** The control key is independent of the browser session token and is never sent over this socket. */
@@ -81,7 +85,7 @@ export async function startLauncherControl(options: {
   token: string;
   controlKey: Buffer;
   shutdown: () => void;
-  registerPair?: (digest: string) => void;
+  registerPair?: (digest: string, peers?: LocalPairPeer[]) => void;
 }): Promise<{ instance: LauncherInstance; close: () => Promise<void> }> {
   const usedNonces = new Map<string, number>();
   const sockets = new Set<Socket>();
@@ -101,7 +105,7 @@ export async function startLauncherControl(options: {
       usedNonces.set(value.nonce, now + REQUEST_WINDOW_MS * 2);
       if (value.action === "pair") {
         if (!options.registerPair || !value.pairDigest) throw new Error("pairing unavailable");
-        options.registerPair(value.pairDigest);
+        options.registerPair(value.pairDigest, value.peers);
       }
       const healthy = value.action === "status" ? await runnerHealth(options.port, options.token, options.identity.projectPath) : true;
       const response: ControlResponse = { nonce: value.nonce, healthy, instance, mac: "" };
@@ -134,11 +138,14 @@ export async function startLauncherControl(options: {
   };
 }
 
-export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: ControlAction, pairDigest?: string): Promise<{ healthy: boolean }> {
+export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: ControlAction, pairDigest?: string, peers?: LocalPairPeer[]): Promise<{ healthy: boolean }> {
   if (action === "pair" ? !pairDigest || !/^[0-9a-f]{64}$/.test(pairDigest) : pairDigest !== undefined) {
     throw new Error("Invalid launcher control request.");
   }
-  const request: ControlRequest = { action, nonce: randomBytes(32).toString("hex"), sentAt: Date.now(), instance, mac: "", ...(pairDigest ? { pairDigest } : {}) };
+  if (peers !== undefined && (action !== "pair" || peers.length > 3 || !peers.every(isLocalPairPeer))) {
+    throw new Error("Invalid launcher control request.");
+  }
+  const request: ControlRequest = { action, nonce: randomBytes(32).toString("hex"), sentAt: Date.now(), instance, mac: "", ...(pairDigest ? { pairDigest } : {}), ...(peers ? { peers } : {}) };
   request.mac = sign(key, requestBody(request));
   const socket = createConnection({ host: "127.0.0.1", port: instance.controlPort });
   socket.on("error", () => socket.destroy());
@@ -200,7 +207,7 @@ function readLine(socket: Socket): Promise<string> {
   });
 }
 
-function requestBody(request: ControlRequest): string { return JSON.stringify(["request", request.action, request.nonce, request.sentAt, request.pairDigest ?? null, instanceFields(request.instance)]); }
+function requestBody(request: ControlRequest): string { return JSON.stringify(["request", request.action, request.nonce, request.sentAt, request.pairDigest ?? null, instanceFields(request.instance), request.peers ?? null]); }
 function responseBody(response: ControlResponse): string { return JSON.stringify(["response", response.nonce, response.healthy, instanceFields(response.instance)]); }
 function instanceFields(value: LauncherInstance): unknown[] {
   return [value.schemaVersion, value.projectPath, value.projectKey, value.owner, value.pid, value.startedAt, value.port, value.controlPort, value.instanceId, value.version];
@@ -214,7 +221,8 @@ function validMac(key: Buffer, body: string, mac: string): boolean {
 function isControlRequest(value: unknown): value is ControlRequest {
   return isObject(value) && (value.action === "status" || value.action === "stop" || value.action === "pair") && typeof value.nonce === "string" &&
     /^[0-9a-f]{64}$/.test(value.nonce) && Number.isSafeInteger(value.sentAt) && isObject(value.instance) && typeof value.mac === "string" &&
-    (value.action === "pair" ? typeof value.pairDigest === "string" && /^[0-9a-f]{64}$/.test(value.pairDigest) : value.pairDigest === undefined);
+    (value.action === "pair" ? typeof value.pairDigest === "string" && /^[0-9a-f]{64}$/.test(value.pairDigest) : value.pairDigest === undefined) &&
+    (value.peers === undefined || (value.action === "pair" && Array.isArray(value.peers) && value.peers.length <= 3 && value.peers.every(isLocalPairPeer)));
 }
 function isControlResponse(value: unknown): value is ControlResponse {
   return isObject(value) && typeof value.nonce === "string" && typeof value.healthy === "boolean" && isObject(value.instance) && typeof value.mac === "string";

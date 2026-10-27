@@ -14,6 +14,19 @@ function hash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+export type LocalPairKind = "runner" | "accounts" | "legacy" | "bench";
+export interface LocalPairPeer { instanceId: string; kind: LocalPairKind; port: number; code: string }
+const PAIR_KINDS: ReadonlySet<string> = new Set(["runner", "accounts", "legacy", "bench"]);
+
+export function isLocalPairPeer(value: unknown): value is LocalPairPeer {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const peer = value as Record<string, unknown>;
+  return typeof peer.instanceId === "string" && INSTANCE_ID.test(peer.instanceId) &&
+    typeof peer.kind === "string" && PAIR_KINDS.has(peer.kind) &&
+    Number.isInteger(peer.port) && Number(peer.port) >= 1 && Number(peer.port) <= 65_535 &&
+    typeof peer.code === "string" && peer.code.length >= 1 && peer.code.length <= 512;
+}
+
 /** The launcher keeps the code; only its digest is registered with the Runner. */
 export function createLocalPairTicket(instanceId: string): { code: string; digest: string } {
   if (!INSTANCE_ID.test(instanceId)) throw new Error("Invalid pairing instance identity.");
@@ -26,6 +39,7 @@ export class LocalPairing {
   private readonly tickets = new Map<string, { expiresAt: number; consumed: boolean }>();
   private readonly sessions = new Set<string>();
   private readonly attempts: number[] = [];
+  private peerList: LocalPairPeer[] = [];
   private closed = false;
 
   constructor(readonly instanceId: string, private readonly clock: () => number = () => performance.now()) {
@@ -39,6 +53,15 @@ export class LocalPairing {
     }
     this.tickets.set(digest, { expiresAt: this.clock() + TICKET_LIFETIME_MS, consumed: false });
   }
+
+  /** Peers are set only by the launcher over its private control channel. */
+  setPeers(peers: readonly LocalPairPeer[]): void {
+    if (this.closed || peers.length > 3 || !peers.every(isLocalPairPeer)) throw new Error("Invalid pairing peers.");
+    if (new Set(peers.map((peer) => peer.kind)).size !== peers.length) throw new Error("Invalid pairing peers.");
+    this.peerList = peers.map((peer) => ({ ...peer }));
+  }
+
+  exchangePeers(): LocalPairPeer[] { return this.peerList.map((peer) => ({ ...peer })); }
 
   allowAttempt(): boolean {
     if (this.closed) return false;
@@ -76,5 +99,6 @@ export class LocalPairing {
     this.tickets.clear();
     this.sessions.clear();
     this.attempts.length = 0;
+    this.peerList = [];
   }
 }
