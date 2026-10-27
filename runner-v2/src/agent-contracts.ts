@@ -1,7 +1,7 @@
 import type { OpaqueExecutionGrant } from "./execution-grants.js";
 import type { FilesystemMutationPermit } from "./filesystem-mutation-fence.js";
 
-export type AgentRole = "architect" | "worker" | "subagent" | "verifier";
+export type AgentRole = "architect" | "worker" | "subagent" | "verifier" | "remote";
 
 export interface AgentActor {
   role: AgentRole;

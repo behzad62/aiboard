@@ -268,5 +268,5 @@ function decodeResult(row: EventRow): ToolResult {
 function isAgentActor(value: unknown): value is import("./agent-contracts.js").AgentActor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const actor = value as Record<string, unknown>;
-  return typeof actor.id === "string" && actor.id.length > 0 && ["architect", "worker", "subagent", "verifier"].includes(actor.role as string);
+  return typeof actor.id === "string" && actor.id.length > 0 && ["architect", "worker", "subagent", "verifier", "remote"].includes(actor.role as string);
 }

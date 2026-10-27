@@ -9,9 +9,9 @@ import type { ToolEffect } from "./agent-contracts.js";
  * inspection surface and the verifier verdict surface. The Architect tool is
  * optional: it is registered only when a disposable copy exists.
  */
-export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker";
+export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker" | "remote";
 
-export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "answer" | "delivery_obligations" | "delivery" | "delivery_commands" | "task";
+export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "answer" | "delivery_obligations" | "delivery" | "delivery_commands" | "task" | "remote";
 
 /**
  * `all` registers every MCP tool the manager exposes (the worker).
@@ -48,6 +48,7 @@ export const ROLE_CAPABILITY_BROKERS = [
   { role: "verifier", broker: "delivery_commands" },
   { role: "plan-critic", broker: "inspection" },
   { role: "worker", broker: "task" },
+  { role: "remote", broker: "remote" },
 ] as const satisfies readonly { role: RoleCapabilityRole; broker: RoleCapabilityBroker }[];
 
 /**
@@ -87,6 +88,15 @@ const ARCHITECT_PLAN_ONLY_BROWSER_TOOLS = [
 ] as const;
 
 const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
+  // Availability is narrower until remote path, browser and job protections exist.
+  "remote:remote": surface("remote", "remote", "none", [], [
+    "browser.click", "browser.close", "browser.drag", "browser.events", "browser.fill",
+    "browser.navigate", "browser.open", "browser.screenshot", "browser.snapshot", "browser.wheel",
+    "fs.delete", "fs.list", "fs.move", "fs.patch", "fs.read", "fs.search", "fs.write",
+    "git.diff", "git.log", "git.status", "image.inspect",
+    "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
+    "process.start", "process.write_stdin",
+  ]),
   "architect:inspection": surface("architect", "inspection", "read-only-class", [
     "image.inspect",
     "archive_project_memory",
