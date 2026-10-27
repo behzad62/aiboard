@@ -39,10 +39,11 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
 - 2026-10-27: Owner decisions D15 (low-level remote tools first), D16 (2026-10-15 plan superseded except Milestone B; C1 folded into L1; P7 superseded), D17 (Desktop Commander-style freedom by default, opt-in controls, S2 sandbox post-launch), D18 (GitHub Releases + CI signing in a protected environment). Architect decisions in plan §1.2.
 - 2026-10-27: R0 baseline (architect; Windows 10, Node 24.18.0): `npm run typecheck:runner-v2` exit 0 (14 s) on d7ed04d2 code; aiboard-tunnel `npm test` exit 0 (14 s) at 69dc065.
 - 2026-10-27: R0 verification (architect): 511 `path:line` citations in docs/remote/r0 resolve to existing files/lines (one intentional branch-only reference); catalog 107 tools, 0 duplicates, every id found at its cited line; 7 JSON Schemas compile under Ajv 8.17.1 strict + ajv-formats 3.0.1, and all 80 fixtures behave as expected (valid pass; invalid fail; 6 documented contextual negatives pass schema by design). Error-code alias `conflict_idempotency` removed before release.
+- 2026-10-27: Streams merged on `remote/r1d-device-transport` (L1a–L1e + R1a–R1c + MCP launcher boundary fix). Integration gate (architect): static-adapter-policy, local-combined-runners, local-launcher, local-pair-exchange, remote-actor-binding, remote-admission, remote-extension-policy, extension-mcp, control-server, storage-key-migration — 107/113 first run; the 6 failures were merge-only (R1c fixture still passed a token string to the L1a key-based credential store; the L1b launcher spawn pin did not know L1e's peer spawn) and were fixed without loosening: 113/113, both typechecks 0.
 
 ## Open items carried from R0
 
-- Pre-existing (found 2026-10-27, not caused by this plan): `runner-v2/test/static-adapter-policy.test.ts` fails on main — `src/extension-mcp-launcher.ts` (commit 3bd6bbdd) is an unregistered raw process boundary. Needs its own small fix.
+- RESOLVED 2026-10-27 (`00689436`): `runner-v2/test/static-adapter-policy.test.ts` failed on main because `src/extension-mcp-launcher.ts` (commit 3bd6bbdd) was an unregistered raw process boundary; now audit-marked, allowlisted and documented.
 - Windows launcher state trusts the per-user profile default ACL (no ACL verification yet); real ACL/keychain checks belong to the OS-keychain follow-up of L1a.
 - Windows-MCP release pin and tool keys (X1); VPS device/concurrency ceiling (R4 measurement); git_commit remote task context (R1/R2); artifact-to-principal authorization (R2/R3); S2 per-OS confinement providers.
 

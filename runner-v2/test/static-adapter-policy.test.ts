@@ -60,13 +60,20 @@ test("raw child_process access is confined to explicit audited platform adapter 
   assert.deepEqual(missingMarkers, [], `Raw process boundaries lack audit markers: ${missingMarkers.join(", ")}`);
 });
 
-test("launcher bootstrap starts only the fixed Runner V2 entrypoint and the OS URL opener", () => {
+test("launcher bootstrap starts only the fixed Runner V2 and peer runner entrypoints and the OS URL opener", () => {
   const launcher = readFileSync(join(sourceRoot, "launcher.ts"), "utf8");
   assert.match(launcher, /new URL\("\.\.\/bin\/aiboard-runner-v2\.mjs", import\.meta\.url\)/);
   assert.match(launcher, /spawnRunner\(process\.execPath, runnerSpawnArguments\(identity, stateDirectory, args\.runnerFlags\)/);
   assert.match(launcher, /stdio: \["ignore", "pipe", "pipe", "ipc"\]/);
   assert.equal((launcher.match(/\bspawnRunner\s*\(/g) ?? []).length, 1);
-  assert.equal((launcher.match(/\bspawn\s*\(/g) ?? []).length, 1);
+  // Combined launches (L1e) start only the three fixed in-repo peer runners, by Node, with fixed arguments.
+  for (const entry of ["../../lib/account-provider-runner.mjs", "../../scripts/runner.mjs", "../../scripts/bench-runner.mjs"]) {
+    assert.ok(launcher.includes(`fileURLToPath(new URL("${entry}", import.meta.url))`), entry);
+  }
+  assert.match(launcher, /spawnPeer\(kind, process\.execPath, peerSpawnArguments\(kind, input\.identity, input\.stateDirectory, input\.port\)/);
+  assert.equal((launcher.match(/\bspawnPeer\s*\(/g) ?? []).length, 1);
+  assert.match(launcher, /\(\(_kind, command, args, options\) => spawn\(command, args, options\)\)/);
+  assert.equal((launcher.match(/\bspawn\s*\(/g) ?? []).length, 2);
   assert.match(launcher, /const child = spawn\(command, args, options\);/);
   assert.doesNotMatch(launcher, /\b(?:exec|execFile|fork|spawnSync|execSync|execFileSync)\s*\(/);
 });

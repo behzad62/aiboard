@@ -134,7 +134,7 @@ async function offlineRuntime(t: test.TestContext) {
   const stateDirectory = join(root, "state");
   const home = join(root, "home");
   await mkdir(project, { recursive: true });
-  const credentials = new ExtensionCredentialStore(join(stateDirectory, "credentials.enc"), "fixture-token-0123456789abcdef");
+  const credentials = new ExtensionCredentialStore(join(stateDirectory, "credentials.enc"), Buffer.alloc(32, 1));
   t.after(() => credentials.close());
   const state = { names: ["read", "write"], schemaVersion: 0, calls: [] as string[] };
   const fakeFetch: typeof fetch = async (_input, init) => {
