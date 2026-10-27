@@ -17,6 +17,7 @@ import {
   describeSource,
   beginExtensionSignIn,
   getExtensionInventory,
+  getExtensionToolPolicy,
   getMcpToolPolicy,
   inspectCliMcpAdoption,
   inspectExtensionSource,
@@ -26,6 +27,7 @@ import {
   revokeExtensionCredentials,
   saveInstallPolicy,
   setMcpToolPolicy,
+  setExtensionToolPolicy,
   sourceFromText,
   submitExtensionCredential,
   testExtension,
@@ -35,6 +37,8 @@ import {
   type ExtensionDependencyDto,
   type ExtensionInventoryDto,
   type ExtensionItemDto,
+  type ExtensionToolPolicyDto,
+  type ExtensionToolPolicyViewDto,
   type ExtensionKind,
   type ExtensionOperationDto,
   type InstallPolicyDto,
@@ -495,6 +499,17 @@ function dependencyLabel(dependency: ExtensionDependencyDto): string {
   return `${dependency.kind === "skill" ? "skill" : "MCP server"} "${dependency.name}"`;
 }
 
+function inventoryMatches(left: ExtensionToolPolicyViewDto["discovered"], right: ExtensionToolPolicyViewDto["discovered"]): boolean {
+  const canonical = (items: ExtensionToolPolicyViewDto["discovered"]) => JSON.stringify([...items].sort((a, b) => a.componentId.localeCompare(b.componentId)).map((item) => ({ ...item, toolNames: [...item.toolNames].sort() })));
+  return canonical(left) === canonical(right);
+}
+
+function isAllowed(policy: ExtensionToolPolicyDto, componentId: string, toolName: string): boolean {
+  const matches = (key: { componentId: string; toolName: string }) => key.componentId === componentId && key.toolName === toolName;
+  if (policy.toolFilter.deny.some(matches)) return false;
+  return policy.toolFilter.allow.some(matches) || policy.toolFilter.default === "allow";
+}
+
 function InstalledItem({ connection, item, onChanged, onMoveToRunner }: { connection: NativeRunnerConnection; item: ExtensionItemDto; onChanged: () => void; onMoveToRunner: (source: SourceRequestDto) => void }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -511,12 +526,45 @@ function InstalledItem({ connection, item, onChanged, onMoveToRunner }: { connec
   const migrated = item.provenance === "migrated";
   const runnerMcp = server?.kind === "mcp_server" && server.route === "runner";
   const [toolPolicy, setToolPolicy] = useState<McpToolPolicy | undefined>(undefined);
+  const [toolFilter, setToolFilter] = useState<ExtensionToolPolicyViewDto | undefined>(undefined);
+  const hasRunnerMcp = item.currentVersion?.components.some((component) => component.kind === "mcp_server" && component.route === "runner") === true;
   useEffect(() => {
     if (!runnerMcp) return;
     let live = true;
     void getMcpToolPolicy(connection, item.id).then((result) => { if (live) setToolPolicy(result.policy); }).catch(() => undefined);
     return () => { live = false; };
   }, [connection, item.id, runnerMcp]);
+
+  useEffect(() => {
+    if (!hasRunnerMcp) return;
+    let live = true;
+    void getExtensionToolPolicy(connection, item.id).then((result) => { if (live) setToolFilter(result); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [connection, item.id, hasRunnerMcp, item.currentVersionId]);
+
+  const updateFilter = async (change: { componentId: string; toolName: string; allow: boolean } | { remoteExposure: boolean }) => {
+    if (!toolFilter) return;
+    const matches = inventoryMatches(toolFilter.policy.reviewed, toolFilter.discovered);
+    const current: ExtensionToolPolicyDto = matches ? toolFilter.policy : {
+      ...toolFilter.policy, reviewed: toolFilter.discovered, toolFilter: { default: "deny", allow: [], deny: [] }, remoteExposure: false,
+    };
+    let next: ExtensionToolPolicyDto;
+    if ("remoteExposure" in change) {
+      if (change.remoteExposure && !window.confirm("Allow the reviewed tools of this extension to be offered remotely? Allowed tools can have broad effects.")) return;
+      next = { ...current, remoteExposure: change.remoteExposure };
+    } else {
+      if (change.allow && !window.confirm("Allow " + change.toolName + " from " + change.componentId + "? The tool can have effects beyond its description.")) return;
+      const matchesKey = (key: { componentId: string; toolName: string }) => key.componentId === change.componentId && key.toolName === change.toolName;
+      const key = { componentId: change.componentId, toolName: change.toolName };
+      next = { ...current, toolFilter: { ...current.toolFilter,
+        allow: [...current.toolFilter.allow.filter((item) => !matchesKey(item)), ...(change.allow ? [key] : [])],
+        deny: [...current.toolFilter.deny.filter((item) => !matchesKey(item)), ...(!change.allow ? [key] : [])] } };
+    }
+    setBusy(true);
+    try { setToolFilter(await setExtensionToolPolicy(connection, item.id, next)); onChanged(); }
+    catch (cause) { setMessage(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(false); }
+  };
 
   const lifecycle = async (plan: PlanRequestDto) => {
     setBusy(true);
@@ -566,7 +614,7 @@ function InstalledItem({ connection, item, onChanged, onMoveToRunner }: { connec
         {readiness.detail && <p className="text-muted-foreground">{readiness.detail}</p>}
         {migrated && server?.kind === "mcp_server" && (
           <div className="space-y-2 rounded-md bg-muted/60 p-3 text-xs">
-            <p>Your model provider calls this server directly with the token saved in this browser. To have the Runner call it instead (so any model with tools can use it, and the token is kept by the Runner), add it as a Runner-hosted server and enter the token again in the secure field. Nothing moves automatically.</p>
+            <p>Provider-hosted tools are unsupported because the Runner cannot enforce their filter. Add this as a Runner-hosted server and enter the token again in the secure field. Nothing moves automatically.</p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={() => onMoveToRunner({ type: "remote_http", url: server.url ?? "", serverName: server.serverName, auth: server.auth === "bearer" ? "bearer" : "none" })}>Add as Runner-hosted…</Button>
               <Button asChild size="sm" variant="ghost"><Link href="/settings?tab=tools">Edit provider-hosted setting</Link></Button>
@@ -598,6 +646,32 @@ function InstalledItem({ connection, item, onChanged, onMoveToRunner }: { connec
             }} />
             <span>{toolPolicy === "all" ? "The assistant may call every tool of this server." : "The assistant may call only tools the server marks as non-destructive (hints, not guarantees)."}</span>
           </label>
+        )}
+        {hasRunnerMcp && toolFilter && (
+          <div className="space-y-2 rounded-md bg-muted/60 p-3 text-xs">
+            <p className="font-medium">Tool review · risk: {toolFilter.policy.riskLabel}</p>
+            <p>Only reviewed exact tools are available. An allowed tool can still have broad effects; the separate approval setting still applies.</p>
+            {!inventoryMatches(toolFilter.policy.reviewed, toolFilter.discovered) && <p>Discovery changed. Review these tools before allowing them; prior decisions will not carry over.</p>}
+            {toolFilter.discovered.length === 0 && <p>No verified tool inventory. Use Test after the server is ready.</p>}
+            {toolFilter.discovered.map((inventory) => (
+              <div key={inventory.componentId} className="space-y-1">
+                <p className="font-medium">{inventory.componentId}</p>
+                {inventory.toolNames.map((name) => {
+                  const admitted = inventoryMatches(toolFilter.policy.reviewed, toolFilter.discovered) && isAllowed(toolFilter.policy, inventory.componentId, name);
+                  return <label key={name} className="flex items-center gap-2">
+                    <Switch checked={admitted} disabled={busy} aria-label={(admitted ? "Deny " : "Allow ") + name} onCheckedChange={(allow) => void updateFilter({ componentId: inventory.componentId, toolName: name, allow })} />
+                    <span>{name}: {admitted && item.enabled && readiness.state === "ready" ? "listed locally" : "absent locally"}{admitted && item.enabled && readiness.state === "ready" && toolFilter.policy.remoteExposure ? ", listed remotely" : ", absent remotely"}</span>
+                  </label>;
+                })}
+              </div>
+            ))}
+            <label className="flex items-center gap-2">
+              <Switch checked={toolFilter.policy.remoteExposure} disabled={busy} aria-label="Expose reviewed tools remotely" onCheckedChange={(remoteExposure) => void updateFilter({ remoteExposure })} />
+              <span>Available remotely</span>
+            </label>
+            <p>Current generation {toolFilter.currentGeneration}; extension active generation {item.activeGeneration ?? "pending"}.</p>
+            {toolFilter.unsupported && <p>Provider-hosted components are unsupported.</p>}
+          </div>
         )}
         <div className={migrated ? "hidden" : "flex flex-wrap items-center gap-3"}>
           <label className="flex items-center gap-2">

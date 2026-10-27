@@ -251,6 +251,29 @@ export function beginExtensionSignIn(connection: NativeRunnerConnection, operati
   return call(connection, `/v2/extensions/${encodeURIComponent(operationOrExtensionId)}/sign-in`, { method: "POST", body: "{}" });
 }
 
+export interface ExtensionToolKeyDto { componentId: string; toolName: string }
+export interface ExtensionToolInventoryDto { componentId: string; schemaDigest: string; toolNames: string[] }
+export interface ExtensionToolPolicyDto {
+  version: 1;
+  versionId: string;
+  toolFilter: { default: "allow" | "deny"; allow: ExtensionToolKeyDto[]; deny: ExtensionToolKeyDto[] };
+  remoteExposure: boolean;
+  riskLabel: "low" | "elevated" | "high" | "unreviewed";
+  reviewed: ExtensionToolInventoryDto[];
+}
+export interface ExtensionToolPolicyViewDto {
+  policy: ExtensionToolPolicyDto;
+  discovered: ExtensionToolInventoryDto[];
+  currentGeneration: number;
+  unsupported: boolean;
+}
+export function getExtensionToolPolicy(connection: NativeRunnerConnection, extensionId: string): Promise<ExtensionToolPolicyViewDto> {
+  return call(connection, "/v2/extensions/" + encodeURIComponent(extensionId) + "/tool-filter-policy", { method: "GET" });
+}
+export function setExtensionToolPolicy(connection: NativeRunnerConnection, extensionId: string, policy: ExtensionToolPolicyDto): Promise<ExtensionToolPolicyViewDto> {
+  return call(connection, "/v2/extensions/" + encodeURIComponent(extensionId) + "/tool-filter-policy", { method: "PUT", body: JSON.stringify({ policy }) });
+}
+
 export function getMcpToolPolicy(connection: NativeRunnerConnection, extensionId: string): Promise<{ policy?: McpToolPolicy }> {
   return call(connection, `/v2/extensions/${encodeURIComponent(extensionId)}/tool-policy`, { method: "GET" });
 }

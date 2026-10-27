@@ -3,7 +3,7 @@
  * Settings UI and agent management tools. Every record here is validated on load; unknown fields are
  * rejected. Credentials are referenced by id only and never appear in these records.
  */
-export const EXTENSION_REGISTRY_SCHEMA_VERSION = 1 as const;
+export const EXTENSION_REGISTRY_SCHEMA_VERSION = 2 as const;
 
 export type ExtensionKind = "skill" | "mcp_server" | "plugin";
 export type ExtensionScope = { readonly kind: "user" } | { readonly kind: "project"; readonly projectIdentity: string };
@@ -85,6 +85,104 @@ export interface McpServerComponent {
   readonly protocolVersion?: string;
 }
 
+/** Exact, case-sensitive identity inside one installed extension. */
+export interface ExtensionToolKey {
+  readonly componentId: string;
+  readonly toolName: string;
+}
+
+/** The inventory and schema the user reviewed for one Runner-hosted component. */
+export interface ExtensionToolInventory {
+  readonly componentId: string;
+  readonly schemaDigest: string;
+  readonly toolNames: readonly string[];
+}
+
+export interface ExtensionToolPolicy {
+  readonly version: 1;
+  readonly versionId: string;
+  readonly toolFilter: Readonly<{
+    default: "allow" | "deny";
+    allow: readonly ExtensionToolKey[];
+    deny: readonly ExtensionToolKey[];
+  }>;
+  readonly remoteExposure: boolean;
+  readonly riskLabel: "low" | "elevated" | "high" | "unreviewed";
+  readonly reviewed: readonly ExtensionToolInventory[];
+}
+
+/** Validate the complete policy against the version that owns its components. */
+export function validateExtensionToolPolicy(raw: unknown, version: Pick<ExtensionVersion, "versionId" | "components">): ExtensionToolPolicy {
+  const fail = (): never => { throw new ExtensionManagementError("tool_policy_invalid", "Extension tool policy is malformed or does not match its version."); };
+  const object = (value: unknown): Record<string, unknown> => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return fail();
+    return value as Record<string, unknown>;
+  };
+  const fields = (value: Record<string, unknown>, keys: readonly string[]) => {
+    if (Object.keys(value).some((key) => !keys.includes(key))) fail();
+  };
+  const value = object(raw);
+  fields(value, ["version", "versionId", "toolFilter", "remoteExposure", "riskLabel", "reviewed"]);
+  if (value.version !== 1 || value.versionId !== version.versionId || typeof value.remoteExposure !== "boolean" ||
+      !["low", "elevated", "high", "unreviewed"].includes(value.riskLabel as string) || !Array.isArray(value.reviewed)) fail();
+  const components = new Map(version.components.filter((component): component is McpServerComponent => component.kind === "mcp_server").map((component) => [component.componentId, component]));
+  if (components.size !== version.components.filter((component) => component.kind === "mcp_server").length) fail();
+  const reviewed = new Map<string, Set<string>>();
+  const inventories = value.reviewed as unknown[];
+  if (inventories.length > components.size) fail();
+  for (const rawInventory of inventories) {
+    const inventory = object(rawInventory);
+    fields(inventory, ["componentId", "schemaDigest", "toolNames"]);
+    if (typeof inventory.componentId !== "string" || !inventory.componentId.length || inventory.componentId.length > 160 ||
+        typeof inventory.schemaDigest !== "string" || !/^[a-f0-9]{64}$/.test(inventory.schemaDigest) ||
+        !Array.isArray(inventory.toolNames) || inventory.toolNames.length > 4096) fail();
+    const componentId = inventory.componentId as string;
+    if (reviewed.has(componentId) || components.get(componentId)?.route !== "runner") fail();
+    const names = new Set<string>();
+    for (const name of inventory.toolNames as unknown[]) {
+      if (typeof name !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(name) || names.has(name)) fail();
+      names.add(name as string);
+    }
+    reviewed.set(componentId, names);
+  }
+  const filter = object(value.toolFilter);
+  fields(filter, ["default", "allow", "deny"]);
+  if ((filter.default !== "allow" && filter.default !== "deny") || !Array.isArray(filter.allow) || !Array.isArray(filter.deny)) fail();
+  for (const list of [filter.allow, filter.deny]) {
+    if ((list as unknown[]).length > 4096) fail();
+    const seen = new Set<string>();
+    for (const rawKey of list as unknown[]) {
+      const key = object(rawKey);
+      fields(key, ["componentId", "toolName"]);
+      if (typeof key.componentId !== "string" || typeof key.toolName !== "string" || !reviewed.get(key.componentId)?.has(key.toolName)) fail();
+      const identity = JSON.stringify([key.componentId, key.toolName]);
+      if (seen.has(identity)) fail();
+      seen.add(identity);
+    }
+  }
+  return structuredClone(value) as unknown as ExtensionToolPolicy;
+}
+
+/** An inventory mismatch never inherits an old decision, including default allow. */
+export function extensionToolAdmitted(
+  policy: ExtensionToolPolicy,
+  component: McpServerComponent,
+  schemaDigest: string,
+  observedNames: readonly string[],
+  toolName: string,
+  remote = false,
+): boolean {
+  if (component.route !== "runner" || (remote && !policy.remoteExposure)) return false;
+  const reviewed = policy.reviewed.find((item) => item.componentId === component.componentId);
+  if (!reviewed || reviewed.schemaDigest !== schemaDigest || reviewed.toolNames.length !== observedNames.length ||
+      new Set(observedNames).size !== observedNames.length || observedNames.some((name) => !reviewed.toolNames.includes(name)) ||
+      !reviewed.toolNames.includes(toolName)) return false;
+  const matches = (key: ExtensionToolKey) => key.componentId === component.componentId && key.toolName === toolName;
+  if (policy.toolFilter.deny.some(matches)) return false;
+  if (policy.toolFilter.allow.some(matches)) return true;
+  return policy.toolFilter.default === "allow";
+}
+
 export interface RunnerExtensionComponent {
   readonly kind: "runner_extension";
   readonly componentId: string;
@@ -152,6 +250,9 @@ export interface ExtensionGeneration {
     versionId: string;
     packageDigest?: string;
     components: readonly ExtensionComponent[];
+    /** Absent only in immutable v1 generations. */
+    toolPolicy?: ExtensionToolPolicy;
+    toolApprovalOverride?: "all" | "non_destructive";
   }>[];
   readonly digest: string;
 }
@@ -162,6 +263,10 @@ export interface ExtensionRegistryDocument {
   readonly currentGeneration: number;
   readonly extensions: readonly InstalledExtension[];
   readonly versions: readonly ExtensionVersion[];
+  readonly toolPolicies: Readonly<Record<string, ExtensionToolPolicy>>;
+  readonly toolApprovals: Readonly<Record<string, "all" | "non_destructive">>;
+  readonly legacyToolApprovals: Readonly<Record<string, "all" | "non_destructive">>;
+  readonly toolDiscoveries: Readonly<Record<string, Readonly<{ versionId: string; components: readonly ExtensionToolInventory[] }>>>;
   readonly policy: InstallPolicy;
   readonly migrations: readonly string[];
 }

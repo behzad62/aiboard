@@ -7,12 +7,16 @@ import type { ExtensionCredentialStore } from "./extension-credentials.js";
 import {
   EXTENSION_LIMITS,
   ExtensionManagementError,
+  extensionToolAdmitted,
+  validateExtensionToolPolicy,
   sameScope,
   scopeKey,
   type AccessSummary,
   type AuthorizationReceipt,
   type ExtensionChangePlan,
   type ExtensionComponent,
+  type ExtensionToolPolicy,
+  type ExtensionToolInventory,
   type ExtensionDependency,
   type RunnerExtensionComponent,
   type ExtensionGeneration,
@@ -32,7 +36,7 @@ import {
   type UserActionRequest,
 } from "./extension-management-contracts.js";
 import { ExtensionPackageStore, readZipArchive, snapshotDirectory, type PackageTree } from "./extension-package-store.js";
-import { ExtensionRegistryStore, type MutableRegistryState } from "./extension-registry.js";
+import { defaultToolPolicy, legacyToolPolicy, ExtensionRegistryStore, type MutableRegistryState } from "./extension-registry.js";
 import { discoverSkills, singleFileSkillTree } from "./extension-skill-validation.js";
 import {
   isWithin,
@@ -213,6 +217,7 @@ export class ExtensionManagementService {
     if (isWithin(projectRoot, home)) throw new ExtensionManagementError("invalid_extensions_home", "The extension store must be outside the project.", 500);
     // The store directory is created by the first write, so starting a Runner leaves no trace.
     const service = new ExtensionManagementService({ ...options, home }, projectRoot);
+    await service.registry.load();
     await service.recover();
     return service;
   }
@@ -250,6 +255,24 @@ export class ExtensionManagementService {
   async generation(generation?: number): Promise<ExtensionGeneration> {
     const current = generation ?? (await this.registry.load()).currentGeneration;
     return await this.registry.generation(current);
+  }
+
+  /** Changes to the durable registry invalidate cached managed-tool lists. */
+  async policyRevision(): Promise<number> {
+    return (await this.registry.load()).revision;
+  }
+
+  /** Revision of only the policies and live state that can change a pinned generation's tools. */
+  async policyRevisionForGeneration(generationNumber: number): Promise<string> {
+    const generation = await this.registry.generation(generationNumber);
+    const registry = await this.registry.load();
+    const relevant = generation.entries.map((entry) => {
+      const extension = registry.extensions.find((item) => item.id === entry.extensionId);
+      return [entry.extensionId, entry.versionId, registry.toolPolicies[entry.extensionId] ?? null,
+        registry.toolApprovals[entry.extensionId] ?? null, extension?.enabled ?? false,
+        extension?.removedAt ?? null, extension?.currentVersionId ?? null, extension?.readiness.state ?? null];
+    }).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    return sha256(JSON.stringify(relevant));
   }
 
   async setPolicy(policy: InstallPolicy, caller: ManagementCaller): Promise<InstallPolicy> {
@@ -585,7 +608,7 @@ export class ExtensionManagementService {
     const extensionId = extensionIdFor("mcp_server", scope, `provider-hosted:${url}`);
     const now = this.now().toISOString();
     const readiness: ExtensionReadiness = input.enabled
-      ? { state: "external", checkedAt: now, detail: "Called by your model provider with the token saved in this browser (Settings → Tools). The Runner does not call it." }
+      ? { state: "unsupported", checkedAt: now, detail: "Provider-hosted tools are unavailable because the Runner cannot enforce their tool filter." }
       : { state: "disabled", checkedAt: now, detail: "Disabled in Settings → Tools." };
     await this.registry.mutate((state) => {
       const prior = state.extension(extensionId);
@@ -683,7 +706,81 @@ export class ExtensionManagementService {
     const setter = extension ? this.handlerFor(extension.kind)?.toolPolicy : undefined;
     if (!setter) throw new ExtensionManagementError("extension_not_found", "No such MCP server.", 404);
     await setter.set(extensionId, policy);
+    this.emit({ type: "generation", generation: (await this.registry.load()).currentGeneration });
     return policy;
+  }
+
+  /** Record verified discovery as a candidate for local human review, never as an approval. */
+  async recordMcpDiscovery(extensionId: string, versionId: string, inventory: ExtensionToolInventory): Promise<void> {
+    await this.registry.mutate((state) => {
+      const extension = state.extension(extensionId);
+      if (!extension || extension.removedAt || extension.currentVersionId !== versionId) return;
+      const prior = state.registry.toolDiscoveries[extensionId];
+      const components = prior?.versionId === versionId ? prior.components.filter((item) => item.componentId !== inventory.componentId) : [];
+      state.setToolDiscovery(extensionId, versionId, [...components, inventory].sort((left, right) => left.componentId.localeCompare(right.componentId)));
+    });
+  }
+
+  async extensionToolPolicy(extensionId: string): Promise<ExtensionToolPolicyView> {
+    const registry = await this.registry.load();
+    const extension = registry.extensions.find((item) => item.id === extensionId && !item.removedAt && this.inScope(item.scope));
+    const version = registry.versions.find((item) => item.versionId === extension?.currentVersionId && item.extensionId === extensionId);
+    if (!extension || !version) throw new ExtensionManagementError("extension_not_found", "No such installed extension.", 404);
+    const current = registry.toolPolicies[extensionId];
+    const discovery = registry.toolDiscoveries[extensionId];
+    return {
+      policy: current?.versionId === version.versionId ? current : defaultToolPolicy(version.versionId),
+      discovered: discovery?.versionId === version.versionId ? discovery.components : [],
+      currentGeneration: registry.currentGeneration,
+      unsupported: version.components.some((component) => component.kind === "mcp_server" && component.route === "provider_hosted"),
+    };
+  }
+
+  /** Only the authenticated local control plane may publish a reviewed widening. */
+  async setExtensionToolPolicy(extensionId: string, raw: unknown, caller: ManagementCaller): Promise<ExtensionToolPolicyView> {
+    if (caller.kind !== "ui") throw new ExtensionManagementError("ui_only", "Only you can review extension tools in local Settings.", 403);
+    const generation = await this.registry.mutate((state) => {
+      const extension = state.extension(extensionId);
+      const version = extension?.currentVersionId ? state.version(extension.currentVersionId) : undefined;
+      if (!extension || extension.removedAt || !this.inScope(extension.scope) || !version) throw new ExtensionManagementError("extension_not_found", "No such installed extension.", 404);
+      const policy = validateExtensionToolPolicy(raw, version);
+      const prior = state.registry.toolPolicies[extensionId];
+      // Catalog classification is Runner-owned; a submitted value cannot lower risk.
+      if (policy.riskLabel !== (prior?.versionId === version.versionId ? prior.riskLabel : "unreviewed")) throw new ExtensionManagementError("tool_policy_invalid", "Risk labels are assigned by the Runner.");
+      const discovery = state.registry.toolDiscoveries[extensionId];
+      const expected = discovery?.versionId === version.versionId ? discovery.components : [];
+      const canonical = (items: readonly ExtensionToolInventory[]) => JSON.stringify([...items].sort((a, b) => a.componentId.localeCompare(b.componentId)).map((item) => ({ ...item, toolNames: [...item.toolNames].sort() })));
+      if (canonical(policy.reviewed) !== canonical(expected)) throw new ExtensionManagementError("tool_discovery_changed", "Discovery changed; review the current tools before applying policy.", 409);
+      if (policy.remoteExposure && !version.components.some((component) => component.kind === "mcp_server" && component.route === "runner")) throw new ExtensionManagementError("unsupported", "Provider-hosted tools cannot be remotely exposed.", 409);
+      state.setToolPolicy(extensionId, policy);
+      state.putExtension({ ...extension, desiredGeneration: state.registry.currentGeneration + 1, updatedAt: this.now().toISOString() });
+      return state.publishGeneration(undefined, this.now().toISOString()).generation;
+    });
+    this.emit({ type: "generation", generation });
+    return await this.extensionToolPolicy(extensionId);
+  }
+
+  async managedMcpServerEligible(entry: ManagedMcpServerEntry, remote = false): Promise<boolean> {
+    const registry = await this.registry.load();
+    const extension = registry.extensions.find((item) => item.id === entry.extensionId);
+    const live = registry.toolPolicies[entry.extensionId];
+    if (!extension?.enabled || extension.removedAt || !this.inScope(extension.scope) || extension.currentVersionId !== entry.versionId ||
+        extension.readiness.state !== "ready" || !live || live.versionId !== entry.versionId || !entry.toolPolicy) return false;
+    const inventory = entry.toolPolicy.reviewed.find((item) => item.componentId === entry.component.componentId);
+    return !!inventory && inventory.toolNames.some((name) =>
+      extensionToolAdmitted(entry.toolPolicy!, entry.component, inventory.schemaDigest, inventory.toolNames, name, remote) &&
+      extensionToolAdmitted(live, entry.component, inventory.schemaDigest, inventory.toolNames, name, remote));
+  }
+
+  /** A pinned decision intersects the latest live restriction at listing and call time. */
+  async managedMcpToolAdmitted(entry: ManagedMcpServerEntry, schemaDigest: string, observedNames: readonly string[], toolName: string, remote = false): Promise<boolean> {
+    const registry = await this.registry.load();
+    const extension = registry.extensions.find((item) => item.id === entry.extensionId);
+    if (!extension?.enabled || extension.removedAt || !this.inScope(extension.scope) || extension.currentVersionId !== entry.versionId || extension.readiness.state !== "ready") return false;
+    const live = registry.toolPolicies[entry.extensionId];
+    if (!entry.toolPolicy || !live || live.versionId !== entry.versionId) return false;
+    return extensionToolAdmitted(entry.toolPolicy, entry.component, schemaDigest, observedNames, toolName, remote) &&
+      extensionToolAdmitted(live, entry.component, schemaDigest, observedNames, toolName, remote);
   }
 
   /** Re-checks readiness without changing installed state. */
@@ -726,9 +823,12 @@ export class ExtensionManagementService {
   /** Managed MCP servers visible to this project in a generation (immutable entries). */
   async managedMcpServers(generationNumber: number): Promise<ManagedMcpServerEntry[]> {
     const generation = await this.registry.generation(generationNumber);
+    const registry = await this.registry.load();
     return generation.entries.filter((entry) => this.inScope(entry.scope)).flatMap((entry) => entry.components
       .filter((component): component is McpServerComponent => component.kind === "mcp_server")
-      .map((component) => ({ extensionId: entry.extensionId, versionId: entry.versionId, generation: generation.generation, component })));
+      .map((component) => ({ extensionId: entry.extensionId, versionId: entry.versionId, generation: generation.generation, component,
+        toolPolicy: entry.toolPolicy ?? (registry.migrations.includes("extension-tool-policy-v1-to-v2") ? legacyToolPolicy(entry.versionId, entry.components) : defaultToolPolicy(entry.versionId)),
+        pinnedApproval: entry.toolApprovalOverride ?? (!entry.toolPolicy ? registry.legacyToolApprovals[entry.extensionId] : undefined) ?? component.toolApproval ?? "all" })));
   }
 
   /**
@@ -849,7 +949,7 @@ export class ExtensionManagementService {
     const readinessBefore: ExtensionReadiness = { state: "installed", checkedAt: now };
     if (plan.dependencies?.length) this.assertDependencies((await this.registry.load()).extensions, plan.dependencies, plan.scope);
     await this.update(operationId, (current) => this.advance(current, "commit"));
-    const generation = await this.registry.mutate((state) => {
+    const baseGeneration = await this.registry.mutate((state) => {
       const prior = state.extension(extensionId);
       state.putVersion(version);
       const previous = prior?.currentVersionId && !prior.removedAt ? [...prior.previousVersionIds, prior.currentVersionId].slice(-5) : prior?.previousVersionIds ?? [];
@@ -869,16 +969,35 @@ export class ExtensionManagementService {
       relinkDependencies(state, extensionId, version.dependencies ?? [], now);
       const advanced = state.operation(operationId);
       if (advanced) state.putOperation(this.advance(advanced, "activate"));
-      return state.publishGeneration(operationId, now);
+      return state.registry.currentGeneration;
     });
-    return await this.finalizeReadiness(operationId, extensionId, version, generation.generation, plan.action === "update" ? previousVersionOf(await this.registry.load(), extensionId) : undefined);
+    return await this.finalizeReadiness(operationId, extensionId, version, baseGeneration, plan.action === "update" ? previousVersionOf(await this.registry.load(), extensionId) : undefined, true);
   }
 
   /**
    * Readiness after activation. When an update's check fails, the previous working version is restored
    * in a new generation, so the last working state stays usable.
    */
-  private async finalizeReadiness(operationId: string, extensionId: string, version: ExtensionVersion, generation: number, previousVersionId: string | undefined): Promise<ExtensionOperation> {
+  /** Approving an install/enable reviews the inventory discovered at that moment for local use. */
+  private applyApprovedToolReview(state: MutableRegistryState, extensionId: string, version: ExtensionVersion): boolean {
+    const discovery = state.registry.toolDiscoveries[extensionId];
+    const discovered = discovery?.versionId === version.versionId ? discovery.components : [];
+    if (!discovered.length) return false;
+    const existing = state.registry.toolPolicies[extensionId];
+    const prior = existing?.versionId === version.versionId ? existing : undefined;
+    // Curated catalog policies and explicit per-tool decisions on this inventory still win.
+    if (prior && prior.riskLabel !== "unreviewed") return false;
+    const canonical = (items: readonly ExtensionToolInventory[]) => JSON.stringify([...items].sort((a, b) => a.componentId.localeCompare(b.componentId)).map((item) => ({ ...item, toolNames: [...item.toolNames].sort() })));
+    if (prior && canonical(prior.reviewed) === canonical(discovered)) return false;
+    const policy: ExtensionToolPolicy = { version: 1, versionId: version.versionId, reviewed: discovered,
+      // Explicit user denies outlive inventory and version changes; deny wins over this allow list.
+      toolFilter: { default: "deny", allow: discovered.flatMap((item) => item.toolNames.map((toolName) => ({ componentId: item.componentId, toolName }))), deny: [...(existing?.toolFilter.deny ?? [])] },
+      remoteExposure: false, riskLabel: prior?.riskLabel ?? "unreviewed" };
+    state.setToolPolicy(extensionId, policy);
+    return true;
+  }
+
+  private async finalizeReadiness(operationId: string, extensionId: string, version: ExtensionVersion, generation: number, previousVersionId: string | undefined, publishPending = false): Promise<ExtensionOperation> {
     const extension = (await this.registry.load()).extensions.find((entry) => entry.id === extensionId)!;
     const readiness = await this.checkReadiness(extension, version);
     if (readiness.state === "failed" && previousVersionId) {
@@ -901,31 +1020,34 @@ export class ExtensionManagementService {
     if (readiness.state === "needs_auth" && signIn) {
       // The same operation waits for the user's sign-in; the callback resumes it (resumeAfterSignIn).
       const waiting = await this.registry.mutate((state) => {
+        const effective = publishPending ? state.publishGeneration(operationId, this.now().toISOString()).generation : generation;
         const current = state.extension(extensionId)!;
-        state.putExtension({ ...current, readiness, activeGeneration: generation, updatedAt: this.now().toISOString() });
+        state.putExtension({ ...current, readiness, activeGeneration: effective, updatedAt: this.now().toISOString() });
         const op = state.operation(operationId)!;
         const next: ExtensionOperation = {
           ...this.advance(op, "await_sign_in"), outcome: "awaiting_user",
           userAction: { kind: "sign_in", reason: readiness.detail ?? "Sign in to finish connecting.", server: signIn.serverName },
-          result: { extensionId, versionId: version.versionId, generation, readiness },
+          result: { extensionId, versionId: version.versionId, generation: effective, readiness },
         };
         state.putOperation(next);
         return next;
       });
-      this.emit({ type: "generation", generation });
+      this.emit({ type: "generation", generation: waiting.result?.generation ?? generation });
       this.emit({ type: "operation", operation: publicOperation(waiting) });
       return waiting;
     }
     const finished = await this.registry.mutate((state) => {
+      const reviewed = readiness.state === "ready" ? this.applyApprovedToolReview(state, extensionId, version) : false;
+      const effective = publishPending || reviewed ? state.publishGeneration(operationId, this.now().toISOString()).generation : generation;
       const current = state.extension(extensionId)!;
-      state.putExtension({ ...current, readiness, activeGeneration: generation, updatedAt: this.now().toISOString() });
+      state.putExtension({ ...current, readiness, activeGeneration: effective, updatedAt: this.now().toISOString() });
       const op = state.operation(operationId)!;
       const outcome = readiness.state === "failed" ? "failed" : "succeeded";
-      const next: ExtensionOperation = { ...this.finish(this.advance(op, "ready"), outcome, readiness.state === "failed" ? (readiness.lastError?.message ?? "Readiness check failed.") : undefined), result: { extensionId, versionId: version.versionId, generation, readiness } };
+      const next: ExtensionOperation = { ...this.finish(this.advance(op, "ready"), outcome, readiness.state === "failed" ? (readiness.lastError?.message ?? "Readiness check failed.") : undefined), result: { extensionId, versionId: version.versionId, generation: effective, readiness } };
       state.putOperation(next);
       return next;
     });
-    this.emit({ type: "generation", generation });
+    this.emit({ type: "generation", generation: finished.result?.generation ?? generation });
     this.emit({ type: "operation", operation: publicOperation(finished) });
     return finished;
   }
@@ -938,13 +1060,21 @@ export class ExtensionManagementService {
     const version = registry.versions.find((entry) => entry.versionId === prior?.currentVersionId);
     if (!enabled && prior && version) await this.handlerFor(prior.kind)?.release?.(prior, version).catch(() => undefined);
     const now = this.now().toISOString();
+    if (enabled && version) {
+      const baseGeneration = await this.registry.mutate((state) => {
+        const current = state.extension(extensionId);
+        if (!current) throw new ExtensionManagementError("extension_not_found", "No such installed extension.", 404);
+        state.putExtension({ ...current, enabled, desiredGeneration: state.registry.currentGeneration + 1, readiness: { state: "enabled", checkedAt: now }, updatedAt: now });
+        return state.registry.currentGeneration;
+      });
+      return await this.finalizeReadiness(operationId, extensionId, version, baseGeneration, undefined, true);
+    }
     const generation = await this.registry.mutate((state) => {
       const current = state.extension(extensionId);
       if (!current) throw new ExtensionManagementError("extension_not_found", "No such installed extension.", 404);
-      state.putExtension({ ...current, enabled, desiredGeneration: state.registry.currentGeneration + 1, readiness: enabled ? { state: "enabled", checkedAt: now } : { state: "disabled", checkedAt: now }, updatedAt: now });
+      state.putExtension({ ...current, enabled, desiredGeneration: state.registry.currentGeneration + 1, readiness: { state: "disabled", checkedAt: now }, updatedAt: now });
       return state.publishGeneration(operationId, now);
     });
-    if (enabled && version) return await this.finalizeReadiness(operationId, extensionId, version, generation.generation, undefined);
     return await this.completeSimple(operationId, extensionId, generation.generation, { state: "disabled", checkedAt: now });
   }
 
@@ -974,16 +1104,16 @@ export class ExtensionManagementService {
     const target = plan.targetVersionId!;
     await this.update(operationId, (current) => this.advance(current, "commit"));
     const now = this.now().toISOString();
-    const generation = await this.registry.mutate((state) => {
+    const baseGeneration = await this.registry.mutate((state) => {
       const current = state.extension(extensionId);
       if (!current || !current.previousVersionIds.includes(target)) throw new ExtensionManagementError("rollback_unavailable", "That version is no longer available.", 409);
       const previous = [...current.previousVersionIds.filter((id) => id !== target), ...(current.currentVersionId ? [current.currentVersionId] : [])].slice(-5);
       state.putExtension({ ...current, currentVersionId: target, previousVersionIds: previous, enabled: true, desiredGeneration: state.registry.currentGeneration + 1, updatedAt: now });
       relinkDependencies(state, extensionId, state.version(target)?.dependencies ?? [], now);
-      return state.publishGeneration(operationId, now);
+      return state.registry.currentGeneration;
     });
     const version = (await this.registry.load()).versions.find((entry) => entry.versionId === target)!;
-    return await this.finalizeReadiness(operationId, extensionId, version, generation.generation, undefined);
+    return await this.finalizeReadiness(operationId, extensionId, version, baseGeneration, undefined, true);
   }
 
   private async completeSimple(operationId: string, extensionId: string, generation: number, readiness: ExtensionReadiness): Promise<ExtensionOperation> {
@@ -1246,11 +1376,20 @@ export interface StagedRunnerExtension {
   readonly directory: string;
 }
 
+export interface ExtensionToolPolicyView {
+  readonly policy: ExtensionToolPolicy;
+  readonly discovered: readonly ExtensionToolInventory[];
+  readonly currentGeneration: number;
+  readonly unsupported: boolean;
+}
+
 export interface ManagedMcpServerEntry {
   readonly extensionId: string;
   readonly versionId: string;
   readonly generation: number;
   readonly component: McpServerComponent;
+  readonly toolPolicy?: ExtensionToolPolicy;
+  readonly pinnedApproval?: "all" | "non_destructive";
 }
 
 export const NO_ACCESS: AccessSummary = Object.freeze({ executesCode: "never", network: Object.freeze([]), filesystem: "No new access.", credentials: Object.freeze([]), notes: Object.freeze([]) });
