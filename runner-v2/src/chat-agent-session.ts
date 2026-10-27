@@ -232,7 +232,7 @@ export class ChatAgentSessions {
       session.transitions.push(transition);
       session.generation = transition.to;
       await this.save(sessionId, session);
-    });
+    }, () => this.options.extensions.policyRevision());
     try {
       const transport = (this.options.modelFactory ?? createProviderModel)(config, artifacts);
       const model = new BudgetedAgentModel({
@@ -245,6 +245,7 @@ export class ChatAgentSessions {
       const budgeted = new BudgetedToolRuntime({ runtime, ledger: budget, scopeId: sessionId });
       const loop = await runAgentLoop({
         model, registry: budgeted, signal, maxTurns: MAX_TURNS_PER_MESSAGE,
+        beforeModelTurn: () => runtime.ready(),
         context: { runId: sessionId, sessionId, actor: { role: "worker", id: `chat:${config.runtimeId}` }, workspacePath: this.options.projectRoot, signal },
         initialMessages: session.transcript,
         // A chat answer is a text-only turn; reading several skills in a row is not a stall.
@@ -340,17 +341,32 @@ export class GenerationalToolRuntime implements AgentToolRuntime {
   private current: { generation: number; runtime: AgentToolRuntime; close(): Promise<void> } | undefined;
   private pending: { to: number; operationIds: string[] } | undefined;
   private inFlight = 0;
+  private revision: number | undefined;
   private readonly retired: Array<() => Promise<void>> = [];
 
   constructor(
     private readonly build: (generation: number) => Promise<{ runtime: AgentToolRuntime; close(): Promise<void> }>,
     private generation: number,
     private readonly onTransition: (transition: ChatGenerationTransition) => Promise<void>,
+    private readonly policyRevision?: () => Promise<number>,
   ) {}
 
   async ready(): Promise<void> {
-    if (!this.current) this.current = { generation: this.generation, ...(await this.build(this.generation)) };
+    if (!this.current) {
+      this.revision = await this.policyRevision?.();
+      this.current = { generation: this.generation, ...(await this.build(this.generation)) };
+    }
     await this.adopt();
+    const revision = await this.policyRevision?.();
+    if (revision !== this.revision) {
+      if (this.inFlight) throw new Error("Cannot refresh managed tools while a call is in flight.");
+      const current = this.current;
+      if (!current) throw new Error("Chat tool runtime is not ready.");
+      await current.close();
+      this.current = undefined;
+      this.current = { generation: this.generation, ...(await this.build(this.generation)) };
+      this.revision = revision;
+    }
   }
 
   definitions(): ToolDefinition[] {

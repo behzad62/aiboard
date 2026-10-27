@@ -229,7 +229,7 @@ export interface StreamingSessionRecord {
   readonly leaseExpiresAt: string;
   readonly runId: string;
   readonly agentSessionId: string;
-  readonly actor: Readonly<{ role: "architect" | "worker" | "subagent" | "verifier" | "system" | "user" | "runner_internal"; id: string }>;
+  readonly actor: Readonly<{ role: "architect" | "worker" | "subagent" | "verifier" | "remote" | "system" | "user" | "runner_internal"; id: string }>;
   readonly toolName: string;
   readonly callId: string;
   readonly envelope: StreamingSessionEnvelope;
@@ -358,7 +358,7 @@ export interface HostLaunchRecord {
   readonly sessionId: string;
   readonly runId: string;
   readonly agentSessionId: string;
-  readonly actor: Readonly<{ role: "architect" | "worker" | "subagent" | "verifier" | "system" | "user" | "runner_internal"; id: string }>;
+  readonly actor: Readonly<{ role: "architect" | "worker" | "subagent" | "verifier" | "remote" | "system" | "user" | "runner_internal"; id: string }>;
   readonly toolName: string;
   readonly callId: string;
   readonly ownerId: string;
@@ -3288,7 +3288,7 @@ function commandRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function isActorRole(value: unknown): boolean {
-  return value === "architect" || value === "worker" || value === "subagent" || value === "verifier" || value === "system" || value === "user" || value === "runner_internal";
+  return value === "architect" || value === "worker" || value === "subagent" || value === "verifier" || value === "remote" || value === "system" || value === "user" || value === "runner_internal";
 }
 
 function isValidText(value: unknown): value is string {

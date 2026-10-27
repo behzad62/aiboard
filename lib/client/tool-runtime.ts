@@ -62,26 +62,12 @@ export function configuredOpenAIFileSearchIntent(
     parameters: { vectorStoreIds },
   };
 }
+/** Provider-hosted MCP bypasses the Runner's tool filter and is unavailable until it can be enforced. */
 export function configuredRemoteMcpIntent(
   server: RemoteMcpServerSettings | null | undefined,
 ): ToolIntent | undefined {
-  const name = server?.name?.trim();
-  const url = server?.url?.trim();
-  if (!server?.enabled || !name || !url || !/^https?:\/\//i.test(url)) return undefined;
-  const authorizationToken = server.authorizationToken?.trim();
-  return {
-    id: "remote_mcp",
-    requirement: "optional",
-    parameters: {
-      // Provider adapters normalize different names from this shared intent.
-      serverName: name,
-      serverLabel: name,
-      serverUrl: url,
-      ...(authorizationToken
-        ? { authorizationToken, authorization: authorizationToken }
-        : {}),
-    },
-  };
+  void server;
+  return undefined;
 }
 
 export function applyToolRuntimeToRequest(
@@ -95,7 +81,7 @@ export function applyToolRuntimeToRequest(
     : undefined;
   return buildProviderToolRequest({
     toolIntents: [
-      ...request.toolIntents,
+      ...request.toolIntents.filter((intent) => intent.id !== "remote_mcp"),
       ...(remoteMcpIntent ? [remoteMcpIntent] : []),
       ...(fileSearchIntent ? [fileSearchIntent] : []),
     ],
@@ -205,7 +191,7 @@ export async function resolveToolRuntimeResourceState(input: {
     : {
         configured: Boolean(remote?.name || remote?.url),
         ready: false,
-        detail: "Add and enable an approved http(s) remote MCP server in Tools settings.",
+        detail: "Provider-hosted MCP filtering is unsupported. Add the server as Runner-hosted in Extensions.",
       };
 
   const openaiFileSearchIntent = configuredOpenAIFileSearchIntent(settings.openaiFileSearch);

@@ -123,7 +123,8 @@ function isAgentActor(value: unknown): value is AgentActor {
       ((value as { role?: unknown }).role === "architect" ||
         (value as { role?: unknown }).role === "worker" ||
         (value as { role?: unknown }).role === "subagent" ||
-        (value as { role?: unknown }).role === "verifier") &&
+        (value as { role?: unknown }).role === "verifier" ||
+        (value as { role?: unknown }).role === "remote") &&
       typeof (value as { id?: unknown }).id === "string",
   );
 }

@@ -195,6 +195,12 @@ async function install(env: Awaited<ReturnType<typeof fixture>>, url: string, au
   return { view, plan, operation: await env.extensions.applyChange({ planId: plan.planId, planDigest: plan.planDigest, key: `ui-${plan.planId}` }, UI) };
 }
 
+async function reviewTools(env: Awaited<ReturnType<typeof fixture>>, extensionId: string): Promise<void> {
+  const view = await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId, { ...view.policy, reviewed: view.discovered,
+    toolFilter: { default: "deny", allow: view.discovered.flatMap((item) => item.toolNames.map((toolName) => ({ componentId: item.componentId, toolName }))), deny: [] } }, UI);
+}
+
 async function filesContaining(root: string, needle: string): Promise<string[]> {
   const hits: string[] = [];
   const walk = async (directory: string): Promise<void> => {
@@ -223,6 +229,7 @@ test("a no-auth remote server is ready after a real handshake; chat may call onl
   assert.equal(view.access.executesCode, "never");
   assert.equal(operation.outcome, "succeeded", operation.diagnostics.join("; "));
   assert.match(operation.result?.readiness?.detail ?? "", /3 tools: read_note, send_email, flaky_write \(MCP 2025-06-18\)/);
+  await reviewTools(env, operation.result!.extensionId!);
 
   env.setSteps([
     (request) => {
@@ -305,7 +312,7 @@ test("the browser's provider-hosted MCP setting migrates idempotently, keeps its
   const again = await env.extensions.recordProviderHostedMcp({ name: "Docs", url: "https://mcp.example.test/sse?x=1", enabled: true, hasToken: true }, UI);
   assert.equal(first.id, again.id);
   assert.equal(first.provenance, "migrated");
-  assert.equal(first.readiness.state, "external");
+  assert.equal(first.readiness.state, "unsupported");
   assert.equal(first.currentVersion?.components[0]?.kind === "mcp_server" && first.currentVersion.components[0].route, "provider_hosted");
   assert.equal(first.credentials.length, 0, "no token moved to the Runner");
   const inventory = await env.extensions.inventory();
@@ -348,10 +355,11 @@ test("remote managed MCP is available in a Build with the Build permission profi
   const env=await fixture(t);
   const {operation}=await install(env,`${remote.base}/mcp`,"none");
   assert.equal(operation.outcome,"succeeded");
+  await reviewTools(env, operation.result!.extensionId!);
   const artifacts=new ArtifactStore(join(env.root,"build-artifacts"));
   const host=createExecutionHost({projectRoot:join(env.root,"project"),stateDirectory:join(env.root,"build-state"),artifacts,ambientEnvironment:snapshotNativeBuildAmbientEnvironment()});
   const binding=await host.bindRun({runId:"remote-build",permissionProfile:"guarded",capabilityContract:{digest:"d".repeat(64)} as RunnerCapabilityContract,capabilitiesConfig:emptyRunnerCapabilitiesConfig()});
-  const managed=await env.runtime.buildTools(operation.result!.generation!,binding,"guarded",artifacts);
+  const managed=await env.runtime.buildTools((await env.extensions.generation()).generation,binding,"guarded",artifacts);
   try {
   const broker=new ToolBroker({approve:async request=>request.toolName === "mcp.notes.read_note",permissionProfile:"guarded",workspacePath:join(env.root,"project"),artifacts,executionGrants:binding.executionGrants});
   for(const tool of managed.tools)broker.register(tool);

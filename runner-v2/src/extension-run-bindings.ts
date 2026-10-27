@@ -53,6 +53,10 @@ export class ExtensionRunBindings {
     return (this.bindings.get(runId) ?? await this.bind(runId)).generation;
   }
 
+  async policyRevision(generation?: number): Promise<number | string> {
+    return generation === undefined ? await this.service.policyRevision() : await this.service.policyRevisionForGeneration(generation);
+  }
+
   pinnedGenerations(): ReadonlySet<number> {
     return new Set([...this.bindings.values()].map((binding) => binding.generation));
   }
