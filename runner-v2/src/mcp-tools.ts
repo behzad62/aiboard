@@ -181,6 +181,35 @@ export function createMcpTools(
   });
 }
 
+/**
+ * Native tools for a Runner-hosted remote (Streamable HTTP) MCP server. Naming, input validation and
+ * untrusted-output labeling match stdio tools; access is always external network use, and a tool is
+ * treated as destructive unless the server marks it otherwise.
+ */
+export function createRemoteMcpTools(
+  server: string,
+  tools: readonly McpDiscoveryResult["servers"][number]["tools"][number][],
+  call: (name: string, args: Record<string, unknown>, context: ToolExecutionContext) => Promise<McpCallResult>,
+  artifacts: ArtifactStore,
+): NativeTool<Record<string, unknown>>[] {
+  const used = new Set<string>();
+  return tools.map((tool) => {
+    const name = uniqueToolName(server, tool.name, used);
+    return {
+      definition: {
+        name,
+        description: formatMcpToolDescription(server, tool.description, tool.name),
+        inputSchema: tool.inputSchema ?? { type: "object", additionalProperties: true },
+        readOnly: tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false,
+        effect: "external",
+      },
+      validate: objectInput,
+      assessAccess: () => ({ capability: `mcp.${server}.${tool.name}`, external: true, destructive: tool.annotations?.destructiveHint !== false, network: true }),
+      execute: async (input, context) => await mcpOutput(await call(tool.name, input, context), artifacts, `${server}.${tool.name}`),
+    };
+  });
+}
+
 async function mcpOutput(
   result: McpCallResult,
   artifacts: ArtifactStore,

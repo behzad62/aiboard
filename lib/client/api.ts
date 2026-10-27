@@ -560,6 +560,7 @@ export interface CreateDiscussionInput {
   runnerUrl?: string | null;
   runnerToken?: string | null;
   runnerAccess?: "ask" | "project" | "full" | null;
+  chatRunnerTools?: boolean;
   buildRunPolicy?: BuildRunPolicy;
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
@@ -624,6 +625,7 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     runnerUrl: input.runnerUrl ?? null,
     runnerToken: input.runnerToken ?? null,
     runnerAccess: input.runnerAccess ?? null,
+    ...(input.mode === "chat" && input.chatRunnerTools ? { chatRunnerTools: true } : {}),
     nativeBuildRunId: input.mode === "build" ? `native-${uuidv4()}` : null,
     nativeBuildRequestedAt: input.mode === "build" ? now : null,
     nativeBuildPassStartedAt: input.mode === "build" ? now : null,

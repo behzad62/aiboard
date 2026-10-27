@@ -15,6 +15,8 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
+import { SEARCH_LIMITS, SearchError, SearchSessionStore, compileGlobs, contextAround, emptySkipCounts, normalizedQueryDigest,
+  type SearchCandidate, type SearchQuery, type SearchSession, type SearchSkipCounts, type SearchState } from "./filesystem-search.js";
 import type {
   RepositoryEntry,
   RepositoryIntelligence,
@@ -29,6 +31,8 @@ export interface FilesystemToolsOptions {
   maxSearchMatches?: number;
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
+  /** Resumable fs.search sessions; injectable for tests (clock). */
+  searchSessions?: SearchSessionStore;
 }
 
 type Input = Record<string, unknown>;
@@ -44,7 +48,7 @@ const MAX_PATCH_EDITS = 50;
 
 /** T10 (M9): model-facing search contract: literal match, skipped outputs. */
 export const FS_SEARCH_DESCRIPTION =
-  "Search text files under `path` (literal, case-insensitive by default; set regex/caseSensitive to change). Git-ignored, generated, and build-output paths are skipped, but tracked source files are still searched; narrow `path` for large repos.";
+  "Search text files under `path` (literal, case-insensitive by default; set regex/caseSensitive to change). Git-ignored, generated, and build-output paths are skipped, but tracked source files are still searched. Filter with include/exclude globs and add contextLines. When state is \"running\" pass the returned cursor (with the same query) to get the next page instead of re-running with a bigger maxMatches; exhaustive=true means a zero-match result is definitive.";
 
 /** T10 (M9): model-facing list contract: ignored paths skipped, plus name-based build-output skips without repository metadata. */
 export const FS_LIST_DESCRIPTION =
@@ -84,6 +88,7 @@ export function createFilesystemTools(
   const maxReadBytes = options.maxReadBytes ?? 1024 * 1024;
   const maxEntries = options.maxEntries ?? 5_000;
   const maxSearchMatches = options.maxSearchMatches ?? 500;
+  const searchSessions = options.searchSessions ?? new SearchSessionStore();
   // The revision each session last read or wrote per file. A write or patch without expectedSha256
   // replaces only that revision, so replacing a file the worker has read needs no extra round trip,
   // while content it has not seen is still refused (tunnel run: the refusal cost a model call).
@@ -347,90 +352,117 @@ export function createFilesystemTools(
         } catch (cause) {
           return error("invalid_pattern", cause instanceof Error ? cause.message : "Invalid pattern.");
         }
-        const matches: Array<{ path: string; line: number; column: number; text: string }> = [];
+        let include: ((path: string) => boolean) | undefined, exclude: ((path: string) => boolean) | undefined;
+        try {
+          include = compileGlobs(input.include as unknown[] | undefined, "include");
+          exclude = compileGlobs(input.exclude as unknown[] | undefined, "exclude");
+        } catch (cause) {
+          return error("invalid_glob", cause instanceof Error ? cause.message : "Invalid glob.");
+        }
+        const contextLines = integer(input.contextLines, 0, 0, SEARCH_LIMITS.maxContextLines);
+        const query: SearchQuery = {
+          root, pattern: input.pattern as string, regex: input.regex === true, caseSensitive: input.caseSensitive === true,
+          include: (input.include as string[] | undefined) ?? [], exclude: (input.exclude as string[] | undefined) ?? [], contextLines,
+          flags: { includeIgnored: input.includeIgnored === true, includeGenerated: input.includeGenerated === true,
+            includeVendored: input.includeVendored === true, includeBinary: input.includeBinary === true },
+        };
+        const queryDigest = normalizedQueryDigest(query);
+        const owner = { runId: context.runId, sessionId: context.sessionId, actor: { ...context.actor } };
         let searchWorkspaceCanonical: string | null | undefined;
         if (hasPolicyPaths(options.hiddenPaths) && context.workspacePath) {
           searchWorkspaceCanonical = await canonicalOrNull(context.workspacePath);
         }
-        const searchFile = async (path: string): Promise<boolean> => {
-          if (matches.length >= limit) return false;
-          if (matchesPolicyPath(context, path, options.hiddenPaths)) return true;
-          if (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths, searchWorkspaceCanonical)) return true;
-          const bytes = await readFile(path);
-          if (!isUtf8Text(bytes)) return true;
-          const lines = decodeText(bytes).split(/\r?\n/);
-          for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-            expression.lastIndex = 0;
-            let match: RegExpExecArray | null;
-            while ((match = expression.exec(lines[lineIndex])) !== null) {
-              matches.push({
-                path: displayPath(context, path),
-                line: lineIndex + 1,
-                column: match.index + 1,
-                text: lines[lineIndex],
-              });
-              if (matches.length >= limit) break;
-              if (match[0].length === 0) expression.lastIndex += 1;
-            }
-            if (matches.length >= limit) break;
+        const hidden = async (path: string) => matchesPolicyPath(context, path, options.hiddenPaths) ||
+          (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths, searchWorkspaceCanonical));
+        let session: SearchSession, offset = 0;
+        if (input.cursor !== undefined) {
+          if (typeof input.cursor !== "string") return error("search_cursor_invalid", "cursor must be a string.");
+          try { ({ session, offset } = searchSessions.resume(input.cursor, owner, queryDigest)); }
+          catch (cause) {
+            if (cause instanceof SearchError) return { content: [json({ matches: [], truncated: true, state: cause.code === "search_expired" ? "expired" : "failed", exhaustive: false })], isError: true, error: { code: cause.code, message: cause.message } };
+            throw cause;
           }
-          return matches.length < limit;
-        };
-        const rootDetails = await lstat(root);
-        let skippedIgnored = 0;
-        let listedWithin = 0;
-        if (rootDetails.isFile()) {
-          await searchFile(root);
-        } else if (rootDetails.isDirectory()) {
-          if (options.repository && context.workspacePath) {
-            const snapshot = await options.repository.snapshot(
-              context.workspacePath,
-              {
-                includeIgnored: input.includeIgnored === true,
-                maxEntries: 20_000,
-              },
-              context.signal,
-            );
-            for (const entry of snapshot.entries) {
-              if (matches.length >= limit) break;
+          if (input.cancel === true) {
+            searchSessions.cancel(session);
+            return { content: [json({ matches: [], truncated: true, state: "cancelled", exhaustive: false, scope: searchScope(session, query, context) })], isError: false };
+          }
+        } else {
+          const rootDetails = await lstat(root);
+          if (!rootDetails.isFile() && !rootDetails.isDirectory()) return error("invalid_search_path", "Search path must be a file or directory.");
+          const skipped = emptySkipCounts();
+          const candidates: SearchCandidate[] = [];
+          let source: SearchSession["source"] = "file", snapshotTruncated = false, listedWithin = 0;
+          const admit = async (path: string) => {
+            const display = displayPath(context, path);
+            if ((include && !include(display)) || (exclude && exclude(display))) { skipped.excluded += 1; return; }
+            if (await hidden(path)) { skipped.hidden += 1; return; }
+            candidates.push({ absolutePath: path, displayPath: display });
+          };
+          if (rootDetails.isFile()) await admit(root);
+          else if (options.repository && context.workspacePath) {
+            const snapshot = await options.repository.snapshot(context.workspacePath, { includeIgnored: input.includeIgnored === true, maxEntries: 20_000 }, context.signal);
+            source = snapshot.source; snapshotTruncated = snapshot.truncated;
+            const entries = [...snapshot.entries].sort((left, right) => left.path.localeCompare(right.path));
+            for (const entry of entries) {
               const path = resolve(context.workspacePath, entry.path);
               if (!isWithin(root, path)) continue;
               listedWithin += 1;
-              if (!entryIsSearchable(entry, input)) {
-                if (entry.gitState !== "tracked") skippedIgnored += 1;
-                continue;
-              }
-              await searchFile(path);
+              const reason = searchSkipReason(entry, input);
+              if (reason) { skipped[reason] += 1; continue; }
+              await admit(path);
             }
           } else {
-            await walk(root, 50, async (path, type) =>
-              type === "file" ? await searchFile(path) : matches.length < limit,
-            context.signal);
+            source = "filesystem";
+            await walk(root, 50, async (path, type) => {
+              if (type !== "file") return true;
+              if (candidates.length >= 20_000) { snapshotTruncated = true; return false; }
+              await admit(path); return true;
+            }, context.signal);
           }
-        } else {
-          return error("invalid_search_path", "Search path must be a file or directory.");
+          // The snapshot leaves ignored files out entirely, so a non-empty directory it lists nothing
+          // under (node_modules, dist) is itself ignored.
+          if (input.includeIgnored !== true && rootDetails.isDirectory() && options.repository && listedWithin === 0 &&
+            (await readdir(root).catch(() => [])).length > 0) {
+            skipped.ignored = Math.max(skipped.ignored, 1);
+          }
+          session = searchSessions.create({ owner, queryDigest, source, snapshotTruncated, candidates, skipped });
         }
+        await scanSearchSession(session, offset + limit, expression, contextLines, hidden, context.signal, offset === 0 && input.cursor === undefined);
+        const matches = session.matches.slice(offset, offset + limit);
+        const next = offset + matches.length;
+        const more = session.matches.length > next || (session.state === "running" && session.position < session.candidates.length);
+        const state: SearchState = more && session.state === "running" ? "running"
+          : session.state === "running" ? (session.overflow ? "capped" : "complete") : session.state;
+        const exhaustive = state === "complete" && !session.snapshotTruncated && session.skipped.unreadable === 0 && !session.overflow;
         // An empty result says why it may be empty: a worker searched node_modules (skipped as
         // ignored) and an a|b pattern (matched literally), got nothing twice and fell back to shell
         // commands (tunnel run).
         const notes: string[] = [];
-        // The snapshot leaves ignored files out entirely, so a non-empty directory it lists nothing
-        // under (node_modules, dist) is itself ignored.
-        if (!matches.length && input.includeIgnored !== true && rootDetails.isDirectory() && listedWithin === 0 &&
-          (await readdir(root).catch(() => [])).length > 0) {
-          skippedIgnored = Math.max(skippedIgnored, 1);
-        }
-        if (!matches.length && skippedIgnored > 0) {
+        const skippedIgnored = session.skipped.ignored + session.skipped.generated + session.skipped.vendored;
+        if (!session.matches.length && skippedIgnored > 0) {
           notes.push(`${skippedIgnored} git-ignored or generated file(s) under this path were skipped; set includeIgnored: true to search them.`);
         }
-        if (!matches.length && input.regex !== true && /[|*+?()[\]{}^$\\]/.test(String(input.pattern))) {
+        if (!session.matches.length && input.regex !== true && /[|*+?()[\]{}^$\\]/.test(String(input.pattern))) {
           notes.push("The pattern was matched literally; set regex: true to use it as a regular expression.");
         }
+        if (state === "stale") notes.push("Files changed after this search started; results so far are from the original snapshot. Start a new search for current content.");
+        if (state === "capped") notes.push(`Retained results reached the session cap (${SEARCH_LIMITS.maxRetainedMatches} matches or ${SEARCH_LIMITS.maxRetainedBytes} bytes); narrow path, include or pattern.`);
+        if (state === "timed_out") notes.push("The search reached its total scan-time bound; results are partial.");
         return {
-          content: [json({ matches, truncated: matches.length >= limit, ...(notes.length ? { notes } : {}) })],
+          content: [json({
+            matches,
+            truncated: state !== "complete" || more,
+            state,
+            exhaustive,
+            ...(more && (state === "running" || session.matches.length > next) ? { cursor: searchSessions.encode(session, next) } : {}),
+            scope: searchScope(session, query, context),
+            ...(session.errors.length ? { errors: session.errors.slice(0, 10) } : {}),
+            ...(notes.length ? { notes } : {}),
+          })],
           isError: false,
         };
       },
+      timeoutMs: () => SEARCH_LIMITS.pageTimeMs + 30_000,
     },
     {
       definition: definition("fs.write", "Atomically create a new text file only if absent, or replace existing text using the SHA-256 from a prior read/inspection. expectedSha256 defaults to the revision you last read or wrote; replacing a file you have not read is refused.", false, "workspace"),
@@ -625,6 +657,11 @@ function filesystemSchema(name: string): Record<string, unknown> {
           includeIgnored: { type: "boolean" },
           includeBinary: { type: "boolean" },
           maxMatches: { type: "integer", minimum: 1 },
+          include: { type: "array", items: { type: "string" }, maxItems: 32, description: "Only search paths matching these globs (e.g. \"*.ts\", \"src/**/*.tsx\")." },
+          exclude: { type: "array", items: { type: "string" }, maxItems: 32, description: "Skip paths matching these globs." },
+          contextLines: { type: "integer", minimum: 0, maximum: 5, description: "Lines of context before and after each match." },
+          cursor: { type: "string", description: "Continue a previous search: pass its cursor with the same path, pattern and options." },
+          cancel: { type: "boolean", description: "With cursor: end that search session." },
         },
         ["path", "pattern"]
       );
@@ -706,6 +743,105 @@ function repositoryListEntries(
     path: normalizeDisplayPath(workspaceRoot, path),
     type,
   }));
+}
+
+function searchSkipReason(entry: RepositoryEntry, input: Input): keyof SearchSkipCounts | undefined {
+  if (entryIsSearchable(entry, input)) return undefined;
+  if (entry.gitState !== "tracked" && (entry.gitState === "ignored" || isBuildOutputPath(entry.path))) return "ignored";
+  if (entry.kind === "generated") return "generated";
+  if (entry.kind === "vendored") return "vendored";
+  if (entry.kind === "binary") return "binary";
+  return "ignored";
+}
+
+function searchScope(session: SearchSession, query: SearchQuery, context: ToolExecutionContext) {
+  return {
+    path: displayPath(context, query.root),
+    source: session.source,
+    candidates: session.candidates.length,
+    scanned: session.scanned,
+    remaining: Math.max(0, session.candidates.length - session.position),
+    skipped: { ...session.skipped },
+    snapshotTruncated: session.snapshotTruncated,
+    retainedMatches: session.matches.length,
+  };
+}
+
+/**
+ * Scan whole candidate files until `wanted` matches are retained or the page budget is spent.
+ * `firstPage` reads happen inside the creating call, so no page boundary has been crossed yet.
+ */
+async function scanSearchSession(
+  session: SearchSession,
+  wanted: number,
+  expression: RegExp,
+  contextLines: number,
+  hidden: (path: string) => Promise<boolean>,
+  signal: AbortSignal | undefined,
+  firstPage: boolean,
+): Promise<void> {
+  if (session.state !== "running") return;
+  const started = Date.now();
+  let bytes = 0;
+  try {
+    while (session.position < session.candidates.length && session.matches.length < wanted) {
+      if (signal?.aborted) return;
+      const elapsed = Date.now() - started;
+      if (session.scanMs + elapsed > SEARCH_LIMITS.sessionScanTimeMs) { session.state = "timed_out"; return; }
+      if (elapsed > SEARCH_LIMITS.pageTimeMs || bytes > SEARCH_LIMITS.pageScanBytes) return;
+      const candidate = session.candidates[session.position]!;
+      // Access policy is rechecked on every page; a revoked path is never read.
+      if (await hidden(candidate.absolutePath)) { session.skipped.hidden += 1; session.position += 1; continue; }
+      let details;
+      try { details = await lstat(candidate.absolutePath); }
+      catch (cause) {
+        if ((cause as NodeJS.ErrnoException).code === "ENOENT" && !firstPage) {
+          session.state = "stale"; session.errors.push(`${candidate.displayPath} was removed after the search started.`); return;
+        }
+        session.skipped.unreadable += 1; session.errors.push(`${candidate.displayPath}: unreadable`); session.position += 1; continue;
+      }
+      if (!details.isFile()) { session.skipped.unreadable += 1; session.position += 1; continue; }
+      if (!firstPage && details.mtimeMs > session.createdAtMs) {
+        session.state = "stale"; session.errors.push(`${candidate.displayPath} changed after the search started.`); return;
+      }
+      if (details.size > SEARCH_LIMITS.maxFileBytes) { session.skipped.tooLarge += 1; session.position += 1; continue; }
+      let content: Buffer;
+      try { content = await readFile(candidate.absolutePath); }
+      catch { session.skipped.unreadable += 1; session.errors.push(`${candidate.displayPath}: unreadable`); session.position += 1; continue; }
+      bytes += content.byteLength;
+      session.scanned += 1;
+      if (!isUtf8Text(content)) { session.skipped.notText += 1; session.position += 1; continue; }
+      const lines = decodeText(content).split(/\r?\n/);
+      const found: typeof session.matches = [];
+      let foundBytes = 0;
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+        expression.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = expression.exec(lines[lineIndex]!)) !== null) {
+          const line = lines[lineIndex]!;
+          const clipped = line.length > SEARCH_LIMITS.maxLineChars;
+          const entry = { path: candidate.displayPath, line: lineIndex + 1, column: match.index + 1,
+            text: clipped ? `${line.slice(0, SEARCH_LIMITS.maxLineChars)}…` : line, ...(clipped ? { textTruncated: true } : {}),
+            ...contextAround(lines, lineIndex, contextLines) };
+          found.push(entry); foundBytes += JSON.stringify(entry).length;
+          if (match[0].length === 0) expression.lastIndex += 1;
+        }
+      }
+      // A file's matches are retained whole or not at all, so a page never splits a file's
+      // results across a cap boundary and resumption needs no intra-file position.
+      if (session.matches.length + found.length > SEARCH_LIMITS.maxRetainedMatches || session.retainedBytes + foundBytes > SEARCH_LIMITS.maxRetainedBytes) {
+        session.overflow = true;
+        const room = Math.max(0, SEARCH_LIMITS.maxRetainedMatches - session.matches.length);
+        session.matches.push(...found.slice(0, room));
+        session.position = session.candidates.length;
+        return;
+      }
+      session.matches.push(...found); session.retainedBytes += foundBytes;
+      session.position += 1;
+    }
+  } finally {
+    session.scanMs += Date.now() - started;
+  }
 }
 
 function entryIsSearchable(entry: RepositoryEntry, input: Input): boolean {
@@ -892,6 +1028,12 @@ async function workspaceLinkTarget(context: ToolExecutionContext, path: string):
   } catch {
     return undefined;
   }
+}
+
+/** Same hidden-path policy as the filesystem tools (lexical, then canonical target). */
+export async function isHiddenWorkspacePath(context: ToolExecutionContext, absolutePath: string, hiddenPaths: readonly string[] | undefined): Promise<boolean> {
+  if (!hasPolicyPaths(hiddenPaths)) return false;
+  return matchesPolicyPath(context, absolutePath, hiddenPaths) || await matchesCanonicalPolicyTarget(context, absolutePath, hiddenPaths);
 }
 
 function toolPath(context: ToolExecutionContext, path: string): string {

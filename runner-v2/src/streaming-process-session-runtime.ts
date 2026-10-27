@@ -93,7 +93,7 @@ export interface StreamingHandshakeControl {
 type OutputController = ReturnType<typeof createStreamingOutputController>;
 type FinalizedEvidence = Awaited<ReturnType<ReturnType<typeof createProtocolEvidenceTee>["finalize"]>>;
 interface AttachmentEvidence { readonly tee: ReturnType<typeof createProtocolEvidenceTee>; finalizing?: Promise<FinalizedEvidence>; finalizedEvidence?: FinalizedEvidence; cleanup?: Promise<void> }
-interface PrivateAttachment { terminalMonitor?: Promise<void>; onTerminal?: (observation: StreamingTerminalObservation) => void; terminal?: StreamingTerminalObservation; terminalDelivered?: boolean; gracefulProtocolSettlement?: Promise<void>; gracefulInputClose?: Promise<"acknowledged" | "failed">; readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly evidence: AttachmentEvidence; readonly outputOwnerId: string; readonly outputFencingToken: number; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; closed: boolean; detached: boolean; cleanupRelinquished: boolean; nextWriteSequence: number; writeTail: Promise<void>; intakeTail: Promise<void>; intakeCount: number; closing?: Promise<FinalizedEvidence>; takeover?: Promise<void>; settling?: Promise<void>; outputSettlement?: { deadlineAt: number; promise: Promise<BackpressuredOutputSettlement> }; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
+interface PrivateAttachment { terminalMonitor?: Promise<void>; onTerminal?: (observation: StreamingTerminalObservation) => void; terminal?: StreamingTerminalObservation; terminalDelivered?: boolean; gracefulProtocolSettlement?: Promise<void>; gracefulInputClose?: Promise<"acknowledged" | "failed">; readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly evidence: AttachmentEvidence; readonly outputOwnerId: string; readonly outputFencingToken: number; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; readonly evidenceWaiters: Set<() => void>; closed: boolean; detached: boolean; cleanupRelinquished: boolean; nextWriteSequence: number; writeTail: Promise<void>; intakeTail: Promise<void>; intakeCount: number; closing?: Promise<FinalizedEvidence>; takeover?: Promise<void>; settling?: Promise<void>; outputSettlement?: { deadlineAt: number; promise: Promise<BackpressuredOutputSettlement> }; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
 interface AdoptedCleanupContext { ownerId: string; fencingToken: number; live?: PrivateAttachment; cleanup?: PrivateAttachment; detachChannel?: FakeStreamingChannel; detachSettlement?: Promise<BackpressuredOutputSettlement>; detachOutputFailed?: boolean; control?: AdoptedBackendControl; evidenceContinuable: boolean; retainedCount: number }
 interface AdoptedCleanupRun {
   readonly ownerId: string;
@@ -538,6 +538,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     const evidence = inherited ?? {
       tee: createProtocolEvidenceTee({ queue, spool: spool!, continuation }),
     };
+    const evidenceWaiters = new Set<() => void>();
     const output = createStreamingOutputController({
       kernel: options.kernel, sessionId, ownerId, fencingToken, maxAcceptedChunks: options.output.maxAcceptedChunks,
       // A host-owned pre-adoption cleanup has no family-delivery principal.
@@ -546,14 +547,18 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       queue,
       protocolStreams: deliveryMode === "cleanup_evidence_only" ? [] : protocolStreams,
       acceptedReplayEvidenceAlreadyRecorded: options.output.artifacts ? false : acceptedReplayEvidenceAlreadyRecorded,
-      writeEvidence: evidence.tee.writeEvidence,
+      // Observation-only wake-up: waiters re-read bounded evidence under their own authority.
+      writeEvidence: async (stream, bytes, metadata) => {
+        try { return await evidence.tee.writeEvidence(stream, bytes, metadata); }
+        finally { notifyEvidenceWaiters(evidenceWaiters); }
+      },
       assertAuthorization: (authorization, expected) => options.sessions.assertOperationAuthorization(authorization, expected),
       deliver: async (stream, bytes) => {
         try { await options.output.deliver(stream, bytes); }
         catch { throw runnerSessionError("launch_failed", "Streaming output delivery failed."); }
       },
     });
-    const attachment: PrivateAttachment = { channel, output, evidence, outputOwnerId: ownerId, outputFencingToken: fencingToken, onPreAdoptionFailure, unsubscribe: () => undefined, unobserve: () => undefined, closed: false, detached: false, cleanupRelinquished: false, nextWriteSequence: 1, writeTail: Promise.resolve(), intakeTail: Promise.resolve(), intakeCount: 0 };
+    const attachment: PrivateAttachment = { channel, output, evidence, outputOwnerId: ownerId, outputFencingToken: fencingToken, onPreAdoptionFailure, unsubscribe: () => undefined, unobserve: () => undefined, evidenceWaiters, closed: false, detached: false, cleanupRelinquished: false, nextWriteSequence: 1, writeTail: Promise.resolve(), intakeTail: Promise.resolve(), intakeCount: 0 };
     return attachment;
   };
   const writeAttachment = async (
@@ -580,6 +585,33 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     });
     attachment.writeTail = operation.catch(() => undefined);
     await operation;
+  };
+  /** End-of-input is ordered after every admitted write; it is never a signal. */
+  const closeAttachmentInput = async (attachment: PrivateAttachment, timeoutMs: number, assertCurrent?: () => void): Promise<void> => {
+    const channel = attachment.channel as Partial<InteractiveProcessChannel>;
+    if (typeof channel.closeInput !== "function") throw runnerSessionError("launch_failed", "Streaming channel input close is unavailable.");
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 3_600_000) throw runnerSessionError("launch_failed", "Streaming input close timeout is invalid.");
+    const operation = attachment.writeTail.then(async () => {
+      assertCurrent?.();
+      await bounded(Promise.resolve().then(() => channel.closeInput!()), timeoutMs);
+    });
+    attachment.writeTail = operation.catch(() => undefined);
+    await operation;
+  };
+  const waitForAttachmentEvidence = (attachment: PrivateAttachment, timeoutMs: number, signal?: AbortSignal): Promise<"changed" | "terminal" | "timeout" | "cancelled"> => {
+    if (attachment.terminal || attachment.closed) return Promise.resolve("terminal");
+    if (signal?.aborted) return Promise.resolve("cancelled");
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw runnerSessionError("launch_failed", "Streaming evidence wait bound is invalid.");
+    return new Promise((resolveWait) => {
+      const finish = (value: "changed" | "terminal" | "timeout" | "cancelled") => {
+        clearTimeout(timer); attachment.evidenceWaiters.delete(waiter); signal?.removeEventListener("abort", abort); resolveWait(value);
+      };
+      const waiter = () => finish(attachment.terminal || attachment.closed ? "terminal" : "changed");
+      const abort = () => finish("cancelled");
+      const timer = setTimeout(() => finish("timeout"), timeoutMs);
+      attachment.evidenceWaiters.add(waiter);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
   };
   const publishTerminalObservation = (sessionId: string, attachment: PrivateAttachment) => {
     if (!attachment.onTerminal || !attachment.terminal || attachment.terminalDelivered) return;
@@ -628,6 +660,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     });
     const onTerminal = (value: unknown) => {
       attachment.terminal = terminalObservation(value);
+      notifyEvidenceWaiters(attachment.evidenceWaiters);
       const session = options.kernel.store.readBySession(sessionId);
       if (session?.state === "active") {
         publishTerminalObservation(sessionId, attachment);
@@ -712,6 +745,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     try { await finalizeAttachmentEvidence(sessionId, attachment); }
     catch (error) { errors.push(error); }
     if (!attachment.detached) try { await attachment.channel.detach(); await attachment.terminalMonitor; attachment.detached = true; } catch (error) { errors.push(error); }
+    notifyEvidenceWaiters(attachment.evidenceWaiters);
     if (errors.length) throw new AggregateError(errors, "Streaming attachment cleanup failed.");
     attachment.closed = true;
     return attachment.finalizedEvidence!;
@@ -1375,6 +1409,8 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       stream: value.stream, tail: value.tail, tailBytesBase64: value.tailBytesBase64, tailByteLength: value.tailByteLength,
       tailDisplayTruncated: value.tailDisplayTruncated, totalBytes: value.totalBytes, truncated: value.truncated,
       lossyBytes: value.lossyBytes, lossyOutput: value.lossyOutput, lossReasons: value.lossReasons,
+      // Finalized evidence only: the ingested spill is the stream prefix [0, spillBytes).
+      ...finalizedSpillReference(value),
     }))) }) });
   };
   return Object.freeze({
@@ -1538,6 +1574,19 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
             options.sessions.assertOperationAuthorization(authorization, { ...assertion, sessionId: request.sessionId, operation: "write" });
             await writeAttachment(attachment!, payload, timeoutMs);
           },
+          /** Ordered end-of-input under one exact current write/close_input authorization. */
+          closeInput: async (
+            authorization: SessionOperationAuthorization,
+            assertion: OperationAuthorizationAssertion,
+            timeoutMs: number,
+          ) => {
+            if (assertion.operation !== "write" && assertion.operation !== "close_input") throw runnerSessionError("cleanup_blocked", "Input close requires input authority.");
+            const expected = { ...assertion, sessionId: request.sessionId };
+            options.sessions.assertOperationAuthorization(authorization, expected);
+            await closeAttachmentInput(attachment!, timeoutMs, () => options.sessions.assertOperationAuthorization(authorization, expected));
+          },
+          /** Wake-up only: grants no read. Callers re-observe under their own authority. */
+          waitForEvidence: (timeoutMs: number, signal?: AbortSignal) => waitForAttachmentEvidence(attachment!, timeoutMs, signal),
           waitForOutput: async (signal?: AbortSignal) => await attachment!.output.waitForPending(signal),
           deliverOutput: async (
             authorization: SessionOperationAuthorization,
@@ -1879,4 +1928,14 @@ function terminalObservation(value: unknown): StreamingTerminalObservation {
   const exitCode = Number.isSafeInteger(code) ? code as number : null;
   const parsedSignal = typeof signal === "string" && /^SIG[A-Z0-9]{1,16}$/.test(signal) ? signal as NodeJS.Signals : null;
   return Object.freeze({ state: state === "exited" ? "exited" : "outcome_unknown", exitCode, signal: parsedSignal });
+}
+
+function notifyEvidenceWaiters(waiters: Set<() => void>): void {
+  for (const waiter of [...waiters]) { try { waiter(); } catch { /* a waiter only re-reads under its own authority */ } }
+}
+
+function finalizedSpillReference(value: object): { spillArtifactId?: string; spillBytes?: number } {
+  const spill = value as { spillArtifactId?: unknown; spillBytes?: unknown };
+  return typeof spill.spillArtifactId === "string" && Number.isSafeInteger(spill.spillBytes)
+    ? { spillArtifactId: spill.spillArtifactId, spillBytes: spill.spillBytes as number } : {};
 }

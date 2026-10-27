@@ -19,7 +19,7 @@ import {
   toolResultText,
 } from "./provider-model-utils.js";
 import { createHash } from "node:crypto";
-import { withVisualMedia } from "./provider-visual-input.js";
+import { withToolVisualMessages, withVisualMedia } from "./provider-visual-input.js";
 import { openAICompatibleReasoningFields } from "./reasoning-effort.js";
 import { providerProtocolProfile } from "./provider-protocol-profiles.js";
 import { NATIVE_PATCH_EXECUTOR, mergeNativePatchResults, nativePatchCallId, nativePatchPartId, parseCodexPatch, type CodexPatchOperation } from "./codex-apply-patch.js";
@@ -146,9 +146,9 @@ export class OpenAICompatibleModel implements AgentModel {
             prompt_cache_retention: "24h",
           }
         : {}),
-      messages: withVisualMedia(request.messages.map((message) => toOpenAIMessage(message, toolNames, {
+      messages: withVisualMedia(withToolVisualMessages(request.messages.map((message) => toOpenAIMessage(message, toolNames, {
         reasoningContent: providerProtocolProfile(this.options.providerId)?.chatReasoningContent === true,
-      })), request.attachments, "openai-chat"),
+      })), request.toolVisuals, "openai-chat"), request.attachments, "openai-chat"),
       ...(toolPayload.length > 0
         ? { tools: toolPayload, tool_choice: toolChoice }
         : {}),
@@ -253,9 +253,9 @@ export class OpenAICompatibleModel implements AgentModel {
           }
         : {}),
       ...(profile?.maxOutputTokens ? { max_output_tokens: profile.maxOutputTokens } : {}),
-      input: withVisualMedia(responsesInput(request.messages, toolNames, {
+      input: withVisualMedia(withToolVisualMessages(responsesInput(request.messages, toolNames, {
         reasoningItems: profile?.responses?.reasoningItems === true,
-      }), request.attachments, "openai-responses"),
+      }), request.toolVisuals, "openai-responses"), request.attachments, "openai-responses"),
       ...(responseTools.length > 0
         ? {
             tools: responseTools,

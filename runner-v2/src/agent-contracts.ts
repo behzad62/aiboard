@@ -18,6 +18,20 @@ export interface ArtifactBlock {
   hash: string;
   mediaType: string;
   label?: string;
+  /**
+   * Set only by Runner tools that validated a raster image for model viewing (image.inspect,
+   * browser.screenshot). Adapters deliver it as native image input once, in the continuation that
+   * follows the producing tool call; later turns carry only this reference.
+   */
+  visual?: VisualArtifactMetadata;
+}
+
+export interface VisualArtifactMetadata {
+  width: number;
+  height: number;
+  /** Digest of the original bytes this delivered image was derived from (equal to hash when unmodified). */
+  sourceDigest: string;
+  transforms?: string[];
 }
 
 export interface JsonBlock {
@@ -106,9 +120,20 @@ export interface AgentMediaAttachment {
   base64Data: string;
 }
 
+/** Transient, per-request image bytes for visual artifact blocks in the pending tool results. Never persisted. */
+export interface ToolVisualInput {
+  readonly callId: string;
+  readonly hash: string;
+  readonly mimeType: "image/png" | "image/jpeg" | "image/webp";
+  readonly base64Data: string;
+  readonly label?: string;
+}
+
 export interface AgentModelRequest {
   /** Model-native, validated images/PDFs for the newest user message. */
   attachments?: readonly AgentMediaAttachment[];
+  /** Images produced by the tool calls this request answers; adapters place them in native image form. */
+  toolVisuals?: readonly ToolVisualInput[];
   sessionId: string;
   messages: readonly AgentMessage[];
   tools: readonly ToolDefinition[];
@@ -127,6 +152,8 @@ export interface AgentModel {
   complete(request: AgentModelRequest): Promise<ModelTurn>;
   /** The model's context window, when the owner's settings know it; sizes the agent working set. */
   readonly contextWindowTokens?: number;
+  /** Declared input modalities; absent means text-only for tool-delivered images. */
+  readonly inputModalities?: { readonly image: boolean };
 }
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
@@ -216,6 +243,8 @@ export interface ToolExecutionContext {
   filesystemMutation?: FilesystemMutationPermit;
   /** Runner-set from the calling model's context window: results up to this size stay inline. */
   inlineOutputBytes?: number;
+  /** Runner-set from the calling model's declared modalities. Model input can never populate this field. */
+  imageInput?: boolean;
 }
 
 export type ToolPathAccessMode = "read" | "write" | "delete";

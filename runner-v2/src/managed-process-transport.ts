@@ -28,4 +28,10 @@ export interface ManagedProcessRunRuntime {
   observe(target: ManagedProcessTarget, context?: Readonly<ToolExecutionContext>, maxOutputBytes?: number): Promise<ManagedProcessSnapshot>;
   observeMany?(targets: readonly ManagedProcessTarget[], context: Readonly<ToolExecutionContext>, maxOutputBytes: number): Promise<readonly ManagedProcessSnapshot[]>;
   stop(target: ManagedProcessTarget, context?: Readonly<ToolExecutionContext>, signal?: NodeJS.Signals, timeoutMs?: number): Promise<ManagedProcessSnapshot>;
+  /** Acknowledged, ordered stdin delivery through the owned session channel. Absent: typed unsupported. */
+  writeInput?(target: ManagedProcessTarget, context: Readonly<ToolExecutionContext>, request: Readonly<{ bytes: Uint8Array; closeInput: boolean; timeoutMs: number }>): Promise<Readonly<{ inputClosed: boolean }>>;
+  /** Exact bounded evidence bytes, optionally after one event-driven wait for new evidence or termination. */
+  readOutput?(target: ManagedProcessTarget, context: Readonly<ToolExecutionContext>, request: Readonly<{ waitMs: number; satisfied: (evidence: import("./managed-process-contracts.js").ManagedOutputEvidence) => boolean }>): Promise<import("./managed-process-contracts.js").ManagedOutputEvidence>;
+  /** Finalized spill artifact bytes; read-only evidence, never an execution capability. */
+  readSpill?(artifactId: string): Promise<Uint8Array>;
 }

@@ -51,6 +51,7 @@ import {
 } from "@/components/DiscussionSessionSettings";
 import { DiscussionAttachments } from "@/components/DiscussionAttachments";
 import { ChatThread, type ChatThreadMessage } from "@/components/chat/ChatThread";
+import { RunnerChatOperations } from "@/components/extensions/RunnerChatOperations";
 import type { ExtractedFile } from "@/lib/artifacts/extract";
 import { getBuildCheckpoint, getBuildFiles, insertMessage, updateDiscussion } from "@/lib/client/store";
 import {
@@ -3182,6 +3183,14 @@ function DiscussionPageInner() {
           </div>
         )}
         <DiscussionAttachments attachments={attachments} />
+        {discussion.chatRunnerTools && discussion.runnerUrl && discussion.runnerToken && (
+          <RunnerChatOperations
+            discussionId={discussion.id}
+            runnerUrl={discussion.runnerUrl}
+            runnerToken={discussion.runnerToken}
+            replying={replying}
+          />
+        )}
         <ChatThread
           messages={threadMessages}
           running={replying}

@@ -1,3 +1,4 @@
+import { RUNNER_VISUAL_TOOLS } from "./image-tools.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import { lstat, realpath } from "node:fs/promises";
 import { authorizeFilesystemMutation, captureFilesystemMutation, filesystemMutationFailure,
@@ -552,6 +553,13 @@ export class ToolBroker implements AgentToolRuntime {
     let changed = false;
     const content: ToolExecutionOutput["content"] = [];
     for (const block of output.content) {
+      if (block.type === "artifact" && block.visual && (extensionId || !RUNNER_VISUAL_TOOLS.has(toolName))) {
+        // Only the Runner's own validated image producers may mark model-visible images.
+        const { visual: _visual, ...plain } = block;
+        content.push(plain);
+        changed = true;
+        continue;
+      }
       if (block.type !== "text" && block.type !== "json") {
         content.push(block);
         continue;

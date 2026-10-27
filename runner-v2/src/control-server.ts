@@ -1,4 +1,8 @@
 import { ExecutionIsolationError } from "./execution-isolation-provider.js";
+import { ChatSessionError, type ChatAgentSessions } from "./chat-agent-session.js";
+import { handleOAuthCallback, OAUTH_CALLBACK_PATH, routeExtensions } from "./extension-control-routes.js";
+import { ExtensionManagementError } from "./extension-management-contracts.js";
+import type { ExtensionManagementService } from "./extension-management-service.js";
 import type { ToolBenchSessions, ToolBenchSessionRequest } from "./toolbench-session.js";
 import { NativeBuildRuntimeInitializationError, createProviderModel } from "./native-build-factory.js";
 import { BuildUserMediaStore, validateVisualInputs, type UserMediaInput } from "./build-user-media.js";
@@ -57,6 +61,8 @@ const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
 
 export interface ControlServerOptions {
   toolBench?: ToolBenchSessions;
+  extensions?: ExtensionManagementService;
+  chatSessions?: ChatAgentSessions;
   supervisor: RunSupervisor;
   token: string;
   checkGit?: () => Promise<GitPreflightResult>;
@@ -232,6 +238,8 @@ export class ControlServer {
   private readonly buildProvisioner?: ControlServerOptions["buildProvisioner"];
   private readonly providerConfigs?: ProviderConfigStore;
   private readonly toolBench?: ToolBenchSessions;
+  private readonly extensions?: ExtensionManagementService;
+  private readonly chatSessions?: ChatAgentSessions;
   private readonly userMedia?: BuildUserMediaStore;
   private readonly runnerInfo?: ControlServerOptions["runnerInfo"];
   private readonly mcp?: ControlServerOptions["mcp"];
@@ -256,6 +264,8 @@ export class ControlServer {
     this.buildProvisioner = options.buildProvisioner;
     this.providerConfigs = options.providerConfigs;
     this.toolBench = options.toolBench;
+    this.extensions = options.extensions;
+    this.chatSessions = options.chatSessions;
     this.userMedia = options.userMediaDirectory ? new BuildUserMediaStore(options.userMediaDirectory) : undefined;
     this.runnerInfo = options.runnerInfo;
     this.mcp = options.mcp;
@@ -299,6 +309,7 @@ export class ControlServer {
 
   async close(): Promise<void> {
     await this.toolBench?.close();
+    await this.chatSessions?.close();
     const server = this.server;
     if (!server) return;
     this.server = undefined;
@@ -324,6 +335,12 @@ export class ControlServer {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (!url.pathname.startsWith("/v2")) {
         throw new HttpError(404, "not_found", "Route not found.");
+      }
+      // The OAuth redirect is the one route reached without the runner token (from the user's browser);
+      // it accepts only a single-use state this Runner issued.
+      if (url.pathname === OAUTH_CALLBACK_PATH && request.method === "GET" && this.extensions) {
+        await handleOAuthCallback(response, url, this.extensions);
+        return;
       }
       if (!hasBearerToken(request.headers.authorization, this.token)) {
         response.setHeader("WWW-Authenticate", "Bearer");
@@ -354,6 +371,10 @@ export class ControlServer {
     url: URL
   ): Promise<void> {
     const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    if (segments[1] === "extensions" || segments[1] === "chat-sessions") {
+      await routeExtensions(request, response, url, segments, { ...(this.extensions ? { extensions: this.extensions } : {}), ...(this.chatSessions ? { chatSessions: this.chatSessions } : {}) });
+      return;
+    }
     if (segments[1] === "toolbench-sessions") {
       if (!this.toolBench) throw new HttpError(404, "toolbench_unavailable", "Solo ToolBench sessions are unavailable; update the runner.");
       if (segments.length === 2 && request.method === "POST") {
@@ -376,7 +397,7 @@ export class ControlServer {
       sendJson(response, 200, {
         ok: true,
         protocolVersion: 2,
-        capabilities: { soloToolBench: Boolean(this.toolBench) },
+        capabilities: { soloToolBench: Boolean(this.toolBench), extensions: Boolean(this.extensions), chatSessions: Boolean(this.chatSessions) },
         projectPath: this.runnerInfo.projectPath,
         nodeVersion: this.runnerInfo.nodeVersion,
         mcpServers: this.mcp?.status().length ?? 0,
@@ -474,6 +495,8 @@ export class ControlServer {
           }
         }
         if (body.build) {
+          // The objective is the human's own request for this run.
+          this.extensions?.authorizer.recordHumanMessage(body.runId, body.build.objective);
           if (!this.buildProvisioner) {
             throw new HttpError(503, "native_build_unavailable", "Native Build provisioning is unavailable.");
           }
@@ -746,6 +769,7 @@ export class ControlServer {
       ) {
         const body = await readJson<BuildMessageBody>(request, 17 * 1024 * 1024);
         assertExactBodyKeys(body, ["text", "messageId", "history", "attachments"]);
+        if (typeof body.text === "string") this.extensions?.authorizer.recordHumanMessage(runId, body.text);
         if (!isNonEmptyString(body.text) || body.text.length > 100_000 ||
             !isNonEmptyString(body.messageId) || body.messageId.length > 140 ||
             (body.history !== undefined && (!Array.isArray(body.history) || body.history.length > 6 ||
@@ -802,6 +826,7 @@ export class ControlServer {
       ) {
         const body = await readJson<UserGuidanceBody>(request);
         assertExactBodyKeys(body, ["guidanceId", "text", "idempotencyKey"]);
+        if (typeof body.text === "string") this.extensions?.authorizer.recordHumanMessage(runId, body.text);
         if (
           !isNonEmptyString(body.guidanceId) ||
           !isNonEmptyString(body.text) ||
@@ -1793,6 +1818,7 @@ function describeInternalError(error: unknown, depth = 0): string {
 
 function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
+  if (error instanceof ExtensionManagementError || error instanceof ChatSessionError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ProcessRecoveryError) {
     if (error.code === "invalid_recovery_proposal") return new HttpError(400, error.code, error.message);
     if (error.code === "recovery_not_found") return new HttpError(404, error.code, error.message);

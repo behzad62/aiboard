@@ -128,6 +128,8 @@ export interface RunnerInternalExecutionContext {
     readonly mcpServers: readonly McpServerSpec[];
     readonly capabilitiesConfig: RunnerCapabilitiesConfig;
   }): Promise<RunnerConfiguredCapabilitiesAttestation>;
+  /** Attests MCP server configurations only (managed servers bound per run or chat generation). */
+  attestMcpServers(servers: readonly McpServerSpec[]): Promise<readonly McpConfigurationAttestation[]>;
   createMcpDiscoveryExecutor(input: {
     readonly runId: string;
     readonly servers: readonly McpServerSpec[];
@@ -209,6 +211,16 @@ export function createRunnerInternalExecutionContext(
         { version: 1, principal, result },
       );
       return deepFreeze({ principal, result });
+    },
+
+    async attestMcpServers(servers: readonly McpServerSpec[]) {
+      assertOpen(closed);
+      const trusted = await attestMcpConfigurations(servers, projectDirectory, environment);
+      return Object.freeze(trusted.map((entry) => {
+        const visible = deepFreeze({ name: entry.name, configDigest: entry.configDigest, executableDigest: entry.executableDigest });
+        TRUSTED_MCP_ATTESTATIONS.set(visible, entry);
+        return visible;
+      }));
     },
 
     async attestConfiguredCapabilities(input: {

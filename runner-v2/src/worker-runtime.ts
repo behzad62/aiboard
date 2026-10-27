@@ -1,3 +1,4 @@
+import { createImageTools } from "./image-tools.js";
 import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
 import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
@@ -213,6 +214,7 @@ export async function runWorkerTask(
     registerStaticWorkerTool(broker, tool);
   }
   for (const tool of createArtifactTools(options.artifacts)) registerStaticWorkerTool(broker, tool);
+  for (const tool of createImageTools({ artifacts: options.artifacts, ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}) })) registerStaticWorkerTool(broker, tool);
   for (const tool of createSessionTools(options.sessions)) registerStaticWorkerTool(broker, tool);
   for (const tool of createProcessTools({
     ...(options.execution ? { execution: options.execution } : {}),

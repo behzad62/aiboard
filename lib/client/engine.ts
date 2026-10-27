@@ -6,6 +6,7 @@
  * engine so the UI keeps a single definition.
  */
 
+import { runRunnerChatTurn } from "./runner-chat";
 import { v4 as uuidv4 } from "uuid";
 import type {
   DiscussionMode,
@@ -856,6 +857,36 @@ export async function runDiscussion(
         updatedAt: new Date().toISOString(),
       });
       emit({ type: "status", status: "running", round, maxRounds: round });
+
+      if (discussion.chatRunnerTools && discussion.runnerUrl && discussion.runnerToken) {
+        const messageId = uuidv4();
+        emit({ type: "message_start", messageId, modelId: model.modelId, modelName: model.displayName, round, role: "assistant" });
+        emit({ type: "diagnostic", phase: "model_streaming", round, modelId: model.modelId, modelName: model.displayName, message: `${model.displayName} is replying with Runner tools` });
+        const earlier = turns.filter((turn) => turn.round < round);
+        let waitingNoted = false;
+        const { text } = await runRunnerChatTurn({
+          connection: { url: discussion.runnerUrl, token: discussion.runnerToken },
+          discussionId,
+          modelId: model.modelId,
+          reasoningEffort,
+          round,
+          text: turns[turns.length - 1].content,
+          history: earlier.map((turn) => ({ role: turn.role, text: turn.content })),
+          signal,
+          onProgress: (snapshot) => {
+            if (waitingNoted || !snapshot.operations.some((operation) => operation.outcome === "awaiting_user")) return;
+            waitingNoted = true;
+            emit({ type: "diagnostic", phase: "model_streaming", round, message: "An extension change is waiting for you below the conversation" });
+          },
+        });
+        insertMessage({ id: messageId, discussionId, round, modelId: model.modelId, role: "assistant", content: text, createdAt: new Date().toISOString() });
+        emit({ type: "message_complete", messageId, content: text });
+        updateDiscussion(discussionId, { status: "completed", updatedAt: new Date().toISOString() });
+        emit({ type: "status", status: "completed", round, maxRounds: round });
+        emit({ type: "diagnostic", phase: "finished", round, message: `${model.displayName} replied` });
+        emit({ type: "complete" });
+        return;
+      }
 
       const { providerId, model: rawModel } = parseModelId(model.modelId);
       const profile = resolveClientModelContextProfile(model.modelId);

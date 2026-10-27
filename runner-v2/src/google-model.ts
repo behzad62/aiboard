@@ -16,7 +16,8 @@ import {
   toolResultText,
   type ToolNameCodec,
 } from "./provider-model-utils.js";
-import { withVisualMedia } from "./provider-visual-input.js";
+import { geminiToolVisualParts, withVisualMedia } from "./provider-visual-input.js";
+import { visualsForCall } from "./tool-visual-input.js";
 import { geminiThinkingConfig } from "./reasoning-effort.js";
 import { collectGoogleStream } from "./native-provider-streaming.js";
 
@@ -89,7 +90,7 @@ export class GoogleModel implements AgentModel {
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
       contents: withVisualMedia(request.messages
         .filter((message) => message.role !== "system")
-        .map((message) => toGoogleContent(message, toolNames)), request.attachments, "gemini"),
+        .map((message) => toGoogleContent(message, toolNames, request.toolVisuals)), request.attachments, "gemini"),
       ...(request.tools.length > 0
         ? { tools: [{ functionDeclarations: request.tools.map((tool) => toGoogleTool(tool, toolNames)) }] }
         : {}),
@@ -164,7 +165,8 @@ function messageText(message: AgentMessage): string {
 
 function toGoogleContent(
   message: AgentMessage,
-  toolNames: ToolNameCodec
+  toolNames: ToolNameCodec,
+  toolVisuals?: AgentModelRequest["toolVisuals"],
 ): Record<string, unknown> {
   if (message.role === "tool") {
     const result = message.content as ToolResult;
@@ -178,7 +180,7 @@ function toGoogleContent(
             ? { error: result.error, content: toolResultText(result) }
             : { content: toolResultText(result) },
         },
-      }],
+      }, ...geminiToolVisualParts(visualsForCall({ toolVisuals }, result.callId))],
     };
   }
   if (typeof message.content === "string") {

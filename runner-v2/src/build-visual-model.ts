@@ -11,6 +11,7 @@ export function wrapModelWithBuildUserVisuals(
 ): AgentModel {
   return {
     ...(model.contextWindowTokens !== undefined ? { contextWindowTokens: model.contextWindowTokens } : {}),
+    ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
     async complete(request) {
       if (!inputCapabilities?.image && !inputCapabilities?.document) return model.complete(request);
       // Only evidence markers copied into the Architect/task context are opened.

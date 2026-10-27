@@ -47,6 +47,7 @@ export interface RunnerResources {
   permissions?: ClosableRunnerResource;
   mcpManager?: ClosableRunnerResource;
   providerConfigs?: ClosableRunnerResource;
+  extensionCredentials?: ClosableRunnerResource;
   supervisor?: ClosableRunnerResource;
 }
 
@@ -68,6 +69,7 @@ const RUNNER_RESOURCE_CLOSE_ORDER: readonly (keyof RunnerResources)[] = Object.f
   "permissions",
   "mcpManager",
   "providerConfigs",
+  "extensionCredentials",
   "supervisor",
 ]);
 

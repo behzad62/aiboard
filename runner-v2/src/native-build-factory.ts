@@ -1,3 +1,5 @@
+import { createExtensionManagementTools } from "./extension-management-tools.js";
+import { wrapModelWithToolVisuals } from "./tool-visual-input.js";
 import { RunActivityBoard } from "./run-activity.js";
 import { projectTaskDecompositionObservability } from "./task-decomposition-observability.js";
 import { workingTreeForRunner } from "./command-evidence-identity.js";
@@ -366,6 +368,13 @@ export interface NativeBuildFactoryOptions {
   capabilitiesConfig?: RunnerCapabilitiesConfig;
   /** Production supplies the single CLI-owned execution composition root. */
   executionHost?: ExecutionHost;
+  /** Managed skills/MCP/plugins; each run binds one capability generation (see ExtensionRunBindings). */
+  extensions?: {
+    readonly service: import("./extension-management-service.js").ExtensionManagementService;
+    readonly bindings: import("./extension-run-bindings.js").ExtensionRunBindings;
+    /** Managed MCP servers of the run's pinned generation join the run's discovery at construction. */
+    readonly managedMcp?: import("./extension-mcp.js").ManagedMcpRuntime;
+  };
   /** Production MCP configuration is attested once, discovered ephemerally per run, then bound live per run. */
   mcpServers?: readonly import("./mcp-tools.js").McpServerSpec[];
   mcpAttestation?: readonly McpConfigurationAttestation[];
@@ -552,9 +561,14 @@ export class NativeBuildFactory {
     }
     let runMcpManager = this.options.mcpManager;
     if (this.options.internalExecutionContext) {
-      const servers = this.options.mcpServers ?? [];
-      const attestation = this.options.mcpAttestation ?? [];
+      // Benchmark attempts freeze capability identity: managed servers never join them.
+      const managedMcp = spec.benchmark || !this.options.extensions?.managedMcp
+        ? undefined
+        : await this.options.extensions.managedMcp.forRun((await this.options.extensions.bindings.bind(spec.runId)).generation);
+      const servers = [...(this.options.mcpServers ?? []), ...(managedMcp?.servers ?? [])];
+      const attestation = [...(this.options.mcpAttestation ?? []), ...(managedMcp?.attestation ?? [])];
       initializationStage = "mcp_discovery";
+      for (const server of managedMcp?.servers ?? []) await managedMcp!.beforeLaunch(server.name);
       const discovery = this.options.internalExecutionContext.createMcpDiscoveryExecutor({
         runId: spec.runId,
         servers,
@@ -581,12 +595,14 @@ export class NativeBuildFactory {
         reattest: () => this.options.internalExecutionContext!.resolveMcpRuntimeLaunches({ servers, attestation }),
         cwd: this.options.projectRoot,
         servers,
-        transportFactory: createExecutionHostMcpTransportFactory({
-          run: executionHostBinding,
-          permissionProfile: spec.permissionProfile,
-          projectDirectory: this.options.projectRoot,
-          launches: runtimeLaunches,
-        }),
+        transportFactory: ((factory) => managedMcp ? this.options.extensions!.managedMcp!.wrapTransport(factory, managedMcp.beforeLaunch) : factory)(
+          createExecutionHostMcpTransportFactory({
+            run: executionHostBinding,
+            permissionProfile: spec.permissionProfile,
+            projectDirectory: this.options.projectRoot,
+            launches: runtimeLaunches,
+          }),
+        ),
       });
       const statusRegistration: {
         value?: Readonly<{ dispose(): void }>;
@@ -1195,10 +1211,17 @@ export class NativeBuildFactory {
       canonicalModelIdentity(reviewer.modelId) === canonicalModelIdentity(architectCandidate.modelId))
       ? reviewer.runtimeId : undefined;
     const verifierRouter = new RuntimeRouter({ candidates, health, ...(preferredVerifierRuntimeId ? { preferredVerifierRuntimeId } : {}) });
+    // Benchmark attempts freeze capability identity: no managed extensions and no management tools.
+    const extensions = spec.benchmark ? undefined : this.options.extensions;
+    if (extensions) await extensions.bindings.bind(spec.runId);
     const skillCatalog = new SkillCatalog({
       projectRoot: this.options.projectRoot,
       sharedRoots: this.options.skillRoots ?? defaultSharedSkillRoots(),
+      ...(extensions ? { managed: extensions.bindings.managedSkills(spec.runId) } : {}),
     });
+    const extensionTools = extensions
+      ? createExtensionManagementTools({ service: extensions.service, conversationId: () => spec.runId, canMutate: (context) => context.actor.role === "architect" })
+      : undefined;
     initializationStage = "models";
     const providerModelFactory = this.options.providerModelFactory ?? createProviderModel;
     const userVisuals = new BuildUserMediaStore(join(this.options.stateDirectory, "user-input-media"));
@@ -1272,6 +1295,7 @@ export class NativeBuildFactory {
       sessions,
       artifacts: this.artifacts,
       skillCatalog,
+      ...(extensionTools ? { extensionTools } : {}),
       memoryStore,
       evidenceStore,
       projectId: spec.projectId,
@@ -4017,10 +4041,29 @@ export function snapshotNativeBuildAmbientEnvironment(
 
 /** Carries the owner's context window on the model so each agent loop sizes its working set from it. */
 function withContextWindow(model: AgentModel, contextWindowTokens: number | undefined): AgentModel {
-  return contextWindowTokens === undefined ? model : { complete: (request) => model.complete(request), contextWindowTokens };
+  return contextWindowTokens === undefined ? model : {
+    complete: (request) => model.complete(request), contextWindowTokens,
+    ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
+  };
 }
 
 export function createProviderModel(
+  config: RunnerProviderConfig,
+  artifacts?: ArtifactStore
+): AgentModel {
+  // Tool-produced images (image.inspect, browser.screenshot) reach image-capable models as native
+  // image input in the continuation that answers the producing call; text-only models never get bytes.
+  const image = config.inputCapabilities?.image === true && artifacts !== undefined;
+  const transport = createTransportModel(config, artifacts);
+  if (!image) return transport;
+  return wrapModelWithToolVisuals(transport, {
+    image,
+    resolveInAdapter: config.transport === "account-runner",
+    ...(artifacts ? { readArtifact: (hash: string) => artifacts.get(hash) } : {}),
+  });
+}
+
+function createTransportModel(
   config: RunnerProviderConfig,
   artifacts?: ArtifactStore
 ): AgentModel {
@@ -4314,7 +4357,7 @@ function historicalSkillMetadata(value: unknown, index: number): SkillMetadata {
     !/^[a-f0-9]{64}$/.test(skill.digest) ||
     !Number.isSafeInteger(skill.byteLength) ||
     (skill.byteLength as number) < 0 ||
-    (skill.source !== "project" && skill.source !== "built-in" && skill.source !== "user")
+    (skill.source !== "project" && skill.source !== "built-in" && skill.source !== "user" && skill.source !== "managed")
   ) {
     throw new Error(`Historical list_skills result ${index} is malformed.`);
   }

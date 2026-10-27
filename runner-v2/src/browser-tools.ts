@@ -1,3 +1,4 @@
+import { visualArtifactOutput } from "./image-tools.js";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
@@ -456,6 +457,10 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
         ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
       });
+      // Image-capable models see the screenshot through the same visual continuation as image.inspect.
+      const visual = context.imageInput === true
+        ? await visualArtifactOutput(options.artifacts, bytes, `Browser screenshot ${options.taskId}`)
+        : undefined;
       return {
         content: [
           {
@@ -464,9 +469,10 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
               artifactHash: artifact.hash,
               mediaType: "image/png",
               byteLength: bytes.byteLength,
+              ...(visual ? visual.facts : { shownToModel: false }),
             },
           },
-          {
+          visual?.block ?? {
             type: "artifact",
             hash: artifact.hash,
             mediaType: "image/png",

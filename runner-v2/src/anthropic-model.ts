@@ -16,7 +16,8 @@ import {
   toolResultText,
   type ToolNameCodec,
 } from "./provider-model-utils.js";
-import { withVisualMedia } from "./provider-visual-input.js";
+import { anthropicToolResultContent, withVisualMedia } from "./provider-visual-input.js";
+import { visualsForCall } from "./tool-visual-input.js";
 import { anthropicReasoningFields } from "./reasoning-effort.js";
 import { collectAnthropicStream } from "./native-provider-streaming.js";
 
@@ -74,7 +75,7 @@ export class AnthropicModel implements AgentModel {
       ...(system ? { system } : {}),
       messages: withVisualMedia(request.messages
         .filter((message) => message.role !== "system")
-        .map((message) => toAnthropicMessage(message, toolNames)), request.attachments, "anthropic"),
+        .map((message) => toAnthropicMessage(message, toolNames, request.toolVisuals)), request.attachments, "anthropic"),
       ...(request.tools.length > 0
         ? { tools: request.tools.map((tool) => toAnthropicTool(tool, toolNames)) }
         : {}),
@@ -183,7 +184,8 @@ function messageText(message: AgentMessage): string {
 
 function toAnthropicMessage(
   message: AgentMessage,
-  toolNames: ToolNameCodec
+  toolNames: ToolNameCodec,
+  toolVisuals?: AgentModelRequest["toolVisuals"],
 ): Record<string, unknown> {
   if (message.role === "tool") {
     const result = message.content as ToolResult;
@@ -192,7 +194,7 @@ function toAnthropicMessage(
       content: [{
         type: "tool_result",
         tool_use_id: result.callId,
-        content: toolResultText(result),
+        content: anthropicToolResultContent(toolResultText(result), visualsForCall({ toolVisuals }, result.callId)),
         ...(result.isError ? { is_error: true } : {}),
       }],
     };

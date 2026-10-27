@@ -31,6 +31,7 @@ export type ModelCostEstimator = (
 export class BudgetedAgentModel implements AgentModel {
   private readonly model: AgentModel;
   readonly contextWindowTokens?: number;
+  readonly inputModalities?: AgentModel["inputModalities"];
   private readonly ledger: BudgetLedger;
   private readonly scopeId: string;
   private readonly attribution: Readonly<ModelCallAttribution>;
@@ -48,6 +49,7 @@ export class BudgetedAgentModel implements AgentModel {
     }
     this.model = options.model;
     if (options.model.contextWindowTokens !== undefined) this.contextWindowTokens = options.model.contextWindowTokens;
+    if (options.model.inputModalities) this.inputModalities = options.model.inputModalities;
     this.ledger = options.ledger;
     this.scopeId = options.scopeId;
     this.attribution = Object.freeze({ ...options.attribution });

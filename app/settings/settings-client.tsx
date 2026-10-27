@@ -7,6 +7,7 @@ import { CustomModelsManager } from "@/components/CustomModelsManager";
 import { CapabilityLab } from "@/components/CapabilityLab";
 import { StorageSettings } from "@/components/StorageSettings";
 import { ToolRuntimeSettingsPanel } from "@/components/ToolRuntimeSettingsPanel";
+import { ExtensionsSettings } from "@/components/extensions/ExtensionsSettings";
 import { ensureReady, saveSettings } from "@/lib/client/api";
 import { loadProviders } from "@/lib/client/settings-api";
 import { DetailControl } from "@/components/DetailControl";
@@ -75,7 +76,7 @@ interface SettingsData {
 
 const MODES: DiscussionMode[] = ["chat", "panel", "debate", "specialist", "build"];
 
-const TAB_VALUES = ["providers", "tools", "capability-lab", "defaults", "storage", "security"];
+const TAB_VALUES = ["providers", "tools", "extensions", "capability-lab", "defaults", "storage", "security"];
 
 export default function SettingsPage() {
   const [tab, setTab] = useState("providers");
@@ -197,9 +198,10 @@ export default function SettingsPage() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="tools">Tools</TabsTrigger>
+          <TabsTrigger value="extensions">Extensions</TabsTrigger>
           <TabsTrigger value="capability-lab">Capability Lab</TabsTrigger>
           <TabsTrigger value="defaults">Defaults</TabsTrigger>
           <TabsTrigger value="storage">Storage</TabsTrigger>
@@ -339,6 +341,11 @@ export default function SettingsPage() {
             settings={data?.settings.toolRuntime}
             onChanged={load}
           />
+        </TabsContent>
+
+        {/* ── Extensions ────────────────────────────────────────── */}
+        <TabsContent value="extensions">
+          <ExtensionsSettings />
         </TabsContent>
 
         {/* ── Capability Lab ───────────────────────────────────── */}

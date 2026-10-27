@@ -65,6 +65,21 @@ export function parseMcpCommand(command: string): readonly string[] {
   return Object.freeze(result);
 }
 
+/** Inverse of parseMcpCommand for a structured argv; refuses tokens the closed grammar cannot carry. */
+export function formatMcpCommand(argv: readonly string[]): string {
+  if (!argv.length) throw new McpConfigurationError("mcp_command_invalid", "MCP command requires an executable.");
+  const command = argv.map((token) => {
+    if (!token || /[\0\r\n]/u.test(token)) throw new McpConfigurationError("mcp_command_invalid", "MCP arguments must be non-empty single-line strings.");
+    if (!/[\s&|;<>`$()%*?'"\[\]{}]/u.test(token)) return token;
+    if (!token.includes('"') && !token.endsWith("\\")) return `"${token}"`;
+    if (!token.includes("'")) return `'${token}'`;
+    throw new McpConfigurationError("mcp_command_invalid", "An MCP argument contains both quote characters.");
+  }).join(" ");
+  const parsed = parseMcpCommand(command);
+  if (parsed.length !== argv.length || parsed.some((token, index) => token !== argv[index])) throw new McpConfigurationError("mcp_command_invalid", "MCP command does not round-trip exactly.");
+  return command;
+}
+
 export function fixedMcpEnvelope(value: McpDeclaredEnvelope | undefined): McpFixedEnvelope {
   const error = () => new McpConfigurationError("mcp_envelope_invalid", "MCP requires a bounded conservative fixed path, network and credential envelope.");
   const object = value === undefined ? {} : plainData(value, ["paths", "network", "credentialNames"], error);

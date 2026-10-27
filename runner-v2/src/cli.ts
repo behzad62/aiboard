@@ -1,10 +1,20 @@
-import { configureMcpServers } from "./mcp-configuration.js";
+import { configureMcpServers, mcpConfigurationDigest } from "./mcp-configuration.js";
 import { randomBytes } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
 import { ToolBenchSessions } from "./toolbench-session.js";
+import { ChatAgentSessions } from "./chat-agent-session.js";
+import { ExtensionCredentialStore } from "./extension-credentials.js";
+import { ExtensionManagementService, type ExternalItem } from "./extension-management-service.js";
+import { ExtensionRunBindings } from "./extension-run-bindings.js";
+import { fetchPackageMetadata, ManagedMcpRuntime } from "./extension-mcp.js";
+import { activateStagedRunnerExtensions, createPluginHandler, type RunnerExtensionActivation } from "./extension-plugin.js";
+import { OAUTH_CALLBACK_PATH } from "./extension-control-routes.js";
+import { createBoundedGitCommandExecutor } from "./git-preflight.js";
+import { SkillCatalog } from "./skill-catalog.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildUserMediaStore } from "./build-user-media.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
@@ -18,6 +28,7 @@ import {
   preflightRecoveredRunnerCapabilities,
   selectRuntimeCandidates,
   snapshotNativeBuildAmbientEnvironment,
+  defaultSharedSkillRoots,
 } from "./native-build-factory.js";
 import {
   NativeBuildManager,
@@ -60,6 +71,8 @@ interface CliOptions {
   mcpServers: McpServerSpec[];
   allowOrigins: string[];
   capabilitiesConfigPath?: string;
+  /** Shared, AI Board-owned extension registry and package store (outside every project). */
+  extensionsHome: string;
   /** Runs the owner set aside: left paused and untouched, not rebuilt at startup. */
   setAsideRuns: ReadonlySet<string>;
 }
@@ -156,6 +169,58 @@ async function main(): Promise<void> {
       options.token
     );
     resources.providerConfigs = providerConfigs;
+    if (isInside(options.projectPath, options.extensionsHome)) {
+      throw new Error("invalid_extensions_home: The extension store must be outside the project directory.");
+    }
+    const extensionCredentials = new ExtensionCredentialStore(join(options.stateDirectory, "extension-credentials.enc"), options.token);
+    resources.extensionCredentials = extensionCredentials;
+    const gitEnvironment = { ...executionHost.filteredEnvironmentSource(), GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1" };
+    // Versions bound by a live run or chat session are never collected.
+    const pins: { bindings?: ExtensionRunBindings; chats?: ChatAgentSessions } = {};
+    // Managed MCP servers: installers and readiness checks run through the same governed internal
+    // process kernel; live tools use per-run/per-chat ExecutionHost bindings.
+    const installerEnvironment = executionHost.filteredEnvironmentSource();
+    const oauthRedirect: { uri?: string } = {};
+    // Staged plugin Runner extensions are decided below, once the extension registry is open.
+    let runnerExtensionActivation: RunnerExtensionActivation = { active: new Set(), refused: new Map(), deferred: "The Runner is still starting." };
+    const managedMcp = new ManagedMcpRuntime({
+      home: options.extensionsHome,
+      stateDirectory: options.stateDirectory,
+      projectRoot: options.projectPath,
+      credentials: extensionCredentials,
+      internal: internalExecutionContext,
+      executionHost,
+      capabilitiesConfig: () => capabilitiesConfig,
+      reservedServerNames: options.mcpServers.map((server) => server.name),
+      cliServers: options.mcpServers,
+      oauthRedirectUri: () => oauthRedirect.uri,
+      installer: {
+        nodeExecutable: process.execPath,
+        environment: installerEnvironment,
+        fetchJson: fetchPackageMetadata,
+        run: async (command, args, cwd) => await createBoundedGitCommandExecutor({ executionDeadlineMs: 600_000, terminationDeadlineMs: 15_000, environment: installerEnvironment, cwd, processKernel: executionHost.internalProcesses, maxOutputBytes: 4 * 1024 * 1024 })(command, [...args]),
+      },
+    });
+    const extensions = await ExtensionManagementService.open({
+      home: options.extensionsHome,
+      pinnedGenerations: () => new Set([...(pins.bindings?.pinnedGenerations() ?? []), ...(pins.chats?.pinnedGenerations() ?? [])]),
+      projectRoot: options.projectPath,
+      credentials: extensionCredentials,
+      // Git sources run through the same governed internal process kernel as Git preflight.
+      git: { executorFor: (cwd) => createBoundedGitCommandExecutor({ executionDeadlineMs: 120_000, terminationDeadlineMs: 15_000, environment: gitEnvironment, cwd, processKernel: executionHost.internalProcesses, maxOutputBytes: 1024 * 1024 }) },
+      external: async () => await discoverExternalItems(options.projectPath, options.mcpServers),
+      handlers: [managedMcp.handler(), createPluginHandler({ home: options.extensionsHome, mcp: managedMcp, runnerExtensions: () => runnerExtensionActivation })],
+    });
+    managedMcp.attach(extensions);
+    runnerExtensionActivation = await activateStagedRunnerExtensions({
+      staged: await extensions.stagedRunnerExtensions(),
+      unfinishedBuilds: () => countUnfinishedBuilds(supervisor, options.stateDirectory),
+      configuredDirectories: capabilitiesConfig.extensions,
+    });
+    if (runnerExtensionActivation.deferred) console.warn(`[runner] plugin Runner extensions stay staged: ${runnerExtensionActivation.deferred}`);
+    capabilitiesConfig = { ...capabilitiesConfig, extensions: [...capabilitiesConfig.extensions, ...runnerExtensionActivation.active] };
+    const extensionBindings = new ExtensionRunBindings(options.stateDirectory, extensions);
+    pins.bindings = extensionBindings;
     const mcpStatus = createLiveMcpStatusRegistry(options.mcpServers);
     const permissions = new SqlitePermissionStore(
       join(options.stateDirectory, "permissions.sqlite")
@@ -172,6 +237,7 @@ async function main(): Promise<void> {
       mcpServers: options.mcpServers,
       mcpAttestation: configuredCapabilitiesAttestation.mcp,
       mcpStatusRegistry: mcpStatus,
+      extensions: { service: extensions, bindings: extensionBindings, managedMcp },
       closeProviderConfigs: false,
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
@@ -236,8 +302,14 @@ async function main(): Promise<void> {
     }]);
     const toolBench = new ToolBenchSessions({ projectRoot: options.projectPath, stateDirectory: options.stateDirectory, providerConfigs, executionHost, capabilitiesConfig });
     await toolBench.recover();
+    const chatSessions = new ChatAgentSessions({ projectRoot: options.projectPath, stateDirectory: options.stateDirectory, providerConfigs, extensions, skillRoots: defaultSharedSkillRoots(),
+      generationTools: async (generation, sessionId, artifacts) => await managedMcp.chatTools(generation, sessionId, artifacts) });
+    pins.chats = chatSessions;
+    await chatSessions.recover();
     const server = new ControlServer({
       toolBench,
+      extensions,
+      chatSessions,
       supervisor,
       builds,
       buildProvisioner: builds,
@@ -275,6 +347,7 @@ async function main(): Promise<void> {
     });
     resources.server = server;
     const address = await server.start(options.port);
+    oauthRedirect.uri = `${address.url}${OAUTH_CALLBACK_PATH}`;
 
     const readiness = {
       protocolVersion: PROTOCOL_VERSION,
@@ -320,6 +393,16 @@ async function main(): Promise<void> {
         : error,
     );
     process.exitCode = 1;
+  }
+}
+
+/** Builds that are not terminal, set-aside runs included: their capability contracts are fixed. */
+function countUnfinishedBuilds(supervisor: RunSupervisor, stateDirectory: string): number {
+  const specs = new SqliteBuildSpecStore(join(stateDirectory, "build-specs.sqlite"));
+  try {
+    return specs.list().filter((spec) => !isTerminalRunState(supervisor.getRun(spec.runId).state)).length;
+  } finally {
+    specs.close();
   }
 }
 
@@ -490,6 +573,7 @@ function parseArguments(args: string[]): CliOptions {
         "--port",
         "--token",
         "--capabilities-config",
+        "--extensions-home",
       ].includes(flag)
     ) {
       throw new Error(`invalid_arguments: Unknown option ${flag}.`);
@@ -511,6 +595,7 @@ function parseArguments(args: string[]): CliOptions {
     values,
     "--capabilities-config",
   );
+  const extensionsHome = optionalAbsolutePath(values, "--extensions-home") ?? join(homedir(), ".aiboard", "runner-extensions");
   const portText = values.get("--port") ?? "0";
   const port = Number(portText);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
@@ -527,6 +612,7 @@ function parseArguments(args: string[]): CliOptions {
     token,
     mcpServers: [...configureMcpServers(mcpServers, mcpEnvelopes)],
     allowOrigins,
+    extensionsHome,
     ...(capabilitiesConfigPath ? { capabilitiesConfigPath } : {}),
     setAsideRuns,
   };
@@ -566,6 +652,7 @@ function printHelp(): void {
     "  --capabilities-config <path>  Absolute trusted JSON configuration outside the project.",
     "  --mcp <name=command>    Register MCP server; can be repeated.",
     "  --mcp-envelope <name=JSON> Fixed paths/network/credential requirements; defaults to no extra access.",
+    "  --extensions-home <abs-path> Managed skills/MCP/plugins store (default ~/.aiboard/runner-extensions).",
     "  --allow-origin <url>    Allowed browser CORS origin (repeatable, comma-separated list supported).",
     "  --set-aside-run <id>    Start without rebuilding this run; it stays paused and untouched (repeatable).",
     "                         Defaults to loopback origins + aiboard.me.",
@@ -674,4 +761,31 @@ function writeRunnerWarning(runId: string, error: unknown, warning = "runner_cle
   process.stderr.write(
     `${JSON.stringify({ warning, runId, error: message, ...(cause ? { cause } : {}) })}\n`
   );
+}
+
+/**
+ * Items AI Board does not manage, shown read-only with provenance: the project's own skills, other
+ * tools' skill folders and CLI-configured MCP servers (adoptable explicitly, never silently).
+ */
+async function discoverExternalItems(projectPath: string, mcpServers: readonly McpServerSpec[]): Promise<ExternalItem[]> {
+  const catalog = new SkillCatalog({ projectRoot: projectPath, sharedRoots: defaultSharedSkillRoots() });
+  const skills = await catalog.discover().catch(() => []);
+  return [
+    ...skills.map((skill): ExternalItem => ({
+      kind: "skill",
+      name: skill.name,
+      provenance: skill.source === "project" ? "project" : "external",
+      source: { type: "external_skill", path: skill.relativePath, digest: skill.digest },
+      description: skill.description,
+      detail: skill.source === "built-in" ? "Bundled with AI Board" : skill.source === "project" ? `Project file ${skill.relativePath}` : `User skill folder (${skill.relativePath.replace(/^user:/, "")})`,
+    })),
+    ...mcpServers.map((server): ExternalItem => ({
+      kind: "mcp_server",
+      name: server.name,
+      provenance: "cli",
+      source: { type: "cli_config", name: server.name, configDigest: mcpConfigurationDigest(server) },
+      detail: "Configured with --mcp when this Runner started.",
+      adoptable: true,
+    })),
+  ];
 }

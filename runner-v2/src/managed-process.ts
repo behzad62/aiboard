@@ -1,13 +1,15 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ToolExecutionContext } from "./agent-contracts.js";
-import { ManagedProcessError, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
+import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_WAIT_MAX_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
+import { MANAGED_OUTPUT_FINAL_SPILL_BYTES, MANAGED_OUTPUT_LIVE_TAIL_BYTES, decodeOutputCursor, encodeOutputCursor, hasNewOutput, normalizeOutputRead, sliceOutput, streamsFor, type ManagedOutputCursorBinding, type ManagedOutputReadRequest, type ManagedOutputReadResult, type ManagedOutputSlice, type ManagedOutputStreamName } from "./managed-process-output.js";
 import { historicalSnapshot, readHistoricalManagedProcessRecord } from "./managed-process-history.js";
 import { MAX_MANAGED_OUTPUT_BYTES, managedIdentity, managedProcessId, managedSnapshot, parseManagedSessionRecord, persistManagedSessionRecord, readManagedRecordValue, type ManagedSessionRecord } from "./managed-process-record.js";
 import type { ManagedProcessOwner, ManagedProcessRunRuntime } from "./managed-process-transport.js";
 export * from "./managed-process-contracts.js";
+export type { ManagedOutputReadRequest, ManagedOutputReadResult } from "./managed-process-output.js";
 export { readHistoricalManagedProcessObservations } from "./managed-process-history.js";
 
 export interface ManagedProcessServiceOptions {
@@ -33,6 +35,9 @@ export class ManagedProcessService {
   private readonly starts = new Set<Promise<unknown>>();
   private readonly reads = new Set<Promise<unknown>>();
   private readonly stops = new Map<string, Promise<ManagedProcessSnapshot>>();
+  /** Per-process input order: one write settles (durably) before the next is admitted. */
+  private readonly inputTails = new Map<string, Promise<unknown>>();
+  private cursorKeyBytes?: Uint8Array;
   private readonly stateDirectory: string;
   private readonly idFactory: () => string;
   private readonly clock: () => string;
@@ -82,11 +87,13 @@ export class ManagedProcessService {
     const command = checkedCommand(input.command), args = checkedArguments(input.args ?? []), environment = checkedEnvironment(input.env ?? {});
     const cwd = resolve(workspaceRoot, input.cwd ?? "."), at = this.clock();
     const identity = managedIdentity({ processId, runId: exact.runId, sessionId: exact.sessionId, actor: exact.actor });
+    if (input.interactive !== undefined && typeof input.interactive !== "boolean") throw new ManagedProcessError("invalid_arguments", "interactive must be a boolean.");
     const record: ManagedSessionRecord = { ...identity, recordKind: "runner.managed-process", schemaVersion: 2,
       command, args: [...args], cwd, environmentKeys: Object.keys(environment).sort(),
       configurationDigest: createHash("sha256").update(JSON.stringify({ command, args, cwd, environment })).digest("hex"),
       streamingSessionId: `managed-stream-${processId}`, launchId: `managed-launch-${processId}`,
-      pid: 0, status: "exited_unknown", exitCode: null, signal: null, startedAt: at, updatedAt: at, stdout: "", stderr: "" };
+      pid: 0, status: "exited_unknown", exitCode: null, signal: null, startedAt: at, updatedAt: at, stdout: "", stderr: "",
+      ...(input.interactive ? { input: { interactive: true, inputClosed: false, writes: [] } } : {}) };
     this.save(record);
     const work = (async () => {
       try {
@@ -116,6 +123,99 @@ export class ManagedProcessService {
       if (exact.signal?.aborted) throw cancelled("poll");
       return this.saveSnapshot(processId, snapshot);
     });
+    this.reads.add(read); void read.finally(() => this.reads.delete(read)).catch(() => undefined);
+    return await cancelRead(read, exact.signal);
+  }
+
+  /**
+   * N1: acknowledged stdin delivery. A writeId is idempotent within this process's bounded journal:
+   * the same payload returns the settled outcome without sending twice; a changed payload conflicts.
+   * Payload bytes are never persisted or logged (digest and length only).
+   */
+  async writeInput(processId: string, request: ManagedInputWriteRequest, context: ToolExecutionContext): Promise<ManagedInputWriteResult> {
+    this.assertOpen(); const exact = exactCall(context, "process.write_stdin"); const record = this.owned(processId, exact);
+    if (!("schemaVersion" in record)) throw new ManagedProcessError("process_input_unavailable", "Historical process records are read-only.");
+    const writeId = checkedWriteId(request.writeId);
+    if (request.data !== undefined && typeof request.data !== "string") throw new ManagedProcessError("invalid_arguments", "data must be a string.");
+    if (request.appendNewline !== undefined && typeof request.appendNewline !== "boolean") throw new ManagedProcessError("invalid_arguments", "appendNewline must be a boolean.");
+    if (request.closeInput !== undefined && typeof request.closeInput !== "boolean") throw new ManagedProcessError("invalid_arguments", "closeInput must be a boolean.");
+    const text = (request.data ?? "") + (request.appendNewline ? "\n" : "");
+    if (text.includes("\0")) throw new ManagedProcessError("invalid_arguments", "Input cannot contain NUL characters.");
+    const bytes = new Uint8Array(Buffer.from(text, "utf8")), closeInput = request.closeInput === true;
+    if (bytes.byteLength > MANAGED_INPUT_MAX_BYTES) throw new ManagedProcessError("invalid_arguments", `Input exceeds ${MANAGED_INPUT_MAX_BYTES} bytes.`);
+    if (!bytes.byteLength && !closeInput) throw new ManagedProcessError("invalid_arguments", "Provide data, appendNewline or closeInput.");
+    const digest = createHash("sha256").update(bytes).update(closeInput ? "\u0001eof" : "\u0000").digest("hex");
+    const runtime = this.runtime(record.runId);
+    if (!runtime.writeInput) throw new ManagedProcessError("process_input_unsupported", "This execution environment cannot deliver process input; nothing was sent.");
+    const previous = this.inputTails.get(record.processId) ?? Promise.resolve();
+    const work = previous.catch(() => undefined).then(async (): Promise<ManagedInputWriteResult> => {
+      const current = this.records.get(record.processId)!;
+      const input = current.input;
+      if (!input?.interactive) throw new ManagedProcessError("process_input_not_enabled", "Interactive input is off for this process; start it with interactive: true to send stdin.");
+      const prior = input.writes.find(entry => entry.writeId === writeId);
+      if (prior) {
+        if (prior.digest !== digest) throw new ManagedProcessError("process_input_conflict", "This writeId was already used with different input; choose a new writeId.");
+        return inputResult(current.processId, prior, input.inputClosed, true);
+      }
+      if (input.inputClosed) throw new ManagedProcessError("process_input_closed", "Input was already closed (EOF) for this process.");
+      if (exact.signal?.aborted) throw cancelled("input");
+      const pending: ManagedInputWriteRecord = { writeId, digest, byteLength: bytes.byteLength, closeInput, status: "pending", requestedAt: this.clock() };
+      this.save({ ...current, input: { ...input, writes: [...input.writes, pending].slice(-MANAGED_INPUT_HISTORY_LIMIT) } });
+      let settled: ManagedInputWriteRecord, inputClosed = false;
+      try {
+        inputClosed = (await runtime.writeInput!(current, exact, { bytes, closeInput, timeoutMs: MANAGED_INPUT_WRITE_TIMEOUT_MS })).inputClosed;
+        settled = { ...pending, status: "acknowledged", settledAt: this.clock() };
+      } catch (error) {
+        const code = error instanceof ManagedProcessError ? error.code : "process_input_outcome_unknown";
+        const certain = ["process_input_rejected", "process_input_unavailable", "process_not_owned", "process_cancelled"].includes(code);
+        settled = { ...pending, status: certain ? "rejected" : "outcome_unknown", settledAt: this.clock(), errorCode: code };
+        // Uncertain delivery may have closed input; refuse further writes rather than guess.
+        inputClosed = !certain && closeInput;
+      }
+      const latest = this.records.get(record.processId)!;
+      const latestInput = latest.input!;
+      this.save({ ...latest, input: { ...latestInput, inputClosed: latestInput.inputClosed || inputClosed,
+        writes: latestInput.writes.map(entry => entry.writeId === writeId ? settled : entry) } });
+      return inputResult(record.processId, settled, latestInput.inputClosed || inputClosed, false);
+    });
+    this.inputTails.set(record.processId, work);
+    try { return await work; } finally { if (this.inputTails.get(record.processId) === work) this.inputTails.delete(record.processId); }
+  }
+
+  /** N2: caller-held cursor, tail or explicit-range reads of exact bounded output evidence. */
+  async readOutput(processId: string, request: ManagedOutputReadRequest, context: ToolExecutionContext): Promise<ManagedOutputReadResult> {
+    const exact = exactCall(context, "process.read_output"); const record = this.owned(processId, exact);
+    if (!("schemaVersion" in record)) throw new ManagedProcessError("process_output_history_unsupported", "This historical record keeps only a bounded legacy tail without offsets; use process.poll.");
+    const normalized = normalizeOutputRead(request);
+    const runtime = this.runtime(record.runId);
+    if (!runtime.readOutput) throw new ManagedProcessError("process_output_unsupported", "This execution environment cannot provide offset-addressed output.");
+    const binding: ManagedOutputCursorBinding = { processId: record.processId, launchId: record.launchId, generation: `${record.configurationDigest.slice(0, 16)}:${record.startedAt}` };
+    const key = this.cursorKey();
+    const offsets: Record<ManagedOutputStreamName, number> = normalized.cursor !== undefined ? decodeOutputCursor(key, binding, normalized.cursor) : { stdout: 0, stderr: 0 };
+    const selected = normalized.range ? [normalized.range.stream] : streamsFor(normalized.stream);
+    const waitMs = Math.min(normalized.waitMs, MANAGED_OUTPUT_WAIT_MAX_MS);
+    const read = runtime.readOutput(record, exact, { waitMs, satisfied: evidence => hasNewOutput(evidence, offsets, normalized.range ? normalized.range.stream : normalized.stream) })
+      .then(async evidence => {
+        if (exact.signal?.aborted) throw cancelled("read");
+        this.saveSnapshot(record.processId, { ...evidence.snapshot, stdout: record.stdout, stderr: record.stderr });
+        const slices: ManagedOutputSlice[] = [];
+        const next = { ...offsets };
+        for (const stream of selected) {
+          const total = evidence.streams.find(entry => entry.stream === stream)?.totalBytes ?? 0;
+          const start = normalized.range ? normalized.range.startOffset : normalized.tailBytes !== undefined ? Math.max(0, total - normalized.tailBytes) : offsets[stream];
+          const slice = await sliceOutput({ evidence, stream, startOffset: start, maxBytes: normalized.maxBytes, readSpill: runtime.readSpill?.bind(runtime) });
+          slices.push(slice);
+          if (!normalized.range) next[stream] = slice.endOffset;
+        }
+        const terminal = evidence.snapshot.status !== "running";
+        return Object.freeze({
+          processId: record.processId, status: evidence.snapshot.status, exitCode: evidence.snapshot.exitCode, signal: evidence.snapshot.signal,
+          source: evidence.source, ...(evidence.waited ? { waited: evidence.waited } : {}), slices: Object.freeze(slices),
+          cursor: encodeOutputCursor(key, binding, next),
+          complete: terminal && evidence.source === "final" && !normalized.range && slices.every(slice => !slice.hasMore && !slice.gap && slice.lossyBytes === 0),
+          limits: Object.freeze({ maxBytesPerStream: normalized.maxBytes, liveTailBytesPerStream: MANAGED_OUTPUT_LIVE_TAIL_BYTES, finalSpillBytesPerStream: MANAGED_OUTPUT_FINAL_SPILL_BYTES }),
+        });
+      });
     this.reads.add(read); void read.finally(() => this.reads.delete(read)).catch(() => undefined);
     return await cancelRead(read, exact.signal);
   }
@@ -220,7 +320,11 @@ export class ManagedProcessService {
   private load(entry: string): void {
     const value = readManagedRecordValue(join(this.stateDirectory, entry));
     if (value && typeof value === "object" && ("schemaVersion" in value || "recordKind" in value)) {
-      const record = parseManagedSessionRecord(value, entry.slice(0, -5)); this.records.set(record.processId, record); return;
+      const record = parseManagedSessionRecord(value, entry.slice(0, -5)); this.records.set(record.processId, record);
+      // A write that was pending at a crash may or may not have been delivered. Record that honestly; never replay it.
+      if (record.input?.writes.some(write => write.status === "pending")) this.save({ ...record, input: { ...record.input,
+        writes: record.input.writes.map(write => write.status === "pending" ? { ...write, status: "outcome_unknown" as const, settledAt: this.clock(), errorCode: "process_input_interrupted" } : write) } });
+      return;
     }
     const legacy = readHistoricalManagedProcessRecord(join(this.stateDirectory, entry));
     if (!legacy || legacy.processId !== entry.slice(0, -5)) throw new ManagedProcessError("process_record_invalid", "Managed historical record identity is invalid.");
@@ -249,6 +353,16 @@ export class ManagedProcessService {
     const current = this.save({ ...previous, ...managedSnapshot(snapshot), stdout: boundedTail(snapshot.stdout, this.maxPollBytes), stderr: boundedTail(snapshot.stderr, this.maxPollBytes) });
     return managedSnapshot(current);
   }
+  private cursorKey(): Uint8Array {
+    if (this.cursorKeyBytes) return this.cursorKeyBytes;
+    const path = join(this.stateDirectory, "output-cursor.key");
+    try { writeFileSync(path, randomBytes(32), { flag: "wx", mode: 0o600 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    const entry = lstatSync(path);
+    if (!entry.isFile() || entry.isSymbolicLink() || entry.size !== 32) throw new ManagedProcessError("process_record_invalid", "Output cursor key identity is invalid.");
+    this.cursorKeyBytes = new Uint8Array(readFileSync(path));
+    return this.cursorKeyBytes;
+  }
   private assertOpen(): void {
     if (this.closing || this.closed) throw new ManagedProcessError("process_service_closed", "Managed process service is closing or closed.");
   }
@@ -256,6 +370,17 @@ export class ManagedProcessService {
 
 function sameOwner(a: ManagedProcessOwner, b: ManagedProcessOwner): boolean {
   return a.runId === b.runId && a.sessionId === b.sessionId && a.actor.role === b.actor.role && a.actor.id === b.actor.id;
+}
+function checkedWriteId(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(value)) throw new ManagedProcessError("invalid_arguments", "writeId must be 1-128 characters of [A-Za-z0-9._:-].");
+  return value;
+}
+function inputResult(processId: string, write: ManagedInputWriteRecord, inputClosed: boolean, deduplicated: boolean): ManagedInputWriteResult {
+  const status = write.status === "pending" ? "outcome_unknown" : write.status;
+  return Object.freeze({ processId, writeId: write.writeId, status, byteLength: write.byteLength, inputClosed, deduplicated,
+    ...(write.errorCode ? { errorCode: write.errorCode } : {}),
+    ...(status === "outcome_unknown" ? { message: "Delivery was not acknowledged; the process may or may not have received this input. It will not be resent automatically." }
+      : status === "rejected" ? { message: "Input was refused before delivery; nothing was sent." } : {}) });
 }
 function bound(value: number, minimum: number, maximum: number): number {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new ManagedProcessError("invalid_arguments", "Managed process bound is invalid.");

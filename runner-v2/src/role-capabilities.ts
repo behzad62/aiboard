@@ -1,3 +1,4 @@
+import { EXTENSION_MANAGEMENT_TOOL_NAMES } from "./extension-management-tools.js";
 import type { ToolEffect } from "./agent-contracts.js";
 
 /**
@@ -58,8 +59,10 @@ export const ROLE_CAPABILITY_BROKERS = [
 const VERIFIER_LIVE_PROCESS_TOOLS = [
   "process.list",
   "process.poll",
+  "process.read_output",
   "process.signal",
   "process.start",
+  "process.write_stdin",
 ] as const;
 
 const ARCHITECT_INSPECTION_BROWSER_TOOLS = [
@@ -85,6 +88,7 @@ const ARCHITECT_PLAN_ONLY_BROWSER_TOOLS = [
 
 const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
   "architect:inspection": surface("architect", "inspection", "read-only-class", [
+    "image.inspect",
     "archive_project_memory",
     "artifact.read",
     "code.definition",
@@ -111,8 +115,9 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "repo.map",
     "research.fetch",
     "search_session_history",
-  ], [...ARCHITECT_INSPECTION_BROWSER_TOOLS, "record_external_blocker", "record_repair_approach_decision", "run_evidence_command"]),
+  ], [...ARCHITECT_INSPECTION_BROWSER_TOOLS, ...EXTENSION_MANAGEMENT_TOOL_NAMES, "record_external_blocker", "record_repair_approach_decision", "run_evidence_command"]),
   "architect:planOnly": surface("architect", "planOnly", "read-only-class", [
+    "image.inspect",
     "artifact.read",
     "code.definition",
     "code.diagnostics",
@@ -243,6 +248,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "submit_plan_critique",
   ], []),
   "worker:task": surface("worker", "task", "all", [
+    "image.inspect",
     "artifact.read",
     "code.definition",
     "code.diagnostics",
@@ -290,8 +296,10 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "list_skills",
     "process.list",
     "process.poll",
+    "process.read_output",
     "process.signal",
     "process.start",
+    "process.write_stdin",
     "promote_project_memory",
     "propose_project_memory",
     "read_skill",

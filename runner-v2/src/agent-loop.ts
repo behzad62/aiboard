@@ -552,6 +552,7 @@ async function invokeTool(
     ...options.context,
     signal: options.signal ?? options.context.signal,
     inlineOutputBytes: inlineResultBytesForContextWindow(options.model.contextWindowTokens),
+    imageInput: options.model.inputModalities?.image === true,
   });
 }
 

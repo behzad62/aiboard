@@ -1,3 +1,4 @@
+import { createExtensionManagementTools } from "../src/extension-management-tools.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -76,6 +77,7 @@ const ARCHITECT_INSPECTION_REQUIRED = [
   "git.remotes",
   "git.show",
   "git.status",
+  "image.inspect",
   "inspect_evidence",
   "list_memory_proposals",
   "list_skills",
@@ -106,6 +108,11 @@ const ARCHITECT_INSPECTION_FULL = [
   "code.diagnostics",
   "code.references",
   "code.workspace_symbols",
+  "extensions.apply_change",
+  "extensions.inspect_source",
+  "extensions.list",
+  "extensions.operation_status",
+  "extensions.plan_change",
   "fs.list",
   "fs.read",
   "fs.search",
@@ -115,6 +122,7 @@ const ARCHITECT_INSPECTION_FULL = [
   "git.remotes",
   "git.show",
   "git.status",
+  "image.inspect",
   "inspect_evidence",
   "list_memory_proposals",
   "list_skills",
@@ -146,6 +154,7 @@ const ARCHITECT_PLAN_ONLY_REQUIRED = [
   "git.remotes",
   "git.show",
   "git.status",
+  "image.inspect",
   "inspect_evidence",
   "list_memory_proposals",
   "list_skills",
@@ -177,6 +186,7 @@ const ARCHITECT_PLAN_ONLY_FULL = [
   "git.remotes",
   "git.show",
   "git.status",
+  "image.inspect",
   "inspect_evidence",
   "list_memory_proposals",
   "list_skills",
@@ -208,8 +218,10 @@ const VERIFIER_INSPECTION_REQUIRED = [
 const VERIFIER_LIVE_PROCESS = [
   "process.list",
   "process.poll",
+  "process.read_output",
   "process.signal",
   "process.start",
+  "process.write_stdin",
 ] as const;
 
 const VERIFIER_INSPECTION_FULL = [
@@ -346,6 +358,7 @@ const WORKER_REQUIRED = [
   "git.remotes",
   "git.show",
   "git.status",
+  "image.inspect",
   "process.run",
   "repo.manifest",
   "repo.map",
@@ -390,14 +403,17 @@ const WORKER_FULL = [
   "git.remotes",
   "git.show",
   "git.status",
+  "image.inspect",
   "inspect_evidence",
   "list_memory_proposals",
   "list_skills",
   "process.list",
   "process.poll",
+  "process.read_output",
   "process.run",
   "process.signal",
   "process.start",
+  "process.write_stdin",
   "promote_project_memory",
   "propose_project_memory",
   "read_skill",
@@ -560,9 +576,13 @@ test("constructed brokers match the derived surfaces and an unlisted probe fails
     const withBrowser = createArchitectInspectionBroker({ ...base, browserBackend: browserStub() });
     assert.deepEqual(
       names(withBrowser),
-      [...ARCHITECT_INSPECTION_FULL].filter((name) => name !== "run_evidence_command" && name !== "record_external_blocker" && name !== "record_repair_approach_decision"),
+      [...ARCHITECT_INSPECTION_FULL].filter((name) => name !== "run_evidence_command" && name !== "record_external_blocker" && name !== "record_repair_approach_decision" && !name.startsWith("extensions.")),
     );
     assert.equal(names(withBrowser).includes("run_evidence_command"), false);
+    // Management tools reach only the user-facing coordinator, and only the plan-only view hides them.
+    const managing = createArchitectInspectionBroker({ ...base, extensionTools: createExtensionManagementTools({ service: {} as never, conversationId: () => undefined, canMutate: () => true }) });
+    assert.deepEqual(names(managing).filter((name) => name.startsWith("extensions.")), [...ARCHITECT_INSPECTION_FULL].filter((name) => name.startsWith("extensions.")));
+    assert.equal(names(new PlanOnlyInspectionRuntime(managing)).some((name) => name.startsWith("extensions.")), false);
     assert.deepEqual(
       names(new PlanOnlyInspectionRuntime(withBrowser)),
       [...ARCHITECT_PLAN_ONLY_FULL].filter((name) => name !== "record_external_blocker" && name !== "record_repair_approach_decision"),

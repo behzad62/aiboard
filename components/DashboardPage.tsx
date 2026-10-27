@@ -33,6 +33,7 @@ import {
   type BuildCrew,
 } from "@/lib/client/build-crew";
 import type {
+  ToolRuntimeRunnerSettings,
   Discussion,
   DiscussionMode,
   EffortLevel,
@@ -54,6 +55,7 @@ import {
   loadDashboard,
   participatingModelRequirementMessage,
 } from "@/lib/client/api";
+import { getToolRuntimeRunner } from "@/lib/client/tool-runtime";
 import { claimPendingProjectFolder } from "@/lib/client/project-fs";
 import { ProjectAccessSetup } from "@/components/ProjectAccessSetup";
 import type { RunnerSelection } from "@/components/RunnerSetup";
@@ -129,6 +131,9 @@ export default function DashboardPage() {
   const [locked, setLocked] = useState(false);
   const [projectFolderName, setProjectFolderName] = useState<string | null>(null);
   const [runner, setRunner] = useState<RunnerSelection | null>(null);
+  // Chat with Runner tools: the saved Tools-tab Runner hosts the reply (skills, extensions, project reads).
+  const [toolRunner, setToolRunner] = useState<ToolRuntimeRunnerSettings | null>(null);
+  const [chatRunnerTools, setChatRunnerTools] = useState(false);
   const [topic, setTopic] = useState("");
   const [mode, setMode] = useState<DiscussionMode>("chat");
   // The chat style to return to when switching back from Build.
@@ -189,6 +194,7 @@ export default function DashboardPage() {
         setLocked(true);
         return;
       }
+      setToolRunner(getToolRuntimeRunner());
       const d = loadDashboard();
       {
         setData(d);
@@ -443,9 +449,10 @@ export default function DashboardPage() {
         styleNote: styleNote.trim() || undefined,
         reasoningEffort,
         projectFolderName: mode === "build" ? projectFolderName : null,
-        runnerUrl: mode === "build" ? runner?.url ?? null : null,
-        runnerToken: mode === "build" ? runner?.token ?? null : null,
-        runnerAccess: mode === "build" ? runner?.access ?? null : null,
+        runnerUrl: mode === "build" ? runner?.url ?? null : singleChat && chatRunnerTools ? toolRunner?.url ?? null : null,
+        runnerToken: mode === "build" ? runner?.token ?? null : singleChat && chatRunnerTools ? toolRunner?.token ?? null : null,
+        runnerAccess: mode === "build" ? runner?.access ?? null : singleChat && chatRunnerTools ? toolRunner?.access ?? null : null,
+        chatRunnerTools: singleChat && chatRunnerTools && Boolean(toolRunner),
         reviewerModelId: mode === "build" ? buildReviewerId : null,
         buildReviewerReasoningEffort: mode === "build" ? crew?.reviewer?.reasoningEffort ?? null : null,
         buildArchitectReasoningEffort: mode === "build" ? crew?.architect.reasoningEffort ?? null : null,
@@ -662,7 +669,7 @@ export default function DashboardPage() {
               </div>
               {singleChat ? (
                 compatibleJudgeOptions.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
                     <Label htmlFor="chat-model" className="text-sm text-muted-foreground">
                       Model
                     </Label>
@@ -678,6 +685,19 @@ export default function DashboardPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {toolRunner && (
+                      <label
+                        className="flex items-center gap-2 text-sm text-muted-foreground"
+                        title="Replies run on your Runner, where the model can use installed skills, read project files and install skills or MCP servers you ask for."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={chatRunnerTools}
+                          onChange={(event) => setChatRunnerTools(event.target.checked)}
+                        />
+                        Runner tools
+                      </label>
+                    )}
                   </div>
                 )
               ) : (

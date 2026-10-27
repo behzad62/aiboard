@@ -31,9 +31,20 @@ export interface NativeToolBenchSnapshot {
   completedAt?: string;
   result?: { status: string; reason?: string; error?: string; errorCode?: string; turns: number };
   usage?: NativeBuildUsageProjection;
+  /** Tool names offered to the model (older Runners omit it). */
+  availableTools?: string[];
   tools: Array<{ sequence: number; sessionId: string; callId: string; toolName: string; status: "started" | "completed"; occurredAt: string; isError?: boolean; errorCode?: string }>;
   evidence: NativeBuildObservability["evidence"];
-  toolEvidence: { runId: string; tools: Array<{ sequence: number; callId: string; toolName: string; isError: boolean; errorCode?: string; input: { path?: string; startLine?: number; endLine?: number; editCount?: number }; outputText: string }> };
+  toolEvidence: { runId: string; tools: Array<{ sequence: number; callId: string; toolName: string; isError: boolean; errorCode?: string; input: NativeToolEvidenceInput; outputText: string }> };
+}
+/** Recorded call facts for hidden qualification; `offset`/`continued` come from newer Runners. */
+export interface NativeToolEvidenceInput {
+  path?: string;
+  startLine?: number;
+  endLine?: number;
+  editCount?: number;
+  offset?: number;
+  continued?: boolean;
 }
 export interface NativeToolBenchSessionInput {
   sessionId: string;

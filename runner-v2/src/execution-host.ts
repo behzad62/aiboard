@@ -755,7 +755,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       },
     });
     managedRuntimeRegistration.detach = input.managedProcesses.registerRuntime(createExecutionHostManagedRuntime({
-      run: binding, permissionProfile: input.permissionProfile, environment: input.ambientEnvironment,
+      run: binding, permissionProfile: input.permissionProfile, environment: input.ambientEnvironment, artifacts: input.artifacts,
     }));
     constructionOwner.transfer();
     return binding;

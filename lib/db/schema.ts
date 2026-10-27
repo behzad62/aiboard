@@ -428,6 +428,11 @@ export interface Discussion {
   runnerToken?: string | null;
   /** "ask" = approve each command in the UI; "full" = run without asking. */
   runnerAccess?: "ask" | "project" | "full" | null;
+  /**
+   * Chat mode: replies run in a Runner chat session (runnerUrl/runnerToken) where the model can use
+   * skills, read project files and manage extensions through native tool calls.
+   */
+  chatRunnerTools?: boolean | null;
   /** Durable Runner V2 run identity for the current native Build pass. */
   nativeBuildRunId?: string | null;
   /** When set, the run id is reserved for an intentional not-yet-attached Build pass. */

@@ -1,3 +1,4 @@
+import { createImageTools } from "./image-tools.js";
 import { createHash } from "node:crypto";
 
 import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
@@ -119,6 +120,8 @@ export interface NativeArchitectRuntimeOptions {
   sessions: SqliteAgentSessionStore;
   artifacts: ArtifactStore;
   skillCatalog: SkillCatalog;
+  /** User-facing coordinator only: extensions.* management tools (never under a benchmark). */
+  extensionTools?: readonly NativeTool<unknown>[];
   memoryStore: ProjectMemoryStore;
   evidenceStore: EvidenceStore;
   projectId: string;
@@ -334,6 +337,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       sessions: this.options.sessions,
       evidenceStore: this.options.evidenceStore,
       skillCatalog: this.options.skillCatalog,
+      ...(this.options.extensionTools ? { extensionTools: this.options.extensionTools } : {}),
       memoryStore: this.options.memoryStore,
       projectId: this.options.projectId,
       runId: request.runId,
@@ -1102,6 +1106,7 @@ export interface ArchitectInspectionBrokerInput {
   sessions: SqliteAgentSessionStore;
   evidenceStore: EvidenceStore;
   skillCatalog: SkillCatalog;
+  extensionTools?: readonly NativeTool<unknown>[];
   memoryStore: ProjectMemoryStore;
   projectId: string;
   runId: string;
@@ -1281,6 +1286,7 @@ export function createArchitectInspectionBroker(input: ArchitectInspectionBroker
   }));
   registerAdmitted(broker, createCodeIntelligenceTools({ repository, language }));
   registerAdmitted(broker, createArtifactTools(input.artifacts));
+  registerAdmitted(broker, createImageTools({ artifacts: input.artifacts, ...(input.hiddenPaths ? { hiddenPaths: input.hiddenPaths } : {}) }));
   registerAdmitted(broker, createSessionTools(input.sessions));
   registerAdmitted(broker, createGitTools(input.git));
   registerAdmitted(broker, createEvidenceTools({
@@ -1291,6 +1297,7 @@ export function createArchitectInspectionBroker(input: ArchitectInspectionBroker
     clock: input.clock,
   }));
   registerAdmitted(broker, createSkillTools(input.skillCatalog));
+  registerAdmitted(broker, input.extensionTools ?? []);
   registerAdmitted(broker, createMemoryTools({
     store: input.memoryStore,
     projectId: input.projectId,

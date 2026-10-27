@@ -187,11 +187,9 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
       maxMatches: 1,
     });
     assert.equal(fileSearch.isError, false);
+    const fileResult = json(fileSearch) as { matches: unknown[]; truncated: boolean; state: string; exhaustive: boolean; cursor?: string };
     assert.deepEqual(
-      (json(fileSearch) as {
-        matches: unknown[];
-        truncated: boolean;
-      }),
+      { matches: fileResult.matches, truncated: fileResult.truncated },
       {
         matches: [
           { path: "src/app.ts", line: 1, column: 1, text: "const alpha = 1;" },
@@ -199,6 +197,8 @@ test("filesystem tools read, inspect, list, search, and preserve CRLF edits", as
         truncated: true,
       }
     );
+    // The second match is retained: a continuation returns it instead of a rerun with a larger limit.
+    assert.equal(fileResult.state, "running"); assert.equal(fileResult.exhaustive, false); assert.ok(fileResult.cursor);
 
     const patch = await invoke(broker, "patch", "fs.patch", {
       path: "src/app.ts",

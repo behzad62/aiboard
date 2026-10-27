@@ -1,4 +1,4 @@
-import type { SkillMetadata } from "./skill-catalog.js";
+import { skillSourcePrecedence, type SkillMetadata } from "./skill-catalog.js";
 
 export function rankSkillsForTask(
   metadata: readonly SkillMetadata[],
@@ -130,11 +130,6 @@ function intersectionSize(left: ReadonlySet<string>, right: ReadonlySet<string>)
 }
 
 function compareSkillSource(left: SkillMetadata, right: SkillMetadata): number {
-  const priority: Record<SkillMetadata["source"], number> = {
-    project: 0,
-    user: 1,
-    "built-in": 2,
-  };
-  return priority[left.source] - priority[right.source] ||
+  return skillSourcePrecedence(left) - skillSourcePrecedence(right) ||
     left.id.localeCompare(right.id);
 }
