@@ -146,7 +146,7 @@ test("real broker binds remote grants and preserves exact managed-process owners
   let admissions = 0;
   let holdAdmission: (() => Promise<void>) | undefined;
   const runtime = new RemoteToolRuntime({ host: runtimeHost, principals, workspacePath: project, permissionProfile: "full", capabilitiesConfig: config,
-    admitEffect: async () => { admissions += 1; if (holdAdmission) await holdAdmission(); return true; } });
+    admitEffect: async (_request, dispatch) => { admissions += 1; if (holdAdmission) await holdAdmission(); return await dispatch(); } });
   let worker: ExecutionHostRunBinding | undefined;
   let failed = false, primary: unknown;
   try {

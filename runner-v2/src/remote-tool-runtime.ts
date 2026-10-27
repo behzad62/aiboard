@@ -24,10 +24,20 @@ export interface RemoteToolRuntimeOptions {
   readonly workspacePath: string;
   readonly permissionProfile: PermissionProfile;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
-  /** Runner-owned R2 admission, supplied only by trusted composition after S1. */
-  readonly admitEffect?: (request: Readonly<{
-    principal: RemotePrincipal; callId: string; toolName: string; workspacePath: string; arguments: unknown;
-  }>) => Promise<boolean>;
+  /** Runner-owned admission, supplied only by trusted composition after S1 and R2. */
+  readonly admitEffect?: (request: Readonly<RemoteEffectRequest>, dispatch: () => Promise<ToolResult>) => Promise<ToolResult>;
+}
+
+export interface RemoteEffectRequest {
+  readonly principal: RemotePrincipal;
+  readonly callId: string;
+  readonly toolName: string;
+  readonly workspacePath: string;
+  readonly arguments: unknown;
+  /** Raw transport JSON preserves duplicate keys for admission validation. */
+  readonly rawRequest?: string;
+  /** Synchronous policy and revocation check at the pre-effect boundary. */
+  readonly authorize: () => ToolResult | undefined;
 }
 
 interface BoundRemote {
@@ -63,19 +73,19 @@ export class RemoteToolRuntime {
     this.workspacePath = resolve(options.workspacePath);
   }
 
-  invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal): Promise<ToolResult> {
+  invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult> {
     const callId = `remote-call-${randomUUID()}`;
     if (this.closing) return Promise.resolve(failure(callId, name, "runtime_closed", "Remote runtime is closing."));
     let snapshot: unknown;
     try { snapshot = freezeArguments(structuredClone(args)); }
     catch { return Promise.resolve(failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely.")); }
-    const work = this.invokeChecked(identity, name, snapshot, callId, signal);
+    const work = this.invokeChecked(identity, name, snapshot, callId, signal, rawRequest);
     this.active.add(work);
     void work.finally(() => this.active.delete(work)).catch(() => undefined);
     return work;
   }
 
-  private async invokeChecked(identity: VerifiedRemoteIdentity, name: string, args: unknown, callId: string, signal?: AbortSignal): Promise<ToolResult> {
+  private async invokeChecked(identity: VerifiedRemoteIdentity, name: string, args: unknown, callId: string, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult> {
     let principal = this.options.principals.getOrCreate(identity);
     identity = principal.identity;
     if (principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
@@ -99,21 +109,29 @@ export class RemoteToolRuntime {
     if (!principal || principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
     refusal = policyRefusal(this.options.principals.policy(identity), name, args);
     if (refusal) return failure(callId, name, refusal.code, refusal.message);
+    const authorize = (): ToolResult | undefined => {
+      const current = this.options.principals.find(identity);
+      if (!current || current.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
+      principal = current;
+      const currentRefusal = policyRefusal(this.options.principals.policy(identity), name, args);
+      if (currentRefusal) return failure(callId, name, currentRefusal.code, currentRefusal.message);
+      if (this.closing || signal?.aborted) return failure(callId, name, "tool_cancelled", "Remote invocation was cancelled.");
+      return undefined;
+    };
+    const dispatch = async (): Promise<ToolResult> => {
+      const denied = authorize();
+      if (denied) return denied;
+      return await bound.broker.invoke({ type: "tool_call", callId, name, arguments: args }, {
+        runId: principal.runId, sessionId: principal.sessionId,
+        actor: { role: "remote", id: principal.principalId }, workspacePath: this.workspacePath,
+        ...(signal ? { signal } : {}),
+      });
+    };
     if (isMutating(name, args)) {
-      if (!await this.options.admitEffect!({ principal, callId, toolName: name, workspacePath: this.workspacePath, arguments: args })) {
-        return failure(callId, name, "effect_admission_required", "Durable remote effect admission is unavailable.");
-      }
-      principal = this.options.principals.find(identity)!;
-      if (!principal || principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
-      refusal = policyRefusal(this.options.principals.policy(identity), name, args);
-      if (refusal) return failure(callId, name, refusal.code, refusal.message);
+      return await this.options.admitEffect!({ principal, callId, toolName: name, workspacePath: this.workspacePath,
+        arguments: args, ...(rawRequest !== undefined ? { rawRequest } : {}), authorize }, dispatch);
     }
-    if (this.closing || signal?.aborted) return failure(callId, name, "tool_cancelled", "Remote invocation was cancelled.");
-    return await bound.broker.invoke({ type: "tool_call", callId, name, arguments: args }, {
-      runId: principal.runId, sessionId: principal.sessionId,
-      actor: { role: "remote", id: principal.principalId }, workspacePath: this.workspacePath,
-      ...(signal ? { signal } : {}),
-    });
+    return await dispatch();
   }
 
   private binding(principal: RemotePrincipal): Promise<BoundRemote> {
