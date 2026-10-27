@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE, WORKBENCH_SMOKE_SUITE } from "../lib/benchmark/native-suites";
+import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE, WORKBENCH_SMOKE_SUITE } from "../lib/benchmark/native-suites";
 import { nativeToolBenchReferenceFiles } from "../lib/benchmark/toolreliability/native-cases";
 import { LEGACY_NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_VARIANT_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE } from "../lib/benchmark/toolreliability/native-cases";
 import { scoreWorkBenchAttempt } from "../lib/benchmark/scoring/workbench";
@@ -35,12 +35,15 @@ const pack = getNativeBenchmarkPack("toolreliability", LEGACY_NATIVE_TOOLBENCH_S
 const compact = getNativeBenchmarkPack("toolreliability", NATIVE_TOOLBENCH_SUITE)!;
 assert.equal(compact.caseCount, 7);
 assert.deepEqual(listCertifiedSuiteOptions("toolreliability").map(option => option.id), [NATIVE_TOOLBENCH_SUITE]);
-assert.ok(compact.cases.every(option => option.case.budget.maxModelCalls <= 36 && option.case.budget.maxWallClockSeconds === 300));
-assert.equal(compact.cases.filter(option => option.case.nativeQualification?.requiresBrowser).length, 1);
-assert.ok(compact.caseIds.some(id => id.includes("interactive-process-v6")));
-assert.ok(compact.cases.every(option => option.id.endsWith("-v6")));
+assert.ok(compact.cases.every(option => option.case.budget.maxModelCalls === 300 && option.case.budget.maxWallClockSeconds === 4500 && option.case.budget.maxInputTokens === 5_000_000));
+assert.equal(compact.cases.filter(option => option.case.nativeQualification?.requiresBrowser).length, 0);
+assert.ok(compact.caseIds.some(id => id.includes("interactive-process-v7")));
+assert.ok(compact.cases.every(option => option.id.endsWith("-v7")));
 assert.ok(!compact.caseIds.some(id => /variant-b|atomic-edits|bounded-output|command-args|investigate/.test(id)));
 assert.equal(pack.caseCount, 6);
+const browserPack = getNativeBenchmarkPack("toolreliability", NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE)!;
+assert.equal(browserPack.cases.filter(option => option.case.nativeQualification?.requiresBrowser).length, 1);
+assert.equal(browserPack.caseCount, 7);
 for (const option of pack.cases) {
   assert.deepEqual(option.case.budget, {maxWallClockSeconds:4500,maxModelCalls:300,maxToolCalls:900,maxInputTokens:5000000,maxOutputTokens:750000});
   assert.equal(option.case.environment.timeoutSeconds,4500);
@@ -84,7 +87,7 @@ function completed(name: string, sequence: number, errorCode?: string): NativeBu
 try {
   // The compact artifact case must enforce the two distinct process argv values,
   // rather than accepting a shell-like string split into three arguments.
-  const exactArgCase = compact.cases.find(option => option.id.endsWith("artifact-retrieval-v6"))!.case;
+  const exactArgCase = compact.cases.find(option => option.id.endsWith("artifact-retrieval-v7"))!.case;
   const exactArgRoot = workspace(exactArgCase.fixtureFiles!);
   assert.throws(() => execFileSync(process.execPath, ["emit-report.mjs", "alpha", "beta", "gamma"], {
     cwd: exactArgRoot, stdio: "pipe", timeout: 10_000, windowsHide: true,

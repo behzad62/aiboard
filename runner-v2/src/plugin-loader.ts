@@ -34,6 +34,8 @@ export interface LocalPluginLoaderOptions {
   projectDirectory: string;
   stateDirectory: string;
   reservedToolNames?: readonly string[];
+  /** Live management revocation; never supplied by an extension manifest. */
+  admitExtension?: (extensionId: string) => Promise<boolean>;
   signal?: AbortSignal;
   /** Revalidates a durable snapshot around every extension execution boundary. */
   verifyExtensionIntegrity?: () => Promise<void>;
@@ -126,6 +128,7 @@ export class LocalPluginLoader {
         await this.options.verifyExtensionIntegrity?.();
         const closure = await (this.options.captureClosure ?? captureRunnerExtensionClosure)(directory);
         const manifest = closure.manifest;
+        if (this.options.admitExtension && !await this.options.admitExtension(manifest.id)) continue;
         await this.options.verifyExtensionIntegrity?.();
         let importedModule: unknown;
         if (this.options.importModule) {
@@ -149,7 +152,9 @@ export class LocalPluginLoader {
         await verifyExecutionCopies(executionCopies);
       }
 
+      const unstarted = new Set<string>();
       const registry = new CapabilityRegistry(created, {
+        authorizeExtension: async id => !unstarted.has(id) && (this.options.admitExtension ? await this.options.admitExtension(id) : true),
         ...(this.options.reservedToolNames
           ? { reservedToolNames: this.options.reservedToolNames }
           : {}),
@@ -157,6 +162,10 @@ export class LocalPluginLoader {
       await verifyExecutionCopies(executionCopies);
       for (const registration of created) {
         throwIfAborted(this.options.signal);
+        if (this.options.admitExtension && !await this.options.admitExtension(registration.manifest.id)) {
+          unstarted.add(registration.manifest.id);
+          continue;
+        }
         await this.options.verifyExtensionIntegrity?.();
         await verifyExecutionCopies(executionCopies);
         const extensionState = await prepareExtensionState(

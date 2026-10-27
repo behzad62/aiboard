@@ -6,6 +6,13 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn, ToolResult } from "../src/agent-contracts.js";
+import { runAgentLoop } from "../src/agent-loop.js";
+import { mcpToolAdmitted, roleToolSurface } from "../src/role-capabilities.js";
+import { ManagedBuildToolRuntime } from "../src/managed-build-tools.js";
+import { ExtensionRunBindings } from "../src/extension-run-bindings.js";
+import { createExtensionManagementTools } from "../src/extension-management-tools.js";
+import { ToolBroker } from "../src/tool-broker.js";
+import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { ChatAgentSessions } from "../src/chat-agent-session.js";
 import { createExecutionHost } from "../src/execution-host.js";
@@ -64,6 +71,8 @@ interface Fixture {
   root: string;
   project: string;
   home: string;
+  host: ReturnType<typeof createExecutionHost>;
+  state: string;
   extensions: ExtensionManagementService;
   runtime: ManagedMcpRuntime;
   sessions: ChatAgentSessions;
@@ -84,7 +93,7 @@ async function fixture(t: test.TestContext, options: { run?: McpInstallerCommand
   const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: ambient });
   const internal = createRunnerInternalExecutionContext({ projectDirectory: project, stateDirectory: state, processKernel: host.internalProcesses, ambientEnvironment: host.filteredEnvironmentSource() });
   const credentials = new ExtensionCredentialStore(join(state, "extension-credentials.enc"), "mcp-test-token-0123456789abcdef");
-  const environment = options.path !== undefined ? { ...host.filteredEnvironmentSource(), PATH: options.path } : host.filteredEnvironmentSource();
+  const environment = options.path !== undefined ? { ...Object.fromEntries(Object.entries(host.filteredEnvironmentSource()).filter(([name]) => name.toLowerCase() !== "path")), PATH: options.path } : host.filteredEnvironmentSource();
   const runtime = new ManagedMcpRuntime({
     home, stateDirectory: state, projectRoot: project, credentials, internal, executionHost: host, capabilitiesConfig: () => emptyRunnerCapabilitiesConfig(),
     installer: {
@@ -110,7 +119,7 @@ async function fixture(t: test.TestContext, options: { run?: McpInstallerCommand
     await host.close();
     await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   });
-  return { root, project, home, extensions, runtime, sessions, seen, setSteps: (next) => { steps = next; } };
+  return { root, project, home, host, state, extensions, runtime, sessions, seen, setSteps: (next) => { steps = next; } };
 }
 
 async function installFixtureServer(env: Fixture, args: string[], credentialNames: string[] = []) {
@@ -313,4 +322,66 @@ test("a Python server without a Python runtime is an actionable requirement, nev
     env.extensions.inspectSource({ type: "pypi", packageName: "fixture-mcp" }, UI),
     (error: Error & { code?: string }) => error.code === "runtime_missing" && /never installs system runtimes/.test(error.message),
   );
+});
+
+
+test("Build-owned installation publishes MCP on the next model turn, preserves other Build pins and revokes disabled calls", {timeout:120_000}, async t => {
+  const env = await fixture(t);
+  const pins = new ExtensionRunBindings(env.state, env.extensions);
+  t.after(() => pins.close());
+  await pins.bind("build-install");
+  await pins.bind("unrelated-build");
+  const binding = await env.host.bindRun({runId:"build-install", permissionProfile:"full", capabilityContract:{digest:"d".repeat(64)} as RunnerCapabilityContract, capabilitiesConfig:emptyRunnerCapabilitiesConfig()});
+  t.after(() => binding.close());
+  const brokerOptions = {permissionProfile:"full" as const, workspacePath:env.project, executionGrants:binding.executionGrants, artifacts:new ArtifactStore(join(env.state,"build-artifacts"))};
+  const base = new ToolBroker(brokerOptions);
+  for (const tool of createExtensionManagementTools({service:env.extensions, conversationId:()=>"build-conversation", canMutate:context=>context.actor.role === "architect"})) base.register(tool);
+  env.extensions.authorizer.recordHumanMessage("build-conversation", `Install the MCP server ${FIXTURE} and use it to find beavers.`);
+  const source = {generation:()=>pins.generation("build-install"), tools:(g:number)=>env.runtime.buildTools(g,binding,"full",brokerOptions.artifacts)};
+  const runtime = new ManagedBuildToolRuntime(base, source, brokerOptions, tool=>mcpToolAdmitted(roleToolSurface("architect","inspection").mcpPolicy, tool.definition));
+  t.after(() => runtime.close());
+  let installedId = "";
+  const requests: AgentModelRequest[] = [];
+  const model = scripted([
+    () => call("extensions.inspect_source", {source:{type:"executable",command:process.execPath,args:[FIXTURE],serverName:"fixture"}}),
+    (_request,result) => call("extensions.plan_change", {action:"install",inspectionId:json(result).inspectionId,applyIfAuthorized:true}),
+    async (_request,result) => {
+      const operationId = json(result).operation.operationId;
+      const operation = await env.extensions.operationStatus(operationId,UI);
+      const approved = await env.extensions.approve(operationId, operation.plan!.planDigest, UI);
+      assert.equal(approved.outcome,"succeeded",approved.diagnostics.join("; "));
+      installedId = approved.result!.extensionId!;
+      return call("extensions.operation_status", {operationId});
+    },
+    (request,result) => {
+      assert.equal(json(result).outcome,"succeeded");
+      assert.ok(request.tools.some(tool=>tool.name === "mcp.fixture.lookup"));
+      assert.ok(!request.tools.some(tool=>tool.name === "mcp.fixture.delete_note"),"Architect read-only surface");
+      return call("mcp.fixture.lookup", {query:"beavers"});
+    },
+    async (_request,result) => {
+      assert.match(textOf(result), /found:beavers:OTTER-7/);
+      const worker = new ManagedBuildToolRuntime(new ToolBroker(brokerOptions), source, brokerOptions,
+        tool=>mcpToolAdmitted(roleToolSurface("worker","task").mcpPolicy,tool.definition));
+      try {
+        await worker.prepare();
+        assert.ok(worker.definitions().some(tool=>tool.name === "mcp.fixture.delete_note"));
+        const used = await worker.invoke({type:"tool_call",callId:"worker-use",name:"mcp.fixture.lookup",arguments:{query:"worker"}},
+          {runId:"build-install",sessionId:"worker",actor:{role:"worker",id:"worker"},workspacePath:env.project});
+        assert.equal(used.isError,false,textOf(used));
+        assert.match(textOf(used),/found:worker:OTTER-7/);
+      } finally { await worker.close(); }
+      const plan = await env.extensions.planChange({action:"disable",extensionId:installedId},UI);
+      assert.equal((await env.extensions.applyChange({planId:plan.planId,planDigest:plan.planDigest,key:plan.planId},UI)).outcome,"succeeded");
+      return call("mcp.fixture.lookup",{query:"denied"});
+    },
+    (_request,result) => {assert.equal(result?.isError,true); assert.match(textOf(result),/disabled|removed/i);return say("verified");},
+  ], requests);
+  const outcome = await runAgentLoop({model, registry:runtime, beforeModelTurn:()=>runtime.prepare(), context:{runId:"build-install",sessionId:"architect",actor:{role:"architect",id:"architect"},workspacePath:env.project}, initialMessages:[{id:"user",role:"user",content:"Install the fixture server and find beavers."}]});
+  assert.equal(outcome.status,"suspended");
+  if (outcome.status !== "suspended") throw new Error("Expected scripted end-of-turn suspension.");
+  assert.equal(outcome.reason,"model_ended_without_lifecycle", outcome.error ?? "");
+  assert.equal(requests.length,6);
+  assert.ok(await pins.generation("build-install") > 0);
+  assert.equal(await pins.generation("unrelated-build"),0);
 });

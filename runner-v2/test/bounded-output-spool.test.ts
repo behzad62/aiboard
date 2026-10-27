@@ -11,6 +11,7 @@ import {
   attestPrivateDirectoryForPrincipal,
   cleanupOutputSpillRoot,
   createNodeOutputSpillStorage,
+  createMemoryOutputSpillStorage,
   type BoundedOutputSpoolOptions,
   type BoundedOutputStreamResult,
   type OutputSpillFile,
@@ -263,7 +264,7 @@ test("treats unavailable attestation as tail-only without trying disk", async (t
   assert.equal(output.lossyBytes, 5);
 });
 
-test("built-in backend creates no spill when it cannot attest current-principal privacy", async (t) => {
+test("disk backend creates no spill when it cannot attest current-principal privacy", async (t) => {
   if (process.platform !== "win32") return;
   const root = await temporaryRoot(t);
   const spool = new BoundedOutputSpool({
@@ -271,6 +272,7 @@ test("built-in backend creates no spill when it cannot attest current-principal 
     projectRoot: process.cwd(),
     ownershipId: "runner-test-owner",
     tailBytes: 4,
+    storage: createNodeOutputSpillStorage(),
   });
 
   await spool.write("stdout", Buffer.from("tail only"));
@@ -1030,4 +1032,58 @@ test("cleanup rejects a replacement directory even when its ownership marker is 
 
   await assert.rejects(spool.finalize(), /root identity changed/);
   assert.equal(await readFile(join(root, "keep.txt"), "utf8"), "foreign");
+});
+
+
+test("private memory spill retains both full streams beyond 128 KiB without payload files", async t => {
+  const root = await temporaryRoot(t);
+  const artifacts = new Map<string, Buffer>();
+  const mediaTypes: string[] = [];
+  const storage = createMemoryOutputSpillStorage();
+  const spool = new BoundedOutputSpool({ spillRoot: root, projectRoot: process.cwd(), ownershipId: "memory-test", storage,
+    artifactStore: { put: async (bytes,mediaType) => { mediaTypes.push(mediaType); const hash = String(artifacts.size); artifacts.set(hash, Buffer.from(bytes)); return { hash }; } } });
+  const stdout = Buffer.from("PREFIX\n" + "x".repeat(300_000));
+  const stderr = Buffer.from("ERROR-PREFIX\n" + "y".repeat(180_000));
+  await spool.write("stdout", stdout);
+  await spool.write("stderr", stderr);
+  const result = await spool.finalize();
+  for (const [name, expected] of [["stdout", stdout], ["stderr", stderr]] as const) {
+    const output = stream(result, name);
+    assert.equal(output.lossyOutput, false);
+    assert.ok(output.spillArtifactId);
+    assert.deepEqual(artifacts.get(output.spillArtifactId), expected);
+  }
+  assert.deepEqual(mediaTypes, ["text/plain", "text/plain"]);
+  assert.ok((await storage.list(root)).every(name => !name.endsWith(".spill")), "no payload files");
+});
+
+test("memory spill enforces shared quota, exclusive ownership and releases capacity on close", async () => {
+  const storage = createMemoryOutputSpillStorage(8);
+  const first = await storage.openExclusive("first");
+  const second = await storage.openExclusive("second");
+  await assert.rejects(storage.openExclusive("first"), /already exists/);
+  await first.write(Buffer.from("123456"));
+  await assert.rejects(second.write(Buffer.from("789")), /quota/);
+  await first.close();
+  await first.close();
+  await second.write(Buffer.from("789"));
+  assert.equal((await second.sealAndRead(3, 8)).toString(), "789");
+  await assert.rejects(second.write(Buffer.from("x")), /closed/);
+  await second.close();
+  const replacement = await storage.openExclusive("first");
+  await replacement.write(Buffer.alloc(8));
+  await replacement.close();
+});
+
+
+test("binary process output remains exact and is stored as binary", async t => {
+  const root=await temporaryRoot(t);
+  const store=new ArtifactStore(join(root,"..","artifacts"));
+  const bytes=Buffer.from([0,255,254,128,0,65]);
+  const spool=new BoundedOutputSpool({spillRoot:root,projectRoot:process.cwd(),ownershipId:"binary",storage:createMemoryOutputSpillStorage(),artifactStore:store});
+  await spool.write("stdout",bytes);
+  const output=stream(await spool.finalize(),"stdout");
+  assert.equal(output.lossyOutput,false);
+  assert.equal((await store.stat(output.spillArtifactId!)).mediaType,"application/octet-stream");
+  assert.deepEqual(await store.get(output.spillArtifactId!),bytes);
 });

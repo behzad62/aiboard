@@ -47,6 +47,12 @@ export class ExtensionRunBindings {
     };
   }
 
+  /** Flush the durable transition before constructing the next agent tool surface. */
+  async generation(runId: string): Promise<number> {
+    await this.queue;
+    return (this.bindings.get(runId) ?? await this.bind(runId)).generation;
+  }
+
   pinnedGenerations(): ReadonlySet<number> {
     return new Set([...this.bindings.values()].map((binding) => binding.generation));
   }
@@ -72,7 +78,10 @@ export class ExtensionRunBindings {
       transitions: [...current.transitions, { from: current.generation, to, at: new Date().toISOString(), operationIds: [operation.id], reason: "run_operation" as const }].slice(-64),
     };
     this.bindings.set(next.runId, next);
-    this.queue = this.queue.then(() => this.write(next)).catch(() => undefined);
+    this.queue = this.queue.then(() => this.write(next));
+    // Observe rejection to avoid an unhandled promise, but retain it on queue:
+    // future generation reads must fail closed rather than use an unpersisted pin.
+    void this.queue.catch(() => undefined);
   }
 
   private async read(runId: string): Promise<RunCapabilityBinding | undefined> {

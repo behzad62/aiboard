@@ -1,5 +1,6 @@
 import { createImageTools } from "./image-tools.js";
 import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
+import { ManagedBuildToolRuntime, withManagedBuildToolLifecycle, type ManagedBuildToolSource } from "./managed-build-tools.js";
 import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
@@ -73,6 +74,7 @@ export interface SubagentToolsOptions {
   clock?: () => string;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
+  managedBuildTools?: ManagedBuildToolSource;
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
@@ -273,17 +275,23 @@ function spawnSubagentTool(
         }
       }
       broker.register(createReturnToParentTool());
+      const managedRuntime = !readOnly && options.managedBuildTools ? new ManagedBuildToolRuntime(broker, options.managedBuildTools, {
+        git: options.git, executionGrants: options.executionGrants, permissionProfile: options.permissionProfile,
+        workspacePath: options.workspacePath, artifacts: options.artifacts, ledger: options.ledger,
+        ...(options.permissions ? { approve: request => options.permissions!.requestTool(request) } : {}),
+      }, () => true) : undefined;
       const toolRuntime = options.budgetLedger
         ? new BudgetedToolRuntime({
-            runtime: broker,
+            runtime: managedRuntime ?? broker,
             ledger: options.budgetLedger,
             scopeId: options.runId,
             clock,
           })
-        : broker;
-      const result = await withLanguageAgentLifecycle(options.language, { runId: options.runId, sessionId, actor: { role: "subagent", id: `${options.parentActorId}:${callId}` } }, () => withMcpAgentLifecycle(options.mcpManager, { runId: options.runId, sessionId, actor: { role: "subagent", id: `${options.parentActorId}:${callId}` } }, () => runAgentLoop({
+        : managedRuntime ?? broker;
+      const result = await withManagedBuildToolLifecycle(managedRuntime, () => withLanguageAgentLifecycle(options.language, { runId: options.runId, sessionId, actor: { role: "subagent", id: `${options.parentActorId}:${callId}` } }, () => withMcpAgentLifecycle(options.mcpManager, { runId: options.runId, sessionId, actor: { role: "subagent", id: `${options.parentActorId}:${callId}` } }, () => runAgentLoop({
         model,
         registry: toolRuntime,
+        beforeModelTurn: () => managedRuntime?.prepare() ?? Promise.resolve(),
         context: {
           runId: options.runId,
           sessionId,
@@ -297,7 +305,7 @@ function spawnSubagentTool(
         onCheckpoint: async (checkpoint) => {
           await options.sessions.checkpoint(sessionId, checkpoint, clock());
         },
-      })));
+      }))));
       if (result.status !== "subagent_returned") {
         const reason = result.status === "suspended"
           ? `${result.reason}${result.error ? `: ${result.error}` : ""}`

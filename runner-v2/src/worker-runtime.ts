@@ -1,4 +1,5 @@
 import { createImageTools } from "./image-tools.js";
+import { ManagedBuildToolRuntime, withManagedBuildToolLifecycle, type ManagedBuildToolSource } from "./managed-build-tools.js";
 import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
 import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
@@ -114,6 +115,7 @@ export interface RunWorkerTaskOptions {
   clock?: () => string;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
+  managedBuildTools?: ManagedBuildToolSource;
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
@@ -306,6 +308,7 @@ export async function runWorkerTask(
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.browserBackend ? { browserBackend: options.browserBackend } : {}),
     ...(options.mcpManager ? { mcpManager: options.mcpManager } : {}),
+    ...(options.managedBuildTools ? { managedBuildTools: options.managedBuildTools } : {}),
     ...(options.permissions ? { permissions: options.permissions } : {}),
     ...(options.managedProcesses
       ? { managedProcesses: options.managedProcesses }
@@ -465,17 +468,23 @@ export async function runWorkerTask(
     registerExtensionCapabilities(options.capabilityRegistry, broker);
   }
 
+  const managedRuntime = options.managedBuildTools ? new ManagedBuildToolRuntime(broker, options.managedBuildTools, {
+    git: options.git, executionGrants: options.executionGrants, permissionProfile: options.permissionProfile,
+    workspacePath: options.workspace.path, artifacts: options.artifacts, ledger: options.ledger,
+    ...(options.permissions ? { approve: request => options.permissions!.requestTool(request) } : {}),
+  }, tool => mcpToolAdmitted(roleToolSurface("worker", "task").mcpPolicy, tool.definition)) : undefined;
   const toolRuntime = options.budgetLedger
     ? new BudgetedToolRuntime({
-        runtime: broker,
+        runtime: managedRuntime ?? broker,
         ledger: options.budgetLedger,
         scopeId: options.runId,
         clock,
       })
-    : broker;
-  const loop = await withLanguageAgentLifecycle(options.language, { runId: options.runId, sessionId: options.sessionId, actor: { role: "worker", id: options.actorId } }, () => withMcpAgentLifecycle(options.mcpManager, { runId: options.runId, sessionId: options.sessionId, actor: { role: "worker", id: options.actorId } }, () => runAgentLoop({
+    : managedRuntime ?? broker;
+  const loop = await withManagedBuildToolLifecycle(managedRuntime, () => withLanguageAgentLifecycle(options.language, { runId: options.runId, sessionId: options.sessionId, actor: { role: "worker", id: options.actorId } }, () => withMcpAgentLifecycle(options.mcpManager, { runId: options.runId, sessionId: options.sessionId, actor: { role: "worker", id: options.actorId } }, () => runAgentLoop({
     model: options.model,
     registry: toolRuntime,
+    beforeModelTurn: () => managedRuntime?.prepare() ?? Promise.resolve(),
     context: {
       runId: options.runId,
       sessionId: options.sessionId,
@@ -489,7 +498,7 @@ export async function runWorkerTask(
     onCheckpoint: async (checkpoint) => {
       await options.sessions.checkpoint(options.sessionId, checkpoint, clock());
     },
-  })));
+  }))));
 
   if (loop.status === "submitted") {
     producedChangeSet ??= changeSetFromMessages(loop.messages, loop.changeSetId);

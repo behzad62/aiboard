@@ -10,7 +10,7 @@ import { snapshotNativeBuildAmbientEnvironment } from "../runner-v2/src/native-b
 import { emptyRunnerCapabilitiesConfig } from "../runner-v2/src/runner-capabilities-config";
 import {
   getNativeToolBenchPack, nativeToolBenchReferenceFiles,
-  NATIVE_TOOLBENCH_SUITE, LEGACY_NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_VARIANT_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE,
+  NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE, LEGACY_NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_VARIANT_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE,
   NATIVE_TOOLBENCH_EXTENDED_SUITE, NATIVE_TOOLBENCH_BROWSER_FORM_SUITE, NATIVE_TOOLBENCH_EXTENDED_VERSION,
 } from "../lib/benchmark/toolreliability/native-cases";
 import { qualifyNativeToolBench } from "../lib/benchmark/toolreliability/native-qualification";
@@ -32,7 +32,7 @@ const jsonOf = (result: ToolResult | undefined) => {
 /** Each planner looks only at real tool results, like a model would. `variant` drives the negative controls. */
 function plannerFor(id: string, variant: string | undefined): Planner {
   if (id.includes("code-navigation")) {
-    const v6 = id.endsWith("-v6");
+    const v6 = /-v[67]$/.test(id);
     const basic: Step[] = [["fs.search", { path: "src", pattern: "applyDiscount(" }], ["fs.read", { path: "src/pricing/discount.mjs" }],
       ["fs.patch", { path: "src/pricing/discount.mjs", search: "(1 - percent)", replace: "(1 - percent / 100)" }],
       ["fs.write", { path: "callers.json", content: '["src/cart.mjs","src/invoice/render.mjs"]\n' }], finish];
@@ -62,7 +62,7 @@ function plannerFor(id: string, variant: string | undefined): Planner {
     };
   }
   if (id.includes("artifact-retrieval")) {
-    const v6 = id.endsWith("-v6");
+    const v6 = /-v[67]$/.test(id);
     return (results) => {
       const command = last(results, "run_evidence_command");
       if (!command) return ["run_evidence_command", { label: "Report", command: "node", args: v6 ? ["emit-report.mjs", "alpha beta", "gamma"] : ["emit-report.mjs"] }];
@@ -81,9 +81,9 @@ function plannerFor(id: string, variant: string | undefined): Planner {
       return ["artifact.read", { hash, offset, maxBytes: 65_536 }];
     };
   }
-  if (id.includes("interactive-process")) {
+  if (id.includes("interactive-process") || id.includes("interactive-browser-process")) {
     return (results) => {
-      if (id.endsWith("-v6")) {
+      if (id.endsWith("-v6") || id.includes("interactive-browser-process")) {
         const started = jsonOf(last(results, "process.start"));
         if (!started) return ["process.start", { command: "node", args: ["quiz.mjs"], interactive: true }];
         const processId = started.processId as string;
@@ -195,7 +195,7 @@ async function runCase(option: WorkBenchCaseOption, variant?: string): Promise<O
     let snapshot: ToolBenchSessionSnapshot;
     do { await new Promise((r) => setTimeout(r, 20)); snapshot = await sessions.get("solo"); } while (snapshot.status === "running");
     snapshot = await sessions.stop("solo");
-    assert.equal(snapshot.status, "completed", JSON.stringify({ reason: snapshot.reason, errors: snapshot.tools.filter((t) => t.isError) }));
+    assert.equal(snapshot.status, "completed", JSON.stringify({ reason: snapshot.reason, errors: snapshot.tools.filter((t) => t.isError), toolEvidence:snapshot.toolEvidence.tools.map(t=>({name:t.toolName,input:t.input,output:t.outputText.slice(0,120)})) }));
     const verdict = qualifyNativeToolBench(option.case, { observability: { tools: snapshot.tools, evidence: snapshot.evidence } }, snapshot.toolEvidence);
     writeFileSync(join(project, "verifier.mjs"), hiddenVerifier);
     try { execFileSync(process.execPath, ["verifier.mjs"], { cwd: project, stdio: "pipe", timeout: 10_000, windowsHide: true }); } catch { /* the result file carries the verdict */ }
@@ -218,13 +218,16 @@ assert.deepEqual(extended.caseIds, ["toolbench-native-code-navigation-v5", "tool
 const compact = getNativeToolBenchPack(NATIVE_TOOLBENCH_SUITE)!;
 assert.equal(getNativeToolBenchPack(LEGACY_NATIVE_TOOLBENCH_SUITE)!.caseCount, 6, "old suite identity is readable");
 assert.equal(compact.caseCount, 7);
-const processBrowser = compact.cases.find(option => option.id.endsWith("interactive-process-v6"))!.case;
+const browserCompact = getNativeToolBenchPack(NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE)!;
+assert.ok(compact.cases.every(option => !option.case.nativeQualification?.requiresBrowser));
+assert.equal(browserCompact.caseCount, 7);
+const processBrowser = browserCompact.cases.find(option => option.id.endsWith("interactive-browser-process-v7"))!.case;
 assert.equal(processBrowser.nativeQualification?.requiresBrowser, true);
 assert.equal(processBrowser.nativeQualification?.processGeneratedOutputs, true);
 assert.ok(processBrowser.nativeQualification?.coverage?.includes("browser_form"));
-assert.equal(processBrowser.budget.maxModelCalls, 36);
-const atomicCase = compact.cases.find(option => option.id.endsWith("code-navigation-v6"))!.case;
-const boundedCase = compact.cases.find(option => option.id.endsWith("artifact-retrieval-v6"))!.case;
+assert.equal(processBrowser.budget.maxModelCalls, 300);
+const atomicCase = compact.cases.find(option => option.id.endsWith("code-navigation-v7"))!.case;
+const boundedCase = compact.cases.find(option => option.id.endsWith("artifact-retrieval-v7"))!.case;
 assert.equal(atomicCase.nativeQualification!.minimumAtomicEdits, 2);
 assert.equal(boundedCase.nativeQualification!.requiredReadText!.maxLines, 64);
 assert.deepEqual(boundedCase.nativeQualification!.requiredCommand!.args, ["emit-report.mjs", "alpha beta", "gamma"]);
@@ -232,10 +235,11 @@ assert.ok(atomicCase.nativeQualification!.coverage!.includes("atomic_multi_edit"
 assert.ok(boundedCase.nativeQualification!.coverage!.includes("bounded_file_read"));
 assert.ok(boundedCase.nativeQualification!.coverage!.includes("command_arguments"));
 for (const option of compact.cases) {
-  assert.equal(option.case.caseVersion, "6.2.0");
+  assert.equal(option.case.caseVersion, "7.0.0");
+  assert.deepEqual(option.case.budget, { maxWallClockSeconds: 4500, maxModelCalls: 300, maxToolCalls: 900, maxInputTokens: 5_000_000, maxOutputTokens: 750_000 });
   assert.ok(option.case.nativeQualification?.coverage?.length);
   assert.equal(option.case.nativeQualification!.profile, NATIVE_TOOLBENCH_SUITE);
-  for (const capability of option.case.nativeQualification!.coverage!) assert.ok(NATIVE_TOOL_COVERAGE.find(row => row.id === capability)?.cases.includes(option.id), `v6 manifest missing ${option.id}: ${capability}`);
+  for (const capability of option.case.nativeQualification!.coverage!) assert.ok(NATIVE_TOOL_COVERAGE.find(row => row.id === capability)?.cases.includes(option.id), `v7 manifest missing ${option.id}: ${capability}`);
   assert.doesNotThrow(() => nativeToolBenchReferenceFiles(option.id));
 }
 for (const option of [...extended.cases, ...browserForm.cases]) {
@@ -248,9 +252,9 @@ for (const option of [...extended.cases, ...browserForm.cases]) {
   assert.ok(option.case.executionPolicy!.hiddenPaths!.includes("verifier.mjs"), "hidden scoring stays out of the model workspace");
   assert.doesNotThrow(() => nativeToolBenchReferenceFiles(option.id));
 }
-const allCaseIds = new Set([NATIVE_TOOLBENCH_SUITE, LEGACY_NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_VARIANT_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE, NATIVE_TOOLBENCH_EXTENDED_SUITE, NATIVE_TOOLBENCH_BROWSER_FORM_SUITE].flatMap((id) => getNativeToolBenchPack(id)!.caseIds));
+const allCaseIds = new Set([NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE, "toolbench-native-capability-v6", LEGACY_NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_VARIANT_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE, NATIVE_TOOLBENCH_EXTENDED_SUITE, NATIVE_TOOLBENCH_BROWSER_FORM_SUITE].flatMap((id) => getNativeToolBenchPack(id)!.caseIds));
 for (const capability of NATIVE_TOOL_COVERAGE) for (const id of capability.cases) assert.ok(allCaseIds.has(id), `manifest case ${id} exists`);
-console.log("PASS v5 historical and v6 compact identities and coverage manifest consistency");
+console.log("PASS v5 historical and v7 capability identities and coverage manifest consistency");
 
 // ---- Coverage report semantics -------------------------------------------------------------------
 {
@@ -288,23 +292,23 @@ for (const option of [...extended.cases, ...(browserAvailable ? browserForm.case
 }
 
 // The consolidated pack must exercise the actual native tools, not just pass fixture assertions.
-for (const option of compact.cases.filter(entry => /code-navigation-v6|artifact-retrieval-v6|interactive-process-v6/.test(entry.id) && (!only || entry.id.includes(only)))) {
+for (const option of [...compact.cases.filter(entry => /code-navigation-v7|artifact-retrieval-v7|interactive-process-v7/.test(entry.id)), ...(browserAvailable ? browserCompact.cases.filter(entry => entry.id.includes("interactive-browser-process")) : [])].filter(entry => !only || entry.id.includes(only))) {
   const outcome = await runCase(option);
   assert.equal(outcome.qualification.passed, true, `${option.id}: ${failed(outcome)}`);
   assert.equal(outcome.verifierPassed, true, `${option.id}: hidden verifier`);
   console.log(`PASS ${option.id}: real native tools, bounded evidence and hidden behavioral verifier`);
 }
 if (!only || "code-navigation".includes(only)) {
-  const outcome = await runCase(compact.cases.find(entry => entry.id.endsWith("code-navigation-v6"))!, "split-patches");
+  const outcome = await runCase(compact.cases.find(entry => entry.id.endsWith("code-navigation-v7"))!, "split-patches");
   assert.equal(outcome.verifierPassed, true, "separate edits produce correct final behavior");
   assert.deepEqual(failed(outcome), ["atomic-multi-edit"], "multiple independent patches do not qualify as one atomic edit");
-  console.log("PASS v6 negative control: multiple successful separate patches fail atomic qualification");
+  console.log("PASS v7 negative control: multiple successful separate patches fail atomic qualification");
 }
 if (!only || "artifact-retrieval".includes(only)) {
-  const outcome = await runCase(compact.cases.find(entry => entry.id.endsWith("artifact-retrieval-v6"))!, "oversized-read");
+  const outcome = await runCase(compact.cases.find(entry => entry.id.endsWith("artifact-retrieval-v7"))!, "oversized-read");
   assert.equal(outcome.verifierPassed, true, "oversized read produces correct final behavior");
   assert.deepEqual(failed(outcome), ["bounded-target-read"], "oversized file read does not qualify as bounded");
-  console.log("PASS v6 negative control: oversized file reads fail bounded qualification");
+  console.log("PASS v7 negative control: oversized file reads fail bounded qualification");
 }
 
 const byId = (id: string) => extended.cases.find((entry) => entry.id === id)!;

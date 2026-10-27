@@ -175,7 +175,7 @@ export class ToolBenchSessions {
       const contract = await createRunnerCapabilityContractSnapshot(this.options.capabilitiesConfig, this.options.stateDirectory);
       await writeFile(join(directory, "manifest.json"), JSON.stringify({ request, runtime: providerUsageConfig(config), capabilityContract: contract }));
       refresh(); await save();
-      binding = await this.options.executionHost.bindRun({ runId: request.sessionId, permissionProfile: "full", capabilitiesConfig: this.options.capabilitiesConfig, capabilityContract: contract });
+      binding = await this.options.executionHost.bindRun({ runId: request.sessionId, artifacts, permissionProfile: "full", capabilitiesConfig: this.options.capabilitiesConfig, capabilityContract: contract });
       const broker = new ToolBroker({ git: binding.git, permissionProfile: "full", workspacePath: this.options.projectRoot, artifacts, ledger, executionGrants: binding.executionGrants });
       const tools: NativeTool<unknown>[] = [
         ...createFilesystemTools({ artifacts, hiddenPaths: request.hiddenPaths, protectedPaths: request.protectedPaths }),

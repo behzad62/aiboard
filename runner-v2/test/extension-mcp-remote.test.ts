@@ -8,6 +8,12 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn, ToolResult } from "../src/agent-contracts.js";
+import { ArtifactStore } from "../src/artifact-store.js";
+import { createExecutionHost } from "../src/execution-host.js";
+import { ToolBroker } from "../src/tool-broker.js";
+import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
+import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { ChatAgentSessions } from "../src/chat-agent-session.js";
 import { ExtensionCredentialStore } from "../src/extension-credentials.js";
 import { ExtensionManagementService, type ManagementCaller } from "../src/extension-management-service.js";
@@ -334,4 +340,28 @@ test("a CLI-configured MCP server is adopted only on request, with its exact lau
   assert.ok(view.warnings.some((warning) => /Remove the --mcp flag/.test(warning)));
   await assert.rejects(extensions.inspectAdoption("missing", UI), /No command-line MCP server/);
   await assert.rejects(extensions.inspectAdoption("docs", { kind: "agent", runId: "r", sessionId: "s", actorRole: "architect", canMutate: true } as ManagementCaller), /from Settings/);
+});
+
+
+test("remote managed MCP is available in a Build with the Build permission profile", async t => {
+  const remote=await mockRemote(t,"none");
+  const env=await fixture(t);
+  const {operation}=await install(env,`${remote.base}/mcp`,"none");
+  assert.equal(operation.outcome,"succeeded");
+  const artifacts=new ArtifactStore(join(env.root,"build-artifacts"));
+  const host=createExecutionHost({projectRoot:join(env.root,"project"),stateDirectory:join(env.root,"build-state"),artifacts,ambientEnvironment:snapshotNativeBuildAmbientEnvironment()});
+  const binding=await host.bindRun({runId:"remote-build",permissionProfile:"guarded",capabilityContract:{digest:"d".repeat(64)} as RunnerCapabilityContract,capabilitiesConfig:emptyRunnerCapabilitiesConfig()});
+  const managed=await env.runtime.buildTools(operation.result!.generation!,binding,"guarded",artifacts);
+  try {
+  const broker=new ToolBroker({approve:async request=>request.toolName === "mcp.notes.read_note",permissionProfile:"guarded",workspacePath:join(env.root,"project"),artifacts,executionGrants:binding.executionGrants});
+  for(const tool of managed.tools)broker.register(tool);
+  const result=await broker.invoke({type:"tool_call",callId:"remote-read",name:"mcp.notes.read_note",arguments:{id:"build-note"}},
+    {runId:"remote-build",sessionId:"worker",actor:{role:"worker",id:"worker"}});
+  assert.equal(result.isError,false,textOf(result));
+  assert.match(textOf(result),/HERON-3/);
+  const refused=await broker.invoke({type:"tool_call",callId:"remote-write",name:"mcp.notes.send_email",arguments:{to:"x"}},
+    {runId:"remote-build",sessionId:"worker",actor:{role:"worker",id:"worker"}});
+  assert.equal(refused.isError,true);
+  assert.equal(remote.callCount.send_email ?? 0,0);
+  } finally { await managed.close(); await binding.close(); await host.close(); }
 });

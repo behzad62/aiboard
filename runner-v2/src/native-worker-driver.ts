@@ -85,6 +85,7 @@ export interface NativeWorkerDriverOptions {
   validationBudgetMsForTask?: (input: { taskId: string; baselineRevision: string; workspacePath: string }) => number | Promise<number>;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
+  managedBuildTools?: import("./managed-build-tools.js").ManagedBuildToolSource;
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
   contextLimits?: ContextLimits;
@@ -406,6 +407,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           ? { browserBackend: this.options.browserBackend }
           : {}),
         ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
+        ...(this.options.managedBuildTools ? { managedBuildTools: this.options.managedBuildTools } : {}),
         ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
         ...(this.options.managedProcesses
           ? { managedProcesses: this.options.managedProcesses }

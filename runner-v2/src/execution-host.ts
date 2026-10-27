@@ -117,6 +117,8 @@ export interface ExecutionHostOptions {
 }
 
 export interface ExecutionHostRunBindingInput {
+  /** Trusted per-run evidence destination; defaults to the host store. */
+  readonly artifacts?: ArtifactStore;
   readonly runId: string;
   readonly permissionProfile: PermissionProfile;
   readonly capabilityContract: RunnerCapabilityContract;
@@ -266,7 +268,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           capabilityContractDigest: digest,
           capabilitiesConfig: input.capabilitiesConfig,
           ambientEnvironment,
-          artifacts: options.artifacts,
+          artifacts: input.artifacts ?? options.artifacts,
           managedProcesses,
           windowsJobHost,
           platform,
@@ -853,7 +855,7 @@ function createStreamingOutputOptions(input: {
     artifacts: input.artifacts,
     createEvidenceSpool: input.overrides?.createEvidenceSpool ?? ((sessionId) => {
       const spool = new BoundedOutputSpool({
-        spillRoot: join(input.runRoot, "streaming-output"),
+        spillRoot: join(input.runRoot, `streaming-output-${createHash("sha256").update(sessionId).digest("hex").slice(0, 20)}`),
         projectRoot: input.projectRoot,
         ownershipId: `streaming-${safeSegment(sessionId)}`,
         artifactStore: input.artifacts,

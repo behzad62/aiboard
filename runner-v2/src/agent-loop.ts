@@ -132,6 +132,8 @@ export interface RunAgentLoopOptions {
   signal?: AbortSignal;
   idFactory?: () => string;
   onCheckpoint?: (checkpoint: AgentLoopCheckpoint) => Promise<void>;
+  /** Governed capability refresh, after the preceding tool batch fully settles. */
+  beforeModelTurn?: () => Promise<void>;
   workingSet?: AgentWorkingSetLimits;
   hostedTools?: AgentModelRequest["hostedTools"];
   readOnlyStall?: {
@@ -279,6 +281,8 @@ export async function runAgentLoop(
       return suspended("cancelled", turnNumber - 1, messages);
     }
     let attempt = 0;
+    try { await options.beforeModelTurn?.(); }
+    catch (error) { return suspended("protocol_error", turnNumber - 1, messages, error instanceof Error ? error.message : String(error), undefined, "capability_refresh_failed"); }
     let streamingActive = false;
     const identity = () => ({
       runId: options.context.runId,

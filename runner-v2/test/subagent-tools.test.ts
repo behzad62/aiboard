@@ -41,6 +41,7 @@ test("read-only subagents expose no workspace mutation tools and are concurrency
     const registry = new ToolRegistry();
     for (const tool of createSubagentTools({
       model,
+      managedBuildTools: { generation: async () => { throw new Error("Read-only subagents must not acquire managed MCP tools."); }, tools: async () => { throw new Error("must not acquire"); } },
       runId: "run_1",
       parentSessionId: "worker:run_1:T1:1",
       taskId: "T1",
@@ -295,3 +296,27 @@ function fixtureLanguageProvider(): LanguageIntelligenceProvider {
     close: async () => undefined,
   };
 }
+
+
+test("editing subagents inherit the managed Build source and close it on return", async()=>{
+  const root=mkdtempSync(join(tmpdir(),"aiboard-managed-subagent-"));
+  const workspace=join(root,"workspace");mkdirSync(workspace);
+  const artifacts=new ArtifactStore(join(root,"artifacts"));
+  const sessions=new SqliteAgentSessionStore(join(root,"sessions.sqlite"),artifacts);
+  const ledger=new SqliteToolLedger(join(root,"tools.sqlite"));
+  let turns=0;let calls=0;let closed=0;
+  const model:AgentModel={complete:async request=>{
+    assert.ok(request.tools.some(t=>t.name==="mcp.fixture.lookup"));
+    return {blocks:[{type:"tool_call",callId:`child-${++turns}`,name:turns===1?"mcp.fixture.lookup":"return_to_parent",arguments:turns===1?{}:{summary:"Found the fact",artifactHashes:[]}}],stopReason:"tool_calls"};
+  }};
+  try {
+    const registry=new ToolRegistry();
+    for(const tool of createSubagentTools({model,runId:"run_1",parentSessionId:"worker",taskId:"T1",parentActorId:"worker",permissionProfile:"full",workspacePath:workspace,artifacts,ledger,sessions,
+      managedBuildTools:{generation:async()=>1,tools:async()=>({tools:[{definition:{name:"mcp.fixture.lookup",description:"Lookup",inputSchema:{type:"object"},readOnly:true,effect:"none"},validate:input=>({ok:true,value:input}),execute:async()=>{calls++;return {isError:false,content:[]};}}],close:async()=>{closed++;}})},
+    }))registry.register(tool);
+    const result=await registry.invoke({type:"tool_call",callId:"child",name:"spawn_subagent",arguments:{assignment:"Look up a fact",maxTurns:3}},
+      {runId:"run_1",sessionId:"worker",actor:{role:"worker",id:"worker"},workspacePath:workspace});
+    assert.equal(result.isError,false,result.error?.message ?? "");
+    assert.equal(calls,1);assert.equal(closed,1);
+  } finally {sessions.close();ledger.close();rmSync(root,{recursive:true,force:true});}
+});

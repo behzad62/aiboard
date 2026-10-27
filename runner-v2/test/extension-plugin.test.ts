@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { LocalPluginLoader } from "../src/plugin-loader.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { ExtensionCredentialStore } from "../src/extension-credentials.js";
@@ -269,4 +270,36 @@ test("a bundled Runner extension is validated without import and reports restart
   // A disabled plugin's Runner extension is not staged for the next start.
   await change(env, "disable", extensionId);
   assert.deepEqual(await env.extensions.stagedRunnerExtensions(), []);
+});
+
+
+test("disabling a loaded plugin immediately revokes calls and prevents loading into another Build", async t => {
+  const env = await fixture(t);
+  const bundle = join(env.root, "revocable-kit");
+  await writeBundle(bundle, { mcp: false, runnerExtension: true });
+  await writeFile(join(bundle, "runner", "runner-extension.json"), JSON.stringify({ apiVersion: 1, id: "example.release-tools", name: "Release", version: "1", entry: "index.mjs", capabilities: ["tools"] }));
+  await writeFile(join(bundle, "runner", "index.mjs"), `export function createExtension() { return {
+    capabilities() { return { tools: [{ definition: { name: "release.status", description: "Read release status", inputSchema: {type:"object"}, readOnly:true, effect:"none" }, validate: input => ({ok:true,value:input}), execute: async () => ({isError:false,content:[{type:"text",text:"READY"}]}) }], contextContributors:[], languageProviders:[] }; },
+    async start() {}, async close() {}
+  }; }`);
+  const { operation } = await install(env, bundle);
+  assert.equal(operation.outcome, "succeeded", operation.diagnostics.join("; "));
+  const staged = await env.extensions.stagedRunnerExtensions();
+  const options = { pluginDirectories: staged.map(entry => entry.directory), projectDirectory: join(env.root, "project"), stateDirectory: join(env.root, "state"), admitExtension: (id: string) => env.extensions.runnerExtensionAllowed(id) };
+  let checks = 0;
+  const revokedBeforeStart = await new LocalPluginLoader({...options,admitExtension:async()=>++checks !== 2}).load();
+  const context = { runId:"build", sessionId:"worker", actor:{role:"worker" as const,id:"worker"} };
+  assert.equal((await revokedBeforeStart.registry.tools()[0]!.tool.execute({},context)).error?.code,"extension_disabled",
+    "a component revoked before start cannot become callable merely because it is enabled again");
+  await revokedBeforeStart.close();
+  const loaded = await new LocalPluginLoader(options).load();
+  t.after(() => loaded.close());
+  const tool = loaded.registry.tools()[0]!.tool;
+  assert.equal((await tool.execute({}, context)).isError, false);
+  assert.equal((await change(env, "disable", operation.result!.extensionId!)).outcome, "succeeded");
+  assert.equal((await tool.execute({}, context)).error?.code, "extension_disabled");
+  const nextBuild = await new LocalPluginLoader(options).load();
+  t.after(() => nextBuild.close());
+  assert.equal(nextBuild.registry.tools().length, 0);
+  assert.equal(await env.extensions.runnerExtensionAllowed("operator.configured"), true);
 });

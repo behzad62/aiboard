@@ -1,4 +1,5 @@
 import { createImageTools } from "./image-tools.js";
+import { ManagedBuildToolRuntime, withManagedBuildToolLifecycle, type ManagedBuildToolSource } from "./managed-build-tools.js";
 import { createHash } from "node:crypto";
 
 import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
@@ -139,6 +140,7 @@ export interface NativeArchitectRuntimeOptions {
   permissions?: SqlitePermissionStore;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
+  managedBuildTools?: ManagedBuildToolSource;
   runPolicy?: NativeBuildRunPolicy;
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
@@ -327,6 +329,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       this.options.projectRoot,
       this.options.canonicalProjectRoot,
     );
+    let managedRuntime: ManagedBuildToolRuntime | undefined;
     try {
     const extras = createArchitectInspectionBroker({
       git: this.options.git,
@@ -393,14 +396,22 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       inspectionTools = extras;
     }
     const layeredTools = new LayeredToolRuntime(request.tools, inspectionTools);
+    if (this.options.managedBuildTools) {
+      managedRuntime = new ManagedBuildToolRuntime(layeredTools, this.options.managedBuildTools, {
+        git: this.options.git, executionGrants: this.options.executionGrants,
+        permissionProfile: this.options.permissionProfile ?? "project", workspacePath: inspectionWorkspace,
+        artifacts: this.options.artifacts, ledger: this.options.ledger,
+        ...(this.options.permissions ? { approve: approval => this.options.permissions!.requestTool(approval) } : {}),
+      }, tool => mcpToolAdmitted(roleToolSurface("architect", this.options.runPolicy === "plan_only" ? "planOnly" : "inspection").mcpPolicy, tool.definition));
+    }
     const tools = this.options.budgetLedger
       ? new BudgetedToolRuntime({
-          runtime: layeredTools,
+          runtime: managedRuntime ?? layeredTools,
           ledger: this.options.budgetLedger,
           scopeId: request.runId,
           clock: this.clock,
         })
-      : layeredTools;
+      : managedRuntime ?? layeredTools;
     const runtimeModel = this.options.budgetLedger
       ? new BudgetedAgentModel({
           model,
@@ -413,9 +424,10 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           clock: this.clock,
         })
       : model;
-    const result = await withLanguageAgentLifecycle(this.options.language, request.context, () => withMcpAgentLifecycle(this.options.mcpManager, request.context, () => runAgentLoop({
+    const result = await withManagedBuildToolLifecycle(managedRuntime, () => withLanguageAgentLifecycle(this.options.language, request.context, () => withMcpAgentLifecycle(this.options.mcpManager, request.context, () => runAgentLoop({
       model: runtimeModel,
       registry: tools,
+      beforeModelTurn: () => managedRuntime?.prepare() ?? Promise.resolve(),
       context: {
         ...request.context,
         workspacePath: inspectionWorkspace,
@@ -440,7 +452,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       onCheckpoint: async (checkpoint) => {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
       },
-    })));
+    }))));
     if (result.status === "architect_action") {
       this.options.health.recordSuccess(candidate.providerId);
       this.persistHealth(request.runId, candidate.providerId);

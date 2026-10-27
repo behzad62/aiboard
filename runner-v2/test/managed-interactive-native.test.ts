@@ -134,11 +134,12 @@ test("large real output supports new-only cursors, independent readers, retained
   const exitDeadline = Date.now() + 30_000;
   while (tailRead.status !== "stopped" && Date.now() < exitDeadline) tailRead = json(await f.invoke("process.read_output", { processId: id, stream: "stdout", cursor: a.cursor, waitMs: 5_000 })) as unknown as Read;
   assert.equal(tailRead.status, "stopped"); assert.equal(tailRead.exitCode, 3); assert.equal(tailRead.slices[0]!.text, "done\n");
-  // Historical read of the earliest range after completion: exact from the spill, or an explicit gap — never silent.
+  // Completion must retain the prefix, including on Windows; accepting a gap
+  // here would conceal the former 128 KiB retention limitation.
   const early = json(await f.invoke("process.read_output", { processId: id, range: { stream: "stdout", startOffset: 0 }, maxBytes: 100 })) as unknown as Read;
   const slice = early.slices[0]!;
-  if (slice.gap) assert.equal(slice.gap.fromOffset, 0);
-  else assert.equal(slice.text, `line-00000 ${"x".repeat(38)}\nline-00001 ${"x".repeat(38)}\n`);
-  t.diagnostic(`completed earliest-range source: ${slice.gap ? `gap ${slice.gap.reason}` : "finalized spill"}`);
+  assert.equal(slice.gap, undefined);
+  assert.equal(slice.text, `line-00000 ${"x".repeat(38)}\nline-00001 ${"x".repeat(38)}\n`);
+  t.diagnostic("completed earliest-range source: finalized spill");
   assert.equal(early.complete, false, "a range read never claims completeness");
 }));

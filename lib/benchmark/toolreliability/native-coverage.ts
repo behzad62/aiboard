@@ -29,7 +29,7 @@ const CORE = (id: string) => [`toolbench-native-${id}-v4`, `toolbench-native-${i
 const V5 = (id: string) => `toolbench-native-${id}-v5`;
 const V6 = (id: string) => `toolbench-native-${id}-v6`;
 
-export const NATIVE_TOOL_COVERAGE: readonly NativeCapability[] = [
+const LEGACY_NATIVE_TOOL_COVERAGE: readonly NativeCapability[] = [
   { id: "file_read", label: "File reads", tools: ["fs.read"], evidence: "Read output delivered task-relevant text; range limits are qualified separately.", cases: [...CORE("investigate"), ...CORE("bounded-output"), V5("code-navigation"), V6("verify"), V6("revision-recovery"), V6("code-navigation"), V6("artifact-retrieval")] },
   { id: "bounded_file_read", label: "Bounded file reads", tools: ["fs.read"], evidence: "The target appears in the read output from a ≤64-line startLine/endLine range.", cases: [...CORE("bounded-output"), V6("artifact-retrieval")] },
   { id: "repository_search", label: "Repository search", tools: ["fs.search"], evidence: "A successful search preceded the read that delivered the target.", cases: [...CORE("investigate"), V5("code-navigation"), V5("continued-search"), V6("code-navigation"), V6("continued-search")] },
@@ -52,6 +52,18 @@ export const NATIVE_TOOL_COVERAGE: readonly NativeCapability[] = [
   { id: "image_inspection", label: "Local image inspection", tools: ["image.inspect"], evidence: "—", cases: [], requires: "vision", untestedReason: "ToolBench fixtures are text-only and solo sessions do not offer image.inspect yet; covered by Runner tests (test/image-inspection.test.ts), not by a model benchmark." },
   { id: "mcp_tools", label: "Managed MCP tools", tools: [], evidence: "—", cases: [], untestedReason: "Managed MCP and plugins are covered by local controlled Runner fixtures (extension-mcp*, extension-plugin tests). ToolBench does not certify arbitrary third-party servers." },
 ];
+
+/** Preserve historical v6 coverage while identifying v7's optional browser case separately. */
+export const NATIVE_TOOL_COVERAGE: readonly NativeCapability[] = LEGACY_NATIVE_TOOL_COVERAGE.map(capability => ({
+  ...capability,
+  cases: [...capability.cases, ...capability.cases.filter(id => id.endsWith("-v6")).flatMap(id => {
+    if (id === "toolbench-native-interactive-process-v6") {
+      const browser = "toolbench-native-interactive-browser-process-v7";
+      return capability.requires === "browser" ? [browser] : [id.replace(/-v6$/, "-v7"), browser];
+    }
+    return [id.replace(/-v6$/, "-v7")];
+  })],
+}));
 
 export interface NativeCoverageAttempt {
   readonly caseId: string;

@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import {
@@ -178,7 +179,7 @@ export class BoundedOutputSpool {
     this.tailBytes = positiveInteger(options.tailBytes ?? DEFAULT_TAIL_BYTES, "tailBytes");
     this.maximumSpillBytes = positiveInteger(options.spillBytes ?? DEFAULT_SPILL_BYTES, "spillBytes");
     this.artifactStore = options.artifactStore;
-    this.storage = options.storage ?? createNodeOutputSpillStorage();
+    this.storage = options.storage ?? createDefaultOutputSpillStorage();
   }
 
   write(stream: OutputStream, chunk: Uint8Array): Promise<void> {
@@ -431,7 +432,7 @@ export class BoundedOutputSpool {
       try {
         const artifact = await this.artifactStore.put(
           artifactBytes,
-          "application/octet-stream",
+          isUtf8(artifactBytes) && !artifactBytes.includes(0) ? "text/plain" : "application/octet-stream",
           `${state.stream} process output`
         );
         state.spillArtifactId = artifact.hash;
@@ -499,6 +500,70 @@ export class BoundedOutputSpool {
   }
 }
 
+// Windows cannot attest POSIX unlinked-file privacy. Retain bounded output in
+// private process memory instead of writing plaintext to an unverified directory.
+// Finalization still ingests the same durable, content-addressed output artifact.
+const MEMORY_SPILL_PROCESS_LIMIT = 256 * 1024 * 1024;
+let memorySpillBytes = 0;
+
+export function createMemoryOutputSpillStorage(maximumBytes = 128 * 1024 * 1024): OutputSpillStorage {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > MEMORY_SPILL_PROCESS_LIMIT) throw new Error("Invalid memory spill limit.");
+  let retained = 0;
+  const paths = new Set<string>();
+  return {
+    attest: async () => ({ currentPrincipalPrivacy: true, identityStableDeletion: true, unlinkedEntries: true }),
+    prepareRoot: async () => undefined,
+    openExclusive: async path => {
+      if (paths.has(path)) throw new Error("Memory spill already exists.");
+      paths.add(path);
+      let chunks: Buffer[] = [];
+      let size = 0;
+      let closed = false;
+      let sealed = false;
+      const identity = `memory:${randomUUID()}`;
+      return {
+        identity,
+        write: async bytes => {
+          if (closed || sealed) throw new Error("Memory spill is closed.");
+          if (retained + bytes.byteLength > maximumBytes || memorySpillBytes + bytes.byteLength > MEMORY_SPILL_PROCESS_LIMIT) throw new Error("Private memory spill quota exceeded.");
+          chunks.push(Buffer.from(bytes));
+          size += bytes.byteLength;
+          retained += bytes.byteLength;
+          memorySpillBytes += bytes.byteLength;
+          return bytes.byteLength;
+        },
+        sealAndRead: async (expectedBytes, limit) => {
+          if (closed || size !== expectedBytes || size > limit) throw new Error("Memory spill identity or size mismatch.");
+          sealed = true;
+          return Buffer.concat(chunks, size);
+        },
+        close: async () => {
+          if (closed) return;
+          closed = true;
+          paths.delete(path);
+          for (const chunk of chunks) chunk.fill(0);
+          chunks = [];
+          retained -= size;
+          memorySpillBytes -= size;
+          size = 0;
+        },
+      };
+    },
+    // Payloads have no filesystem entries; only BoundedOutputSpool's existing
+    // identity-checked ownership marker is on disk.
+    remove: async () => { throw new Error("Memory spills have no linked entries."); },
+    removeIdentityStable: async () => { throw new Error("Memory spills have no linked entries."); },
+    list: async root => await readdir(root).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    }),
+  };
+}
+
+function createDefaultOutputSpillStorage(): OutputSpillStorage {
+  return process.platform === "win32" ? createMemoryOutputSpillStorage() : createNodeOutputSpillStorage();
+}
+
 export function createNodeOutputSpillStorage(): OutputSpillStorage {
   return {
     attest: async () => {
@@ -554,7 +619,7 @@ export async function cleanupOutputSpillRoot(
     readonly storage?: OutputSpillStorage;
   }
 ): Promise<void> {
-  const storage = options.storage ?? createNodeOutputSpillStorage();
+  const storage = options.storage ?? createDefaultOutputSpillStorage();
   let attestation: OutputSpillStorageAttestation | undefined;
   try {
     attestation = parseOutputSpillStorageAttestation(await storage.attest());

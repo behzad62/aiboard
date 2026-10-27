@@ -1,9 +1,9 @@
 import type { BenchmarkTrack } from "./types";
-import { getNativeToolBenchPack, NATIVE_TOOLBENCH_SUITE } from "./toolreliability/native-cases";
+import { getNativeToolBenchPack } from "./toolreliability/native-cases";
 import { getWorkBenchCasePack } from "./workbench/corpus";
 import { createRecoverableJobServiceCasePack } from "./workbench/recoverable-job-service/case-pack";
 
-export { NATIVE_TOOLBENCH_SUITE };
+export { NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE } from "./toolreliability/native-cases";
 export const HARNESSBENCH_SUITE = "harnessbench-recoverable-job-service-v3";
 export const WORKBENCH_SMOKE_SUITE = "workbench-native-smoke-v1";
 

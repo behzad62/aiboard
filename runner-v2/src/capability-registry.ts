@@ -40,9 +40,11 @@ export interface RegisteredLanguageProvider {
 
 export interface CapabilityRegistryOptions {
   reservedToolNames?: readonly string[];
+  authorizeExtension?: (extensionId: string) => Promise<boolean>;
 }
 
 export class CapabilityRegistry {
+  private readonly authorizeExtension?: CapabilityRegistryOptions["authorizeExtension"];
   private readonly extensionManifests: RunnerExtensionManifest[];
   private readonly extensionTools: RegisteredExtensionTool[];
   private readonly extensionContext: RegisteredContextContributor[];
@@ -52,6 +54,7 @@ export class CapabilityRegistry {
     registrations: readonly RunnerExtensionRegistration[],
     options: CapabilityRegistryOptions = {},
   ) {
+    this.authorizeExtension = options.authorizeExtension;
     const reserved = new Set(options.reservedToolNames ?? []);
     const ids = new Set<string>();
     const toolNames = new Set<string>();
@@ -121,18 +124,40 @@ export class CapabilityRegistry {
   }
 
   tools(): RegisteredExtensionTool[] {
-    return this.extensionTools.map((item) => ({ ...item }));
+    return this.extensionTools.map((item) => ({ ...item, tool: { ...item.tool, execute: async (input, context) => {
+      if (!await this.admitted(item.extensionId)) return { isError: true, content: [{ type: "text", text: "This plugin was disabled or removed. Its tools are unavailable." }], error: { code: "extension_disabled", message: "Plugin access was revoked." } };
+      return await item.tool.execute(input, context);
+    } } }));
   }
 
   contextContributors(): RegisteredContextContributor[] {
-    return this.extensionContext.map((item) => ({ ...item }));
+    return this.extensionContext.map((item) => ({ ...item, contributor: { ...item.contributor, contribute: async request => {
+      if (!await this.admitted(item.extensionId)) return null;
+      return await item.contributor.contribute(request);
+    } } }));
   }
 
   languageProviders(): RegisteredLanguageProvider[] {
     return this.extensionLanguages.map((item) => ({
       ...item,
       descriptor: cloneLanguageDescriptor(item.descriptor),
+      provider: this.guardedLanguage(item.extensionId, item.provider),
     }));
+  }
+
+  private async admitted(extensionId: string): Promise<boolean> {
+    return this.authorizeExtension ? await this.authorizeExtension(extensionId) : true;
+  }
+
+  private guardedLanguage(extensionId: string, provider: LanguageIntelligenceProvider): LanguageIntelligenceProvider {
+    const guard = <A extends unknown[], R>(action: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
+      if (!await this.admitted(extensionId)) throw new Error(`Extension ${extensionId} was disabled or removed.`);
+      return await action(...args);
+    };
+    return { descriptor: provider.descriptor,
+      workspaceSymbols: guard(provider.workspaceSymbols.bind(provider)),
+      definition: guard(provider.definition.bind(provider)), references: guard(provider.references.bind(provider)),
+      diagnostics: guard(provider.diagnostics.bind(provider)), close: provider.close.bind(provider) };
   }
 }
 

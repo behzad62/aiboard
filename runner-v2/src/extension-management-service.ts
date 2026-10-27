@@ -749,6 +749,17 @@ export class ExtensionManagementService {
       })));
   }
 
+  /** Live revocation, independent of the immutable capability snapshot of an active Build. */
+  async runnerExtensionAllowed(extensionId: string): Promise<boolean> {
+    const registry = await this.registry.load();
+    const owners = registry.extensions.filter(entry => registry.versions.some(version =>
+      version.extensionId === entry.id && version.components.some(component => component.kind === "runner_extension" && component.extensionId === extensionId)));
+    // Operator-configured extensions are governed by their existing configuration.
+    if (!owners.length) return true;
+    return owners.some(entry => entry.enabled && !entry.removedAt && registry.versions.some(version =>
+      version.versionId === entry.currentVersionId && version.components.some(component => component.kind === "runner_extension" && component.extensionId === extensionId)));
+  }
+
   /** Current tool policy and credential names for a managed server (Settings may change policy). */
   async extensionRecord(extensionId: string): Promise<InstalledExtension | undefined> {
     return (await this.registry.load()).extensions.find((entry) => entry.id === extensionId && !entry.removedAt);

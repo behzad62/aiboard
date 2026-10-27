@@ -372,7 +372,7 @@ export interface NativeBuildFactoryOptions {
   extensions?: {
     readonly service: import("./extension-management-service.js").ExtensionManagementService;
     readonly bindings: import("./extension-run-bindings.js").ExtensionRunBindings;
-    /** Managed MCP servers of the run's pinned generation join the run's discovery at construction. */
+    /** Managed MCP servers refresh from the run's durable generation at each model turn. */
     readonly managedMcp?: import("./extension-mcp.js").ManagedMcpRuntime;
   };
   /** Production MCP configuration is attested once, discovered ephemerally per run, then bound live per run. */
@@ -562,13 +562,11 @@ export class NativeBuildFactory {
     let runMcpManager = this.options.mcpManager;
     if (this.options.internalExecutionContext) {
       // Benchmark attempts freeze capability identity: managed servers never join them.
-      const managedMcp = spec.benchmark || !this.options.extensions?.managedMcp
-        ? undefined
-        : await this.options.extensions.managedMcp.forRun((await this.options.extensions.bindings.bind(spec.runId)).generation);
-      const servers = [...(this.options.mcpServers ?? []), ...(managedMcp?.servers ?? [])];
-      const attestation = [...(this.options.mcpAttestation ?? []), ...(managedMcp?.attestation ?? [])];
+      // CLI servers retain their fixed configuration. Managed servers are
+      // refreshed separately at each agent's quiescent model-turn boundary.
+      const servers = [...(this.options.mcpServers ?? [])];
+      const attestation = [...(this.options.mcpAttestation ?? [])];
       initializationStage = "mcp_discovery";
-      for (const server of managedMcp?.servers ?? []) await managedMcp!.beforeLaunch(server.name);
       const discovery = this.options.internalExecutionContext.createMcpDiscoveryExecutor({
         runId: spec.runId,
         servers,
@@ -595,14 +593,12 @@ export class NativeBuildFactory {
         reattest: () => this.options.internalExecutionContext!.resolveMcpRuntimeLaunches({ servers, attestation }),
         cwd: this.options.projectRoot,
         servers,
-        transportFactory: ((factory) => managedMcp ? this.options.extensions!.managedMcp!.wrapTransport(factory, managedMcp.beforeLaunch) : factory)(
-          createExecutionHostMcpTransportFactory({
+        transportFactory: createExecutionHostMcpTransportFactory({
             run: executionHostBinding,
             permissionProfile: spec.permissionProfile,
             projectDirectory: this.options.projectRoot,
             launches: runtimeLaunches,
           }),
-        ),
       });
       const statusRegistration: {
         value?: Readonly<{ dispose(): void }>;
@@ -621,6 +617,11 @@ export class NativeBuildFactory {
       statusRegistration.value = this.options.mcpStatusRegistry?.register(spec.runId, runMcpManager);
       await this.options.runtimeConstructionHooks?.afterAcquire?.("mcp_manager");
     }
+    const managedBuildTools: import("./managed-build-tools.js").ManagedBuildToolSource | undefined =
+      !spec.benchmark && this.options.extensions?.managedMcp && executionHostBinding ? {
+        generation: () => this.options.extensions!.bindings.generation(spec.runId),
+        tools: generation => this.options.extensions!.managedMcp!.buildTools(generation, executionHostBinding!, spec.permissionProfile, this.artifacts),
+      } : undefined;
     initializationStage = "execution_isolation";
     const executionIsolation = executionHostBinding?.isolation ??
       await createConfiguredOciIsolationSelector(
@@ -637,6 +638,7 @@ export class NativeBuildFactory {
     initializationStage = "capabilities";
     const gitContext = executionHostBinding?.git ?? this.options.gitForRun?.(spec);
     const runCapabilities = await createNativeRunCapabilities({
+      ...(this.options.extensions ? { admitExtension: (id: string) => this.options.extensions!.service.runnerExtensionAllowed(id) } : {}),
       git: gitContext,
       environment: this.options.executionHost?.filteredEnvironmentSource() ?? {},
       ...(executionHostBinding ? { lspTransportFactory: createExecutionHostLspTransportFactory({
@@ -1268,6 +1270,7 @@ export class NativeBuildFactory {
       modelCostBases,
       browserBackend: this.browserBackend,
       ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
+      ...(managedBuildTools ? { managedBuildTools } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       managedProcesses,
       execution: commandExecution,
@@ -1320,6 +1323,7 @@ export class NativeBuildFactory {
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       browserBackend: this.browserBackend,
       ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
+      ...(managedBuildTools ? { managedBuildTools } : {}),
       contextManifests,
       recordContextPackText: spec.contextRecording === "full",
       commandWorkspace: {
@@ -3227,6 +3231,7 @@ function aggregateConstructionFailure(
 }
 
 export interface RunnerCapabilityPreflightOptions {
+  admitExtension?: (extensionId: string) => Promise<boolean>;
   lspTransportFactory?: LspTransportFactory;
   environment?: Readonly<Record<string, string | undefined>>;
   git?: RunGitExecutionContext;
@@ -3363,6 +3368,7 @@ async function createNativeRunCapabilities(
   try {
     if (config.extensions.length > 0) {
       extensions = await new LocalPluginLoader({
+        ...(options.admitExtension ? { admitExtension: options.admitExtension } : {}),
         pluginDirectories: config.extensions,
         projectDirectory: options.projectDirectory,
         stateDirectory: options.stateDirectory,

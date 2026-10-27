@@ -569,7 +569,17 @@ export class ManagedMcpRuntime {
     }
   }
 
-  /** Runner-hosted remote servers: one session per chat turn and generation, no local process. */
+  /** Managed local and remote tools using the Build's existing authority/profile. */
+  async buildTools(generation: number, binding: ExecutionHostRunBinding, permissionProfile: PermissionProfile, artifacts: ArtifactStore): Promise<ChatMcpTools> {
+    const remote = await this.remoteChatTools(generation, artifacts);
+    try {
+      const local = await this.stdioChatTools(generation, binding.runId, artifacts, { binding, permissionProfile });
+      return { tools: [...local.tools, ...remote.tools], binding, unavailable: [...local.unavailable, ...remote.unavailable],
+        close: async () => { try { await local.close(); } finally { await remote.close(); } } };
+    } catch (error) { await remote.close(); throw error; }
+  }
+
+  /** Runner-hosted remote servers: one session per agent turn/generation, no local process. */
   private async remoteChatTools(generation: number, artifacts: ArtifactStore): Promise<ChatMcpTools> {
     const tools: NativeTool<unknown>[] = [];
     const unavailable: Array<{ serverName: string; reason: string }> = [];
@@ -612,24 +622,27 @@ export class ManagedMcpRuntime {
     };
   }
 
-  private async stdioChatTools(generation: number, sessionId: string, artifacts: ArtifactStore): Promise<ChatMcpTools> {
+  private async stdioChatTools(generation: number, sessionId: string, artifacts: ArtifactStore,
+    build?: { binding: ExecutionHostRunBinding; permissionProfile: PermissionProfile }): Promise<ChatMcpTools> {
     const { plans, unavailable } = await this.launchPlans(generation);
     if (!plans.length || !this.options.executionHost) return { tools: [], unavailable, close: async () => undefined };
     const host = this.options.executionHost;
     const servers = plans.map((plan) => plan.spec);
     const attestation = await this.options.internal.attestMcpServers(servers);
-    const runId = `chat-${createHash("sha256").update(sessionId).digest("hex").slice(0, 24)}-g${generation}`;
+    const runId = build?.binding.runId ?? `chat-${createHash("sha256").update(sessionId).digest("hex").slice(0, 24)}-g${generation}`;
     // Chat sessions use the process-group lifecycle of Full-access Builds: these servers run unsandboxed
     // as the user (as the install card says), and a chat has no per-call approval UI. What a model may
     // call is decided per server by the Settings tool policy below.
-    const permissionProfile: PermissionProfile = "full";
+    const permissionProfile: PermissionProfile = build?.permissionProfile ?? "full";
     const capabilitiesConfig = this.options.capabilitiesConfig!();
-    const contract = await createRunnerCapabilityContractSnapshot(capabilitiesConfig, this.options.stateDirectory);
-    const binding = await host.bindRun({ runId, permissionProfile, capabilityContract: contract, capabilitiesConfig });
+    const binding = build?.binding ?? await host.bindRun({ runId, permissionProfile,
+      capabilityContract: await createRunnerCapabilityContractSnapshot(capabilitiesConfig, this.options.stateDirectory), capabilitiesConfig });
     let manager: McpManager | undefined;
     try {
-      await binding.recover({ maxRecords: 1_024, timeoutMs: 30_000 });
-      await cleanupRecoveredMcpTransports(binding);
+      if (!build) {
+        await binding.recover({ maxRecords: 1_024, timeoutMs: 30_000 });
+        await cleanupRecoveredMcpTransports(binding);
+      }
       for (const plan of plans) if (plan.secrets) await provisionMcpSecrets(plan.secrets.directory, plan.secrets.values);
       const discovery = this.options.internal.createMcpDiscoveryExecutor({ runId, servers, attestation });
       let discovered;
@@ -648,7 +661,7 @@ export class ManagedMcpRuntime {
       for (const server of discovered.servers) if (server.status !== "ready") unavailable.push({ serverName: server.name, reason: "It did not complete the MCP handshake." });
     } catch (error) {
       await manager?.close().catch(() => undefined);
-      await binding.close().catch(() => undefined);
+      if (!build) await binding.close().catch(() => undefined);
       throw error;
     }
     const owned = manager;
@@ -662,7 +675,7 @@ export class ManagedMcpRuntime {
       binding,
       unavailable,
       close: async () => {
-        try { await owned.close(); } finally { await binding.close(); }
+        try { await owned.close(); } finally { if (!build) await binding.close(); }
       },
     };
   }

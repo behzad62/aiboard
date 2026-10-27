@@ -6,9 +6,11 @@ export const NATIVE_TOOLBENCH_VERSION = "4.0.1";
 export const NATIVE_TOOLBENCH_SCORING = "solo-toolbench-v4.1";
 export const LEGACY_NATIVE_TOOLBENCH_SUITE = "toolbench-native-core-v4";
 /** Lean capability qualification used by the Run tab. Legacy suite identities remain readable for historical evidence. */
-export const NATIVE_TOOLBENCH_SUITE = "toolbench-native-capability-v6";
-export const NATIVE_TOOLBENCH_CAPABILITY_VERSION = "6.2.0";
-export const NATIVE_TOOLBENCH_CAPABILITY_SCORING = "solo-toolbench-capability-v6.2";
+export const NATIVE_TOOLBENCH_SUITE = "toolbench-native-capability-v7";
+export const NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE = "toolbench-native-capability-browser-v7";
+export const NATIVE_TOOLBENCH_CAPABILITY_VERSION = "7.0.0";
+export const NATIVE_TOOLBENCH_CAPABILITY_SCORING = "solo-toolbench-capability-v7";
+const LEGACY_CAPABILITY_SUITE = "toolbench-native-capability-v6";
 export const NATIVE_TOOLBENCH_VARIANT_SUITE = "toolbench-native-core-variant-b-v4";
 export const NATIVE_TOOLBENCH_BROWSER_SUITE = "toolbench-native-browser-v4";
 export const NATIVE_TOOLBENCH_SKILLS_SUITE = "toolbench-native-skills-v4";
@@ -36,6 +38,7 @@ interface Fixture {
   minimumAtomicEdits?: number;
   /** v5 only: identity, profile and the additional qualification it measures. */
   v6?: boolean;
+  v7?: boolean;
   v5?: {
     profile: string;
     sequence?: string[][];
@@ -252,8 +255,8 @@ function variantFixtures(): Fixture[] {
 
 const V5_PUBLIC_CONTEXT = "Use production native tools directly as the only model. Scope violations disqualify the attempt. Public verification is node check.mjs (also npm test); no install or compile is needed. Use the tools the request names; tool errors are ordinary feedback. Finish with finish_toolbench when the requested task is complete. External hidden scoring runs only after your session ends; it checks saved behavior, fixture integrity, and recorded tool actions. No planning, review, documentation, integration or project handoff is required.";
 
-/** One compact ToolBench profile: the existing process case also exercises browser automation. */
-function capabilityFixtures(): Fixture[] {
+/** Core remains usable without a browser; the optional profile adds browser behavior to the process case. */
+function capabilityFixtures(includeBrowser = false, legacy = false): Fixture[] {
   const navigation = extendedFixtures[0]!;
   const navigationBase = navigation.files["src/pricing/discount.mjs"]!;
   const navigationFixture: Fixture = {
@@ -287,7 +290,7 @@ assert.deepEqual(JSON.parse(readFileSync('callers.json','utf8')), {applyDiscount
     request: "Run node emit-report.mjs through run_evidence_command with exactly two separate argv entries after the script: 'alpha beta' and 'gamma' (preserve the space in the first argument). The command emits a large report: use artifact.read with advancing offset and maxBytes (never repeat an offset) to observe INCIDENT_ID. Also use fs.read with startLine/endLine covering no more than 64 lines near 1750–1780 in source.mjs, observe RELEASE_CHECKSUM in the actual file; do not read the entire file or import it. Write answer.json containing exactly the observed incidentId and checksum. Only answer.json may change.",
     files: {
       ...report.files,
-      "emit-report.mjs": "import assert from 'node:assert/strict';\nassert.deepEqual(process.argv.slice(2), ['alpha beta', 'gamma']);\n" + report.files["emit-report.mjs"]!,
+      "emit-report.mjs": "import assert from 'node:assert/strict';\nassert.deepEqual(process.argv.slice(2), ['alpha beta', 'gamma']);\n" + (legacy ? report.files["emit-report.mjs"]! : report.files["emit-report.mjs"]!.replace("i <= 1800", "i <= 6000").replace("i === 1100", "i === 100")),
       "source.mjs": source,
     },
     assertions: `assert.deepEqual(JSON.parse(readFileSync('answer.json','utf8')), {incidentId:'${INCIDENT_ID}',checksum:'r7-cobalt-9217'});`,
@@ -300,6 +303,7 @@ assert.deepEqual(JSON.parse(readFileSync('callers.json','utf8')), {applyDiscount
   const processFixture = extendedFixtures[3]!;
   const browserProcessFixture: Fixture = {
     ...processFixture,
+    id: legacy ? processFixture.id : "interactive-browser-process",
     title: "Control an interactive process and its browser form",
     request: "Start node quiz.mjs with process.start and interactive: true. Read output with process.read_output to discover the runtime access code and local server URL. Open the URL with browser.open and inspect browser.snapshot. Use browser.fill to enter Ada Lovelace in Name and Analytical Engines in Team, submit with browser.click, and inspect a NEW snapshot to confirm the saved values. Next send the runtime access code exactly once with process.write_stdin and closeInput, then use process.read_output with its previous cursor to confirm ACCEPTED and BYE. If a write response is uncertain, retry using the SAME writeId. Finally stop the still-running owned server with process.signal. The process must generate submission.json and session.json; do not create either using filesystem tools.",
     files: {
@@ -323,12 +327,12 @@ assert.deepEqual(JSON.parse(readFileSync('callers.json','utf8')), {applyDiscount
       coverage: [...processFixture.v5!.coverage, "browser_interaction", "browser_form"],
     },
   };
-  const selected = [fixtures[1]!, fixtures[2]!, navigationFixture, extendedFixtures[1]!, reportFixture, browserProcessFixture, extendedFixtures[4]!];
+  const selected = [fixtures[1]!, fixtures[2]!, navigationFixture, extendedFixtures[1]!, reportFixture, includeBrowser ? browserProcessFixture : processFixture, extendedFixtures[4]!];
   return selected.map((fixture): Fixture => ({
     ...fixture,
-    v6: true,
+    ...(legacy ? { v6: true } : { v7: true }),
     v5: {
-      profile: NATIVE_TOOLBENCH_SUITE,
+      profile: legacy ? LEGACY_CAPABILITY_SUITE : fixture.id === "interactive-browser-process" ? NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE : NATIVE_TOOLBENCH_SUITE,
       coverage: fixture.id === "code-navigation"
         ? [...fixture.v5!.coverage, "atomic_multi_edit"]
         : fixture.id === "artifact-retrieval"
@@ -359,7 +363,7 @@ process.exitCode=passed?0:1;
 }
 
 function caseIdOf(fixture: Fixture): string {
-  return `toolbench-native-${fixture.id}-${fixture.v6 ? "v6" : fixture.v5 ? "v5" : "v4"}`;
+  return `toolbench-native-${fixture.id}-${fixture.v7 ? "v7" : fixture.v6 ? "v6" : fixture.v5 ? "v5" : "v4"}`;
 }
 
 function option(fixture: Fixture): WorkBenchCaseOption {
@@ -371,15 +375,15 @@ function option(fixture: Fixture): WorkBenchCaseOption {
   const workBenchCase: WorkBenchCase = {
     schemaVersion: 1, benchmarkTrack: "toolreliability", id: caseIdOf(fixture),
     title: fixture.title, description: "Native Runner V2 tool qualification with executed behavioral checks and durable tool evidence.",
-    difficulty: "medium", tags: ["toolbench", "native", fixture.id], caseVersion: fixture.v6 ? NATIVE_TOOLBENCH_CAPABILITY_VERSION : fixture.v5 ? NATIVE_TOOLBENCH_EXTENDED_VERSION : NATIVE_TOOLBENCH_VERSION,
+    difficulty: "medium", tags: ["toolbench", "native", fixture.id], caseVersion: fixture.v7 ? NATIVE_TOOLBENCH_CAPABILITY_VERSION : fixture.v6 ? "6.2.0" : fixture.v5 ? NATIVE_TOOLBENCH_EXTENDED_VERSION : NATIVE_TOOLBENCH_VERSION,
     prompt: { userRequest: fixture.request, publicContext: fixture.v5 ? V5_PUBLIC_CONTEXT : "Use production native tools directly as the only model. Scope violations disqualify the attempt. Public verification is node check.mjs (also npm test); no install or compile is needed. Core fixtures have no service or browser surface. Use fs.search/fs.read for inspection rather than inventing shell commands. Finish with finish_toolbench when the requested task is complete. External hidden scoring runs only after your session ends; it checks saved behavior, fixture integrity, and recorded tool actions. No planning, review, documentation, integration or project handoff is required." },
-    repo: { url: "fixture://inline", baseCommit: fixture.v6 ? "toolbench-native-v6" : fixture.v5 ? "toolbench-native-v5" : "toolbench-native-v4", shallowClone: true },
+    repo: { url: "fixture://inline", baseCommit: fixture.v7 ? "toolbench-native-v7" : fixture.v6 ? "toolbench-native-v6" : fixture.v5 ? "toolbench-native-v5" : "toolbench-native-v4", shallowClone: true },
     environment: { type: "local-runner", timeoutSeconds: fixture.v6 ? 300 : 4_500, network: "dependency-only" },
     verifier: { command: "node verifier.mjs", resultFile: "verifier-result.json", timeoutSeconds: 30 },
     budget: fixture.v6
       ? { maxWallClockSeconds: 300, maxModelCalls: fixture.id === "interactive-process" ? 36 : 24, maxToolCalls: fixture.id === "interactive-process" ? 96 : 64, maxInputTokens: 120_000, maxOutputTokens: 24_000 }
       : { maxWallClockSeconds: 4_500, maxModelCalls: 300, maxToolCalls: 900, maxInputTokens: 5_000_000, maxOutputTokens: 750_000 },
-    scoring: { scoringVersion: fixture.v6 ? NATIVE_TOOLBENCH_CAPABILITY_SCORING : fixture.v5 ? NATIVE_TOOLBENCH_EXTENDED_SCORING : NATIVE_TOOLBENCH_SCORING, timeTargetSeconds: 180, toolCallTarget: 24 },
+    scoring: { scoringVersion: fixture.v7 ? NATIVE_TOOLBENCH_CAPABILITY_SCORING : fixture.v6 ? "solo-toolbench-capability-v6.2" : fixture.v5 ? NATIVE_TOOLBENCH_EXTENDED_SCORING : NATIVE_TOOLBENCH_SCORING, timeTargetSeconds: 180, toolCallTarget: 24 },
     contamination: { originalTask: true, canary: `AIBENCH-NATIVE-TOOLBENCH-${fixture.id}`, referenceSolutionPrivate: true },
     allowedCommands: [...(fixture.commands ?? []), "node check.mjs", "npm test", "node verifier.mjs"],
     fixtureFiles: { ...fixture.files, "verifier.mjs": verifier(fixture) },
@@ -395,12 +399,13 @@ function option(fixture: Fixture): WorkBenchCaseOption {
 }
 
 export function getNativeToolBenchPack(id: string): WorkBenchCasePackOption | null {
-  if (id === NATIVE_TOOLBENCH_SUITE) {
-    const cases = capabilityFixtures().map(option);
+  if ([NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE, LEGACY_CAPABILITY_SUITE].includes(id)) {
+    const browser = id !== NATIVE_TOOLBENCH_SUITE;
+    const cases = capabilityFixtures(browser, id === LEGACY_CAPABILITY_SUITE).map(option);
     return {
       id,
-      label: "ToolBench: capability check",
-      description: "One seven-case tool qualification including editing/recovery, search, command artifacts, project skills and a combined browser + interactive process workflow.",
+      label: browser ? "ToolBench: capability check with browser" : "ToolBench: capability check",
+      description: browser ? "Seven focused checks, with browser form interaction combined with the owned interactive process case." : "Seven focused checks for editing/recovery, navigation, continued search, command artifacts, interactive process IO and project skills. Browser tools are optional.",
       caseCount: cases.length, caseIds: cases.map(item => item.id), cases,
     };
   }
@@ -418,7 +423,7 @@ export function getNativeToolBenchPack(id: string): WorkBenchCasePackOption | nu
 
 /** Test controls stay outside model-visible fixtures. */
 export function nativeToolBenchReferenceFiles(caseId: string): Record<string, string> {
-  const fixture = [...fixtures, ...variantFixtures(), browserFixture, skillFixture, ...extendedFixtures, browserFormFixture, ...capabilityFixtures()].find(item => caseIdOf(item) === caseId);
+  const fixture = [...fixtures, ...variantFixtures(), browserFixture, skillFixture, ...extendedFixtures, browserFormFixture, ...capabilityFixtures(), ...capabilityFixtures(true), ...capabilityFixtures(true, true)].find(item => caseIdOf(item) === caseId);
   if (!fixture) throw new Error(`Unknown native ToolBench case ${caseId}`);
   return { ...fixture.reference };
 }

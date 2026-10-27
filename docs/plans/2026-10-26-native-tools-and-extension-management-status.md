@@ -6,6 +6,37 @@ Companion to [`2026-10-26-native-tools-and-extension-management.md`](./2026-10-2
 - No paid model calls, calibration, deployment, push, RJS snapshot promotion or Task 12 acceptance claims are part of this work.
 - Task 12 / Gate status is unaffected: this is feature work. Execution-boundary changes are additive (see N1/N2) and covered by targeted tests only; no integrated matrix was run.
 
+## 2026-10-27 follow-up — installation during Builds and ToolBench corrections
+
+This section supersedes the activation, output-retention and default-pack limitations in the older implementation snapshots below. The implementation was subsequently committed as `3bd6bbdd` and the earlier v6 consolidation as `399eead1`; this follow-up is a new working-tree change.
+
+### User-visible behavior
+
+- A single model in **Chat**, with Runner tools enabled, can request installation and subsequently use supported integrations. The **Build Architect** can do the same. Workers and editing subagents consume admitted MCP tools; they cannot independently change installed integrations. Existing per-role restrictions remain in force; this does not add MCP tools to the separate verifier/plan-critic surfaces.
+- Managed **local and remote MCP** tools refresh at the next model-turn boundary of the owning Build. Only successful operations owned by that Build advance its durable generation; unrelated Builds retain their pins. The existing Build permission profile and exact execution grants are reused. No call is replayed when capabilities change. Skills already use the same per-run generation mechanism.
+- An in-process Runner extension still loads only after a Runner restart with no unfinished Build. Disabling/removing a loaded plugin immediately refuses subsequent tool execution and context/language contributions, and prevents loading it into new Builds. Already running plugin code is not unloaded; a restart is still needed to remove that code from the process. A plugin revoked before startup cannot become callable in that unstarted instance if later re-enabled.
+- Windows output now uses bounded private **memory** retention when the disk backend cannot attest privacy: 64 MiB per stream, 128 MiB per spool storage and 256 MiB of retained spill chunks across the process. Quota/ingestion failures remain explicit loss. The existing identity-checked ownership markers remain on disk; payload spill files do not. Completed streams become durable artifacts. Live reads outside the retained inline window can still report a gap until finalization; a crash before finalization cannot recover the in-memory prefix.
+- Real ToolBench testing also exposed an artifact-store mismatch: command capture wrote to the host store, while evidence and `artifact.read` used the session store. A trusted per-run artifact destination now keeps these together. UTF-8 command output is labeled text, avoiding Base64 logs; binary bytes remain exact binary artifacts.
+- [ToolBench v7](../bench/toolbench-capability-check-v7.md) keeps seven focused cases and makes the combined browser/process case optional. Emergency ceilings are restored to **5M input tokens, 750k output tokens, 300 model calls, 900 tool calls and 4,500 seconds per case**. Tokens/cost/seconds remain efficiency measurements. New identities separate these runs from prior v6 evidence; all 27 historical v4/v5/v6 case fingerprints are unchanged.
+
+### Verification and limits
+
+Targeted verification on Windows / Node 24.18, using scripted models and real Runner tools; no paid model calls:
+
+- Build-owned local MCP install → next-turn discovery → Architect use → worker use → immediate disabled-call rejection; unrelated Build generation unchanged: passed. Guarded-profile remote MCP read and denied write: passed.
+- Plugin disable admission, startup race and new-Build loading controls: passed.
+- Managed-generation quiescence, no replay, role filtering, conflicting names, refresh failure before model invocation and primary/cleanup error aggregation: passed.
+- Output/artifact/real interactive-process group: **60 passed**, including full stdout/stderr beyond 128 KiB, binary preservation, quota/exclusivity/release, exact process input/EOF and completed early-range retrieval.
+- Broader affected integration group: **157 passed, one failed, one macOS-only skip**. The failure is `native-architect-runtime.test.ts`'s committed STATE context assertion: it expects `entryPoint:` but the current context says `entryPoint at STATE commit (completion gate):`. The same failure was reproduced using both the test and Architect runtime from HEAD before these edits. A final Architect-only run retained **19 passed / that same one failure**. This is recorded as an existing test failure, not a fully green matrix.
+- Application and Runner typechecks and ESLint across all changed TypeScript/TSX paths passed. Managed editing-subagent inheritance/cleanup and read-only subagent exclusion also passed.
+- Runner and generic WorkBench downloads were regenerated and their bundled changed source verified; the pinned RJS download remains byte-identical.
+- A Windows fixture's empty-PATH setup was corrected to remove both `Path` and `PATH`; it now deterministically tests missing Python without finding the host runtime through the other spelling.
+- v7 output retrieval uses an early fact in ~287 KiB of stdout (outside the last 128 KiB), rather than requiring long repetitive scanning. Real artifact, atomic-navigation, interactive and optional browser cases plus their affected negative controls passed. Profile/verifier checks, benchmark Run UI checks and historical fingerprint parity passed.
+
+Local evidence is retained in `D:/tmp/aiboard-*-tests.log`, `D:/tmp/aiboard-build-worker-install-test.log`, `D:/tmp/aiboard-remote-build-test-r3.log`, `D:/tmp/aiboard-toolbench-*-final.log` and `D:/tmp/aiboard-architect-state-baseline.log`. Earlier failed diagnostic attempts remain separate. Two early remote-Build fixture attempts used incomplete host setup and were stopped; the corrected real-host test passed.
+
+No deployment, paid calibration, pinned RJS promotion or Task 12 acceptance is claimed. Compatibility limits documented below (including supported plugin formats and OAuth dynamic registration) remain.
+
 ## Phase overview
 
 | Phase | Scope | State |

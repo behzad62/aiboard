@@ -1,5 +1,7 @@
 # ToolBench capability check (v6.2)
 
+> Historical v6 profile. New runs use [ToolBench v7](./toolbench-capability-check-v7.md); its optional browser check and larger emergency ceilings supersede the new-run instructions below.
+
 ToolBench qualifies whether a single model can operate AIBoard's native tools. It is **not** an intelligence ranking or a substitute for HarnessBench's end-to-end software-development evaluation.
 
 ## New-run profiles
