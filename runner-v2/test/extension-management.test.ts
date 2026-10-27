@@ -14,7 +14,7 @@ import { discoverSkills, parseSkillFrontmatter } from "../src/extension-skill-va
 import { extractSourcesFromText, sourceKey } from "../src/extension-sources.js";
 import { createBoundedGitCommandExecutor } from "../src/git-preflight.js";
 
-const TOKEN = "extension-test-token-0123456789";
+const STORAGE_KEY = Buffer.alloc(32, 1);
 const UI: ManagementCaller = { kind: "ui" };
 
 function skill(name: string, description = `Use ${name} for tests.`, body = "Follow the steps.\n"): string {
@@ -32,7 +32,7 @@ async function fixture() {
   const sources = join(root, "sources");
   await mkdir(project, { recursive: true });
   await mkdir(sources, { recursive: true });
-  const credentials = new ExtensionCredentialStore(join(root, "state", "extension-credentials.enc"), TOKEN);
+  const credentials = new ExtensionCredentialStore(join(root, "state", "extension-credentials.enc"), STORAGE_KEY);
   const open = (extra: Partial<Parameters<typeof ExtensionManagementService.open>[0]> = {}) => ExtensionManagementService.open({
     home, projectRoot: project, credentials,
     git: { executorFor: (cwd) => createBoundedGitCommandExecutor({ executionDeadlineMs: 30_000, terminationDeadlineMs: 5_000, environment: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, cwd }) },

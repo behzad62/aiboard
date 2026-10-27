@@ -18,6 +18,7 @@ import { SkillCatalog } from "./skill-catalog.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildUserMediaStore } from "./build-user-media.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
+import { prepareCredentialStores } from "./credential-migration.js";
 import { createExecutionHost } from "./execution-host.js";
 import { createRunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
 import { captureRunGitBaseline } from "./git-bootstrap.js";
@@ -68,6 +69,7 @@ interface CliOptions {
   stateDirectory: string;
   port: number;
   token: string;
+  legacyTokenProvided: boolean;
   mcpServers: McpServerSpec[];
   allowOrigins: string[];
   capabilitiesConfigPath?: string;
@@ -111,6 +113,26 @@ async function main(): Promise<void> {
     }
     await mkdir(options.stateDirectory, { recursive: true });
     await assertDirectory(options.stateDirectory, "state");
+
+    if (isInside(options.projectPath, options.extensionsHome)) {
+      throw new Error("invalid_extensions_home: The extension store must be outside the project directory.");
+    }
+    const credentialStorage = prepareCredentialStores({
+      stateDirectory: options.stateDirectory,
+      legacyToken: options.legacyTokenProvided ? options.token : undefined,
+    });
+    let providerConfigs: EncryptedProviderConfigStore;
+    let extensionCredentials: ExtensionCredentialStore;
+    try {
+      const storeOptions = { requireExisting: true, beforeAccess: credentialStorage.assertLegacyUnchanged };
+      providerConfigs = new EncryptedProviderConfigStore(credentialStorage.providerPath, credentialStorage.providerKey, storeOptions);
+      resources.providerConfigs = providerConfigs;
+      extensionCredentials = new ExtensionCredentialStore(credentialStorage.extensionPath, credentialStorage.extensionKey, storeOptions);
+      resources.extensionCredentials = extensionCredentials;
+    } finally {
+      credentialStorage.providerKey.fill(0);
+      credentialStorage.extensionKey.fill(0);
+    }
 
     const artifactDirectory = join(options.stateDirectory, "artifacts");
     await mkdir(artifactDirectory, { recursive: true });
@@ -164,16 +186,6 @@ async function main(): Promise<void> {
       executionHost.filteredEnvironmentSource(),
       options.setAsideRuns,
     );
-    const providerConfigs = new EncryptedProviderConfigStore(
-      join(options.stateDirectory, "provider-configs.enc"),
-      options.token
-    );
-    resources.providerConfigs = providerConfigs;
-    if (isInside(options.projectPath, options.extensionsHome)) {
-      throw new Error("invalid_extensions_home: The extension store must be outside the project directory.");
-    }
-    const extensionCredentials = new ExtensionCredentialStore(join(options.stateDirectory, "extension-credentials.enc"), options.token);
-    resources.extensionCredentials = extensionCredentials;
     const gitEnvironment = { ...executionHost.filteredEnvironmentSource(), GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1" };
     // Versions bound by a live run or chat session are never collected.
     const pins: { bindings?: ExtensionRunBindings; chats?: ChatAgentSessions } = {};
@@ -610,6 +622,7 @@ function parseArguments(args: string[]): CliOptions {
     stateDirectory,
     port,
     token,
+    legacyTokenProvided: values.has("--token"),
     mcpServers: [...configureMcpServers(mcpServers, mcpEnvelopes)],
     allowOrigins,
     extensionsHome,

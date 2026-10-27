@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
-import { openEncryptedJson, writeEncryptedJson } from "./encrypted-provider-config-store.js";
+import { openEncryptedJson, writeEncryptedJson, type CredentialStoreOptions } from "./encrypted-provider-config-store.js";
 import { ExtensionManagementError } from "./extension-management-contracts.js";
 
 export interface CredentialMetadata {
@@ -26,17 +26,17 @@ const MAX_CREDENTIALS = 256;
 const MAX_SECRET_BYTES = 16 * 1024;
 
 /**
- * Runner-owned secret custody for extensions. Values are encrypted with the runner token (same envelope
+ * Runner-owned secret custody for extensions. Values are encrypted with a store key (same envelope
  * as provider configuration) and are only ever returned to Runner-internal launch/transport code.
  * Every outward-facing method returns metadata without values.
  */
 export class ExtensionCredentialStore {
-  private readonly token: Buffer;
+  private readonly key: Buffer;
   private closed = false;
 
-  constructor(private readonly path: string, runnerToken: string) {
-    if (runnerToken.length < 16) throw new Error("Runner token must contain at least 16 characters.");
-    this.token = Buffer.from(runnerToken, "utf8");
+  constructor(private readonly path: string, key: Buffer, private readonly options: CredentialStoreOptions = {}) {
+    if (key.length !== 32) throw new Error("Extension storage key must contain exactly 32 bytes.");
+    this.key = Buffer.from(key);
   }
 
   list(extensionId?: string): CredentialMetadata[] {
@@ -93,24 +93,30 @@ export class ExtensionCredentialStore {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.token.fill(0);
+    this.key.fill(0);
   }
 
   private load(): StoredCredential[] {
     if (this.closed) throw new Error("Extension credential store is closed.");
-    if (!existsSync(this.path)) return [];
+    this.options.beforeAccess?.();
+    if (!existsSync(this.path)) {
+      if (this.options.requireExisting) throw new ExtensionManagementError("credential_store_corrupt", "Extension credential envelope is missing.", 500);
+      return [];
+    }
     let value: unknown;
     try {
-      value = openEncryptedJson(this.token, readFileSync(this.path, "utf8"));
+      value = openEncryptedJson(this.key, readFileSync(this.path, "utf8"));
     } catch {
-      throw new ExtensionManagementError("credential_store_locked", "Extension credentials cannot be decrypted with this runner token.", 500);
+      throw new ExtensionManagementError("credential_store_locked", "Extension credentials cannot be decrypted with the storage key.", 500);
     }
     if (!Array.isArray(value)) throw new ExtensionManagementError("credential_store_corrupt", "Extension credential store is malformed.", 500);
     return value as StoredCredential[];
   }
 
   private save(entries: readonly StoredCredential[]): void {
-    writeEncryptedJson(this.path, this.token, entries);
+    this.options.beforeAccess?.();
+    if (this.options.requireExisting && !existsSync(this.path)) throw new ExtensionManagementError("credential_store_corrupt", "Extension credential envelope is missing.", 500);
+    writeEncryptedJson(this.path, this.key, entries);
   }
 }
 

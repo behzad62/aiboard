@@ -51,7 +51,7 @@ async function fixture(steps: Step[]) {
   const root = await mkdtemp(join(tmpdir(), "aiboard-chat-ext-"));
   const project = join(root, "project");
   await mkdir(project, { recursive: true });
-  const credentials = new ExtensionCredentialStore(join(root, "state", "extension-credentials.enc"), "chat-test-token-0123456789");
+  const credentials = new ExtensionCredentialStore(join(root, "state", "extension-credentials.enc"), Buffer.alloc(32, 1));
   const extensions = await ExtensionManagementService.open({ home: join(root, "home"), projectRoot: project, credentials });
   const seen: AgentModelRequest[] = [];
   const sessions = new ChatAgentSessions({ projectRoot: project, stateDirectory: join(root, "state"), providerConfigs: configs(), extensions, modelFactory: () => scripted(steps, seen) });

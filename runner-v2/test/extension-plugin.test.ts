@@ -37,7 +37,7 @@ async function fixture(t: test.TestContext): Promise<Fixture> {
     value !== undefined && /^(path|pathext|systemroot|windir|comspec|temp|tmp)$/i.test(name))) as Record<string, string>;
   const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: ambient });
   const internal = createRunnerInternalExecutionContext({ projectDirectory: project, stateDirectory: state, processKernel: host.internalProcesses, ambientEnvironment: host.filteredEnvironmentSource() });
-  const credentials = new ExtensionCredentialStore(join(state, "extension-credentials.enc"), "plugin-test-token-0123456789abcdef");
+  const credentials = new ExtensionCredentialStore(join(state, "extension-credentials.enc"), Buffer.alloc(32, 1));
   const runtime = new ManagedMcpRuntime({
     home, stateDirectory: state, projectRoot: project, credentials, internal, executionHost: host, capabilitiesConfig: () => emptyRunnerCapabilitiesConfig(),
     installer: {

@@ -92,7 +92,7 @@ async function fixture(t: test.TestContext, options: { run?: McpInstallerCommand
     value !== undefined && /^(path|pathext|systemroot|windir|comspec|temp|tmp)$/i.test(name))) as Record<string, string>;
   const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: ambient });
   const internal = createRunnerInternalExecutionContext({ projectDirectory: project, stateDirectory: state, processKernel: host.internalProcesses, ambientEnvironment: host.filteredEnvironmentSource() });
-  const credentials = new ExtensionCredentialStore(join(state, "extension-credentials.enc"), "mcp-test-token-0123456789abcdef");
+  const credentials = new ExtensionCredentialStore(join(state, "extension-credentials.enc"), Buffer.alloc(32, 1));
   const environment = options.path !== undefined ? { ...Object.fromEntries(Object.entries(host.filteredEnvironmentSource()).filter(([name]) => name.toLowerCase() !== "path")), PATH: options.path } : host.filteredEnvironmentSource();
   const runtime = new ManagedMcpRuntime({
     home, stateDirectory: state, projectRoot: project, credentials, internal, executionHost: host, capabilitiesConfig: () => emptyRunnerCapabilitiesConfig(),

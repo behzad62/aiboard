@@ -7,7 +7,7 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
 | Packet | Title | Depends on | Status | Owner (delegate) | Evidence / commit |
 | --- | --- | --- | --- | --- | --- |
 | R0 | Audit, ADRs, contracts | — | ACCEPTED (architect review; owner OK 2026-10-27) | architect; codex (T1 catalog, T2 ADR-A/C/D, T3 ADR-B/E/F/G, T4 contracts, T6 D17 revision, T7 hand-off), muse (T5 ledger); agy T2 attempt hit quota | docs/remote/r0/; commit on remote/r0-audit (see Log) |
-| L1 | `aiboard` CLI | R0 | ACTIVE (L1a) | codex | — |
+| L1 | `aiboard` CLI | R0 | ACTIVE — L1a REVIEWED (architect) | codex | L1a: storage-key-migration 20/20, touched suites 72/72 + credential-graph 2/2, typecheck:runner-v2 0, eslint 0 (2026-10-27) |
 | L2 | Installers and updates | L1 | NOT STARTED | — | — |
 | R1 | Connector inside Runner V2 | R0 | ACTIVE (R1a) | codex | — |
 | S1 | Whole-machine remote scope | R1 | NOT STARTED | — | — |

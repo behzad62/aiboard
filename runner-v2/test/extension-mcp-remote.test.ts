@@ -150,7 +150,7 @@ async function fixture(t: test.TestContext) {
   const root = await mkdtemp(join(tmpdir(), "aiboard-remote-mcp-"));
   const project = join(root, "project");
   await mkdir(project, { recursive: true });
-  const credentials = new ExtensionCredentialStore(join(root, "state", "extension-credentials.enc"), "remote-test-token-0123456789abc");
+  const credentials = new ExtensionCredentialStore(join(root, "state", "extension-credentials.enc"), Buffer.alloc(32, 1));
   const runtime = new ManagedMcpRuntime({
     home: join(root, "home"), stateDirectory: join(root, "state"), projectRoot: project, credentials,
     // Remote servers never use the local process kernel.
@@ -320,7 +320,7 @@ test("the browser's provider-hosted MCP setting migrates idempotently, keeps its
 test("a CLI-configured MCP server is adopted only on request, with its exact launch arguments", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "aiboard-adopt-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const credentials = new ExtensionCredentialStore(join(root, "creds.enc"), "adopt-test-token-0123456789abcdef");
+  const credentials = new ExtensionCredentialStore(join(root, "creds.enc"), Buffer.alloc(32, 1));
   t.after(() => credentials.close());
   const script = join(root, "server.mjs");
   await (await import("node:fs/promises")).writeFile(script, "process.stdin.resume();\n");
