@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
 import { getToolRuntimeRunner, saveToolRuntimeRunner } from "@/lib/client/tool-runtime";
+import { getLauncherConnection } from "@/lib/client/local-runner-handoff";
 
 interface ProjectAccessSetupProps {
   onFolderChange?: (folderName: string | null) => void;
@@ -11,7 +12,13 @@ interface ProjectAccessSetupProps {
 
 /** Build execution is native-runner only; the browser never owns project files. */
 export function ProjectAccessSetup({ onRunnerChange }: ProjectAccessSetupProps) {
-  const initialSelection = useMemo(() => getToolRuntimeRunner(), []);
+  const initialSelection = useMemo(() => {
+    const launcher = getLauncherConnection();
+    if (launcher) {
+      return { url: launcher.url, token: launcher.token, access: "ask" as const, source: "launcher" as const };
+    }
+    return getToolRuntimeRunner();
+  }, []);
   useEffect(() => {
     onRunnerChange?.(initialSelection);
   }, [initialSelection, onRunnerChange]);
@@ -19,7 +26,8 @@ export function ProjectAccessSetup({ onRunnerChange }: ProjectAccessSetupProps) 
     <RunnerSetup
       initialSelection={initialSelection}
       onChange={(selection) => {
-        saveToolRuntimeRunner(selection);
+        // Launcher session tokens are tab-scoped and must never be persisted.
+        if (selection?.source !== "launcher") saveToolRuntimeRunner(selection);
         onRunnerChange?.(selection);
       }}
     />

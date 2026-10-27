@@ -56,6 +56,7 @@ import {
   participatingModelRequirementMessage,
 } from "@/lib/client/api";
 import { getToolRuntimeRunner } from "@/lib/client/tool-runtime";
+import { getLauncherConnection } from "@/lib/client/local-runner-handoff";
 import { claimPendingProjectFolder } from "@/lib/client/project-fs";
 import { ProjectAccessSetup } from "@/components/ProjectAccessSetup";
 import type { RunnerSelection } from "@/components/RunnerSetup";
@@ -194,7 +195,12 @@ export default function DashboardPage() {
         setLocked(true);
         return;
       }
-      setToolRunner(getToolRuntimeRunner());
+      const launcher = getLauncherConnection();
+      setToolRunner(
+        launcher
+          ? { url: launcher.url, token: launcher.token, access: "ask" }
+          : getToolRuntimeRunner()
+      );
       const d = loadDashboard();
       {
         setData(d);

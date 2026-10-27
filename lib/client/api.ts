@@ -48,6 +48,10 @@ import {
 } from "./engine";
 import { queueBuildNote } from "./build-notes";
 import {
+  resolveRunnerConnection,
+  sanitizeRunnerTokenForPersistence,
+} from "./local-runner-handoff";
+import {
   submitNativeBuildUserGuidance,
   type NativeBuildProjection,
 } from "./runner-v2";
@@ -156,14 +160,18 @@ export async function submitNativeBuildNote(
   message: { id: string; round: number };
 }> {
   const discussion = getDiscussionById(discussionId);
+  const connection = discussion ? resolveRunnerConnection(discussion) : null;
   if (
     !discussion ||
     discussion.mode !== "build" ||
     !discussion.nativeBuildRunId ||
-    !discussion.runnerUrl ||
-    !discussion.runnerToken
+    !connection
   ) {
-    throw new Error("This discussion is not connected to an active Runner V2 Build.");
+    throw new Error(
+      discussion?.runnerUrl
+        ? "Reconnect: run `aiboard` again to reconnect this Build to its Runner."
+        : "This discussion is not connected to an active Runner V2 Build."
+    );
   }
   const trimmed = note.trim();
   if (!trimmed) throw new Error("The note is empty.");
@@ -172,7 +180,7 @@ export async function submitNativeBuildNote(
   }
 
   const projection = await submitNativeBuildUserGuidance(
-    { url: discussion.runnerUrl, token: discussion.runnerToken },
+    { url: connection.url, token: connection.token },
     discussion.nativeBuildRunId,
     {
       guidanceId: identity.guidanceId,
@@ -302,7 +310,9 @@ export function interruptOrphanedRunningBuild(id: string): boolean {
   }
   // Runner V2 owns the durable process and survives browser reloads. A reload
   // is not an interruption and must never rewrite its authoritative state.
-  if (discussion.runnerUrl && discussion.runnerToken) return false;
+  // A launcher-session Build persists no token, so a new tab without the
+  // session must still leave it alone (it shows "reconnect" instead).
+  if (discussion.runnerUrl && (discussion.runnerToken || discussion.nativeBuildRunId)) return false;
 
   const checkpoint = getBuildCheckpoint(id);
   const now = new Date().toISOString();
@@ -342,7 +352,8 @@ export function setDiscussionRunner(
     sel
       ? {
           runnerUrl: sel.url,
-          runnerToken: sel.token,
+          // A launcher session token is tab-scoped; only its URL is persisted.
+          runnerToken: sanitizeRunnerTokenForPersistence(sel.token),
           runnerAccess: sel.access,
           updatedAt: new Date().toISOString(),
         }
@@ -623,7 +634,7 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
       : null,
     projectFolderName: input.projectFolderName ?? null,
     runnerUrl: input.runnerUrl ?? null,
-    runnerToken: input.runnerToken ?? null,
+    runnerToken: sanitizeRunnerTokenForPersistence(input.runnerToken),
     runnerAccess: input.runnerAccess ?? null,
     ...(input.mode === "chat" && input.chatRunnerTools ? { chatRunnerTools: true } : {}),
     nativeBuildRunId: input.mode === "build" ? `native-${uuidv4()}` : null,

@@ -11,6 +11,11 @@ import {
   getNativeRunnerHealth,
 } from "@/lib/client/runner-v2";
 import {
+  getLauncherConnection,
+  revokeLauncherSession,
+  type LauncherConnection,
+} from "@/lib/client/local-runner-handoff";
+import {
   NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
   supportsNativeRunnerNodeVersion,
 } from "@/lib/client/native-build-policy";
@@ -19,6 +24,7 @@ export interface RunnerSelection {
   url: string;
   token: string;
   access: "ask" | "project" | "full";
+  source?: "manual" | "launcher";
 }
 
 interface RunnerSetupProps {
@@ -43,13 +49,44 @@ export function RunnerSetup({
     state: "idle" | "checking" | "ok" | "error";
     message?: string;
   }>({ state: "idle" });
+  const [launcher, setLauncher] = useState<LauncherConnection | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   useEffect(() => {
     setUrl(initialSelection?.url ?? DEFAULT_RUNNER_V2_URL);
-    setToken(initialSelection?.token ?? "");
+    setToken(initialSelection?.source === "launcher" ? "" : initialSelection?.token ?? "");
     setAccess(initialSelection?.access ?? "ask");
     setStatus({ state: "idle" });
-  }, [initialSelection?.access, initialSelection?.token, initialSelection?.url]);
+  }, [initialSelection?.access, initialSelection?.source, initialSelection?.token, initialSelection?.url]);
+
+  // A launcher session (from `aiboard` via /connect) wins over a pasted token.
+  useEffect(() => {
+    const connection = getLauncherConnection();
+    if (!connection) return;
+    setLauncher(connection);
+    setUrl(connection.url);
+    onChange?.({
+      url: connection.url,
+      token: connection.token,
+      access: initialSelection?.access ?? "ask",
+      source: "launcher",
+    });
+    // Only on mount: the parent owns the selection afterwards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const disconnectLauncher = async () => {
+    if (disconnecting) return;
+    setDisconnecting(true);
+    try {
+      await revokeLauncherSession();
+    } finally {
+      setLauncher(null);
+      setDisconnecting(false);
+      setStatus({ state: "idle" });
+      onChange?.(null);
+    }
+  };
 
   const emit = (next: Partial<RunnerSelection>) => {
     if (disabled) return;
@@ -58,7 +95,7 @@ export function RunnerSetup({
       token: next.token ?? token,
       access: next.access ?? access,
     };
-    onChange?.(selection.token.trim() ? selection : null);
+    onChange?.(selection.token.trim() ? { ...selection, source: "manual" as const } : null);
   };
 
   const test = async () => {
@@ -94,6 +131,21 @@ export function RunnerSetup({
           Builds run on your machine, never in the browser.
         </span>
       </div>
+      {launcher && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+          <Badge>Connected via aiboard (session)</Badge>
+          <span className="text-xs text-muted-foreground">{launcher.url}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={disabled || disconnecting}
+            onClick={() => void disconnectLauncher()}
+          >
+            {disconnecting ? "Disconnecting…" : "Disconnect"}
+          </Button>
+        </div>
+      )}
       <details
         className="group rounded-lg border bg-muted/40 px-3 py-2 text-sm"
         open={!initialSelection?.token}

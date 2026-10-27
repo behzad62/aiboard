@@ -308,6 +308,24 @@ check(
   interruptedCheckpoint
 );
 
+const launcherDiscussion: Discussion = {
+  ...runningDiscussion,
+  id: "disc-launcher-reload",
+  status: "running",
+  runnerUrl: "http://127.0.0.1:8787",
+  runnerToken: null,
+  nativeBuildRunId: "native-launcher-reload",
+};
+storeApi.insertDiscussion(launcherDiscussion);
+storeApi.upsertBuildCheckpoint({ ...runningReviewCheckpoint, discussionId: launcherDiscussion.id });
+check(
+  "runner-owned launcher Build without a tab session is not interrupted on reload",
+  clientApi.interruptOrphanedRunningBuild(launcherDiscussion.id) === false &&
+    storeApi.getDiscussionById(launcherDiscussion.id)?.status === "running" &&
+    storeApi.getBuildCheckpoint(launcherDiscussion.id)?.status === "running",
+  storeApi.getDiscussionById(launcherDiscussion.id)
+);
+
 const thrownFailureDiscussion: Discussion = {
   ...runningDiscussion,
   id: "disc-thrown-build-failure",

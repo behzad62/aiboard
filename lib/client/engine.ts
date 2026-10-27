@@ -7,6 +7,7 @@
  */
 
 import { runRunnerChatTurn } from "./runner-chat";
+import { resolveRunnerConnection } from "./local-runner-handoff";
 import { v4 as uuidv4 } from "uuid";
 import type {
   DiscussionMode,
@@ -858,14 +859,15 @@ export async function runDiscussion(
       });
       emit({ type: "status", status: "running", round, maxRounds: round });
 
-      if (discussion.chatRunnerTools && discussion.runnerUrl && discussion.runnerToken) {
+      const runnerConnection = resolveRunnerConnection(discussion);
+      if (discussion.chatRunnerTools && runnerConnection) {
         const messageId = uuidv4();
         emit({ type: "message_start", messageId, modelId: model.modelId, modelName: model.displayName, round, role: "assistant" });
         emit({ type: "diagnostic", phase: "model_streaming", round, modelId: model.modelId, modelName: model.displayName, message: `${model.displayName} is replying with Runner tools` });
         const earlier = turns.filter((turn) => turn.round < round);
         let waitingNoted = false;
         const { text } = await runRunnerChatTurn({
-          connection: { url: discussion.runnerUrl, token: discussion.runnerToken },
+          connection: { url: runnerConnection.url, token: runnerConnection.token, source: runnerConnection.source },
           discussionId,
           modelId: model.modelId,
           reasoningEffort,
