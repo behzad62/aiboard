@@ -1,0 +1,7 @@
+{
+  "requestId": "req-offline",
+  "traceId": "trace-offline",
+  "admitted": false,
+  "status": "awaiting_device",
+  "uncertainty": "not_dispatched"
+}

@@ -1,0 +1,9 @@
+{
+  "protocolVersion": "2.0.0",
+  "jobId": "job-1",
+  "sequence": "1",
+  "occurredAt": "2026-10-27T11:59:00Z",
+  "kind": "state_changed",
+  "state": "queued",
+  "traceId": "trace-write-1"
+}

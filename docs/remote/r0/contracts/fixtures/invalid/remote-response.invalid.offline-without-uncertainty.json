@@ -1,0 +1,6 @@
+{
+  "requestId": "req-1",
+  "traceId": "trace-1",
+  "admitted": false,
+  "status": "awaiting_device"
+}

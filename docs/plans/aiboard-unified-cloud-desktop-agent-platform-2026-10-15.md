@@ -1,4 +1,7 @@
 # AIBoard — Unified Cloud↔Desktop and Agent-Harness Implementation Plan
+
+> **SUPERSEDED IN PART (2026-10-27, owner decision D16):** Milestones A (A1–A3), C2, D (D1–D4) and E (E1–E3) and the P7 charter are superseded by [2026-10-27-aiboard-remote.md](./2026-10-27-aiboard-remote.md). C1 (local stdio MCP) is adopted there as part of L1; E1 (OpenAI Secure MCP Tunnel) is dropped. **Milestone B (agent-harness mixer) remains valid here as separate future work.**
+
 **Date:** 2026-10-15  
 **Status:** Proposed implementation specification; not yet implemented or accepted.  
 **Repository:** D:\repos\ai-discussion-board  

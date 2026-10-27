@@ -14,7 +14,7 @@ Audience: implementation agents, Architect, Reviewer and Verifier.
 5. Implement vertical slices in dependency order. Every packet: grounded baseline + ADR as needed -> contracts/safety -> code -> focused deterministic tests -> typecheck/lint -> independent review -> ledger update with commit and command evidence. Broad Runner matrix only at planned gates (per owner rule: targeted tests per change, full suite once at the end).
 6. Never defeat vendor rate limits, plan quotas, CAPTCHA, login, secure desktops, or billing checks through automation.
 7. Do not confuse tests passing with production readiness. Separate: implemented; deterministic test passed; live end-to-end; deployed; production-qualified.
-8. Precedence: for remote access, relay, accounts, billing, GUI and distribution, THIS plan supersedes Milestones C, D and E of the 2026-10-15 unified plan (including its tool names). The Runner-is-authority invariant from that plan stays.
+8. Precedence (owner decision D16): THIS plan supersedes the 2026-10-15 unified plan's Milestones A (A1–A3), C2, D (D1–D4) and E (E1–E3), including its tool names, and the P7 charter (branch plan/aiboard-platform-a0; both P7 attempts paused at baseline with no launcher code). Milestone B (Codex/Claude CLIs as Build role providers) stays in that plan as separate future work. Its C1 (local stdio MCP) is adopted here as part of L1. E1 (OpenAI Secure MCP Tunnel) is dropped. Valid requirements carried over from A1–A3 are recorded in ADR-E/ADR-F. The Runner-is-authority invariant stays.
 
 ## 1. Product definition
 **AIBoard Remote** lets cloud agents (ChatGPT, Claude, any MCP client) work on the user's own computer through a hosted relay at `mcp.aiboard.me`. Building happens locally on the user's device; the cloud agent is the brain.
@@ -43,8 +43,22 @@ Audience: implementation agents, Architect, Reviewer and Verifier.
 | D12 | Domain | `mcp.aiboard.me`: MCP endpoint `/mcp`, dashboard at `/` served by the relay (same-origin cookies); aiboard.me links to it. |
 | D13 | Directory listing | Submit to the ChatGPT app directory and Claude connector directory as a post-beta milestone; paid launch does not block on approval. |
 | D14 | Test environments | This Windows 10 PC (+ WSL2 Ubuntu) for live tests; GitHub Actions hosted runners (windows/macos/ubuntu) for the cross-OS matrix. Live macOS acceptance is labeled CI-only until a real Mac is available. |
+| D15 | Remote tool style | Low-level Desktop Commander-style tools first (files/process/git/jobs/browser); a few Build-level tools (X3) after launch. |
+| D16 | 2026-10-15 plan | Superseded except Milestone B (agent mixer, separate future work); its C1 local stdio MCP folds into L1; E1 OpenAI tunnel dropped; P7 charter superseded. |
+| D17 | Remote freedom | Desktop Commander-style freedom by default: shell/process tools on, no per-action approval, audit on, one-time notice. Opt-in per device: per-command approval, read-only, cwd-only, shell off; OS sandbox safe mode (S2) later. File-tool denylist stays as a guardrail, never claimed to bind shell commands. |
+| D18 | Releases | install.ps1/install.sh and the signed release manifest are served from aiboard.me; the six platform bundles are attached to GitHub Releases of behzad62/aiboard. Signing happens in a manual-dispatch release workflow whose key lives in a protected GitHub `release` environment requiring owner approval; an offline encrypted backup of the key is kept by the owner. |
 
 ## 2. Evidence inventory: DO NOT rebuild what already exists
+
+### 1.2 Architect decisions on R0 open questions (2026-10-27)
+| Question (source) | Decision |
+| --- | --- |
+| win-arm64 Windows helper not yet qualified (ADR-E) | Ship win-arm64 labeled preview until the helper is qualified on arm64 hardware/CI; other five targets are GA candidates. |
+| Signature verification on minimal Linux (ADR-E) | install.sh requires `openssl` (or LibreSSL on macOS) and fails with an actionable message if absent; no unverified fallback. |
+| Storage key where no OS keychain exists (ADR-F) | Linux headless / no Secret Service: 0600 key file in the per-user state dir, disclosed in `aiboard doctor`. |
+| cwd contains AIBoard state, e.g. home folder (ADR-D) | Allowed; the state directory is an always-excluded protected subtree (S1). |
+| Consent UI when no browser is connected (ADR-A) | Only relevant when a device enables approvals (D17): answer in the `aiboard remote` terminal or the dashboard (signed, job-bound). |
+| Windows-MCP release pin, VPS device ceiling, git_commit task context, artifact-to-principal binding | Deferred to X1, R4 measurement, R1/R2 design respectively; tracked as open in the STATUS ledger. |
 
 ### 2.1 Primary repo (audited 2026-10-27)
 | Capability | Actual implementation | Reuse / genuine gap |
@@ -54,12 +68,12 @@ Audience: implementation agents, Architect, Reviewer and Verifier.
 | Create/replace/patch/move/delete | fs.write, fs.patch (atomic multi-edit, revisions), fs.move, fs.delete | REUSE; remote writes need scope, nonce, audit |
 | Git | git.status/diff/log/show/remotes/commit and guarded git.push (git-tools.ts) | REUSE, preserve role restrictions |
 | Code navigation | code.workspace_symbols/definition/references/diagnostics; repo.manifest/map | REUSE |
-| Governed commands | process.run, process.execute, process.shell (process-tools.ts), owned ExecutionHost | REUSE; R0 catalogs which of these are remote-exposable |
-| Background/interactive process | process.start/poll/list/signal/write_stdin/read_output, process.recovery (managed-process*.ts, output journal/cursors) | REUSE; stdin is a pipe, not a PTY; list/signal act only on OWNED processes |
+| Governed commands | process.run (process-tools.ts); `process.execute` / `process.shell` are its input-dependent access capabilities, not separate tools; owned ExecutionHost. Full-grant execution is explicitly unconfined (execution-isolation-provider.ts:347) | REUSE; remote exposure gated by S1 (see remote-tool-surface.md) |
+| Background/interactive process | process.start/poll/list/signal/write_stdin/read_output (managed-process*.ts, output journal/cursors); `process.recovery` is an internal grant binding, not a tool | REUSE; stdin is a pipe, not a PTY; list/signal act only on OWNED processes |
 | Input dedup | durable writeId acknowledgement / outcome_unknown journal | REUSE; extend to remote job identity |
 | Browser automation | browser.open/navigate/snapshot/click/fill/wheel/drag/screenshot/events/close (Playwright) | REUSE; not desktop GUI |
 | Image inspection | image.inspect (PNG/JPEG/WebP) | REUSE |
-| Artifacts/evidence | artifact.read ranges, evidence.command/sqlite, ArtifactStore | REUSE; remote chunking needed |
+| Artifacts/evidence | artifact.read ranges, ArtifactStore, `run_evidence_command` (capability `evidence.command`) | REUSE; remote chunking and artifact-to-principal authorization needed |
 | MCP extensions | ExtensionManagementService, extension-mcp.ts, mcp-remote.ts, mcp-tools.ts; Settings → Extensions UI | REUSE for the plugin catalog. GAP: only `toolApproval: "non_destructive" \| "all"` exists; no per-tool allow/deny or remote-exposure flag |
 | Durable storage | `node:sqlite` stores (event, evidence, budget, permission, process, session) | REUSE pattern; relay uses `node:sqlite` too (no native deps) |
 | Identity/fencing | session-authority.ts, tool-broker.ts, execution-grants.ts (has a `"full"` grant), runtime-router.ts | NON-NEGOTIABLE reuse |
@@ -117,7 +131,7 @@ ChatGPT / Claude / any MCP client        Browser (dashboard)
 ~~~
 - The relay is NEVER an execution authority. It routes after independent account, device, entitlement and consent decisions.
 - The local Runner independently REAUTHORIZES every remote request. Remote OAuth scope can never grant more than local policy.
-- Trust planes, all must pass: entitlement (paid/free allowance) → client authorization (OAuth token, audience, scope) → device ownership → Runner grant (what, where) → per-action consent for high risk.
+- Trust planes, all must pass: entitlement (paid/free allowance) → client authorization (OAuth token, audience, scope) → device ownership → Runner grant (what, where) → device policy (D17: defaults open; per-action consent only where the user enabled approvals).
 - Data stays on the device: repositories, provider credentials, evidence, screenshots. The relay keeps device/session/job indexes, usage counters and redacted audit only. Do not market end-to-end encryption unless separately implemented and audited.
 - Device authentication: an Ed25519 device key generated at pairing, stored in the OS secret store, used for proof-of-possession on every WSS handshake. (Supersedes the earlier "mTLS" wording.)
 - The aiboard.me site stays a Next static export. Relay, auth, dashboard and webhooks live only at mcp.aiboard.me. Never embed payment or token-minting secrets in browser JS.
@@ -144,7 +158,9 @@ Security baseline: canonical paths with junction/symlink/ADS protection on every
 ### Phase 1 — One-line install and unified local CLI (free; ships independently of the relay)
 **L1 — `aiboard` CLI** (R0)
 - Single entry with runner selection per D8; default Runner V2 with `--project` = current working directory and state under the per-user AIBoard data dir.
-- Generates a fresh token per start, binds 127.0.0.1, opens `https://aiboard.me/<connect page>#runners=<port:token,...>` with the OS opener (`start` / `open` / `xdg-open`, printing the URL when no opener exists). The web app reads the fragment, stores the connection, and strips it with `history.replaceState`. Tokens never go in query strings, logs or Referer.
+- Binds 127.0.0.1 and opens `https://aiboard.me/connect#pair=<one-time code>&runners=<port list>` with the OS opener (`start` / `open` / `xdg-open`; prints code + ports for manual paste when no opener exists). Per ADR-F the code is single-use, ≤ 120 s, instance-bound, and exchanged by the page via POST to 127.0.0.1 with strict Origin/Host checks for a browser-session credential; the page strips the fragment with `history.replaceState`. No reusable bearer token ever appears in a URL, argv or log.
+- Stable per-user+project identity and a protected storage key separate from session credentials (today both encrypted stores are keyed by the control token: cli.ts:168/175), with a journaled migration of existing provider/extension credentials (ADR-E/ADR-F). Instance reuse per project, `aiboard status`, `aiboard stop`, headless `--no-open`.
+- Local stdio MCP (`aiboard mcp serve --stdio`, adopted from the 2026-10-15 plan's C1): local Codex/Claude CLIs can call the same tool surface as P2, through the same Runner authority; recursion/ancestry limits apply.
 - One browser tab connects to every runner started in that invocation. Remote mode never exposes account/legacy/bench runners (D9).
 - `aiboard --help`, `aiboard version`, `aiboard doctor` (ports, Node, Playwright browsers, secret store, relay reachability).
 - **DoD:** on all three OSes (CI): start in a temp folder → page receives the fragment → Runner V2 project root equals cwd; combined start connects both runners; token absent from process list/argv of children, logs and history; existing developer flags keep working.
@@ -167,8 +183,11 @@ Security baseline: canonical paths with junction/symlink/ADS protection on every
 **S1 — Whole-machine remote scope** (R1)
 - Remote grant profile per D9: any path the OS user can access, cwd as default working directory, Runner role restrictions intact.
 - Always-denied paths (not overridable remotely): AIBoard's own state/token/device-key store, OS credential stores, `~/.ssh`, browser profile directories, cloud CLI credential files, the installer's bin directory. Canonicalization defeats symlinks/junctions/8.3 names/ADS/case tricks per OS.
-- Optional narrower mode: `aiboard remote --only-here` (cwd only).
-- **DoD:** traversal suite per OS (symlink, junction, `..`, UNC, case, 8.3, ADS) cannot reach denied paths; denied attempts audited; cwd default verified.
+- The denylist is enforced for Runner file tools (fs.*, artifact/image reads, listings). It is NOT claimed to stop shell/process commands, which run as the OS user (D17); the one-time notice and dashboard say so plainly.
+- Remote device policy (D17), stored locally and shown in the dashboard: defaults = shell/process ON, no per-action approval, audit ON. Opt-in controls: per-command approval, read-only mode, `--only-here` (cwd only), shell OFF. Narrowing can be requested from the dashboard; only the local user can broaden it again. Approvals, when enabled, are answerable in the `aiboard remote` terminal and in the dashboard (account-authenticated, signed approval bound to the job).
+- First `aiboard remote` run shows a one-time notice: agents can run commands as you and read anything you can; how to restrict; how to disconnect/revoke.
+- cwd may contain AIBoard's per-user state (e.g. running in the home folder): the state directory becomes an always-excluded protected subtree instead of a startup refusal (ADR-D open question, architect decision).
+- **DoD:** traversal suite per OS (symlink, junction, `..`, UNC, case, 8.3, ADS) cannot reach denied paths through file tools; denied attempts audited; cwd default verified; each opt-in control (approval, read-only, only-here, shell off) blocks the right tools locally and remotely; home-folder start works with state excluded.
 
 **R2 — Durable jobs, idempotency, cancellation, flow control** (R1)
 - Record-before-dispatch idempotency in Runner SQLite, monotonic event journal, device/connection epoch fencing, explicit outcome_unknown.
@@ -201,7 +220,7 @@ Security baseline: canonical paths with junction/symlink/ADS protection on every
 
 **P2 — Standards MCP gateway + OAuth authorization server** (P1, R2)
 - Streamable HTTP MCP at `https://mcp.aiboard.me/mcp` using the official MCP TypeScript SDK, including its auth helpers: protected-resource and authorization-server metadata, dynamic client registration, authorization code + PKCE, consent screen ("Allow <client> to use your devices"), refresh tokens, revocation, audience/scope checks.
-- Tool surface: a small, direct, well-annotated set (Desktop Commander-style, which works best in ChatGPT/Claude): devices list; file read/list/search/write/patch/move/delete; process start/run/read_output/write_stdin/signal/list; git status/diff/log/commit; jobs status/events/result/cancel; plus remote-enabled plugin tools under a namespace. `deviceId` is optional when exactly one device is online. Truthful readOnly/destructive annotations. Exact identifiers chosen in R0.
+- Tool surface (owner decision D15: low-level first): the 25 fixed tools in docs/remote/r0/remote-tool-surface.md — devices_list; files_read/list/search/write/patch/move/delete; process_start/run/read_output/write_stdin/signal/list; git_status/diff/log/commit; jobs_status/events/result/cancel; artifact_read; image_inspect; browser — plus remote-enabled plugin tools named `plugin_<server>_<tool>_<digest8>`. `deviceId` is optional when exactly one device is online. Truthful readOnly/destructive/idempotent/openWorld annotations. Gating from R0: process tools need S1's process policy; git_commit needs a governed task context; artifact/image-by-hash need artifact-to-principal authorization. Build-level tools follow post-launch (X3).
 - Long actions return a jobId quickly; MCP sessions are not job ownership.
 - **DoD:** MCP inspector/conformance; ChatGPT custom connector and Claude custom connector both connect, list tools, read, perform a user-approved write, survive host disconnect and recover by jobId; unknown method/version and missing auth refused; nothing works after token revocation or device revoke.
 
@@ -243,6 +262,10 @@ Security baseline: canonical paths with junction/symlink/ADS protection on every
 - Per-plugin "available remotely" switch (default off for GUI plugins) and risk label; remote GUI calls require a visible local indicator and one GUI session lock. Borrow Claude's safeguards where the plugin allows (per-app approval, Esc/kill switch).
 - Never auto-install because a model suggested it.
 - **DoD:** enable/disable round-trip on each OS in CI where the plugin supports it; denied tools invisible locally and remotely; remote exposure off → tool absent from MCP listing.
+
+**S2 — Optional OS sandbox "safe mode"** (S1; post-launch): per-OS enforcement for process tools so the denylist and `--only-here` also bind commands and their descendants (Windows restricted token/AppContainer-style, macOS Seatbelt, Linux bubblewrap/Landlock; evaluate Apache-2.0 Codex sandbox code before writing new). Opt-in device setting; may become the default later only by owner decision. Unsupported platforms say so and keep D17 defaults.
+
+**X3 — Build-level remote tools** (P2, R2; owner decision D15): a few AIBoard-semantic tools (e.g. build_start, build_status, build_evidence) so a cloud agent can hand a whole Build to the local Runner, which then runs with the user's configured providers; the cloud agent remains the user-facing brain.
 
 **X2 — Optional extras** (each its own gated packet): document plugins (PDF/DOCX/XLSX) via the same catalog; PTY adapter (never label the stdin pipe a PTY); global host process listing/kill behind explicit approval with PID + start-time identity.
 
@@ -299,11 +322,11 @@ Rules: R2 schemas merged before P2. Avoid overlapping edits to runner-v2/src/cli
 | T05 | Plugin/MCP crash | degraded readiness, supervised restart, no phantom ready |
 | T06 | Relay restart/device reconnect | epoch fencing, no ghost responses or duplicate effects |
 | T07 | PC sleep/shutdown mid-job | job reported awaiting_device/outcome_unknown truthfully on return; no silent replay |
-| T08 | Whole-machine denylist | AIBoard secrets, ~/.ssh, credential stores, browser profiles unreachable via any path trick on each OS |
+| T08 | Whole-machine denylist | Through Runner file tools, AIBoard secrets, ~/.ssh, credential stores and browser profiles are unreachable via any path trick on each OS; shell commands are out of scope by D17 (S2 covers them) and the notice says so |
 | T09 | Interactive process | writeId exactly once, EOF distinct from signal, gaps reported truthfully |
 | T10 | 100 MiB artifact over weak network | resume + SHA-256 verify, bounded relay memory, no frame crash |
 | T11 | One-line install on each OS | standard user, checksum verified, update/rollback/uninstall, PATH correct |
-| T12 | CLI browser handoff | token only in URL fragment, stripped after load, absent from logs/argv/Referer |
+| T12 | CLI browser handoff | only a single-use ≤120 s pairing code appears in the fragment; replayed/expired/wrong-Origin exchange refused; no reusable token in any URL, argv, log or Referer; saved provider keys still decrypt after restart |
 | T13 | Remote runner exposure | account/legacy/bench runners never reachable through the relay |
 | T14 | OAuth/DCR | PKCE enforced, audience checked, revoked client loses access immediately |
 | T15 | Paddle webhooks duplicate/out-of-order/forged | single transition, signature required, redirect grants nothing |
@@ -361,4 +384,4 @@ Start R0 and STOP after its reviewable deliverables:
 - D:\repos\aiboard-tunnel\README.md, AGENTS.md, packages\connector\src\connector.ts, tunnel.ts, mcp-stdio.ts, packages\relay\src\server.ts, registry.ts
 - External: Desktop Commander README (github.com/wonderwhy-er/DesktopCommanderMCP); Claude Code computer use docs (code.claude.com/docs/en/computer-use); Windows-MCP (github.com/CursorTouch/Windows-MCP); WorkOS pricing (considered, not chosen).
 
-This plan supersedes Milestones C–E of the 2026-10-15 unified plan for remote/relay/GUI/distribution. An earlier plan's proposal or status is not proof that a later packet was built.
+This plan supersedes Milestones A, C2, D and E of the 2026-10-15 unified plan and the P7 charter (D16); Milestone B remains there. An earlier plan's proposal or status is not proof that a later packet was built.

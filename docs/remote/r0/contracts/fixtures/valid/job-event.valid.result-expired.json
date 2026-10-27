@@ -1,0 +1,9 @@
+{
+  "protocolVersion": "1.0.0",
+  "jobId": "job-1",
+  "sequence": "4",
+  "occurredAt": "2026-11-03T12:00:00Z",
+  "kind": "result_expired",
+  "state": "completed",
+  "traceId": "trace-write-1"
+}

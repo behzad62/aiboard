@@ -1,0 +1,7 @@
+{
+  "authoritative": false,
+  "jobId": "job-1",
+  "state": "awaiting_device",
+  "lastKnownState": "running",
+  "lastKnownAt": "2026-10-27T12:00:00Z"
+}

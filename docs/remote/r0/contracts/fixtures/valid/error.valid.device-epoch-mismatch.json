@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "device_epoch_mismatch",
+  "message": "The device connection epoch is stale.",
+  "requestId": "req-stale-epoch",
+  "traceId": "trace-read-1"
+}

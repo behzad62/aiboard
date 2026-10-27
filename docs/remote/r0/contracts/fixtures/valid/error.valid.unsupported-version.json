@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "unsupported_version",
+  "message": "The protocol major version is unsupported.",
+  "requestId": "req-1",
+  "traceId": "trace-1"
+}

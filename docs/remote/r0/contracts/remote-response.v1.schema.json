@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcp.aiboard.me/schemas/v1/remote-response.v1.schema.json",
+  "title": "RemoteResponse",
+  "description": "ADR-C response; the transport selects the schema using the negotiated version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requestId",
+    "traceId",
+    "admitted",
+    "status"
+  ],
+  "properties": {
+    "requestId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "traceId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "outputRef": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/opaque"
+    },
+    "errorCode": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/error.v1.schema.json#/$defs/errorCode"
+    },
+    "uncertainty": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "admitted": {
+      "type": "boolean"
+    },
+    "jobId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "status": {
+      "type": "string",
+      "maxLength": 64,
+      "enum": [
+        "queued",
+        "awaiting_device",
+        "awaiting_approval",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "outcome_unknown",
+        "blocked_policy",
+        "blocked_quota",
+        "rejected"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "jobId"
+      ],
+      "properties": {
+        "admitted": {
+          "const": true
+        },
+        "status": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/remoteJobState"
+        },
+        "jobId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "uncertainty"
+      ],
+      "properties": {
+        "admitted": {
+          "const": false
+        },
+        "status": {
+          "const": "awaiting_device"
+        },
+        "uncertainty": {
+          "type": "string",
+          "maxLength": 64,
+          "enum": [
+            "admission_unknown",
+            "not_dispatched"
+          ]
+        }
+      },
+      "not": {
+        "type": "object",
+        "properties": {
+          "jobId": {}
+        },
+        "required": [
+          "jobId"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "admitted": {
+          "const": false
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 64,
+          "enum": [
+            "blocked_policy",
+            "blocked_quota",
+            "rejected"
+          ]
+        }
+      },
+      "not": {
+        "type": "object",
+        "properties": {
+          "jobId": {}
+        },
+        "required": [
+          "jobId"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "blocked_policy",
+  "message": "The current device policy blocks the operation.",
+  "requestId": "req-policy",
+  "traceId": "trace-policy"
+}
