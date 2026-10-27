@@ -5,6 +5,7 @@
 | Schema | Root value and purpose |
 | --- | --- |
 | `remote-request.v1.schema.json` | Untrusted transport envelope, including the tool-specific `payload`. All identity, authorization, epoch, expiry and digest checks remain mandatory. |
+| `remote-authorization.v1.schema.json` | Relay-signed per-request authorization carried beside the request as `{type:"request", request, authorization}`. The `signature` is base64url Ed25519 over the RFC 8785 canonical JSON of `claims`; the Runner verifies it under a pinned `relayKeys` entry, requires every claim to equal the request field, the audience to be the relay identity, and `scopeRef` to be locally authorized before epoch/expiry/nonce checks or admission. |
 | `remote-response.v1.schema.json` | ADR-C response union: admitted responses require a job ID; non-admitted responses forbid one. An offline response requires `admission_unknown` or `not_dispatched`. |
 | `job.v1.schema.json` | Runner-authoritative `RemoteJob`, its exact cancellation fields and states. `$defs/jobView` models the separately labeled offline projection; `$defs/cancelReceipt` models an offline pending cancellation. |
 | `job-event.v1.schema.json` | Either one `RemoteJobEvent` or an ADR-C `RemoteEventPage` with opaque `nextCursor` and optional retention `gap`. |
@@ -32,7 +33,7 @@ The different-digest rejection code is `idempotency_conflict` (ADR-C spelling). 
 
 ## Fixture validation
 
-A future focused test can use **Ajv 8** with its Draft 2020-12 entry point and **ajv-formats** for `date-time`. Register all seven schemas by `$id` before compiling references, enable format validation, then load each JSON fixture. The filename prefix maps to `<prefix>.v1.schema.json`, except `job-view` maps to `job.v1.schema.json#/$defs/jobView` and `cancel-receipt` to `job.v1.schema.json#/$defs/cancelReceipt`. All `valid/` files must pass their schema. All `invalid/` files must fail the complete protocol validation, with the following six deliberately passing schema validation and failing the specified contextual check:
+A future focused test can use **Ajv 8** with its Draft 2020-12 entry point and **ajv-formats** for `date-time`. Register all eight schemas by `$id` before compiling references, enable format validation, then load each JSON fixture. The filename prefix maps to `<prefix>.v1.schema.json`, except `job-view` maps to `job.v1.schema.json#/$defs/jobView` and `cancel-receipt` to `job.v1.schema.json#/$defs/cancelReceipt`. All `valid/` files must pass their schema. All `invalid/` files must fail the complete protocol validation, with the following deliberately passing schema validation and failing the specified contextual check:
 
 | Invalid fixture suffix | Fixed context and expected failure |
 | --- | --- |
@@ -42,6 +43,12 @@ A future focused test can use **Ajv 8** with its Draft 2020-12 entry point and *
 | `job-event.invalid.nonmonotonic-page.json` | The page presents sequence `3` before `2`. Reject the out-of-order page even though each event has a valid shape. |
 | `local-pair-exchange.invalid.reusable-token-as-code.json` | The supplied value is the `sessionToken` in `local-pair-exchange.valid.anchor-response.json`; the issued ticket is the distinct code in `local-pair-exchange.valid.request.json`. Reject it as an unissued ticket. |
 | `local-pair-exchange.invalid.reused-pair-code.json` | The code was already consumed by a successful `local-pair-exchange.valid.request.json` exchange. Reject replay. |
+| `remote-authorization.invalid.bad-signature.json` | Paired with `remote-request.valid.read.json` and the pinned test key below; the signature does not verify. Reject `unauthorized` with no admission or dispatch. |
+| `remote-authorization.invalid.unknown-key.json` | Paired with `remote-request.valid.read.json`; `keyId` is not among the pinned `relayKeys`. Reject `unauthorized` with no admission or dispatch. |
+| `remote-authorization.invalid.claim-mismatch.json` | Correctly signed over its own claims, paired with `remote-request.valid.read.json`; `claims.requestId` differs from the request. Reject `unauthorized` with no admission or dispatch. |
+| `remote-authorization.invalid.scope-not-authorized.json` | Correctly signed over its own claims, paired with a request whose `scopeRef` is `scope-unapproved`; that scope is not in the session `authorizedScopes`. Reject `unauthorized` with no admission or dispatch. |
+
+The valid authorization fixture `remote-authorization.valid.read.json` is signed for `remote-request.valid.read.json` under the synthetic test key `relay-test-1` whose SPKI public key (base64url, test-only) is `MCowBQYDK2VwAyEA-H9fcRUR-1SSE1fw-yuofxEwqpOFbkkl7QlyCibYLQA`. It proves the canonicalization and signature shape only; production relay keys are provisioned with the device session (P1) and never taken from the request.
 
 For valid request fixtures use clock `2026-10-27T12:00:00Z`; the initial read and write use authenticated epoch `5`, and the retry uses epoch `6` after reconnect. Retry keeps the same principal, key, payload and digest while changing request ID, nonce, trace and epoch. The fixture data is synthetic. Also check the two valid request digests against RFC 8785 and SHA-256, and exercise duplicate-key parsing, cursor authorization, transitions, revocation, peer identity and stop evidence separately. The fixture shapes alone do not execute those checks.
 

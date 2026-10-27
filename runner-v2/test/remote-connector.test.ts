@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,6 +15,7 @@ import { parseLauncherArguments, runnerSpawnArguments } from "../src/launcher.js
 import { projectDataDirectory, remoteDeviceDirectory } from "../src/launcher-instance.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import {
+  canonicalJson,
   RemoteAdmissionStore,
   remotePayloadDigest,
   type RemoteRequest,
@@ -25,6 +26,7 @@ import {
   REMOTE_CONNECT_SCOPE,
   REMOTE_RELAY_AUDIENCE,
   type RelayChallenge,
+  type RemoteAuthorization,
   type RemoteSessionIssuer,
 } from "../src/remote-auth.js";
 import {
@@ -115,8 +117,31 @@ interface Harness {
   connector: RemoteConnector;
 }
 
+const relayPair = generateKeyPairSync("ed25519");
+const RELAY_KEY_ID = "relay-test-1";
+const relayPublicKey = relayPair.publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+
 function sessionFor(): RemoteDeviceSession {
-  return { accountId: ACCOUNT, clientId: CLIENT, scope: REMOTE_CONNECT_SCOPE, issuedAt: fixedNow.toISOString() };
+  return {
+    accountId: ACCOUNT, clientId: CLIENT, scope: REMOTE_CONNECT_SCOPE, issuedAt: fixedNow.toISOString(),
+    relayKeys: [{ keyId: RELAY_KEY_ID, publicKey: relayPublicKey }], authorizedScopes: ["scope-project"],
+  };
+}
+
+/** Sign a valid relay authorization for a request, as the fake relay would. */
+function authorize(request: RemoteRequest, overrides: Partial<RemoteAuthorization["claims"]> = {}, keyId: string = RELAY_KEY_ID): RemoteAuthorization {
+  const claims = {
+    audience: REMOTE_RELAY_AUDIENCE, accountId: request.accountId, clientId: request.clientId, deviceId: request.deviceId,
+    deviceEpoch: request.deviceEpoch, scopeRef: request.scopeRef, toolId: request.toolId, operationClass: request.operationClass,
+    requestId: request.requestId, nonce: request.nonce, payloadDigest: request.payloadDigest,
+    issuedAt: request.issuedAt, expiresAt: request.expiresAt, ...overrides,
+  };
+  const signature = cryptoSign(null, Buffer.from(canonicalJson(claims), "utf8"), relayPair.privateKey).toString("base64url");
+  return { version: 1, keyId, claims, signature };
+}
+
+async function emitRequest(transport: FakeTransport, request: RemoteRequest, authorization?: RemoteAuthorization): Promise<void> {
+  await transport.emit({ type: "request", request, authorization: authorization ?? authorize(request) });
 }
 
 function challengeFor(deviceId: string, overrides: Partial<RelayChallenge> = {}): RelayChallenge {
@@ -231,7 +256,7 @@ test("authenticated epoch handshake fences admission and reaches tool-ready", as
   assert.equal(harness.deviceStore.load()?.epoch, "5");
   const identity = { accountId: ACCOUNT, clientId: CLIENT, deviceId: harness.deviceStore.load()!.deviceId };
   // Admission inherited the authenticated epoch: a current-epoch read is admitted.
-  await harness.transport.emit({ type: "request", request: makeRequest(identity.deviceId) });
+  await emitRequest(harness.transport, makeRequest(identity.deviceId));
   const responses = harness.transport.responses();
   assert.equal(responses.length, 1);
   assert.equal(responses[0]!.response.admitted, true);
@@ -261,7 +286,7 @@ test("readiness requires reconciliation; heartbeat alone never grants it", async
   assert.equal(harness.connector.heartbeatObservedAt(), fixedNow.toISOString());
   assert.equal(harness.connector.state().state, "connected-degraded");
   const deviceId = harness.deviceStore.load()!.deviceId;
-  await harness.transport.emit({ type: "request", request: makeRequest(deviceId) });
+  await emitRequest(harness.transport, makeRequest(deviceId));
   assert.equal(harness.dispatches.count, 0);
   assert.equal(harness.transport.responses()[0]!.response.errorCode, "device_offline");
   releaseReconcile();
@@ -277,7 +302,7 @@ test("heartbeat without any handshake never becomes ready", async (t) => {
   await started; // injected sleep makes the handshake timeout immediate
   assert.notEqual(harness.connector.state().state, "tool-ready");
   const deviceId = harness.deviceStore.load()!.deviceId;
-  await harness.transport.emit({ type: "request", request: makeRequest(deviceId) });
+  await emitRequest(harness.transport, makeRequest(deviceId));
   assert.equal(harness.dispatches.count, 0);
 });
 
@@ -352,30 +377,30 @@ test("revoked device and stale-epoch, replayed and unknown requests never dispat
   await handshake(harness);
   const deviceId = harness.deviceStore.load()!.deviceId;
   const good = makeRequest(deviceId);
-  await harness.transport.emit({ type: "request", request: good });
+  await emitRequest(harness.transport, good);
   assert.equal(harness.dispatches.count, 1);
   // Replayed nonce (same envelope retransmitted under a new request id is still a replay).
   const replay = makeRequest(deviceId, { nonce: good.nonce });
-  await harness.transport.emit({ type: "request", request: replay });
+  await emitRequest(harness.transport, replay);
   assert.equal(harness.dispatches.count, 1);
   assert.equal(harness.transport.responses().at(-1)!.response.admitted, false);
   // Stale epoch.
-  await harness.transport.emit({ type: "request", request: makeRequest(deviceId, { deviceEpoch: "4" }) });
+  await emitRequest(harness.transport, makeRequest(deviceId, { deviceEpoch: "4" }));
   assert.equal(harness.dispatches.count, 1);
   assert.equal(harness.transport.responses().at(-1)!.response.errorCode, "device_epoch_mismatch");
   // Expired request.
   const expired = makeRequest(deviceId, { expiresAt: new Date(fixedNow.getTime() - 1_000).toISOString() });
-  await harness.transport.emit({ type: "request", request: expired });
+  await emitRequest(harness.transport, expired);
   assert.equal(harness.dispatches.count, 1);
   // Unsupported tools stay off the remote surface (git_commit, browser, jobs).
   for (const toolId of ["git_commit", "browser", "jobs_status", "unknown_tool"]) {
-    await harness.transport.emit({ type: "request", request: makeRequest(deviceId, { toolId }) });
+    await emitRequest(harness.transport, makeRequest(deviceId, { toolId }));
     assert.equal(harness.dispatches.count, 1, toolId);
     assert.equal(harness.transport.responses().at(-1)!.response.errorCode, "unsupported_tool", toolId);
   }
   // Revocation blocks immediately.
   harness.deviceStore.revoke();
-  await harness.transport.emit({ type: "request", request: makeRequest(deviceId) });
+  await emitRequest(harness.transport, makeRequest(deviceId));
   assert.equal(harness.dispatches.count, 1);
   assert.equal(harness.connector.state().state, "revoked");
   assert.equal(harness.transport.responses().at(-1)!.response.errorCode, "device_revoked");
@@ -386,13 +411,13 @@ test("owner-lock loss suspends admission and unverified cleanup blocks it", asyn
   const harness = await stubHarness(t, { isOwnerLockHeld: () => held });
   await handshake(harness);
   const deviceId = harness.deviceStore.load()!.deviceId;
-  await harness.transport.emit({ type: "request", request: makeRequest(deviceId) });
+  await emitRequest(harness.transport, makeRequest(deviceId));
   assert.equal(harness.dispatches.count, 1);
   held = false;
   await harness.transport.emit({ type: "heartbeat", at: fixedNow.toISOString() });
   assert.equal(harness.connector.state().state, "suspended");
   assert.equal(harness.connector.state().reasonCode, "owner_lock_lost");
-  await harness.transport.emit({ type: "request", request: makeRequest(deviceId) });
+  await emitRequest(harness.transport, makeRequest(deviceId));
   assert.equal(harness.dispatches.count, 1);
 
   const blocked = await stubHarness(t, {
@@ -402,7 +427,7 @@ test("owner-lock loss suspends admission and unverified cleanup blocks it", asyn
   assert.equal(blocked.connector.state().state, "connected-degraded");
   assert.equal(blocked.connector.state().reasonCode, "recovery_unverified");
   const blockedId = blocked.deviceStore.load()!.deviceId;
-  await blocked.transport.emit({ type: "request", request: makeRequest(blockedId) });
+  await emitRequest(blocked.transport, makeRequest(blockedId));
   assert.equal(blocked.dispatches.count, 0);
 });
 
@@ -437,7 +462,7 @@ test("ordered shutdown settles in-flight work as outcome_unknown", async (t) => 
   await handshake(harness);
   const deviceId = harness.deviceStore.load()!.deviceId;
   const request = makeRequest(deviceId);
-  const pending = harness.transport.emit({ type: "request", request });
+  const pending = emitRequest(harness.transport, request);
   await tick(); await tick();
   await harness.connector.close();
   assert.deepEqual(steps, ["admission-stopped", "inflight-settled", "transport-closed"]);
@@ -537,7 +562,7 @@ test("real broker read and admitted write through the connector", { timeout: 120
   await handshake(harnessLike);
   assert.equal(connector.state().state, "tool-ready");
   const deviceId = identity.deviceId;
-  await transport.emit({ type: "request", request: makeRequest(deviceId) });
+  await emitRequest(transport, makeRequest(deviceId));
   assert.equal(transport.responses().at(-1)!.response.admitted, true);
   assert.equal(transport.responses().at(-1)!.response.status, "completed");
   assert.match(JSON.stringify(results.at(-1)!.content), /isolated remote fixture/);
@@ -546,14 +571,14 @@ test("real broker read and admitted write through the connector", { timeout: 120
     toolId: "files_write", operationClass: "write",
     payload: { path: "notes.txt", content: "Hello\n" },
   });
-  await transport.emit({ type: "request", request: writeRequest });
+  await emitRequest(transport, writeRequest);
   const writeResponse = transport.responses().at(-1)!.response;
   assert.equal(writeResponse.admitted, true);
   assert.equal(writeResponse.status, "completed");
   assert.equal(await readFile(join(project, "notes.txt"), "utf8"), "Hello\n");
   const duplicate = { ...writeRequest, requestId: "req-duplicate", nonce: "nonce-duplicate", traceId: "trace-duplicate" };
   duplicate.payloadDigest = remotePayloadDigest(duplicate);
-  await transport.emit({ type: "request", request: duplicate });
+  await emitRequest(transport, duplicate);
   assert.equal(transport.responses().at(-1)!.response.jobId, writeResponse.jobId);
   const db = new DatabaseSync(join(state, "remote-admission.sqlite"), { readOnly: true });
   try {
@@ -562,7 +587,7 @@ test("real broker read and admitted write through the connector", { timeout: 120
   // Wrong-scope resignation: a request for another account never dispatches.
   const before = results.length;
   const foreign = makeRequest(deviceId, { accountId: "account-2" });
-  await transport.emit({ type: "request", request: foreign });
+  await emitRequest(transport, foreign);
   assert.equal(results.length, before);
   assert.equal(transport.responses().at(-1)!.response.admitted, false);
 });
@@ -641,6 +666,45 @@ test("control server exposes remote status only, behind the runner token", async
 
 
 
+test("missing, forged, unknown-key, mismatched and out-of-scope authorization never admits or dispatches", async (t) => {
+  const harness = await stubHarness(t);
+  await handshake(harness);
+  const deviceId = harness.deviceStore.load()!.deviceId;
+  const last = () => harness.transport.responses().at(-1)!.response;
+  // Missing authorization.
+  const missing = makeRequest(deviceId);
+  await harness.transport.emit({ type: "request", request: missing });
+  assert.equal(harness.dispatches.count, 0, "missing authorization");
+  assert.equal(last().admitted, false); assert.equal(last().errorCode, "unauthorized"); assert.equal(last().status, "blocked_policy");
+  // Bad signature.
+  const badSigRequest = makeRequest(deviceId);
+  const badSig = authorize(badSigRequest);
+  const forged = { ...badSig, signature: (badSig.signature[0] === "A" ? "B" : "A") + badSig.signature.slice(1) };
+  await emitRequest(harness.transport, badSigRequest, forged);
+  assert.equal(harness.dispatches.count, 0, "bad signature");
+  assert.equal(last().errorCode, "unauthorized"); assert.equal(last().status, "blocked_policy");
+  // Unknown keyId (correctly signed, unpinned key).
+  const unknownRequest = makeRequest(deviceId);
+  await emitRequest(harness.transport, unknownRequest, authorize(unknownRequest, {}, "relay-unknown-1"));
+  assert.equal(harness.dispatches.count, 0, "unknown keyId");
+  assert.equal(last().errorCode, "unauthorized");
+  // Claim/request mismatch (signed over different requestId).
+  const mismatchRequest = makeRequest(deviceId);
+  await emitRequest(harness.transport, mismatchRequest, authorize(mismatchRequest, { requestId: "req-other" }));
+  assert.equal(harness.dispatches.count, 0, "claim mismatch");
+  assert.equal(last().errorCode, "unauthorized");
+  // Scope not in authorizedScopes (claim and request agree, scope unapproved).
+  const scopeRequest = makeRequest(deviceId, { scopeRef: "scope-unapproved" });
+  await emitRequest(harness.transport, scopeRequest, authorize(scopeRequest));
+  assert.equal(harness.dispatches.count, 0, "scope not authorized");
+  assert.equal(last().errorCode, "unauthorized"); assert.equal(last().status, "blocked_policy");
+  // No job was admitted for any of the failures.
+  const identity = { accountId: ACCOUNT, clientId: CLIENT, deviceId };
+  void identity;
+  await emitRequest(harness.transport, makeRequest(deviceId));
+  assert.equal(harness.dispatches.count, 1, "a valid authorization still dispatches");
+});
+
 test("malformed, over-long and future-issued requests are refused at the boundary before dispatch", async (t) => {
   const harness = await stubHarness(t);
   await handshake(harness);
@@ -649,19 +713,19 @@ test("malformed, over-long and future-issued requests are refused at the boundar
   const cases: Array<[string, RemoteRequest]> = [
     ["unparseable expiry", makeRequest(deviceId, { expiresAt: "not-a-date" })],
     ["unknown field", { ...makeRequest(deviceId), extra: true } as unknown as RemoteRequest],
-    ["lifetime over five minutes", makeRequest(deviceId, { expiresAt: new Date(fixedNow.getTime() + 10 * 60_000).toISOString() })],
+    ["lifetime over ten minutes", makeRequest(deviceId, { expiresAt: new Date(fixedNow.getTime() + 10 * 60_000).toISOString() })],
     ["issued in the future", makeRequest(deviceId, {
       issuedAt: new Date(fixedNow.getTime() + 2 * 60_000).toISOString(),
       expiresAt: new Date(fixedNow.getTime() + 4 * 60_000).toISOString(),
     })],
   ];
   for (const [name, request] of cases) {
-    await harness.transport.emit({ type: "request", request });
+    await emitRequest(harness.transport, request);
     assert.equal(harness.dispatches.count, 0, name);
     assert.equal(harness.transport.responses().at(-1)!.response.admitted, false, name);
     assert.equal(lastCode(), "invalid_request", name);
   }
-  await harness.transport.emit({ type: "request", request: makeRequest(deviceId) });
+  await emitRequest(harness.transport, makeRequest(deviceId));
   assert.equal(harness.dispatches.count, 1, "a well-formed request is still admitted");
 });
 
@@ -720,4 +784,31 @@ test("one per-user device serves every project and admits a single remote owner 
   fromB.logout();
   assert.equal(fromA.load(), undefined, "logout from either project wipes the shared device");
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+
+test("remote-authorization.v1 contract fixtures verify under the documented test key and fail for their stated reason", async () => {
+  const contracts = new URL("../../docs/remote/r0/contracts/fixtures/", import.meta.url);
+  const load = async <T>(name: string): Promise<T> => JSON.parse(await readFile(new URL(name, contracts), "utf8")) as T;
+  const request = await load<RemoteRequest>("valid/remote-request.valid.read.json");
+  assert.equal(remotePayloadDigest(request), request.payloadDigest);
+  const session: RemoteDeviceSession = {
+    accountId: ACCOUNT, clientId: CLIENT, scope: REMOTE_CONNECT_SCOPE, issuedAt: fixedNow.toISOString(),
+    // The synthetic public key documented in contracts/README.md.
+    relayKeys: [{ keyId: "relay-test-1", publicKey: "MCowBQYDK2VwAyEA-H9fcRUR-1SSE1fw-yuofxEwqpOFbkkl7QlyCibYLQA" }],
+    authorizedScopes: ["scope-project"],
+  };
+  // verifyAuthorization reads only the session; the device store is never consulted.
+  const auth = new RemoteAuthenticator({} as RemoteDeviceStore, { now: clock });
+  auth.verifyAuthorization(request, await load<RemoteAuthorization>("valid/remote-authorization.valid.read.json"), session);
+  const cases: [string, RemoteRequest, RegExp][] = [
+    ["bad-signature", request, /signature does not verify/],
+    ["unknown-key", request, /key is not pinned/],
+    ["claim-mismatch", request, /claims do not match the request/],
+    ["scope-not-authorized", { ...request, scopeRef: "scope-unapproved" }, /scope is not authorized/],
+  ];
+  for (const [name, paired, reason] of cases) {
+    const authorization = await load<RemoteAuthorization>(`invalid/remote-authorization.invalid.${name}.json`);
+    assert.throws(() => auth.verifyAuthorization(paired, authorization, session),
+      (error: unknown) => (error as { code?: string }).code === "unauthorized" && reason.test((error as Error).message), name);
+  }
 });

@@ -38,7 +38,7 @@ export function createExecutionHostMcpTransportFactory(options: {
     async open(request: McpTransportOpenRequest): Promise<McpOwnedTransport> {
       const owner = request.owner;
       if (!owner?.context.executionGrant || owner.context.runId !== options.run.runId || !owner.context.sessionId ||
-          !owner.context.actor?.id || !owner.context.callId || !owner.context.toolName?.startsWith("mcp."))
+          !owner.context.actor?.id || !owner.context.callId || !(owner.context.toolName?.startsWith("mcp.") || owner.context.toolName?.startsWith("plugin_")))
         throw new McpSessionError("mcp_authority_required", "MCP live launch requires the exact current run/call grant authority.");
       const launch = launches.get(request.server.name);
       const lifecycleRequirements = freezeExecutionLifecycleRequirements(launch?.lifecycleRequirements);
@@ -77,7 +77,7 @@ export function createExecutionHostMcpTransportFactory(options: {
 export async function cleanupRecoveredMcpTransports(run: ExecutionHostRunBinding): Promise<void> {
   const isMcp = (record: Readonly<StreamingSessionRecord> | undefined) => record && record.runId === run.runId &&
     (record.actor.role === "runner_internal" && record.toolName === "mcp.transport.open" ||
-      record.sessionId.startsWith("mcp-stream-") && record.toolName.startsWith("mcp."));
+      record.sessionId.startsWith("mcp-stream-") && (record.toolName.startsWith("mcp.") || record.toolName.startsWith("plugin_")));
   const failures: unknown[] = [];
   for (const sessionId of run.streamingState.listSessionIds()) {
     const record = run.streamingState.readSession(sessionId);

@@ -7,6 +7,7 @@ import type { RemoteSessionIssuer } from "./remote-auth.js";
 import {
   RemoteConnector,
   type RemoteConnectionState,
+  type RemotePluginToolProvider,
   type RemoteTransport,
 } from "./remote-connector.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
@@ -54,6 +55,7 @@ export interface RemoteServiceOptions {
   readonly random?: () => number;
   readonly drainTimeoutMs?: number;
   readonly onShutdownStep?: (step: string) => void;
+  readonly pluginTools?: RemotePluginToolProvider;
 }
 
 /**
@@ -165,6 +167,7 @@ export class RemoteService {
       runtime: this.composition.runtime,
       session,
       createTransport: this.options.createTransport,
+      ...(this.options.pluginTools ? { pluginTools: this.options.pluginTools } : {}),
       reconcile: async () => {
         admission.reconcileStartup();
         await this.options.reconcileStartup?.();

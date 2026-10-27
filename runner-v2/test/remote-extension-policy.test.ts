@@ -201,7 +201,8 @@ test("approved install is the local review; materialization intersects pinned po
   assert.deepEqual(oldPinned.tools, []); await oldPinned.close();
   const remote = await f.runtime.remoteAdmittedTools(exposed.currentGeneration, "remote-on", f.artifacts);
   assert.equal(remote.tools.length, 1);
-  assert.match(remote.tools[0]!.definition.name, /^mcp\.ext_/);
+  // R1e deliberately renames remote-admitted tools to the plan P2 relay ids.
+  assert.match(remote.tools[0]!.definition.name, /^plugin_offline_read_[0-9a-f]{8}$/);
   await remote.close();
   const denied = await f.service.setExtensionToolPolicy(f.id, { ...exposed.policy,
     toolFilter: { ...exposed.policy.toolFilter, deny: [write, read] } }, UI);

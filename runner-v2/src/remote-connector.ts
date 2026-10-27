@@ -1,6 +1,6 @@
 import type { ToolResult } from "./agent-contracts.js";
 import { parseRemoteRequest, type RemoteAdmissionStore, type RemoteRequest } from "./remote-admission-store.js";
-import { RemoteAuthError, type RelayChallenge, type RemoteAuthenticator } from "./remote-auth.js";
+import { RemoteAuthError, type RelayChallenge, type RemoteAuthorization, type RemoteAuthenticator } from "./remote-auth.js";
 import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
 import type { VerifiedRemoteIdentity } from "./remote-principal.js";
 
@@ -38,7 +38,7 @@ export type RemoteTransportMessage =
   | { readonly type: "proof"; readonly deviceId: string; readonly publicKey: string; readonly signature: string }
   | { readonly type: "authenticated"; readonly epoch: string }
   | { readonly type: "auth_error"; readonly code: string }
-  | { readonly type: "request"; readonly request: RemoteRequest }
+  | { readonly type: "request"; readonly request: RemoteRequest; readonly authorization?: RemoteAuthorization }
   | { readonly type: "response"; readonly response: RemoteResponseMessage }
   | { readonly type: "heartbeat"; readonly at: string }
   | { readonly type: "revoked" };
@@ -54,6 +54,24 @@ export interface RemoteTransport {
 /** The slice of RemoteToolRuntime the connector may use. Never an authority. */
 export interface RemoteRequestRuntime {
   invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult>;
+}
+
+/** One admitted extension tool as offered to the relay (plan P2 naming). */
+export interface RemotePluginToolInfo {
+  readonly relayToolId: string;
+  readonly required: boolean;
+  readonly available: boolean;
+}
+
+/**
+ * Extension tools admitted for remote use (R1c `remoteAdmittedTools` for the
+ * current generation and policy). The connector routes only listed relay ids;
+ * an unavailable listed tool degrades the connection, never fakes readiness.
+ */
+export interface RemotePluginToolProvider {
+  list(): Promise<readonly RemotePluginToolInfo[]>;
+  invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal): Promise<ToolResult>;
+  close?(): Promise<void>;
 }
 
 /** Relay tool ids (remote-tool-surface.md) mapped to Runner broker names. */
@@ -101,6 +119,8 @@ export interface RemoteConnectorOptions {
   readonly isOwnerLockHeld?: () => boolean;
   readonly onStateChange?: (state: RemoteConnectionState) => void;
   readonly onShutdownStep?: (step: string) => void;
+  /** Admitted extension tools for the current generation/policy (R1c), when composed. */
+  readonly pluginTools?: RemotePluginToolProvider;
 }
 
 interface InFlight {
@@ -136,6 +156,7 @@ export class RemoteConnector {
   private reconnectAttempts = 0;
   private established = false;
   private lastHeartbeatAt: string | undefined;
+  private pluginDegradedReason: "optional_tool_unavailable" | "required_tool_unavailable" | undefined;
 
   constructor(private readonly options: RemoteConnectorOptions) {
     this.now = options.now ?? (() => new Date());
@@ -156,8 +177,16 @@ export class RemoteConnector {
     return this.current;
   }
 
+  /** Healthy admitted tools may be called in plugin-degraded state; nothing else may. */
+  pluginDegraded(): boolean {
+    return this.pluginDegradedReason !== undefined;
+  }
+
   isReady(): boolean {
-    return this.current.state === "tool-ready" && this.admitting;
+    if (!this.admitting) return false;
+    if (this.current.state === "tool-ready") return true;
+    // Plugin degradation admits only individually healthy tools (ADR-A).
+    return this.current.state === "connected-degraded" && this.pluginDegradedReason !== undefined;
   }
 
   heartbeatObservedAt(): string | undefined {
@@ -207,6 +236,7 @@ export class RemoteConnector {
       const transport = this.transport;
       this.transport = undefined;
       if (transport) await transport.close();
+      await this.options.pluginTools?.close?.();
       this.completedSteps.add("transport-closed");
       this.options.onShutdownStep?.("transport-closed");
     }
@@ -266,9 +296,31 @@ export class RemoteConnector {
       return;
     }
     this.admitting = true;
+    await this.refreshPluginState();
     this.established = true;
     this.reconnectAttempts = 0;
-    this.transition("tool-ready", "ready");
+    // refreshPluginState above already transitioned to tool-ready or plugin-degraded.
+  }
+
+  /** Recompute plugin degradation from the admitted set; healthy again returns to tool-ready. */
+  async refreshPluginState(): Promise<void> {
+    const provider = this.options.pluginTools;
+    if (!provider) {
+      this.pluginDegradedReason = undefined;
+      if (this.admitting) this.transition("tool-ready", "ready");
+      return;
+    }
+    let tools: readonly RemotePluginToolInfo[];
+    try { tools = await provider.list(); } catch { this.pluginDegradedReason = "optional_tool_unavailable"; if (!this.closing && !this.closed) this.transition("connected-degraded", this.pluginDegradedReason); return; }
+    const unavailable = tools.filter((tool) => !tool.available);
+    if (unavailable.length === 0) {
+      const wasDegraded = this.pluginDegradedReason !== undefined;
+      this.pluginDegradedReason = undefined;
+      if (this.admitting && (wasDegraded || this.current.state !== "tool-ready")) this.transition("tool-ready", "ready");
+      return;
+    }
+    this.pluginDegradedReason = unavailable.some((tool) => tool.required) ? "required_tool_unavailable" : "optional_tool_unavailable";
+    if (!this.closing && !this.closed) this.transition("connected-degraded", this.pluginDegradedReason);
   }
 
   private waitForChallenge(): Promise<RelayChallenge> {
@@ -342,7 +394,7 @@ export class RemoteConnector {
           try { await this.transport?.send({ type: "response", response: malformed(message.request) }); } catch { /* socket loss is fenced by epoch */ }
           return;
         }
-        await this.onRequest(request);
+        await this.onRequest(request, message.authorization);
         return;
       }
       default:
@@ -386,7 +438,7 @@ export class RemoteConnector {
     })();
   }
 
-  private async onRequest(request: RemoteRequest): Promise<void> {
+  private async onRequest(request: RemoteRequest, authorization?: RemoteAuthorization): Promise<void> {
     const transport = this.transport;
     const respond = async (response: RemoteResponseMessage): Promise<void> => {
       try { await transport?.send({ type: "response", response }); } catch { /* socket loss is fenced by epoch */ }
@@ -395,6 +447,14 @@ export class RemoteConnector {
       this.admitting = false;
       this.transition("revoked", "device_key_revoked");
       await respond(rejected(request, "device_revoked"));
+      return;
+    }
+    // Relay-signed authorization next: any failure is unauthorized, with no
+    // admission and zero broker/tool invocations (ADR-A verify order).
+    try {
+      this.options.authenticator.verifyAuthorization(request, authorization, this.options.session);
+    } catch {
+      await respond(rejected(request, "unauthorized"));
       return;
     }
     if (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) {
@@ -413,8 +473,9 @@ export class RemoteConnector {
       await respond(rejected(request, code));
       return;
     }
-    const runnerName = REMOTE_TOOL_ID_TO_RUNNER[request.toolId];
-    if (!runnerName) {
+    const isPlugin = request.toolId.startsWith("plugin_");
+    const runnerName = isPlugin ? request.toolId : REMOTE_TOOL_ID_TO_RUNNER[request.toolId];
+    if (!runnerName || (isPlugin && !this.options.pluginTools)) {
       await respond(rejected(request, "unsupported_tool"));
       return;
     }
@@ -430,7 +491,9 @@ export class RemoteConnector {
     };
     const work = (async (): Promise<void> => {
       try {
-        const response = EFFECT_TOOL_IDS.has(request.toolId) || isSearchCancel(request)
+        const response = isPlugin
+          ? await this.dispatchPlugin(identity, request, rawRequest)
+          : EFFECT_TOOL_IDS.has(request.toolId) || isSearchCancel(request)
           ? await this.dispatchEffect(identity, runnerName, request, rawRequest)
           : await this.dispatchRead(identity, runnerName, request, rawRequest);
         entry.settled = true;
@@ -445,6 +508,49 @@ export class RemoteConnector {
     entry.done = work;
     this.inFlight.add(entry);
     await work;
+  }
+
+  /** Plugin tools: only admitted relay ids, record-before-dispatch, never replayed. */
+  private async dispatchPlugin(
+    identity: VerifiedRemoteIdentity, request: RemoteRequest, rawRequest: string,
+  ): Promise<RemoteResponseMessage> {
+    const provider = this.options.pluginTools!;
+    let tools: readonly RemotePluginToolInfo[];
+    try { tools = await provider.list(); } catch { return rejected(request, "unsupported_tool"); }
+    const tool = tools.find((entry) => entry.relayToolId === request.toolId);
+    if (!tool) return rejected(request, "unsupported_tool");
+    if (!tool.available) {
+      // A fresh request is the supervised recovery attempt: the manager
+      // re-attests and restarts the same executable/schema on this call.
+      // It is never a replay of the interrupted request (new admission key).
+      await this.refreshPluginState();
+    }
+    const admission = this.options.admission;
+    let decision;
+    try { decision = admission.admit(identity, rawRequest); } catch (error) { return rejected(request, admissionCode(error)); }
+    if (!decision.created) {
+      const job = decision.job;
+      return { requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state };
+    }
+    try { admission.markDispatching(identity, decision.job.jobId, request.deviceEpoch); } catch (error) { return rejected(request, admissionCode(error)); }
+    let result: ToolResult;
+    try {
+      result = await provider.invoke(identity, request.toolId, request.payload, undefined);
+    } catch {
+      // An interrupted plugin call is settled unknown and never replayed.
+      const job = admission.settle(identity, decision.job.jobId, "outcome_unknown");
+      await this.refreshPluginState();
+      return { requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state, errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" };
+    }
+    await this.refreshPluginState();
+    const unknown = ["tool_timeout", "tool_cancelled", "process_timeout", "process_cancelled", "mcp_session_unavailable", "mcp_restart_exhausted"].includes(result.error?.code ?? "") ||
+      (result.isError && this.pluginDegradedReason !== undefined && /crash|closed|unavailable|restart/i.test(result.error?.message ?? ""));
+    const job = admission.settle(identity, decision.job.jobId, unknown ? "outcome_unknown" : result.isError ? "failed" : "completed");
+    return {
+      requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state,
+      ...(job.state === "outcome_unknown" ? { errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" } : {}),
+      ...(result.isError && job.state === "failed" ? { errorCode: result.error?.code ?? "internal_error" } : {}),
+    };
   }
 
   /** Reads: connector-level record-before-dispatch, then the R1a runtime. */

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { access, constants, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import type { NativeTool } from "./agent-contracts.js";
+import type { NativeTool, ToolResult } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { ExtensionCredentialStore } from "./extension-credentials.js";
 import {
@@ -43,6 +43,9 @@ import { canonicalMcpDigest, formatMcpCommand, parseMcpCommand, type McpServerSp
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
 import { createMcpTools, createRemoteMcpTools, McpManager, type McpCallResult, type McpServerStatus, type McpTransportFactory } from "./mcp-tools.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
+import { ToolBroker } from "./tool-broker.js";
+import type { RemotePluginToolInfo, RemotePluginToolProvider } from "./remote-connector.js";
+import type { VerifiedRemoteIdentity } from "./remote-principal.js";
 import { createRunnerCapabilityContractSnapshot } from "./runner-capability-contract.js";
 import type { McpConfigurationAttestation, RunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
 import { runnerRunStateSegment } from "./run-state-identity.js";
@@ -631,7 +634,7 @@ export class ManagedMcpRuntime {
           }
         }, artifacts, {
           admit: (_server, tool) => admitted.has(tool.name),
-          ...(remotelyExposed ? { name: (_server: string, tool: { name: string }) => remoteToolName(entry, tool.name) } : {}),
+          ...(remotelyExposed ? { name: (_server: string, tool: { name: string }) => remoteToolName(entry, tool.name, snapshot.schemaDigest) } : {}),
           guard: (tool, _server, discovered) => this.guard(tool, entry, discovered.name, snapshot, remotelyExposed, async () => {
             const current = await client.listTools();
             return { schemaDigest: canonicalMcpDigest(current), names: current.map((item) => item.name) };
@@ -730,7 +733,7 @@ export class ManagedMcpRuntime {
     }
     const tools = createMcpTools(owned, artifacts, {
       admit: (server, tool) => admitted.has(JSON.stringify([server, tool.name])),
-      ...(remotelyExposed ? { name: (server: string, tool: { name: string }) => remoteToolName(entries.get(server)!, tool.name) } : {}),
+      ...(remotelyExposed ? { name: (server: string, tool: { name: string }) => remoteToolName(entries.get(server)!, tool.name, snapshots.get(server)!.schemaDigest) } : {}),
       guard: (tool, server, discovered) => this.guard(tool, entries.get(server)!, discovered.name, snapshots.get(server)!, remotelyExposed),
     }) as NativeTool<unknown>[];
     return {
@@ -854,12 +857,92 @@ export class ManagedMcpRuntime {
   }
 }
 
+
+/** Options for the connector-facing admitted extension tool provider (R1c + plan P2). */
+export interface RemotePluginToolProviderOptions {
+  readonly generation: () => Promise<number>;
+  readonly artifacts: ArtifactStore;
+  readonly workspacePath: string;
+  readonly sessionId?: string;
+  readonly requiredRelayToolIds?: ReadonlySet<string>;
+}
+
+/**
+ * Routes relay plugin ids to the current generation's `remoteAdmittedTools`.
+ * Tools are executed through a ToolBroker bound to the admitted binding, so
+ * grants and the manager's re-attested restart semantics stay Runner-owned.
+ */
+export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, options: RemotePluginToolProviderOptions): RemotePluginToolProvider {
+  const sessionId = options.sessionId ?? "remote-plugins";
+  let current: { generation: number; admitted: ChatMcpTools; broker: ToolBroker } | undefined;
+  let sequence = 0;
+  const load = async () => {
+    const generation = await options.generation();
+    if (current && current.generation === generation) return current;
+    const previous = current;
+    current = undefined;
+    if (previous) await previous.admitted.close().catch(() => undefined);
+    const admitted = await runtime.remoteAdmittedTools(generation, sessionId, options.artifacts);
+    const broker = new ToolBroker({
+      // A crashed MCP server must settle as outcome_unknown promptly, not at
+      // the generic two-minute broker ceiling; recovery is a fresh request.
+      toolTimeoutMs: 30_000,
+      permissionProfile: "full", workspacePath: options.workspacePath, artifacts: options.artifacts,
+      ...(admitted.binding ? { executionGrants: admitted.binding.executionGrants } : {}),
+    });
+    for (const tool of admitted.tools) broker.register(tool);
+    current = { generation, admitted, broker };
+    return current;
+  };
+  return {
+    async list(): Promise<readonly RemotePluginToolInfo[]> {
+      const loaded = await load();
+      const statuses = loaded.admitted.status?.() ?? [];
+      return loaded.admitted.tools.map((tool) => {
+        const relayToolId = tool.definition.name;
+        const status = statuses
+          .filter((entry) => relayToolId.startsWith(`plugin_${entry.name}_`))
+          .sort((a, b) => b.name.length - a.name.length)[0];
+        return {
+          relayToolId,
+          required: options.requiredRelayToolIds?.has(relayToolId) ?? false,
+          available: !status || status.status === "ready",
+        };
+      });
+    },
+    async invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown): Promise<ToolResult> {
+      const loaded = await load();
+      const tool = loaded.admitted.tools.find((entry) => entry.definition.name === relayToolId);
+      if (!tool) throw new Error("Plugin tool is not admitted for remote use.");
+      sequence += 1;
+      return await loaded.broker.invoke(
+        { type: "tool_call", callId: `remote-plugin-${sequence}`, name: relayToolId, arguments: args },
+        {
+          runId: loaded.admitted.binding?.runId ?? `remote-plugin-${loaded.generation}`,
+          sessionId, actor: { role: "remote", id: identity.clientId }, workspacePath: options.workspacePath,
+        },
+      );
+    },
+    async close(): Promise<void> {
+      const previous = current;
+      current = undefined;
+      if (previous) await previous.admitted.close();
+    },
+  };
+}
+
 // ---- Helpers ---------------------------------------------------------------------------------------------
 
-function remoteToolName(entry: ManagedMcpServerEntry, toolName: string): string {
-  const digest = createHash("sha256").update(JSON.stringify([entry.extensionId, entry.component.componentId, toolName])).digest("hex").slice(0, 24);
-  return "mcp." + entry.extensionId.slice(0, 25) + "." + digest;
+/** Plan P2 relay naming: plugin_<server>_<tool>_<digest8>, digest8 from the R1c schema digest. */
+export function remotePluginToolId(serverName: string, toolName: string, schemaDigest: string): string {
+  const clean = (value: string) => value.replace(/[^A-Za-z0-9_-]+/g, "_");
+  return `plugin_${clean(serverName)}_${clean(toolName)}_${schemaDigest.slice(0, 8)}`;
 }
+
+function remoteToolName(entry: ManagedMcpServerEntry, toolName: string, schemaDigest: string): string {
+  return remotePluginToolId(entry.component.serverName, toolName, schemaDigest);
+}
+
 
 
 /** npm installs keep a lock file (entry + lock are digested); Python installs digest the console script. */

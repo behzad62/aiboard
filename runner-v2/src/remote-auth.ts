@@ -7,8 +7,11 @@ import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-sto
 export const REMOTE_RELAY_AUDIENCE = "mcp.aiboard.me";
 /** The only scope a device connection may claim in R1. */
 export const REMOTE_CONNECT_SCOPE = "aiboard.remote";
-/** Longest accepted challenge/request lifetime; the contracts set none, so R1 fixes it here. */
-const MAX_LIFETIME_MS = 5 * 60_000;
+/**
+ * Longest accepted challenge/request lifetime. The contracts set no bound;
+ * the accepted valid-read fixture spans six minutes, so R1 allows ten.
+ */
+const MAX_LIFETIME_MS = 10 * 60_000;
 /** Tolerated relay clock lead for a request's issuedAt. */
 const CLOCK_SKEW_MS = 60_000;
 /** Live nonces kept per cache; at capacity new ones are refused, never evicted early. */
@@ -24,6 +27,31 @@ export interface RelayChallenge {
   readonly nonce: string;
   readonly epoch: string;
   readonly expiresAt: string;
+}
+
+/** Claims signed by the relay for one request (remote-authorization.v1). */
+export interface RemoteAuthorizationClaims {
+  readonly audience: string;
+  readonly accountId: string;
+  readonly clientId: string;
+  readonly deviceId: string;
+  readonly deviceEpoch: string;
+  readonly scopeRef: string;
+  readonly toolId: string;
+  readonly operationClass: string;
+  readonly requestId: string;
+  readonly nonce: string;
+  readonly payloadDigest: string;
+  readonly issuedAt: string;
+  readonly expiresAt: string;
+}
+
+/** Relay-signed authorization carried beside a request frame. */
+export interface RemoteAuthorization {
+  readonly version: 1;
+  readonly keyId: string;
+  readonly claims: RemoteAuthorizationClaims;
+  readonly signature: string;
 }
 
 export interface DeviceProof {
@@ -156,6 +184,47 @@ export class RemoteAuthenticator {
       publicKey: identity.publicKey,
       signature: signature.toString("base64url"),
     });
+  }
+
+  /**
+   * Relay-signed authorization (ADR-A), checked before verifyRequest: the
+   * signature must verify under a pinned session key, every claim must equal
+   * the request field, the audience must be the relay identity, and scopeRef
+   * must be locally authorized. Any failure is `unauthorized`; no admission
+   * or dispatch may follow it. Missing authorization is a failure.
+   */
+  verifyAuthorization(request: RemoteRequest, authorization: RemoteAuthorization | undefined, session: RemoteDeviceSession): void {
+    const fail = (message: string): never => { throw new RemoteAuthError("unauthorized", message); };
+    if (!authorization || typeof authorization !== "object") fail("Remote request authorization is missing.");
+    const auth = authorization as RemoteAuthorization;
+    if (auth.version !== 1 || typeof auth.keyId !== "string" || !auth.keyId || typeof auth.signature !== "string" || !auth.signature) {
+      fail("Remote request authorization is invalid.");
+    }
+    const claims = auth.claims;
+    if (!claims || typeof claims !== "object") fail("Remote request authorization claims are invalid.");
+    const fields = ["audience", "accountId", "clientId", "deviceId", "deviceEpoch", "scopeRef", "toolId", "operationClass", "requestId", "nonce", "payloadDigest", "issuedAt", "expiresAt"] as const;
+    for (const field of fields) {
+      if (typeof claims[field] !== "string" || !claims[field]) fail("Remote request authorization claims are invalid.");
+    }
+    if (Object.keys(claims).length !== fields.length) fail("Remote request authorization claims are invalid.");
+    const pinned = (session.relayKeys ?? []).find((entry) => entry.keyId === auth.keyId);
+    if (!pinned) throw new RemoteAuthError("unauthorized", "Remote request authorization key is not pinned for this device.");
+    let verified = false;
+    try {
+      const key = createPublicKey({ key: Buffer.from(pinned.publicKey, "base64url"), type: "spki", format: "der" });
+      verified = cryptoVerify(null, Buffer.from(canonicalJson(claims), "utf8"), key, Buffer.from(auth.signature, "base64url"));
+    } catch { verified = false; }
+    if (!verified) fail("Remote request authorization signature does not verify.");
+    if (claims.audience !== this.expectedAudience) fail("Remote request authorization audience does not match the relay identity.");
+    if (claims.accountId !== request.accountId || claims.clientId !== request.clientId || claims.deviceId !== request.deviceId ||
+      claims.deviceEpoch !== request.deviceEpoch || claims.scopeRef !== request.scopeRef || claims.toolId !== request.toolId ||
+      claims.operationClass !== request.operationClass || claims.requestId !== request.requestId || claims.nonce !== request.nonce ||
+      claims.payloadDigest !== request.payloadDigest || claims.issuedAt !== request.issuedAt || claims.expiresAt !== request.expiresAt) {
+      fail("Remote request authorization claims do not match the request.");
+    }
+    if (!(session.authorizedScopes ?? []).includes(request.scopeRef)) {
+      fail("Remote request scope is not authorized for this device.");
+    }
   }
 
   /** Per-request fence: identity, current epoch, expiry and nonce replay. */
