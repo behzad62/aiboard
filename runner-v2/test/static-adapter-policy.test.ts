@@ -59,13 +59,15 @@ test("raw child_process access is confined to explicit audited platform adapter 
   assert.deepEqual(missingMarkers, [], `Raw process boundaries lack audit markers: ${missingMarkers.join(", ")}`);
 });
 
-test("launcher bootstrap starts only the fixed Runner V2 entrypoint", () => {
+test("launcher bootstrap starts only the fixed Runner V2 entrypoint and the OS URL opener", () => {
   const launcher = readFileSync(join(sourceRoot, "launcher.ts"), "utf8");
   assert.match(launcher, /new URL\("\.\.\/bin\/aiboard-runner-v2\.mjs", import\.meta\.url\)/);
   assert.match(launcher, /spawnRunner\(process\.execPath, runnerSpawnArguments\(identity, stateDirectory, args\.runnerFlags\)/);
   assert.match(launcher, /stdio: \["ignore", "pipe", "pipe", "ipc"\]/);
   assert.equal((launcher.match(/\bspawnRunner\s*\(/g) ?? []).length, 1);
-  assert.doesNotMatch(launcher, /\b(?:spawn|exec|execFile|fork|spawnSync|execSync|execFileSync)\s*\(/);
+  assert.equal((launcher.match(/\bspawn\s*\(/g) ?? []).length, 1);
+  assert.match(launcher, /const child = spawn\(command, args, options\);/);
+  assert.doesNotMatch(launcher, /\b(?:exec|execFile|fork|spawnSync|execSync|execFileSync)\s*\(/);
 });
 
 

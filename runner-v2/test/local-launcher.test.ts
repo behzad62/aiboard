@@ -85,6 +85,7 @@ class FakeRunner extends EventEmitter {
       identity: handshake.identity, instanceId: handshake.instanceId, version: handshake.version,
       startedAt: 1_700_000_000_000, port: address.port, token: handshake.token,
       controlKey: Buffer.from(handshake.controlKey, "hex"), shutdown: () => { void this.stop(); },
+      registerPair: () => undefined,
     });
     this.emit("message", { type: "aiboard-launcher-ready", instance: this.control.instance });
   }

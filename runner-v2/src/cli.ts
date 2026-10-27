@@ -63,6 +63,7 @@ import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
 import { assertExternalState, projectIdentity, tryAcquireLock } from "./launcher-instance.js";
 import { receiveLauncherHandshake, startLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
+import { LocalPairing } from "./local-pairing.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -355,7 +356,11 @@ async function main(): Promise<void> {
       generationTools: async (generation, sessionId, artifacts) => await managedMcp.chatTools(generation, sessionId, artifacts) });
     pins.chats = chatSessions;
     await chatSessions.recover();
+    const localPairing = launcher ? new LocalPairing(launcher.instanceId) : undefined;
+    if (launcher && localPairing) localPairing.register(launcher.pairDigest);
     const server = new ControlServer({
+      localPairing,
+      allowLocalPairDevOrigin: process.env.AIBOARD_LOCAL_PAIR_DEV_ORIGIN === "1",
       toolBench,
       extensions,
       chatSessions,
@@ -414,6 +419,7 @@ async function main(): Promise<void> {
     const shutdown = (signal: NodeJS.Signals) => {
       if (shuttingDown) return;
       shuttingDown = true;
+      localPairing?.close();
       void (async () => {
         let controlError: unknown;
         try { await launcherControl?.close(); } catch (error) { controlError = error; }
@@ -453,6 +459,10 @@ async function main(): Promise<void> {
         port: address.port,
         token: options.token,
         controlKey: Buffer.from(launcher.controlKey, "hex"),
+        registerPair: (digest) => {
+          if (!localPairing) throw new Error("Pairing unavailable.");
+          localPairing.register(digest);
+        },
         shutdown: requestLauncherShutdown,
       });
       if (process.connected) process.send?.({ type: "aiboard-launcher-ready", instance: launcherControl.instance });

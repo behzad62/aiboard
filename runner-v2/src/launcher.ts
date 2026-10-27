@@ -1,9 +1,9 @@
-// RUNNER_RAW_PROCESS_BOUNDARY: The launcher starts only the fixed Runner V2 entrypoint.
+// RUNNER_RAW_PROCESS_BOUNDARY: The launcher starts the fixed Runner V2 entrypoint and the OS URL opener.
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -13,6 +13,7 @@ import {
   type LauncherIdentity, type LauncherInstance,
 } from "./launcher-instance.js";
 import { requestLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
+import { createLocalPairTicket } from "./local-pairing.js";
 
 type Command = "start" | "status" | "stop" | "version" | "help";
 export interface LauncherArguments {
@@ -20,6 +21,7 @@ export interface LauncherArguments {
   project?: string;
   stateDirectory?: string;
   runnerFlags: string[];
+  noOpen?: boolean;
 }
 
 const VALUE_FLAGS = new Set(["--project", "--state-dir", "--port", "--capabilities-config", "--extensions-home", "--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run"]);
@@ -41,7 +43,7 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index]!;
     if (flag === "--help" || flag === "-h") { result.command = "help"; continue; }
-    if (flag === "--no-open") continue;
+    if (flag === "--no-open") { result.noOpen = true; continue; }
     if (flag === "--token") throw new Error("invalid_arguments: aiboard uses fresh state and does not accept --token; legacy users should use aiboard-runner-v2.");
     if (!VALUE_FLAGS.has(flag)) throw new Error("invalid_arguments: Unknown launcher option. See --help.");
     const value = args[++index];
@@ -69,6 +71,7 @@ interface LauncherRuntime {
   platform?: NodeJS.Platform;
   write?: (message: string) => void;
   spawnRunner?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+  openUrl?: (url: string) => void;
 }
 
 export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}): Promise<void> {
@@ -117,7 +120,13 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           throw new Error("instance_unverified: The recorded Runner cannot be verified; no process was stopped.");
         });
         if (args.command === "status") { write(describe(recorded, status.healthy ? "running" : "unhealthy")); return; }
-        if (args.command === "start" && status.healthy) { write(describe(recorded, "already running")); return; }
+        if (args.command === "start" && status.healthy) {
+          const ticket = createLocalPairTicket(recorded.instanceId);
+          await requestLauncherControl(recorded, key, "pair", ticket.digest);
+          write(describe(recorded, "already running"));
+          showPairing(ticket.code, recorded.port, args.noOpen === true, write, runtime);
+          return;
+        }
         await requestLauncherControl(recorded, key, "stop");
         releasedLifetime = await waitForLifetimeRelease(stateDirectory);
       } finally { key.fill(0); }
@@ -132,8 +141,9 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     const key = await createControlKey(stateDirectory);
     const token = randomBytes(32).toString("hex");
     const instanceId = randomBytes(16).toString("hex");
+    const ticket = createLocalPairTicket(instanceId);
     const handshake: LauncherHandshake = {
-      type: "aiboard-launcher-init", token, controlKey: key.toString("hex"), instanceId, identity, stateDirectory, version,
+      type: "aiboard-launcher-init", token, controlKey: key.toString("hex"), instanceId, pairDigest: ticket.digest, identity, stateDirectory, version,
     };
     const diagnostics: string[] = [];
     let diagnosticBytes = 0;
@@ -169,6 +179,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       releaseDiscovery = () => undefined;
       key.fill(0);
       write(describe(instance, "running"));
+      showPairing(ticket.code, instance.port, args.noOpen === true, write, runtime);
       let interrupted = false;
       const requestStop = () => { if (capturedChild.connected) capturedChild.send({ type: "aiboard-launcher-stop" }); };
       const onInterrupt = () => { interrupted = true; requestStop(); };
@@ -180,7 +191,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         else if (interrupted) process.exitCode = 130;
         if (result.signal) process.exitCode = 1;
         if ((result.code && result.code !== 130) || result.signal) {
-          const detail = redact(diagnostics.join(""), [token]);
+          const detail = redact(diagnostics.join(""), [token, ticket.code, ticket.digest]);
           if (detail) process.stderr.write(`${detail}\n`);
         }
       } finally {
@@ -198,7 +209,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       } finally { release(); }
     } catch (error) {
       if (child?.connected) child.disconnect();
-      const detail = redact(diagnostics.join(""), [token]);
+      const detail = redact(diagnostics.join(""), [token, ticket.code, ticket.digest]);
       throw new Error(`${error instanceof Error ? error.message : String(error)}${detail ? `\n${detail}` : ""}`);
     } finally { key.fill(0); }
   } finally {
@@ -242,6 +253,31 @@ async function waitForLifetimeRelease(stateDirectory: string): Promise<() => voi
   throw new Error("runner_shutdown_pending: Runner cleanup is still in progress; retry status later.");
 }
 
+function showPairing(code: string, port: number, noOpen: boolean, write: (message: string) => void, runtime: LauncherRuntime): void {
+  const url = `https://aiboard.me/connect#pair=${code}&runners=${port}`;
+  write(`Pairing code: ${code}\nConnect: ${url}\n`);
+  if (noOpen) return;
+  try { (runtime.openUrl ?? ((target) => openPairUrl(target, runtime.platform ?? process.platform)))(url); }
+  catch { /* The printed code and URL are the manual fallback. */ }
+}
+
+function openPairUrl(url: string, platform: NodeJS.Platform): void {
+  const base: SpawnOptions = { stdio: "ignore", windowsHide: true, detached: true };
+  let command = "xdg-open";
+  let args: string[] = [url];
+  let options = base;
+  if (platform === "win32") {
+    command = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe");
+    args = ["/d", "/s", "/c", `start "" "${url}"`];
+    options = { ...base, windowsVerbatimArguments: true };
+  } else if (platform === "darwin") {
+    command = "open";
+  }
+  const child = spawn(command, args, options);
+  child.once("error", () => undefined);
+  child.unref();
+}
+
 function describe(instance: LauncherInstance, state: string): string {
   return `Runner ${state}\nProject: ${instance.projectPath}\nURL: http://127.0.0.1:${instance.port}\nPID: ${instance.pid}\n`;
 }
@@ -252,7 +288,7 @@ function help(): string {
   return [
     "AIBoard Runner V2", "", "Usage: aiboard [status|stop|version] [options]", "",
     "Runs the current directory in the foreground, or reuses its healthy Runner.",
-    "  --no-open                 Do not open a browser (the local URL is printed).",
+    "  --no-open                 Do not open a browser (print the pairing code and URL).",
     "  --project <absolute-path> Override the current project directory.",
     "  --state-dir <path>        Use an absolute state directory outside the project.",
     "  --port <number>           Runner port (0 selects an available port).",

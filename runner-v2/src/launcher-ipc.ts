@@ -10,17 +10,19 @@ export interface LauncherHandshake {
   token: string;
   controlKey: string;
   instanceId: string;
+  pairDigest: string;
   identity: LauncherIdentity;
   stateDirectory: string;
   version: string;
   legacyToken?: string;
 }
 
-type ControlAction = "status" | "stop";
+type ControlAction = "status" | "stop" | "pair";
 interface ControlRequest {
   action: ControlAction;
   nonce: string;
   sentAt: number;
+  pairDigest?: string;
   instance: LauncherInstance;
   mac: string;
 }
@@ -63,6 +65,7 @@ function isHandshake(value: unknown): value is LauncherHandshake {
   return value.type === "aiboard-launcher-init" && typeof value.token === "string" && /^[0-9a-f]{64}$/.test(value.token) &&
     typeof value.controlKey === "string" && /^[0-9a-f]{64}$/.test(value.controlKey) &&
     typeof value.instanceId === "string" && /^[0-9a-f]{32}$/.test(value.instanceId) &&
+    typeof value.pairDigest === "string" && /^[0-9a-f]{64}$/.test(value.pairDigest) &&
     typeof value.identity.projectPath === "string" && typeof value.identity.projectKey === "string" &&
     typeof value.identity.owner === "string" && typeof value.stateDirectory === "string" &&
     typeof value.version === "string" && (value.legacyToken === undefined || typeof value.legacyToken === "string");
@@ -78,6 +81,7 @@ export async function startLauncherControl(options: {
   token: string;
   controlKey: Buffer;
   shutdown: () => void;
+  registerPair?: (digest: string) => void;
 }): Promise<{ instance: LauncherInstance; close: () => Promise<void> }> {
   const usedNonces = new Map<string, number>();
   const sockets = new Set<Socket>();
@@ -95,6 +99,10 @@ export async function startLauncherControl(options: {
       for (const [nonce, expiry] of usedNonces) if (expiry < now) usedNonces.delete(nonce);
       if (usedNonces.has(value.nonce) || usedNonces.size >= 2048) throw new Error("replayed control request");
       usedNonces.set(value.nonce, now + REQUEST_WINDOW_MS * 2);
+      if (value.action === "pair") {
+        if (!options.registerPair || !value.pairDigest) throw new Error("pairing unavailable");
+        options.registerPair(value.pairDigest);
+      }
       const healthy = value.action === "status" ? await runnerHealth(options.port, options.token, options.identity.projectPath) : true;
       const response: ControlResponse = { nonce: value.nonce, healthy, instance, mac: "" };
       response.mac = sign(options.controlKey, responseBody(response));
@@ -126,8 +134,11 @@ export async function startLauncherControl(options: {
   };
 }
 
-export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: ControlAction): Promise<{ healthy: boolean }> {
-  const request: ControlRequest = { action, nonce: randomBytes(32).toString("hex"), sentAt: Date.now(), instance, mac: "" };
+export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: ControlAction, pairDigest?: string): Promise<{ healthy: boolean }> {
+  if (action === "pair" ? !pairDigest || !/^[0-9a-f]{64}$/.test(pairDigest) : pairDigest !== undefined) {
+    throw new Error("Invalid launcher control request.");
+  }
+  const request: ControlRequest = { action, nonce: randomBytes(32).toString("hex"), sentAt: Date.now(), instance, mac: "", ...(pairDigest ? { pairDigest } : {}) };
   request.mac = sign(key, requestBody(request));
   const socket = createConnection({ host: "127.0.0.1", port: instance.controlPort });
   socket.on("error", () => socket.destroy());
@@ -189,7 +200,7 @@ function readLine(socket: Socket): Promise<string> {
   });
 }
 
-function requestBody(request: ControlRequest): string { return JSON.stringify(["request", request.action, request.nonce, request.sentAt, instanceFields(request.instance)]); }
+function requestBody(request: ControlRequest): string { return JSON.stringify(["request", request.action, request.nonce, request.sentAt, request.pairDigest ?? null, instanceFields(request.instance)]); }
 function responseBody(response: ControlResponse): string { return JSON.stringify(["response", response.nonce, response.healthy, instanceFields(response.instance)]); }
 function instanceFields(value: LauncherInstance): unknown[] {
   return [value.schemaVersion, value.projectPath, value.projectKey, value.owner, value.pid, value.startedAt, value.port, value.controlPort, value.instanceId, value.version];
@@ -201,8 +212,9 @@ function validMac(key: Buffer, body: string, mac: string): boolean {
   return timingSafeEqual(Buffer.from(sign(key, body), "hex"), Buffer.from(mac, "hex"));
 }
 function isControlRequest(value: unknown): value is ControlRequest {
-  return isObject(value) && (value.action === "status" || value.action === "stop") && typeof value.nonce === "string" &&
-    /^[0-9a-f]{64}$/.test(value.nonce) && Number.isSafeInteger(value.sentAt) && isObject(value.instance) && typeof value.mac === "string";
+  return isObject(value) && (value.action === "status" || value.action === "stop" || value.action === "pair") && typeof value.nonce === "string" &&
+    /^[0-9a-f]{64}$/.test(value.nonce) && Number.isSafeInteger(value.sentAt) && isObject(value.instance) && typeof value.mac === "string" &&
+    (value.action === "pair" ? typeof value.pairDigest === "string" && /^[0-9a-f]{64}$/.test(value.pairDigest) : value.pairDigest === undefined);
 }
 function isControlResponse(value: unknown): value is ControlResponse {
   return isObject(value) && typeof value.nonce === "string" && typeof value.healthy === "boolean" && isObject(value.instance) && typeof value.mac === "string";

@@ -52,6 +52,7 @@ import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./process-recovery.js";
 import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
+import type { LocalPairing } from "./local-pairing.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
@@ -80,6 +81,8 @@ export interface ControlServerOptions {
   permissions?: SqlitePermissionStore;
   processRecovery?: ProcessRecoveryControlPlane;
   allowedOrigins?: string[];
+  localPairing?: LocalPairing;
+  allowLocalPairDevOrigin?: boolean;
 }
 
 export interface RunBootstrapInput {
@@ -246,6 +249,8 @@ export class ControlServer {
   private readonly permissions?: SqlitePermissionStore;
   private readonly processRecovery?: ProcessRecoveryControlPlane;
   private readonly allowedOrigins: ReadonlySet<string>;
+  private readonly localPairing?: LocalPairing;
+  private readonly allowLocalPairDevOrigin: boolean;
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
@@ -272,6 +277,8 @@ export class ControlServer {
     this.permissions = options.permissions;
     this.processRecovery = options.processRecovery;
     this.allowedOrigins = buildAllowedOriginSet(options.allowedOrigins);
+    this.localPairing = options.localPairing;
+    this.allowLocalPairDevOrigin = options.allowLocalPairDevOrigin === true;
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -308,6 +315,7 @@ export class ControlServer {
   }
 
   async close(): Promise<void> {
+    this.localPairing?.close();
     await this.toolBench?.close();
     await this.chatSessions?.close();
     const server = this.server;
@@ -326,13 +334,22 @@ export class ControlServer {
     response: ServerResponse
   ): Promise<void> {
     try {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (url.pathname === "/v1/local-pair/exchange" || url.pathname === "/v1/local-pair/session") {
+        await this.handleLocalPair(request, response, url);
+        return;
+      }
       setCommonHeaders(request, response, this.allowedOrigins);
       if (request.method === "OPTIONS") {
+        if (url.pathname.startsWith("/v2") && this.isLocalPairOrigin(request) &&
+            validPreflight(request, ["GET", "POST", "PUT"], ["authorization", "content-type"]) &&
+            request.headers["access-control-request-private-network"] === "true") {
+          response.setHeader("Access-Control-Allow-Private-Network", "true");
+        }
         response.statusCode = 204;
         response.end();
         return;
       }
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (!url.pathname.startsWith("/v2")) {
         throw new HttpError(404, "not_found", "Route not found.");
       }
@@ -342,7 +359,10 @@ export class ControlServer {
         await handleOAuthCallback(response, url, this.extensions);
         return;
       }
-      if (!hasBearerToken(request.headers.authorization, this.token)) {
+      const sessionToken = bearerToken(request.headers.authorization);
+      const isSession = sessionToken !== undefined && singleHeader(request, "authorization") &&
+        this.localPairing?.hasSession(sessionToken) === true;
+      if (!hasBearerToken(request.headers.authorization, this.token) && !isSession) {
         response.setHeader("WWW-Authenticate", "Bearer");
         throw new HttpError(401, "unauthorized", "A valid runner token is required.");
       }
@@ -363,6 +383,73 @@ export class ControlServer {
         code: httpError.code,
       });
     }
+  }
+
+  private isLocalPairOrigin(request: IncomingMessage): boolean {
+    const address = this.server?.address();
+    if (!address || typeof address === "string") return false;
+    const origin = request.headers.origin;
+    return singleHeader(request, "origin") && singleHeader(request, "host") &&
+      request.headers.host === `127.0.0.1:${address.port}` &&
+      (origin === "https://aiboard.me" || (this.allowLocalPairDevOrigin && origin === "http://localhost:3000"));
+  }
+
+  private async handleLocalPair(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    const refuse = async (): Promise<void> => {
+      // Drain any unread body so the generic refusal is delivered, not a reset.
+      try { for await (const chunk of request) { void chunk; } } catch { /* already refused */ }
+      if (!response.writableEnded) sendJson(response, 400, { error: "Local pairing request refused.", code: "local_pair_refused" });
+    };
+    const exchange = url.pathname === "/v1/local-pair/exchange";
+    if (!this.localPairing || request.url !== url.pathname || !this.isLocalPairOrigin(request)) {
+      await refuse(); return;
+    }
+    const origin = request.headers.origin!;
+    if (request.method === "OPTIONS") {
+      const methods = exchange ? ["POST"] : ["DELETE"];
+      const headers = exchange ? ["content-type", "x-aiboard-pair-version"] : ["authorization"];
+      if (!validPreflight(request, methods, headers)) { await refuse(); return; }
+      response.setHeader("Access-Control-Allow-Origin", origin);
+      response.setHeader("Vary", "Origin");
+      response.setHeader("Access-Control-Allow-Methods", exchange ? "POST, OPTIONS" : "DELETE, OPTIONS");
+      response.setHeader("Access-Control-Allow-Headers", exchange ? "Content-Type, X-AIBoard-Pair-Version" : "Authorization");
+      if (request.headers["access-control-request-private-network"] === "true") {
+        response.setHeader("Access-Control-Allow-Private-Network", "true");
+      }
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Vary", "Origin");
+    if (!exchange) {
+      const token = bearerToken(request.headers.authorization);
+      if (request.method !== "DELETE" || !singleHeader(request, "authorization") || !token || !this.localPairing.revoke(token)) {
+        await refuse(); return;
+      }
+      sendJson(response, 200, { version: 1 });
+      return;
+    }
+    if (!this.localPairing.allowAttempt() || request.method !== "POST" ||
+        !singleHeader(request, "content-type") ||
+        !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers["content-type"] ?? "") ||
+        !singleHeader(request, "x-aiboard-pair-version") || request.headers["x-aiboard-pair-version"] !== "1") {
+      await refuse(); return;
+    }
+    let body: unknown;
+    try { body = await readJson<unknown>(request, 2_048); } catch { await refuse(); return; }
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+        Object.keys(body).length !== 2 || !("version" in body) || body.version !== 1 ||
+        !("code" in body) || typeof body.code !== "string" || body.code.length < 1 || body.code.length > 512) {
+      await refuse(); return;
+    }
+    const sessionToken = this.localPairing.consume(body.code);
+    if (!sessionToken) { await refuse(); return; }
+    const address = this.server?.address();
+    if (!address || typeof address === "string") { this.localPairing.revoke(sessionToken); await refuse(); return; }
+    sendJson(response, 200, { version: 1, instanceId: this.localPairing.instanceId, kind: "runner", port: address.port, sessionToken, peers: [] });
   }
 
   private async route(
@@ -530,7 +617,7 @@ export class ControlServer {
             ...(body.build.handoffFiles !== undefined ? { handoffFiles: body.build.handoffFiles } : {}),
             // T7a opt-in only: the kernel stamps planningPolicy solely from
             // this explicit field; a missing field keeps the current default.
-            // The manifest itself is kernel-derived — never caller-chosen.
+            // The manifest itself is kernel-derived â€” never caller-chosen.
             ...(body.build.planningPolicy !== undefined
               ? { planningPolicy: { version: 1 as const } }
               : {}),
@@ -1558,6 +1645,28 @@ function mergeProviderConfigs(
   );
 }
 
+function bearerToken(header: string | undefined): string | undefined {
+  return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
+}
+
+function singleHeader(request: IncomingMessage, name: string): boolean {
+  let count = 0;
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    if (request.rawHeaders[index]?.toLowerCase() === name) count += 1;
+  }
+  return count === 1;
+}
+
+function validPreflight(request: IncomingMessage, methods: string[], headers: string[]): boolean {
+  const method = request.headers["access-control-request-method"];
+  const requested = request.headers["access-control-request-headers"];
+  const privateNetwork = request.headers["access-control-request-private-network"];
+  return singleHeader(request, "access-control-request-method") && typeof method === "string" && methods.includes(method) &&
+    (requested === undefined || (typeof requested === "string" && singleHeader(request, "access-control-request-headers") &&
+      requested.split(",").every((header) => headers.includes(header.trim().toLowerCase())))) &&
+    (privateNetwork === undefined || (singleHeader(request, "access-control-request-private-network") && privateNetwork === "true"));
+}
+
 function hasBearerToken(header: string | undefined, expected: string): boolean {
   if (!header?.startsWith("Bearer ")) return false;
   const actual = Buffer.from(header.slice("Bearer ".length));
@@ -1735,7 +1844,7 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     ) invalidBody();
   }
   if (body.approvedSource !== undefined) {
-    // T7a: an approved source without the explicit opt-in is inconsistent —
+    // T7a: an approved source without the explicit opt-in is inconsistent â€”
     // refuse it rather than silently changing the run default.
     if (body.planningPolicy?.version !== 1) invalidBody();
     try {
