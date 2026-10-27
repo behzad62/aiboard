@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { isAbsolute, join, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type { ToolResult } from "./agent-contracts.js";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
@@ -13,7 +14,7 @@ import { createProcessTools } from "./process-tools.js";
 import { roleAllowList } from "./role-capabilities.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
-import { RemotePrincipalStore, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
+import { RemotePrincipalStore, type LocalMcpIdentity, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
 import { ToolBroker } from "./tool-broker.js";
 
@@ -147,42 +148,8 @@ export class RemoteToolRuntime {
   }
 
   private async createBinding(principal: RemotePrincipal): Promise<BoundRemote> {
-    const capabilityContract = await createRunnerCapabilityContract(this.options.capabilitiesConfig);
-    const binding = await this.options.host.bindRun({ runId: principal.runId,
-      permissionProfile: this.options.permissionProfile, capabilityContract,
-      capabilitiesConfig: this.options.capabilitiesConfig });
-    let ledger: SqliteToolLedger | undefined;
-    try {
-      const recovery = await binding.recover({ maxRecords: 1_024, timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS });
-      if (recovery.subprocess.some((entry) => entry.state !== "cleaned") ||
-        recovery.streaming.outcomes.some((entry) => entry.disposition !== "cleaned") ||
-        recovery.streaming.sessionOutcomes.some((entry) => !["reattached", "cleanup_released"].includes(entry.disposition)) ||
-        recovery.streaming.lateCleanupFailures.length > 0 || recovery.isolation.some((entry) => entry.blockers.length > 0)) {
-        throw new Error("Remote execution recovery is blocked.");
-      }
-      ledger = new SqliteToolLedger(join(binding.runRoot, "remote-tool-ledger.sqlite"));
-      const broker = new ToolBroker({ permissionProfile: this.options.permissionProfile,
-        workspacePath: this.workspacePath, git: binding.git, artifacts: this.options.host.artifacts,
-        executionGrants: binding.executionGrants, ledger });
-      const tools = [
-        ...createFilesystemTools({ artifacts: this.options.host.artifacts }),
-        ...createGitTools(binding.git),
-        ...createProcessTools({ execution: binding.commandExecution }),
-        ...createManagedProcessTools(binding.managedProcesses),
-        ...createImageTools({ artifacts: this.options.host.artifacts }),
-      ];
-      for (const tool of tools) {
-        if (ALLOWED_TOOLS.has(tool.definition.name) && tool.definition.lifecycle !== true) broker.register(tool);
-      }
-      return { binding, broker, ledger };
-    } catch (error) {
-      try { await binding.close(); ledger?.close(); }
-      catch (cleanup) {
-        this.partialBindings.set(principal.principalId, { binding, ledger });
-        throw new AggregateError([error, cleanup], "Remote binding cleanup remains unverified.");
-      }
-      throw error;
-    }
+    return await createGovernedBinding(this.options, this.workspacePath, principal.runId, ALLOWED_TOOLS,
+      (binding, ledger) => this.partialBindings.set(principal.principalId, { binding, ledger }));
   }
 
   async close(): Promise<void> {
@@ -202,6 +169,222 @@ export class RemoteToolRuntime {
       } catch (error) { failures.push(error); }
     }
     if (failures.length) throw new AggregateError(failures, "Remote execution cleanup remains unverified.");
+  }
+}
+
+type GovernedOptions = Pick<RemoteToolRuntimeOptions, "host" | "permissionProfile" | "capabilitiesConfig">;
+
+async function createGovernedBinding(
+  options: GovernedOptions, workspacePath: string, runId: string, allowed: ReadonlySet<string>,
+  onPartial: (binding: ExecutionHostRunBinding, ledger?: SqliteToolLedger) => void, localMcpDepth?: number,
+): Promise<BoundRemote> {
+  const capabilityContract = await createRunnerCapabilityContract(options.capabilitiesConfig);
+  const binding = await options.host.bindRun({ runId, permissionProfile: options.permissionProfile,
+    capabilityContract, capabilitiesConfig: options.capabilitiesConfig,
+    ...(localMcpDepth !== undefined ? { localMcpDepth } : {}) });
+  let ledger: SqliteToolLedger | undefined;
+  try {
+    const recovery = await binding.recover({ maxRecords: 1_024, timeoutMs: AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS });
+    if (recovery.subprocess.some((entry) => entry.state !== "cleaned") ||
+      recovery.streaming.outcomes.some((entry) => entry.disposition !== "cleaned") ||
+      recovery.streaming.sessionOutcomes.some((entry) => !["reattached", "cleanup_released"].includes(entry.disposition)) ||
+      recovery.streaming.lateCleanupFailures.length > 0 || recovery.isolation.some((entry) => entry.blockers.length > 0)) {
+      throw new Error("Remote execution recovery is blocked.");
+    }
+    ledger = new SqliteToolLedger(join(binding.runRoot, "remote-tool-ledger.sqlite"));
+    const broker = new ToolBroker({ permissionProfile: localMcpDepth === undefined ? options.permissionProfile : "project", workspacePath,
+      git: binding.git, artifacts: options.host.artifacts, executionGrants: binding.executionGrants, ledger,
+      ...(localMcpDepth !== undefined ? { approve: async (request) => !request.outsideWorkspace } : {}) });
+    const tools = [
+      ...createFilesystemTools({ artifacts: options.host.artifacts }), ...createGitTools(binding.git),
+      ...createProcessTools({ execution: binding.commandExecution }), ...createManagedProcessTools(binding.managedProcesses),
+      ...createImageTools({ artifacts: options.host.artifacts }),
+    ];
+    for (const tool of tools) if (allowed.has(tool.definition.name) && tool.definition.lifecycle !== true) broker.register(tool);
+    return { binding, broker, ledger };
+  } catch (error) {
+    try { await binding.close(); ledger?.close(); }
+    catch (cleanup) {
+      onPartial(binding, ledger);
+      throw new AggregateError([error, cleanup], "Remote binding cleanup remains unverified.");
+    }
+    throw error;
+  }
+}
+
+const LOCAL_TOOLS: Readonly<Record<string, string>> = Object.freeze({
+  files_read: "fs.read", files_list: "fs.list", files_search: "fs.search", files_write: "fs.write",
+  files_patch: "fs.patch", files_move: "fs.move", files_delete: "fs.delete",
+  process_start: "process.start", process_run: "process.run", process_read_output: "process.read_output",
+  process_write_stdin: "process.write_stdin", process_signal: "process.signal", process_list: "process.list",
+  git_status: "git.status", git_diff: "git.diff", git_log: "git.log", image_inspect: "image.inspect",
+});
+const LOCAL_ALLOWED = new Set(roleAllowList("local_mcp", "local_mcp"));
+
+export interface LocalMcpToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: { readonly type: "object"; readonly [key: string]: unknown };
+  readonly annotations: { readonly readOnlyHint: boolean; readonly destructiveHint: boolean; readonly idempotentHint: boolean; readonly openWorldHint: boolean };
+}
+
+export interface LocalMcpOwner {
+  readonly identity: LocalMcpIdentity;
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly depth: number;
+}
+
+export function createLocalMcpOwner(depth: number): LocalMcpOwner {
+  return Object.freeze({ identity: Object.freeze({ kind: "local_mcp", localClientId: `local-mcp-${randomUUID()}` }),
+    runId: `local-mcp-run-${randomUUID()}`, sessionId: `local-mcp-session-${randomUUID()}`, depth });
+}
+
+/** One socket-owned identity and one exact managed-process owner. */
+export class LocalMcpToolSession {
+  private readonly controller = new AbortController();
+  private readonly active = new Set<Promise<unknown>>();
+  private bound?: Promise<BoundRemote>;
+  private partial?: { binding: ExecutionHostRunBinding; ledger?: SqliteToolLedger };
+  private closed = false;
+  private closing?: Promise<void>;
+
+  constructor(private readonly options: GovernedOptions & { workspacePath: string }, readonly owner: LocalMcpOwner) {
+    if (!isAbsolute(options.workspacePath)) throw new Error("Local MCP workspace must be absolute.");
+  }
+
+  private binding(): Promise<BoundRemote> {
+    if (this.closed) throw new Error("Local MCP session is revoked.");
+    if (this.partial) throw new Error("Local MCP execution cleanup remains unverified.");
+    return this.bound ??= createGovernedBinding(this.options, resolve(this.options.workspacePath), this.owner.runId, LOCAL_ALLOWED,
+      (binding, ledger) => { this.partial = { binding, ledger }; }, this.owner.depth);
+  }
+
+  async recover(): Promise<void> { await this.binding(); }
+
+  async list(): Promise<LocalMcpToolDefinition[]> {
+    const bound = await this.binding();
+    if (this.closed) throw new Error("Local MCP session is revoked.");
+    const definitions = new Map(bound.broker.definitions().map((definition) => [definition.name, definition]));
+    return Object.entries(LOCAL_TOOLS).map(([name, internal]) => {
+      const definition = definitions.get(internal);
+      if (!definition) throw new Error(`Local MCP tool ${name} is unavailable.`);
+      const schema = structuredClone(definition.inputSchema) as { type: "object"; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown };
+      if (name === "process_read_output") schema.properties = { ...schema.properties, view: { enum: ["output", "snapshot"] } };
+      if (name === "image_inspect") {
+        delete schema.properties?.artifactHash;
+        schema.required = ["path"];
+      }
+      if (MUTATING_TOOLS.has(internal)) {
+        schema.properties = { ...schema.properties, idempotencyKey: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" } };
+        schema.required = [...(schema.required ?? []), "idempotencyKey"];
+      }
+      const mutating = MUTATING_TOOLS.has(internal);
+      const readOnly = definition.readOnly && internal !== "fs.search";
+      const description = name === "image_inspect" ? "Inspect an image file in the project and return its bounded visual content." : definition.description;
+      return { name, description: description + (mutating ? " The local call completes inline; job APIs are unavailable." : "") + " Artifact retrieval is not available.", inputSchema: schema,
+        annotations: { readOnlyHint: readOnly, destructiveHint: mutating, idempotentHint: readOnly, openWorldHint: internal.startsWith("process.") && mutating } };
+    });
+  }
+
+  invoke(name: string, input: unknown): Promise<ToolResult> {
+    const work = this.invokeChecked(name, input);
+    this.active.add(work);
+    void work.finally(() => this.active.delete(work)).catch(() => undefined);
+    return work;
+  }
+
+  private async invokeChecked(name: string, input: unknown): Promise<ToolResult> {
+    let callId = `local-call-${randomUUID()}`;
+    const internal = Object.hasOwn(LOCAL_TOOLS, name) ? LOCAL_TOOLS[name] : undefined;
+    if (this.closed) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
+    if (!internal) return failure(callId, name, "tool_unavailable", "Tool is unavailable to local MCP.");
+    if (!input || typeof input !== "object" || Array.isArray(input)) return failure(callId, name, "invalid_arguments", "Tool arguments must be an object.");
+    let args: Record<string, unknown>;
+    try { args = structuredClone(input) as Record<string, unknown>; } catch { return failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely."); }
+    if (Object.keys(args).some((key) => AUTHORITY_ARGUMENTS.has(key) || ["root", "repoPath", "deviceId"].includes(key))) return failure(callId, name, "invalid_arguments", "Tool arguments cannot supply Runner authority.");
+    if (internal === "image.inspect" && Object.hasOwn(args, "artifactHash")) return failure(callId, name, "tool_unavailable", "Artifact-hash inspection is unavailable.");
+    if (args.env && typeof args.env === "object" && Object.keys(args.env).some((key) => key.toUpperCase() === "AIBOARD_MCP_DEPTH")) return failure(callId, name, "invalid_arguments", "MCP ancestry is Runner-owned.");
+    if (MUTATING_TOOLS.has(internal)) {
+      if (typeof args.idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(args.idempotencyKey)) return failure(callId, name, "invalid_arguments", "A valid idempotencyKey is required.");
+      callId = `local-key-${createHash("sha256").update(args.idempotencyKey).digest("hex")}`;
+      delete args.idempotencyKey;
+    }
+    let target = internal;
+    if (name === "process_read_output" && args.view !== undefined) {
+      if (args.view !== "output" && args.view !== "snapshot") return failure(callId, name, "invalid_arguments", "Invalid process output view.");
+      if (args.view === "snapshot") {
+        if (Object.keys(args).some((key) => key !== "view" && key !== "processId")) return failure(callId, name, "invalid_arguments", "Snapshot view only accepts processId.");
+        target = "process.poll";
+      }
+      delete args.view;
+    }
+    try {
+      const paths = internal.startsWith("fs.") ? ["path", "source", "destination"] : internal === "image.inspect" ? ["path"] : internal.startsWith("process.") ? ["cwd"] : [];
+      for (const key of paths) if (typeof args[key] === "string") await assertProjectPath(this.options.workspacePath, args[key] as string);
+      freezeArguments(args);
+      const bound = await this.binding();
+      if (this.closed || this.controller.signal.aborted) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
+      for (const key of paths) if (typeof args[key] === "string") await assertProjectPath(this.options.workspacePath, args[key] as string);
+      if (this.closed || this.controller.signal.aborted) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
+      const definition = bound.broker.definitions().find((item) => item.name === target);
+      const properties = definition?.inputSchema.properties;
+      if (!properties || typeof properties !== "object" || Object.keys(args).some((key) => !Object.hasOwn(properties, key))) {
+        return failure(callId, name, "invalid_arguments", "Unknown tool argument.");
+      }
+      return await bound.broker.invoke({ type: "tool_call", callId, name: target, arguments: args }, {
+        runId: this.owner.runId, sessionId: this.owner.sessionId, actor: { role: "local_mcp", id: this.owner.identity.localClientId },
+        workspacePath: resolve(this.options.workspacePath), signal: this.controller.signal, ...(target === "image.inspect" ? { imageInput: true } : {}),
+      });
+    } catch (error) {
+      if (this.closed) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
+      return failure(callId, name, "tool_refused", error instanceof Error ? error.message : "Tool refused.");
+    }
+  }
+
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
+    const work = this.closeOnce();
+    this.closing = work;
+    void work.finally(() => { if (this.closing === work) this.closing = undefined; }).catch(() => undefined);
+    return work;
+  }
+
+  private async closeOnce(): Promise<void> {
+    this.closed = true;
+    this.controller.abort();
+    await Promise.allSettled([...this.active]);
+    const failures: unknown[] = [];
+    if (this.bound) {
+      let bound: BoundRemote | undefined;
+      try { bound = await this.bound; } catch { this.bound = undefined; }
+      if (bound) {
+        try { await bound.binding.close(); bound.ledger.close(); this.bound = undefined; }
+        catch (error) { failures.push(error); }
+      }
+    }
+    if (this.partial) {
+      try { await this.partial.binding.close(); this.partial.ledger?.close(); this.partial = undefined; }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "Local MCP execution cleanup remains unverified.");
+  }
+}
+
+async function assertProjectPath(workspace: string, path: string): Promise<void> {
+  const root = await realpath(workspace);
+  const target = resolve(root, path);
+  const inside = (candidate: string) => { const part = relative(root, candidate); return part === "" || part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part); };
+  if (!inside(target)) throw new Error("Path outside the project is unavailable until S1.");
+  let current = target;
+  for (;;) {
+    try { if (!inside(await realpath(current))) throw new Error("Path outside the project is unavailable until S1."); return; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = resolve(current, "..");
+      if (parent === current) throw error;
+      current = parent;
+    }
   }
 }
 

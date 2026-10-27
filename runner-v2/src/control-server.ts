@@ -49,6 +49,7 @@ import type {
 } from "./provider-config-store.js";
 import type { RunSupervisor } from "./run-supervisor.js";
 import type { McpManager } from "./mcp-tools.js";
+import type { LocalMcpSessions } from "./local-stdio-mcp.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./process-recovery.js";
 import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
@@ -82,6 +83,7 @@ export interface ControlServerOptions {
   processRecovery?: ProcessRecoveryControlPlane;
   allowedOrigins?: string[];
   localPairing?: LocalPairing;
+  localMcp?: LocalMcpSessions;
   allowLocalPairDevOrigin?: boolean;
   /** Status only; control routes are never forwarded to or from the relay. */
   remoteStatus?: () => unknown;
@@ -252,6 +254,7 @@ export class ControlServer {
   private readonly processRecovery?: ProcessRecoveryControlPlane;
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly localPairing?: LocalPairing;
+  private readonly localMcp?: LocalMcpSessions;
   private readonly allowLocalPairDevOrigin: boolean;
   private readonly remoteStatus?: ControlServerOptions["remoteStatus"];
   private readonly streams = new Set<ServerResponse>();
@@ -281,6 +284,7 @@ export class ControlServer {
     this.processRecovery = options.processRecovery;
     this.allowedOrigins = buildAllowedOriginSet(options.allowedOrigins);
     this.localPairing = options.localPairing;
+    this.localMcp = options.localMcp;
     this.allowLocalPairDevOrigin = options.allowLocalPairDevOrigin === true;
     this.remoteStatus = options.remoteStatus;
   }
@@ -320,6 +324,7 @@ export class ControlServer {
 
   async close(): Promise<void> {
     this.localPairing?.close();
+    await this.localMcp?.close();
     await this.toolBench?.close();
     await this.chatSessions?.close();
     const server = this.server;
@@ -339,6 +344,10 @@ export class ControlServer {
   ): Promise<void> {
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (url.pathname === "/v1/local-mcp") {
+        await this.handleLocalMcp(request, response, url);
+        return;
+      }
       if (url.pathname === "/v1/local-pair/exchange" || url.pathname === "/v1/local-pair/session") {
         await this.handleLocalPair(request, response, url);
         return;
@@ -386,6 +395,28 @@ export class ControlServer {
         error: httpError.message,
         code: httpError.code,
       });
+    }
+  }
+
+  private async handleLocalMcp(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    const address = this.server?.address();
+    const originPresent = request.rawHeaders.some((header, index) => index % 2 === 0 && header.toLowerCase() === "origin");
+    const token = bearerToken(request.headers.authorization);
+    if (!this.localMcp || !address || typeof address === "string" || request.url !== url.pathname || originPresent ||
+        !singleHeader(request, "host") || request.headers.host !== `127.0.0.1:${address.port}` || request.method !== "POST" ||
+        !singleHeader(request, "authorization") || !token || !singleHeader(request, "content-type") ||
+        !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers["content-type"] ?? "")) {
+      sendJson(response, 403, { code: "local_mcp_refused", error: "Local MCP request refused." });
+      return;
+    }
+    try {
+      const body = await readJson<unknown>(request, 1_048_576);
+      const result = await this.localMcp.perform(token, body);
+      sendJson(response, 200, result);
+    } catch {
+      sendJson(response, 403, { code: "local_mcp_refused", error: "Local MCP request refused." });
     }
   }
 

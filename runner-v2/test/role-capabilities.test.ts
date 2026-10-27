@@ -454,6 +454,12 @@ const DERIVED: readonly {
     "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
     "process.start", "process.write_stdin",
   ] },
+  { role: "local_mcp", broker: "local_mcp", required: [], full: [
+    "fs.delete", "fs.list", "fs.move", "fs.patch", "fs.read", "fs.search", "fs.write",
+    "git.diff", "git.log", "git.status", "image.inspect",
+    "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
+    "process.start", "process.write_stdin",
+  ] },
 ];
 
 test("every role broker has an exact derived allow-list in both directions", () => {

@@ -16,7 +16,7 @@ export interface PermissionRequest {
   callId: string;
   toolName: string;
   extensionId?: string;
-  actor: { role: "architect" | "worker" | "subagent" | "verifier" | "remote"; id: string };
+  actor: { role: "architect" | "worker" | "subagent" | "verifier" | "remote" | "local_mcp"; id: string };
   permissionProfile: PermissionProfile;
   access: ToolAccessRequest;
   outsideWorkspace: boolean;

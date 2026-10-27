@@ -4,6 +4,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 
 import type { LauncherIdentity, LauncherInstance } from "./launcher-instance.js";
 import { isLocalPairPeer, type LocalPairPeer } from "./local-pairing.js";
+import { LOCAL_MCP_DEPTH_LIMIT } from "./child-environment.js";
 
 /** The inherited Node IPC pipe carries secrets; neither argv nor the environment carries them. */
 export interface LauncherHandshake {
@@ -11,7 +12,7 @@ export interface LauncherHandshake {
   token: string;
   controlKey: string;
   instanceId: string;
-  pairDigest: string;
+  pairDigest?: string;
   peers?: LocalPairPeer[];
   identity: LauncherIdentity;
   stateDirectory: string;
@@ -19,13 +20,14 @@ export interface LauncherHandshake {
   legacyToken?: string;
 }
 
-type ControlAction = "status" | "stop" | "pair";
+type ControlAction = "status" | "stop" | "pair" | "local_mcp";
 interface ControlRequest {
   action: ControlAction;
   nonce: string;
   sentAt: number;
   pairDigest?: string;
   peers?: LocalPairPeer[];
+  depth?: number;
   instance: LauncherInstance;
   mac: string;
 }
@@ -34,6 +36,7 @@ interface ControlResponse {
   healthy: boolean;
   instance: LauncherInstance;
   mac: string;
+  sessionToken?: string;
 }
 
 const MAX_MESSAGE_BYTES = 16_384;
@@ -68,7 +71,7 @@ function isHandshake(value: unknown): value is LauncherHandshake {
   return value.type === "aiboard-launcher-init" && typeof value.token === "string" && /^[0-9a-f]{64}$/.test(value.token) &&
     typeof value.controlKey === "string" && /^[0-9a-f]{64}$/.test(value.controlKey) &&
     typeof value.instanceId === "string" && /^[0-9a-f]{32}$/.test(value.instanceId) &&
-    typeof value.pairDigest === "string" && /^[0-9a-f]{64}$/.test(value.pairDigest) &&
+    (value.pairDigest === undefined || typeof value.pairDigest === "string" && /^[0-9a-f]{64}$/.test(value.pairDigest)) &&
     typeof value.identity.projectPath === "string" && typeof value.identity.projectKey === "string" &&
     typeof value.identity.owner === "string" && typeof value.stateDirectory === "string" &&
     typeof value.version === "string" && (value.legacyToken === undefined || typeof value.legacyToken === "string") &&
@@ -86,6 +89,7 @@ export async function startLauncherControl(options: {
   controlKey: Buffer;
   shutdown: () => void;
   registerPair?: (digest: string, peers?: LocalPairPeer[]) => void;
+  registerLocalMcp?: (depth: number) => { token: string; revoke: () => void };
 }): Promise<{ instance: LauncherInstance; close: () => Promise<void> }> {
   const usedNonces = new Map<string, number>();
   const sockets = new Set<Socket>();
@@ -106,6 +110,17 @@ export async function startLauncherControl(options: {
       if (value.action === "pair") {
         if (!options.registerPair || !value.pairDigest) throw new Error("pairing unavailable");
         options.registerPair(value.pairDigest, value.peers);
+      }
+      if (value.action === "local_mcp") {
+        if (!options.registerLocalMcp || value.depth === undefined || value.depth >= LOCAL_MCP_DEPTH_LIMIT) throw new Error("local MCP recursion limit");
+        const session = options.registerLocalMcp(value.depth);
+        socket.once("close", session.revoke);
+        if (socket.destroyed) { session.revoke(); return; }
+        const response: ControlResponse = { nonce: value.nonce, healthy: true, instance, mac: "", sessionToken: session.token };
+        response.mac = sign(options.controlKey, responseBody(response));
+        socket.setTimeout(0);
+        socket.write(`${JSON.stringify(response)}\n`);
+        return;
       }
       const healthy = value.action === "status" ? await runnerHealth(options.port, options.token, options.identity.projectPath) : true;
       const response: ControlResponse = { nonce: value.nonce, healthy, instance, mac: "" };
@@ -138,7 +153,7 @@ export async function startLauncherControl(options: {
   };
 }
 
-export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: ControlAction, pairDigest?: string, peers?: LocalPairPeer[]): Promise<{ healthy: boolean }> {
+export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: Exclude<ControlAction, "local_mcp">, pairDigest?: string, peers?: LocalPairPeer[]): Promise<{ healthy: boolean }> {
   if (action === "pair" ? !pairDigest || !/^[0-9a-f]{64}$/.test(pairDigest) : pairDigest !== undefined) {
     throw new Error("Invalid launcher control request.");
   }
@@ -157,6 +172,26 @@ export async function requestLauncherControl(instance: LauncherInstance, key: Bu
         !validMac(key, responseBody(value), value.mac)) throw new Error("instance_unverified: The Runner did not prove its identity.");
     return { healthy: value.healthy };
   } finally { socket.destroy(); }
+}
+
+/** The authenticated socket remains open for the lifetime of the in-memory session. */
+export async function openLauncherMcpSession(instance: LauncherInstance, key: Buffer, depth: number): Promise<{ token: string; closed: Promise<void>; close: () => void }> {
+  if (!Number.isSafeInteger(depth) || depth < 0 || depth >= LOCAL_MCP_DEPTH_LIMIT) throw new Error("local_mcp_recursion_limit: MCP nesting limit is 2.");
+  const request: ControlRequest = { action: "local_mcp", nonce: randomBytes(32).toString("hex"), sentAt: Date.now(), instance, depth, mac: "" };
+  request.mac = sign(key, requestBody(request));
+  const socket = createConnection({ host: "127.0.0.1", port: instance.controlPort });
+  const closed = new Promise<void>((resolve) => socket.once("close", resolve));
+  socket.on("error", () => socket.destroy());
+  socket.setTimeout(5_000, () => socket.destroy());
+  try {
+    socket.once("connect", () => socket.write(`${JSON.stringify(request)}\n`));
+    const value: unknown = JSON.parse(await readLine(socket));
+    if (!isControlResponse(value) || value.nonce !== request.nonce || !sameInstance(value.instance, instance) ||
+        !validMac(key, responseBody(value), value.mac) || !value.healthy ||
+        typeof value.sessionToken !== "string" || !/^[0-9a-f]{64}$/.test(value.sessionToken)) throw new Error("instance_unverified: The Runner did not prove its identity.");
+    socket.setTimeout(0);
+    return { token: value.sessionToken, closed, close: () => socket.destroy() };
+  } catch (error) { socket.destroy(); throw error; }
 }
 
 function runnerHealth(port: number, token: string, projectPath: string): Promise<boolean> {
@@ -207,8 +242,16 @@ function readLine(socket: Socket): Promise<string> {
   });
 }
 
-function requestBody(request: ControlRequest): string { return JSON.stringify(["request", request.action, request.nonce, request.sentAt, request.pairDigest ?? null, instanceFields(request.instance), request.peers ?? null]); }
-function responseBody(response: ControlResponse): string { return JSON.stringify(["response", response.nonce, response.healthy, instanceFields(response.instance)]); }
+function requestBody(request: ControlRequest): string {
+  const fields: unknown[] = ["request", request.action, request.nonce, request.sentAt, request.pairDigest ?? null, instanceFields(request.instance), request.peers ?? null];
+  if (request.action === "local_mcp") fields.push(request.depth);
+  return JSON.stringify(fields);
+}
+function responseBody(response: ControlResponse): string {
+  const fields: unknown[] = ["response", response.nonce, response.healthy, instanceFields(response.instance)];
+  if (response.sessionToken !== undefined) fields.push(response.sessionToken);
+  return JSON.stringify(fields);
+}
 function instanceFields(value: LauncherInstance): unknown[] {
   return [value.schemaVersion, value.projectPath, value.projectKey, value.owner, value.pid, value.startedAt, value.port, value.controlPort, value.instanceId, value.version];
 }
@@ -219,10 +262,11 @@ function validMac(key: Buffer, body: string, mac: string): boolean {
   return timingSafeEqual(Buffer.from(sign(key, body), "hex"), Buffer.from(mac, "hex"));
 }
 function isControlRequest(value: unknown): value is ControlRequest {
-  return isObject(value) && (value.action === "status" || value.action === "stop" || value.action === "pair") && typeof value.nonce === "string" &&
+  return isObject(value) && (value.action === "status" || value.action === "stop" || value.action === "pair" || value.action === "local_mcp") && typeof value.nonce === "string" &&
     /^[0-9a-f]{64}$/.test(value.nonce) && Number.isSafeInteger(value.sentAt) && isObject(value.instance) && typeof value.mac === "string" &&
     (value.action === "pair" ? typeof value.pairDigest === "string" && /^[0-9a-f]{64}$/.test(value.pairDigest) : value.pairDigest === undefined) &&
-    (value.peers === undefined || (value.action === "pair" && Array.isArray(value.peers) && value.peers.length <= 3 && value.peers.every(isLocalPairPeer)));
+    (value.peers === undefined || (value.action === "pair" && Array.isArray(value.peers) && value.peers.length <= 3 && value.peers.every(isLocalPairPeer))) &&
+    (value.action === "local_mcp" ? Number.isSafeInteger(value.depth) && (value.depth as number) >= 0 : value.depth === undefined);
 }
 function isControlResponse(value: unknown): value is ControlResponse {
   return isObject(value) && typeof value.nonce === "string" && typeof value.healthy === "boolean" && isObject(value.instance) && typeof value.mac === "string";

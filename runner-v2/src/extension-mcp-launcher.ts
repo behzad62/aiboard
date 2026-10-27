@@ -34,6 +34,8 @@ if (!values) {
   process.stderr.write("AI Board MCP launcher: the Runner did not provide this server's credentials.\\n");
   process.exit(78);
 }
+// Credentials cannot replace the Runner-owned ancestry marker.
+for (const name of Object.keys(values)) if (name.toUpperCase() === "AIBOARD_MCP_DEPTH") delete values[name];
 const child = spawn(executable, args, { stdio: "inherit", env: { ...process.env, ...values }, windowsHide: true });
 values = undefined;
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => { try { child.kill(signal); } catch {} });

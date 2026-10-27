@@ -123,6 +123,8 @@ export interface ExecutionHostRunBindingInput {
   readonly permissionProfile: PermissionProfile;
   readonly capabilityContract: RunnerCapabilityContract;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
+  /** Trusted ancestry of the local MCP proxy, if this is its private binding. */
+  readonly localMcpDepth?: number;
 }
 
 export interface ExecutionHostRunBindingSnapshot {
@@ -268,6 +270,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           capabilityContractDigest: digest,
           capabilitiesConfig: input.capabilitiesConfig,
           ambientEnvironment,
+          ...(input.localMcpDepth !== undefined ? { mcpChildDepth: input.localMcpDepth + 1 } : {}),
           artifacts: input.artifacts ?? options.artifacts,
           managedProcesses,
           windowsJobHost,
@@ -454,6 +457,7 @@ interface CreateRunBindingInput {
   readonly capabilityContractDigest: string;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
   readonly ambientEnvironment: Readonly<Record<string, string>>;
+  readonly mcpChildDepth?: number;
   readonly artifacts: ArtifactStore;
   readonly managedProcesses: ManagedProcessService;
   readonly windowsJobHost: WindowsJobProcessHost;
@@ -484,6 +488,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       if (blockers.length > 0) throw new Error(blockers.join(" "));
     });
     const childEnvironments = createChildEnvironmentFactory({
+      ...(input.mcpChildDepth !== undefined ? { mcpChildDepth: input.mcpChildDepth } : {}),
       credentialResolver: {
         consume: () => {
           throw new Error("No Runner child-environment credential grant is configured.");

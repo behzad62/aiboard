@@ -33,7 +33,7 @@ export function parseManagedSessionRecord(value: unknown, expectedId?: string): 
   const id = managedProcessId(row.processId);
   if (expectedId !== undefined && id !== expectedId) return invalid("identity does not match its owned entry");
   const actor = row.actor as Record<string, unknown> | undefined;
-  if (!actor || Object.keys(actor).sort().join() !== "id,role" || !["architect", "worker", "subagent", "verifier", "remote"].includes(actor.role as string) || !text(actor.id, 256)) return invalid("actor is invalid");
+  if (!actor || Object.keys(actor).sort().join() !== "id,role" || !["architect", "worker", "subagent", "verifier", "remote", "local_mcp"].includes(actor.role as string) || !text(actor.id, 256)) return invalid("actor is invalid");
   if (!text(row.runId, 256) || !text(row.sessionId, 256) || !text(row.command) || !text(row.cwd) || !isAbsolute(row.cwd)) return invalid("owner or command is invalid");
   if (!Array.isArray(row.args) || row.args.length > 1024 || row.args.some(arg => typeof arg !== "string" || arg.includes("\0")) || Buffer.byteLength(JSON.stringify(row.args)) > 128 * 1024) return invalid("arguments exceed their bound");
   if (!Array.isArray(row.environmentKeys) || row.environmentKeys.length > 256 || row.environmentKeys.some(key => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key)) || new Set(row.environmentKeys).size !== row.environmentKeys.length) return invalid("environment key inventory is invalid");

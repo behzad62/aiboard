@@ -9,9 +9,9 @@ import type { ToolEffect } from "./agent-contracts.js";
  * inspection surface and the verifier verdict surface. The Architect tool is
  * optional: it is registered only when a disposable copy exists.
  */
-export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker" | "remote";
+export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker" | "remote" | "local_mcp";
 
-export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "answer" | "delivery_obligations" | "delivery" | "delivery_commands" | "task" | "remote";
+export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "answer" | "delivery_obligations" | "delivery" | "delivery_commands" | "task" | "remote" | "local_mcp";
 
 /**
  * `all` registers every MCP tool the manager exposes (the worker).
@@ -49,6 +49,7 @@ export const ROLE_CAPABILITY_BROKERS = [
   { role: "plan-critic", broker: "inspection" },
   { role: "worker", broker: "task" },
   { role: "remote", broker: "remote" },
+  { role: "local_mcp", broker: "local_mcp" },
 ] as const satisfies readonly { role: RoleCapabilityRole; broker: RoleCapabilityBroker }[];
 
 /**
@@ -88,6 +89,12 @@ const ARCHITECT_PLAN_ONLY_BROWSER_TOOLS = [
 ] as const;
 
 const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
+  "local_mcp:local_mcp": surface("local_mcp", "local_mcp", "none", [], [
+    "fs.delete", "fs.list", "fs.move", "fs.patch", "fs.read", "fs.search", "fs.write",
+    "git.diff", "git.log", "git.status", "image.inspect",
+    "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
+    "process.start", "process.write_stdin",
+  ]),
   // Availability is narrower until remote path, browser and job protections exist.
   "remote:remote": surface("remote", "remote", "none", [], [
     "browser.click", "browser.close", "browser.drag", "browser.events", "browser.fill",

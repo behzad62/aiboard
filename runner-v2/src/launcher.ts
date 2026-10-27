@@ -13,7 +13,9 @@ import {
   projectDataDirectory, projectIdentity, readControlKey, readInstance, remoteDeviceDirectory, tryAcquireLock, writeInstance,
   type LauncherIdentity, type LauncherInstance,
 } from "./launcher-instance.js";
-import { requestLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
+import { openLauncherMcpSession, requestLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
+import { LOCAL_MCP_DEPTH_LIMIT, parseMcpDepth } from "./child-environment.js";
+import { serveLocalStdioMcp } from "./local-stdio-mcp.js";
 import { createLocalPairTicket, type LocalPairPeer } from "./local-pairing.js";
 import { STUB_REMOTE_PAIRING_URL } from "./remote-auth.js";
 import { RemoteDeviceStore } from "./remote-device-store.js";
@@ -28,7 +30,7 @@ const peerEntries: Record<Exclude<RunnerKind, "runner">, string> = {
   bench: fileURLToPath(new URL("../../scripts/bench-runner.mjs", import.meta.url)),
 };
 
-type Command = "start" | "status" | "stop" | "version" | "help" | "remote";
+type Command = "start" | "status" | "stop" | "version" | "help" | "remote" | "mcp";
 export interface LauncherArguments {
   command: Command;
   runners: RunnerKind[];
@@ -38,6 +40,7 @@ export interface LauncherArguments {
   noOpen?: boolean;
   logout?: boolean;
   acknowledgeRemote?: boolean;
+  stdio?: boolean;
 }
 
 const VALUE_FLAGS = new Set(["--project", "--state-dir", "--port", "--capabilities-config", "--extensions-home", "--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run"]);
@@ -52,6 +55,12 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
   const selected: RunnerKind[] = [];
   while (args[0] && !args[0].startsWith("-")) {
     const name = args[0];
+    if (name === "mcp") {
+      if (selected.length > 0 || args[1] !== "serve") throw new Error("invalid_arguments: Expected aiboard mcp serve --stdio.");
+      args.splice(0, 2);
+      command = "mcp";
+      break;
+    }
     if (name === "remote") {
       if (selected.length > 0) throw new Error("invalid_arguments: Unknown aiboard command. See --help.");
       args.shift();
@@ -80,6 +89,10 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
     const flag = args[index]!;
     if (flag === "--help" || flag === "-h") { result.command = "help"; continue; }
     if (flag === "--no-open") { result.noOpen = true; continue; }
+    if (flag === "--stdio") {
+      if (result.command !== "mcp" || result.stdio) throw new Error("invalid_arguments: --stdio applies once to mcp serve.");
+      result.stdio = true; continue;
+    }
     if (flag === "--logout") {
       if (result.command !== "remote") throw new Error("invalid_arguments: --logout applies only to aiboard remote.");
       result.logout = true; continue;
@@ -97,7 +110,8 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
   }
   if (result.project && !isAbsolute(result.project)) throw new Error("invalid_arguments: --project must be an absolute path.");
   if (result.stateDirectory && !isAbsolute(result.stateDirectory)) throw new Error("invalid_arguments: --state-dir must be an absolute path.");
-  if (result.command !== "start" && result.command !== "remote" && result.runnerFlags.length > 0) throw new Error("invalid_arguments: Runner options apply only when starting a Runner.");
+  if (result.command === "mcp" && !result.stdio) throw new Error("invalid_arguments: mcp serve requires --stdio.");
+  if (result.command !== "start" && result.command !== "remote" && result.command !== "mcp" && result.runnerFlags.length > 0) throw new Error("invalid_arguments: Runner options apply only when starting a Runner.");
   return result;
 }
 
@@ -119,8 +133,10 @@ interface LauncherRuntime {
 
 export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}): Promise<void> {
   const args = parseLauncherArguments(raw);
-  const startLike = args.command === "start" || (args.command === "remote" && args.logout !== true);
-  const write = runtime.write ?? ((message: string) => process.stdout.write(message));
+  const startLike = args.command === "start" || args.command === "mcp" || (args.command === "remote" && args.logout !== true);
+  const write = runtime.write ?? ((message: string) => (args.command === "mcp" ? process.stderr : process.stdout).write(message));
+  const depth = args.command === "mcp" ? parseMcpDepth((runtime.environment ?? process.env).AIBOARD_MCP_DEPTH) : 0;
+  if (args.command === "mcp" && depth >= LOCAL_MCP_DEPTH_LIMIT) throw new Error("local_mcp_recursion_limit: MCP nesting limit is 2.");
   const metadata: unknown = JSON.parse(await readFile(packagePath, "utf8"));
   const version = typeof metadata === "object" && metadata !== null && "version" in metadata && typeof metadata.version === "string" ? metadata.version : "unknown";
   if (args.command === "version") { write(`AIBoard Runner V2 ${version}\n`); return; }
@@ -343,7 +359,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           if (status.healthy) {
             reuseV2 = true;
             instances.set("runner", recorded);
-            tickets.set("runner", createLocalPairTicket(recorded.instanceId));
+            if (args.command !== "mcp") tickets.set("runner", createLocalPairTicket(recorded.instanceId));
             reused.add("runner");
           } else {
             await requestLauncherControl(recorded, key, "stop");
@@ -359,11 +375,11 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         ownedKeys.push(key);
         v2Token = randomBytes(32).toString("hex");
         const instanceId = randomBytes(16).toString("hex");
-        const ticket = createLocalPairTicket(instanceId);
-        tickets.set("runner", ticket);
+        const ticket = args.command === "mcp" ? undefined : createLocalPairTicket(instanceId);
+        if (ticket) tickets.set("runner", ticket);
         const handshake: LauncherHandshake = {
           type: "aiboard-launcher-init", token: v2Token, controlKey: key.toString("hex"), instanceId,
-          pairDigest: ticket.digest, peers: peerListFor("runner", selected, instances, tickets), identity, stateDirectory, version,
+          ...(ticket ? { pairDigest: ticket.digest, peers: peerListFor("runner", selected, instances, tickets) } : {}), identity, stateDirectory, version,
         };
         const spawnRunner = runtime.spawnRunner ?? spawn;
         v2Child = spawnRunner(process.execPath, runnerSpawnArguments(identity, stateDirectory, args.runnerFlags), {
@@ -393,8 +409,9 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     }
 
     // Anchor peers are registered first, then the anchor with its peer list.
-    const anchorPeers = peerListFor(anchorKind, selected, instances, tickets);
+    const anchorPeers = args.command === "mcp" ? [] : peerListFor(anchorKind, selected, instances, tickets);
     for (const kind of selected) {
+      if (args.command === "mcp") break;
       if (!reused.has(kind)) continue;
       const instance = instances.get(kind)!;
       const key = kind === "runner"
@@ -415,11 +432,24 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     started = true;
     releaseDiscovery();
     releaseDiscovery = () => undefined;
-    for (const kind of selected) {
-      write(describe(instances.get(kind)!, freshKinds.has(kind) ? "running" : "already running"));
+    if (args.command === "mcp") {
+      const instance = instances.get("runner")!;
+      const key = await readControlKey(stateDirectory);
+      let session: Awaited<ReturnType<typeof openLauncherMcpSession>>;
+      try { session = await openLauncherMcpSession(instance, key, depth); } finally { key.fill(0); }
+      const stop = () => session.close();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      try { await serveLocalStdioMcp({ port: instance.port, token: session.token, closed: session.closed }); }
+      finally {
+        process.off("SIGINT", stop); process.off("SIGTERM", stop); session.close();
+        for (const fresh of freshChildren) if (fresh.connected) fresh.send({ type: "aiboard-launcher-stop" });
+      }
+    } else {
+      for (const kind of selected) write(describe(instances.get(kind)!, freshKinds.has(kind) ? "running" : "already running"));
+      const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
+      showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime);
     }
-    const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
-    showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime);
     if (args.command === "remote" && !new RemoteDeviceStore(deviceDirectory!).loadSession()) {
       write("Remote pairing: " + STUB_REMOTE_PAIRING_URL + "\n");
       if (args.noOpen !== true) {
@@ -704,6 +734,7 @@ function help(): string {
     "  --capabilities-config, --extensions-home, --mcp, --mcp-envelope,",
     "  --allow-origin, --set-aside-run  Pass existing Runner options through.",
     "  aiboard remote            Start Runner V2 with the remote service; --logout wipes the device.",
+    "  aiboard mcp serve --stdio Serve local tools through this project's Runner (maximum MCP nesting depth: 2).",
     "  --help, -h                Show this help.", "",
   ].join("\n");
 }

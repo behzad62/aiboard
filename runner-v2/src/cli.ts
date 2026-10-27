@@ -63,6 +63,7 @@ import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
 import { assertExternalState, projectIdentity, tryAcquireLock } from "./launcher-instance.js";
 import { receiveLauncherHandshake, startLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
+import { LocalMcpSessions } from "./local-stdio-mcp.js";
 import { LocalPairing } from "./local-pairing.js";
 import { RemoteService } from "./remote-service.js";
 import { StubRemoteSessionIssuer } from "./remote-auth.js";
@@ -365,7 +366,7 @@ async function main(): Promise<void> {
     await chatSessions.recover();
     const localPairing = launcher ? new LocalPairing(launcher.instanceId) : undefined;
     if (launcher && localPairing) {
-      localPairing.register(launcher.pairDigest);
+      if (launcher.pairDigest) localPairing.register(launcher.pairDigest);
       if (launcher.peers?.length) localPairing.setPeers(launcher.peers);
     }
     let remoteService: RemoteService | undefined;
@@ -390,9 +391,12 @@ async function main(): Promise<void> {
       resources.remote = remoteService;
       await remoteService.start();
     }
+    const localMcp = launcher ? new LocalMcpSessions({ host: executionHost, workspacePath: options.projectPath, statePath: join(options.stateDirectory, "local-mcp-owners.sqlite"),
+      permissionProfile: "full", capabilitiesConfig }) : undefined;
     const server = new ControlServer({
       ...(remoteService ? { remoteStatus: () => remoteService.status() } : {}),
       localPairing,
+      localMcp,
       allowLocalPairDevOrigin: process.env.AIBOARD_LOCAL_PAIR_DEV_ORIGIN === "1",
       toolBench,
       extensions,
@@ -433,6 +437,7 @@ async function main(): Promise<void> {
       },
     });
     resources.server = server;
+    await localMcp?.recover();
     const address = await server.start(options.port);
     oauthRedirect.uri = `${address.url}${OAUTH_CALLBACK_PATH}`;
 
@@ -496,6 +501,10 @@ async function main(): Promise<void> {
           if (!localPairing) throw new Error("Pairing unavailable.");
           localPairing.register(digest);
           if (peers?.length) localPairing.setPeers(peers);
+        },
+        registerLocalMcp: (depth) => {
+          if (!localMcp) throw new Error("Local MCP is unavailable.");
+          return localMcp.mint(depth);
         },
         shutdown: requestLauncherShutdown,
       });
