@@ -325,7 +325,7 @@ Rules: R2 schemas merged before P2. Avoid overlapping edits to runner-v2/src/cli
 ## 10. Acceptance process and documentation
 Every packet produces an implementer summary: requirement IDs, edited paths, security implications, test commands and observed results, commit hash, protocol changes, known limitations, owner decisions needed, next packet. "Verified" is reserved for executed tests against a declared revision/environment.
 
-Ledger: docs/plans/2026-10-27-paid-remote-device-tools-STATUS.md, created by R0 with every packet NOT STARTED and this audit as DOCUMENTED ONLY. States: NOT STARTED / ACTIVE / BLOCKED / REVIEWED / ACCEPTED.
+Ledger: docs/plans/2026-10-27-aiboard-remote-STATUS.md, created by R0 with every packet NOT STARTED and this audit as DOCUMENTED ONLY. States: NOT STARTED / ACTIVE / BLOCKED / REVIEWED / ACCEPTED.
 
 Command families (confirm exact names at execution time):
 - AIBoard: targeted `npx tsx --test runner-v2/test/<selected>.test.ts`; `npm run typecheck:runner-v2`; `npm run lint`; full Runner suite only at deliberate gates. Never run `npm run build` while the dev server is up.
@@ -344,7 +344,7 @@ Start R0 and STOP after its reviewable deliverables:
 5. Create the STATUS ledger anchored to inspected revisions. Commit docs/contracts only in a separate worktree after independent review. No production mutation, paid calls or broad suites.
 6. Hand off L1 and R1 entrypoints, commands, a minimal fake-relay scenario and mandatory negative checks.
 
-> Implement packet R0 of D:\repos\ai-discussion-board\docs\plans\2026-10-27-paid-remote-device-tools-and-autonomous-jobs.md. Review both repositories and the required docs. Produce the tool catalog, remote tool surface proposal, ADRs A–G, versioned contracts with fixtures, the STATUS ledger and deterministic baseline evidence only. Preserve main and other worktrees; do not deploy, push, use paid models or run broad gates. Get independent review and return the exact commit and the L1/R1 handoff.
+> Implement packet R0 of D:\repos\ai-discussion-board\docs\plans\2026-10-27-aiboard-remote.md. Review both repositories and the required docs. Produce the tool catalog, remote tool surface proposal, ADRs A–G, versioned contracts with fixtures, the STATUS ledger and deterministic baseline evidence only. Preserve main and other worktrees; do not deploy, push, use paid models or run broad gates. Get independent review and return the exact commit and the L1/R1 handoff.
 
 ## 12. References
 - D:\repos\ai-discussion-board\AGENTS.md, CLAUDE.md
