@@ -6,8 +6,11 @@ export const NATIVE_TOOLBENCH_VERSION = "4.0.1";
 export const NATIVE_TOOLBENCH_SCORING = "solo-toolbench-v4.1";
 export const LEGACY_NATIVE_TOOLBENCH_SUITE = "toolbench-native-core-v4";
 /** Lean capability qualification used by the Run tab. Legacy suite identities remain readable for historical evidence. */
-export const NATIVE_TOOLBENCH_SUITE = "toolbench-native-capability-v7";
-export const NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE = "toolbench-native-capability-browser-v7";
+/** The only selectable ToolBench: seven cases, including browser + interactive process. */
+export const NATIVE_TOOLBENCH_SUITE = "toolbench-native-capability-browser-v7";
+/** Historical alias retained for published v7 browser results. */
+export const NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE = NATIVE_TOOLBENCH_SUITE;
+const LEGACY_V7_NON_BROWSER_SUITE = "toolbench-native-capability-v7";
 export const NATIVE_TOOLBENCH_CAPABILITY_VERSION = "7.0.0";
 export const NATIVE_TOOLBENCH_CAPABILITY_SCORING = "solo-toolbench-capability-v7";
 const LEGACY_CAPABILITY_SUITE = "toolbench-native-capability-v6";
@@ -255,7 +258,7 @@ function variantFixtures(): Fixture[] {
 
 const V5_PUBLIC_CONTEXT = "Use production native tools directly as the only model. Scope violations disqualify the attempt. Public verification is node check.mjs (also npm test); no install or compile is needed. Use the tools the request names; tool errors are ordinary feedback. Finish with finish_toolbench when the requested task is complete. External hidden scoring runs only after your session ends; it checks saved behavior, fixture integrity, and recorded tool actions. No planning, review, documentation, integration or project handoff is required.";
 
-/** Core remains usable without a browser; the optional profile adds browser behavior to the process case. */
+/** Historical non-browser v7 remains addressable, but every new ToolBench run includes browser + process. */
 function capabilityFixtures(includeBrowser = false, legacy = false): Fixture[] {
   const navigation = extendedFixtures[0]!;
   const navigationBase = navigation.files["src/pricing/discount.mjs"]!;
@@ -332,7 +335,7 @@ assert.deepEqual(JSON.parse(readFileSync('callers.json','utf8')), {applyDiscount
     ...fixture,
     ...(legacy ? { v6: true } : { v7: true }),
     v5: {
-      profile: legacy ? LEGACY_CAPABILITY_SUITE : fixture.id === "interactive-browser-process" ? NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE : NATIVE_TOOLBENCH_SUITE,
+      profile: legacy ? LEGACY_CAPABILITY_SUITE : fixture.id === "interactive-browser-process" ? NATIVE_TOOLBENCH_SUITE : LEGACY_V7_NON_BROWSER_SUITE,
       coverage: fixture.id === "code-navigation"
         ? [...fixture.v5!.coverage, "atomic_multi_edit"]
         : fixture.id === "artifact-retrieval"
@@ -399,13 +402,13 @@ function option(fixture: Fixture): WorkBenchCaseOption {
 }
 
 export function getNativeToolBenchPack(id: string): WorkBenchCasePackOption | null {
-  if ([NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE, LEGACY_CAPABILITY_SUITE].includes(id)) {
-    const browser = id !== NATIVE_TOOLBENCH_SUITE;
+  if ([NATIVE_TOOLBENCH_SUITE, LEGACY_V7_NON_BROWSER_SUITE, LEGACY_CAPABILITY_SUITE].includes(id)) {
+    const browser = id !== LEGACY_V7_NON_BROWSER_SUITE;
     const cases = capabilityFixtures(browser, id === LEGACY_CAPABILITY_SUITE).map(option);
     return {
       id,
-      label: browser ? "ToolBench: capability check with browser" : "ToolBench: capability check",
-      description: browser ? "Seven focused checks, with browser form interaction combined with the owned interactive process case." : "Seven focused checks for editing/recovery, navigation, continued search, command artifacts, interactive process IO and project skills. Browser tools are optional.",
+      label: id === NATIVE_TOOLBENCH_SUITE ? "ToolBench: capability check" : "ToolBench: historical capability check",
+      description: id === NATIVE_TOOLBENCH_SUITE ? "One seven-case ToolBench qualification including browser interaction, owned interactive processes, editing, search, command artifacts and skills." : "Historical ToolBench fixture retained for previously recorded benchmark results.",
       caseCount: cases.length, caseIds: cases.map(item => item.id), cases,
     };
   }

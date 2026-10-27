@@ -219,9 +219,9 @@ const compact = getNativeToolBenchPack(NATIVE_TOOLBENCH_SUITE)!;
 assert.equal(getNativeToolBenchPack(LEGACY_NATIVE_TOOLBENCH_SUITE)!.caseCount, 6, "old suite identity is readable");
 assert.equal(compact.caseCount, 7);
 const browserCompact = getNativeToolBenchPack(NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE)!;
-assert.ok(compact.cases.every(option => !option.case.nativeQualification?.requiresBrowser));
+assert.equal(compact.cases.filter(option => option.case.nativeQualification?.requiresBrowser).length, 1);
 assert.equal(browserCompact.caseCount, 7);
-const processBrowser = browserCompact.cases.find(option => option.id.endsWith("interactive-browser-process-v7"))!.case;
+const processBrowser = compact.cases.find(option => option.id.endsWith("interactive-browser-process-v7"))!.case;
 assert.equal(processBrowser.nativeQualification?.requiresBrowser, true);
 assert.equal(processBrowser.nativeQualification?.processGeneratedOutputs, true);
 assert.ok(processBrowser.nativeQualification?.coverage?.includes("browser_form"));
@@ -238,7 +238,7 @@ for (const option of compact.cases) {
   assert.equal(option.case.caseVersion, "7.0.0");
   assert.deepEqual(option.case.budget, { maxWallClockSeconds: 4500, maxModelCalls: 300, maxToolCalls: 900, maxInputTokens: 5_000_000, maxOutputTokens: 750_000 });
   assert.ok(option.case.nativeQualification?.coverage?.length);
-  assert.equal(option.case.nativeQualification!.profile, NATIVE_TOOLBENCH_SUITE);
+  assert.equal(option.case.nativeQualification!.profile, option.id.endsWith("interactive-browser-process-v7") ? NATIVE_TOOLBENCH_SUITE : "toolbench-native-capability-v7");
   for (const capability of option.case.nativeQualification!.coverage!) assert.ok(NATIVE_TOOL_COVERAGE.find(row => row.id === capability)?.cases.includes(option.id), `v7 manifest missing ${option.id}: ${capability}`);
   assert.doesNotThrow(() => nativeToolBenchReferenceFiles(option.id));
 }
@@ -252,7 +252,7 @@ for (const option of [...extended.cases, ...browserForm.cases]) {
   assert.ok(option.case.executionPolicy!.hiddenPaths!.includes("verifier.mjs"), "hidden scoring stays out of the model workspace");
   assert.doesNotThrow(() => nativeToolBenchReferenceFiles(option.id));
 }
-const allCaseIds = new Set([NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE, "toolbench-native-capability-v6", LEGACY_NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_VARIANT_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE, NATIVE_TOOLBENCH_EXTENDED_SUITE, NATIVE_TOOLBENCH_BROWSER_FORM_SUITE].flatMap((id) => getNativeToolBenchPack(id)!.caseIds));
+const allCaseIds = new Set([NATIVE_TOOLBENCH_SUITE, "toolbench-native-capability-v7", "toolbench-native-capability-v6", LEGACY_NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_VARIANT_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE, NATIVE_TOOLBENCH_EXTENDED_SUITE, NATIVE_TOOLBENCH_BROWSER_FORM_SUITE].flatMap((id) => getNativeToolBenchPack(id)!.caseIds));
 for (const capability of NATIVE_TOOL_COVERAGE) for (const id of capability.cases) assert.ok(allCaseIds.has(id), `manifest case ${id} exists`);
 console.log("PASS v5 historical and v7 capability identities and coverage manifest consistency");
 
@@ -292,7 +292,7 @@ for (const option of [...extended.cases, ...(browserAvailable ? browserForm.case
 }
 
 // The consolidated pack must exercise the actual native tools, not just pass fixture assertions.
-for (const option of [...compact.cases.filter(entry => /code-navigation-v7|artifact-retrieval-v7|interactive-process-v7/.test(entry.id)), ...(browserAvailable ? browserCompact.cases.filter(entry => entry.id.includes("interactive-browser-process")) : [])].filter(entry => !only || entry.id.includes(only))) {
+for (const option of compact.cases.filter(entry => /code-navigation-v7|artifact-retrieval-v7|interactive-browser-process-v7/.test(entry.id) && (!only || entry.id.includes(only)) && (browserAvailable || !entry.id.includes("interactive-browser-process")))) {
   const outcome = await runCase(option);
   assert.equal(outcome.qualification.passed, true, `${option.id}: ${failed(outcome)}`);
   assert.equal(outcome.verifierPassed, true, `${option.id}: hidden verifier`);

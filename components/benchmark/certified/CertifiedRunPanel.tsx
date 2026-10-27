@@ -34,7 +34,7 @@ import {
   type BenchRunnerHealth,
 } from "@/lib/client/bench-runner";
 import { getEnabledModels } from "@/lib/client/providers";
-import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE } from "@/lib/benchmark/native-suites";
+import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE } from "@/lib/benchmark/native-suites";
 
 import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
 import {
@@ -79,8 +79,7 @@ export function CertifiedRunPanel({
     );
   // Repeated model IDs are intentional: one model may fill every Build role.
   const [harnessModelIds, setHarnessModelIds] = useState<string[]>([]);
-  const [includeBrowser, setIncludeBrowser] = useState(false);
-  const toolBenchSuiteId = includeBrowser ? NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE : NATIVE_TOOLBENCH_SUITE;
+  const toolBenchSuiteId = NATIVE_TOOLBENCH_SUITE;
   const [focusedPresetId, setFocusedPresetId] =
     useState<BenchmarkPreset["id"]>("team-benchmark");
   const [presetLegRows, setPresetLegRows] = useState<RunProgressLegRow[]>([]);
@@ -193,11 +192,7 @@ export function CertifiedRunPanel({
           <div className="space-y-3">
           <div className="rounded-lg border bg-background/40 p-3 text-sm space-y-2">
             <div className="font-medium">ToolBench: capability check</div>
-            <p className="text-xs text-muted-foreground">Seven focused checks for native tool use. Tokens, cost and seconds measure efficiency; budgets are emergency spending guards.</p>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={includeBrowser} disabled={busy} onChange={event => setIncludeBrowser(event.target.checked)} />
-              Include browser interaction (requires a browser backend)
-            </label>
+            <p className="text-xs text-muted-foreground">Seven focused native-tool checks, including browser interaction and owned process management. One score; a browser backend is required. Tokens, cost, and seconds measure efficiency.</p>
           </div>
           <ModelChecklist
             models={models}

@@ -1,4 +1,5 @@
 /* ToolReliability current-name public API checks (run: npx tsx scripts/test-toolreliability-current-names.mts) */
+import { readFileSync } from "node:fs";
 const toolReliabilityApi = await import("../lib/benchmark/toolreliability");
 const suiteOptionsApi = await import("../lib/benchmark/certified/suite-options");
 
@@ -8,6 +9,14 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures++;
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
+
+const runPanelSource = readFileSync(new URL("../components/benchmark/certified/CertifiedRunPanel.tsx", import.meta.url), "utf8");
+check(
+  "ToolBench Run UI has exactly one profile without a browser checkbox",
+  runPanelSource.includes("const toolBenchSuiteId = NATIVE_TOOLBENCH_SUITE;") &&
+    !runPanelSource.includes("Include browser interaction") &&
+    !runPanelSource.includes("includeBrowser ?")
+);
 
 const publicApi = toolReliabilityApi as Record<string, unknown>;
 const suiteApi = suiteOptionsApi as Record<string, unknown>;
@@ -70,7 +79,7 @@ const relevantSuiteOptions = [
 check(
   "ToolReliability UI option uses current pack id and label",
   toolReliabilityOptions.length === 1 &&
-    toolReliabilityOptions[0]?.id === "toolbench-native-capability-v7" &&
+    toolReliabilityOptions[0]?.id === "toolbench-native-capability-browser-v7" &&
     toolReliabilityOptions[0]?.label === "ToolBench: capability check",
   toolReliabilityOptions
 );

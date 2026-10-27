@@ -36,14 +36,17 @@ const compact = getNativeBenchmarkPack("toolreliability", NATIVE_TOOLBENCH_SUITE
 assert.equal(compact.caseCount, 7);
 assert.deepEqual(listCertifiedSuiteOptions("toolreliability").map(option => option.id), [NATIVE_TOOLBENCH_SUITE]);
 assert.ok(compact.cases.every(option => option.case.budget.maxModelCalls === 300 && option.case.budget.maxWallClockSeconds === 4500 && option.case.budget.maxInputTokens === 5_000_000));
-assert.equal(compact.cases.filter(option => option.case.nativeQualification?.requiresBrowser).length, 0);
-assert.ok(compact.caseIds.some(id => id.includes("interactive-process-v7")));
+assert.equal(compact.cases.filter(option => option.case.nativeQualification?.requiresBrowser).length, 1);
+assert.ok(compact.caseIds.some(id => id.includes("interactive-browser-process-v7")));
 assert.ok(compact.cases.every(option => option.id.endsWith("-v7")));
 assert.ok(!compact.caseIds.some(id => /variant-b|atomic-edits|bounded-output|command-args|investigate/.test(id)));
 assert.equal(pack.caseCount, 6);
 const browserPack = getNativeBenchmarkPack("toolreliability", NATIVE_TOOLBENCH_BROWSER_CAPABILITY_SUITE)!;
-assert.equal(browserPack.cases.filter(option => option.case.nativeQualification?.requiresBrowser).length, 1);
-assert.equal(browserPack.caseCount, 7);
+assert.equal(browserPack.id, compact.id, "the browser-inclusive pack is the only new-run ToolBench");
+const historicalWithoutBrowser = getNativeBenchmarkPack("toolreliability", "toolbench-native-capability-v7")!;
+assert.equal(historicalWithoutBrowser.caseCount, 7);
+assert.equal(historicalWithoutBrowser.cases.filter(option => option.case.nativeQualification?.requiresBrowser).length, 0);
+assert.deepEqual(compact.caseIds.filter(id => !id.includes("interactive-browser-process")), historicalWithoutBrowser.caseIds.filter(id => !id.includes("interactive-process")));
 for (const option of pack.cases) {
   assert.deepEqual(option.case.budget, {maxWallClockSeconds:4500,maxModelCalls:300,maxToolCalls:900,maxInputTokens:5000000,maxOutputTokens:750000});
   assert.equal(option.case.environment.timeoutSeconds,4500);
