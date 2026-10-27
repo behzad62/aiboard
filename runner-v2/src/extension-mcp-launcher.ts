@@ -1,3 +1,4 @@
+// RUNNER_RAW_PROCESS_BOUNDARY: generated stdio MCP env launcher; it runs as an owned MCP transport command and its one child stays in that owned tree.
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
