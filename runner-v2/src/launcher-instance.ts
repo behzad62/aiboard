@@ -29,6 +29,17 @@ export interface StateLocationOptions {
 
 export function projectDataDirectory(projectKey: string, options: StateLocationOptions): string {
   const paths = options.platform === "win32" ? win32 : posix;
+  const digest = createHash("sha256").update(projectKey).digest("hex");
+  return paths.join(userDataRoot(options), "projects", digest);
+}
+
+/** Remote device custody is per user (one device = this machine, D9), never per project. */
+export function remoteDeviceDirectory(options: StateLocationOptions): string {
+  return (options.platform === "win32" ? win32 : posix).join(userDataRoot(options), "remote");
+}
+
+function userDataRoot(options: StateLocationOptions): string {
+  const paths = options.platform === "win32" ? win32 : posix;
   let base: string;
   if (options.platform === "win32") {
     const local = options.environment.LOCALAPPDATA;
@@ -42,8 +53,7 @@ export function projectDataDirectory(projectKey: string, options: StateLocationO
     const xdg = options.environment.XDG_DATA_HOME;
     base = paths.join(xdg && paths.isAbsolute(xdg) ? xdg : paths.join(options.home, ".local", "share"), "aiboard");
   }
-  const digest = createHash("sha256").update(projectKey).digest("hex");
-  return paths.join(base, "projects", digest);
+  return base;
 }
 
 export function currentOwner(): string {
@@ -180,6 +190,29 @@ export async function prepareStateDirectory(
   if (!info.isDirectory()) throw new Error("invalid_state_directory: State must be a directory.");
   if (process.platform !== "win32" && (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)) {
     throw new Error("invalid_state_directory: State must be owned by the current user and private (mode 0700).");
+  }
+  return actual;
+}
+
+/**
+ * A per-user directory that is not bound to one project (remote device custody).
+ * Same placement checks as project state: inside the profile on Windows, outside
+ * the project, no link swapped in while preparing, private to the current user.
+ */
+export async function prepareUserDirectory(projectPath: string, requested: string, windowsDefault?: WindowsDefaultStateLocation): Promise<string> {
+  await assertWindowsStatePath(requested, windowsDefault);
+  const prospective = await canonicalFuturePath(requested);
+  assertExternalState(projectPath, prospective);
+  await mkdir(prospective, { recursive: true, mode: 0o700 });
+  await assertWindowsStatePath(requested, windowsDefault);
+  const actual = await realpath(requested);
+  if (process.platform === "win32" ? actual.toLowerCase() !== prospective.toLowerCase() : actual !== prospective) {
+    throw new Error("invalid_state_directory: The remote device directory changed while it was being prepared.");
+  }
+  const info = await stat(actual);
+  if (!info.isDirectory()) throw new Error("invalid_state_directory: The remote device directory must be a directory.");
+  if (process.platform !== "win32" && (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)) {
+    throw new Error("invalid_state_directory: The remote device directory must be owned by the current user and private (mode 0700).");
   }
   return actual;
 }

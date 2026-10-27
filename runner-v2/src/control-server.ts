@@ -83,6 +83,8 @@ export interface ControlServerOptions {
   allowedOrigins?: string[];
   localPairing?: LocalPairing;
   allowLocalPairDevOrigin?: boolean;
+  /** Status only; control routes are never forwarded to or from the relay. */
+  remoteStatus?: () => unknown;
 }
 
 export interface RunBootstrapInput {
@@ -251,6 +253,7 @@ export class ControlServer {
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly localPairing?: LocalPairing;
   private readonly allowLocalPairDevOrigin: boolean;
+  private readonly remoteStatus?: ControlServerOptions["remoteStatus"];
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
@@ -279,6 +282,7 @@ export class ControlServer {
     this.allowedOrigins = buildAllowedOriginSet(options.allowedOrigins);
     this.localPairing = options.localPairing;
     this.allowLocalPairDevOrigin = options.allowLocalPairDevOrigin === true;
+    this.remoteStatus = options.remoteStatus;
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -476,6 +480,11 @@ export class ControlServer {
         sendJson(response, 200, await this.toolBench.stop(segments[2])); return;
       }
       throw new HttpError(404, "not_found", "Unknown ToolBench session endpoint.");
+    }
+    if (segments.length === 3 && segments[1] === "remote" && segments[2] === "status" && request.method === "GET") {
+      if (!this.remoteStatus) throw new HttpError(503, "remote_unavailable", "Remote service is unavailable.");
+      sendJson(response, 200, this.remoteStatus());
+      return;
     }
     if (segments.length === 2 && segments[1] === "health" && request.method === "GET") {
       if (!this.runnerInfo) {

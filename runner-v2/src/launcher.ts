@@ -9,12 +9,15 @@ import { fileURLToPath } from "node:url";
 
 import {
   acquireDiscoveryLock, assertExternalState, assertInstanceIdentity, assertProjectBinding, assertWindowsStatePath,
-  canonicalFuturePath, clearStaleInstance, createControlKey, prepareStateDirectory,
-  projectDataDirectory, projectIdentity, readControlKey, readInstance, tryAcquireLock, writeInstance,
+  canonicalFuturePath, clearStaleInstance, createControlKey, prepareStateDirectory, prepareUserDirectory,
+  projectDataDirectory, projectIdentity, readControlKey, readInstance, remoteDeviceDirectory, tryAcquireLock, writeInstance,
   type LauncherIdentity, type LauncherInstance,
 } from "./launcher-instance.js";
 import { requestLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
 import { createLocalPairTicket, type LocalPairPeer } from "./local-pairing.js";
+import { STUB_REMOTE_PAIRING_URL } from "./remote-auth.js";
+import { RemoteDeviceStore } from "./remote-device-store.js";
+import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
 
 export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
 const RUNNER_KINDS: readonly RunnerKind[] = ["runner", "accounts", "legacy", "bench"];
@@ -25,7 +28,7 @@ const peerEntries: Record<Exclude<RunnerKind, "runner">, string> = {
   bench: fileURLToPath(new URL("../../scripts/bench-runner.mjs", import.meta.url)),
 };
 
-type Command = "start" | "status" | "stop" | "version" | "help";
+type Command = "start" | "status" | "stop" | "version" | "help" | "remote";
 export interface LauncherArguments {
   command: Command;
   runners: RunnerKind[];
@@ -33,6 +36,8 @@ export interface LauncherArguments {
   stateDirectory?: string;
   runnerFlags: string[];
   noOpen?: boolean;
+  logout?: boolean;
+  acknowledgeRemote?: boolean;
 }
 
 const VALUE_FLAGS = new Set(["--project", "--state-dir", "--port", "--capabilities-config", "--extensions-home", "--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run"]);
@@ -47,6 +52,12 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
   const selected: RunnerKind[] = [];
   while (args[0] && !args[0].startsWith("-")) {
     const name = args[0];
+    if (name === "remote") {
+      if (selected.length > 0) throw new Error("invalid_arguments: Unknown aiboard command. See --help.");
+      args.shift();
+      command = "remote";
+      break;
+    }
     if (name === "status" || name === "stop" || name === "version") {
       if (selected.length > 0) throw new Error("invalid_arguments: Unknown aiboard command. See --help.");
       args.shift();
@@ -69,6 +80,11 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
     const flag = args[index]!;
     if (flag === "--help" || flag === "-h") { result.command = "help"; continue; }
     if (flag === "--no-open") { result.noOpen = true; continue; }
+    if (flag === "--logout") {
+      if (result.command !== "remote") throw new Error("invalid_arguments: --logout applies only to aiboard remote.");
+      result.logout = true; continue;
+    }
+    if (flag === "--acknowledge-remote-access") { result.acknowledgeRemote = true; continue; }
     if (flag === "--token") throw new Error("invalid_arguments: aiboard uses fresh state and does not accept --token; legacy users should use aiboard-runner-v2.");
     if (!VALUE_FLAGS.has(flag)) throw new Error("invalid_arguments: Unknown launcher option. See --help.");
     const value = args[++index];
@@ -81,7 +97,7 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
   }
   if (result.project && !isAbsolute(result.project)) throw new Error("invalid_arguments: --project must be an absolute path.");
   if (result.stateDirectory && !isAbsolute(result.stateDirectory)) throw new Error("invalid_arguments: --state-dir must be an absolute path.");
-  if (result.command !== "start" && result.runnerFlags.length > 0) throw new Error("invalid_arguments: Runner options apply only when starting a Runner.");
+  if (result.command !== "start" && result.command !== "remote" && result.runnerFlags.length > 0) throw new Error("invalid_arguments: Runner options apply only when starting a Runner.");
   return result;
 }
 
@@ -95,6 +111,7 @@ interface LauncherRuntime {
   home?: string;
   platform?: NodeJS.Platform;
   write?: (message: string) => void;
+  confirmNotice?: () => Promise<boolean>;
   spawnRunner?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   spawnPeer?: (kind: RunnerKind, command: string, args: string[], options: SpawnOptions) => ChildProcess;
   openUrl?: (url: string) => void;
@@ -102,6 +119,7 @@ interface LauncherRuntime {
 
 export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}): Promise<void> {
   const args = parseLauncherArguments(raw);
+  const startLike = args.command === "start" || (args.command === "remote" && args.logout !== true);
   const write = runtime.write ?? ((message: string) => process.stdout.write(message));
   const metadata: unknown = JSON.parse(await readFile(packagePath, "utf8"));
   const version = typeof metadata === "object" && metadata !== null && "version" in metadata && typeof metadata.version === "string" ? metadata.version : "unknown";
@@ -117,10 +135,25 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   const windowsDefault = process.platform === "win32" && !args.stateDirectory
     ? { home, localAppData: environment.LOCALAPPDATA ?? "" }
     : undefined;
+  // One remote device per user (D9): custody lives beside, not inside, the per-project state.
+  const deviceDirectory = args.command === "remote"
+    ? await prepareUserDirectory(identity.projectPath,
+      remoteDeviceDirectory({ platform: runtime.platform ?? process.platform, environment, home }),
+      process.platform === "win32" ? { home, localAppData: environment.LOCALAPPDATA ?? "" } : undefined)
+    : undefined;
+  if (args.command === "remote" && args.logout) {
+    const deviceStore = new RemoteDeviceStore(deviceDirectory!);
+    const present = deviceStore.load() !== undefined;
+    deviceStore.logout();
+    write(present
+      ? "Remote device logged out. Device credentials and session state were wiped.\n"
+      : "Remote device logged out. No device credentials were present.\n");
+    return;
+  }
   await assertWindowsStatePath(requestedState, windowsDefault);
   const prospective = await canonicalFuturePath(requestedState);
   assertExternalState(identity.projectPath, prospective);
-  if (args.command !== "start") {
+  if (!startLike) {
     try { await stat(prospective); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -137,11 +170,29 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   const ownedKeys: Buffer[] = [];
   try {
     await assertProjectBinding(stateDirectory, identity);
+    if (args.command === "remote") {
+      const deviceStore = new RemoteDeviceStore(deviceDirectory!);
+      const probe = deviceStore.acquireOwnerLock();
+      if (probe) probe();
+      else {
+        const owner = deviceStore.activeOwnerProject();
+        if (owner !== identity.projectPath) {
+          throw new Error(`remote_already_active: Remote access is already active${owner ? ` for ${owner}` : ""}; stop that Runner first.`);
+        }
+      }
+      if (!deviceStore.noticeAcknowledged()) {
+        write(REMOTE_FIRST_RUN_NOTICE + "\n");
+        const accepted = args.acknowledgeRemote === true || (runtime.confirmNotice ? await runtime.confirmNotice() : false);
+        if (!accepted) throw new Error("remote_notice_required: Review the notice above, then rerun with --acknowledge-remote-access to accept whole-machine remote access.");
+        deviceStore.acknowledgeNotice();
+      }
+      if (!args.runnerFlags.includes("--remote")) args.runnerFlags.push("--remote", "--remote-device-dir", deviceDirectory!);
+    }
     const recorded = await readInstance(stateDirectory);
     if (recorded) assertInstanceIdentity(recorded, identity);
     const peerRecords = await readPeerInstances(stateDirectory, identity);
 
-    if (args.command !== "start") {
+    if (!startLike) {
       if (!recorded && peerRecords.length === 0) {
         const freeLifetime = tryAcquireLock(stateDirectory, "lifetime");
         if (freeLifetime) {
@@ -172,6 +223,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           });
           lines.push(describe(peer, status.healthy ? "running" : "unhealthy"));
         }
+        const remoteLine = await remoteStatusLine(stateDirectory);
+        if (remoteLine) lines.push(remoteLine);
         write(lines.length > 0 ? lines.join("") : "No Runner is running for this project.\n");
         return;
       }
@@ -367,6 +420,12 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     }
     const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
     showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime);
+    if (args.command === "remote" && !new RemoteDeviceStore(deviceDirectory!).loadSession()) {
+      write("Remote pairing: " + STUB_REMOTE_PAIRING_URL + "\n");
+      if (args.noOpen !== true) {
+        try { (runtime.openUrl ?? ((target: string) => openPairUrl(target, runtime.platform ?? process.platform)))(STUB_REMOTE_PAIRING_URL); } catch { /* printed URL is the fallback */ }
+      }
+    }
     if (freshChildren.length === 0) return;
 
     let interrupted = false;
@@ -614,6 +673,18 @@ function openPairUrl(url: string, platform: NodeJS.Platform): void {
   child.unref();
 }
 
+async function remoteStatusLine(stateDirectory: string): Promise<string | undefined> {
+  let raw: string;
+  try { raw = await readFile(join(stateDirectory, "remote-status.json"), "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== "object" || value === null || !("state" in value)) return "Remote: status unverified\n";
+    const status = value as { state: string; deviceId?: string };
+    return "Remote: " + status.state + (status.deviceId ? " (device " + status.deviceId + ")" : "") + "\n";
+  } catch { return "Remote: status unverified\n"; }
+}
+
 function describe(instance: LauncherInstance, state: string): string {
   return `Runner ${state}\nProject: ${instance.projectPath}\nURL: http://127.0.0.1:${instance.port}\nPID: ${instance.pid}\n`;
 }
@@ -632,6 +703,7 @@ function help(): string {
     "  --port <number>           Runner port (0 selects an available port).",
     "  --capabilities-config, --extensions-home, --mcp, --mcp-envelope,",
     "  --allow-origin, --set-aside-run  Pass existing Runner options through.",
+    "  aiboard remote            Start Runner V2 with the remote service; --logout wipes the device.",
     "  --help, -h                Show this help.", "",
   ].join("\n");
 }

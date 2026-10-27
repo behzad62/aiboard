@@ -64,6 +64,9 @@ import { SqliteEventStore } from "./sqlite-event-store.js";
 import { assertExternalState, projectIdentity, tryAcquireLock } from "./launcher-instance.js";
 import { receiveLauncherHandshake, startLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
 import { LocalPairing } from "./local-pairing.js";
+import { RemoteService } from "./remote-service.js";
+import { StubRemoteSessionIssuer } from "./remote-auth.js";
+import type { RemoteTransport } from "./remote-connector.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -81,6 +84,10 @@ interface CliOptions {
   extensionsHome: string;
   /** Runs the owner set aside: left paused and untouched, not rebuilt at startup. */
   setAsideRuns: ReadonlySet<string>;
+  /** aiboard remote: compose the Runner-owned remote service (R1d). */
+  remote: boolean;
+  /** Per-user remote device custody directory, required with --remote (launcher-supplied). */
+  remoteDeviceDirectory?: string;
 }
 
 void main();
@@ -361,7 +368,30 @@ async function main(): Promise<void> {
       localPairing.register(launcher.pairDigest);
       if (launcher.peers?.length) localPairing.setPeers(launcher.peers);
     }
+    let remoteService: RemoteService | undefined;
+    if (options.remote) {
+      const unavailableTransport = (): RemoteTransport => ({
+        connect: async () => { throw new Error("Remote transport is unavailable until R1e."); },
+        close: async () => undefined,
+        send: () => undefined,
+        onMessage: () => undefined,
+        onClose: () => undefined,
+      });
+      remoteService = new RemoteService({
+        stateDirectory: options.stateDirectory,
+        deviceDirectory: options.remoteDeviceDirectory!,
+        workspacePath: options.projectPath,
+        host: executionHost,
+        permissionProfile: "full",
+        capabilitiesConfig,
+        createTransport: unavailableTransport,
+        issuer: new StubRemoteSessionIssuer(),
+      });
+      resources.remote = remoteService;
+      await remoteService.start();
+    }
     const server = new ControlServer({
+      ...(remoteService ? { remoteStatus: () => remoteService.status() } : {}),
       localPairing,
       allowLocalPairDevOrigin: process.env.AIBOARD_LOCAL_PAIR_DEV_ORIGIN === "1",
       toolBench,
@@ -609,6 +639,7 @@ function isHelpRequested(args: string[]): boolean {
 
 function parseArguments(args: string[]): CliOptions {
   const values = new Map<string, string>();
+  let remote = false;
   const mcpServers: McpServerSpec[] = [];
   const mcpEnvelopes: string[] = [];
   const allowOrigins: string[] = [];
@@ -619,6 +650,7 @@ function parseArguments(args: string[]): CliOptions {
     if (!flag?.startsWith("--")) {
       throw new Error(`invalid_arguments: Unknown token ${flag ?? "argument"}.`);
     }
+    if (flag === "--remote") { remote = true; continue; }
     if (flag === "--mcp-envelope") {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("--")) throw new Error("invalid_arguments: Expected name=JSON after --mcp-envelope.");
@@ -671,6 +703,7 @@ function parseArguments(args: string[]): CliOptions {
         "--token",
         "--capabilities-config",
         "--extensions-home",
+        "--remote-device-dir",
       ].includes(flag)
     ) {
       throw new Error(`invalid_arguments: Unknown option ${flag}.`);
@@ -692,6 +725,10 @@ function parseArguments(args: string[]): CliOptions {
     values,
     "--capabilities-config",
   );
+  const remoteDeviceDirectory = optionalAbsolutePath(values, "--remote-device-dir");
+  if (remote !== (remoteDeviceDirectory !== undefined)) {
+    throw new Error("invalid_arguments: --remote and --remote-device-dir must be given together.");
+  }
   const extensionsHome = optionalAbsolutePath(values, "--extensions-home") ?? join(homedir(), ".aiboard", "runner-extensions");
   const portText = values.get("--port") ?? "0";
   const port = Number(portText);
@@ -713,6 +750,8 @@ function parseArguments(args: string[]): CliOptions {
     extensionsHome,
     ...(capabilitiesConfigPath ? { capabilitiesConfigPath } : {}),
     setAsideRuns,
+    remote,
+    ...(remoteDeviceDirectory ? { remoteDeviceDirectory } : {}),
   };
 }
 
@@ -753,6 +792,7 @@ function printHelp(): void {
     "  --extensions-home <abs-path> Managed skills/MCP/plugins store (default ~/.aiboard/runner-extensions).",
     "  --allow-origin <url>    Allowed browser CORS origin (repeatable, comma-separated list supported).",
     "  --set-aside-run <id>    Start without rebuilding this run; it stays paused and untouched (repeatable).",
+    "  --remote                Also start the Runner-owned remote service (aiboard remote).",
     "                         Defaults to loopback origins + aiboard.me.",
     "  --help, -h              Show this help text.",
     "",
