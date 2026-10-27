@@ -1,6 +1,6 @@
 import { configureMcpServers, mcpConfigurationDigest } from "./mcp-configuration.js";
 import { randomBytes } from "node:crypto";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
@@ -61,6 +61,8 @@ import {
 } from "./runner-resource-cleanup.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
+import { assertExternalState, projectIdentity, tryAcquireLock } from "./launcher-instance.js";
+import { receiveLauncherHandshake, startLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -70,6 +72,7 @@ interface CliOptions {
   port: number;
   token: string;
   legacyTokenProvided: boolean;
+  legacyToken?: string;
   mcpServers: McpServerSpec[];
   allowOrigins: string[];
   capabilitiesConfigPath?: string;
@@ -83,15 +86,49 @@ void main();
 
 async function main(): Promise<void> {
   const resources: RunnerResources = {};
+  let launcher: LauncherHandshake | undefined;
+  let releaseLauncherLifetime: (() => void) | undefined;
+  let launcherControl: Awaited<ReturnType<typeof startLauncherControl>> | undefined;
+  let launcherStopRequested = false;
+  let requestLauncherShutdown: (() => void) | undefined;
   try {
     assertSupportedNodeVersion(process.versions.node);
     const args = parseRunnerArguments(process.argv.slice(2));
+    const launcherFlag = args.indexOf("--launcher-ipc");
+    if (launcherFlag !== -1) {
+      args.splice(launcherFlag, 1);
+      if (args.includes("--launcher-ipc")) throw new Error("invalid_arguments: Duplicate launcher channel.");
+      launcher = await receiveLauncherHandshake();
+      process.on("message", (message: unknown) => {
+        if (typeof message === "object" && message !== null && "type" in message && message.type === "aiboard-launcher-stop") {
+          launcherStopRequested = true;
+          requestLauncherShutdown?.();
+        }
+      });
+      process.once("disconnect", () => { launcherStopRequested = true; requestLauncherShutdown?.(); });
+    }
     if (isHelpRequested(args)) {
       printHelp();
       return;
     }
     const options = parseArguments(args);
     await assertDirectory(options.projectPath, "project");
+    if (launcher) {
+      const identity = await projectIdentity(options.projectPath);
+      const canonicalState = await realpath(options.stateDirectory);
+      if (identity.projectPath !== launcher.identity.projectPath || identity.projectKey !== launcher.identity.projectKey ||
+          identity.owner !== launcher.identity.owner || options.stateDirectory !== launcher.stateDirectory ||
+          (process.platform === "win32" ? canonicalState.toLowerCase() !== options.stateDirectory.toLowerCase() : canonicalState !== options.stateDirectory)) {
+        throw new Error("launcher_identity_mismatch: The launcher and Runner identities do not match.");
+      }
+      assertExternalState(identity.projectPath, canonicalState);
+      const release = tryAcquireLock(options.stateDirectory, "lifetime");
+      if (!release) throw new Error("launcher_busy: A Runner already owns this project state.");
+      releaseLauncherLifetime = release;
+      options.token = launcher.token;
+      options.legacyTokenProvided = launcher.legacyToken !== undefined;
+      options.legacyToken = launcher.legacyToken;
+    }
     if (isInside(options.projectPath, options.stateDirectory)) {
       throw new Error(
         "invalid_state_directory: Runner state must be outside the project directory."
@@ -119,7 +156,7 @@ async function main(): Promise<void> {
     }
     const credentialStorage = prepareCredentialStores({
       stateDirectory: options.stateDirectory,
-      legacyToken: options.legacyTokenProvided ? options.token : undefined,
+      legacyToken: options.legacyTokenProvided ? options.legacyToken ?? options.token : undefined,
     });
     let providerConfigs: EncryptedProviderConfigStore;
     let extensionCredentials: ExtensionCredentialStore;
@@ -373,16 +410,25 @@ async function main(): Promise<void> {
       mcp: mcpStatus.status(),
       allowOrigins: options.allowOrigins,
     };
-    process.stdout.write(`${JSON.stringify(readiness)}\n`);
-    writeReadableStartupSummary(readiness);
-
     let shuttingDown = false;
     const shutdown = (signal: NodeJS.Signals) => {
       if (shuttingDown) return;
       shuttingDown = true;
-      void closeRunnerResources(resources).then(
+      void (async () => {
+        let controlError: unknown;
+        try { await launcherControl?.close(); } catch (error) { controlError = error; }
+        try { await closeRunnerResources(resources); }
+        catch (error) {
+          if (controlError) throw new AggregateError([controlError, error], "Runner control and resource cleanup failed.");
+          throw error;
+        }
+        if (controlError) throw controlError;
+      })().then(
         () => {
           process.exitCode = signal === "SIGINT" ? 130 : 0;
+          releaseLauncherLifetime?.();
+          releaseLauncherLifetime = undefined;
+          if (launcher && process.connected) process.disconnect?.();
         },
         (error: unknown) => {
           writeStartupError(error);
@@ -390,21 +436,46 @@ async function main(): Promise<void> {
         }
       );
     };
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
+    const signalShutdown = (signal: NodeJS.Signals) => {
+      if (launcher && !launcherControl) { launcherStopRequested = true; return; }
+      shutdown(signal);
+    };
+    process.once("SIGINT", signalShutdown);
+    process.once("SIGTERM", signalShutdown);
+    requestLauncherShutdown = () => signalShutdown("SIGTERM");
+
+    if (launcher) {
+      launcherControl = await startLauncherControl({
+        identity: launcher.identity,
+        instanceId: launcher.instanceId,
+        version: launcher.version,
+        startedAt: Math.floor(Date.now() - process.uptime() * 1_000),
+        port: address.port,
+        token: options.token,
+        controlKey: Buffer.from(launcher.controlKey, "hex"),
+        shutdown: requestLauncherShutdown,
+      });
+      if (process.connected) process.send?.({ type: "aiboard-launcher-ready", instance: launcherControl.instance });
+      if (launcherStopRequested || !process.connected) requestLauncherShutdown();
+    } else {
+      process.stdout.write(`${JSON.stringify(readiness)}\n`);
+      writeReadableStartupSummary(readiness);
+    }
   } catch (error) {
     let cleanupError: unknown;
-    try {
-      await closeRunnerResources(resources);
-    } catch (closeError) {
-      cleanupError = closeError;
-    }
+    try { await launcherControl?.close(); } catch (closeError) { cleanupError = closeError; }
+    try { await closeRunnerResources(resources); }
+    catch (closeError) { cleanupError = cleanupError ? new AggregateError([cleanupError, closeError], "Runner cleanup failed.") : closeError; }
     writeStartupError(
       cleanupError
         ? startupFailureWithCleanup(error, cleanupError)
         : error,
     );
     process.exitCode = 1;
+    if (!cleanupError) {
+      releaseLauncherLifetime?.();
+      if (launcher && process.connected) process.disconnect?.();
+    }
   }
 }
 

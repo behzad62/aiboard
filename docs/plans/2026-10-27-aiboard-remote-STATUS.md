@@ -7,7 +7,7 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
 | Packet | Title | Depends on | Status | Owner (delegate) | Evidence / commit |
 | --- | --- | --- | --- | --- | --- |
 | R0 | Audit, ADRs, contracts | — | ACCEPTED (architect review; owner OK 2026-10-27) | architect; codex (T1 catalog, T2 ADR-A/C/D, T3 ADR-B/E/F/G, T4 contracts, T6 D17 revision, T7 hand-off), muse (T5 ledger); agy T2 attempt hit quota | docs/remote/r0/; commit on remote/r0-audit (see Log) |
-| L1 | `aiboard` CLI | R0 | ACTIVE — L1a REVIEWED (architect) | codex | L1a: storage-key-migration 20/20, touched suites 72/72 + credential-graph 2/2, typecheck:runner-v2 0, eslint 0 (2026-10-27) |
+| L1 | `aiboard` CLI | R0 | ACTIVE — L1a + L1b REVIEWED (architect) | codex | L1a: storage-key-migration 20/20, touched suites 72/72 + credential-graph 2/2, typecheck:runner-v2 0, eslint 0; L1b: local-launcher + cli-root-capture 16/16 incl. real Windows start→health→owned stop, live smoke start/status/reuse/stop OK, no orphan, typecheck 0, eslint 0 (2026-10-27) |
 | L2 | Installers and updates | L1 | NOT STARTED | — | — |
 | R1 | Connector inside Runner V2 | R0 | ACTIVE (R1a) | codex | — |
 | S1 | Whole-machine remote scope | R1 | NOT STARTED | — | — |
@@ -42,6 +42,8 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
 
 ## Open items carried from R0
 
+- Pre-existing (found 2026-10-27, not caused by this plan): `runner-v2/test/static-adapter-policy.test.ts` fails on main — `src/extension-mcp-launcher.ts` (commit 3bd6bbdd) is an unregistered raw process boundary. Needs its own small fix.
+- Windows launcher state trusts the per-user profile default ACL (no ACL verification yet); real ACL/keychain checks belong to the OS-keychain follow-up of L1a.
 - Windows-MCP release pin and tool keys (X1); VPS device/concurrency ceiling (R4 measurement); git_commit remote task context (R1/R2); artifact-to-principal authorization (R2/R3); S2 per-OS confinement providers.
 
 ## Audit status
