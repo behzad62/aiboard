@@ -83,12 +83,14 @@
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "8.18.2",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.10",
     "postcss": "^8.5.16",
     "tailwindcss": "^4.3.2",
     "tsx": "^4.23.13",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "ws": "8.22.0"
   },
   "overrides": {
     "postcss": "$postcss"
