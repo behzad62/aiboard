@@ -69,9 +69,9 @@ const relevantSuiteOptions = [
 ];
 check(
   "ToolReliability UI option uses current pack id and label",
-  toolReliabilityOptions.length >= 3 &&
-    toolReliabilityOptions[0]?.id === "toolbench-native-core-v3" &&
-    toolReliabilityOptions[0]?.label === "ToolBench: native core",
+  toolReliabilityOptions.length === 1 &&
+    toolReliabilityOptions[0]?.id === "toolbench-native-capability-v6" &&
+    toolReliabilityOptions[0]?.label === "ToolBench: capability check",
   toolReliabilityOptions
 );
 check(

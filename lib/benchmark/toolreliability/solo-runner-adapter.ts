@@ -63,10 +63,11 @@ export async function runSoloToolBench(input: NativeWorkBenchBuildInput, depende
     const budget = input.case.budget;
     snapshot = await dependencies.startNativeToolBenchSession(connection, {
       sessionId, runtimeId: modelId, prompt: [input.case.prompt.userRequest, input.case.prompt.publicContext].filter(Boolean).join("\n\n"),
-      allowedCommands: input.allowedCommands.filter(command => command.trim() !== input.case.verifier.command.trim()), hiddenPaths: [...PRIVATE_FILES, ...(policy.hiddenPaths ?? [])], protectedPaths: [...PRIVATE_FILES, ...policy.protectedPaths], editablePaths: input.case.nativeQualification.requiresBrowser ? [] : policy.editablePaths,
+      allowedCommands: input.allowedCommands.filter(command => command.trim() !== input.case.verifier.command.trim()), hiddenPaths: [...PRIVATE_FILES, ...(policy.hiddenPaths ?? [])], protectedPaths: [...PRIVATE_FILES, ...policy.protectedPaths], // Outputs a fixture program writes (a browser server, an interactive program) may not be created with filesystem tools.
+      editablePaths: input.case.nativeQualification.requiresBrowser || input.case.nativeQualification.processGeneratedOutputs ? [] : policy.editablePaths,
       budget: { maxInputTokens: budget.maxInputTokens, maxOutputTokens: budget.maxOutputTokens, maxModelCalls: budget.maxModelCalls, maxToolCalls: budget.maxToolCalls, ...(budget.maxUsd !== undefined ? { maxEstimatedCostMicros: Math.round(budget.maxUsd * 1e6) } : {}) },
       maxWallClockMs: (budget.maxWallClockSeconds ?? 4500) * 1000,
-      browser: Boolean(input.case.nativeQualification.requiresBrowser), skills: input.case.nativeQualification.profile.includes("skill"),
+      browser: Boolean(input.case.nativeQualification.requiresBrowser), skills: input.case.nativeQualification.requiresSkills ?? input.case.nativeQualification.profile.includes("skill"),
     }, signal);
     for (;;) {
       await record(snapshot);

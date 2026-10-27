@@ -10,7 +10,7 @@ import { ArtifactStore } from "../runner-v2/src/artifact-store";
 import { createExecutionHost } from "../runner-v2/src/execution-host";
 import { snapshotNativeBuildAmbientEnvironment, providerModelCostBasis } from "../runner-v2/src/native-build-factory";
 import { emptyRunnerCapabilitiesConfig } from "../runner-v2/src/runner-capabilities-config";
-import { getNativeToolBenchPack, NATIVE_TOOLBENCH_SUITE } from "../lib/benchmark/toolreliability/native-cases";
+import { getNativeToolBenchPack, LEGACY_NATIVE_TOOLBENCH_SUITE } from "../lib/benchmark/toolreliability/native-cases";
 import { runSoloToolBench, SOLO_TOOLBENCH_DEPENDENCIES } from "../lib/benchmark/toolreliability/solo-runner-adapter";
 import { NativeWorkBenchExecutionError } from "../lib/benchmark/workbench/native-runner-adapter";
 import type { BenchmarkModelCallTrace } from "../lib/benchmark/types";
@@ -18,7 +18,7 @@ import type { ModelTurn } from "../runner-v2/src/agent-contracts";
 
 const root = realpathSync.native(mkdtempSync(join(tmpdir(), "solo-control-")));
 const project = join(root, "project"); const state = join(root, "state"); mkdirSync(project); mkdirSync(state);
-const fixture = getNativeToolBenchPack(NATIVE_TOOLBENCH_SUITE)!.cases[0].case;
+const fixture = getNativeToolBenchPack(LEGACY_NATIVE_TOOLBENCH_SUITE)!.cases[0].case;
 for (const [path, content] of Object.entries(fixture.fixtureFiles!)) { mkdirSync(dirname(join(project, path)), { recursive: true }); writeFileSync(join(project, path), content); }
 const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
 const config = { runtimeId: "test:model", providerId: "test", modelId: "model", transport: "openai-compatible" as const, secret: "test", capabilities: ["tools"], priority: 0, billingBasis: "api_priced" as const, inputCostMicrosPerMillion: 100_000, outputCostMicrosPerMillion: 200_000 };

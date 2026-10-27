@@ -29,7 +29,7 @@ import { classifyProviderFailure } from "./provider-health.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
 
-import type { ToolBenchSessionRequest, ToolBenchSessionSnapshot } from "./toolbench-contracts.js";
+import type { ToolBenchEvidenceInput, ToolBenchSessionRequest, ToolBenchSessionSnapshot } from "./toolbench-contracts.js";
 export type { ToolBenchSessionRequest } from "./toolbench-contracts.js";
 
 export interface ToolBenchSessionOptions {
@@ -80,7 +80,7 @@ export class ToolBenchSessions {
       usage: undefined as import("./model-usage-projection.js").NativeBuildUsageProjection | undefined,
       tools: [],
       evidence: [] as ReturnType<SqliteEvidenceStore["list"]>,
-      toolEvidence: { runId: sessionId, tools: [] as Array<{ sequence: number; callId: string; toolName: string; isError: boolean; errorCode?: string; input: { path?: string; startLine?: number; endLine?: number; editCount?: number }; outputText: string }> },
+      toolEvidence: { runId: sessionId, tools: [] as Array<{ sequence: number; callId: string; toolName: string; isError: boolean; errorCode?: string; input: ToolBenchEvidenceInput; outputText: string }> },
     };
   }
 
@@ -195,6 +195,7 @@ export class ToolBenchSessions {
         execute: async () => ({ isError: false, content: [{ type: "text", text: "Task submitted for deterministic scoring." }], lifecycle: { type: "submit_task", changeSetId: request.sessionId } }),
       });
       for (const tool of tools) broker.register(fenceTool(tool, request, this.options.projectRoot));
+      entry.snapshot.availableTools = tools.map(tool => tool.definition.name).sort();
       const runtime = new BudgetedToolRuntime({ runtime: broker, ledger: budget, scopeId: request.sessionId });
       const originalInvoke = runtime.invoke.bind(runtime);
       runtime.invoke = async (call: ToolCallBlock, context: ToolExecutionContext) => {
@@ -205,8 +206,11 @@ export class ToolBenchSessions {
           ...(typeof args.startLine === "number" ? { startLine: args.startLine } : {}),
           ...(typeof args.endLine === "number" ? { endLine: args.endLine } : {}),
           ...(Array.isArray(args.edits) ? { editCount: args.edits.length } : {}),
+          ...(call.name === "artifact.read" && typeof args.offset === "number" ? { offset: args.offset } : {}),
+          ...(call.name === "fs.search" && typeof args.cursor === "string" ? { continued: true } : {}),
           ...(args.operation && typeof args.operation === "object" && "diff" in args.operation ? { editCount: Math.min((String(args.operation.diff).match(/^-[^-]/gm) ?? []).length, (String(args.operation.diff).match(/^\+[^+]/gm) ?? []).length) } : {}),
-        }, outputText: result.content.filter(block => block.type === "text").map(block => block.text).join("\n").slice(0, 64 * 1024) });
+        // fs.search answers in JSON only; its bounded JSON is the evidence of what a page delivered.
+        }, outputText: result.content.map(block => block.type === "text" ? block.text : call.name === "fs.search" && block.type === "json" ? JSON.stringify(block.value) : "").filter(Boolean).join("\n").slice(0, 64 * 1024) });
         if (Buffer.byteLength(JSON.stringify(entry.snapshot.toolEvidence)) > 4 * 1024 * 1024) throw new Error("ToolBench qualification evidence exceeded its export bound.");
         refresh(); await save(); return result;
       };

@@ -14,7 +14,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { CaseSuitePicker } from "./CaseSuitePicker";
 import { WorkBenchRunnerStatus } from "@/components/benchmark/workbench/WorkBenchRunnerStatus";
 import {
   ModelChecklist,
@@ -36,9 +35,7 @@ import {
 } from "@/lib/client/bench-runner";
 import { getEnabledModels } from "@/lib/client/providers";
 import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE } from "@/lib/benchmark/native-suites";
-import {
-  listCertifiedSuiteOptions,
-} from "@/lib/benchmark/certified/suite-options";
+
 import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
 import {
   runPreset,
@@ -82,7 +79,7 @@ export function CertifiedRunPanel({
     );
   // Repeated model IDs are intentional: one model may fill every Build role.
   const [harnessModelIds, setHarnessModelIds] = useState<string[]>([]);
-  const [toolBenchSuiteId, setToolBenchSuiteId] = useState(NATIVE_TOOLBENCH_SUITE);
+  const toolBenchSuiteId = NATIVE_TOOLBENCH_SUITE;
   const [focusedPresetId, setFocusedPresetId] =
     useState<BenchmarkPreset["id"]>("team-benchmark");
   const [presetLegRows, setPresetLegRows] = useState<RunProgressLegRow[]>([]);
@@ -157,7 +154,7 @@ export function CertifiedRunPanel({
     soloModelIds,
     harnessModelIds,
     workBenchRunnerReady,
-    toolBenchRunnerReady: getTrustedBenchRunnerReadiness(workBenchRunnerHealth, getNativeBenchmarkPack("toolreliability", toolBenchSuiteId)?.cases[0]?.case).ready,
+    toolBenchRunnerReady: getTrustedBenchRunnerReadiness(workBenchRunnerHealth, getNativeBenchmarkPack("toolreliability", toolBenchSuiteId)?.cases.find(item => item.case.nativeQualification?.requiresBrowser)?.case ?? getNativeBenchmarkPack("toolreliability", toolBenchSuiteId)?.cases[0]?.case).ready,
     harnessBenchRunnerReady: getTrustedBenchRunnerReadiness(workBenchRunnerHealth, getNativeBenchmarkPack("harnessbench", HARNESSBENCH_SUITE)?.cases[0]?.case).ready,
   });
   const handleEffortChange = (
@@ -193,10 +190,10 @@ export function CertifiedRunPanel({
             </div>
           ) : !focusedPresetHasTeamLeg ? (
           <div className="space-y-3">
-          <label className="block space-y-1 text-sm">
-            <span className="font-medium">ToolBench case pack</span>
-            <CaseSuitePicker value={toolBenchSuiteId} options={listCertifiedSuiteOptions("toolreliability")} ariaLabel="ToolBench case pack" onChange={setToolBenchSuiteId} />
-          </label>
+          <div className="rounded-lg border bg-background/40 p-3 text-sm space-y-2">
+            <div className="font-medium">ToolBench: capability check</div>
+            <p className="text-xs text-muted-foreground">Seven focused checks, including browser form interaction and owned process management. A configured browser backend is required.</p>
+          </div>
           <ModelChecklist
             models={models}
             selectedModelIds={soloModelIds}
@@ -236,7 +233,7 @@ export function CertifiedRunPanel({
           {focusedPreset.legs.some((leg) => leg.requires === "bench-runner") && (
             <WorkBenchRunnerStatus
               idPrefix="preset-runner"
-              workBenchCase={focusedPack?.cases[0]?.case}
+              workBenchCase={focusedPack?.cases.find(item => item.case.nativeQualification?.requiresBrowser)?.case ?? focusedPack?.cases[0]?.case}
               url={workBenchRunnerUrl}
               token={workBenchRunnerToken}
               health={workBenchRunnerHealth}
@@ -249,7 +246,7 @@ export function CertifiedRunPanel({
                 setWorkBenchRunnerToken(value);
                 setWorkBenchRunnerHealth(null);
               }}
-              onCheck={() => void checkWorkBenchRunner(focusedPack?.cases[0]?.case)}
+              onCheck={() => void checkWorkBenchRunner(focusedPack?.cases.find(item => item.case.nativeQualification?.requiresBrowser)?.case ?? focusedPack?.cases[0]?.case)}
             />
           )}
           <RunProgressList

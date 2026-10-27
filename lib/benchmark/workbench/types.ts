@@ -100,6 +100,16 @@ export interface WorkBenchCase {
     requiredReadText?: { path: string; text: string; maxLines?: number };
     minimumAtomicEdits?: number;
     requiredCommand?: { command: string; args: string[]; failureBeforeSuccess?: boolean };
+    /** The target text must arrive in a page obtained by continuing an fs.search cursor. */
+    requiredContinuedSearchText?: string;
+    /** The target text must arrive through artifact.read, without re-reading the same range. */
+    requiredArtifactText?: { text: string; maxReads?: number };
+    /** Offer list_skills/read_skill (older cases infer this from a "skill" profile name). */
+    requiresSkills?: boolean;
+    /** Outputs are written only by the fixture's own process; filesystem tools may not create them. */
+    processGeneratedOutputs?: boolean;
+    /** Capability ids from the native coverage manifest this case measures. */
+    coverage?: string[];
   };
   schemaVersion: 1;
   id: string;

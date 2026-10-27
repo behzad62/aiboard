@@ -424,7 +424,8 @@ export async function runNativeWorkBenchBuild(
       input.signal
     );
     throwIfAborted(input.signal);
-    if (input.case.nativeQualification?.requiredReadText || input.case.nativeQualification?.minimumAtomicEdits) {
+    const evidencePolicy = input.case.nativeQualification;
+    if (evidencePolicy?.requiredReadText || evidencePolicy?.minimumAtomicEdits || evidencePolicy?.requiredContinuedSearchText || evidencePolicy?.requiredArtifactText) {
       try {
         input = { ...input, nativeToolEvidence: await (dependencies.getNativeBenchmarkToolEvidence ?? getNativeBenchmarkToolEvidence)(input.runner, { attemptId: input.attemptId, runId: nativeRunId }, input.signal) };
         if (input.nativeToolEvidence?.runId !== nativeRunId) throw new Error("Native benchmark tool evidence belongs to a different run.");

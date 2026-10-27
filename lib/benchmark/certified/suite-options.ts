@@ -1,6 +1,6 @@
 import { listWorkBenchCasePacks } from "@/lib/benchmark/workbench";
 import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE } from "@/lib/benchmark/native-suites";
-import { NATIVE_TOOLBENCH_VARIANT_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE } from "@/lib/benchmark/toolreliability/native-cases";
+
 import type { CertifiedRunnableTrack } from "./ui-gates";
 
 export type { CertifiedRunnableTrack } from "./ui-gates";
@@ -15,7 +15,7 @@ export function listCertifiedSuiteOptions(
 ): CertifiedSuiteOption[] {
   if (track === "toolreliability" || track === "harnessbench") {
     const id = track === "toolreliability" ? NATIVE_TOOLBENCH_SUITE : HARNESSBENCH_SUITE;
-    const ids = track === "toolreliability" ? [id, NATIVE_TOOLBENCH_VARIANT_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE] : [id];
+    const ids = [id];
     return ids.map(id => ({ id, label: getNativeBenchmarkPack(track, id)!.label }));
   }
   if (track === "teamiq") {

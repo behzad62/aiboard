@@ -5,6 +5,7 @@ import type {
   WorkBenchCase,
 } from "@/lib/benchmark/workbench/types";
 import type { WorkBenchTrustedPolicy } from "@/lib/benchmark/workbench/types";
+import type { NativeToolEvidenceInput } from "@/lib/client/runner-v2";
 
 export const DEFAULT_BENCH_RUNNER_URL = "http://127.0.0.1:8797";
 
@@ -67,7 +68,7 @@ export interface ManagedAttemptRunnerResult {
 
 export interface NativeBenchmarkToolEvidence {
   runId: string;
-  tools: Array<{ sequence: number; callId: string; toolName: string; input: { path?: string; startLine?: number; endLine?: number; editCount?: number }; isError: boolean; errorCode?: string; outputText: string }>;
+  tools: Array<{ sequence: number; callId: string; toolName: string; input: NativeToolEvidenceInput; isError: boolean; errorCode?: string; outputText: string }>;
 }
 
 export function getNativeBenchmarkToolEvidence(config: BenchRunnerConfig, input: BenchAttemptInput & { runId: string }, signal?: AbortSignal): Promise<NativeBenchmarkToolEvidence> {
@@ -112,7 +113,7 @@ export function getTrustedBenchRunnerReadiness(
   const policy = workBenchCase?.trustedPolicy;
   if (workBenchCase?.benchmarkTrack === "toolreliability" && !health.nativeCapabilities?.soloToolBench) return { ready: false, error: "This ToolBench requires solo native sessions. Download the current benchmark runner bundle and check it again." };
   if (workBenchCase?.nativeQualification?.requiresBrowser && !health.nativeCapabilities?.browser) {
-    return { ready: false, error: "This optional ToolBench profile requires the runner browser. Run npm run setup:browser in the benchmark runner folder, then check again." };
+    return { ready: false, error: "ToolBench includes a browser/process test and requires the runner browser. Run npm run setup:browser in the benchmark runner folder, then check again." };
   }
   if (workBenchCase?.benchmarkTrack && (!health.runnerV2.sourceDigest || !health.nodeVersion || !health.platform)) {
     return { ready: false, error: "Update the benchmark runner to record native source, Node, and platform identity." };

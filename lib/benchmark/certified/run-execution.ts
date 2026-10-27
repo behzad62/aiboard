@@ -240,7 +240,7 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
         token: workBenchRunnerToken,
       },
       signal,
-      selectedWorkBenchPack?.cases[0]?.case
+      selectedWorkBenchPack?.cases.find(item => item.case.nativeQualification?.requiresBrowser)?.case ?? selectedWorkBenchPack?.cases[0]?.case
     );
     runnerEnvironment = health.environment;
     if (signal?.aborted) {
@@ -1090,7 +1090,7 @@ export async function runPreset(
       const health = await checkBenchRunnerForLeg({
         url: ctx.workBenchRunnerUrl,
         token: ctx.workBenchRunnerToken,
-      }, ctx.signal, getNativeBenchmarkPack(leg.track, leg.suiteId)?.cases[0]?.case);
+      }, ctx.signal, getNativeBenchmarkPack(leg.track, leg.suiteId)?.cases.find(item => item.case.nativeQualification?.requiresBrowser)?.case ?? getNativeBenchmarkPack(leg.track, leg.suiteId)?.cases[0]?.case);
       if (ctx.signal.aborted) {
         onProgress({ type: "leg", legIndex, leg, status: "skipped", detail: "Cancelled." });
         continue;

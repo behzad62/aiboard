@@ -23,6 +23,7 @@ import {
   type BenchmarkVariantRosterDetail,
 } from "@/lib/benchmark/model-effort";
 import type { ReasoningEffort } from "@/lib/db/schema";
+import { capabilitiesForCase, nativeCoverageReport, type NativeCoverageRow } from "@/lib/benchmark/toolreliability/native-coverage";
 
 const TOOL_RELIABILITY_ACCOUNTABILITIES = [
   "provider",
@@ -144,6 +145,8 @@ export interface AttemptDetailViewModel {
   }>;
   runEvents: BenchmarkRunEvent[];
   toolCalls: BenchmarkToolCallTrace[];
+  /** Native ToolBench attempts: the capabilities this attempt measured and what it may claim for each. */
+  nativeToolCoverage: NativeCoverageRow[] | null;
   artifacts: BenchmarkArtifact[];
   patchArtifacts: BenchmarkArtifact[];
   failures: BenchmarkFailure[];
@@ -162,6 +165,20 @@ export interface AttemptDetailViewModel {
     promptSetVersion: string;
     scoringVersion: string;
   };
+}
+
+/** Scoped to the capabilities the case measures; "verified" needs the final passed status, not tool use alone. */
+function nativeToolCoverageForAttempt(attempt: BenchmarkAttemptV2, toolCalls: BenchmarkToolCallTrace[]): NativeCoverageRow[] | null {
+  if (!attempt.caseId.startsWith("toolbench-native-")) return null;
+  const capabilities = new Set(capabilitiesForCase({ id: attempt.caseId }));
+  if (capabilities.size === 0) return null;
+  const report = nativeCoverageReport({
+    selectedCaseIds: [attempt.caseId],
+    attempts: [{ caseId: attempt.caseId, succeededTools: toolCalls.filter((trace) => trace.status === "ok").map((trace) => trace.toolName), passed: attempt.status === "passed" }],
+    // The attempt ran, so a browser case had its backend; vision is not measured by ToolBench.
+    environment: { browser: true, vision: false },
+  });
+  return report.rows.filter((row) => capabilities.has(row.capability));
 }
 
 export function buildAttemptDetailViewModel(
@@ -237,6 +254,7 @@ export function buildAttemptDetailViewModel(
       .filter((event) => event.attemptId === attempt.id)
       .sort((left, right) => Date.parse(left.at) - Date.parse(right.at)),
     toolCalls,
+    nativeToolCoverage: nativeToolCoverageForAttempt(attempt, toolCalls),
     artifacts,
     patchArtifacts: artifacts.filter((artifact) => artifact.kind === "patch"),
     failures,

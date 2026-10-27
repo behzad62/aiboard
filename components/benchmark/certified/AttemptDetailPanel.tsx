@@ -18,6 +18,7 @@ import { formatNormalizedScore } from "@/components/benchmark/format";
 import { VerifierAssertionTable } from "./VerifierAssertionTable";
 import { VariantRosterBadges } from "@/components/benchmark/results/VariantRosterBadges";
 import { RecoverableJobServiceSummary } from "./RecoverableJobServiceSummary";
+import type { NativeCoverageStatus } from "@/lib/benchmark/toolreliability/native-coverage";
 
 export function AttemptDetailPanel({
   summary,
@@ -106,6 +107,17 @@ export function AttemptDetailPanel({
             ))}
           </div>
         </Section>
+
+        {detail.nativeToolCoverage && (
+          <Section title="Native tool coverage">
+            <p className="text-xs text-muted-foreground">Scoped to the capabilities this case measures. A pass here does not establish full native-tool coverage.</p>
+            <dl className="space-y-1">
+              {detail.nativeToolCoverage.map((row) => (
+                <Row key={row.capability} label={COVERAGE_LABELS[row.status]} value={`${row.label} — ${row.detail}`} />
+              ))}
+            </dl>
+          </Section>
+        )}
 
         <Section title="Model calls">
           <TraceList
@@ -294,6 +306,15 @@ export function AttemptDetailPanel({
     </Card>
   );
 }
+
+const COVERAGE_LABELS: Record<NativeCoverageStatus, string> = {
+  verified: "Verified",
+  exercised: "Exercised",
+  available: "Available",
+  not_tested: "Not tested",
+  unsupported: "Unsupported",
+  excluded_by_environment: "Excluded",
+};
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (

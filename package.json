@@ -46,7 +46,7 @@
     "test:provider-runtime:live": "tsx scripts/test-provider-runtime-live.mts",
     "test:benchmark:rjs-qualification": "tsx scripts/test-recoverable-job-service-checkout.mts && tsx scripts/test-recoverable-job-service-release.mts && tsx scripts/test-recoverable-job-service-integration.mts && tsx scripts/test-recoverable-job-service-calibration-truthful-capacity.mts",
     "test:benchmark:native-browser": "tsx scripts/test-native-toolbench-browser.mts",
-    "test:benchmark:solo": "tsx scripts/test-harnessbench-roles.mts && tsx scripts/test-solo-toolbench-sessions.mts && tsx scripts/test-solo-toolbench-control.mts"
+    "test:benchmark:solo": "tsx scripts/test-harnessbench-roles.mts && tsx scripts/test-solo-toolbench-sessions.mts && tsx scripts/test-native-toolbench-extended.mts && tsx scripts/test-solo-toolbench-control.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

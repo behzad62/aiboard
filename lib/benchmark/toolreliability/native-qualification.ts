@@ -41,6 +41,18 @@ export function qualifyNativeToolBench(benchmarkCase: WorkBenchCase, audit: { ob
     checks.push({ id: "target-evidence-delivered", passed: Boolean(evidence?.tools.some(tool => tool.toolName === "fs.read" && !tool.isError && tool.input.path === expected.path && tool.outputText.includes(expected.text))) });
     if (expected.maxLines) checks.push({id:"bounded-target-read",passed:Boolean(evidence?.tools.some(tool=>tool.toolName==="fs.read" && !tool.isError && tool.input.path===expected.path && tool.outputText.includes(expected.text) && Number.isSafeInteger(tool.input.startLine) && Number.isSafeInteger(tool.input.endLine) && tool.input.startLine!>0 && tool.input.endLine!>=tool.input.startLine! && tool.input.endLine!-tool.input.startLine!+1<=expected.maxLines!))});
   }
+  if (policy.requiredContinuedSearchText) {
+    // A continued page must itself deliver the target: re-running with a bigger page does not count.
+    const target = policy.requiredContinuedSearchText;
+    checks.push({ id: "continued-search-delivered-target", passed: Boolean(evidence?.tools.some(tool => tool.toolName === "fs.search" && !tool.isError && tool.input.continued === true && tool.outputText.includes(target))) });
+  }
+  if (policy.requiredArtifactText) {
+    const expected = policy.requiredArtifactText;
+    const reads = evidence?.tools.filter(tool => tool.toolName === "artifact.read" && !tool.isError) ?? [];
+    checks.push({ id: "artifact-delivered-target", passed: reads.some(tool => tool.outputText.includes(expected.text)) });
+    const offsets = reads.map(tool => tool.input.offset ?? 0);
+    checks.push({ id: "artifact-ranges-not-repeated", passed: reads.length > 0 && new Set(offsets).size === offsets.length && (expected.maxReads === undefined || reads.length <= expected.maxReads) });
+  }
   if (policy.minimumAtomicEdits) checks.push({ id: "atomic-multi-edit", passed: Boolean(evidence?.tools.some(tool => ["fs.patch", "openrouter.apply_patch"].includes(tool.toolName) && !tool.isError && (tool.input.editCount ?? 0) >= policy.minimumAtomicEdits!)) });
   if (policy.requiredCommand) {
     const required = policy.requiredCommand;

@@ -8,7 +8,7 @@ import { ArtifactStore } from "../runner-v2/src/artifact-store";
 import { createExecutionHost } from "../runner-v2/src/execution-host";
 import { snapshotNativeBuildAmbientEnvironment } from "../runner-v2/src/native-build-factory";
 import { emptyRunnerCapabilitiesConfig } from "../runner-v2/src/runner-capabilities-config";
-import { getNativeToolBenchPack, NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE } from "../lib/benchmark/toolreliability/native-cases";
+import { getNativeToolBenchPack, LEGACY_NATIVE_TOOLBENCH_SUITE, NATIVE_TOOLBENCH_SKILLS_SUITE, NATIVE_TOOLBENCH_BROWSER_SUITE } from "../lib/benchmark/toolreliability/native-cases";
 import { qualifyNativeToolBench } from "../lib/benchmark/toolreliability/native-qualification";
 import type { AgentModelRequest, ModelTurn, ToolResult } from "../runner-v2/src/agent-contracts";
 import type { ToolBenchSessionSnapshot } from "../runner-v2/src/toolbench-contracts";
@@ -29,7 +29,7 @@ const stepsFor = (id: string): Step[] => {
   if (id.includes("browser")) return [["process.start", { command: "node", args: ["browser-server.mjs"] }], ["process.poll", {}], ["browser.open", {}], ["browser.snapshot", {}], ["browser.click", { selector: "#save" }], ["browser.snapshot", {}], ["process.signal", { signal: "SIGTERM" }], finish];
   throw new Error(`Missing steps for ${id}`);
 };
-const packs = [getNativeToolBenchPack(NATIVE_TOOLBENCH_SUITE)!, getNativeToolBenchPack(NATIVE_TOOLBENCH_SKILLS_SUITE)!, getNativeToolBenchPack(NATIVE_TOOLBENCH_BROWSER_SUITE)!];
+const packs = [getNativeToolBenchPack(LEGACY_NATIVE_TOOLBENCH_SUITE)!, getNativeToolBenchPack(NATIVE_TOOLBENCH_SKILLS_SUITE)!, getNativeToolBenchPack(NATIVE_TOOLBENCH_BROWSER_SUITE)!];
 for (const option of packs.flatMap(p => p.cases).filter(option => !process.argv[2] || option.id.includes(process.argv[2]))) {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "solo-toolbench-")));
   const project = join(root, "project"); const state = join(root, "state");
