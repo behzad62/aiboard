@@ -1,3 +1,5 @@
+import { rejectDuplicateKeys } from "./remote-admission-store.js";
+
 /**
  * R3 frame limits for the device transport. One negotiated maximum governs
  * every frame in both directions (fixing the old 4 MiB relay / 8 MiB stdio
@@ -10,7 +12,7 @@ export const REMOTE_FRAME_MAX_BYTES = 1024 * 1024;
 export const REMOTE_TRANSFER_MAX_WINDOW = 16;
 
 /** Bytes reserved for a chunk frame's JSON envelope around its base64 data. */
-const CHUNK_ENVELOPE_BYTES = 1024;
+const CHUNK_ENVELOPE_BYTES = 2048;
 const CHUNK_ALIGN_BYTES = 4 * 1024;
 
 export interface RemoteFrameLimits {
@@ -98,7 +100,9 @@ export function decodeFrame(bytes: Uint8Array, limits: RemoteFrameLimits): Decod
   if (bytes.byteLength > limits.maxFrameBytes) return { ok: false, code: "frame_too_large" };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    const raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    rejectDuplicateKeys(raw);
+    parsed = JSON.parse(raw);
   } catch {
     return { ok: false, code: "malformed_frame" };
   }

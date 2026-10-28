@@ -137,6 +137,10 @@ export function initializeRemoteAdmissionSchema(database: DatabaseSync, key: Uin
       job_id TEXT PRIMARY KEY REFERENCES remote_jobs(job_id) ON DELETE RESTRICT,
       process_id TEXT NOT NULL
     )`);
+    database.exec(`CREATE TABLE IF NOT EXISTS remote_job_policy_fences (
+      job_id TEXT PRIMARY KEY REFERENCES remote_jobs(job_id) ON DELETE CASCADE,
+      narrowed_at TEXT
+    )`);
     database.prepare(`INSERT INTO remote_store_metadata (name, value) VALUES ('schema_version', '2')
       ON CONFLICT(name) DO UPDATE SET value = excluded.value`).run();
     database.exec("COMMIT");

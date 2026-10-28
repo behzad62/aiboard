@@ -134,6 +134,11 @@ const relayPair = generateKeyPairSync("ed25519");
 const RELAY_KEY_ID = "relay-test-1";
 const relayPublicKey = relayPair.publicKey.export({ type: "spki", format: "der" }).toString("base64url");
 
+function signedChallenge(challenge: RelayChallenge): Extract<RemoteTransportMessage, { type: "challenge" }> {
+  return { type: "challenge", challenge, keyId: RELAY_KEY_ID,
+    signature: cryptoSign(null, Buffer.from(canonicalJson(challenge)), relayPair.privateKey).toString("base64url") };
+}
+
 function sessionFor(): RemoteDeviceSession {
   return {
     accountId: ACCOUNT, clientId: CLIENT, scope: REMOTE_CONNECT_SCOPE, issuedAt: fixedNow.toISOString(),
@@ -172,6 +177,7 @@ function challengeFor(deviceId: string, overrides: Partial<RelayChallenge> = {})
 
 function stubRuntime(dispatches: Harness["dispatches"]): RemoteRequestRuntime {
   return {
+    latestPolicyNarrowing: () => undefined,
     invoke: async (_identity, name) => {
       dispatches.count += 1;
       const result: ToolResult = name.startsWith("fs.write") || name.startsWith("process.")
@@ -230,7 +236,7 @@ async function handshake(harness: Harness, challenge: RelayChallenge = harness.c
     const ok = verifyDeviceProof(harness.deviceStore.load()!.publicKey, challenge, proof.signature);
     void harness.transport.emit(ok ? { type: "authenticated", epoch: challenge.epoch } : { type: "auth_error", code: "unauthorized" });
   };
-  await harness.transport.emit({ type: "challenge", challenge });
+  await harness.transport.emit(signedChallenge(challenge));
   await started;
 }
 
@@ -291,7 +297,7 @@ test("readiness requires reconciliation; heartbeat alone never grants it", async
     assert.equal(verifyDeviceProof(harness.deviceStore.load()!.publicKey, harness.challenge, proof.signature), true);
     void harness.transport.emit({ type: "authenticated", epoch: harness.challenge.epoch });
   };
-  await harness.transport.emit({ type: "challenge", challenge: harness.challenge });
+  await harness.transport.emit(signedChallenge(harness.challenge));
   await tick(); await tick();
   assert.equal(harness.connector.state().state, "connected-degraded");
   assert.equal(harness.connector.state().reasonCode, "reconciliation_pending");
@@ -360,7 +366,7 @@ test("handshake rejects a replayed nonce with no dispatch", async (t) => {
   const started = second.start();
   await tick(); await tick();
   transport.onProof = () => { void transport.emit({ type: "authenticated", epoch: "5" }); };
-  await transport.emit({ type: "challenge", challenge: harness.challenge });
+  await transport.emit(signedChallenge(harness.challenge));
   await started;
   assert.equal(second.state().state, "disconnected");
   assert.equal(harness.dispatches.count, 0);
@@ -378,11 +384,41 @@ test("handshake rejects a bad signature with no dispatch", async (t) => {
     assert.equal(ok, false);
     void harness.transport.emit({ type: "auth_error", code: "unauthorized" });
   };
-  await harness.transport.emit({ type: "challenge", challenge: harness.challenge });
+  await harness.transport.emit(signedChallenge(harness.challenge));
   await started;
   assert.equal(harness.connector.state().state, "disconnected");
   assert.equal(harness.connector.state().reasonCode, "authentication_failed");
   assert.equal(harness.dispatches.count, 0);
+});
+
+for (const scenario of ["unsigned", "unknown key", "wrong key", "tampered epoch"] as const) {
+  test(`relay challenge ${scenario} sends no proof and cannot advance the epoch`, async (t) => {
+    const harness = await stubHarness(t);
+    const started = harness.connector.start();
+    await tick(); await tick();
+    const signed = signedChallenge(harness.challenge);
+    const attacker = generateKeyPairSync("ed25519");
+    const frame = scenario === "unsigned" ? { type: "challenge", challenge: harness.challenge } :
+      scenario === "unknown key" ? { ...signed, keyId: "untrusted" } :
+      scenario === "wrong key" ? { ...signed, signature: cryptoSign(null, Buffer.from(canonicalJson(harness.challenge)), attacker.privateKey).toString("base64url") } :
+      { ...signed, challenge: { ...harness.challenge, epoch: "999999999" } };
+    await harness.transport.emit(frame as RemoteTransportMessage);
+    await started;
+    assert.equal(harness.deviceStore.load()!.epoch, "1");
+    assert.equal(harness.transport.sent.some((message) => message.type === "proof"), false);
+    assert.equal(harness.connector.isReady(), false);
+  });
+}
+
+test("a signed challenge requires a matching authenticated acknowledgment before the epoch is committed", async (t) => {
+  const harness = await stubHarness(t);
+  const started = harness.connector.start();
+  await tick(); await tick();
+  harness.transport.onProof = () => { void harness.transport.emit({ type: "authenticated", epoch: "6" }); };
+  await harness.transport.emit(signedChallenge(harness.challenge));
+  await started;
+  assert.equal(harness.deviceStore.load()!.epoch, "1");
+  assert.equal(harness.connector.isReady(), false);
 });
 
 test("revoked device and stale-epoch, replayed and unknown requests never dispatch", async (t) => {
@@ -475,6 +511,7 @@ test("ordered shutdown settles in-flight work as outcome_unknown", async (t) => 
   let releaseDispatch!: () => void;
   const gate = new Promise<void>((resolve) => { releaseDispatch = resolve; });
   const slow: RemoteRequestRuntime = {
+    latestPolicyNarrowing: () => undefined,
     invoke: async (_identity, name) => {
       await gate;
       return { callId: "call", toolName: name, content: [{ type: "text", text: "late" }], isError: false };
@@ -573,6 +610,7 @@ test("real broker read and admitted write through the connector", { timeout: 120
   let writeEntered = false;
   let writeAuthorizationChecks = 0;
   const countingRuntime: RemoteRequestRuntime = {
+    latestPolicyNarrowing: (id) => composition.runtime.latestPolicyNarrowing(id),
     invokeAdmitted: async (id, name, args, signal, raw, jobId, beforeBroker) => {
       if (name === "fs.write") writeEntered = true;
       const check = beforeBroker ? () => { if (name === "fs.write") writeAuthorizationChecks++; return beforeBroker(); } : undefined;
@@ -675,7 +713,7 @@ test("service shutdown is retryable, ordered, and logout returns to logged-out",
     const ok = verifyDeviceProof(service.composition.deviceStore.load()!.publicKey, challenge, proof.signature);
     void transport.emit(ok ? { type: "authenticated", epoch: challenge.epoch } : { type: "auth_error", code: "unauthorized" });
   };
-  await transport.emit({ type: "challenge", challenge: challengeFor(deviceId) });
+  await transport.emit(signedChallenge(challengeFor(deviceId)));
   await started;
   assert.equal(service.status().state, "tool-ready");
   const statusFile = JSON.parse(await readFile(join(state, "remote-status.json"), "utf8")) as { state: string };

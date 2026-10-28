@@ -77,6 +77,7 @@ async function harness(t: test.TestContext, limits: { running?: number; queued?:
   let stop: (clientId: string, processId: string) => Promise<boolean> = async () => false;
   const calls: string[] = [];
   const runtime: RemoteRequestRuntime = {
+    latestPolicyNarrowing: () => undefined,
     invoke: async (_identity, name) => success(name),
     stopStartedProcess: async (identity, processId) => await stop(identity.clientId, processId),
     invokeAdmitted: async (identity, name, _args, signal, _raw, _jobId, beforeBroker) => {
@@ -109,7 +110,8 @@ async function harness(t: test.TestContext, limits: { running?: number; queued?:
       expiresAt: new Date(currentTime + 60_000).toISOString(),
     };
     transport.onProof = () => { void transport.emit({ type: "authenticated", epoch }); };
-    await transport.emit({ type: "challenge", challenge });
+    await transport.emit({ type: "challenge", challenge, keyId: "relay",
+      signature: sign(null, Buffer.from(canonicalJson(challenge)), relayKey.privateKey).toString("base64url") });
     await started;
     assert.equal(connector.isReady(), true);
   }

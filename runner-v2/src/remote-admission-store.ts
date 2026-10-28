@@ -87,7 +87,7 @@ export interface RemoteRequest {
 
 type AdmissionCode = "invalid_request" | "unsupported_version" | "expired_request" |
   "device_epoch_mismatch" | "idempotency_conflict" | "unauthorized" | "not_found" |
-  "result_expired" | "storage_exhausted" | "schema_migration_failed" | "blocked_quota";
+  "result_expired" | "result_withheld_by_policy" | "storage_exhausted" | "schema_migration_failed" | "blocked_quota";
 
 export class RemoteAdmissionError extends Error {
   constructor(readonly code: AdmissionCode, message: string) {
@@ -178,7 +178,7 @@ export class RemoteAdmissionStore {
     });
   }
 
-  admit(identity: VerifiedRemoteIdentity, rawRequest: string, options: { rejectNew?: boolean } = {}): AdmissionDecision {
+  admit(identity: VerifiedRemoteIdentity, rawRequest: string, options: { rejectNew?: boolean; policyNarrowing?: string | null } = {}): AdmissionDecision {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);
     const request = parseRemoteRequest(rawRequest);
@@ -187,6 +187,7 @@ export class RemoteAdmissionStore {
     }
     if (Date.parse(request.expiresAt) <= this.clock().getTime()) throw new RemoteAdmissionError("expired_request", "Request has expired.");
     if (request.payloadDigest !== remotePayloadDigest(request)) throw new RemoteAdmissionError("invalid_request", "Request digest is invalid.");
+    if (options.policyNarrowing != null && !Number.isFinite(Date.parse(options.policyNarrowing))) throw new RemoteAdmissionError("invalid_request", "Invalid policy fence.");
     return this.transaction(() => {
       this.requireEpoch(principal, request.deviceEpoch);
       const existing = this.database.prepare(`SELECT * FROM remote_jobs WHERE account_id = ? AND client_id = ?
@@ -234,6 +235,9 @@ export class RemoteAdmissionStore {
       );
       this.database.prepare(`INSERT INTO remote_job_events (job_id, sequence, occurred_at, kind, state, trace_id)
         VALUES (?, 1, ?, 'state_changed', 'queued', ?)`).run(jobId, now, request.traceId);
+      if (Object.hasOwn(options, "policyNarrowing")) {
+        this.database.prepare("INSERT INTO remote_job_policy_fences (job_id, narrowed_at) VALUES (?, ?)").run(jobId, options.policyNarrowing ?? null);
+      }
       return { created: true, job: this.toJob(this.ownedRow(principal, jobId)), request };
     });
   }
@@ -242,6 +246,19 @@ export class RemoteAdmissionStore {
     const principal = checkedPrincipal(identity);
     const row = this.findOwnedRow(principal, jobId);
     return row ? this.toJob(row) : undefined;
+  }
+
+  /** Undefined means the job predates policy fencing; null means it was admitted before any narrowing. */
+  policyNarrowingAtAdmission(identity: VerifiedRemoteIdentity, jobId: string): string | null | undefined {
+    const principal = checkedPrincipal(identity);
+    this.ownedRow(principal, jobId);
+    const row = this.database.prepare("SELECT narrowed_at FROM remote_job_policy_fences WHERE job_id = ?").get(jobId) as
+      { narrowed_at: string | null } | undefined;
+    if (!row) return undefined;
+    if (row.narrowed_at !== null && (typeof row.narrowed_at !== "string" || !Number.isFinite(Date.parse(row.narrowed_at)))) {
+      throw new RemoteAdmissionError("schema_migration_failed", "Invalid stored policy fence.");
+    }
+    return row.narrowed_at;
   }
 
   view(identity: VerifiedRemoteIdentity, jobId: string): RemoteJobView {
@@ -856,7 +873,7 @@ export function remotePayloadDigest(request: Pick<RemoteRequest, "protocolVersio
 }
 
 /** Validate raw JSON before JSON.parse can discard duplicate object members. */
-function rejectDuplicateKeys(raw: string): void {
+export function rejectDuplicateKeys(raw: string): void {
   let position = 0;
   const whitespace = () => { while (/[\x20\t\r\n]/.test(raw[position] ?? "#")) position++; };
   const string = (): string => {

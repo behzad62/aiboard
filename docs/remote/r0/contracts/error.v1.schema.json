@@ -43,6 +43,7 @@
         "effect_outcome_unknown",
         "admission_unknown",
         "result_expired",
+        "result_withheld_by_policy",
         "invalid_request",
         "expired_request",
         "device_epoch_mismatch",

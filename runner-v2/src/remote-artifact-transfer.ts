@@ -5,8 +5,8 @@ import type { RemoteFrameLimits } from "./remote-frame-codec.js";
 /**
  * R3 artifact data plane, device side. A content-addressed artifact streams as
  * bounded chunk frames under a credit window: at most `window` chunks are ever
- * unacknowledged, and only one chunk buffer is read at a time, so memory stays
- * bounded under a slow receiver. Each chunk carries its own SHA-256; the end
+ * unacknowledged. A whole-file preflight and bounded block digests verify each
+ * in-memory block again before its chunks leave. Each chunk carries its own SHA-256; the end
  * frame is sent only after every chunk is acknowledged and the whole artifact
  * re-hashed to its address. Resume is a new transfer from an acknowledged
  * offset — no transfer state survives the connection that carried it.
@@ -18,7 +18,11 @@ export interface ArtifactTransferSource {
   readonly byteLength: number;
 }
 
-export type ArtifactTransferErrorCode = "transfer_stalled" | "artifact_corrupt" | "artifact_unavailable";
+const VERIFY_BLOCK_BYTES = 4 * 1024 * 1024;
+/** Cap the preflight digest table at 3.2 MiB (about 390 GiB of artifact data). */
+const MAX_VERIFY_BLOCKS = 100_000;
+
+export type ArtifactTransferErrorCode = "transfer_stalled" | "artifact_corrupt" | "artifact_unavailable" | "result_withheld_by_policy";
 
 export type ArtifactTransferFrame =
   | {
@@ -30,7 +34,7 @@ export type ArtifactTransferFrame =
 
 export interface ArtifactTransferOptions {
   readonly limits: () => RemoteFrameLimits;
-  readonly send: (frame: ArtifactTransferFrame) => Promise<void> | void;
+  readonly send: (frame: ArtifactTransferFrame, signal: AbortSignal, beforeSend?: () => boolean) => Promise<void> | void;
   /** Time with a full window and no acknowledgment before the transfer fails; defaults to 60 s. */
   readonly stallTimeoutMs?: number;
   /** Concurrent transfers per connection; defaults to 4. */
@@ -47,6 +51,7 @@ export class ArtifactTransferError extends Error {
 interface Transfer {
   readonly id: string;
   readonly unacked: Set<number>;
+  readonly controller: AbortController;
   aborted: boolean;
   wake: (() => void) | undefined;
   maxUnacked: number;
@@ -71,14 +76,15 @@ export class ArtifactTransferManager {
   reserve(transferId: string, source: ArtifactTransferSource, offset: number): void {
     if (this.transfers.has(transferId)) throw new ArtifactTransferError("duplicate_transfer", "Transfer id is already active.");
     if (this.transfers.size >= this.maxConcurrent) throw new ArtifactTransferError("transfer_limit", "Too many concurrent artifact transfers.");
-    if (!Number.isSafeInteger(offset) || offset < 0 || offset > source.byteLength) {
+    if (!Number.isSafeInteger(source.byteLength) || source.byteLength < 0 ||
+      !Number.isSafeInteger(offset) || offset < 0 || offset > source.byteLength) {
       throw new ArtifactTransferError("invalid_offset", "Transfer offset is outside the artifact.");
     }
-    this.transfers.set(transferId, { id: transferId, unacked: new Set(), aborted: false, wake: undefined, maxUnacked: 0 });
+    this.transfers.set(transferId, { id: transferId, unacked: new Set(), controller: new AbortController(), aborted: false, wake: undefined, maxUnacked: 0 });
   }
 
   /** Stream a reserved transfer to completion, error or abort. Never throws. */
-  async run(transferId: string, source: ArtifactTransferSource, offset: number): Promise<void> {
+  async run(transferId: string, source: ArtifactTransferSource, offset: number, beforeRelease?: () => ArtifactTransferErrorCode | undefined): Promise<void> {
     const transfer = this.transfers.get(transferId);
     if (!transfer) return;
     let handle: FileHandle | undefined;
@@ -91,37 +97,68 @@ export class ArtifactTransferManager {
         return;
       }
       const limits = this.options.limits();
+      const blockCount = Math.ceil(source.byteLength / VERIFY_BLOCK_BYTES);
+      if (blockCount > MAX_VERIFY_BLOCKS) { await this.fail(transfer, "artifact_unavailable"); return; }
+      const buffer = Buffer.allocUnsafe(VERIFY_BLOCK_BYTES);
+      const blockHashes = Buffer.allocUnsafe(blockCount * 32);
+      const verified = createHash("sha256");
+      for (let position = 0, block = 0; position < source.byteLength; block++) {
+        const length = Math.min(buffer.byteLength, source.byteLength - position);
+        const { bytesRead } = await handle.read(buffer, 0, length, position);
+        if (bytesRead !== length) { await this.fail(transfer, "artifact_corrupt"); return; }
+        const bytes = buffer.subarray(0, bytesRead);
+        verified.update(bytes);
+        createHash("sha256").update(bytes).digest().copy(blockHashes, block * 32);
+        position += bytesRead;
+        if (transfer.aborted) return;
+      }
+      if (verified.digest("hex") !== source.hash) { await this.fail(transfer, "artifact_corrupt"); return; }
       const whole = createHash("sha256");
       // A resumed transfer still proves the whole artifact: hash the prefix without sending it.
-      const buffer = Buffer.allocUnsafe(limits.chunkBytes);
       for (let position = 0; position < offset;) {
         const length = Math.min(buffer.byteLength, offset - position);
         const { bytesRead } = await handle.read(buffer, 0, length, position);
         if (bytesRead !== length) { await this.fail(transfer, "artifact_corrupt"); return; }
+        if (transfer.aborted) return;
+        const refusal = beforeRelease?.();
+        if (refusal) { await this.fail(transfer, refusal); return; }
         whole.update(buffer.subarray(0, bytesRead));
         position += bytesRead;
         if (transfer.aborted) return;
       }
       let seq = 0;
       for (let position = offset; position < source.byteLength;) {
-        if (!(await this.awaitCredit(transfer, limits.window))) return;
-        const length = Math.min(limits.chunkBytes, source.byteLength - position);
-        const { bytesRead } = await handle.read(buffer, 0, length, position);
-        if (bytesRead !== length) { await this.fail(transfer, "artifact_corrupt"); return; }
-        const chunk = buffer.subarray(0, length);
-        whole.update(chunk);
-        transfer.unacked.add(seq);
-        transfer.maxUnacked = Math.max(transfer.maxUnacked, transfer.unacked.size);
-        if (!(await this.emit(transfer, {
-          type: "chunk", transferId, seq, offset: position, length,
-          sha256: createHash("sha256").update(chunk).digest("hex"), data: chunk.toString("base64"),
-        }))) return;
-        position += length;
-        seq += 1;
+        const block = Math.floor(position / VERIFY_BLOCK_BYTES);
+        const blockStart = block * VERIFY_BLOCK_BYTES;
+        const length = Math.min(VERIFY_BLOCK_BYTES, source.byteLength - blockStart);
+        const { bytesRead } = await handle.read(buffer, 0, length, blockStart);
+        if (bytesRead !== length || !createHash("sha256").update(buffer.subarray(0, bytesRead)).digest()
+          .equals(blockHashes.subarray(block * 32, (block + 1) * 32))) {
+          await this.fail(transfer, "artifact_corrupt"); return;
+        }
+        for (let inBlock = position - blockStart; inBlock < bytesRead;) {
+          if (!(await this.awaitCredit(transfer, limits.window))) return;
+          const refusal = beforeRelease?.();
+          if (refusal) { await this.fail(transfer, refusal); return; }
+          const chunkLength = Math.min(limits.chunkBytes, bytesRead - inBlock);
+          const chunk = buffer.subarray(inBlock, inBlock + chunkLength);
+          whole.update(chunk);
+          transfer.unacked.add(seq);
+          transfer.maxUnacked = Math.max(transfer.maxUnacked, transfer.unacked.size);
+          if (!(await this.emit(transfer, {
+            type: "chunk", transferId, seq, offset: position, length: chunkLength,
+            sha256: createHash("sha256").update(chunk).digest("hex"), data: chunk.toString("base64"),
+          }, beforeRelease))) return;
+          inBlock += chunkLength;
+          position += chunkLength;
+          seq += 1;
+        }
       }
       if (!(await this.awaitCredit(transfer, 1, true))) return;
       if (whole.digest("hex") !== source.hash) { await this.fail(transfer, "artifact_corrupt"); return; }
-      await this.emit(transfer, { type: "artifact_end", transferId, byteLength: source.byteLength, sha256: source.hash });
+      const refusal = beforeRelease?.();
+      if (refusal) { await this.fail(transfer, refusal); return; }
+      await this.emit(transfer, { type: "artifact_end", transferId, byteLength: source.byteLength, sha256: source.hash }, beforeRelease);
     } catch {
       await this.fail(transfer, "artifact_unavailable");
     } finally {
@@ -142,6 +179,7 @@ export class ArtifactTransferManager {
     const transfer = this.transfers.get(transferId);
     if (!transfer) return;
     transfer.aborted = true;
+    transfer.controller.abort();
     transfer.wake?.();
     this.transfers.delete(transferId);
   }
@@ -167,12 +205,26 @@ export class ArtifactTransferManager {
     return !transfer.aborted;
   }
 
-  private async emit(transfer: Transfer, frame: ArtifactTransferFrame): Promise<boolean> {
+  private async emit(transfer: Transfer, frame: ArtifactTransferFrame, beforeSend?: () => ArtifactTransferErrorCode | undefined): Promise<boolean> {
     if (transfer.aborted) return false;
     try {
-      await this.options.send(frame);
+      const signal = transfer.controller.signal;
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => { signal.removeEventListener("abort", abort); reject(new Error("Transfer aborted.")); };
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) { abort(); return; }
+        Promise.resolve().then(() => this.options.send(frame, signal, beforeSend ? () => beforeSend() === undefined : undefined)).then(
+          () => { signal.removeEventListener("abort", abort); resolve(); },
+          (error: unknown) => { signal.removeEventListener("abort", abort); reject(error); },
+        );
+      });
       return !transfer.aborted;
     } catch {
+      const refusal = beforeSend?.();
+      if (!transfer.aborted && refusal) {
+        await this.fail(transfer, refusal);
+        return false;
+      }
       // The socket is gone; the receiver resumes from its last verified offset.
       transfer.aborted = true;
       return false;

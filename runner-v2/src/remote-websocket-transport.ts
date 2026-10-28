@@ -46,12 +46,18 @@ export interface WebSocketTransportOptions {
   readonly deviceId?: string;
   /** Backpressure bound on the socket's send buffer; defaults to 4 MiB. */
   readonly maxBufferedBytes?: number;
+  /** Maximum time a send may wait for its turn and buffer space. */
+  readonly sendTimeoutMs?: number;
   readonly connectTimeoutMs?: number;
   /** Injectable for tests; defaults to the global WebSocket. */
   readonly createSocket?: (url: string) => WebSocketLike;
 }
 
 const OPEN = 1;
+const MAX_INBOUND_MESSAGES = 64;
+const MAX_INBOUND_BYTES = 8 * 1024 * 1024;
+const MAX_OUTBOUND_MESSAGES = 64;
+const MAX_OUTBOUND_BYTES = 8 * 1024 * 1024;
 
 export class WebSocketRemoteTransport implements RemoteTransport {
   private readonly url: string;
@@ -61,6 +67,12 @@ export class WebSocketRemoteTransport implements RemoteTransport {
   private closeHandler: (() => void) | undefined;
   /** Inbound frames are handled strictly in arrival order. */
   private inbound: Promise<void> = Promise.resolve();
+  private inboundMessages = 0;
+  private inboundBytes = 0;
+  private outbound: Promise<void> = Promise.resolve();
+  private outboundMessages = 0;
+  private outboundBytes = 0;
+  private readonly pendingSends = new Set<(error: Error) => void>();
   private closed = false;
 
   constructor(private readonly options: WebSocketTransportOptions) {
@@ -109,25 +121,65 @@ export class WebSocketRemoteTransport implements RemoteTransport {
   async close(): Promise<void> {
     const socket = this.socket;
     if (!socket || this.closed) { this.markClosed(); return; }
+    this.markClosed();
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 2_000);
       socket.addEventListener("close", () => { clearTimeout(timer); resolve(); });
       try { socket.close(1000, "client closing"); } catch { clearTimeout(timer); resolve(); }
     });
-    this.markClosed();
   }
 
-  async send(message: RemoteTransportMessage): Promise<void> {
+  async send(message: RemoteTransportMessage, signal?: AbortSignal, beforeSend?: () => boolean): Promise<void> {
     const socket = this.socket;
     if (!socket || this.closed || socket.readyState !== OPEN) throw new Error("Remote transport is not open.");
-    // Throws frame_too_large; the connector never emits such a frame, so this is a backstop.
     const frame = encodeFrame(message, this.limits);
-    socket.send(frame.toString("utf8"));
     const bound = this.options.maxBufferedBytes ?? 4 * 1024 * 1024;
-    while (socket.bufferedAmount > bound) {
-      if (this.closed || socket.readyState !== OPEN) throw new Error("Remote transport closed while sending.");
-      await new Promise((resolve) => setTimeout(resolve, 5));
+    const timeout = this.options.sendTimeoutMs ?? 60_000;
+    if (!Number.isSafeInteger(bound) || bound < 1 || !Number.isSafeInteger(timeout) || timeout < 1) throw new Error("Invalid remote send limits.");
+    if (signal?.aborted) throw new Error("Remote send was aborted.");
+    if (this.outboundMessages >= MAX_OUTBOUND_MESSAGES || this.outboundBytes + frame.byteLength > MAX_OUTBOUND_BYTES) {
+      this.shutdownSocket();
+      throw new Error("Remote send queue is full.");
     }
+    this.outboundMessages++;
+    this.outboundBytes += frame.byteLength;
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+        this.pendingSends.delete(cancel);
+        if (error) reject(error); else resolve();
+      };
+      const cancel = (error: Error) => finish(error);
+      const abort = () => finish(new Error("Remote send was aborted."));
+      const timer = setTimeout(() => {
+        this.shutdownSocket();
+        finish(new Error("Remote send timed out."));
+      }, timeout);
+      this.pendingSends.add(cancel);
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+      this.outbound = this.outbound.then(async () => {
+        try {
+          while (!settled && !this.closed && socket.readyState === OPEN && socket.bufferedAmount + frame.byteLength > bound) {
+            await new Promise((accept) => setTimeout(accept, 5));
+          }
+          if (settled) return;
+          if (this.closed || socket.readyState !== OPEN) { finish(new Error("Remote transport closed while sending.")); return; }
+          try {
+            if (beforeSend && !beforeSend()) { finish(new Error("Remote send authorization changed.")); return; }
+          } catch { finish(new Error("Remote send authorization changed.")); return; }
+          try { socket.send(frame.toString("utf8")); finish(); }
+          catch (error) { finish(error instanceof Error ? error : new Error("Remote send failed.")); this.shutdownSocket(); }
+        } finally {
+          this.outboundMessages--;
+          this.outboundBytes -= frame.byteLength;
+        }
+      });
+    });
   }
 
   onMessage(handler: (message: RemoteTransportMessage) => void | Promise<void>): void {
@@ -139,22 +191,36 @@ export class WebSocketRemoteTransport implements RemoteTransport {
   }
 
   private receive(data: unknown): void {
-    let message: RemoteTransportMessage;
-    if (typeof data !== "string") {
-      message = { type: "frame_rejected", code: "malformed_frame" };
-    } else {
-      const bytes = Buffer.from(data, "utf8");
-      const decoded = decodeFrame(bytes, this.limits);
-      message = decoded.ok ? decoded.message as unknown as RemoteTransportMessage : { type: "frame_rejected", code: decoded.code };
+    if (this.closed) return;
+    const size = typeof data === "string" ? Buffer.byteLength(data, "utf8") : 0;
+    if (this.inboundMessages >= MAX_INBOUND_MESSAGES || this.inboundBytes + size > MAX_INBOUND_BYTES) {
+      this.shutdownSocket();
+      return;
     }
+    this.inboundMessages++;
+    this.inboundBytes += size;
     this.inbound = this.inbound.then(async () => {
-      try { await this.messageHandler?.(message); } catch { /* the connector owns its own failures */ }
+      try {
+        if (this.closed) return;
+        const decoded = typeof data === "string" ? decodeFrame(Buffer.from(data, "utf8"), this.limits) :
+          { ok: false as const, code: "malformed_frame" as const };
+        const message: RemoteTransportMessage = decoded.ok ? decoded.message as unknown as RemoteTransportMessage :
+          { type: "frame_rejected", code: decoded.code };
+        await this.messageHandler?.(message);
+      } catch { /* the connector owns its own failures */ }
+      finally { this.inboundMessages--; this.inboundBytes -= size; }
     });
+  }
+
+  private shutdownSocket(): void {
+    this.markClosed();
+    try { this.socket?.close(1008, "transport limit"); } catch { /* already closing */ }
   }
 
   private markClosed(): void {
     if (this.closed) return;
     this.closed = true;
+    for (const cancel of [...this.pendingSends]) cancel(new Error("Remote transport closed while sending."));
     this.closeHandler?.();
   }
 }

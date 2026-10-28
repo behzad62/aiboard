@@ -127,7 +127,7 @@ test("authenticated remote-only home start protects owned paths and uses cwd", {
     expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
   };
   await Promise.race([
-    relay.send({ type: "challenge", challenge }),
+    relay.send(authority.challenge(challenge)),
     starting.then((value) => { if (!value.started) throw new Error("Runner failed before relay authentication."); }),
   ]);
   const proof = await relay.nextMessage();

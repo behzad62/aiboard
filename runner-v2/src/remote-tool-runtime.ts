@@ -132,6 +132,10 @@ export class RemoteToolRuntime {
     return undefined;
   }
 
+  latestPolicyNarrowing(identity: VerifiedRemoteIdentity): string | undefined {
+    return this.options.principals.latestPolicyNarrowing(identity);
+  }
+
   requiresCommandApproval(identity: VerifiedRemoteIdentity, name: string): boolean {
     return this.options.principals.policy(identity).approvals && APPROVAL_TOOLS.has(name);
   }

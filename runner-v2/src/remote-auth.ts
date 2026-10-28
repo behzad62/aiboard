@@ -29,6 +29,12 @@ export interface RelayChallenge {
   readonly expiresAt: string;
 }
 
+export interface SignedRelayChallenge {
+  readonly challenge: RelayChallenge;
+  readonly keyId: string;
+  readonly signature: string;
+}
+
 /** Claims signed by the relay for one request (remote-authorization.v1). */
 export interface RemoteAuthorizationClaims {
   readonly audience: string;
@@ -172,11 +178,31 @@ export class RemoteAuthenticator {
     this.checkReplay(this.seenChallengeNonces, challenge.nonce, "Relay challenge nonce was already used.");
   }
 
-  /** Validate, fence the epoch forward, remember the nonce, then sign. */
-  answerChallenge(challenge: RelayChallenge, session: RemoteDeviceSession): DeviceProof {
+  /** Authenticate the relay before signing; the connector commits the epoch after acknowledgment. */
+  answerChallenge(signed: SignedRelayChallenge, session: RemoteDeviceSession): DeviceProof {
+    if (!signed || typeof signed !== "object" || typeof signed.keyId !== "string" ||
+      typeof signed.signature !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(signed.signature)) {
+      throw new RemoteAuthError("unauthorized", "Relay challenge signature is missing or invalid.");
+    }
+    const challenge = signed.challenge;
+    const fields = ["audience", "accountId", "deviceId", "scope", "nonce", "epoch", "expiresAt"];
+    if (!challenge || typeof challenge !== "object" || Array.isArray(challenge) ||
+      Object.keys(challenge).length !== fields.length || fields.some((field) => !Object.hasOwn(challenge, field))) {
+      throw new RemoteAuthError("unauthorized", "Relay challenge fields are invalid.");
+    }
+    const pinned = session.relayKeys.find((entry) => entry.keyId === signed.keyId);
+    let verified = false;
+    try {
+      if (pinned) {
+        const key = createPublicKey({ key: Buffer.from(pinned.publicKey, "base64url"), type: "spki", format: "der" });
+        const signature = Buffer.from(signed.signature, "base64url");
+        verified = signature.length === 64 && signature.toString("base64url") === signed.signature &&
+          cryptoVerify(null, Buffer.from(canonicalJson(challenge), "utf8"), key, signature);
+      }
+    } catch { verified = false; }
+    if (!verified) throw new RemoteAuthError("unauthorized", "Relay challenge signature does not verify.");
     this.validateChallenge(challenge, session);
     const identity = this.deviceStore.load()!;
-    this.deviceStore.advanceEpochTo(challenge.epoch);
     this.seenChallengeNonces.set(challenge.nonce, Date.parse(challenge.expiresAt));
     const signature = this.deviceStore.sign(canonicalChallenge(challenge));
     return Object.freeze({

@@ -52,7 +52,7 @@ export class RemotePrincipalStore {
   readonly auditStore: RemoteAuditStore;
   private readonly ownsAuditStore: boolean;
 
-  constructor(path: string, auditStore?: RemoteAuditStore, devicePolicyPath?: string) {
+  constructor(path: string, auditStore?: RemoteAuditStore, devicePolicyPath?: string, private readonly clock: () => Date = () => new Date()) {
     if (!isAbsolute(path)) throw new Error("Remote principal state path must be absolute.");
     if (devicePolicyPath !== undefined && !isAbsolute(devicePolicyPath)) throw new Error("Remote device policy path must be absolute.");
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -70,20 +70,22 @@ export class RemotePrincipalStore {
       CREATE TABLE IF NOT EXISTS remote_device_policy (
         account_id TEXT NOT NULL, device_id TEXT NOT NULL,
         shell INTEGER NOT NULL, approvals INTEGER NOT NULL, read_only INTEGER NOT NULL,
-        only_here INTEGER NOT NULL, audit INTEGER NOT NULL,
+        only_here INTEGER NOT NULL, audit INTEGER NOT NULL, narrowed_at TEXT,
         PRIMARY KEY (account_id, device_id)
       );
     `);
+    this.ensureNarrowingColumn("main");
     this.policyTable = devicePolicyPath ? "remote_device.remote_device_policy" : "remote_device_policy";
     if (devicePolicyPath) {
       mkdirSync(dirname(devicePolicyPath), { recursive: true, mode: 0o700 });
       this.database.prepare("ATTACH DATABASE ? AS remote_device").run(devicePolicyPath);
       this.database.exec(`CREATE TABLE IF NOT EXISTS remote_device.remote_device_policy (
         account_id TEXT NOT NULL, device_id TEXT NOT NULL, shell INTEGER NOT NULL, approvals INTEGER NOT NULL,
-        read_only INTEGER NOT NULL, only_here INTEGER NOT NULL, audit INTEGER NOT NULL,
+        read_only INTEGER NOT NULL, only_here INTEGER NOT NULL, audit INTEGER NOT NULL, narrowed_at TEXT,
         PRIMARY KEY (account_id, device_id)
       );
       CREATE TABLE IF NOT EXISTS remote_policy_migrations (policy_path TEXT PRIMARY KEY);`);
+      this.ensureNarrowingColumn("remote_device");
       this.migratePolicy(devicePolicyPath);
     }
   }
@@ -134,6 +136,16 @@ export class RemotePrincipalStore {
     return this.policyStatus(identity).policy;
   }
 
+  /** Broadening never clears the last narrowing, which applies to every client on this device. */
+  latestPolicyNarrowing(identity: VerifiedRemoteIdentity): string | undefined {
+    const verified = checkedIdentity(identity);
+    const row = this.database.prepare(`SELECT narrowed_at FROM ${this.policyTable} WHERE account_id = ? AND device_id = ?`)
+      .get(verified.accountId, verified.deviceId) as { narrowed_at: string | null } | undefined;
+    if (!row || row.narrowed_at === null) return undefined;
+    if (typeof row.narrowed_at !== "string" || !Number.isFinite(Date.parse(row.narrowed_at))) throw new Error("Remote policy narrowing timestamp is invalid.");
+    return row.narrowed_at;
+  }
+
   policyStatus(identity: VerifiedRemoteIdentity): { readonly policy: Readonly<RemoteDevicePolicy>; readonly fromDefaults: boolean } {
     const verified = checkedIdentity(identity);
     const row = this.database.prepare(`SELECT shell, approvals, read_only, only_here, audit
@@ -165,15 +177,17 @@ export class RemotePrincipalStore {
       if (!principal || principal.revoked) throw new Error("Remote principal is unavailable or revoked.");
       const before = this.policy(verified);
       const next = { ...before, ...patch };
+      const previousNarrowing = this.latestPolicyNarrowing(verified);
+      const narrowedAt = policyNarrowed(before, next) ? nextNarrowingTimestamp(previousNarrowing, this.clock().toISOString()) : previousNarrowing;
       if (origin !== "local" && ((!before.shell && next.shell) || (before.approvals && !next.approvals) ||
         (before.readOnly && !next.readOnly) || (before.onlyHere && !next.onlyHere) || (before.audit && !next.audit))) {
         throw new Error("Only the local user can broaden remote device policy.");
       }
-      this.database.prepare(`INSERT INTO ${this.policyTable} (account_id, device_id, shell, approvals, read_only, only_here, audit)
-        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, device_id) DO UPDATE SET
+      this.database.prepare(`INSERT INTO ${this.policyTable} (account_id, device_id, shell, approvals, read_only, only_here, audit, narrowed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, device_id) DO UPDATE SET
         shell=excluded.shell, approvals=excluded.approvals, read_only=excluded.read_only,
-        only_here=excluded.only_here, audit=excluded.audit`).run(verified.accountId, verified.deviceId,
-        Number(next.shell), Number(next.approvals), Number(next.readOnly), Number(next.onlyHere), Number(next.audit));
+        only_here=excluded.only_here, audit=excluded.audit, narrowed_at=excluded.narrowed_at`).run(verified.accountId, verified.deviceId,
+        Number(next.shell), Number(next.approvals), Number(next.readOnly), Number(next.onlyHere), Number(next.audit), narrowedAt ?? null);
       // Record before committing: a failed audit write must never broaden policy silently.
       this.auditStore.recordPolicy(verified, origin, before, next);
       this.database.exec("COMMIT");
@@ -186,12 +200,24 @@ export class RemotePrincipalStore {
 
   close(): void { this.database.close(); if (this.ownsAuditStore) this.auditStore.close(); }
 
+  private ensureNarrowingColumn(schema: "main" | "remote_device"): void {
+    const columns = this.database.prepare(`PRAGMA ${schema}.table_info(remote_device_policy)`).all() as unknown as Array<{ name: string }>;
+    if (columns.some((column) => column.name === "narrowed_at")) return;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.exec(`ALTER TABLE ${schema}.remote_device_policy ADD COLUMN narrowed_at TEXT`);
+      // Earlier policy history cannot prove that a later broadening never occurred.
+      this.database.prepare(`UPDATE ${schema}.remote_device_policy SET narrowed_at = ?`).run(this.clock().toISOString());
+      this.database.exec("COMMIT");
+    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+  }
+
   /** Migrate each project's earlier policy once, preserving the stricter choices. */
   private migratePolicy(path: string): void {
     if (this.database.prepare("SELECT 1 FROM remote_policy_migrations WHERE policy_path = ?").get(path)) return;
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const rows = this.database.prepare("SELECT * FROM remote_device_policy").all() as unknown as Array<PolicyRow & { account_id: string; device_id: string }>;
+      const rows = this.database.prepare("SELECT * FROM remote_device_policy").all() as unknown as Array<PolicyRow & { account_id: string; device_id: string; narrowed_at: string | null }>;
       for (const row of rows) {
         const principal = this.database.prepare("SELECT client_id FROM remote_principals WHERE account_id = ? AND device_id = ? LIMIT 1").get(row.account_id, row.device_id) as { client_id: string } | undefined;
         if (!principal) throw new Error("Remote policy migration cannot identify its owner.");
@@ -202,16 +228,34 @@ export class RemotePrincipalStore {
         const next = current.fromDefaults ? legacy : { shell: current.policy.shell && legacy.shell,
           approvals: current.policy.approvals || legacy.approvals, readOnly: current.policy.readOnly || legacy.readOnly,
           onlyHere: current.policy.onlyHere || legacy.onlyHere, audit: current.policy.audit || legacy.audit };
-        this.database.prepare(`INSERT INTO ${this.policyTable} (account_id, device_id, shell, approvals, read_only, only_here, audit)
-          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, device_id) DO UPDATE SET shell=excluded.shell,
-          approvals=excluded.approvals, read_only=excluded.read_only, only_here=excluded.only_here, audit=excluded.audit`).run(
-          identity.accountId, identity.deviceId, Number(next.shell), Number(next.approvals), Number(next.readOnly), Number(next.onlyHere), Number(next.audit));
+        let narrowedAt = laterTimestamp(this.latestPolicyNarrowing(identity), row.narrowed_at ?? undefined);
+        if (policyNarrowed(current.policy, next)) narrowedAt = nextNarrowingTimestamp(narrowedAt, this.clock().toISOString());
+        this.database.prepare(`INSERT INTO ${this.policyTable} (account_id, device_id, shell, approvals, read_only, only_here, audit, narrowed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, device_id) DO UPDATE SET shell=excluded.shell,
+          approvals=excluded.approvals, read_only=excluded.read_only, only_here=excluded.only_here, audit=excluded.audit, narrowed_at=excluded.narrowed_at`).run(
+          identity.accountId, identity.deviceId, Number(next.shell), Number(next.approvals), Number(next.readOnly), Number(next.onlyHere), Number(next.audit), narrowedAt ?? null);
         this.auditStore.recordPolicy(identity, "system", current.policy, next);
       }
       this.database.prepare("INSERT INTO remote_policy_migrations (policy_path) VALUES (?)").run(path);
       this.database.exec("COMMIT");
     } catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
+}
+
+function policyNarrowed(before: Readonly<RemoteDevicePolicy>, next: Readonly<RemoteDevicePolicy>): boolean {
+  return (before.shell && !next.shell) || (!before.approvals && next.approvals) ||
+    (!before.readOnly && next.readOnly) || (!before.onlyHere && next.onlyHere);
+}
+
+function laterTimestamp(a: string | undefined, b: string | undefined): string | undefined {
+  if (a !== undefined && !Number.isFinite(Date.parse(a))) throw new Error("Remote policy narrowing timestamp is invalid.");
+  if (b !== undefined && !Number.isFinite(Date.parse(b))) throw new Error("Remote policy narrowing timestamp is invalid.");
+  return !a ? b : !b ? a : Date.parse(a) >= Date.parse(b) ? a : b;
+}
+
+function nextNarrowingTimestamp(previous: string | undefined, now: string): string {
+  const latest = laterTimestamp(previous, now)!;
+  return previous && latest === previous ? new Date(Date.parse(previous) + 1).toISOString() : latest;
 }
 
 function policyFromRow(row: PolicyRow | undefined): { readonly policy: Readonly<RemoteDevicePolicy>; readonly fromDefaults: boolean } {

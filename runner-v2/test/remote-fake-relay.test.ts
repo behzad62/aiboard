@@ -92,6 +92,7 @@ async function harness(t: test.TestContext, options: {
   const results: ToolResult[] = [];
   let dispatches = 0;
   const runtime: RemoteRequestRuntime = {
+    latestPolicyNarrowing: (identity) => composition.runtime.latestPolicyNarrowing(identity),
     invokeAdmitted: async (identity, name, args, signal, raw, jobId, beforeBroker) => {
       dispatches += 1;
       const outcome = await composition.runtime.invokeAdmitted(identity, name, args, signal, raw, jobId, beforeBroker);
@@ -142,7 +143,7 @@ async function harness(t: test.TestContext, options: {
     scope: REMOTE_CONNECT_SCOPE, nonce: "relay-challenge-1", epoch: "5", expiresAt: "2026-10-27T12:05:00Z",
   };
   const starting = connector.start();
-  await relay.send({ type: "challenge", challenge });
+  await relay.send(authority.challenge(challenge));
   const proof = await relay.nextMessage();
   assert.equal(proof.type, "proof");
   if (proof.type === "proof") {
@@ -415,7 +416,7 @@ test("scenario 6: SIGINT shutdown of the child Runner cleans its managed process
     scope: REMOTE_CONNECT_SCOPE, nonce: "child-challenge-1", epoch: "5",
     expiresAt: new Date(at + 5 * 60_000).toISOString(),
   };
-  await relay.send({ type: "challenge", challenge });
+  await relay.send(authority.challenge(challenge));
   const proof = await relay.nextMessage();
   assert.equal(proof.type, "proof");
   if (proof.type === "proof") assert.equal(verifyDeviceProof(identity.publicKey, challenge, proof.signature), true);

@@ -7,7 +7,7 @@ import WebSocket, { WebSocketServer, type RawData } from "ws";
 
 import type { RemoteTransport, RemoteTransportMessage } from "../../src/remote-connector.js";
 import { canonicalJson, type RemoteRequest } from "../../src/remote-admission-store.js";
-import { REMOTE_CONNECT_SCOPE, REMOTE_RELAY_AUDIENCE, type RemoteAuthorization } from "../../src/remote-auth.js";
+import { REMOTE_CONNECT_SCOPE, REMOTE_RELAY_AUDIENCE, type RelayChallenge, type RemoteAuthorization } from "../../src/remote-auth.js";
 import type { RemoteDeviceSession } from "../../src/remote-device-store.js";
 
 /** Test-only relay signing authority: the Runner only ever sees the public key. */
@@ -27,6 +27,11 @@ export class TestRelayAuthority {
       accountId, clientId, scope: REMOTE_CONNECT_SCOPE, issuedAt,
       relayKeys: [{ keyId: this.keyId, publicKey: this.publicKey }], authorizedScopes: ["scope-project"],
     };
+  }
+
+  challenge(challenge: RelayChallenge): Extract<RemoteTransportMessage, { type: "challenge" }> {
+    return { type: "challenge", challenge, keyId: this.keyId,
+      signature: sign(null, Buffer.from(canonicalJson(challenge), "utf8"), this.privateKey).toString("base64url") };
   }
 
   authorize(request: RemoteRequest, overrides: Partial<RemoteAuthorization["claims"]> = {}, keyId: string = this.keyId): RemoteAuthorization {

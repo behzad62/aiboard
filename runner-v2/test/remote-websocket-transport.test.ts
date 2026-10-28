@@ -59,7 +59,7 @@ test("--relay-url is validated and requires --remote", () => {
 test("sends wait while the socket send buffer is over its bound", async () => {
   const listeners = new Map<string, (event: unknown) => void>();
   const socket = {
-    readyState: 1, bufferedAmount: 0, sent: [] as string[],
+    readyState: 1, bufferedAmount: 10_000_000, sent: [] as string[],
     send(data: string) { this.sent.push(data); this.bufferedAmount += 10_000_000; },
     close() { listeners.get("close")?.({}); },
     addEventListener(type: string, listener: (event: unknown) => void) { listeners.set(type, listener); },
@@ -72,9 +72,118 @@ test("sends wait while the socket send buffer is over its bound", async () => {
   const sending = transport.send({ type: "heartbeat", at: "x" }).then(() => { finished = true; });
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(finished, false, "the send is held while the buffer is over its bound");
+  assert.deepEqual(socket.sent, [], "nothing is sent before buffer space is available");
   socket.bufferedAmount = 0;
   await sending;
   assert.equal(finished, true);
+});
+
+function mockSocket() {
+  const listeners = new Map<string, Array<(event: unknown) => void>>();
+  const emit = (type: string, event: unknown = {}) => { for (const listener of listeners.get(type) ?? []) listener(event); };
+  const socket = {
+    readyState: 1, bufferedAmount: 0, sent: [] as string[], closes: 0,
+    send(data: string) { this.sent.push(data); },
+    close() { this.closes++; this.readyState = 3; emit("close"); },
+    addEventListener(type: string, listener: (event: unknown) => void) {
+      const entries = listeners.get(type) ?? [];
+      entries.push(listener);
+      listeners.set(type, entries);
+    },
+  };
+  return { socket, emit };
+}
+
+test("inbound count and byte limits close the transport when a handler is stalled", async () => {
+  for (const mode of ["count", "bytes"] as const) {
+    const { socket, emit } = mockSocket();
+    const transport = new WebSocketRemoteTransport({ url: "ws://127.0.0.1:1/connect", createSocket: () => socket as unknown as WebSocket });
+    let closed = 0, delivered = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    transport.onClose(() => { closed++; });
+    transport.onMessage(async () => { delivered++; await gate; });
+    const connected = transport.connect(); emit("open"); await connected;
+    const frame = mode === "count" ? '{"type":"heartbeat","at":"x"}' : JSON.stringify({ type: "heartbeat", at: "x".repeat(1024 * 1024 - 100) });
+    emit("message", { data: frame });
+    await tick();
+    assert.equal(delivered, 1);
+    for (let i = 0; i < (mode === "count" ? 64 : 9); i++) emit("message", { data: frame });
+    assert.equal(closed, 1, mode);
+    assert.equal(socket.closes, 1, mode);
+    release(); await tick();
+    assert.equal(delivered, 1, "queued messages are not delivered after close");
+  }
+});
+
+test("sends are serialized, abortable, and rejected on close or deadline", async () => {
+  for (const mode of ["abort", "close", "deadline"] as const) {
+    const { socket, emit } = mockSocket();
+    socket.bufferedAmount = 10_000;
+    const transport = new WebSocketRemoteTransport({ url: "ws://127.0.0.1:1/connect", maxBufferedBytes: 1000,
+      sendTimeoutMs: mode === "deadline" ? 30 : 1000, createSocket: () => socket as unknown as WebSocket });
+    let closed = 0;
+    transport.onClose(() => { closed++; });
+    const connected = transport.connect(); emit("open"); await connected;
+    const controller = new AbortController();
+    const first = transport.send({ type: "heartbeat", at: "one" }, controller.signal);
+    const second = transport.send({ type: "heartbeat", at: "two" });
+    const firstRejection = assert.rejects(first);
+    const secondRejection = mode === "abort" ? undefined : assert.rejects(second);
+    await tick();
+    assert.deepEqual(socket.sent, []);
+    if (mode === "abort") {
+      controller.abort();
+      await firstRejection;
+      socket.bufferedAmount = 0;
+      await second;
+      assert.equal(socket.sent.length, 1);
+      assert.match(socket.sent[0]!, /two/);
+      await transport.close();
+    } else if (mode === "close") {
+      await transport.close();
+      await firstRejection; await secondRejection;
+    } else {
+      await firstRejection; await secondRejection;
+      assert.equal(socket.sent.length, 0);
+    }
+    assert.equal(closed, 1, mode);
+  }
+});
+
+test("a queued send rechecks its authorization immediately before the socket write", async () => {
+  const { socket, emit } = mockSocket();
+  socket.bufferedAmount = 10_000;
+  const transport = new WebSocketRemoteTransport({ url: "ws://127.0.0.1:1/connect", maxBufferedBytes: 1000,
+    createSocket: () => socket as unknown as WebSocket });
+  const connected = transport.connect(); emit("open"); await connected;
+  let allowed = true;
+  const blocked = transport.send({ type: "heartbeat", at: "sensitive" }, undefined, () => allowed);
+  const rejected = assert.rejects(blocked, /authorization changed/);
+  await tick();
+  allowed = false;
+  socket.bufferedAmount = 0;
+  await rejected;
+  assert.deepEqual(socket.sent, []);
+  await transport.send({ type: "heartbeat", at: "still-open" });
+  assert.equal(socket.sent.length, 1);
+  await transport.close();
+});
+
+test("a blocked outbound queue has a fixed message limit", async () => {
+  const { socket, emit } = mockSocket();
+  socket.bufferedAmount = 10_000;
+  const transport = new WebSocketRemoteTransport({ url: "ws://127.0.0.1:1/connect", maxBufferedBytes: 1000,
+    createSocket: () => socket as unknown as WebSocket });
+  let closed = 0;
+  transport.onClose(() => { closed++; });
+  const connected = transport.connect(); emit("open"); await connected;
+  const sends = Array.from({ length: 65 }, (_, index) =>
+    transport.send({ type: "heartbeat", at: String(index) }).then(() => undefined, (error: unknown) => error));
+  const results = await Promise.all(sends);
+  assert.equal(results.filter((result) => result instanceof Error).length, 65);
+  assert.equal(closed, 1);
+  assert.deepEqual(socket.sent, []);
 });
 
 /** A minimal relay: challenge → verify the device proof → authenticated with limits; records every frame. */
@@ -103,7 +212,8 @@ async function fakeRelay(t: test.TestContext, deviceKey: () => string, deviceId:
       }
       if (frame.type === "chunk") connection.send(JSON.stringify({ type: "chunk_ack", transferId: frame.transferId, seq: frame.seq }));
     });
-    connection.send(JSON.stringify({ type: "challenge", challenge: issued }));
+    connection.send(JSON.stringify({ type: "challenge", challenge: issued, keyId: "relay",
+      signature: sign(null, Buffer.from(canonicalJson(issued)), relayKey.privateKey).toString("base64url") }));
   });
   t.after(async () => { for (const client of server.clients) client.terminate(); await new Promise<void>((resolve) => server.close(() => resolve())); });
   return {
@@ -137,6 +247,7 @@ test("the connector runs end to end over a real WebSocket: handshake, limits, re
   const blob = randomBytes(300 * 1024);
   const hash = (await artifacts.put(blob, "application/octet-stream")).hash;
   const runtime: RemoteRequestRuntime = {
+    latestPolicyNarrowing: () => undefined,
     invoke: async (_identity, name): Promise<ToolResult> => ({ callId: "c", toolName: name, isError: false,
       content: [{ type: "artifact", hash, mediaType: "application/octet-stream" }] }),
   };
@@ -196,8 +307,9 @@ test("the connector runs end to end over a real WebSocket: handshake, limits, re
   // A frame over the negotiated maximum is refused by length and the session keeps serving.
   relay.send(JSON.stringify({ type: "heartbeat", at: "x".repeat(REMOTE_FRAME_MIN_BYTES) }));
   relay.send("{not json");
-  await until(() => relay.received.filter((frame) => frame.type === "frame_error").length === 2);
-  assert.deepEqual(relay.received.filter((frame) => frame.type === "frame_error").map((frame) => frame.code), ["frame_too_large", "malformed_frame"]);
+  relay.send('{"type":"request","request":{"payload":{"x":1,"\\u0078":2}}}');
+  await until(() => relay.received.filter((frame) => frame.type === "frame_error").length === 3);
+  assert.deepEqual(relay.received.filter((frame) => frame.type === "frame_error").map((frame) => frame.code), ["frame_too_large", "malformed_frame", "malformed_frame"]);
   const status = signed({ toolId: "jobs_status", payload: { jobId } });
   await until(() => relay.response(status.requestId) !== undefined);
   assert.equal(relay.response(status.requestId)!.response.admitted, true);

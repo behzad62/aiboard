@@ -1,8 +1,9 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { open } from "node:fs/promises";
 
 import type { ToolResult } from "./agent-contracts.js";
 import { RemoteAdmissionError, parseRemoteRequest, remotePayloadDigest, type RemoteAdmissionStore, type RemoteJob, type RemoteRequest } from "./remote-admission-store.js";
-import { RemoteAuthError, type RelayChallenge, type RemoteAuthorization, type RemoteAuthenticator } from "./remote-auth.js";
+import { RemoteAuthError, type SignedRelayChallenge, type RemoteAuthorization, type RemoteAuthenticator } from "./remote-auth.js";
 import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
 import type { VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
@@ -40,7 +41,7 @@ export interface RemoteResponseMessage {
 
 /** Injected duplex framing. The real WebSocket/TLS transport lands in R1e. */
 export type RemoteTransportMessage =
-  | { readonly type: "challenge"; readonly challenge: RelayChallenge }
+  | ({ readonly type: "challenge" } & SignedRelayChallenge)
   | { readonly type: "proof"; readonly deviceId: string; readonly publicKey: string; readonly signature: string; readonly limits?: RemoteFrameLimits }
   | { readonly type: "authenticated"; readonly epoch: string; readonly limits?: unknown }
   | { readonly type: "auth_error"; readonly code: string }
@@ -58,7 +59,8 @@ export type RemoteTransportMessage =
 export interface RemoteTransport {
   connect(): Promise<void>;
   close(): Promise<void>;
-  send(message: RemoteTransportMessage): Promise<void> | void;
+  /** Check beforeSend synchronously at the socket write, after any queue or backpressure wait. */
+  send(message: RemoteTransportMessage, signal?: AbortSignal, beforeSend?: () => boolean): Promise<void> | void;
   onMessage(handler: (message: RemoteTransportMessage) => void | Promise<void>): void;
   onClose(handler: () => void): void;
   /** Limits negotiated at the handshake, for a transport that encodes frames itself. */
@@ -72,6 +74,7 @@ export interface RemoteRequestRuntime {
   invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string, jobId?: string): Promise<ToolResult>;
   invokeAdmitted?(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal: AbortSignal, rawRequest: string, jobId: string, beforeBroker?: () => boolean, approvalGranted?: boolean): Promise<RemoteInvocationResult>;
   authorizeJob?(identity: VerifiedRemoteIdentity, name?: string, args?: unknown): string | undefined;
+  latestPolicyNarrowing(identity: VerifiedRemoteIdentity): string | undefined;
   requiresCommandApproval?(identity: VerifiedRemoteIdentity, name: string): boolean;
   summarizeCommandApproval?(identity: VerifiedRemoteIdentity, jobId: string, code: string, name: string, args: unknown): CommandApprovalSummary;
   stopStartedProcess?(identity: VerifiedRemoteIdentity, processId: string): Promise<boolean>;
@@ -126,8 +129,10 @@ export const REMOTE_TOOL_ID_TO_RUNNER: Readonly<Record<string, string>> = Object
 const JOB_TOOL_IDS: ReadonlySet<string> = new Set(["jobs_status", "jobs_events", "jobs_result", "jobs_cancel"]);
 /** Results above this many encoded bytes are stored as an artifact and returned by outputRef. */
 const INLINE_RESULT_MAX_BYTES = 256 * 1024;
-/** Artifact hashes listed in a large-result stub; more are reachable only through the outputRef itself. */
+/** Artifact hashes listed directly in a large-result stub. */
 const MAX_STUB_ARTIFACTS = 256;
+const MAX_INDEX_ARTIFACTS = 100_000;
+const MAX_INDEX_BYTES = MAX_INDEX_ARTIFACTS * 67 + 2;
 const EFFECT_TOOL_IDS: ReadonlySet<string> = new Set(["files_write", "files_patch", "files_move", "files_delete",
   "process_start", "process_run", "process_write_stdin", "process_signal"]);
 
@@ -214,10 +219,11 @@ export class RemoteConnector {
   private readonly processStops = new Map<string, { identity: VerifiedRemoteIdentity; promise: Promise<void> }>();
   private lastClientId: string | undefined;
   private startupReconciled = false;
-  private challengeWaiter: { resolve: (challenge: RelayChallenge) => void; reject: (error: Error) => void } | undefined;
+  private challengeWaiter: { resolve: (challenge: SignedRelayChallenge) => void; reject: (error: Error) => void } | undefined;
   private authWaiter: { resolve: () => void; reject: (error: Error) => void } | undefined;
-  private earlyChallenge: RelayChallenge | undefined;
+  private earlyChallenge: SignedRelayChallenge | undefined;
   private earlyAuth: boolean | undefined;
+  private pendingEpoch: string | undefined;
   private reconnectTimer: Promise<void> | undefined;
   private reconnectAttempts = 0;
   private established = false;
@@ -241,10 +247,10 @@ export class RemoteConnector {
     this.limits = this.localLimits;
     this.transfers = new ArtifactTransferManager({
       limits: () => this.limits,
-      send: async (frame) => {
+      send: async (frame, signal, beforeSend) => {
         const transport = this.transport;
         if (!transport) throw new Error("Remote transport closed.");
-        await transport.send(frame);
+        await transport.send(frame, signal, beforeSend);
       },
       ...(options.artifactStallTimeoutMs !== undefined ? { stallTimeoutMs: options.artifactStallTimeoutMs } : {}),
       ...(options.maxConcurrentArtifactTransfers !== undefined ? { maxConcurrent: options.maxConcurrentArtifactTransfers } : {}),
@@ -364,6 +370,9 @@ export class RemoteConnector {
     this.transition("authenticating", reason);
     this.transfers.abortAll();
     this.limits = this.localLimits;
+    this.earlyChallenge = undefined;
+    this.earlyAuth = undefined;
+    this.pendingEpoch = undefined;
     const transport = this.options.createTransport({ deviceId: deviceStore.load()?.deviceId ?? "device-unprovisioned" });
     this.transport = transport;
     transport.onMessage((message) => this.onMessage(message));
@@ -372,9 +381,16 @@ export class RemoteConnector {
       await transport.connect();
       const challenge = await this.waitForChallenge();
       const proof = this.options.authenticator.answerChallenge(challenge, this.options.session);
+      this.pendingEpoch = challenge.challenge.epoch;
       await transport.send({ type: "proof", deviceId: proof.deviceId, publicKey: proof.publicKey, signature: proof.signature, limits: this.localLimits });
       await this.waitForAuthenticated();
+      if (deviceStore.isRevoked() || (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld())) throw new Error("Remote device is unavailable.");
+      const currentEpoch = deviceStore.load()?.epoch;
+      if (!currentEpoch || BigInt(challenge.challenge.epoch) < BigInt(currentEpoch)) throw new Error("Remote epoch is stale.");
+      deviceStore.advanceEpochTo(challenge.challenge.epoch);
+      this.pendingEpoch = undefined;
     } catch {
+      this.pendingEpoch = undefined;
       this.admitting = false;
       if (!deviceStore.isRevoked() && this.current.state !== "suspended") {
         this.transition("disconnected", "authentication_failed");
@@ -434,7 +450,7 @@ export class RemoteConnector {
     if (!this.closing && !this.closed) this.transition("connected-degraded", this.pluginDegradedReason);
   }
 
-  private waitForChallenge(): Promise<RelayChallenge> {
+  private waitForChallenge(): Promise<SignedRelayChallenge> {
     if (this.earlyChallenge) {
       const challenge = this.earlyChallenge;
       this.earlyChallenge = undefined;
@@ -442,7 +458,7 @@ export class RemoteConnector {
     }
     const timeout = this.options.handshakeTimeoutMs ?? 10_000;
     return Promise.race([
-      new Promise<RelayChallenge>((resolve, reject) => { this.challengeWaiter = { resolve, reject }; }),
+      new Promise<SignedRelayChallenge>((resolve, reject) => { this.challengeWaiter = { resolve, reject }; }),
       this.sleep(timeout).then(() => { throw new Error("Remote handshake timed out."); }),
     ]);
   }
@@ -464,14 +480,15 @@ export class RemoteConnector {
     switch (message.type) {
       case "challenge":
         if (this.challengeWaiter) {
-          this.challengeWaiter.resolve(message.challenge);
+          this.challengeWaiter.resolve(message);
           this.challengeWaiter = undefined;
         } else {
-          this.earlyChallenge = message.challenge;
+          this.earlyChallenge = message;
         }
         return;
       case "authenticated": {
-        let accepted = true;
+        if (this.pendingEpoch === undefined) return;
+        let accepted = message.epoch === this.pendingEpoch;
         try {
           this.limits = negotiateFrameLimits(this.localLimits, message.limits);
           this.transport?.setFrameLimits?.(this.limits);
@@ -568,12 +585,28 @@ export class RemoteConnector {
 
   private async onRequest(request: RemoteRequest, authorization?: RemoteAuthorization): Promise<void> {
     const transport = this.transport;
-    const respond = async (response: RemoteResponseMessage, data?: unknown): Promise<void> => {
+    const respond = async (response: RemoteResponseMessage, data?: unknown, beforeSend?: () => boolean): Promise<boolean> => {
       let frame: RemoteTransportMessage = { type: "response", response, ...(data !== undefined ? { data } : {}) };
       // Never emit a frame over the negotiated maximum; the job itself is unaffected.
-      if (frameByteLength(frame) > this.limits.maxFrameBytes) frame = { type: "response", response: rejected(request, "frame_too_large") };
-      try { await transport?.send(frame); }
-      catch { /* A disconnected wait does not own the admitted job. */ }
+      const oversized = frameByteLength(frame) > this.limits.maxFrameBytes;
+      if (oversized) frame = { type: "response", response: rejected(request, "frame_too_large") };
+      try {
+        if (!transport) return false;
+        await transport.send(frame, undefined, beforeSend);
+        return !oversized;
+      }
+      catch {
+        // A policy change while a response waits for socket space must not release the old result.
+        if (beforeSend && !beforeSend()) {
+          try {
+            if (request.toolId === "jobs_status") {
+              const refreshed = this.jobTool({ accountId: request.accountId, clientId: request.clientId, deviceId: request.deviceId }, request);
+              await transport?.send({ type: "response", response: refreshed.response, data: refreshed.data });
+            } else await transport?.send({ type: "response", response: rejected(request, "result_withheld_by_policy") });
+          } catch { /* socket loss */ }
+        }
+        return false;
+      }
     };
     if (this.options.deviceStore.isRevoked()) {
       this.admitting = false;
@@ -612,7 +645,14 @@ export class RemoteConnector {
       if (refusal) { await respond(rejected(request, "unauthorized")); return; }
       if (JOB_TOOL_IDS.has(request.toolId)) {
         const answer = this.jobTool(identity, request);
-        await respond(answer.response, answer.data);
+        const jobId = request.toolId === "jobs_result" || (request.toolId === "jobs_status" &&
+          (answer.data as { job?: RemoteJob }).job?.outputRef) ? jobArguments(request).jobId : undefined;
+        await respond(answer.response, answer.data, jobId ? () => {
+          try {
+            const job = this.options.admission.getJob(identity, jobId);
+            return !!job && !this.resultWithheld(identity, job);
+          } catch { return false; }
+        } : undefined);
         return;
       }
       if (request.toolId === "artifacts_read") {
@@ -652,7 +692,8 @@ export class RemoteConnector {
       const rawRequest = JSON.stringify(request);
       const needsApproval = !isPlugin && this.options.runtime.requiresCommandApproval?.(identity, runnerName) === true;
       const full = this.queue.length >= this.queueLimit() && (needsApproval || this.runningCount() >= this.concurrentLimit());
-      const decision = this.options.admission.admit(identity, rawRequest, { rejectNew: full });
+      const decision = this.options.admission.admit(identity, rawRequest, { rejectNew: full,
+        policyNarrowing: this.options.runtime.latestPolicyNarrowing(identity) ?? null });
       const deadline = Math.min(Date.parse(request.expiresAt),
         Date.parse(decision.job.createdAt) + (this.options.toolDeadlineMs ?? 300_000));
       if (!decision.created) {
@@ -699,8 +740,20 @@ export class RemoteConnector {
     // The current signed scope must still cover the original job.
     if (view.job.scopeRef !== request.scopeRef) throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
     const name = REMOTE_TOOL_ID_TO_RUNNER[view.job.toolId] ?? view.job.toolId;
-    if (this.options.runtime.authorizeJob?.(identity, name)) throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
+    if (this.options.runtime.authorizeJob?.(identity, this.resultWithheld(identity, view.job) ? undefined : name)) {
+      throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
+    }
     return view;
+  }
+
+  private resultWithheld(identity: VerifiedRemoteIdentity, job: RemoteJob): boolean {
+    const narrowedAt = this.options.runtime.latestPolicyNarrowing(identity);
+    if (narrowedAt === undefined) return false;
+    return this.options.admission.policyNarrowingAtAdmission(identity, job.jobId) !== narrowedAt;
+  }
+
+  private requireResultAccess(identity: VerifiedRemoteIdentity, job: RemoteJob): void {
+    if (this.resultWithheld(identity, job)) throw new RemoteAdmissionError("result_withheld_by_policy", "Result is withheld after device policy narrowed.");
   }
 
   /**
@@ -709,7 +762,7 @@ export class RemoteConnector {
    * expiry ends access. The response announces the transfer; chunk frames follow.
    */
   private async artifactRead(identity: VerifiedRemoteIdentity, request: RemoteRequest,
-    respond: (response: RemoteResponseMessage, data?: unknown) => Promise<void>): Promise<void> {
+    respond: (response: RemoteResponseMessage, data?: unknown, beforeSend?: () => boolean) => Promise<boolean>): Promise<void> {
     const args = artifactArguments(request);
     const view = this.authorizedJobView(identity, request, args.jobId);
     const artifacts = this.options.artifacts;
@@ -717,11 +770,22 @@ export class RemoteConnector {
       try { this.options.auditArtifactRead?.(identity, args.jobId, decision, outcome); } catch { /* audit never blocks a read decision */ }
     };
     const refuse = async (code: string) => { audit("denied", code); await respond(rejected(request, code)); };
+    if (this.resultWithheld(identity, view.job)) { await refuse("result_withheld_by_policy"); return; }
     const result = this.options.admission.result(identity, args.jobId);
-    if (!artifacts || !reachableArtifacts(result).has(args.hash)) { await refuse("artifact_unavailable"); return; }
+    const reachable = artifacts ? await reachableArtifacts(result, artifacts) : new Set<string>();
+    if (this.resultWithheld(identity, view.job)) { await refuse("result_withheld_by_policy"); return; }
+    if (!artifacts || !reachable.has(args.hash)) { await refuse("artifact_unavailable"); return; }
     let record: { path: string; byteLength: number; mediaType: string };
     try { record = await artifacts.stat(args.hash); }
-    catch { await refuse("artifact_unavailable"); return; }
+    catch { await refuse(this.resultWithheld(identity, view.job) ? "result_withheld_by_policy" : "artifact_unavailable"); return; }
+    this.authorizedJobView(identity, request, args.jobId);
+    if (this.resultWithheld(identity, view.job)) { await refuse("result_withheld_by_policy"); return; }
+    this.options.admission.result(identity, args.jobId);
+    if (!this.isReady() || this.options.deviceStore.isRevoked() ||
+      (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) ||
+      this.options.deviceStore.load()?.epoch !== request.deviceEpoch || Date.parse(request.expiresAt) <= this.now().getTime()) {
+      await refuse("unauthorized"); return;
+    }
     const source = { path: record.path, hash: args.hash, byteLength: record.byteLength };
     try { this.transfers.reserve(request.requestId, source, args.offset); }
     catch (error) {
@@ -729,11 +793,24 @@ export class RemoteConnector {
       return;
     }
     audit("allowed", "transfer_started");
-    await respond(jobResponse(request, view.job), {
+    const announced = await respond(jobResponse(request, view.job), {
       transferId: request.requestId, hash: args.hash, mediaType: record.mediaType, byteLength: record.byteLength,
       offset: args.offset, chunkBytes: this.limits.chunkBytes, window: this.limits.window,
+    }, () => {
+      try { return !this.resultWithheld(identity, view.job); } catch { return false; }
     });
-    void this.transfers.run(request.requestId, source, args.offset);
+    if (!announced) { this.transfers.abort(request.requestId); return; }
+    void this.transfers.run(request.requestId, source, args.offset, () => {
+      try {
+        if (this.resultWithheld(identity, view.job)) return "result_withheld_by_policy";
+        this.authorizedJobView(identity, request, args.jobId);
+        if (view.job.resultExpiresAt && Date.parse(view.job.resultExpiresAt) <= this.now().getTime()) return "artifact_unavailable";
+        return this.isReady() && !this.options.deviceStore.isRevoked() &&
+          (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld()) &&
+          this.options.deviceStore.load()?.epoch === request.deviceEpoch && Date.parse(request.expiresAt) > this.now().getTime() ?
+          undefined : "artifact_unavailable";
+      } catch { return "artifact_unavailable"; }
+    });
   }
 
   private jobTool(identity: VerifiedRemoteIdentity, request: RemoteRequest): { response: RemoteResponseMessage; data: unknown } {
@@ -742,21 +819,34 @@ export class RemoteConnector {
     const view = this.authorizedJobView(identity, request, args.jobId);
     let data: unknown;
     if (request.toolId === "jobs_status") {
-      data = view;
+      if (this.resultWithheld(identity, view.job)) {
+        const job = { ...view.job };
+        delete job.outputRef;
+        data = { ...view, job };
+      } else data = view;
     } else if (request.toolId === "jobs_events") {
       data = admission.events(identity, args.jobId, args.cursor, args.limit);
     } else if (request.toolId === "jobs_result") {
+      this.requireResultAccess(identity, view.job);
       const result = admission.result(identity, args.jobId);
       const offset = resultOffset(args.cursor, args.jobId);
       const bytes = result.inline;
       if (offset > (bytes?.byteLength ?? 0)) throw new Error("Invalid result cursor.");
-      const end = Math.min(bytes?.byteLength ?? 0, offset + (args.maxBytes ?? 64 * 1024));
-      data = {
+      const makePage = (end: number) => ({
         state: result.state,
         ...(result.outputRef ? { outputRef: result.outputRef } : {}),
         ...(bytes ? { inline: Buffer.from(bytes.subarray(offset, end)).toString("base64"), encoding: "base64" } : {}),
         ...(bytes && end < bytes.byteLength ? { nextCursor: resultCursor(args.jobId, end) } : {}),
-      };
+      });
+      let low = 0;
+      let high = Math.min((bytes?.byteLength ?? 0) - offset, args.maxBytes ?? 64 * 1024, 64 * 1024);
+      while (low < high) {
+        const length = Math.ceil((low + high) / 2);
+        const frame = { type: "response", response: jobResponse(request, view.job), data: makePage(offset + length) };
+        if (frameByteLength(frame) <= this.limits.maxFrameBytes) low = length; else high = length - 1;
+      }
+      if (bytes && offset < bytes.byteLength && low === 0) throw new RemoteAdmissionError("invalid_request", "Result page cannot fit in a frame.");
+      data = makePage(offset + low);
     } else {
       // Persist the request before aborting or signalling any work.
       data = admission.requestCancel(identity, args.jobId, request.idempotencyKey, request.traceId);
@@ -1025,14 +1115,20 @@ export class RemoteConnector {
   private async storedResult(result: ToolResult): Promise<{ inline: Uint8Array; outputRef?: string }> {
     const bytes = Buffer.from(JSON.stringify(result), "utf8");
     if (bytes.byteLength <= INLINE_RESULT_MAX_BYTES) return { inline: bytes };
-    const hashes = [...artifactHashes(result)].slice(0, MAX_STUB_ARTIFACTS);
+    const allHashes = [...artifactHashes(result)];
+    if (allHashes.length > MAX_INDEX_ARTIFACTS) throw new Error("Remote result artifact index exceeds its limit.");
+    const hashes = allHashes.slice(0, MAX_STUB_ARTIFACTS);
     if (!this.options.artifacts) {
+      if (allHashes.length > MAX_STUB_ARTIFACTS) throw new Error("Remote result artifact index is unavailable.");
       return { inline: Buffer.from(JSON.stringify({ resultTooLarge: true, byteLength: bytes.byteLength, artifacts: hashes }), "utf8") };
     }
     const stored = await this.options.artifacts.put(bytes, "application/json", "remote-result");
+    const index = allHashes.length > MAX_STUB_ARTIFACTS ?
+      await this.options.artifacts.put(Buffer.from(JSON.stringify(allHashes), "utf8"), "application/json", "remote-artifact-index") : undefined;
     return {
       outputRef: stored.hash,
-      inline: Buffer.from(JSON.stringify({ outputRef: stored.hash, mediaType: "application/json", byteLength: bytes.byteLength, artifacts: hashes }), "utf8"),
+      inline: Buffer.from(JSON.stringify({ outputRef: stored.hash, mediaType: "application/json", byteLength: bytes.byteLength, artifacts: hashes,
+        ...(index ? { artifactIndex: index.hash } : {}) }), "utf8"),
     };
   }
 
@@ -1126,7 +1222,7 @@ function jobArguments(request: RemoteRequest): JobArguments {
     typeof payload.jobId !== "string" || !payload.jobId || payload.jobId.length > 256 ||
     (payload.cursor !== undefined && (typeof payload.cursor !== "string" || !payload.cursor || payload.cursor.length > 512)) ||
     (payload.limit !== undefined && (!Number.isInteger(payload.limit) || Number(payload.limit) < 1 || Number(payload.limit) > 256)) ||
-    (payload.maxBytes !== undefined && (!Number.isInteger(payload.maxBytes) || Number(payload.maxBytes) < 1 || Number(payload.maxBytes) > 64 * 1024))) {
+    (payload.maxBytes !== undefined && (!Number.isSafeInteger(payload.maxBytes) || Number(payload.maxBytes) < 1))) {
     throw new Error("Invalid job arguments.");
   }
   return {
@@ -1158,7 +1254,7 @@ function artifactHashes(result: ToolResult): Set<string> {
 }
 
 /** Hashes a job result makes readable: its outputRef plus artifacts named in the stored inline result or stub. */
-function reachableArtifacts(result: { outputRef?: string; inline?: Uint8Array }): Set<string> {
+async function reachableArtifacts(result: { outputRef?: string; inline?: Uint8Array }, artifacts: RemoteArtifactSource): Promise<Set<string>> {
   const reachable = new Set<string>();
   if (result.outputRef) reachable.add(result.outputRef);
   if (!result.inline) return reachable;
@@ -1170,6 +1266,30 @@ function reachableArtifacts(result: { outputRef?: string; inline?: Uint8Array })
   }
   for (const hash of Array.isArray(parsed.artifacts) ? parsed.artifacts : []) {
     if (typeof hash === "string" && /^[0-9a-f]{64}$/.test(hash)) reachable.add(hash);
+  }
+  if (typeof parsed.artifactIndex === "string" && /^[0-9a-f]{64}$/.test(parsed.artifactIndex)) {
+    const indexHash = parsed.artifactIndex;
+    try {
+      const record = await artifacts.stat(indexHash);
+      if (!Number.isSafeInteger(record.byteLength) || record.byteLength < 2 || record.byteLength > MAX_INDEX_BYTES) return reachable;
+      const handle = await open(record.path, "r");
+      try {
+        if ((await handle.stat()).size !== record.byteLength) return reachable;
+        const bytes = Buffer.alloc(record.byteLength);
+        let position = 0;
+        while (position < bytes.length) {
+          const { bytesRead } = await handle.read(bytes, position, bytes.length - position, position);
+          if (!bytesRead) return reachable;
+          position += bytesRead;
+        }
+        if (createHash("sha256").update(bytes).digest("hex") !== indexHash) return reachable;
+        const entries: unknown = JSON.parse(bytes.toString("utf8"));
+        if (!Array.isArray(entries) || entries.length > MAX_INDEX_ARTIFACTS ||
+          entries.some((hash) => typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash))) return reachable;
+        reachable.add(indexHash);
+        for (const hash of entries) reachable.add(hash as string);
+      } finally { await handle.close(); }
+    } catch { /* A missing or invalid index grants no additional artifacts. */ }
   }
   return reachable;
 }

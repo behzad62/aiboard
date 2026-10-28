@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -21,6 +22,40 @@ const aliases: Readonly<Record<string, string>> = {
   "fs.patch": "files_patch", "fs.move": "files_move", "fs.delete": "files_delete",
   "process.run": "process_run", "process.start": "process_start", "process.write_stdin": "process_write_stdin",
 };
+
+test("device policy narrowing survives broadening, restart, and legacy migration", async () => {
+  const root = await mkdtemp(join(process.cwd(), "runner-v2", "test", ".policy-narrowing-"));
+  const project = join(root, "principals.sqlite");
+  const shared = join(root, "device.sqlite");
+  let now = new Date("2026-10-27T12:00:00Z");
+  const clock = () => now;
+  const legacy = new DatabaseSync(project);
+  legacy.exec(`CREATE TABLE remote_principals (account_id TEXT NOT NULL, client_id TEXT NOT NULL, device_id TEXT NOT NULL,
+    principal_id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL UNIQUE,
+    revoked INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, client_id, device_id));
+    CREATE TABLE remote_device_policy (account_id TEXT NOT NULL, device_id TEXT NOT NULL, shell INTEGER NOT NULL,
+    approvals INTEGER NOT NULL, read_only INTEGER NOT NULL, only_here INTEGER NOT NULL, audit INTEGER NOT NULL,
+    PRIMARY KEY (account_id, device_id));
+    INSERT INTO remote_principals VALUES ('account', 'client', 'device', 'remote-a', 'remote-run-a', 'remote-session-a', 0);
+    INSERT INTO remote_device_policy VALUES ('account', 'device', 1, 0, 0, 0, 1);`);
+  legacy.close();
+  let store = new RemotePrincipalStore(project, undefined, shared, clock);
+  try {
+    assert.equal(store.latestPolicyNarrowing(identity), now.toISOString(), "legacy policy history is fenced conservatively");
+    now = new Date(now.getTime() + 1000);
+    store.updatePolicy(identity, { onlyHere: true }, "local");
+    const narrowedAt = now.toISOString();
+    now = new Date(now.getTime() + 1000);
+    store.updatePolicy(identity, { onlyHere: false, audit: false }, "local");
+    assert.equal(store.latestPolicyNarrowing({ ...identity, clientId: "another-client" }), narrowedAt);
+    store.close();
+    store = new RemotePrincipalStore(project, undefined, shared, clock);
+    assert.equal(store.latestPolicyNarrowing(identity), narrowedAt);
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
 
 test("device controls confine remote and local MCP tools and audit refusals", { timeout: 120_000 }, async () => {
   const root = await mkdtemp(join(process.cwd(), "runner-v2", "test", ".device-policy-"));

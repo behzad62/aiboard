@@ -62,6 +62,7 @@ async function harness(t: test.TestContext, approvals: boolean) {
   const calls: { name: string; approvalGranted: boolean }[] = [];
   const audit: string[] = [];
   const runtime: RemoteRequestRuntime = {
+    latestPolicyNarrowing: () => undefined,
     invoke: async (_identity, name) => success(name),
     invokeAdmitted: async (_identity, name, _args, _signal, _raw, _jobId, beforeBroker, approvalGranted) => {
       if (beforeBroker && !beforeBroker()) return { result: success(name), brokerInvoked: false };
@@ -84,10 +85,12 @@ async function harness(t: test.TestContext, approvals: boolean) {
   const started = connector.start();
   await tick();
   transport.onProof = () => { void transport.emit({ type: "authenticated", epoch: "5" }); };
-  await transport.emit({ type: "challenge", challenge: {
+  const challenge = {
     audience: REMOTE_RELAY_AUDIENCE, accountId: ACCOUNT, deviceId: device.deviceId, scope: REMOTE_CONNECT_SCOPE,
     nonce: "challenge-1", epoch: "5", expiresAt: new Date(currentTime + 60_000).toISOString(),
-  } });
+  };
+  await transport.emit({ type: "challenge", challenge, keyId: "relay",
+    signature: sign(null, Buffer.from(canonicalJson(challenge)), relayKey.privateKey).toString("base64url") });
   await started;
   assert.equal(connector.isReady(), true);
   t.after(async () => {

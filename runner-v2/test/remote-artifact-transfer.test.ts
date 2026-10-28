@@ -12,6 +12,7 @@ import { ArtifactTransferError, ArtifactTransferManager, type ArtifactTransferFr
 import { RemoteAuthenticator, REMOTE_CONNECT_SCOPE, REMOTE_RELAY_AUDIENCE, type RemoteAuthorization } from "../src/remote-auth.js";
 import { RemoteConnector, type RemoteRequestRuntime, type RemoteTransport, type RemoteTransportMessage } from "../src/remote-connector.js";
 import { RemoteDeviceStore, type RemoteDeviceSession } from "../src/remote-device-store.js";
+import { RemotePrincipalStore } from "../src/remote-principal.js";
 import {
   chunkBytesFor, decodeFrame, DEFAULT_REMOTE_FRAME_LIMITS, encodeFrame, frameByteLength, negotiateFrameLimits,
   RemoteFrameError, REMOTE_FRAME_MAX_BYTES, REMOTE_FRAME_MIN_BYTES, type RemoteFrameLimits,
@@ -98,11 +99,11 @@ test("frame limits negotiate to the minimum and fail closed on malformed offers"
 });
 
 test("a full chunk frame always fits under the negotiated maximum", () => {
-  for (const max of [REMOTE_FRAME_MIN_BYTES, 100_000, 512 * 1024, REMOTE_FRAME_MAX_BYTES]) {
+  for (const max of [REMOTE_FRAME_MIN_BYTES, REMOTE_FRAME_MIN_BYTES + 1024, 100_000, 512 * 1024, REMOTE_FRAME_MAX_BYTES]) {
     const chunk = chunkBytesFor(max);
     assert.equal(chunk % 4096, 0);
     const frame: ArtifactTransferFrame = {
-      type: "chunk", transferId: "x".repeat(128), seq: Number.MAX_SAFE_INTEGER, offset: Number.MAX_SAFE_INTEGER,
+      type: "chunk", transferId: "\u0001".repeat(256), seq: Number.MAX_SAFE_INTEGER, offset: Number.MAX_SAFE_INTEGER,
       length: chunk, sha256: "f".repeat(64), data: Buffer.alloc(chunk, 0xff).toString("base64"),
     };
     assert.ok(frameByteLength(frame) <= max, `chunk frame for ${max}`);
@@ -119,6 +120,8 @@ test("oversized frames are refused by length before parsing; the codec never thr
   assert.deepEqual(decodeFrame(Buffer.from([0xff, 0xfe]), limits), { ok: false, code: "malformed_frame" });
   assert.deepEqual(decodeFrame(Buffer.from("[1]"), limits), { ok: false, code: "malformed_frame" });
   assert.deepEqual(decodeFrame(Buffer.from('{"kind":"x"}'), limits), { ok: false, code: "malformed_frame" });
+  assert.deepEqual(decodeFrame(Buffer.from('{"type":"request","request":{"payload":{"x":1,"\\u0078":2}}}'), limits), { ok: false, code: "malformed_frame" });
+  assert.deepEqual(decodeFrame(Buffer.from('{"type":"x","data":' + '['.repeat(130) + '0' + ']'.repeat(130) + '}'), limits), { ok: false, code: "malformed_frame" });
   const good = encodeFrame({ type: "chunk_ack", transferId: "t", seq: 1 }, limits);
   assert.deepEqual(decodeFrame(good, limits), { ok: true, message: { type: "chunk_ack", transferId: "t", seq: 1 } });
 });
@@ -217,7 +220,34 @@ test("content that no longer matches its address is reported corrupt, never ende
     await manager.run("t", source, 0);
     assert.equal(receiver.ended, false, name);
     assert.equal(receiver.error, "artifact_corrupt", name);
+    assert.equal(receiver.frames.filter((frame) => frame.type === "chunk").length, 0, name);
   }
+});
+
+test("a changed block is refused before any of its bytes leave", async (t) => {
+  const root = await temporary(t);
+  const bytes = randomBytes(4 * 1024 * 1024 + 3 * 4096);
+  const changed = Buffer.from(bytes);
+  changed[4 * 1024 * 1024] ^= 1;
+  const path = join(root, "changing.bin");
+  await writeFile(path, bytes);
+  const frames: ArtifactTransferFrame[] = [];
+  const manager = new ArtifactTransferManager({
+    limits: () => ({ maxFrameBytes: REMOTE_FRAME_MIN_BYTES, chunkBytes: 4096, window: 1 }),
+    send: async (frame) => {
+      frames.push(frame);
+      if (frame.type === "chunk") {
+        if (frame.seq === 0) await writeFile(path, changed);
+        manager.ack("t", frame.seq);
+      }
+    },
+  });
+  const source = { path, hash: sha256(bytes), byteLength: bytes.length };
+  manager.reserve("t", source, 0);
+  await manager.run("t", source, 0);
+  assert.deepEqual(frames.at(-1), { type: "artifact_error", transferId: "t", code: "artifact_corrupt" });
+  assert.equal(frames.some((frame) => frame.type === "artifact_end"), false);
+  assert.equal(frames.filter((frame) => frame.type === "chunk").length, 1024);
 });
 
 test("receiver abort stops a transfer; slots, offsets and duplicates are bounded", async (t) => {
@@ -246,6 +276,32 @@ test("receiver abort stops a transfer; slots, offsets and duplicates are bounded
   assert.equal(manager.active, 0);
 });
 
+test("abort and abortAll release a transfer whose send is blocked", async (t) => {
+  const root = await temporary(t);
+  const bytes = randomBytes(4096);
+  const path = join(root, "blocked.bin");
+  await writeFile(path, bytes);
+  for (const abortAll of [false, true]) {
+    let sending = false;
+    let observedAbort = false;
+    const manager = new ArtifactTransferManager({ limits: () => DEFAULT_REMOTE_FRAME_LIMITS,
+      send: (_frame, signal) => new Promise<void>(() => {
+        sending = true;
+        signal.addEventListener("abort", () => { observedAbort = true; }, { once: true });
+      }) });
+    const source = { path, hash: sha256(bytes), byteLength: bytes.length };
+    manager.reserve("blocked", source, 0);
+    let finished = false;
+    const running = manager.run("blocked", source, 0).then(() => { finished = true; });
+    await until(() => sending);
+    if (abortAll) manager.abortAll(); else manager.abort("blocked");
+    await until(() => finished, 1000);
+    await running;
+    assert.equal(observedAbort, true);
+    assert.equal(manager.active, 0);
+  }
+});
+
 // --------------------------------------------------- connector integration
 
 const ACCOUNT = "account";
@@ -260,10 +316,16 @@ class RelayTransport implements RemoteTransport {
   private handler?: (message: RemoteTransportMessage) => void | Promise<void>;
   private closed?: () => void;
   onProof?: () => void;
+  responseGate?: { entered: () => void; wait: Promise<void> };
   async connect(): Promise<void> { this.dropped = false; }
   async close(): Promise<void> { this.dropped = true; this.closed?.(); }
-  send(message: RemoteTransportMessage): void {
+  async send(message: RemoteTransportMessage, _signal?: AbortSignal, beforeSend?: () => boolean): Promise<void> {
     if (this.dropped) throw new Error("socket lost");
+    if (message.type === "response" && this.responseGate) {
+      this.responseGate.entered();
+      await this.responseGate.wait;
+    }
+    if (beforeSend && !beforeSend()) throw new Error("authorization changed");
     this.sent.push(message);
     if (message.type === "proof") this.onProof?.();
     if (message.type === "chunk" && this.autoAck) {
@@ -287,10 +349,13 @@ async function connectorHarness(t: test.TestContext, options: { results?: (name:
   const root = await temporary(t, false);
   const state = join(root, "state");
   await mkdir(state);
-  const now = Date.parse("2026-10-27T12:00:00.000Z");
+  let now = Date.parse("2026-10-27T12:00:00.000Z");
   const clock = () => new Date(now);
   const deviceStore = new RemoteDeviceStore(state);
   const device = deviceStore.ensure(ACCOUNT);
+  const identity = { accountId: ACCOUNT, clientId: CLIENT, deviceId: device.deviceId };
+  const principals = new RemotePrincipalStore(join(state, "principals.sqlite"), undefined, undefined, clock);
+  principals.getOrCreate(identity);
   const session: RemoteDeviceSession = {
     accountId: ACCOUNT, clientId: CLIENT, scope: REMOTE_CONNECT_SCOPE, issuedAt: clock().toISOString(),
     relayKeys: [{ keyId: "relay", publicKey: relayKey.publicKey.export({ type: "spki", format: "der" }).toString("base64url") }],
@@ -303,6 +368,7 @@ async function connectorHarness(t: test.TestContext, options: { results?: (name:
   const runtime: RemoteRequestRuntime = {
     invoke: async (_identity, name) => await results(name),
     invokeAdmitted: async (_identity, name) => ({ result: await results(name), brokerInvoked: true }),
+    latestPolicyNarrowing: (principal) => principals.latestPolicyNarrowing(principal),
   };
   const audits: [string, string, string, string][] = [];
   let transport = new RelayTransport();
@@ -320,16 +386,19 @@ async function connectorHarness(t: test.TestContext, options: { results?: (name:
   t.after(async () => {
     await connector.close().catch(() => undefined);
     admission.close();
+    principals.close();
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   async function connect(limits?: unknown): Promise<void> {
     const started = connector.start();
     await tick();
     transport.onProof = () => { void transport.emit({ type: "authenticated", epoch: "5", ...(limits !== undefined ? { limits } : {}) }); };
-    await transport.emit({ type: "challenge", challenge: {
+    const challenge = {
       audience: REMOTE_RELAY_AUDIENCE, accountId: ACCOUNT, deviceId: device.deviceId, scope: REMOTE_CONNECT_SCOPE,
       nonce: "challenge-" + ++challengeNumber, epoch: "5", expiresAt: new Date(now + 60_000).toISOString(),
-    } });
+    };
+    await transport.emit({ type: "challenge", challenge, keyId: "relay",
+      signature: sign(null, Buffer.from(canonicalJson(challenge)), relayKey.privateKey).toString("base64url") });
     await started;
   }
   function request(patch: Partial<RemoteRequest> = {}): RemoteRequest {
@@ -378,7 +447,8 @@ async function connectorHarness(t: test.TestContext, options: { results?: (name:
     const last = frames.at(-1)!;
     return { bytes: Buffer.concat(parts), ...(last.type === "artifact_end" ? { end: last } : {}), ...(last.type === "artifact_error" ? { error: last.code } : {}) };
   }
-  return { audits, connector, admission, artifacts, device, connect, request, send, settledJob, drain, get transport() { return transport; },
+  return { audits, connector, admission, artifacts, principals, identity, device, connect, request, send, settledJob, drain,
+    advanceTime(ms: number) { now += ms; }, get transport() { return transport; },
     replaceTransport() { transport = new RelayTransport(); return transport; } };
 }
 
@@ -431,6 +501,167 @@ test("an artifact named by a job result streams through artifacts_read byte-exac
   assert.ok(!JSON.stringify(h.audits).includes(blob.hash), "audit never carries the content address");
 });
 
+for (const [name, patch, broaden] of [
+  ["onlyHere", { onlyHere: true }, { onlyHere: false }],
+  ["readOnly", { readOnly: true }, { readOnly: false }],
+  ["shell", { shell: false }, { shell: true }],
+  ["approvals", { approvals: true }, { approvals: false }],
+] as const) {
+  test(`${name} narrowing withholds old results even after broadening`, async (t) => {
+    let hash = "";
+    const h = await connectorHarness(t, { results: (toolName) => ({ callId: "c", toolName, isError: false,
+      content: [{ type: "artifact", hash, mediaType: "text/plain" }] }) });
+    hash = (await h.artifacts.put(Buffer.from("private"), "text/plain")).hash;
+    await h.connect();
+    const jobId = await h.settledJob();
+    h.advanceTime(1000);
+    h.principals.updatePolicy(h.identity, patch, "local");
+    const narrowedAt = h.principals.latestPolicyNarrowing(h.identity);
+    h.advanceTime(1000);
+    h.principals.updatePolicy(h.identity, broaden, "local");
+    assert.equal(h.principals.latestPolicyNarrowing(h.identity), narrowedAt);
+    assert.equal((await h.send(h.request({ toolId: "jobs_result", payload: { jobId } }))).response.errorCode, "result_withheld_by_policy");
+    const read = h.request({ toolId: "artifacts_read", payload: { jobId, hash } });
+    assert.equal((await h.send(read)).response.errorCode, "result_withheld_by_policy");
+    assert.deepEqual(h.transport.transfer(read.requestId), []);
+    for (const toolId of ["jobs_status", "jobs_events"]) {
+      assert.equal((await h.send(h.request({ toolId, payload: { jobId } }))).response.admitted, true);
+    }
+    h.advanceTime(1000);
+    const newJob = await h.settledJob();
+    assert.equal((await h.send(h.request({ toolId: "jobs_result", payload: { jobId: newJob } }))).response.admitted, true);
+  });
+}
+
+test("policy fencing distinguishes admissions at the same time and survives a clock rollback", async (t) => {
+  const h = await connectorHarness(t);
+  await h.connect();
+  const oldJob = await h.settledJob();
+  h.principals.updatePolicy(h.identity, { onlyHere: true }, "local");
+  assert.equal((await h.send(h.request({ toolId: "jobs_result", payload: { jobId: oldJob } }))).response.errorCode, "result_withheld_by_policy");
+  const sameTimeJob = await h.settledJob();
+  assert.equal((await h.send(h.request({ toolId: "jobs_result", payload: { jobId: sameTimeJob } }))).response.admitted, true);
+  const firstFence = h.principals.latestPolicyNarrowing(h.identity)!;
+  h.principals.updatePolicy(h.identity, { onlyHere: false }, "local");
+  h.advanceTime(-1000);
+  h.principals.updatePolicy(h.identity, { shell: false }, "local");
+  assert.ok(Date.parse(h.principals.latestPolicyNarrowing(h.identity)!) > Date.parse(firstFence));
+  assert.equal((await h.send(h.request({ toolId: "jobs_result", payload: { jobId: sameTimeJob } }))).response.errorCode, "result_withheld_by_policy");
+  const afterRollback = await h.settledJob();
+  assert.equal((await h.send(h.request({ toolId: "jobs_result", payload: { jobId: afterRollback } }))).response.admitted, true);
+});
+
+test("withheld large results do not expose their outputRef through job status", async (t) => {
+  const h = await connectorHarness(t, { results: (toolName) => ({ callId: "c", toolName, isError: false,
+    content: [{ type: "text", text: "x".repeat(300 * 1024) }] }) });
+  await h.connect();
+  const jobId = await h.settledJob();
+  const before = await h.send(h.request({ toolId: "jobs_status", payload: { jobId } }));
+  assert.ok((before.data as { job: { outputRef?: string } }).job.outputRef);
+  h.principals.updatePolicy(h.identity, { readOnly: true }, "local");
+  const after = await h.send(h.request({ toolId: "jobs_status", payload: { jobId } }));
+  assert.equal(after.response.admitted, true);
+  assert.equal((after.data as { job: { outputRef?: string } }).job.outputRef, undefined);
+  assert.equal((await h.send(h.request({ toolId: "jobs_result", payload: { jobId } }))).response.errorCode, "result_withheld_by_policy");
+});
+
+test("narrowing while artifact stat is pending refuses the transfer", async (t) => {
+  let hash = "";
+  const h = await connectorHarness(t, { results: (toolName) => ({ callId: "c", toolName, isError: false,
+    content: [{ type: "artifact", hash, mediaType: "text/plain" }] }) });
+  hash = (await h.artifacts.put(Buffer.from("private"), "text/plain")).hash;
+  await h.connect();
+  const jobId = await h.settledJob();
+  const original = h.artifacts.stat.bind(h.artifacts);
+  let entered!: () => void, release!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  h.artifacts.stat = async (value) => { const record = await original(value); entered(); await gate; return record; };
+  const request = h.request({ toolId: "artifacts_read", payload: { jobId, hash } });
+  const pending = h.send(request);
+  await enteredPromise;
+  h.advanceTime(1000);
+  h.principals.updatePolicy(h.identity, { onlyHere: true }, "local");
+  release();
+  assert.equal((await pending).response.errorCode, "result_withheld_by_policy");
+  assert.deepEqual(h.transport.transfer(request.requestId), []);
+});
+
+test("a result waiting for socket space is withheld if policy narrows", async (t) => {
+  const h = await connectorHarness(t);
+  await h.connect();
+  const jobId = await h.settledJob();
+  let entered!: () => void, release!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  h.transport.responseGate = { entered, wait: gate };
+  const pending = h.send(h.request({ toolId: "jobs_result", payload: { jobId } }));
+  await enteredPromise;
+  h.advanceTime(1000);
+  h.principals.updatePolicy(h.identity, { approvals: true }, "local");
+  release();
+  const answer = await pending;
+  assert.equal(answer.response.errorCode, "result_withheld_by_policy");
+  assert.equal(answer.data, undefined);
+});
+
+test("narrowing after announcement is rechecked before the first artifact chunk", async (t) => {
+  let hash = "";
+  const h = await connectorHarness(t, { results: (toolName) => ({ callId: "c", toolName, isError: false,
+    content: [{ type: "artifact", hash, mediaType: "application/octet-stream" }] }) });
+  hash = (await h.artifacts.put(randomBytes(2 * 1024 * 1024), "application/octet-stream")).hash;
+  await h.connect();
+  const jobId = await h.settledJob();
+  const read = h.request({ toolId: "artifacts_read", payload: { jobId, hash } });
+  assert.equal((await h.send(read)).response.admitted, true);
+  h.advanceTime(1000);
+  h.principals.updatePolicy(h.identity, { readOnly: true }, "local");
+  const result = await h.drain(read.requestId);
+  assert.equal(result.error, "result_withheld_by_policy");
+  assert.equal(result.bytes.length, 0);
+});
+
+test("large results index every artifact and bind the index to the job", async (t) => {
+  const hashes = Array.from({ length: 257 }, (_, index) => sha256(Buffer.from(`artifact-${index}`)));
+  let includeArtifacts = true;
+  const h = await connectorHarness(t, { results: (toolName) => ({ callId: "c", toolName, isError: false,
+    content: includeArtifacts ? [{ type: "text", text: "x".repeat(270 * 1024) },
+      ...hashes.map((hash) => ({ type: "artifact" as const, hash, mediaType: "text/plain" }))] : [{ type: "text", text: "other" }] }) });
+  const last = await h.artifacts.put(Buffer.from("artifact-256"), "text/plain");
+  assert.equal(last.hash, hashes[256]);
+  await h.connect();
+  const jobId = await h.settledJob();
+  const result = await h.send(h.request({ toolId: "jobs_result", payload: { jobId } }));
+  const stub = JSON.parse(Buffer.from((result.data as { inline: string }).inline, "base64").toString("utf8")) as { artifactIndex: string; artifacts: string[] };
+  assert.equal(stub.artifacts.length, 256);
+  const readIndex = h.request({ toolId: "artifacts_read", payload: { jobId, hash: stub.artifactIndex } });
+  assert.equal((await h.send(readIndex)).response.admitted, true);
+  assert.deepEqual(JSON.parse((await h.drain(readIndex.requestId)).bytes.toString("utf8")), hashes);
+  const readLast = h.request({ toolId: "artifacts_read", payload: { jobId, hash: last.hash } });
+  assert.equal((await h.send(readLast)).response.admitted, true);
+  assert.equal((await h.drain(readLast.requestId)).bytes.toString(), "artifact-256");
+  includeArtifacts = false;
+  const otherJob = await h.settledJob();
+  for (const hash of [last.hash, stub.artifactIndex]) {
+    assert.equal((await h.send(h.request({ toolId: "artifacts_read", payload: { jobId: otherJob, hash } }))).response.errorCode, "artifact_unavailable");
+  }
+});
+
+test("an oversized artifact index cannot grant reachability", async (t) => {
+  const h = await connectorHarness(t);
+  const target = await h.artifacts.put(Buffer.from("hidden"), "text/plain");
+  const index = await h.artifacts.put(Buffer.from(JSON.stringify(Array(100_001).fill(target.hash))), "application/json");
+  await h.connect();
+  const request = h.request();
+  const decision = h.admission.admit(h.identity, JSON.stringify(request));
+  h.admission.markDispatching(h.identity, decision.job.jobId, "5");
+  h.admission.settle(h.identity, decision.job.jobId, "completed", { inline: Buffer.from(JSON.stringify({ artifactIndex: index.hash })) });
+  const response = await h.send(h.request({ toolId: "artifacts_read", payload: { jobId: decision.job.jobId, hash: target.hash } }));
+  assert.equal(response.response.errorCode, "artifact_unavailable");
+  const indexResponse = await h.send(h.request({ toolId: "artifacts_read", payload: { jobId: decision.job.jobId, hash: index.hash } }));
+  assert.equal(indexResponse.response.errorCode, "artifact_unavailable");
+});
+
 test("a result over the inline cap is stored whole and returned by outputRef, never truncated", async (t) => {
   const text = "x".repeat(600 * 1024);
   const h = await connectorHarness(t, { results: (name) => ({ callId: "c", toolName: name, isError: false, content: [{ type: "text", text }] }) });
@@ -476,10 +707,14 @@ test("negotiated limits bound every frame; an oversized response is refused and 
   const proof = h.transport.sent.find((frame) => frame.type === "proof") as { limits?: RemoteFrameLimits };
   assert.deepEqual(proof.limits, DEFAULT_REMOTE_FRAME_LIMITS, "the device advertises its own limits");
   const jobId = await h.settledJob();
-  // 64 KiB of inline result bytes base64-encode past a 64 KiB frame.
-  const big = await h.send(h.request({ toolId: "jobs_result", payload: { jobId, maxBytes: 64 * 1024 } }));
-  assert.equal(big.response.errorCode, "frame_too_large");
-  assert.equal(big.data, undefined);
+  // Defaults and oversized requests are clamped so base64 and the envelope fit.
+  for (const maxBytes of [undefined, 64 * 1024, 1000000]) {
+    const big = await h.send(h.request({ toolId: "jobs_result", payload: { jobId, ...(maxBytes ? { maxBytes } : {}) } }));
+    assert.equal(big.response.admitted, true);
+    assert.ok((big.data as { inline: string }).inline.length > 0);
+    assert.ok((big.data as { nextCursor?: string }).nextCursor);
+    assert.ok(frameByteLength(big) <= REMOTE_FRAME_MIN_BYTES);
+  }
   const read = h.request({ toolId: "artifacts_read", payload: { jobId, hash } });
   const announced = await h.send(read);
   assert.equal((announced.data as { chunkBytes: number }).chunkBytes, chunkBytesFor(REMOTE_FRAME_MIN_BYTES));
