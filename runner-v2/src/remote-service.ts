@@ -12,6 +12,7 @@ import {
 } from "./remote-connector.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import type { RemoteDevicePolicy } from "./remote-principal.js";
+import type { ProtectedLocations } from "./protected-locations.js";
 import {
   closeRemoteComposition,
   composeRemoteRuntime,
@@ -48,6 +49,7 @@ export interface RemoteServiceOptions {
   readonly permissionProfile: PermissionProfile;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
   readonly extensionsHome?: string;
+  readonly protectedLocations?: ProtectedLocations;
   readonly createTransport: () => RemoteTransport;
   readonly issuer: RemoteSessionIssuer;
   /** Real startup reconciliation (reconcileRunnerStartup) in the CLI. */
@@ -83,6 +85,7 @@ export class RemoteService {
       permissionProfile: options.permissionProfile,
       capabilitiesConfig: options.capabilitiesConfig,
       ...(options.extensionsHome ? { extensionsHome: options.extensionsHome } : {}),
+      ...(options.protectedLocations ? { protectedLocations: options.protectedLocations } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
   }

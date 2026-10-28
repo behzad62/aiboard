@@ -155,6 +155,7 @@ export interface ExternalItem {
 export interface ExtensionManagementServiceOptions {
   readonly home: string;
   readonly projectRoot: string;
+  readonly allowNestedRunnerState?: boolean;
   readonly credentials: ExtensionCredentialStore;
   readonly git?: Omit<GitSourceOptions, "scratchDirectory" | "allowLocal">;
   readonly handlers?: readonly ExtensionKindHandler[];
@@ -214,7 +215,7 @@ export class ExtensionManagementService {
   static async open(options: ExtensionManagementServiceOptions): Promise<ExtensionManagementService> {
     const home = resolve(options.home);
     const projectRoot = await realpath(options.projectRoot);
-    if (isWithin(projectRoot, home)) throw new ExtensionManagementError("invalid_extensions_home", "The extension store must be outside the project.", 500);
+    if (!options.allowNestedRunnerState && isWithin(projectRoot, home)) throw new ExtensionManagementError("invalid_extensions_home", "The extension store must be outside the project.", 500);
     // The store directory is created by the first write, so starting a Runner leaves no trace.
     const service = new ExtensionManagementService({ ...options, home }, projectRoot);
     await service.registry.load();

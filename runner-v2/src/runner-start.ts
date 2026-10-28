@@ -1,8 +1,10 @@
 import { configureMcpServers, mcpConfigurationDigest } from "./mcp-configuration.js";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { ControlServer } from "./control-server.js";
 import { ToolBenchSessions } from "./toolbench-session.js";
@@ -61,7 +63,7 @@ import {
 } from "./runner-resource-cleanup.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
-import { assertExternalState, projectIdentity, remoteDeviceDirectory, tryAcquireLock } from "./launcher-instance.js";
+import { assertExternalState, projectIdentity, remoteDeviceDirectory, tryAcquireLock, type StateLocationOptions } from "./launcher-instance.js";
 import { receiveLauncherHandshake, startLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
 import { LocalMcpSessions } from "./local-stdio-mcp.js";
 import { LocalPairing } from "./local-pairing.js";
@@ -69,6 +71,9 @@ import { RemoteService } from "./remote-service.js";
 import { StubRemoteSessionIssuer, type RemoteSessionIssuer } from "./remote-auth.js";
 import type { RemoteTransport } from "./remote-connector.js";
 import type { RemoteDevicePolicy } from "./remote-principal.js";
+import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
+import { resolveProtectedLocations } from "./protected-locations.js";
+import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -99,10 +104,15 @@ export interface RunnerStartSeams {
   readonly createTransport?: () => RemoteTransport;
   readonly issuer?: RemoteSessionIssuer;
   readonly controlListener?: "loopback" | "none";
+  readonly location?: StateLocationOptions;
+  readonly onLocalAgentsReady?: (agents: { builds: NativeBuildManager; toolBench: ToolBenchSessions; chatSessions: ChatAgentSessions }) => void;
+  readonly onShutdownComplete?: (error?: unknown) => void;
+  readonly onStartupError?: (error: unknown) => void;
 }
 
 export interface StartedRunner {
   readonly started: boolean;
+  readonly remoteOnly?: boolean;
   readonly address?: { readonly url: string; readonly port: number };
   readonly remoteService?: RemoteService;
   shutdown(signal?: NodeJS.Signals): Promise<void>;
@@ -134,6 +144,24 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     if (isHelpRequested(args)) { printHelp(); return { started: false, shutdown: async () => undefined }; }
     const options = parseArguments(args);
     await assertDirectory(options.projectPath, "project");
+    const location = seams.location ?? { platform: process.platform, environment: process.env, home: homedir() };
+    const deviceDirectory = options.remoteDeviceDirectory ?? (launcher ? remoteDeviceDirectory(location) : undefined);
+    const ownedRoots = options.remote ? await resolveRunnerOwnedRoots({
+      projectPath: options.projectPath, stateDirectory: options.stateDirectory,
+      deviceDirectory: deviceDirectory!, extensionsHome: options.extensionsHome,
+      ...(options.capabilitiesConfigPath ? { capabilitiesConfigPath: options.capabilitiesConfigPath } : {}),
+      location,
+    }) : undefined;
+    const remoteOnly = options.remote && ownedRoots?.nested === true;
+    const buildRecoveryUnverified = remoteOnly && hasStoredBuildSpecs(options.stateDirectory);
+    const protectedLocations = resolveProtectedLocations({
+      platform: location.platform, env: location.environment, home: location.home,
+      stateDirectory: options.stateDirectory, ...(deviceDirectory ? { deviceDirectory } : {}),
+      extensionDirectories: [options.extensionsHome],
+      ...(ownedRoots ? { configuredDirectories: ownedRoots.directories } : {}),
+      configuredFiles: [...(ownedRoots?.files ?? []), ...(options.capabilitiesConfigPath ? [options.capabilitiesConfigPath] : [])],
+      requireStateDirectory: true,
+    });
     if (launcher) {
       const identity = await projectIdentity(options.projectPath);
       const canonicalState = await realpath(options.stateDirectory);
@@ -142,7 +170,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
           (process.platform === "win32" ? canonicalState.toLowerCase() !== options.stateDirectory.toLowerCase() : canonicalState !== options.stateDirectory)) {
         throw new Error("launcher_identity_mismatch: The launcher and Runner identities do not match.");
       }
-      assertExternalState(identity.projectPath, canonicalState);
+      assertExternalState(identity.projectPath, canonicalState, { allowNestedRunnerState: remoteOnly });
       const release = tryAcquireLock(options.stateDirectory, "lifetime");
       if (!release) throw new Error("launcher_busy: A Runner already owns this project state.");
       releaseLauncherLifetime = release;
@@ -150,7 +178,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       options.legacyTokenProvided = launcher.legacyToken !== undefined;
       options.legacyToken = launcher.legacyToken;
     }
-    if (isInside(options.projectPath, options.stateDirectory)) {
+    if (!remoteOnly && isInside(options.projectPath, options.stateDirectory)) {
       throw new Error(
         "invalid_state_directory: Runner state must be outside the project directory."
       );
@@ -158,7 +186,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     let capabilitiesConfig = emptyRunnerCapabilitiesConfig();
     if (options.capabilitiesConfigPath) {
       if (
-        await capabilitiesConfigCanonicalTargetIsInsideProject(
+        !remoteOnly && await capabilitiesConfigCanonicalTargetIsInsideProject(
           options.projectPath,
           options.capabilitiesConfigPath,
         )
@@ -172,7 +200,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     await mkdir(options.stateDirectory, { recursive: true });
     await assertDirectory(options.stateDirectory, "state");
 
-    if (isInside(options.projectPath, options.extensionsHome)) {
+    if (!remoteOnly && isInside(options.projectPath, options.extensionsHome)) {
       throw new Error("invalid_extensions_home: The extension store must be outside the project directory.");
     }
     const credentialStorage = prepareCredentialStores({
@@ -199,6 +227,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     const executionHost = createExecutionHost({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,
+      allowNestedRunnerState: remoteOnly,
       artifacts,
       ambientEnvironment,
     });
@@ -229,14 +258,14 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     // terminal-run media older than 30 days before accepting new uploads.
     try {
       const userMedia = new BuildUserMediaStore(join(options.stateDirectory, "user-input-media"));
-      await userMedia.cleanupExpired((runId) => {
+      if (!remoteOnly) await userMedia.cleanupExpired((runId) => {
         try { return isTerminalRunState(supervisor.getRun(runId).state); }
         catch { return true; } // Abandoned pre-build uploads with no run are pruned after 30 days.
       });
     } catch (error) {
       console.warn(`[runner] user media retention cleanup unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
-    await validateActiveRecoveryCapabilityContracts(
+    if (!remoteOnly) await validateActiveRecoveryCapabilityContracts(
       supervisor,
       capabilitiesConfig,
       options.stateDirectory,
@@ -273,6 +302,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     });
     const extensions = await ExtensionManagementService.open({
       home: options.extensionsHome,
+      allowNestedRunnerState: remoteOnly,
       pinnedGenerations: () => new Set([...(pins.bindings?.pinnedGenerations() ?? []), ...(pins.chats?.pinnedGenerations() ?? [])]),
       projectRoot: options.projectPath,
       credentials: extensionCredentials,
@@ -282,7 +312,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       handlers: [managedMcp.handler(), createPluginHandler({ home: options.extensionsHome, mcp: managedMcp, runnerExtensions: () => runnerExtensionActivation })],
     });
     managedMcp.attach(extensions);
-    runnerExtensionActivation = await activateStagedRunnerExtensions({
+    if (!remoteOnly) runnerExtensionActivation = await activateStagedRunnerExtensions({
       staged: await extensions.stagedRunnerExtensions(),
       unfinishedBuilds: () => countUnfinishedBuilds(supervisor, options.stateDirectory),
       configuredDirectories: capabilitiesConfig.extensions,
@@ -317,9 +347,13 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     });
     resources.buildFactory = buildFactory;
     const builds = new NativeBuildManager({
-      specs: new SqliteBuildSpecStore(
-        join(options.stateDirectory, "build-specs.sqlite")
-      ),
+      localAgentsUnavailableNestedState: remoteOnly,
+      specs: remoteOnly ? {
+        save: () => { throw new LocalAgentsUnavailableError(); },
+        get: () => { throw new LocalAgentsUnavailableError(); },
+        list: () => [],
+        close: () => undefined,
+      } : new SqliteBuildSpecStore(join(options.stateDirectory, "build-specs.sqlite")),
       createRuntime: (spec) => buildFactory.create(spec),
       createHistoricalRuntime: (spec, terminalState) =>
         buildFactory.createHistorical(spec, terminalState),
@@ -357,7 +391,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       prepareArtifactCleanup: () => buildFactory.prepareArtifactCleanup(),
     });
     resources.builds = builds;
-    await reconcileRunnerStartup([{
+    if (!remoteOnly) await reconcileRunnerStartup([{
       resource: "nativeBuildRuntime",
       covers: NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE,
       reconcile: async () => {
@@ -370,12 +404,13 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         );
       },
     }]);
-    const toolBench = new ToolBenchSessions({ projectRoot: options.projectPath, stateDirectory: options.stateDirectory, providerConfigs, executionHost, capabilitiesConfig });
+    const toolBench = new ToolBenchSessions({ projectRoot: options.projectPath, stateDirectory: options.stateDirectory, providerConfigs, executionHost, capabilitiesConfig, localAgentsUnavailableNestedState: remoteOnly });
     await toolBench.recover();
-    const chatSessions = new ChatAgentSessions({ projectRoot: options.projectPath, stateDirectory: options.stateDirectory, providerConfigs, extensions, skillRoots: defaultSharedSkillRoots(),
+    const chatSessions = new ChatAgentSessions({ projectRoot: options.projectPath, stateDirectory: options.stateDirectory, providerConfigs, extensions, skillRoots: defaultSharedSkillRoots(), localAgentsUnavailableNestedState: remoteOnly,
       generationTools: async (generation, sessionId, artifacts) => await managedMcp.chatTools(generation, sessionId, artifacts) });
     pins.chats = chatSessions;
     await chatSessions.recover();
+    seams.onLocalAgentsReady?.({ builds, toolBench, chatSessions });
     const localPairing = launcher ? new LocalPairing(launcher.instanceId) : undefined;
     if (launcher && localPairing) {
       if (launcher.pairDigest) localPairing.register(launcher.pairDigest);
@@ -398,6 +433,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         permissionProfile: "full",
         capabilitiesConfig,
         extensionsHome: options.extensionsHome,
+        protectedLocations,
+        ...(buildRecoveryUnverified ? { reconcileStartup: async () => { throw new Error("Build ownership recovery remains unverified."); } } : {}),
         createTransport: seams.createTransport ?? unavailableTransport,
         issuer: seams.issuer ?? new StubRemoteSessionIssuer(),
         policyPatch: options.remotePolicyPatch,
@@ -411,9 +448,10 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     }
     const localMcp = launcher ? new LocalMcpSessions({ host: executionHost, workspacePath: options.projectPath, statePath: join(options.stateDirectory, "local-mcp-owners.sqlite"),
       permissionProfile: "full", capabilitiesConfig, stateDirectory: options.stateDirectory,
-      deviceDirectory: options.remoteDeviceDirectory ?? remoteDeviceDirectory({ platform: process.platform, environment: process.env, home: homedir() }),
-      extensionDirectories: [options.extensionsHome] }) : undefined;
+      deviceDirectory,
+      extensionDirectories: [options.extensionsHome], protectedLocations }) : undefined;
     const server = new ControlServer({
+      localAgentsUnavailableNestedState: remoteOnly,
       ...(remoteService ? { remoteStatus: () => remoteService.status() } : {}),
       localPairing,
       localMcp,
@@ -469,6 +507,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       pid: process.pid,
       projectPath: options.projectPath,
       stateDirectory: options.stateDirectory,
+      ...(remoteOnly ? { localAgents: "unavailable_nested_state" } : {}),
       gitVersion: git.version,
       mcp: mcpStatus.status(),
       allowOrigins: options.allowOrigins,
@@ -493,10 +532,12 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
           releaseLauncherLifetime?.();
           releaseLauncherLifetime = undefined;
           if (launcher && process.connected) process.disconnect?.();
+          seams.onShutdownComplete?.();
         },
         (error: unknown) => {
           writeStartupError(error);
           process.exitCode = 1;
+          seams.onShutdownComplete?.(error);
         }
       );
     };
@@ -516,6 +557,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         startedAt: Math.floor(Date.now() - process.uptime() * 1_000),
         port: address?.port ?? 0,
         token: options.token,
+        remoteOnly,
         controlKey: Buffer.from(launcher.controlKey, "hex"),
         registerPair: (digest, peers) => {
           if (!localPairing) throw new Error("Pairing unavailable.");
@@ -524,6 +566,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         },
         registerLocalMcp: (depth) => {
           if (!localMcp) throw new Error("Local MCP is unavailable.");
+          if (buildRecoveryUnverified) throw new Error("Build ownership recovery remains unverified.");
           return localMcp.mint(depth);
         },
         shutdown: requestLauncherShutdown,
@@ -538,11 +581,13 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     }
     return {
       started: true,
+      ...(remoteOnly ? { remoteOnly: true } : {}),
       ...(address ? { address: { url: address.url, port: address.port } } : {}),
       ...(remoteService ? { remoteService } : {}),
       shutdown: async (signal: NodeJS.Signals = "SIGTERM") => { signalShutdown(signal); },
     };
   } catch (error) {
+    seams.onStartupError?.(error);
     let cleanupError: unknown;
     try { await launcherControl?.close(); } catch (closeError) { cleanupError = closeError; }
     try { await closeRunnerResources(resources); }
@@ -558,6 +603,21 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       if (launcher && process.connected) process.disconnect?.();
     }
     return { started: false, shutdown: async () => undefined };
+  }
+}
+
+/** Inspect only; opening the normal spec store would migrate persisted specs. */
+function hasStoredBuildSpecs(stateDirectory: string): boolean {
+  const path = join(stateDirectory, "build-specs.sqlite");
+  if (!existsSync(path)) return false;
+  try {
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      const row = database.prepare("SELECT EXISTS(SELECT 1 FROM build_specs LIMIT 1) AS present").get() as { present: number } | undefined;
+      return row?.present !== 0;
+    } finally { database.close(); }
+  } catch {
+    return true;
   }
 }
 

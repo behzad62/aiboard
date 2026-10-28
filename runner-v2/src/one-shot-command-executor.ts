@@ -58,6 +58,7 @@ export interface OneShotCommandRequest {
 export function createBoundedProcessOutputFactory(input: {
   readonly spillRoot: string;
   readonly projectRoot: string;
+  readonly allowNestedRunnerState?: boolean;
   readonly artifacts: ArtifactStore;
 }): ProcessOutputFactory {
   const sessions = new Map<string, ProcessOutputSession>();
@@ -70,6 +71,7 @@ export function createBoundedProcessOutputFactory(input: {
       // is stable across restart, so reopen reaches the exact same private root.
       spillRoot: `${input.spillRoot}-${ownerDigest.slice(0, 20)}`,
       projectRoot: input.projectRoot,
+      allowNestedRunnerState: input.allowNestedRunnerState,
       ownershipId: `process-output-${ownerDigest}`,
       artifactStore: input.artifacts,
     });

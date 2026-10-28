@@ -28,12 +28,14 @@ import { ToolBroker } from "./tool-broker.js";
 import { classifyProviderFailure } from "./provider-health.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
+import { assertLocalAgentsAvailable } from "./local-agents-availability.js";
 
 import type { ToolBenchEvidenceInput, ToolBenchSessionRequest, ToolBenchSessionSnapshot } from "./toolbench-contracts.js";
 export type { ToolBenchSessionRequest } from "./toolbench-contracts.js";
 
 export interface ToolBenchSessionOptions {
   projectRoot: string;
+  localAgentsUnavailableNestedState?: boolean;
   stateDirectory: string;
   providerConfigs: ProviderConfigStore;
   executionHost: ExecutionHost;
@@ -85,6 +87,7 @@ export class ToolBenchSessions {
   }
 
   async start(request: ToolBenchSessionRequest) {
+    assertLocalAgentsAvailable(this.options.localAgentsUnavailableNestedState);
     validateRequest(request);
     if (this.sessions.has(request.sessionId)) throw new Error("ToolBench session already exists; inspect its recorded outcome.");
     const directory = join(this.options.stateDirectory, "toolbench", request.sessionId);
