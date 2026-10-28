@@ -11,6 +11,7 @@ import {
   type RemoteTransport,
 } from "./remote-connector.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
+import type { RemoteDevicePolicy } from "./remote-principal.js";
 import {
   closeRemoteComposition,
   composeRemoteRuntime,
@@ -21,8 +22,8 @@ import {
 export const REMOTE_FIRST_RUN_NOTICE = [
   "AIBoard Remote: cloud agents will be able to run commands as you and read",
   "anything your account can read on this machine. There is no per-action",
-  "approval by default; every call is audited locally. You can restrict this",
-  "device at any time (read-only, cwd-only, shell off, per-command approval),",
+  "approval by default; every call is audited locally. Restrict this device with",
+  "--read-only, --only-here or --no-shell; inspect aiboard remote --audit.",
   "disconnect with Ctrl+C, or wipe the device identity with:",
   "  aiboard remote --logout",
   "File-tool exclusions do not confine shell commands; they run as your OS user.",
@@ -57,6 +58,7 @@ export interface RemoteServiceOptions {
   readonly drainTimeoutMs?: number;
   readonly onShutdownStep?: (step: string) => void;
   readonly pluginTools?: RemotePluginToolProvider;
+  readonly policyPatch?: Partial<RemoteDevicePolicy>;
 }
 
 /**
@@ -153,14 +155,16 @@ export class RemoteService {
       } catch {
         // P1 is not built yet: stay logged out and disconnected, fail closed.
         this.writeStatusFile(this.status());
+        if (Object.keys(this.options.policyPatch ?? {}).length > 0) throw new Error("remote_policy_identity_required: Pair this device before changing its policy.");
         return;
       }
       deviceStore.saveSession(session);
     }
-    if (identity.accountId !== session.accountId) {
-      deviceStore.setAccountId(session.accountId);
-      identity = deviceStore.load()!;
-    }
+    identity = deviceStore.ensure(session.accountId);
+    if (identity.revoked) throw new Error("Remote device is revoked.");
+    const verified = { accountId: session.accountId, clientId: session.clientId, deviceId: identity.deviceId };
+    this.composition.principals.getOrCreate(verified);
+    if (Object.keys(this.options.policyPatch ?? {}).length > 0) this.composition.principals.updatePolicy(verified, this.options.policyPatch!, "local");
     const admission = this.composition.admission;
     const connector = new RemoteConnector({
       deviceStore,

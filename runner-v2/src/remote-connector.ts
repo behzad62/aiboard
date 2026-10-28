@@ -53,7 +53,7 @@ export interface RemoteTransport {
 
 /** The slice of RemoteToolRuntime the connector may use. Never an authority. */
 export interface RemoteRequestRuntime {
-  invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult>;
+  invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string, jobId?: string): Promise<ToolResult>;
 }
 
 /** One admitted extension tool as offered to the relay (plan P2 naming). */
@@ -575,7 +575,7 @@ export class RemoteConnector {
     }
     let result: ToolResult;
     try {
-      result = await this.options.runtime.invoke(identity, runnerName, request.payload, undefined, rawRequest);
+      result = await this.options.runtime.invoke(identity, runnerName, request.payload, undefined, rawRequest, decision.job.jobId);
     } catch {
       const job = admission.settle(identity, decision.job.jobId, "outcome_unknown");
       return { requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state, errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" };

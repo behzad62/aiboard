@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { posix, win32 } from "node:path";
 
@@ -23,10 +24,11 @@ export type RemotePathDenialReason =
   | "unc_path"
   | "hardlink_alias"
   | "hardlink_confinement_unprovable"
-  | "identity_unprovable";
+  | "identity_unprovable"
+  | "outside_only_here";
 
 export class RemotePathDeniedError extends Error {
-  readonly code = "path_denied";
+  readonly code: "path_denied" | "outside_only_here";
   constructor(
     readonly reason: RemotePathDenialReason,
     /** Protected category, or the denial class when no protected root matched. */
@@ -35,6 +37,7 @@ export class RemotePathDeniedError extends Error {
   ) {
     super(message);
     this.name = "RemotePathDeniedError";
+    this.code = reason === "outside_only_here" ? "outside_only_here" : "path_denied";
   }
 }
 
@@ -60,6 +63,11 @@ export interface RemotePathGuardOptions {
 
 interface ObjectIdentity { readonly dev: bigint; readonly ino: bigint }
 interface ProtectedCanonical { readonly location: ProtectedLocation; readonly canonical: string; readonly identity?: ObjectIdentity }
+export interface RemotePathScope {
+  readonly workspace: string;
+  readonly restricted: () => boolean;
+  lastDenied?: RemotePathAuditRecord;
+}
 
 // Win32 also treats the superscript digits ¹ ² ³ as COM/LPT device suffixes.
 const DEVICE_SUFFIXES = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³"];
@@ -76,6 +84,7 @@ export class RemotePathGuard {
   private readonly maxTreeEntries: number;
   private protectedCanonicals?: Promise<readonly ProtectedCanonical[]>;
   private protectedFileIdentities?: Promise<{ readonly identities: ReadonlyMap<string, string>; readonly complete: boolean }>;
+  private readonly scopes = new AsyncLocalStorage<RemotePathScope>();
 
   constructor(locations: ProtectedLocations, options: RemotePathGuardOptions = {}) {
     this.locations = locations;
@@ -88,6 +97,23 @@ export class RemotePathGuard {
 
   auditRecords(): readonly RemotePathAuditRecord[] {
     return this.audit.map((record) => Object.freeze({ ...record }));
+  }
+
+  withWorkspaceScope<T>(workspace: string, restricted: () => boolean, action: (scope: RemotePathScope) => Promise<T>): Promise<T> {
+    const scope: RemotePathScope = { workspace, restricted };
+    return this.scopes.run(scope, () => action(scope));
+  }
+
+  /** Check a process cwd without applying the file-tool exclusion list to commands. */
+  async assertWithinWorkspace(target: string, workspace: string, context: RemotePathCheckContext = {}): Promise<void> {
+    try {
+      this.checkSyntax(target);
+      const resolved = await this.canonicalize(this.paths.resolve(target));
+      await this.assertCanonicalWithinWorkspace(resolved.canonical, resolved.exists, workspace);
+    } catch (error) {
+      if (error instanceof RemotePathDeniedError) this.record(context, "read", error);
+      throw error;
+    }
   }
 
   async assertAllowed(target: string, mode: RemotePathMode, context: RemotePathCheckContext = {}): Promise<string> {
@@ -140,6 +166,8 @@ export class RemotePathGuard {
       mode,
     });
     this.audit.push(record);
+    const scope = this.scopes.getStore();
+    if (scope) scope.lastDenied = record;
     this.onDenied?.(record);
   }
 
@@ -155,6 +183,8 @@ export class RemotePathGuard {
     if (lexicalHit) throw denied(lexicalHit);
 
     const { canonical, exists } = await this.canonicalize(absolute);
+    const scope = this.scopes.getStore();
+    if (scope?.restricted()) await this.assertCanonicalWithinWorkspace(canonical, exists, scope.workspace);
     const canonicalHit = this.matchProtected(canonical);
     if (canonicalHit) throw denied(canonicalHit);
 
@@ -242,7 +272,9 @@ export class RemotePathGuard {
     for (;;) {
       try {
         await lstat(current);
-        const resolved = await realpath(current);
+        let resolved: string;
+        try { resolved = await realpath(current); }
+        catch { throw new RemotePathDeniedError("identity_unprovable", "identity_unprovable", "An existing path could not be resolved."); }
         return { canonical: this.paths.resolve(resolved, ...missing.reverse()), exists: missing.length === 0 };
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
@@ -256,6 +288,24 @@ export class RemotePathGuard {
         missing.push(this.paths.basename(current));
         current = parent;
       }
+    }
+  }
+
+  private async assertCanonicalWithinWorkspace(canonical: string, exists: boolean, workspace: string): Promise<void> {
+    const root = await this.canonicalize(this.paths.resolve(workspace));
+    const rootIdentity = root.exists ? await identityOf(root.canonical) : undefined;
+    if (!rootIdentity) throw new RemotePathDeniedError("identity_unprovable", "identity_unprovable", "The workspace identity could not be verified.");
+    let found = false;
+    if (this.isWithin(canonical, root.canonical, "directory")) {
+      for (const prefix of this.prefixes(canonical)) {
+        const identity = await identityOf(prefix);
+        if (identity && identity.dev === rootIdentity.dev && identity.ino === rootIdentity.ino) { found = true; break; }
+      }
+    }
+    if (!found) throw new RemotePathDeniedError("outside_only_here", "outside_only_here", "The target is outside the only-here workspace.");
+    if (exists) {
+      const info = await lstat(canonical, { bigint: true });
+      if (info.isFile() && info.nlink > 1n) throw new RemotePathDeniedError("hardlink_confinement_unprovable", "hardlink_confinement_unprovable", "A multi-link file cannot be confined to the workspace.");
     }
   }
 

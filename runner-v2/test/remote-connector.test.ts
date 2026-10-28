@@ -610,6 +610,7 @@ test("service shutdown is retryable, ordered, and logout returns to logged-out",
     permissionProfile: "full", capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
     createTransport: () => transport, issuer,
     now: clock, sleep: testSleep,
+    policyPatch: { onlyHere: true, readOnly: true, shell: false },
     onShutdownStep: (step) => steps.push(step),
   });
   t.after(async () => {
@@ -621,6 +622,10 @@ test("service shutdown is retryable, ordered, and logout returns to logged-out",
   const started = service.start();
   await tick(); await tick(); await tick();
   const deviceId = service.composition.deviceStore.load()!.deviceId;
+  const localPolicy = service.composition.principals.policy({ accountId: ACCOUNT, clientId: CLIENT, deviceId });
+  assert.deepEqual(localPolicy, { onlyHere: true, readOnly: true, shell: false, approvals: false, audit: true });
+  assert.equal(service.composition.principals.auditStore.list(1)[0]?.kind, "policy");
+  assert.throws(() => service.composition.principals.updatePolicy({ accountId: ACCOUNT, clientId: CLIENT, deviceId }, { shell: true }, "remote"), /local user/);
   transport.onProof = (proof) => {
     const challenge = challengeFor(deviceId);
     const ok = verifyDeviceProof(service.composition.deviceStore.load()!.publicKey, challenge, proof.signature);

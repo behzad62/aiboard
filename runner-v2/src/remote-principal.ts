@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+
+import { RemoteAuditStore } from "./remote-audit-store.js";
 
 /** The connector must verify these claims before passing them to this store. */
 export interface VerifiedRemoteIdentity {
@@ -46,10 +48,16 @@ type PolicyRow = { shell: number; approvals: number; read_only: number; only_her
 /** Local durable identity and policy. Revocation leaves a tombstone, never a new owner. */
 export class RemotePrincipalStore {
   private readonly database: DatabaseSync;
+  private readonly policyTable: string;
+  readonly auditStore: RemoteAuditStore;
+  private readonly ownsAuditStore: boolean;
 
-  constructor(path: string) {
+  constructor(path: string, auditStore?: RemoteAuditStore, devicePolicyPath?: string) {
     if (!isAbsolute(path)) throw new Error("Remote principal state path must be absolute.");
+    if (devicePolicyPath !== undefined && !isAbsolute(devicePolicyPath)) throw new Error("Remote device policy path must be absolute.");
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    this.auditStore = auditStore ?? new RemoteAuditStore(join(dirname(path), "remote-audit.sqlite"));
+    this.ownsAuditStore = auditStore === undefined;
     this.database = new DatabaseSync(path);
     this.database.exec(`
       PRAGMA journal_mode = WAL;
@@ -66,6 +74,18 @@ export class RemotePrincipalStore {
         PRIMARY KEY (account_id, device_id)
       );
     `);
+    this.policyTable = devicePolicyPath ? "remote_device.remote_device_policy" : "remote_device_policy";
+    if (devicePolicyPath) {
+      mkdirSync(dirname(devicePolicyPath), { recursive: true, mode: 0o700 });
+      this.database.prepare("ATTACH DATABASE ? AS remote_device").run(devicePolicyPath);
+      this.database.exec(`CREATE TABLE IF NOT EXISTS remote_device.remote_device_policy (
+        account_id TEXT NOT NULL, device_id TEXT NOT NULL, shell INTEGER NOT NULL, approvals INTEGER NOT NULL,
+        read_only INTEGER NOT NULL, only_here INTEGER NOT NULL, audit INTEGER NOT NULL,
+        PRIMARY KEY (account_id, device_id)
+      );
+      CREATE TABLE IF NOT EXISTS remote_policy_migrations (policy_path TEXT PRIMARY KEY);`);
+      this.migratePolicy(devicePolicyPath);
+    }
   }
 
   getOrCreate(identity: VerifiedRemoteIdentity): RemotePrincipal {
@@ -111,15 +131,27 @@ export class RemotePrincipalStore {
   }
 
   policy(identity: VerifiedRemoteIdentity): Readonly<RemoteDevicePolicy> {
+    return this.policyStatus(identity).policy;
+  }
+
+  policyStatus(identity: VerifiedRemoteIdentity): { readonly policy: Readonly<RemoteDevicePolicy>; readonly fromDefaults: boolean } {
     const verified = checkedIdentity(identity);
     const row = this.database.prepare(`SELECT shell, approvals, read_only, only_here, audit
-      FROM remote_device_policy WHERE account_id = ? AND device_id = ?`).get(
+      FROM ${this.policyTable} WHERE account_id = ? AND device_id = ?`).get(
       verified.accountId, verified.deviceId,
     ) as unknown as PolicyRow | undefined;
-    if (!row) return DEFAULT_REMOTE_DEVICE_POLICY;
-    if (Object.values(row).some((value) => value !== 0 && value !== 1)) throw new Error("Remote device policy is invalid.");
-    return Object.freeze({ shell: row.shell === 1, approvals: row.approvals === 1,
-      readOnly: row.read_only === 1, onlyHere: row.only_here === 1, audit: row.audit === 1 });
+    return policyFromRow(row);
+  }
+
+  static readDevicePolicy(path: string, identity: VerifiedRemoteIdentity): { readonly policy: Readonly<RemoteDevicePolicy>; readonly fromDefaults: boolean } {
+    if (!isAbsolute(path)) throw new Error("Remote device policy path must be absolute.");
+    const verified = checkedIdentity(identity);
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      const row = database.prepare(`SELECT shell, approvals, read_only, only_here, audit FROM remote_device_policy
+        WHERE account_id = ? AND device_id = ?`).get(verified.accountId, verified.deviceId) as unknown as PolicyRow | undefined;
+      return policyFromRow(row);
+    } finally { database.close(); }
   }
 
   updatePolicy(identity: VerifiedRemoteIdentity, patch: Partial<RemoteDevicePolicy>, origin: PolicyOrigin): Readonly<RemoteDevicePolicy> {
@@ -137,11 +169,13 @@ export class RemotePrincipalStore {
         (before.readOnly && !next.readOnly) || (before.onlyHere && !next.onlyHere) || (before.audit && !next.audit))) {
         throw new Error("Only the local user can broaden remote device policy.");
       }
-      this.database.prepare(`INSERT INTO remote_device_policy (account_id, device_id, shell, approvals, read_only, only_here, audit)
+      this.database.prepare(`INSERT INTO ${this.policyTable} (account_id, device_id, shell, approvals, read_only, only_here, audit)
         VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, device_id) DO UPDATE SET
         shell=excluded.shell, approvals=excluded.approvals, read_only=excluded.read_only,
         only_here=excluded.only_here, audit=excluded.audit`).run(verified.accountId, verified.deviceId,
         Number(next.shell), Number(next.approvals), Number(next.readOnly), Number(next.onlyHere), Number(next.audit));
+      // Record before committing: a failed audit write must never broaden policy silently.
+      this.auditStore.recordPolicy(verified, origin, before, next);
       this.database.exec("COMMIT");
       return Object.freeze(next);
     } catch (error) {
@@ -150,7 +184,41 @@ export class RemotePrincipalStore {
     }
   }
 
-  close(): void { this.database.close(); }
+  close(): void { this.database.close(); if (this.ownsAuditStore) this.auditStore.close(); }
+
+  /** Migrate each project's earlier policy once, preserving the stricter choices. */
+  private migratePolicy(path: string): void {
+    if (this.database.prepare("SELECT 1 FROM remote_policy_migrations WHERE policy_path = ?").get(path)) return;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const rows = this.database.prepare("SELECT * FROM remote_device_policy").all() as unknown as Array<PolicyRow & { account_id: string; device_id: string }>;
+      for (const row of rows) {
+        const principal = this.database.prepare("SELECT client_id FROM remote_principals WHERE account_id = ? AND device_id = ? LIMIT 1").get(row.account_id, row.device_id) as { client_id: string } | undefined;
+        if (!principal) throw new Error("Remote policy migration cannot identify its owner.");
+        if ([row.shell, row.approvals, row.read_only, row.only_here, row.audit].some((value) => value !== 0 && value !== 1)) throw new Error("Remote device policy is invalid.");
+        const identity = checkedIdentity({ accountId: row.account_id, clientId: principal.client_id, deviceId: row.device_id });
+        const legacy: RemoteDevicePolicy = { shell: row.shell === 1, approvals: row.approvals === 1, readOnly: row.read_only === 1, onlyHere: row.only_here === 1, audit: row.audit === 1 };
+        const current = this.policyStatus(identity);
+        const next = current.fromDefaults ? legacy : { shell: current.policy.shell && legacy.shell,
+          approvals: current.policy.approvals || legacy.approvals, readOnly: current.policy.readOnly || legacy.readOnly,
+          onlyHere: current.policy.onlyHere || legacy.onlyHere, audit: current.policy.audit || legacy.audit };
+        this.database.prepare(`INSERT INTO ${this.policyTable} (account_id, device_id, shell, approvals, read_only, only_here, audit)
+          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, device_id) DO UPDATE SET shell=excluded.shell,
+          approvals=excluded.approvals, read_only=excluded.read_only, only_here=excluded.only_here, audit=excluded.audit`).run(
+          identity.accountId, identity.deviceId, Number(next.shell), Number(next.approvals), Number(next.readOnly), Number(next.onlyHere), Number(next.audit));
+        this.auditStore.recordPolicy(identity, "system", current.policy, next);
+      }
+      this.database.prepare("INSERT INTO remote_policy_migrations (policy_path) VALUES (?)").run(path);
+      this.database.exec("COMMIT");
+    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+  }
+}
+
+function policyFromRow(row: PolicyRow | undefined): { readonly policy: Readonly<RemoteDevicePolicy>; readonly fromDefaults: boolean } {
+  if (!row) return { policy: DEFAULT_REMOTE_DEVICE_POLICY, fromDefaults: true };
+  if (Object.values(row).some((value) => value !== 0 && value !== 1)) throw new Error("Remote device policy is invalid.");
+  return { policy: Object.freeze({ shell: row.shell === 1, approvals: row.approvals === 1,
+    readOnly: row.read_only === 1, onlyHere: row.only_here === 1, audit: row.audit === 1 }), fromDefaults: false };
 }
 
 function checkedIdentity(value: VerifiedRemoteIdentity): VerifiedRemoteIdentity {

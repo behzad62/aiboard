@@ -19,6 +19,22 @@ import { requestLauncherControl, startLauncherControl, type LauncherHandshake } 
 const bin = fileURLToPath(new URL("../bin/aiboard.mjs", import.meta.url));
 const legacyBin = fileURLToPath(new URL("../bin/aiboard-runner-v2.mjs", import.meta.url));
 
+test("remote device policy and audit flags are validated and forwarded", () => {
+  const parsed = parseLauncherArguments(["remote", "--only-here", "--read-only", "--no-shell"]);
+  assert.deepEqual(parsed.runnerFlags, ["--only-here", "--read-only", "--no-shell"]);
+  assert.deepEqual(parseLauncherArguments(["remote", "--anywhere", "--writable", "--shell"]).runnerFlags,
+    ["--anywhere", "--writable", "--shell"]);
+  assert.equal(parseLauncherArguments(["remote", "--policy"]).policy, true);
+  assert.equal(parseLauncherArguments(["remote", "--audit", "--limit", "12"]).auditLimit, 12);
+  for (const args of [["remote", "--only-here", "--only-here"], ["remote", "--only-here", "--anywhere"],
+    ["remote", "--read-only", "--writable"], ["remote", "--no-shell", "--shell"],
+    ["remote", "--audit", "--policy"], ["remote", "--audit", "--read-only"],
+    ["remote", "--limit", "3"], ["remote", "--audit", "--limit", "0"], ["remote", "--bogus"],
+    ["--only-here"], ["remote", "--logout", "--logout"]]) {
+    assert.throws(() => parseLauncherArguments(args), /invalid_arguments/);
+  }
+});
+
 async function fixture(): Promise<{ root: string; project: string; state: string; cleanup: () => Promise<void> }> {
   const prefix = join(tmpdir(), "aiboard-l1b-");
   const root = await mkdtemp(prefix);

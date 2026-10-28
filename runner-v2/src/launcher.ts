@@ -19,6 +19,8 @@ import { serveLocalStdioMcp } from "./local-stdio-mcp.js";
 import { createLocalPairTicket, type LocalPairPeer } from "./local-pairing.js";
 import { STUB_REMOTE_PAIRING_URL } from "./remote-auth.js";
 import { RemoteDeviceStore } from "./remote-device-store.js";
+import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-principal.js";
+import { RemoteAuditStore } from "./remote-audit-store.js";
 import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
 
 export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
@@ -41,10 +43,18 @@ export interface LauncherArguments {
   logout?: boolean;
   acknowledgeRemote?: boolean;
   stdio?: boolean;
+  policy?: boolean;
+  audit?: boolean;
+  auditLimit?: number;
+  policyFlags?: boolean;
 }
 
 const VALUE_FLAGS = new Set(["--project", "--state-dir", "--port", "--capabilities-config", "--extensions-home", "--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run"]);
 const REPEATABLE_FLAGS = new Set(["--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run"]);
+const POLICY_FLAGS: Readonly<Record<string, string>> = Object.freeze({
+  "--only-here": "scope", "--anywhere": "scope", "--read-only": "writes", "--writable": "writes",
+  "--no-shell": "shell", "--shell": "shell", "--no-audit": "audit", "--audit-on": "audit",
+});
 const runnerEntry = fileURLToPath(new URL("../bin/aiboard-runner-v2.mjs", import.meta.url));
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 
@@ -84,10 +94,15 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
     }
   }
   const seen = new Set<string>();
+  const policyFields = new Set<string>();
   const result: LauncherArguments = { command, runners: selected.length > 0 ? selected : ["runner"], runnerFlags: [] };
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index]!;
     if (flag === "--help" || flag === "-h") { result.command = "help"; continue; }
+    if (["--no-open", "--stdio", "--logout", "--acknowledge-remote-access", "--policy", "--audit"].includes(flag) || Object.hasOwn(POLICY_FLAGS, flag)) {
+      if (seen.has(flag)) throw new Error(`invalid_arguments: Duplicate option ${flag}.`);
+      seen.add(flag);
+    }
     if (flag === "--no-open") { result.noOpen = true; continue; }
     if (flag === "--stdio") {
       if (result.command !== "mcp" || result.stdio) throw new Error("invalid_arguments: --stdio applies once to mcp serve.");
@@ -97,7 +112,28 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
       if (result.command !== "remote") throw new Error("invalid_arguments: --logout applies only to aiboard remote.");
       result.logout = true; continue;
     }
-    if (flag === "--acknowledge-remote-access") { result.acknowledgeRemote = true; continue; }
+    if (flag === "--acknowledge-remote-access") {
+      if (result.command !== "remote") throw new Error("invalid_arguments: --acknowledge-remote-access applies only to aiboard remote.");
+      result.acknowledgeRemote = true; continue;
+    }
+    if (flag === "--policy" || flag === "--audit") {
+      if (result.command !== "remote") throw new Error(`invalid_arguments: ${flag} applies only to aiboard remote.`);
+      if (flag === "--policy") result.policy = true; else result.audit = true;
+      continue;
+    }
+    if (Object.hasOwn(POLICY_FLAGS, flag)) {
+      if (result.command !== "remote") throw new Error(`invalid_arguments: ${flag} applies only to aiboard remote.`);
+      const field = POLICY_FLAGS[flag]!;
+      if (policyFields.has(field)) throw new Error(`invalid_arguments: Conflicting policy option ${flag}.`);
+      policyFields.add(field); result.policyFlags = true; result.runnerFlags.push(flag); continue;
+    }
+    if (flag === "--limit") {
+      if (seen.has(flag)) throw new Error("invalid_arguments: Duplicate option --limit.");
+      seen.add(flag);
+      const value = args[++index];
+      if (!value || !/^[1-9][0-9]*$/.test(value) || Number(value) > 10_000) throw new Error("invalid_arguments: --limit must be an integer from 1 to 10000.");
+      result.auditLimit = Number(value); continue;
+    }
     if (flag === "--token") throw new Error("invalid_arguments: aiboard uses fresh state and does not accept --token; legacy users should use aiboard-runner-v2.");
     if (!VALUE_FLAGS.has(flag)) throw new Error("invalid_arguments: Unknown launcher option. See --help.");
     const value = args[++index];
@@ -111,6 +147,9 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
   if (result.project && !isAbsolute(result.project)) throw new Error("invalid_arguments: --project must be an absolute path.");
   if (result.stateDirectory && !isAbsolute(result.stateDirectory)) throw new Error("invalid_arguments: --state-dir must be an absolute path.");
   if (result.command === "mcp" && !result.stdio) throw new Error("invalid_arguments: mcp serve requires --stdio.");
+  if (Number(Boolean(result.logout)) + Number(Boolean(result.policy)) + Number(Boolean(result.audit)) > 1 ||
+    ((result.logout || result.policy || result.audit) && (result.policyFlags || result.acknowledgeRemote || result.runnerFlags.length > 0)) ||
+    (result.auditLimit !== undefined && !result.audit)) throw new Error("invalid_arguments: Conflicting remote options.");
   if (result.command !== "start" && result.command !== "remote" && result.command !== "mcp" && result.runnerFlags.length > 0) throw new Error("invalid_arguments: Runner options apply only when starting a Runner.");
   return result;
 }
@@ -133,7 +172,7 @@ interface LauncherRuntime {
 
 export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}): Promise<void> {
   const args = parseLauncherArguments(raw);
-  const startLike = args.command === "start" || args.command === "mcp" || (args.command === "remote" && args.logout !== true);
+  const startLike = args.command === "start" || args.command === "mcp" || (args.command === "remote" && !args.logout && !args.policy && !args.audit);
   const write = runtime.write ?? ((message: string) => (args.command === "mcp" ? process.stderr : process.stdout).write(message));
   const depth = args.command === "mcp" ? parseMcpDepth((runtime.environment ?? process.env).AIBOARD_MCP_DEPTH) : 0;
   if (args.command === "mcp" && depth >= LOCAL_MCP_DEPTH_LIMIT) throw new Error("local_mcp_recursion_limit: MCP nesting limit is 2.");
@@ -169,6 +208,17 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   await assertWindowsStatePath(requestedState, windowsDefault);
   const prospective = await canonicalFuturePath(requestedState);
   assertExternalState(identity.projectPath, prospective);
+  if (args.command === "remote" && (args.policy || args.audit)) {
+    try {
+      await stat(prospective);
+      await prepareStateDirectory(identity.projectPath, requestedState, identity, windowsDefault);
+      await assertProjectBinding(prospective, identity);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await showRemoteLocalState(prospective, deviceDirectory!, args, write);
+    return;
+  }
   if (!startLike) {
     try { await stat(prospective); }
     catch (error) {
@@ -357,6 +407,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
             throw new Error("instance_unverified: The recorded Runner cannot be verified; no process was stopped.");
           });
           if (status.healthy) {
+            if (args.command === "remote" && args.policyFlags) throw new Error("remote_policy_requires_restart: Stop this Runner before applying policy flags.");
             reuseV2 = true;
             instances.set("runner", recorded);
             if (args.command !== "mcp") tickets.set("runner", createLocalPairTicket(recorded.instanceId));
@@ -715,6 +766,44 @@ async function remoteStatusLine(stateDirectory: string): Promise<string | undefi
   } catch { return "Remote: status unverified\n"; }
 }
 
+async function showRemoteLocalState(stateDirectory: string, deviceDirectory: string, args: LauncherArguments, write: (message: string) => void): Promise<void> {
+  const exists = async (path: string): Promise<boolean> => {
+    try { await stat(path); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  };
+  if (args.policy) {
+    const device = new RemoteDeviceStore(deviceDirectory);
+    const identity = device.load();
+    const session = device.loadSession();
+    let status = { policy: DEFAULT_REMOTE_DEVICE_POLICY, fromDefaults: true };
+    const path = join(stateDirectory, "remote-principals.sqlite");
+    const devicePolicyPath = join(deviceDirectory, "remote-device-policy.sqlite");
+    if (identity && session) {
+      if (identity.accountId !== session.accountId) throw new Error("Remote device identity does not match its session.");
+      const verified = { accountId: session.accountId, clientId: session.clientId, deviceId: identity.deviceId };
+      if (await exists(path)) {
+        const store = new RemotePrincipalStore(path, undefined, devicePolicyPath);
+        try { status = store.policyStatus(verified); }
+        finally { store.close(); }
+      } else if (await exists(devicePolicyPath)) status = RemotePrincipalStore.readDevicePolicy(devicePolicyPath, verified);
+    }
+    write(`Remote policy (${status.fromDefaults ? "defaults" : "saved"}):\n` +
+      `  shell: ${status.policy.shell ? "on" : "off"}\n  approvals: ${status.policy.approvals ? "on" : "off"}\n` +
+      `  read-only: ${status.policy.readOnly ? "on" : "off"}\n  only-here: ${status.policy.onlyHere ? "on" : "off"}\n  audit: ${status.policy.audit ? "on" : "off"}\n`);
+    return;
+  }
+  const path = join(stateDirectory, "remote-audit.sqlite");
+  if (!(await exists(path))) { write("No remote audit records.\n"); return; }
+  const audit = new RemoteAuditStore(path);
+  try {
+    const rows = audit.list(args.auditLimit ?? 50);
+    if (!rows.length) { write("No remote audit records.\n"); return; }
+    const cell = (value: string | null, width: number) => (value ?? "-").replace(/[\r\n\t]/g, " ").padEnd(width);
+    write(`${cell("UTC", 25)} ${cell("ROLE", 10)} ${cell("ACCOUNT", 14)} ${cell("CLIENT", 14)} ${cell("DEVICE", 14)} ${cell("TOOL", 20)} ${cell("DECISION", 9)} REASON CATEGORY JOB OUTCOME\n` +
+      rows.map((row) => `${cell(row.occurredAt, 25)} ${cell(row.role, 10)} ${cell(row.accountId, 14)} ${cell(row.clientId, 14)} ${cell(row.deviceId, 14)} ${cell(row.toolName, 20)} ${cell(row.decision, 9)} ${cell(row.reasonCode, 1)} ${cell(row.pathCategory, 1)} ${cell(row.jobId, 1)} ${row.outcomeCode}${row.origin ? ` origin=${row.origin} before=${row.beforeFlags} after=${row.afterFlags}` : ""}`).join("\n") + "\n");
+  } finally { audit.close(); }
+}
+
 function describe(instance: LauncherInstance, state: string): string {
   return `Runner ${state}\nProject: ${instance.projectPath}\nURL: http://127.0.0.1:${instance.port}\nPID: ${instance.pid}\n`;
 }
@@ -734,6 +823,9 @@ function help(): string {
     "  --capabilities-config, --extensions-home, --mcp, --mcp-envelope,",
     "  --allow-origin, --set-aside-run  Pass existing Runner options through.",
     "  aiboard remote            Start Runner V2 with the remote service; --logout wipes the device.",
+    "  remote --only-here|--anywhere --read-only|--writable --no-shell|--shell",
+    "  remote --no-audit|--audit-on  Set local device policy; --policy shows it.",
+    "  remote --audit [--limit N]  Show recent local audit records.",
     "  aiboard mcp serve --stdio Serve local tools through this project's Runner (maximum MCP nesting depth: 2).",
     "  --help, -h                Show this help.", "",
   ].join("\n");

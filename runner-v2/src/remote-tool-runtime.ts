@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 import type { ToolResult } from "./agent-contracts.js";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
@@ -15,7 +14,8 @@ import { createProcessTools } from "./process-tools.js";
 import { roleAllowList } from "./role-capabilities.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
-import { RemotePrincipalStore, type LocalMcpIdentity, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
+import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore, type LocalMcpIdentity, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
+import type { RemoteAuditStore } from "./remote-audit-store.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
 import { resolveProtectedLocations, type ProtectedLocations } from "./protected-locations.js";
 import { createRemotePathGuard, RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
@@ -100,19 +100,39 @@ export class RemoteToolRuntime {
 
   pathAuditRecords(): readonly import("./remote-path-guard.js").RemotePathAuditRecord[] { return this.pathGuard.auditRecords(); }
 
-  invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult> {
+  invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string, jobId?: string): Promise<ToolResult> {
     const callId = `remote-call-${randomUUID()}`;
-    if (this.closing) return Promise.resolve(failure(callId, name, "runtime_closed", "Remote runtime is closing."));
-    let snapshot: unknown;
-    try { snapshot = freezeArguments(structuredClone(args)); }
-    catch { return Promise.resolve(failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely.")); }
-    const work = this.invokeChecked(identity, name, snapshot, callId, signal, rawRequest);
+    const work = this.pathGuard.withWorkspaceScope(this.workspacePath, () => this.options.principals.policy(identity).onlyHere, async (scope) => {
+      let dispatched: ToolResult | undefined;
+      let result: ToolResult;
+      try {
+        if (this.closing) result = failure(callId, name, "runtime_closed", "Remote runtime is closing.");
+        else {
+          let snapshot: unknown;
+          try { snapshot = freezeArguments(structuredClone(args)); }
+          catch { snapshot = undefined; }
+          result = snapshot === undefined && args !== undefined
+            ? failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely.")
+            : await this.invokeChecked(identity, name, snapshot, callId, signal, rawRequest, (value) => { dispatched = value; });
+        }
+      } catch (error) {
+        this.options.principals.auditStore.recordTool({ role: "remote", ...identity, toolName: safeToolName(name, ALLOWED_TOOLS),
+          decision: "failed", outcomeCode: "exception", ...(scope.lastDenied ? { pathCategory: scope.lastDenied.pathCategory } : {}), ...(jobId ? { jobId } : {}) }, auditEnabled(this.options.principals, identity));
+        throw error;
+      }
+      const observed = dispatched ?? result;
+      const admittedJob = result.content.find((part) => part.type === "json" && part.value && typeof part.value === "object" && "jobId" in part.value);
+      const resultJob = admittedJob?.type === "json" && typeof (admittedJob.value as { jobId?: unknown }).jobId === "string" ? (admittedJob.value as { jobId: string }).jobId : undefined;
+      this.options.principals.auditStore.recordTool({ role: "remote", ...identity, toolName: safeToolName(name, ALLOWED_TOOLS),
+        ...auditOutcome(observed), ...(scope.lastDenied ? { pathCategory: scope.lastDenied.pathCategory } : {}), ...((jobId ?? resultJob) ? { jobId: jobId ?? resultJob } : {}) }, auditEnabled(this.options.principals, identity));
+      return result;
+    });
     this.active.add(work);
     void work.finally(() => this.active.delete(work)).catch(() => undefined);
     return work;
   }
 
-  private async invokeChecked(identity: VerifiedRemoteIdentity, name: string, args: unknown, callId: string, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult> {
+  private async invokeChecked(identity: VerifiedRemoteIdentity, name: string, args: unknown, callId: string, signal: AbortSignal | undefined, rawRequest: string | undefined, onDispatch: (result: ToolResult) => void): Promise<ToolResult> {
     let principal = this.options.principals.getOrCreate(identity);
     identity = principal.identity;
     if (principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
@@ -127,6 +147,8 @@ export class RemoteToolRuntime {
     }
     let refusal = policyRefusal(this.options.principals.policy(identity), name, args);
     if (refusal) return failure(callId, name, refusal.code, refusal.message);
+    try { await constrainArguments(this.pathGuard, this.workspacePath, this.options.principals.policy(identity), name, args, `remote:${principal.principalId}`); }
+    catch (error) { if (error instanceof RemotePathDeniedError) return failure(callId, name, error.code, error.message); throw error; }
     if (isMutating(name, args) && !this.options.admitEffect) {
       return failure(callId, name, "effect_admission_required", "Durable remote effect admission is unavailable.");
     }
@@ -148,7 +170,10 @@ export class RemoteToolRuntime {
     const dispatch = async (): Promise<ToolResult> => {
       const denied = authorize();
       if (denied) return denied;
-      const result = await bound.broker.invoke({ type: "tool_call", callId, name, arguments: args }, {
+      let dispatchArgs: unknown;
+      try { dispatchArgs = await constrainArguments(this.pathGuard, this.workspacePath, this.options.principals.policy(identity), name, args, `remote:${principal.principalId}`); }
+      catch (error) { if (error instanceof RemotePathDeniedError) { const result = failure(callId, name, error.code, error.message); onDispatch(result); return result; } throw error; }
+      const result = await bound.broker.invoke({ type: "tool_call", callId, name, arguments: dispatchArgs }, {
         runId: principal.runId, sessionId: principal.sessionId,
         actor: { role: "remote", id: principal.principalId }, workspacePath: this.workspacePath,
         ...(signal ? { signal } : {}),
@@ -157,9 +182,10 @@ export class RemoteToolRuntime {
         const dest = (args as Record<string, unknown>)[name === "fs.write" ? "path" : "destination"];
         if (typeof dest === "string") {
           try { await this.pathGuard.assertAllowedAfterCreate(resolve(this.workspacePath, dest), "write", { toolName: name, principal: principal.principalId }); }
-          catch (cause) { if (cause instanceof RemotePathDeniedError) return failure(callId, name, cause.code, cause.message); throw cause; }
+          catch (cause) { if (cause instanceof RemotePathDeniedError) { const denied = failure(callId, name, cause.code, cause.message); onDispatch(denied); return denied; } throw cause; }
         }
       }
+      onDispatch(result);
       return result;
     };
     if (isMutating(name, args)) {
@@ -270,6 +296,12 @@ export interface LocalMcpOwner {
   readonly depth: number;
 }
 
+export interface LocalMcpPolicyOptions {
+  readonly policy?: () => Readonly<RemoteDevicePolicy>;
+  readonly policyIdentity?: () => VerifiedRemoteIdentity | undefined;
+  readonly auditStore?: RemoteAuditStore;
+}
+
 export function createLocalMcpOwner(depth: number): LocalMcpOwner {
   return Object.freeze({ identity: Object.freeze({ kind: "local_mcp", localClientId: `local-mcp-${randomUUID()}` }),
     runId: `local-mcp-run-${randomUUID()}`, sessionId: `local-mcp-session-${randomUUID()}`, depth });
@@ -283,15 +315,17 @@ export class LocalMcpToolSession {
   private partial?: { binding: ExecutionHostRunBinding; ledger?: SqliteToolLedger };
   private closed = false;
   private closing?: Promise<void>;
+  private readonly pathGuard: RemotePathGuard;
 
-  constructor(private readonly options: GovernedOptions & { workspacePath: string }, readonly owner: LocalMcpOwner) {
+  constructor(private readonly options: GovernedOptions & LocalMcpPolicyOptions & { workspacePath: string }, readonly owner: LocalMcpOwner) {
     if (!isAbsolute(options.workspacePath)) throw new Error("Local MCP workspace must be absolute.");
+    this.pathGuard = remotePathGuardFor(options);
   }
 
   private binding(): Promise<BoundRemote> {
     if (this.closed) throw new Error("Local MCP session is revoked.");
     if (this.partial) throw new Error("Local MCP execution cleanup remains unverified.");
-    return this.bound ??= createGovernedBinding(this.options, resolve(this.options.workspacePath), this.owner.runId, LOCAL_ALLOWED,
+    return this.bound ??= createGovernedBinding({ ...this.options, pathGuard: this.pathGuard }, resolve(this.options.workspacePath), this.owner.runId, LOCAL_ALLOWED,
       (binding, ledger) => { this.partial = { binding, ledger }; }, this.owner.depth);
   }
 
@@ -327,7 +361,21 @@ export class LocalMcpToolSession {
   }
 
   invoke(name: string, input: unknown): Promise<ToolResult> {
-    const work = this.invokeChecked(name, input);
+    const work = this.pathGuard.withWorkspaceScope(resolve(this.options.workspacePath), () => true, async (scope) => {
+      const identity = this.options.policyIdentity?.();
+      let result: ToolResult;
+      try { result = await this.invokeChecked(name, input); }
+      catch (error) {
+        this.options.auditStore?.recordTool({ role: "local_mcp", ...(identity ?? {}), clientId: this.owner.identity.localClientId,
+          toolName: safeToolName(LOCAL_TOOLS[name] ?? "unknown", LOCAL_ALLOWED), decision: "failed", outcomeCode: "exception",
+          ...(scope.lastDenied ? { pathCategory: scope.lastDenied.pathCategory } : {}) }, this.currentPolicy().audit);
+        throw error;
+      }
+      this.options.auditStore?.recordTool({ role: "local_mcp", ...(identity ?? {}), clientId: this.owner.identity.localClientId,
+        toolName: safeToolName(LOCAL_TOOLS[name] ?? "unknown", LOCAL_ALLOWED), ...auditOutcome(result),
+        ...(scope.lastDenied ? { pathCategory: scope.lastDenied.pathCategory } : {}) }, this.currentPolicy().audit);
+      return result;
+    });
     this.active.add(work);
     void work.finally(() => this.active.delete(work)).catch(() => undefined);
     return work;
@@ -344,6 +392,8 @@ export class LocalMcpToolSession {
     if (Object.keys(args).some((key) => AUTHORITY_ARGUMENTS.has(key) || ["root", "repoPath", "deviceId"].includes(key))) return failure(callId, name, "invalid_arguments", "Tool arguments cannot supply Runner authority.");
     if (internal === "image.inspect" && Object.hasOwn(args, "artifactHash")) return failure(callId, name, "tool_unavailable", "Artifact-hash inspection is unavailable.");
     if (args.env && typeof args.env === "object" && Object.keys(args.env).some((key) => key.toUpperCase() === "AIBOARD_MCP_DEPTH")) return failure(callId, name, "invalid_arguments", "MCP ancestry is Runner-owned.");
+    let refusal = policyRefusal(this.currentPolicy(), internal, args);
+    if (refusal) return failure(callId, name, refusal.code, refusal.message);
     if (MUTATING_TOOLS.has(internal)) {
       if (typeof args.idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(args.idempotencyKey)) return failure(callId, name, "invalid_arguments", "A valid idempotencyKey is required.");
       callId = `local-key-${createHash("sha256").update(args.idempotencyKey).digest("hex")}`;
@@ -359,12 +409,13 @@ export class LocalMcpToolSession {
       delete args.view;
     }
     try {
-      const paths = internal.startsWith("fs.") ? ["path", "source", "destination"] : internal === "image.inspect" ? ["path"] : internal.startsWith("process.") ? ["cwd"] : [];
-      for (const key of paths) if (typeof args[key] === "string") await assertProjectPath(this.options.workspacePath, args[key] as string);
+      args = await constrainArguments(this.pathGuard, this.options.workspacePath, this.currentPolicy(), internal, args, `local_mcp:${this.owner.identity.localClientId}`, true) as Record<string, unknown>;
       freezeArguments(args);
       const bound = await this.binding();
       if (this.closed || this.controller.signal.aborted) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
-      for (const key of paths) if (typeof args[key] === "string") await assertProjectPath(this.options.workspacePath, args[key] as string);
+      refusal = policyRefusal(this.currentPolicy(), internal, args);
+      if (refusal) return failure(callId, name, refusal.code, refusal.message);
+      args = await constrainArguments(this.pathGuard, this.options.workspacePath, this.currentPolicy(), internal, args, `local_mcp:${this.owner.identity.localClientId}`, true) as Record<string, unknown>;
       if (this.closed || this.controller.signal.aborted) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
       const definition = bound.broker.definitions().find((item) => item.name === target);
       const properties = definition?.inputSchema.properties;
@@ -377,9 +428,12 @@ export class LocalMcpToolSession {
       });
     } catch (error) {
       if (this.closed) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
+      if (error instanceof RemotePathDeniedError) return failure(callId, name, error.code, error.message);
       return failure(callId, name, "tool_refused", error instanceof Error ? error.message : "Tool refused.");
     }
   }
+
+  private currentPolicy(): Readonly<RemoteDevicePolicy> { return this.options.policy?.() ?? DEFAULT_REMOTE_DEVICE_POLICY; }
 
   close(): Promise<void> {
     if (this.closing) return this.closing;
@@ -410,27 +464,7 @@ export class LocalMcpToolSession {
   }
 }
 
-async function assertProjectPath(workspace: string, path: string): Promise<void> {
-  const root = await realpath(workspace);
-  const target = resolve(root, path);
-  const inside = (candidate: string) => { const part = relative(root, candidate); return part === "" || part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part); };
-  if (!inside(target)) throw new Error("Path outside the project is unavailable until S1.");
-  let current = target;
-  for (;;) {
-    try { if (!inside(await realpath(current))) throw new Error("Path outside the project is unavailable until S1."); return; }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      const parent = resolve(current, "..");
-      if (parent === current) throw error;
-      current = parent;
-    }
-  }
-}
-
 function policyRefusal(policy: Readonly<RemoteDevicePolicy>, name: string, args: unknown): { code: string; message: string } | undefined {
-  if (policy.onlyHere && (name.startsWith("fs.") || name === "image.inspect")) {
-    return { code: "policy_unavailable", message: "Cwd-only file protection is not available yet." };
-  }
   if (policy.readOnly && isMutating(name, args)) {
     return { code: "permission_denied", message: "Device policy is read-only." };
   }
@@ -438,6 +472,44 @@ function policyRefusal(policy: Readonly<RemoteDevicePolicy>, name: string, args:
   // Job-bound terminal/dashboard approvals are added after R2. Never treat Full or model input as approval.
   if (policy.approvals && SHELL_TOOLS.has(name)) return { code: "approval_required", message: "A local command approval is required." };
   return undefined;
+}
+
+async function constrainArguments(
+  guard: RemotePathGuard, workspace: string, policy: Readonly<RemoteDevicePolicy>, name: string,
+  value: unknown, principal: string, localProject = false,
+): Promise<unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const args = value as Record<string, unknown>;
+  const context = { toolName: name, principal };
+  if ((policy.onlyHere || localProject) && (name.startsWith("fs.") || name === "image.inspect")) {
+    const mode = name === "fs.delete" ? "delete" : name === "fs.write" || name === "fs.patch" || name === "fs.move" ? "write" : "read";
+    for (const key of ["path", "source", "destination"]) {
+      if (typeof args[key] === "string") await guard.assertAllowed(resolve(workspace, args[key] as string), mode, context);
+    }
+  }
+  if ((policy.onlyHere || localProject) && (name === "process.start" || name === "process.run")) {
+    if (args.cwd === undefined || typeof args.cwd === "string") {
+      await guard.assertWithinWorkspace(resolve(workspace, typeof args.cwd === "string" ? args.cwd : "."), workspace, context);
+      if (policy.onlyHere) return Object.freeze({ ...args, cwd: "." });
+    }
+  }
+  return value;
+}
+
+function auditEnabled(principals: RemotePrincipalStore, identity: VerifiedRemoteIdentity): boolean {
+  try { return principals.policy(identity).audit; } catch { return true; }
+}
+
+function safeToolName(name: string, allowed: ReadonlySet<string>): string {
+  return allowed.has(name) ? name : "unknown";
+}
+
+function auditOutcome(result: ToolResult): { decision: "allowed" | "denied" | "refused" | "failed"; reasonCode?: string; outcomeCode: string } {
+  if (!result.isError) return { decision: "allowed", outcomeCode: "ok" };
+  const code = result.error?.code ?? "tool_error";
+  const decision = ["path_denied", "outside_only_here", "permission_denied", "principal_revoked"].includes(code) ? "denied"
+    : ["tool_unavailable", "invalid_arguments", "approval_required", "effect_admission_required", "tool_refused"].includes(code) ? "refused" : "failed";
+  return { decision, reasonCode: code, outcomeCode: "error" };
 }
 
 function isMutating(name: string, args: unknown): boolean {
