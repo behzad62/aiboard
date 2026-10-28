@@ -9,6 +9,7 @@ import {
   type RemoteConnectionState,
   type RemotePluginToolProvider,
   type RemoteTransport,
+  type RemoteTransportContext,
 } from "./remote-connector.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import type { RemoteDevicePolicy } from "./remote-principal.js";
@@ -50,7 +51,7 @@ export interface RemoteServiceOptions {
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
   readonly extensionsHome?: string;
   readonly protectedLocations?: ProtectedLocations;
-  readonly createTransport: () => RemoteTransport;
+  readonly createTransport: (context: RemoteTransportContext) => RemoteTransport;
   readonly issuer: RemoteSessionIssuer;
   /** Real startup reconciliation (reconcileRunnerStartup) in the CLI. */
   readonly reconcileStartup?: () => Promise<void>;

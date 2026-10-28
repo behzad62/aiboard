@@ -61,7 +61,11 @@ export interface RemoteTransport {
   send(message: RemoteTransportMessage): Promise<void> | void;
   onMessage(handler: (message: RemoteTransportMessage) => void | Promise<void>): void;
   onClose(handler: () => void): void;
+  /** Limits negotiated at the handshake, for a transport that encodes frames itself. */
+  setFrameLimits?(limits: RemoteFrameLimits): void;
 }
+
+export interface RemoteTransportContext { readonly deviceId: string }
 
 /** The slice of RemoteToolRuntime the connector may use. Never an authority. */
 export interface RemoteRequestRuntime {
@@ -133,7 +137,8 @@ export interface RemoteConnectorOptions {
   readonly admission: RemoteAdmissionStore;
   readonly runtime: RemoteRequestRuntime;
   readonly session: RemoteDeviceSession;
-  readonly createTransport: () => RemoteTransport;
+  /** One fresh transport per connection attempt; `deviceId` (public, never a secret) lets a transport address the device route. */
+  readonly createTransport: (context: RemoteTransportContext) => RemoteTransport;
   /** Startup reconciliation gate (reconcileRunnerStartup + admission). */
   readonly reconcile: () => Promise<void>;
   readonly now?: () => Date;
@@ -359,7 +364,7 @@ export class RemoteConnector {
     this.transition("authenticating", reason);
     this.transfers.abortAll();
     this.limits = this.localLimits;
-    const transport = this.options.createTransport();
+    const transport = this.options.createTransport({ deviceId: deviceStore.load()?.deviceId ?? "device-unprovisioned" });
     this.transport = transport;
     transport.onMessage((message) => this.onMessage(message));
     transport.onClose(() => { if (this.transport === transport) this.onTransportClose(); });
@@ -467,8 +472,10 @@ export class RemoteConnector {
         return;
       case "authenticated": {
         let accepted = true;
-        try { this.limits = negotiateFrameLimits(this.localLimits, message.limits); }
-        catch { accepted = false; }
+        try {
+          this.limits = negotiateFrameLimits(this.localLimits, message.limits);
+          this.transport?.setFrameLimits?.(this.limits);
+        } catch { accepted = false; }
         if (this.authWaiter) {
           // Unsupported frame limits fail closed exactly like a refused handshake.
           if (accepted) this.authWaiter.resolve();

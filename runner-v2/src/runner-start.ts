@@ -69,7 +69,8 @@ import { LocalMcpSessions } from "./local-stdio-mcp.js";
 import { LocalPairing } from "./local-pairing.js";
 import { RemoteService } from "./remote-service.js";
 import { StubRemoteSessionIssuer, type RemoteSessionIssuer } from "./remote-auth.js";
-import type { RemoteTransport } from "./remote-connector.js";
+import type { RemoteTransport, RemoteTransportContext } from "./remote-connector.js";
+import { validateRelayUrl, WebSocketRemoteTransport } from "./remote-websocket-transport.js";
 import type { RemoteDevicePolicy } from "./remote-principal.js";
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 import { resolveProtectedLocations } from "./protected-locations.js";
@@ -95,13 +96,15 @@ interface CliOptions {
   remote: boolean;
   /** Per-user remote device custody directory, required with --remote (launcher-supplied). */
   remoteDeviceDirectory?: string;
+  /** Relay WebSocket URL (wss://, or ws:// to loopback); without it the remote transport is unavailable. */
+  remoteRelayUrl?: string;
   remotePolicyPatch: Partial<RemoteDevicePolicy>;
 }
 
 
 /** Seams for the extracted Runner start (CLI production defaults keep current behavior). */
 export interface RunnerStartSeams {
-  readonly createTransport?: () => RemoteTransport;
+  readonly createTransport?: (context: RemoteTransportContext) => RemoteTransport;
   readonly issuer?: RemoteSessionIssuer;
   readonly controlListener?: "loopback" | "none";
   readonly location?: StateLocationOptions;
@@ -418,8 +421,13 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     }
     let remoteService: RemoteService | undefined;
     if (options.remote) {
+      // A relay transport exists only when a relay URL was given; pairing with the hosted relay is P1.
+      const relayUrl = options.remoteRelayUrl;
+      const configuredTransport = relayUrl
+        ? (context: RemoteTransportContext): RemoteTransport => new WebSocketRemoteTransport({ url: relayUrl, deviceId: context.deviceId })
+        : undefined;
       const unavailableTransport = (): RemoteTransport => ({
-        connect: async () => { throw new Error("Remote transport is unavailable until R4."); },
+        connect: async () => { throw new Error("No relay URL is configured for this Runner."); },
         close: async () => undefined,
         send: () => undefined,
         onMessage: () => undefined,
@@ -435,7 +443,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         extensionsHome: options.extensionsHome,
         protectedLocations,
         ...(buildRecoveryUnverified ? { reconcileStartup: async () => { throw new Error("Build ownership recovery remains unverified."); } } : {}),
-        createTransport: seams.createTransport ?? unavailableTransport,
+        createTransport: seams.createTransport ?? configuredTransport ?? unavailableTransport,
         issuer: seams.issuer ?? new StubRemoteSessionIssuer(),
         policyPatch: options.remotePolicyPatch,
         pluginTools: createRemotePluginToolProvider(managedMcp, {
@@ -739,7 +747,8 @@ function isHelpRequested(args: string[]): boolean {
   return args.includes("--help") || args.includes("-h");
 }
 
-function parseArguments(args: string[]): CliOptions {
+/** Exported for tests. */
+export function parseArguments(args: string[]): CliOptions {
   const values = new Map<string, string>();
   let remote = false;
   const policyPatch: Partial<RemoteDevicePolicy> = {};
@@ -816,6 +825,7 @@ function parseArguments(args: string[]): CliOptions {
         "--capabilities-config",
         "--extensions-home",
         "--remote-device-dir",
+        "--relay-url",
       ].includes(flag)
     ) {
       throw new Error(`invalid_arguments: Unknown option ${flag}.`);
@@ -842,6 +852,12 @@ function parseArguments(args: string[]): CliOptions {
     throw new Error("invalid_arguments: --remote and --remote-device-dir must be given together.");
   }
   if (!remote && policyFields.size > 0) throw new Error("invalid_arguments: Remote policy options require --remote.");
+  const remoteRelayUrl = values.get("--relay-url");
+  if (remoteRelayUrl !== undefined) {
+    if (!remote) throw new Error("invalid_arguments: --relay-url requires --remote.");
+    try { validateRelayUrl(remoteRelayUrl); }
+    catch (error) { throw new Error(`invalid_arguments: ${(error as Error).message}`); }
+  }
   const extensionsHome = optionalAbsolutePath(values, "--extensions-home") ?? join(homedir(), ".aiboard", "runner-extensions");
   const portText = values.get("--port") ?? "0";
   const port = Number(portText);
@@ -866,6 +882,7 @@ function parseArguments(args: string[]): CliOptions {
     remote,
     remotePolicyPatch: policyPatch,
     ...(remoteDeviceDirectory ? { remoteDeviceDirectory } : {}),
+    ...(remoteRelayUrl ? { remoteRelayUrl } : {}),
   };
 }
 
