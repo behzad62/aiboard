@@ -83,6 +83,7 @@ export type ExecutionHostPlatform = "posix" | "windows";
 export interface ExecutionHostOptions {
   readonly projectRoot: string;
   readonly stateDirectory: string;
+  readonly allowNestedRunnerState?: boolean;
   readonly artifacts: ArtifactStore;
   readonly platform?: ExecutionHostPlatform;
   readonly ambientEnvironment?: Readonly<Record<string, string | undefined>>;
@@ -196,7 +197,7 @@ export interface ExecutionHost {
 export function createExecutionHost(options: ExecutionHostOptions): ExecutionHost {
   const projectRoot = canonicalRoot(options.projectRoot, "projectRoot");
   const stateDirectory = canonicalRoot(options.stateDirectory, "stateDirectory");
-  if (contains(projectRoot, stateDirectory)) {
+  if (!options.allowNestedRunnerState && contains(projectRoot, stateDirectory)) {
     throw new Error("ExecutionHost state must remain outside the project root.");
   }
   const platform = options.platform ?? (process.platform === "win32" ? "windows" : "posix");
@@ -266,6 +267,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           runId,
           projectRoot,
           stateDirectory,
+          allowNestedRunnerState: options.allowNestedRunnerState,
           permissionProfile: input.permissionProfile,
           capabilityContractDigest: digest,
           capabilitiesConfig: input.capabilitiesConfig,
@@ -453,6 +455,7 @@ interface CreateRunBindingInput {
   readonly runId: string;
   readonly projectRoot: string;
   readonly stateDirectory: string;
+  readonly allowNestedRunnerState?: boolean;
   readonly permissionProfile: PermissionProfile;
   readonly capabilityContractDigest: string;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
@@ -506,6 +509,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       outputs: createBoundedProcessOutputFactory({
         spillRoot: join(runRoot, "subprocess-output"),
         projectRoot: input.projectRoot,
+        allowNestedRunnerState: input.allowNestedRunnerState,
         artifacts: input.artifacts,
       }),
     });
@@ -554,6 +558,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       output: createStreamingOutputOptions({
         runRoot,
         projectRoot: input.projectRoot,
+        allowNestedRunnerState: input.allowNestedRunnerState,
         artifacts: input.artifacts,
         overrides: input.streamingOutput,
       }),
@@ -845,6 +850,7 @@ async function createWindowsBackends(input: CreateRunBindingInput, runRoot: stri
 function createStreamingOutputOptions(input: {
   readonly runRoot: string;
   readonly projectRoot: string;
+  readonly allowNestedRunnerState?: boolean;
   readonly artifacts: ArtifactStore;
   readonly overrides?: Pick<
     StreamingRuntimeOptions["output"],
@@ -862,6 +868,7 @@ function createStreamingOutputOptions(input: {
       const spool = new BoundedOutputSpool({
         spillRoot: join(input.runRoot, `streaming-output-${createHash("sha256").update(sessionId).digest("hex").slice(0, 20)}`),
         projectRoot: input.projectRoot,
+        allowNestedRunnerState: input.allowNestedRunnerState,
         ownershipId: `streaming-${safeSegment(sessionId)}`,
         artifactStore: input.artifacts,
       });

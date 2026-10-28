@@ -22,6 +22,7 @@ import { RemoteDeviceStore } from "./remote-device-store.js";
 import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-principal.js";
 import { RemoteAuditStore } from "./remote-audit-store.js";
 import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
+import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 
 export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
 const RUNNER_KINDS: readonly RunnerKind[] = ["runner", "accounts", "legacy", "bench"];
@@ -190,11 +191,27 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   const windowsDefault = process.platform === "win32" && !args.stateDirectory
     ? { home, localAppData: environment.LOCALAPPDATA ?? "" }
     : undefined;
+  const devicePath = args.command === "remote"
+    ? remoteDeviceDirectory({ platform: runtime.platform ?? process.platform, environment, home }) : undefined;
+  const flagValue = (flag: string) => {
+    const index = args.runnerFlags.indexOf(flag);
+    return index < 0 ? undefined : args.runnerFlags[index + 1];
+  };
+  const roots = devicePath ? await resolveRunnerOwnedRoots({
+    projectPath: identity.projectPath,
+    stateDirectory: requestedState,
+    deviceDirectory: devicePath,
+    extensionsHome: flagValue("--extensions-home") ?? join(home, ".aiboard", "runner-extensions"),
+    ...(flagValue("--capabilities-config") ? { capabilitiesConfigPath: flagValue("--capabilities-config") } : {}),
+    location: { platform: runtime.platform ?? process.platform, environment, home },
+  }) : undefined;
+  const nestedState = { allowNestedRunnerState: roots?.nested === true };
   // One remote device per user (D9): custody lives beside, not inside, the per-project state.
-  const deviceDirectory = args.command === "remote"
+  const deviceDirectory = devicePath
     ? await prepareUserDirectory(identity.projectPath,
-      remoteDeviceDirectory({ platform: runtime.platform ?? process.platform, environment, home }),
-      process.platform === "win32" ? { home, localAppData: environment.LOCALAPPDATA ?? "" } : undefined)
+      devicePath,
+      process.platform === "win32" ? { home, localAppData: environment.LOCALAPPDATA ?? "" } : undefined,
+      nestedState)
     : undefined;
   if (args.command === "remote" && args.logout) {
     const deviceStore = new RemoteDeviceStore(deviceDirectory!);
@@ -207,11 +224,11 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   }
   await assertWindowsStatePath(requestedState, windowsDefault);
   const prospective = await canonicalFuturePath(requestedState);
-  assertExternalState(identity.projectPath, prospective);
+  assertExternalState(identity.projectPath, prospective, nestedState);
   if (args.command === "remote" && (args.policy || args.audit)) {
     try {
       await stat(prospective);
-      await prepareStateDirectory(identity.projectPath, requestedState, identity, windowsDefault);
+      await prepareStateDirectory(identity.projectPath, requestedState, identity, windowsDefault, nestedState);
       await assertProjectBinding(prospective, identity);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -227,10 +244,11 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       write("No Runner is running for this project.\n"); return;
     }
   }
-  const stateDirectory = await prepareStateDirectory(identity.projectPath, requestedState, identity, windowsDefault);
+  const stateDirectory = await prepareStateDirectory(identity.projectPath, requestedState, identity, windowsDefault, nestedState);
   let releaseDiscovery = await acquireDiscoveryLock(stateDirectory);
   let child: ChildProcess | undefined;
   let started = false;
+  let remoteOnlyActive = roots?.nested === true;
   const freshChildren: ChildProcess[] = [];
   const freshKinds = new Set<RunnerKind>();
   const ownedKeys: Buffer[] = [];
@@ -408,6 +426,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           });
           if (status.healthy) {
             if (args.command === "remote" && args.policyFlags) throw new Error("remote_policy_requires_restart: Stop this Runner before applying policy flags.");
+            if (args.command === "remote" && roots?.nested && !status.remoteOnly) throw new Error("remote_restart_required: Stop this Runner before starting remote-only mode.");
+            if (args.command === "remote") remoteOnlyActive = status.remoteOnly === true;
             reuseV2 = true;
             instances.set("runner", recorded);
             if (args.command !== "mcp") tickets.set("runner", createLocalPairTicket(recorded.instanceId));
@@ -498,6 +518,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       }
     } else {
       for (const kind of selected) write(describe(instances.get(kind)!, freshKinds.has(kind) ? "running" : "already running"));
+      if (args.command === "remote" && remoteOnlyActive) write("Remote-only: Build and Chat are unavailable when started from a folder that contains AIBoard state.\n");
       const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
       showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime);
     }

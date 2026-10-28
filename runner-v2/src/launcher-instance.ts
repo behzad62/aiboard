@@ -95,9 +95,9 @@ export async function canonicalFuturePath(input: string): Promise<string> {
   }
 }
 
-export function assertExternalState(projectPath: string, stateDirectory: string): void {
+export function assertExternalState(projectPath: string, stateDirectory: string, options: { allowNestedRunnerState?: boolean } = {}): void {
   const traversal = relative(projectPath, stateDirectory);
-  if (traversal === "" || (traversal !== ".." && !traversal.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(traversal))) {
+  if (!options.allowNestedRunnerState && (traversal === "" || (traversal !== ".." && !traversal.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(traversal)))) {
     throw new Error("invalid_state_directory: Runner state must be outside the project. Choose an external directory with --state-dir <absolute-path>.");
   }
 }
@@ -150,10 +150,11 @@ export async function prepareStateDirectory(
   requested: string,
   identity: LauncherIdentity,
   windowsDefault?: WindowsDefaultStateLocation,
+  options: { allowNestedRunnerState?: boolean } = {},
 ): Promise<string> {
   await assertWindowsStatePath(requested, windowsDefault);
   const prospective = await canonicalFuturePath(requested);
-  assertExternalState(projectPath, prospective);
+  assertExternalState(projectPath, prospective, options);
   if (process.platform === "win32" && windowsDefault) {
     // Trust the per-user profile's default ACL; OS keychain and ACL verification are deferred.
     await mkdir(dirname(prospective), { recursive: true, mode: 0o700 });
@@ -173,7 +174,7 @@ export async function prepareStateDirectory(
       if (actual.toLowerCase() !== prospective.toLowerCase()) {
         throw new Error("invalid_state_directory: The state directory changed while it was being prepared.");
       }
-      assertExternalState(projectPath, actual);
+      assertExternalState(projectPath, actual, options);
       if (!(await stat(actual)).isDirectory()) throw new Error("invalid_state_directory: State must be a directory.");
       await assertProjectBinding(actual, identity, created);
       return actual;
@@ -185,7 +186,7 @@ export async function prepareStateDirectory(
   if (process.platform === "win32" && actual.toLowerCase() !== prospective.toLowerCase()) {
     throw new Error("invalid_state_directory: The state directory changed while it was being prepared.");
   }
-  assertExternalState(projectPath, actual);
+  assertExternalState(projectPath, actual, options);
   const info = await stat(actual);
   if (!info.isDirectory()) throw new Error("invalid_state_directory: State must be a directory.");
   if (process.platform !== "win32" && (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)) {
@@ -199,10 +200,10 @@ export async function prepareStateDirectory(
  * Same placement checks as project state: inside the profile on Windows, outside
  * the project, no link swapped in while preparing, private to the current user.
  */
-export async function prepareUserDirectory(projectPath: string, requested: string, windowsDefault?: WindowsDefaultStateLocation): Promise<string> {
+export async function prepareUserDirectory(projectPath: string, requested: string, windowsDefault?: WindowsDefaultStateLocation, options: { allowNestedRunnerState?: boolean } = {}): Promise<string> {
   await assertWindowsStatePath(requested, windowsDefault);
   const prospective = await canonicalFuturePath(requested);
-  assertExternalState(projectPath, prospective);
+  assertExternalState(projectPath, prospective, options);
   await mkdir(prospective, { recursive: true, mode: 0o700 });
   await assertWindowsStatePath(requested, windowsDefault);
   const actual = await realpath(requested);

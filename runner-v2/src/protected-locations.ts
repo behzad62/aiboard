@@ -55,6 +55,8 @@ export interface ProtectedLocationsInput {
   readonly installerBinDirectories?: readonly string[];
   /** Extra trusted local directories (e.g. an explicitly configured secret store). */
   readonly configuredDirectories?: readonly string[];
+  /** Explicit Runner-owned files such as the capabilities configuration. */
+  readonly configuredFiles?: readonly string[];
   /** Production composition sets this: the configured state dir is not optional there. */
   readonly requireStateDirectory?: boolean;
 }
@@ -136,6 +138,10 @@ export function resolveProtectedLocations(input: ProtectedLocationsInput = {}): 
   for (const dir of input.configuredDirectories ?? []) {
     if (paths.isAbsolute(dir)) add(dir, "configured");
     else failures.push("configured protected directory is not an absolute path");
+  }
+  for (const file of input.configuredFiles ?? []) {
+    if (paths.isAbsolute(file)) add(file, "configured", "file");
+    else failures.push("configured protected file is not an absolute path");
   }
 
   if (homeDir) add(paths.join(homeDir, ".ssh"), "ssh");

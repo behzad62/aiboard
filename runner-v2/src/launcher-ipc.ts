@@ -37,6 +37,7 @@ interface ControlResponse {
   instance: LauncherInstance;
   mac: string;
   sessionToken?: string;
+  remoteOnly?: true;
 }
 
 const MAX_MESSAGE_BYTES = 16_384;
@@ -86,6 +87,7 @@ export async function startLauncherControl(options: {
   startedAt: number;
   port: number;
   token: string;
+  remoteOnly?: boolean;
   controlKey: Buffer;
   shutdown: () => void;
   registerPair?: (digest: string, peers?: LocalPairPeer[]) => void;
@@ -123,7 +125,7 @@ export async function startLauncherControl(options: {
         return;
       }
       const healthy = value.action === "status" ? await runnerHealth(options.port, options.token, options.identity.projectPath) : true;
-      const response: ControlResponse = { nonce: value.nonce, healthy, instance, mac: "" };
+      const response: ControlResponse = { nonce: value.nonce, healthy, instance, mac: "", ...(value.action === "status" && options.remoteOnly ? { remoteOnly: true } : {}) };
       response.mac = sign(options.controlKey, responseBody(response));
       if (value.action === "stop") socket.once("close", options.shutdown);
       socket.end(`${JSON.stringify(response)}\n`);
@@ -153,7 +155,7 @@ export async function startLauncherControl(options: {
   };
 }
 
-export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: Exclude<ControlAction, "local_mcp">, pairDigest?: string, peers?: LocalPairPeer[]): Promise<{ healthy: boolean }> {
+export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: Exclude<ControlAction, "local_mcp">, pairDigest?: string, peers?: LocalPairPeer[]): Promise<{ healthy: boolean; remoteOnly?: true }> {
   if (action === "pair" ? !pairDigest || !/^[0-9a-f]{64}$/.test(pairDigest) : pairDigest !== undefined) {
     throw new Error("Invalid launcher control request.");
   }
@@ -170,7 +172,7 @@ export async function requestLauncherControl(instance: LauncherInstance, key: Bu
     const value: unknown = JSON.parse(await readLine(socket));
     if (!isControlResponse(value) || value.nonce !== request.nonce || !sameInstance(value.instance, instance) ||
         !validMac(key, responseBody(value), value.mac)) throw new Error("instance_unverified: The Runner did not prove its identity.");
-    return { healthy: value.healthy };
+    return { healthy: value.healthy, ...(value.remoteOnly ? { remoteOnly: true } : {}) };
   } finally { socket.destroy(); }
 }
 
@@ -250,6 +252,7 @@ function requestBody(request: ControlRequest): string {
 function responseBody(response: ControlResponse): string {
   const fields: unknown[] = ["response", response.nonce, response.healthy, instanceFields(response.instance)];
   if (response.sessionToken !== undefined) fields.push(response.sessionToken);
+  if (response.remoteOnly === true) fields.push("remote-only");
   return JSON.stringify(fields);
 }
 function instanceFields(value: LauncherInstance): unknown[] {
@@ -269,6 +272,7 @@ function isControlRequest(value: unknown): value is ControlRequest {
     (value.action === "local_mcp" ? Number.isSafeInteger(value.depth) && (value.depth as number) >= 0 : value.depth === undefined);
 }
 function isControlResponse(value: unknown): value is ControlResponse {
-  return isObject(value) && typeof value.nonce === "string" && typeof value.healthy === "boolean" && isObject(value.instance) && typeof value.mac === "string";
+  return isObject(value) && typeof value.nonce === "string" && typeof value.healthy === "boolean" && isObject(value.instance) && typeof value.mac === "string" &&
+    (value.remoteOnly === undefined || value.remoteOnly === true);
 }
 function isObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }

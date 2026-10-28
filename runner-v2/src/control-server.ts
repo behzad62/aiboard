@@ -54,6 +54,7 @@ import type { SqlitePermissionStore } from "./permission-store.js";
 import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./process-recovery.js";
 import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
 import type { LocalPairing } from "./local-pairing.js";
+import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
@@ -62,6 +63,7 @@ const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
 ]);
 
 export interface ControlServerOptions {
+  localAgentsUnavailableNestedState?: boolean;
   toolBench?: ToolBenchSessions;
   extensions?: ExtensionManagementService;
   chatSessions?: ChatAgentSessions;
@@ -236,6 +238,7 @@ class HttpError extends Error {
 }
 
 export class ControlServer {
+  private readonly localAgentsUnavailableNestedState: boolean;
   private readonly supervisor: RunSupervisor;
   private readonly token: string;
   private readonly gitPreflight: () => Promise<GitPreflightResult>;
@@ -263,6 +266,7 @@ export class ControlServer {
 
   constructor(options: ControlServerOptions) {
     if (!options.token) throw new Error("Control server token is required.");
+    this.localAgentsUnavailableNestedState = options.localAgentsUnavailableNestedState === true;
     this.supervisor = options.supervisor;
     this.token = options.token;
     this.gitPreflight = options.checkGit ?? (async () => ({
@@ -493,6 +497,12 @@ export class ControlServer {
     url: URL
   ): Promise<void> {
     const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    if (this.localAgentsUnavailableNestedState && request.method === "POST" &&
+        (segments[1] === "runs" || segments[1] === "builds" ||
+         (segments[1] === "toolbench-sessions" && segments.length === 2) ||
+         (segments[1] === "chat-sessions" && (segments.length === 2 || segments[3] === "messages")))) {
+      throw new LocalAgentsUnavailableError();
+    }
     if (segments[1] === "extensions" || segments[1] === "chat-sessions") {
       await routeExtensions(request, response, url, segments, { ...(this.extensions ? { extensions: this.extensions } : {}), ...(this.chatSessions ? { chatSessions: this.chatSessions } : {}) });
       return;
@@ -525,6 +535,7 @@ export class ControlServer {
         ok: true,
         protocolVersion: 2,
         capabilities: { soloToolBench: Boolean(this.toolBench), extensions: Boolean(this.extensions), chatSessions: Boolean(this.chatSessions) },
+        ...(this.localAgentsUnavailableNestedState ? { localAgents: "unavailable_nested_state" } : {}),
         projectPath: this.runnerInfo.projectPath,
         nodeVersion: this.runnerInfo.nodeVersion,
         mcpServers: this.mcp?.status().length ?? 0,
@@ -1967,6 +1978,7 @@ function describeInternalError(error: unknown, depth = 0): string {
 
 function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
+  if (error instanceof LocalAgentsUnavailableError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ExtensionManagementError || error instanceof ChatSessionError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ProcessRecoveryError) {
     if (error.code === "invalid_recovery_proposal") return new HttpError(400, error.code, error.message);

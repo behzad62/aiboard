@@ -12,6 +12,7 @@ import { RemotePrincipalStore } from "./remote-principal.js";
 import { RemoteToolRuntime } from "./remote-tool-runtime.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { FileStorageKeyProvider } from "./storage-key.js";
+import type { ProtectedLocations } from "./protected-locations.js";
 
 export interface RemoteComposition {
   readonly deviceStore: RemoteDeviceStore;
@@ -30,6 +31,7 @@ export interface RemoteCompositionOptions {
   readonly permissionProfile: PermissionProfile;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
   readonly extensionsHome?: string;
+  readonly protectedLocations?: ProtectedLocations;
   readonly now?: () => Date;
 }
 
@@ -59,6 +61,7 @@ export function composeRemoteRuntime(options: RemoteCompositionOptions): RemoteC
     stateDirectory: options.stateDirectory,
     deviceDirectory: options.deviceDirectory,
     ...(options.extensionsHome ? { extensionDirectories: [options.extensionsHome] } : {}),
+    ...(options.protectedLocations ? { protectedLocations: options.protectedLocations } : {}),
   });
   const authenticator = new RemoteAuthenticator(deviceStore, options.now ? { now: options.now } : {});
   return { deviceStore, principals, admission, runtime, authenticator };
