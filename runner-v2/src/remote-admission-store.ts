@@ -87,7 +87,7 @@ export interface RemoteRequest {
 
 type AdmissionCode = "invalid_request" | "unsupported_version" | "expired_request" |
   "device_epoch_mismatch" | "idempotency_conflict" | "unauthorized" | "not_found" |
-  "result_expired" | "storage_exhausted" | "schema_migration_failed";
+  "result_expired" | "storage_exhausted" | "schema_migration_failed" | "blocked_quota";
 
 export class RemoteAdmissionError extends Error {
   constructor(readonly code: AdmissionCode, message: string) {
@@ -178,7 +178,7 @@ export class RemoteAdmissionStore {
     });
   }
 
-  admit(identity: VerifiedRemoteIdentity, rawRequest: string): AdmissionDecision {
+  admit(identity: VerifiedRemoteIdentity, rawRequest: string, options: { rejectNew?: boolean } = {}): AdmissionDecision {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);
     const request = parseRemoteRequest(rawRequest);
@@ -211,6 +211,7 @@ export class RemoteAdmissionStore {
           state: tombstone.outcome, createdAt: tombstone.created_at, updatedAt: tombstone.updated_at,
           ...(tombstone.result_expires_at ? { resultExpiresAt: tombstone.result_expires_at } : {}) } };
       }
+      if (options.rejectNew) throw new RemoteAdmissionError("blocked_quota", "Remote job queue is full.");
       // Reserve the future tombstone before admitting work, so settlement can never exhaust the bound.
       const capacity = this.database.prepare(`SELECT
         (SELECT COUNT(*) FROM remote_job_tombstones) +
@@ -266,6 +267,33 @@ export class RemoteAdmissionStore {
     return parseRemoteRequest(raw);
   }
 
+  /** Replace only an undispatched request after the connector reauthorizes a retry. */
+  refreshQueuedRequest(identity: VerifiedRemoteIdentity, jobId: string, rawRequest: string): void {
+    this.requireReconciled();
+    const principal = checkedPrincipal(identity);
+    const request = parseRemoteRequest(rawRequest);
+    if (request.accountId !== principal.accountId || request.clientId !== principal.clientId ||
+      request.deviceId !== principal.deviceId || request.payloadDigest !== remotePayloadDigest(request) ||
+      Date.parse(request.expiresAt) <= this.clock().getTime()) {
+      throw new RemoteAdmissionError("invalid_request", "Queued request refresh is invalid.");
+    }
+    this.transaction(() => {
+      const row = this.ownedRow(principal, jobId);
+      this.requireEpoch(principal, request.deviceEpoch);
+      if (row.state !== "queued" || row.dispatching !== 0 || row.idempotency_key !== request.idempotencyKey ||
+        row.payload_digest !== request.payloadDigest || row.tool_id !== request.toolId ||
+        row.operation_class !== request.operationClass || row.scope_ref !== request.scopeRef) {
+        throw new RemoteAdmissionError("invalid_request", "Queued request no longer matches the admitted job.");
+      }
+      const iv = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", this.key, iv);
+      cipher.setAAD(requestAad(principal, jobId, request.payloadDigest));
+      const ciphertext = Buffer.concat([cipher.update(rawRequest, "utf8"), cipher.final()]);
+      this.database.prepare("UPDATE remote_jobs SET request_iv = ?, request_tag = ?, request_ciphertext = ? WHERE job_id = ?")
+        .run(iv, cipher.getAuthTag(), ciphertext, jobId);
+    });
+  }
+
   /** Commit this marker immediately before the broker call, with no intervening await. */
   markDispatching(identity: VerifiedRemoteIdentity, jobId: string, epoch: string): RemoteJob {
     this.requireReconciled();
@@ -300,6 +328,33 @@ export class RemoteAdmissionStore {
     return this.simpleTransition(identity, jobId, "queued", "blocked_quota");
   }
 
+  /** Bind a process returned by the governed start tool to its admitted job. */
+  bindStartedProcess(identity: VerifiedRemoteIdentity, jobId: string, processId: string): void {
+    this.requireReconciled();
+    const principal = checkedPrincipal(identity);
+    checkedId(processId);
+    this.transaction(() => {
+      const row = this.ownedRow(principal, jobId);
+      if (row.tool_id !== "process_start" || !((row.state === "running" && row.dispatching === 1) ||
+        (row.state === "outcome_unknown" && this.cancellation(jobId)))) {
+        throw new Error("A managed process can only bind to its owned start attempt.");
+      }
+      const previous = this.database.prepare("SELECT process_id FROM remote_job_processes WHERE job_id = ?")
+        .get(jobId) as { process_id: string } | undefined;
+      if (previous && previous.process_id !== processId) throw new Error("Remote job process identity changed.");
+      if (!previous) this.database.prepare("INSERT INTO remote_job_processes (job_id, process_id) VALUES (?, ?)").run(jobId, processId);
+    });
+  }
+
+  startedProcess(identity: VerifiedRemoteIdentity, jobId: string): string | undefined {
+    const principal = checkedPrincipal(identity);
+    const row = this.ownedRow(principal, jobId);
+    if (row.tool_id !== "process_start") return undefined;
+    const link = this.database.prepare("SELECT process_id FROM remote_job_processes WHERE job_id = ?")
+      .get(jobId) as { process_id: string } | undefined;
+    return link?.process_id;
+  }
+
   settle(identity: VerifiedRemoteIdentity, jobId: string, state: "completed" | "failed" | "outcome_unknown", result?: RemoteJobResult): RemoteJob {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);
@@ -317,17 +372,18 @@ export class RemoteAdmissionStore {
     });
   }
 
-  blockPolicy(identity: VerifiedRemoteIdentity, jobId: string): RemoteJob {
-    return this.simpleTransition(identity, jobId, "queued", "blocked_policy");
+  blockPolicy(identity: VerifiedRemoteIdentity, jobId: string, reason?: string): RemoteJob {
+    const result = reason === undefined ? undefined : { inline: Buffer.from(JSON.stringify({ reason }), "utf8") };
+    return this.simpleTransition(identity, jobId, "queued", "blocked_policy", result);
   }
 
-  private simpleTransition(identity: VerifiedRemoteIdentity, jobId: string, from: RemoteJobState, to: RemoteJobState): RemoteJob {
+  private simpleTransition(identity: VerifiedRemoteIdentity, jobId: string, from: RemoteJobState, to: RemoteJobState, result?: RemoteJobResult): RemoteJob {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);
     return this.transaction(() => {
       const row = this.ownedRow(principal, jobId);
       if (row.state !== from) throw new Error("Remote job cannot transition from its current state.");
-      return this.transition(row, to, "state_changed");
+      return this.transition(row, to, "state_changed", result);
     });
   }
 
@@ -348,8 +404,10 @@ export class RemoteAdmissionStore {
       if (existing) return cancellationReceipt(existing);
       const now = this.clock().toISOString();
       const beforeDispatch = row.state === "queued" || row.state === "awaiting_approval";
-      const stop: RemoteCancellation["stop"] = beforeDispatch ? "stopped" : row.state === "running" ? "pending" :
-        row.state === "outcome_unknown" ? "unverified" : "not_applicable";
+      const completedProcess = row.tool_id === "process_start" && row.state === "completed";
+      const processLink = completedProcess ? this.database.prepare("SELECT process_id FROM remote_job_processes WHERE job_id = ?").get(jobId) : undefined;
+      const stop: RemoteCancellation["stop"] = beforeDispatch ? "stopped" : row.state === "running" || processLink ? "pending" :
+        row.state === "outcome_unknown" || completedProcess ? "unverified" : "not_applicable";
       const effect: RemoteCancellation["effect"] = beforeDispatch || row.state === "blocked_policy" || row.state === "blocked_quota" ? "no_effect" :
         row.state === "running" ? "pending" : row.state === "outcome_unknown" ? "effect_outcome_unknown" : "known";
       this.database.prepare(`INSERT INTO remote_job_cancellations (job_id, cancel_request_id, trace_id, requested_at, stop, effect, receipt_stop, receipt_effect)
@@ -406,7 +464,7 @@ export class RemoteAdmissionStore {
     if (this.reconciled) return [];
     const jobs = this.transaction(() => {
       const rows = this.database.prepare("SELECT * FROM remote_jobs WHERE state = 'running' AND dispatching = 1").all() as unknown as JobRow[];
-      return rows.map((row) => {
+      const reconciled = rows.map((row) => {
         const cancellation = this.cancellation(row.job_id);
         if (cancellation) {
           // A prior stop observation is not automatically fresh proof after an interrupted dispatch.
@@ -416,6 +474,14 @@ export class RemoteAdmissionStore {
         }
         return this.transition(this.ownedRow(rowIdentity(row), row.job_id), "outcome_unknown", "reconciled");
       });
+      const pending = this.database.prepare(`SELECT j.job_id FROM remote_jobs j JOIN remote_job_cancellations c ON c.job_id = j.job_id
+        WHERE j.state != 'running' AND c.stop = 'pending'`).all() as { job_id: string }[];
+      for (const row of pending) {
+        const cancellation = this.cancellation(row.job_id)!;
+        this.updateCancellation(cancellation, "unverified", cancellation.effect);
+        this.appendEvent(row.job_id, "stopped", cancellation.trace_id);
+      }
+      return reconciled;
     });
     this.reconciled = true;
     return jobs;
@@ -509,7 +575,8 @@ export class RemoteAdmissionStore {
     const cutoff = checkedTime(olderThan ?? (identityOrTime as Date | string));
     return this.transaction(() => {
       const query = `SELECT job_id FROM remote_jobs WHERE state NOT IN ('running', 'outcome_unknown') AND NOT EXISTS
-        (SELECT 1 FROM remote_job_cancellations c WHERE c.job_id = remote_jobs.job_id AND c.stop IN ('pending', 'unverified'))` +
+        (SELECT 1 FROM remote_job_cancellations c WHERE c.job_id = remote_jobs.job_id AND c.stop IN ('pending', 'unverified'))
+        AND NOT EXISTS (SELECT 1 FROM remote_job_processes p WHERE p.job_id = remote_jobs.job_id)` +
         (principal ? " AND account_id = ? AND client_id = ? AND device_id = ?" : "");
       const statement = this.database.prepare(query);
       const jobs = (principal ? statement.all(principal.accountId, principal.clientId, principal.deviceId) : statement.all()) as { job_id: string }[];
@@ -870,6 +937,8 @@ const REMOTE_EFFECT_NAMES: Readonly<Record<string, string>> = Object.freeze({
 
 /** Adapter for RemoteToolRuntime; installation is deliberately left to trusted R1d composition. */
 export function createRemoteAdmissionAdapter(store: RemoteAdmissionStore): NonNullable<RemoteToolRuntimeOptions["admitEffect"]> {
+  // Each durable dispatch marker can enter the broker only once in this Runner.
+  const claimedJobs = new Set<string>();
   return async (effect: Readonly<RemoteEffectRequest>, dispatch: () => Promise<ToolResult>): Promise<ToolResult> => {
     let parsed: RemoteRequest | undefined;
     // The v1 wire error enum does not yet contain the local storage exhaustion code.
@@ -886,6 +955,22 @@ export function createRemoteAdmissionAdapter(store: RemoteAdmissionStore): NonNu
       parsed = parseRemoteRequest(effect.rawRequest);
       if (REMOTE_EFFECT_NAMES[parsed.toolId] !== effect.toolName || canonicalJson(parsed.payload) !== canonicalJson(effect.arguments)) {
         throw new RemoteAdmissionError("invalid_request", "Request does not match the broker invocation.");
+      }
+      if (effect.admittedJobId !== undefined) {
+        const job = store.getJob(effect.principal.identity, effect.admittedJobId);
+        if (!job || job.state !== "running" || job.idempotencyKey !== parsed.idempotencyKey ||
+          job.payloadDigest !== parsed.payloadDigest || remotePayloadDigest(parsed) !== parsed.payloadDigest ||
+          job.toolId !== parsed.toolId || job.operationClass !== parsed.operationClass || job.scopeRef !== parsed.scopeRef ||
+          parsed.accountId !== effect.principal.identity.accountId || parsed.clientId !== effect.principal.identity.clientId ||
+          parsed.deviceId !== effect.principal.identity.deviceId) {
+          throw new RemoteAdmissionError("unauthorized", "The scheduled job does not authorize this invocation.");
+        }
+        if (claimedJobs.has(job.jobId) || claimedJobs.size >= 1_000_000) {
+          throw new RemoteAdmissionError("storage_exhausted", "Scheduled dispatch is unavailable.");
+        }
+        claimedJobs.add(job.jobId);
+        const denied = effect.authorize();
+        return denied ?? await dispatch();
       }
       decision = store.admit(effect.principal.identity, effect.rawRequest);
     } catch (error) {

@@ -164,6 +164,15 @@ function liveTransport(input: Readonly<{ run: ExecutionHostRunBinding; facade: S
       const grant = owner.context.executionGrant;
       const control = new AbortController(); requestAbort = control;
       const signal = owner.context.signal ? AbortSignal.any([owner.context.signal, control.signal]) : control.signal;
+      // Before the request write is acknowledged, cancellation closes the channel
+      // immediately. Afterwards keep only this owned channel alive long enough for
+      // the peer's bounded, exact cancellation notification.
+      const beforeWriteAbort = new AbortController();
+      let written = false;
+      const cancelBeforeWrite = () => { if (!written) beforeWriteAbort.abort(); };
+      if (owner.context.signal?.aborted) cancelBeforeWrite();
+      else owner.context.signal?.addEventListener("abort", cancelBeforeWrite, { once: true });
+      const requestSignal = AbortSignal.any([control.signal, beforeWriteAbort.signal]);
       const operation = (async () => {
         idleAbort?.abort(); await idleWait;
         if (closing || signal.aborted) throw new McpProtocolError("mcp_request_cancelled", "MCP request was closed before authorization.", "not_sent");
@@ -178,11 +187,12 @@ function liveTransport(input: Readonly<{ run: ExecutionHostRunBinding; facade: S
           authorization = input.facade.authorizeFirstOperation(expected); first = false;
         } else authorization = input.facade.authorizeOperation({ ...expected, binding, grant });
         return await input.facade.request(authorization, { ...expected, binding },
-          (io) => performWithOutput(io, perform, input.request, signal), timeoutMs, signal);
+          (io) => performWithOutput(io, perform, input.request, signal, () => { written = true; }), timeoutMs, requestSignal);
       })();
       activeRequest = operation;
       try { return await operation; }
       finally {
+        owner.context.signal?.removeEventListener("abort", cancelBeforeWrite);
         if (activeRequest === operation) activeRequest = undefined;
         if (requestAbort === control) requestAbort = undefined;
         observeIdleTermination();
@@ -206,7 +216,8 @@ function liveTransport(input: Readonly<{ run: ExecutionHostRunBinding; facade: S
     },
   });
 }
-async function performWithOutput<T>(io: StreamingRequestChannel, perform: (writer: McpTransportWriter) => Promise<T>, request: McpTransportOpenRequest, signal: AbortSignal): Promise<T> {
+async function performWithOutput<T>(io: StreamingRequestChannel, perform: (writer: McpTransportWriter) => Promise<T>, request: McpTransportOpenRequest,
+  signal: AbortSignal, onWritten: () => void): Promise<T> {
   // Already-buffered notifications belong to this newly authorized request.
   // Process them before writing an external call; do not mint an idle grant.
   const noWait = new AbortController(); noWait.abort();
@@ -215,15 +226,19 @@ async function performWithOutput<T>(io: StreamingRequestChannel, perform: (write
     await io.deliverOutput(async (stream, bytes) => request.onOutput(stream, new Uint8Array(bytes)));
   }
   const finished = new AbortController();
-  const operation = perform({ write: (bytes, timeoutMs) => io.write(bytes, timeoutMs) });
+  const operation = perform({ write: async (bytes, timeoutMs) => { await io.write(bytes, timeoutMs); onWritten(); } });
   void operation.finally(() => finished.abort()).catch(() => undefined);
   for (;;) {
-    if (signal.aborted) throw new McpProtocolError("mcp_request_cancelled", "MCP transport closed during its request; no replay is permitted.", "outcome_unknown");
+    if (signal.aborted) return await operation;
     const outcome = await Promise.race([
       operation.then((value) => ({ kind: "result" as const, value })),
-      io.waitForOutput(AbortSignal.any([finished.signal, signal])).then((available) => ({ kind: "output" as const, available })),
+      io.waitForOutput(AbortSignal.any([finished.signal, signal])).then((available) => ({ kind: "output" as const, available }), (error: unknown) => {
+        if (signal.aborted) return { kind: "cancelled" as const };
+        throw error;
+      }),
     ]);
     if (outcome.kind === "result") return outcome.value;
+    if (outcome.kind === "cancelled" || signal.aborted) return await operation;
     if (!outcome.available) {
       if (finished.signal.aborted) return await operation;
       throw new McpProtocolError("mcp_transport_unavailable", "MCP output became unavailable after the request; outcome is unknown.", "outcome_unknown");

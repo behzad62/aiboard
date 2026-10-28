@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
+
 import type { ToolResult } from "./agent-contracts.js";
-import { parseRemoteRequest, type RemoteAdmissionStore, type RemoteRequest } from "./remote-admission-store.js";
+import { RemoteAdmissionError, parseRemoteRequest, remotePayloadDigest, type RemoteAdmissionStore, type RemoteJob, type RemoteRequest } from "./remote-admission-store.js";
 import { RemoteAuthError, type RelayChallenge, type RemoteAuthorization, type RemoteAuthenticator } from "./remote-auth.js";
 import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
 import type { VerifiedRemoteIdentity } from "./remote-principal.js";
+import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
 
 export type RemoteConnectionStateName =
   | "disconnected" | "authenticating" | "connected-degraded" | "tool-ready" | "suspended" | "revoked";
@@ -39,7 +42,7 @@ export type RemoteTransportMessage =
   | { readonly type: "authenticated"; readonly epoch: string }
   | { readonly type: "auth_error"; readonly code: string }
   | { readonly type: "request"; readonly request: RemoteRequest; readonly authorization?: RemoteAuthorization }
-  | { readonly type: "response"; readonly response: RemoteResponseMessage }
+  | { readonly type: "response"; readonly response: RemoteResponseMessage; readonly data?: unknown }
   | { readonly type: "heartbeat"; readonly at: string }
   | { readonly type: "revoked" };
 
@@ -54,6 +57,9 @@ export interface RemoteTransport {
 /** The slice of RemoteToolRuntime the connector may use. Never an authority. */
 export interface RemoteRequestRuntime {
   invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult>;
+  invokeAdmitted?(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal: AbortSignal, rawRequest: string, jobId: string, beforeBroker?: () => boolean): Promise<RemoteInvocationResult>;
+  authorizeJob?(identity: VerifiedRemoteIdentity, name?: string, args?: unknown): string | undefined;
+  stopStartedProcess?(identity: VerifiedRemoteIdentity, processId: string): Promise<boolean>;
 }
 
 /** One admitted extension tool as offered to the relay (plan P2 naming). */
@@ -70,7 +76,8 @@ export interface RemotePluginToolInfo {
  */
 export interface RemotePluginToolProvider {
   list(): Promise<readonly RemotePluginToolInfo[]>;
-  invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal): Promise<ToolResult>;
+  invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal, beforeBroker?: () => boolean): Promise<ToolResult>;
+  invokeAdmitted?(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal: AbortSignal, beforeBroker?: () => boolean): Promise<RemoteInvocationResult>;
   close?(): Promise<void>;
 }
 
@@ -95,11 +102,9 @@ export const REMOTE_TOOL_ID_TO_RUNNER: Readonly<Record<string, string>> = Object
   image_inspect: "image.inspect",
 });
 
-/** Tool ids whose dispatch is admitted by RemoteToolRuntime's effect adapter. */
-const EFFECT_TOOL_IDS: ReadonlySet<string> = new Set([
-  "files_write", "files_patch", "files_move", "files_delete",
-  "process_start", "process_run", "process_write_stdin", "process_signal",
-]);
+const JOB_TOOL_IDS: ReadonlySet<string> = new Set(["jobs_status", "jobs_events", "jobs_result", "jobs_cancel"]);
+const EFFECT_TOOL_IDS: ReadonlySet<string> = new Set(["files_write", "files_patch", "files_move", "files_delete",
+  "process_start", "process_run", "process_write_stdin", "process_signal"]);
 
 export interface RemoteConnectorOptions {
   readonly deviceStore: RemoteDeviceStore;
@@ -115,6 +120,14 @@ export interface RemoteConnectorOptions {
   readonly random?: () => number;
   readonly handshakeTimeoutMs?: number;
   readonly drainTimeoutMs?: number;
+  /** Maximum live dispatches per device; defaults to 8. */
+  readonly maxConcurrentJobsPerDevice?: number;
+  /** Maximum waiting admissions per device; defaults to 64. */
+  readonly maxQueuedJobsPerDevice?: number;
+  /** Deadline measured from admission, capped by request expiry; defaults to five minutes. */
+  readonly toolDeadlineMs?: number;
+  /** Time to await stop evidence after cancellation; defaults to five seconds. */
+  readonly cancellationGraceMs?: number;
   readonly reconnect?: { readonly baseDelayMs: number; readonly maxDelayMs: number; readonly maxAttempts: number };
   readonly isOwnerLockHeld?: () => boolean;
   readonly onStateChange?: (state: RemoteConnectionState) => void;
@@ -124,12 +137,21 @@ export interface RemoteConnectorOptions {
 }
 
 interface InFlight {
-  readonly rawRequest: string;
-  readonly request: RemoteRequest;
+  readonly identity: VerifiedRemoteIdentity;
+  readonly jobId: string;
+  rawRequest: string;
+  request: RemoteRequest;
+  authorization: RemoteAuthorization;
+  readonly runnerName: string;
+  readonly isPlugin: boolean;
+  readonly controller: AbortController;
+  deadline: number;
+  readonly done: Promise<RemoteResponseMessage>;
+  readonly resolve: (response: RemoteResponseMessage) => void;
+  started: boolean;
   settled: boolean;
-  done: Promise<void>;
+  physicalDone?: Promise<void>;
 }
-
 const PROTOCOL_VERSION = "1.0.0";
 
 /**
@@ -148,6 +170,10 @@ export class RemoteConnector {
   private closed = false;
   private readonly completedSteps = new Set<string>();
   private readonly inFlight = new Set<InFlight>();
+  private readonly queue: InFlight[] = [];
+  private readonly processStops = new Map<string, { identity: VerifiedRemoteIdentity; promise: Promise<void> }>();
+  private lastClientId: string | undefined;
+  private startupReconciled = false;
   private challengeWaiter: { resolve: (challenge: RelayChallenge) => void; reject: (error: Error) => void } | undefined;
   private authWaiter: { resolve: () => void; reject: (error: Error) => void } | undefined;
   private earlyChallenge: RelayChallenge | undefined;
@@ -162,6 +188,11 @@ export class RemoteConnector {
     this.now = options.now ?? (() => new Date());
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.random = options.random ?? Math.random;
+    for (const [value, minimum] of [[options.maxConcurrentJobsPerDevice ?? 8, 1],
+      [options.maxQueuedJobsPerDevice ?? 64, 0], [options.toolDeadlineMs ?? 300_000, 1],
+      [options.cancellationGraceMs ?? 5_000, 1]] as const) {
+      if (!Number.isSafeInteger(value) || value < minimum) throw new Error("Invalid remote job limits.");
+    }
     const identity = options.deviceStore.load();
     this.current = Object.freeze({
       protocolVersion: PROTOCOL_VERSION,
@@ -223,11 +254,27 @@ export class RemoteConnector {
       this.options.onShutdownStep?.("admission-stopped");
     }
     if (!this.completedSteps.has("inflight-settled")) {
+      for (const entry of [...this.inFlight]) {
+        if (entry.settled) continue;
+        this.options.admission.requestCancel(entry.identity, entry.jobId, "shutdown-" + randomUUID(), entry.request.traceId);
+        this.cancelEntry(entry);
+      }
       const drainMs = this.options.drainTimeoutMs ?? 5_000;
-      const all = Promise.allSettled([...this.inFlight].map((entry) => entry.done));
+      const all = Promise.allSettled([
+        ...[...this.inFlight].map((entry) => entry.physicalDone ?? entry.done),
+        ...[...this.processStops.values()].map((entry) => entry.promise),
+      ]);
       await Promise.race([all, this.sleep(drainMs)]);
       for (const entry of [...this.inFlight]) {
-        if (!entry.settled) this.settleUnknown(entry);
+        if (entry.settled) continue;
+        const job = this.options.admission.getJob(entry.identity, entry.jobId);
+        if (job?.state === "running") {
+          this.options.admission.recordStop(entry.identity, entry.jobId, "unverified");
+          this.finish(entry, this.options.admission.settleCancelled(entry.identity, entry.jobId, "effect_outcome_unknown"));
+        } else if (job) this.finish(entry, job);
+      }
+      for (const [jobId, entry] of this.processStops) {
+        try { this.options.admission.recordStop(entry.identity, jobId, "unverified"); } catch { /* Retain unresolved evidence. */ }
       }
       this.completedSteps.add("inflight-settled");
       this.options.onShutdownStep?.("inflight-settled");
@@ -239,6 +286,9 @@ export class RemoteConnector {
       await this.options.pluginTools?.close?.();
       this.completedSteps.add("transport-closed");
       this.options.onShutdownStep?.("transport-closed");
+    }
+    if ([...this.inFlight].some((entry) => entry.started) || this.processStops.size > 0) {
+      throw new Error("Remote dispatch cleanup remains unverified.");
     }
     this.closed = true;
     this.closing = false;
@@ -280,7 +330,10 @@ export class RemoteConnector {
       { accountId: this.options.session.accountId, deviceId: identity.deviceId }, identity.epoch);
     this.transition("connected-degraded", "reconciliation_pending");
     try {
-      await this.options.reconcile();
+      if (!this.startupReconciled) {
+        await this.options.reconcile();
+        this.startupReconciled = true;
+      }
     } catch {
       this.admitting = false;
       this.transition("connected-degraded", "recovery_unverified");
@@ -385,6 +438,7 @@ export class RemoteConnector {
       case "revoked":
         this.admitting = false;
         this.transition("revoked", "device_key_revoked");
+        this.cancelForRevocation();
         return;
       case "request": {
         // Strict codec at the trust boundary, before any authentication logic reads the fields.
@@ -423,34 +477,32 @@ export class RemoteConnector {
     this.reconnectAttempts += 1;
     const backoff = Math.min(config.maxDelayMs, config.baseDelayMs * 2 ** attempt);
     const delay = backoff + Math.floor(this.random() * config.baseDelayMs);
-    this.reconnectTimer = (async () => {
-      try {
-        await this.sleep(delay);
-        if (this.closing || this.closed) return;
-        await this.connectOnce("reconnecting");
-        if (!this.isReady() && !this.closing && !this.closed &&
-          this.current.state !== "suspended" && this.current.state !== "revoked") {
-          this.scheduleReconnect();
-        }
-      } finally {
-        this.reconnectTimer = undefined;
-      }
+    const pending = (async () => {
+      await this.sleep(delay);
+      if (this.closing || this.closed) return;
+      await this.connectOnce("reconnecting");
     })();
+    this.reconnectTimer = pending;
+    void pending.finally(() => {
+      if (this.reconnectTimer === pending) this.reconnectTimer = undefined;
+      if (!this.isReady() && !this.closing && !this.closed &&
+        this.current.state !== "suspended" && this.current.state !== "revoked") this.scheduleReconnect();
+    }).catch(() => undefined);
   }
 
   private async onRequest(request: RemoteRequest, authorization?: RemoteAuthorization): Promise<void> {
     const transport = this.transport;
-    const respond = async (response: RemoteResponseMessage): Promise<void> => {
-      try { await transport?.send({ type: "response", response }); } catch { /* socket loss is fenced by epoch */ }
+    const respond = async (response: RemoteResponseMessage, data?: unknown): Promise<void> => {
+      try { await transport?.send({ type: "response", response, ...(data !== undefined ? { data } : {}) }); }
+      catch { /* A disconnected wait does not own the admitted job. */ }
     };
     if (this.options.deviceStore.isRevoked()) {
       this.admitting = false;
       this.transition("revoked", "device_key_revoked");
+      this.cancelForRevocation();
       await respond(rejected(request, "device_revoked"));
       return;
     }
-    // Relay-signed authorization next: any failure is unauthorized, with no
-    // admission and zero broker/tool invocations (ADR-A verify order).
     try {
       this.options.authenticator.verifyAuthorization(request, authorization, this.options.session);
     } catch {
@@ -468,159 +520,333 @@ export class RemoteConnector {
     }
     try {
       this.options.authenticator.verifyRequest(request, this.options.session);
+      if (remotePayloadDigest(request) !== request.payloadDigest) throw new Error("Invalid digest.");
     } catch (error) {
-      const code = error instanceof RemoteAuthError ? error.code : "unauthorized";
-      await respond(rejected(request, code));
-      return;
-    }
-    const isPlugin = request.toolId.startsWith("plugin_");
-    const runnerName = isPlugin ? request.toolId : REMOTE_TOOL_ID_TO_RUNNER[request.toolId];
-    if (!runnerName || (isPlugin && !this.options.pluginTools)) {
-      await respond(rejected(request, "unsupported_tool"));
+      await respond(rejected(request, error instanceof RemoteAuthError ? error.code : "invalid_request"));
       return;
     }
     const identity: VerifiedRemoteIdentity = {
-      accountId: this.options.session.accountId,
-      clientId: this.options.session.clientId,
-      deviceId: this.options.deviceStore.load()!.deviceId,
+      accountId: request.accountId, clientId: request.clientId, deviceId: request.deviceId,
     };
-    const rawRequest = JSON.stringify(request);
-    const entry: InFlight = {
-      rawRequest, request, settled: false,
-      done: Promise.resolve(),
-    };
-    const work = (async (): Promise<void> => {
-      try {
-        const response = isPlugin
-          ? await this.dispatchPlugin(identity, request, rawRequest)
-          : EFFECT_TOOL_IDS.has(request.toolId) || isSearchCancel(request)
-          ? await this.dispatchEffect(identity, runnerName, request, rawRequest)
-          : await this.dispatchRead(identity, runnerName, request, rawRequest);
-        entry.settled = true;
-        await respond(response);
-      } catch {
-        entry.settled = true;
+    try {
+      const refusal = this.options.runtime.authorizeJob?.(identity);
+      if (refusal) { await respond(rejected(request, "unauthorized")); return; }
+      if (JOB_TOOL_IDS.has(request.toolId)) {
+        const answer = this.jobTool(identity, request);
+        await respond(answer.response, answer.data);
+        return;
+      }
+      const isPlugin = request.toolId.startsWith("plugin_");
+      const runnerName = isPlugin ? request.toolId : REMOTE_TOOL_ID_TO_RUNNER[request.toolId];
+      if (!runnerName || (isPlugin && !this.options.pluginTools)) {
+        await respond(rejected(request, "unsupported_tool"));
+        return;
+      }
+      if (!isPlugin && isEffect(request) && !this.options.runtime.invokeAdmitted) {
         await respond(rejected(request, "internal_error"));
-      } finally {
+        return;
+      }
+      if (isPlugin) {
+        const tools = await this.options.pluginTools!.list();
+        if (!tools.some((tool) => tool.relayToolId === request.toolId)) {
+          await respond(rejected(request, "unsupported_tool"));
+          return;
+        }
+      }
+      // Plugin discovery may await; shutdown, fencing and policy still win before admission.
+      if (this.closing || !this.isReady()) { await respond(rejected(request, "device_offline")); return; }
+      this.options.authenticator.verifyAuthorization(request, authorization, this.options.session);
+      if (this.options.deviceStore.isRevoked() ||
+        (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) ||
+        this.options.deviceStore.load()?.epoch !== request.deviceEpoch ||
+        this.options.runtime.authorizeJob?.(identity, runnerName, request.payload)) {
+        await respond(rejected(request, "unauthorized")); return;
+      }
+      if (Date.parse(request.expiresAt) <= this.now().getTime()) {
+        await respond(rejected(request, "expired_request")); return;
+      }
+      // The store checks an existing key before rejecting a new admission at capacity.
+      const rawRequest = JSON.stringify(request);
+      const full = this.runningCount() >= this.concurrentLimit() && this.queue.length >= this.queueLimit();
+      const decision = this.options.admission.admit(identity, rawRequest, { rejectNew: full });
+      const deadline = Math.min(Date.parse(request.expiresAt),
+        Date.parse(decision.job.createdAt) + (this.options.toolDeadlineMs ?? 300_000));
+      if (!decision.created) {
+        const existing = [...this.inFlight].find((item) => item.jobId === decision.job.jobId);
+        if (decision.job.state !== "queued") {
+          await respond(jobResponse(request, decision.job));
+          return;
+        }
+        if (existing) {
+          if (!existing.settled) {
+            this.options.admission.refreshQueuedRequest(identity, decision.job.jobId, rawRequest);
+            existing.rawRequest = rawRequest;
+            existing.request = request;
+            existing.authorization = authorization!;
+            existing.deadline = deadline;
+          }
+          await respond(jobResponse(request, decision.job));
+          return;
+        }
+        if (full) { await respond(jobResponse(request, decision.job)); return; }
+        this.options.admission.refreshQueuedRequest(identity, decision.job.jobId, rawRequest);
+      }
+      let resolve!: (response: RemoteResponseMessage) => void;
+      const done = new Promise<RemoteResponseMessage>((accept) => { resolve = accept; });
+      const entry: InFlight = {
+        identity, request, rawRequest, authorization: authorization!, runnerName, isPlugin,
+        jobId: decision.job.jobId, controller: new AbortController(),
+        deadline,
+        done, resolve, started: false, settled: false,
+      };
+      this.inFlight.add(entry);
+      this.queue.push(entry);
+      this.pump();
+      await respond(jobResponse(request, this.options.admission.view(identity, entry.jobId).job));
+    } catch (error) {
+      await respond(rejected(request, admissionCode(error)));
+    }
+  }
+
+  private jobTool(identity: VerifiedRemoteIdentity, request: RemoteRequest): { response: RemoteResponseMessage; data: unknown } {
+    const args = jobArguments(request);
+    const admission = this.options.admission;
+    const view = admission.view(identity, args.jobId);
+    // The current signed scope must still cover the original job.
+    if (view.job.scopeRef !== request.scopeRef) throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
+    const name = REMOTE_TOOL_ID_TO_RUNNER[view.job.toolId] ?? view.job.toolId;
+    if (this.options.runtime.authorizeJob?.(identity, name)) throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
+    let data: unknown;
+    if (request.toolId === "jobs_status") {
+      data = view;
+    } else if (request.toolId === "jobs_events") {
+      data = admission.events(identity, args.jobId, args.cursor, args.limit);
+    } else if (request.toolId === "jobs_result") {
+      const result = admission.result(identity, args.jobId);
+      const offset = resultOffset(args.cursor, args.jobId);
+      const bytes = result.inline;
+      if (offset > (bytes?.byteLength ?? 0)) throw new Error("Invalid result cursor.");
+      const end = Math.min(bytes?.byteLength ?? 0, offset + (args.maxBytes ?? 64 * 1024));
+      data = {
+        state: result.state,
+        ...(result.outputRef ? { outputRef: result.outputRef } : {}),
+        ...(bytes ? { inline: Buffer.from(bytes.subarray(offset, end)).toString("base64"), encoding: "base64" } : {}),
+        ...(bytes && end < bytes.byteLength ? { nextCursor: resultCursor(args.jobId, end) } : {}),
+      };
+    } else {
+      // Persist the request before aborting or signalling any work.
+      data = admission.requestCancel(identity, args.jobId, request.idempotencyKey, request.traceId);
+      const entry = [...this.inFlight].find((item) => item.jobId === args.jobId);
+      if (view.job.toolId === "process_start" && view.job.state === "completed") {
+        const processId = admission.startedProcess(identity, args.jobId);
+        if (processId && admission.view(identity, args.jobId).job.cancellation?.stop !== "stopped") {
+          this.startProcessStop(identity, args.jobId, processId);
+        }
+      } else if (entry) this.cancelEntry(entry);
+    }
+    return { response: jobResponse(request, admission.view(identity, args.jobId).job), data };
+  }
+
+  private concurrentLimit(): number { return this.options.maxConcurrentJobsPerDevice ?? 8; }
+  private queueLimit(): number { return this.options.maxQueuedJobsPerDevice ?? 64; }
+  private runningCount(): number { return [...this.inFlight].filter((entry) => entry.started).length; }
+
+  private pump(): void {
+    if (this.closing || this.closed || this.current.state === "revoked" || this.current.state === "suspended") return;
+    while (this.queue.length && this.runningCount() < this.concurrentLimit()) {
+      const clients = [...new Set(this.queue.map((entry) => entry.identity.clientId))];
+      const last = this.lastClientId === undefined ? -1 : clients.indexOf(this.lastClientId);
+      const selected = clients[(last + 1) % clients.length];
+      const index = this.queue.findIndex((entry) => entry.identity.clientId === selected);
+      const entry = this.queue.splice(index, 1)[0]!;
+      entry.started = true;
+      this.lastClientId = selected;
+      entry.physicalDone = this.dispatch(entry).finally(() => {
         this.inFlight.delete(entry);
-      }
-    })();
-    entry.done = work;
-    this.inFlight.add(entry);
-    await work;
+        this.pump();
+      });
+      void entry.physicalDone.catch(() => undefined);
+    }
   }
 
-  /** Plugin tools: only admitted relay ids, record-before-dispatch, never replayed. */
-  private async dispatchPlugin(
-    identity: VerifiedRemoteIdentity, request: RemoteRequest, rawRequest: string,
-  ): Promise<RemoteResponseMessage> {
-    const provider = this.options.pluginTools!;
-    let tools: readonly RemotePluginToolInfo[];
-    try { tools = await provider.list(); } catch { return rejected(request, "unsupported_tool"); }
-    const tool = tools.find((entry) => entry.relayToolId === request.toolId);
-    if (!tool) return rejected(request, "unsupported_tool");
-    if (!tool.available) {
-      // A fresh request is the supervised recovery attempt: the manager
-      // re-attests and restarts the same executable/schema on this call.
-      // It is never a replay of the interrupted request (new admission key).
-      await this.refreshPluginState();
-    }
+  private async dispatch(entry: InFlight): Promise<void> {
+    const { identity, jobId } = entry;
     const admission = this.options.admission;
-    let decision;
-    try { decision = admission.admit(identity, rawRequest); } catch (error) { return rejected(request, admissionCode(error)); }
-    if (!decision.created) {
-      const job = decision.job;
-      return { requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state };
-    }
-    try { admission.markDispatching(identity, decision.job.jobId, request.deviceEpoch); } catch (error) { return rejected(request, admissionCode(error)); }
-    let result: ToolResult;
     try {
-      result = await provider.invoke(identity, request.toolId, request.payload, undefined);
-    } catch {
-      // An interrupted plugin call is settled unknown and never replayed.
-      const job = admission.settle(identity, decision.job.jobId, "outcome_unknown");
-      await this.refreshPluginState();
-      return { requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state, errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" };
-    }
-    await this.refreshPluginState();
-    const unknown = ["tool_timeout", "tool_cancelled", "process_timeout", "process_cancelled", "mcp_session_unavailable", "mcp_restart_exhausted"].includes(result.error?.code ?? "") ||
-      (result.isError && this.pluginDegradedReason !== undefined && /crash|closed|unavailable|restart/i.test(result.error?.message ?? ""));
-    const job = admission.settle(identity, decision.job.jobId, unknown ? "outcome_unknown" : result.isError ? "failed" : "completed");
-    return {
-      requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state,
-      ...(job.state === "outcome_unknown" ? { errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" } : {}),
-      ...(result.isError && job.state === "failed" ? { errorCode: result.error?.code ?? "internal_error" } : {}),
-    };
-  }
-
-  /** Reads: connector-level record-before-dispatch, then the R1a runtime. */
-  private async dispatchRead(
-    identity: VerifiedRemoteIdentity, runnerName: string, request: RemoteRequest, rawRequest: string,
-  ): Promise<RemoteResponseMessage> {
-    const admission = this.options.admission;
-    let decision;
-    try {
-      decision = admission.admit(identity, rawRequest);
-    } catch (error) {
-      return rejected(request, admissionCode(error));
-    }
-    if (!decision.created) {
-      const job = decision.job;
-      return { requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state };
-    }
-    try {
-      admission.markDispatching(identity, decision.job.jobId, request.deviceEpoch);
-    } catch (error) {
-      return rejected(request, admissionCode(error));
-    }
-    let result: ToolResult;
-    try {
-      result = await this.options.runtime.invoke(identity, runnerName, request.payload, undefined, rawRequest);
-    } catch {
-      const job = admission.settle(identity, decision.job.jobId, "outcome_unknown");
-      return { requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state, errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" };
-    }
-    const unknown = ["tool_timeout", "tool_cancelled", "process_timeout", "process_cancelled"].includes(result.error?.code ?? "");
-    const job = admission.settle(identity, decision.job.jobId, unknown ? "outcome_unknown" : result.isError ? "failed" : "completed");
-    return {
-      requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state,
-      ...(job.state === "outcome_unknown" ? { errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" } : {}),
-      ...(result.isError && job.state === "failed" ? { errorCode: result.error?.code ?? "internal_error" } : {}),
-    };
-  }
-
-  /** Effects: RemoteToolRuntime admits (R1b) immediately before dispatch (R1a). */
-  private async dispatchEffect(
-    identity: VerifiedRemoteIdentity, runnerName: string, request: RemoteRequest, rawRequest: string,
-  ): Promise<RemoteResponseMessage> {
-    const result = await this.options.runtime.invoke(identity, runnerName, request.payload, undefined, rawRequest);
-    const first = result.content[0];
-    const value: unknown = first?.type === "json" ? first.value : undefined;
-    if (isRecord(value) && typeof value.jobId === "string") {
-      const jobId: string = value.jobId;
-      return {
-        requestId: request.requestId, traceId: request.traceId, admitted: true,
-        jobId, status: typeof value.status === "string" ? value.status : "completed",
-        ...(result.error?.code === "outcome_unknown" ? { errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" } : {}),
-      };
-    }
-    if (result.isError) return rejected(request, result.error?.code ?? "internal_error");
-    return rejected(request, "internal_error");
-  }
-
-  private settleUnknown(entry: InFlight): void {
-    try {
-      const identity: VerifiedRemoteIdentity = {
-        accountId: this.options.session.accountId,
-        clientId: this.options.session.clientId,
-        deviceId: this.options.deviceStore.load()!.deviceId,
-      };
-      const decision = this.options.admission.admit(identity, entry.rawRequest);
-      if (decision.job.state === "running") {
-        this.options.admission.settle(identity, decision.job.jobId, "outcome_unknown");
+      if (entry.isPlugin) {
+        const tools = await this.options.pluginTools!.list();
+        if (!tools.some((tool) => tool.relayToolId === entry.request.toolId)) {
+          if (!entry.settled) this.finish(entry, admission.blockPolicy(identity, jobId, "tool_unavailable"));
+          return;
+        }
       }
-    } catch { /* an unsettled record stays as admission left it */ }
+      if (entry.settled) return;
+      const request = entry.request;
+      // Recheck the original relay grant, local policy, deadline and current epoch
+      // after every asynchronous preparation and immediately before the marker.
+      try {
+        this.options.authenticator.verifyAuthorization(request, entry.authorization, this.options.session);
+        if (this.options.deviceStore.isRevoked() ||
+          (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) ||
+          this.options.deviceStore.load()?.epoch !== request.deviceEpoch ||
+          this.options.runtime.authorizeJob?.(identity, entry.runnerName, request.payload)) {
+          throw new Error("authorization_changed");
+        }
+        if (this.now().getTime() >= entry.deadline) throw new Error("expired_before_dispatch");
+      } catch (error) {
+        const reason = error instanceof Error && error.message === "expired_before_dispatch" ? error.message : "authorization_changed";
+        this.finish(entry, admission.blockPolicy(identity, jobId, reason));
+        return;
+      }
+      admission.markDispatching(identity, jobId, request.deviceEpoch);
+      let result: ToolResult;
+      let brokerInvoked = true;
+      let stopEvidence: RemoteInvocationResult["stopEvidence"];
+      try {
+        if (entry.isPlugin) {
+          const provider = this.options.pluginTools!;
+          if (provider.invokeAdmitted) {
+            const outcome = await provider.invokeAdmitted(identity, request.toolId, request.payload, entry.controller.signal, () => this.canDispatch(entry));
+            result = outcome.result;
+            brokerInvoked = outcome.brokerInvoked;
+            stopEvidence = outcome.stopEvidence;
+          } else {
+            result = await provider.invoke(identity, request.toolId, request.payload, entry.controller.signal, () => this.canDispatch(entry));
+          }
+        } else if (this.options.runtime.invokeAdmitted) {
+          const outcome = await this.options.runtime.invokeAdmitted(identity, entry.runnerName, request.payload,
+            entry.controller.signal, entry.rawRequest, jobId, () => this.canDispatch(entry));
+          result = outcome.result;
+          brokerInvoked = outcome.brokerInvoked;
+          stopEvidence = outcome.stopEvidence;
+        } else {
+          result = await this.options.runtime.invoke(identity, entry.runnerName, request.payload, entry.controller.signal, entry.rawRequest);
+        }
+      } catch (error) {
+        if (entry.settled) return;
+        const notSent = isRecord(error) && error.outcome === "not_sent";
+        if (entry.controller.signal.aborted && notSent) {
+          admission.recordStop(identity, jobId, "verified");
+          this.finish(entry, admission.settleCancelled(identity, jobId, "no_effect"));
+        } else {
+          if (entry.controller.signal.aborted) admission.recordStop(identity, jobId, "unverified");
+          this.finish(entry, admission.settle(identity, jobId, notSent ? "failed" : "outcome_unknown"));
+        }
+        return;
+      }
+      if (entry.isPlugin) await this.refreshPluginState();
+      if (entry.settled) {
+        if (entry.controller.signal.aborted && entry.runnerName === "process.start" && !result.isError) {
+          const processId = resultProcessId(result);
+          if (processId) {
+            admission.bindStartedProcess(identity, jobId, processId);
+            await this.stopProcess(identity, jobId, processId);
+          }
+        }
+        return;
+      }
+      if (entry.runnerName === "process.start" && !result.isError) {
+        const processId = resultProcessId(result);
+        if (!processId) throw new Error("Managed process identity is unavailable.");
+        admission.bindStartedProcess(identity, jobId, processId);
+      }
+      const unknown = isUnknownResult(result) || (entry.isPlugin && result.isError &&
+        (entry.controller.signal.aborted || (this.pluginDegradedReason !== undefined &&
+          /crash|closed|unavailable|restart/i.test(result.error?.message ?? ""))));
+      if (entry.controller.signal.aborted && entry.runnerName === "process.start" && !result.isError) {
+        const processId = resultProcessId(result);
+        if (processId) await this.stopProcess(identity, jobId, processId);
+        else admission.recordStop(identity, jobId, "unverified");
+        if (!entry.settled) this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown"));
+      } else if (entry.controller.signal.aborted && (!brokerInvoked || stopEvidence)) {
+        admission.recordStop(identity, jobId, "verified");
+        this.finish(entry, admission.settleCancelled(identity, jobId,
+          stopEvidence?.effect ?? "no_effect"));
+      } else if (!brokerInvoked && result.isError) {
+        this.finish(entry, admission.settle(identity, jobId, "failed",
+          { inline: Buffer.from(JSON.stringify({ reason: result.error?.code ?? "dispatch_refused" }), "utf8") }));
+      } else if (entry.controller.signal.aborted && unknown) {
+        admission.recordStop(identity, jobId, "unverified");
+        this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown"));
+      } else {
+        if (entry.controller.signal.aborted) admission.recordStop(identity, jobId, "unverified");
+        const bytes = Buffer.from(JSON.stringify(result), "utf8");
+        const inline = bytes.byteLength <= 256 * 1024 ? bytes : Buffer.from(JSON.stringify({ truncated: true }), "utf8");
+        this.finish(entry, admission.settle(identity, jobId, unknown ? "outcome_unknown" : result.isError ? "failed" : "completed",
+          unknown ? undefined : { inline }));
+      }
+    } catch {
+      if (!entry.settled) {
+        try {
+          const current = admission.getJob(identity, jobId);
+          if (current?.state === "queued") this.finish(entry, admission.blockPolicy(identity, jobId, "dispatch_refused"));
+          else if (current?.state === "running") this.finish(entry, admission.settle(identity, jobId, "outcome_unknown"));
+          else if (current) this.finish(entry, current);
+        } catch { entry.settled = true; entry.resolve(rejected(entry.request, "internal_error")); }
+      }
+    }
+  }
+
+  private startProcessStop(identity: VerifiedRemoteIdentity, jobId: string, processId: string): void {
+    if (this.processStops.has(jobId)) return;
+    const promise = this.stopProcess(identity, jobId, processId).finally(() => { this.processStops.delete(jobId); });
+    this.processStops.set(jobId, { identity, promise });
+    void promise.catch(() => undefined);
+  }
+
+  private async stopProcess(identity: VerifiedRemoteIdentity, jobId: string, processId: string): Promise<void> {
+    let stopped = false;
+    try { stopped = !!await this.options.runtime.stopStartedProcess?.(identity, processId); }
+    catch { /* An unverified stop remains visible and retryable. */ }
+    this.options.admission.recordStop(identity, jobId, stopped ? "verified" : "unverified");
+  }
+  private canDispatch(entry: InFlight): boolean {
+    try {
+      this.options.authenticator.verifyAuthorization(entry.request, entry.authorization, this.options.session);
+      return !this.closing && !entry.settled && !entry.controller.signal.aborted &&
+        !this.options.deviceStore.isRevoked() &&
+        (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld()) &&
+        this.options.deviceStore.load()?.epoch === entry.request.deviceEpoch &&
+        this.now().getTime() < entry.deadline &&
+        !this.options.runtime.authorizeJob?.(entry.identity, entry.runnerName, entry.request.payload);
+    } catch { return false; }
+  }
+  private finish(entry: InFlight, job: RemoteJob): void {
+    if (entry.settled) return;
     entry.settled = true;
+    entry.resolve(jobResponse(entry.request, job));
+  }
+
+  private cancelForRevocation(): void {
+    if (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) return;
+    for (const entry of [...this.inFlight]) {
+      if (entry.settled) continue;
+      try {
+        this.options.admission.requestCancel(entry.identity, entry.jobId, "revoke-" + randomUUID(), entry.request.traceId);
+        this.cancelEntry(entry);
+      } catch { /* An unrecorded request cannot authorize a cancellation signal. */ }
+    }
+  }
+  private cancelEntry(entry: InFlight): void {
+    entry.controller.abort();
+    if (!entry.started) {
+      const index = this.queue.indexOf(entry);
+      if (index >= 0) this.queue.splice(index, 1);
+      this.finish(entry, this.options.admission.view(entry.identity, entry.jobId).job);
+      this.inFlight.delete(entry);
+      this.pump();
+      return;
+    }
+    void this.sleep(this.options.cancellationGraceMs ?? 5_000).then(() => {
+      if (entry.settled) return;
+      try {
+        const job = this.options.admission.getJob(entry.identity, entry.jobId);
+        if (job?.state === "running") {
+          this.options.admission.recordStop(entry.identity, entry.jobId, "unverified");
+          this.finish(entry, this.options.admission.settleCancelled(entry.identity, entry.jobId, "effect_outcome_unknown"));
+        } else if (job) this.finish(entry, job);
+      } catch { /* The durable marker remains for startup reconciliation. */ }
+    });
   }
 
   private transition(state: RemoteConnectionStateName, reasonCode: RemoteConnectionReason): void {
@@ -637,6 +863,70 @@ export class RemoteConnector {
   }
 }
 
+interface JobArguments { jobId: string; cursor?: string; limit?: number; maxBytes?: number }
+
+function jobArguments(request: RemoteRequest): JobArguments {
+  if (!isRecord(request.payload)) throw new Error("Invalid job arguments.");
+  const payload = request.payload;
+  const allowed = request.toolId === "jobs_events" ? ["jobId", "cursor", "limit"] :
+    request.toolId === "jobs_result" ? ["jobId", "cursor", "maxBytes"] : ["jobId"];
+  if (Object.keys(payload).some((key) => !allowed.includes(key)) ||
+    typeof payload.jobId !== "string" || !payload.jobId || payload.jobId.length > 256 ||
+    (payload.cursor !== undefined && (typeof payload.cursor !== "string" || !payload.cursor || payload.cursor.length > 512)) ||
+    (payload.limit !== undefined && (!Number.isInteger(payload.limit) || Number(payload.limit) < 1 || Number(payload.limit) > 256)) ||
+    (payload.maxBytes !== undefined && (!Number.isInteger(payload.maxBytes) || Number(payload.maxBytes) < 1 || Number(payload.maxBytes) > 64 * 1024))) {
+    throw new Error("Invalid job arguments.");
+  }
+  return {
+    jobId: payload.jobId,
+    ...(typeof payload.cursor === "string" ? { cursor: payload.cursor } : {}),
+    ...(typeof payload.limit === "number" ? { limit: payload.limit } : {}),
+    ...(typeof payload.maxBytes === "number" ? { maxBytes: payload.maxBytes } : {}),
+  };
+}
+
+function resultCursor(jobId: string, offset: number): string {
+  return Buffer.from(JSON.stringify([jobId, offset]), "utf8").toString("base64url");
+}
+
+function resultOffset(cursor: string | undefined, jobId: string): number {
+  if (cursor === undefined) return 0;
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (Array.isArray(parsed) && parsed.length === 2 && parsed[0] === jobId &&
+      Number.isSafeInteger(parsed[1]) && parsed[1] >= 0 && resultCursor(jobId, parsed[1]) === cursor) return parsed[1] as number;
+  } catch { /* Invalid cursors never grant access. */ }
+  throw new Error("Invalid result cursor.");
+}
+
+function jobResponse(request: RemoteRequest, job: RemoteJob): RemoteResponseMessage {
+  return {
+    requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state,
+    ...(job.state === "outcome_unknown" ? { errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" } : {}),
+  };
+}
+
+function resultProcessId(result: ToolResult): string | undefined {
+  for (const block of result.content) {
+    if (block.type === "json" && isRecord(block.value) && typeof block.value.processId === "string") return block.value.processId;
+  }
+  return undefined;
+}
+
+function isEffect(request: RemoteRequest): boolean {
+  return EFFECT_TOOL_IDS.has(request.toolId) ||
+    (request.toolId === "files_search" && isRecord(request.payload) && request.payload.cancel === true);
+}
+
+function isUnknownResult(result: ToolResult): boolean {
+  return ["tool_timeout", "tool_cancelled", "process_timeout", "process_cancelled",
+    "reconciliation_required", "process_input_outcome_unknown", "process_input_interrupted",
+    "mcp_request_timeout", "mcp_request_cancelled", "mcp_write_outcome_unknown",
+    "mcp_session_unavailable", "mcp_restart_exhausted"].includes(result.error?.code ?? "") ||
+    result.content.some((block) => (block.type === "json" && isRecord(block.value) && block.value.status === "outcome_unknown") ||
+      (result.isError && block.type === "text" && /OUTCOME UNKNOWN \(not retried\)/i.test(block.text)));
+}
+
 /** Echo only well-formed correlation ids from a request that failed the strict codec. */
 function malformed(raw: unknown): RemoteResponseMessage {
   const record = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
@@ -648,17 +938,16 @@ function rejected(request: RemoteRequest, errorCode: string): RemoteResponseMess
   const blocked = errorCode === "device_revoked" || errorCode === "unauthorized" || errorCode === "device_epoch_mismatch";
   return {
     requestId: request.requestId, traceId: request.traceId, admitted: false,
-    status: blocked ? "blocked_policy" : "rejected", errorCode,
+    status: errorCode === "blocked_quota" ? "blocked_quota" : blocked ? "blocked_policy" : "rejected", errorCode,
   };
 }
 
 function admissionCode(error: unknown): string {
-  if (isRecord(error) && typeof error.code === "string") return error.code;
+  if (isRecord(error) && typeof error.code === "string") {
+    if (error.code === "storage_exhausted" || error.code === "schema_migration_failed") return "internal_error";
+    return error.code;
+  }
   return "invalid_request";
-}
-
-function isSearchCancel(request: RemoteRequest): boolean {
-  return request.toolId === "files_search" && isRecord(request.payload) && request.payload.cancel === true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

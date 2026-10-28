@@ -1,7 +1,7 @@
 import type { OperationAuthorizationAssertion, SessionOperationAuthorization } from "./session-authority.js";
 
 export interface StreamingRequestChannel {
-  /** Exactly one application request frame per original ToolBroker call. */
+  /** One application request, plus at most its exact MCP cancellation notification. */
   write(payload: Uint8Array, timeoutMs: number): Promise<void>;
   waitForOutput(signal?: AbortSignal): Promise<boolean>;
   deliverOutput(deliver: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>): Promise<boolean>;
@@ -15,7 +15,7 @@ export interface StreamingRequestChannel {
  */
 export function createStreamingRequestOperation(input: Readonly<{
   sessionId: string;
-  /** Internal family discriminator; MCP retains exactly one write. */
+  /** Internal family discriminator; MCP retains exactly one application request. */
   operation?: "request" | "language_request";
   executionState?: { active: boolean };
   retainOwnership?(timeoutMs: number): void;
@@ -52,6 +52,9 @@ export function createStreamingRequestOperation(input: Readonly<{
     const abort = new AbortController();
     const combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
     let open = true; let writes = 0;
+    let mcpCancellation: Buffer | undefined;
+    let requestAcknowledged = false;
+    let cancellationWritten = false;
     const pending = new Set<Promise<unknown>>();
     const assertCurrent = () => {
       if (!open) throw new Error("Session request channel is closed.");
@@ -68,10 +71,17 @@ export function createStreamingRequestOperation(input: Readonly<{
     const io: StreamingRequestChannel = Object.freeze({
       async write(payload: Uint8Array, writeTimeoutMs: number) {
         assertCurrent();
-        if (writes >= maximumWrites) throw new Error(maximumWrites === 1 ? "A session request permits only one request write." : "A language request exceeded its bounded protocol writes.");
-        writes++;
+        const cancellation = operation === "request" && writes === 1 && requestAcknowledged && !cancellationWritten &&
+          mcpCancellation !== undefined && Buffer.from(payload).equals(mcpCancellation);
+        if (writes >= maximumWrites && !cancellation) throw new Error(maximumWrites === 1 ? "A session request permits only one request write." : "A language request exceeded its bounded protocol writes.");
+        if (cancellation) cancellationWritten = true;
+        else {
+          writes++;
+          if (operation === "request") mcpCancellation = mcpCancellationFor(payload);
+        }
         await observe(input.write(new Uint8Array(payload), Math.min(timeoutMs, writeTimeoutMs), assertCurrent));
         assertCurrent();
+        if (!cancellation) requestAcknowledged = true;
       },
       async waitForOutput(waitSignal?: AbortSignal) {
         assertCurrent();
@@ -107,4 +117,21 @@ export function createStreamingRequestOperation(input: Readonly<{
     try { return await Promise.race([execution, cancelled]); }
     finally { open = false; if (timer) clearTimeout(timer); abort.abort(); }
   };
+}
+
+/** Only the exact notification for a canonical, already-written tools/call may follow it. */
+function mcpCancellationFor(payload: Uint8Array): Buffer | undefined {
+  try {
+    if (payload.byteLength > 1024 * 1024) return undefined;
+    const bytes = Buffer.from(payload);
+    const raw = bytes.toString("utf8");
+    if (!Buffer.from(raw, "utf8").equals(bytes)) return undefined;
+    const request: unknown = JSON.parse(raw);
+    if (!request || typeof request !== "object" || Array.isArray(request) || JSON.stringify(request) + "\n" !== raw) return undefined;
+    const frame = request as Record<string, unknown>;
+    if (frame.jsonrpc !== "2.0" || frame.method !== "tools/call" ||
+      typeof frame.id !== "number" || !Number.isSafeInteger(frame.id) || frame.id < 1) return undefined;
+    return Buffer.from(JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled",
+      params: { requestId: frame.id, reason: "Cancelled by caller" } }) + "\n");
+  } catch { return undefined; }
 }

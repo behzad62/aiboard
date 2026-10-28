@@ -37,8 +37,18 @@ export interface RemoteEffectRequest {
   readonly arguments: unknown;
   /** Raw transport JSON preserves duplicate keys for admission validation. */
   readonly rawRequest?: string;
+  /** Job already marked dispatching by the trusted connector scheduler. */
+  readonly admittedJobId?: string;
   /** Synchronous policy and revocation check at the pre-effect boundary. */
   readonly authorize: () => ToolResult | undefined;
+}
+
+export interface RemoteInvocationResult {
+  readonly result: ToolResult;
+  /** False proves the broker was never called; true does not prove an effect or stop. */
+  readonly brokerInvoked: boolean;
+  /** Runtime-supplied evidence, not inferred from a broker cancellation result. */
+  readonly stopEvidence?: { readonly effect: "no_effect" | "effect_outcome_unknown" };
 }
 
 interface BoundRemote {
@@ -75,18 +85,54 @@ export class RemoteToolRuntime {
   }
 
   invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult> {
+    return this.beginInvocation(identity, name, args, signal, rawRequest);
+  }
+
+  async invokeAdmitted(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal: AbortSignal,
+    rawRequest: string, jobId: string, beforeBroker?: () => boolean): Promise<RemoteInvocationResult> {
+    let brokerInvoked = false;
+    const result = await this.beginInvocation(identity, name, args, signal, rawRequest, jobId, () => { brokerInvoked = true; }, beforeBroker);
+    return { result, brokerInvoked };
+  }
+
+  /** Local principal and device policy are rechecked independently of relay claims. */
+  authorizeJob(identity: VerifiedRemoteIdentity, name?: string, args?: unknown): string | undefined {
+    const principal = this.options.principals.getOrCreate(identity);
+    if (principal.revoked || this.closing) return "unauthorized";
+    const policy = this.options.principals.policy(identity);
+    if (name?.startsWith("plugin_") && policy.readOnly) return "permission_denied";
+    if (name) return policyRefusal(policy, name, args)?.code;
+    return undefined;
+  }
+
+  /** Stop only a process issued to this exact Runner-owned remote principal. */
+  async stopStartedProcess(identity: VerifiedRemoteIdentity, processId: string): Promise<boolean> {
+    const principal = this.options.principals.find(identity);
+    if (!principal) return false;
+    const bound = await this.binding(principal);
+    const owned = (await bound.binding.managedProcesses.listRun(principal.runId)).find((item) =>
+      item.processId === processId && item.sessionId === principal.sessionId &&
+      item.actor.role === "remote" && item.actor.id === principal.principalId);
+    if (!owned) return false;
+    await bound.binding.managedProcesses.stopProcesses([processId]);
+    const stopped = (await bound.binding.managedProcesses.listRun(principal.runId)).find((item) => item.processId === processId);
+    return stopped?.status === "stopped";
+  }
+  private beginInvocation(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal,
+    rawRequest?: string, admittedJobId?: string, onBrokerInvoke?: () => void, beforeBroker?: () => boolean): Promise<ToolResult> {
     const callId = `remote-call-${randomUUID()}`;
     if (this.closing) return Promise.resolve(failure(callId, name, "runtime_closed", "Remote runtime is closing."));
     let snapshot: unknown;
     try { snapshot = freezeArguments(structuredClone(args)); }
     catch { return Promise.resolve(failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely.")); }
-    const work = this.invokeChecked(identity, name, snapshot, callId, signal, rawRequest);
+    const work = this.invokeChecked(identity, name, snapshot, callId, signal, rawRequest, admittedJobId, onBrokerInvoke, beforeBroker);
     this.active.add(work);
     void work.finally(() => this.active.delete(work)).catch(() => undefined);
     return work;
   }
 
-  private async invokeChecked(identity: VerifiedRemoteIdentity, name: string, args: unknown, callId: string, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult> {
+  private async invokeChecked(identity: VerifiedRemoteIdentity, name: string, args: unknown, callId: string,
+    signal?: AbortSignal, rawRequest?: string, admittedJobId?: string, onBrokerInvoke?: () => void, beforeBroker?: () => boolean): Promise<ToolResult> {
     let principal = this.options.principals.getOrCreate(identity);
     identity = principal.identity;
     if (principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
@@ -117,11 +163,13 @@ export class RemoteToolRuntime {
       const currentRefusal = policyRefusal(this.options.principals.policy(identity), name, args);
       if (currentRefusal) return failure(callId, name, currentRefusal.code, currentRefusal.message);
       if (this.closing || signal?.aborted) return failure(callId, name, "tool_cancelled", "Remote invocation was cancelled.");
+      if (beforeBroker && !beforeBroker()) return failure(callId, name, "unauthorized", "Remote authorization changed before dispatch.");
       return undefined;
     };
     const dispatch = async (): Promise<ToolResult> => {
       const denied = authorize();
       if (denied) return denied;
+      onBrokerInvoke?.();
       return await bound.broker.invoke({ type: "tool_call", callId, name, arguments: args }, {
         runId: principal.runId, sessionId: principal.sessionId,
         actor: { role: "remote", id: principal.principalId }, workspacePath: this.workspacePath,
@@ -130,7 +178,8 @@ export class RemoteToolRuntime {
     };
     if (isMutating(name, args)) {
       return await this.options.admitEffect!({ principal, callId, toolName: name, workspacePath: this.workspacePath,
-        arguments: args, ...(rawRequest !== undefined ? { rawRequest } : {}), authorize }, dispatch);
+        arguments: args, ...(rawRequest !== undefined ? { rawRequest } : {}),
+        ...(admittedJobId !== undefined ? { admittedJobId } : {}), authorize }, dispatch);
     }
     return await dispatch();
   }

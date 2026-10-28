@@ -54,6 +54,10 @@ export interface RemoteServiceOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly random?: () => number;
   readonly drainTimeoutMs?: number;
+  readonly maxConcurrentJobsPerDevice?: number;
+  readonly maxQueuedJobsPerDevice?: number;
+  readonly toolDeadlineMs?: number;
+  readonly cancellationGraceMs?: number;
   readonly onShutdownStep?: (step: string) => void;
   readonly pluginTools?: RemotePluginToolProvider;
 }
@@ -176,6 +180,10 @@ export class RemoteService {
       ...(this.options.sleep ? { sleep: this.options.sleep } : {}),
       ...(this.options.random ? { random: this.options.random } : {}),
       ...(this.options.drainTimeoutMs !== undefined ? { drainTimeoutMs: this.options.drainTimeoutMs } : {}),
+      ...(this.options.maxConcurrentJobsPerDevice !== undefined ? { maxConcurrentJobsPerDevice: this.options.maxConcurrentJobsPerDevice } : {}),
+      ...(this.options.maxQueuedJobsPerDevice !== undefined ? { maxQueuedJobsPerDevice: this.options.maxQueuedJobsPerDevice } : {}),
+      ...(this.options.toolDeadlineMs !== undefined ? { toolDeadlineMs: this.options.toolDeadlineMs } : {}),
+      ...(this.options.cancellationGraceMs !== undefined ? { cancellationGraceMs: this.options.cancellationGraceMs } : {}),
       isOwnerLockHeld: () => this.releaseOwnerLock !== undefined,
       onStateChange: (state) => this.writeStatusFile(state),
       ...(this.options.onShutdownStep ? { onShutdownStep: this.options.onShutdownStep } : {}),

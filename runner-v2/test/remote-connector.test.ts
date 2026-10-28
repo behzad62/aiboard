@@ -54,6 +54,19 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+async function waitForJob(store: RemoteAdmissionStore, identity: Parameters<RemoteAdmissionStore["getJob"]>[0], jobId: string,
+  diagnostics?: () => string): Promise<void> {
+  // The first remote call includes the cold ExecutionHost.bindRun, measured at
+  // ~9 s on Windows (same on the R1e baseline), so 10 s flaked under load.
+  const deadline = Date.now() + 30_000;
+  let lastState: string | undefined;
+  while (Date.now() < deadline) {
+    lastState = store.getJob(identity, jobId)?.state;
+    if (lastState && !["queued", "running", "awaiting_approval"].includes(lastState)) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(`Remote job did not settle; last state: ${lastState ?? "missing"}.${diagnostics ? " " + diagnostics() : ""}`);
+}
 async function temporary(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "aiboard-r1d-"));
   return root;
@@ -260,9 +273,9 @@ test("authenticated epoch handshake fences admission and reaches tool-ready", as
   const responses = harness.transport.responses();
   assert.equal(responses.length, 1);
   assert.equal(responses[0]!.response.admitted, true);
-  assert.equal(responses[0]!.response.status, "completed");
   assert.equal(harness.dispatches.count, 1);
   const jobId = responses[0]!.response.jobId!;
+  await waitForJob(harness.admission, identity, jobId);
   assert.equal(harness.admission.getJob(identity, jobId)?.state, "completed");
 });
 
@@ -392,8 +405,8 @@ test("revoked device and stale-epoch, replayed and unknown requests never dispat
   const expired = makeRequest(deviceId, { expiresAt: new Date(fixedNow.getTime() - 1_000).toISOString() });
   await emitRequest(harness.transport, expired);
   assert.equal(harness.dispatches.count, 1);
-  // Unsupported tools stay off the remote surface (git_commit, browser, jobs).
-  for (const toolId of ["git_commit", "browser", "jobs_status", "unknown_tool"]) {
+  // Unsupported tools stay off the remote surface (git_commit and browser).
+  for (const toolId of ["git_commit", "browser", "unknown_tool"]) {
     await emitRequest(harness.transport, makeRequest(deviceId, { toolId }));
     assert.equal(harness.dispatches.count, 1, toolId);
     assert.equal(harness.transport.responses().at(-1)!.response.errorCode, "unsupported_tool", toolId);
@@ -444,6 +457,19 @@ test("reconnect after socket loss is bounded and never replays readiness", async
   assert.equal(harness.dispatches.count, 0);
 });
 
+test("a failed reconnect schedules another bounded attempt", async (t) => {
+  const harness = await stubHarness(t);
+  await handshake(harness);
+  harness.transport.drop();
+  const deadline = Date.now() + 2000;
+  while (harness.transport.connectCount < 3 && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(harness.transport.connectCount >= 3, `connectCount=${harness.transport.connectCount}`);
+  assert.ok(harness.transport.connectCount <= 9, `connectCount=${harness.transport.connectCount}`);
+  assert.notEqual(harness.connector.state().state, "tool-ready");
+});
+
 test("ordered shutdown settles in-flight work as outcome_unknown", async (t) => {
   const steps: string[] = [];
   let releaseDispatch!: () => void;
@@ -464,14 +490,19 @@ test("ordered shutdown settles in-flight work as outcome_unknown", async (t) => 
   const request = makeRequest(deviceId);
   const pending = emitRequest(harness.transport, request);
   await tick(); await tick();
-  await harness.connector.close();
+  await assert.rejects(harness.connector.close(), /cleanup remains unverified/);
   assert.deepEqual(steps, ["admission-stopped", "inflight-settled", "transport-closed"]);
   assert.equal(harness.transport.closed, true);
   const identity = { accountId: ACCOUNT, clientId: CLIENT, deviceId };
   const job = harness.admission.admit(identity, JSON.stringify(request)).job;
-  assert.equal(harness.admission.getJob(identity, job.jobId)?.state, "outcome_unknown");
+  const stopped = harness.admission.getJob(identity, job.jobId);
+  assert.equal(stopped?.state, "outcome_unknown");
+  assert.equal(stopped?.cancellation?.stop, "unverified");
+  assert.equal(stopped?.cancellation?.effect, "effect_outcome_unknown");
   releaseDispatch();
   await pending;
+  await tick();
+  await harness.connector.close();
 });
 
 test("device key is a distinct user-only secret and never leaks into argv, env-facing status or logs", async () => {
@@ -539,7 +570,16 @@ test("real broker read and admitted write through the connector", { timeout: 120
   deviceStore.saveSession(session);
   const transport = new FakeTransport();
   const results: ToolResult[] = [];
+  let writeEntered = false;
+  let writeAuthorizationChecks = 0;
   const countingRuntime: RemoteRequestRuntime = {
+    invokeAdmitted: async (id, name, args, signal, raw, jobId, beforeBroker) => {
+      if (name === "fs.write") writeEntered = true;
+      const check = beforeBroker ? () => { if (name === "fs.write") writeAuthorizationChecks++; return beforeBroker(); } : undefined;
+      const outcome = await composition.runtime.invokeAdmitted(id, name, args, signal, raw, jobId, check);
+      results.push(outcome.result);
+      return outcome;
+    },
     invoke: async (id, name, args, signal, raw) => {
       const result = await composition.runtime.invoke(id, name, args, signal, raw);
       results.push(result);
@@ -564,7 +604,9 @@ test("real broker read and admitted write through the connector", { timeout: 120
   const deviceId = identity.deviceId;
   await emitRequest(transport, makeRequest(deviceId));
   assert.equal(transport.responses().at(-1)!.response.admitted, true);
-  assert.equal(transport.responses().at(-1)!.response.status, "completed");
+  const remoteIdentity = { accountId: ACCOUNT, clientId: CLIENT, deviceId };
+  await waitForJob(composition.admission, remoteIdentity, transport.responses().at(-1)!.response.jobId!);
+  assert.equal(composition.admission.getJob(remoteIdentity, transport.responses().at(-1)!.response.jobId!)?.state, "completed");
   assert.match(JSON.stringify(results.at(-1)!.content), /isolated remote fixture/);
   // Effectful write: admitted once, exactly one job, duplicate returns the same job.
   const writeRequest = makeRequest(deviceId, {
@@ -574,7 +616,9 @@ test("real broker read and admitted write through the connector", { timeout: 120
   await emitRequest(transport, writeRequest);
   const writeResponse = transport.responses().at(-1)!.response;
   assert.equal(writeResponse.admitted, true);
-  assert.equal(writeResponse.status, "completed");
+  await waitForJob(composition.admission, remoteIdentity, writeResponse.jobId!, () =>
+    `write entered: ${writeEntered}; authorization checks: ${writeAuthorizationChecks}; file exists: ${existsSync(join(project, "notes.txt"))}.`);
+  assert.equal(composition.admission.getJob(remoteIdentity, writeResponse.jobId!)?.state, "completed");
   assert.equal(await readFile(join(project, "notes.txt"), "utf8"), "Hello\n");
   const duplicate = { ...writeRequest, requestId: "req-duplicate", nonce: "nonce-duplicate", traceId: "trace-duplicate" };
   duplicate.payloadDigest = remotePayloadDigest(duplicate);

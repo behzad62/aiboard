@@ -92,6 +92,12 @@ async function harness(t: test.TestContext, options: {
   const results: ToolResult[] = [];
   let dispatches = 0;
   const runtime: RemoteRequestRuntime = {
+    invokeAdmitted: async (identity, name, args, signal, raw, jobId, beforeBroker) => {
+      dispatches += 1;
+      const outcome = await composition.runtime.invokeAdmitted(identity, name, args, signal, raw, jobId, beforeBroker);
+      results.push(outcome.result);
+      return outcome;
+    },
     invoke: async (identity, name, args, signal, raw) => {
       dispatches += 1;
       const result = await composition.runtime.invoke(identity, name, args, signal, raw);
@@ -154,8 +160,17 @@ async function harness(t: test.TestContext, options: {
     return message.type === "response" ? message.response : (() => { throw new Error("expected response"); })();
   };
 
+  const waitJob = async (response: { jobId?: string }) => {
+    assert.ok(response.jobId);
+    const principal = { accountId: "account-1", clientId: "client-1", deviceId: device.deviceId };
+    await waitFor("remote job settlement", () => {
+      const state = composition.admission.getJob(principal, response.jobId!)?.state;
+      return !!state && !["queued", "running", "awaiting_approval"].includes(state);
+    });
+    return composition.admission.getJob(principal, response.jobId)!;
+  };
   return { root, project, state, relay, connector, composition, device, states, shutdown, grants, results, starting,
-    releaseRecovery, authority, host, artifacts, send, dispatchCount: () => dispatches };
+    releaseRecovery, authority, host, artifacts, send, waitJob, dispatchCount: () => dispatches };
 }
 
 test("scenario 1-2: WSS device proof gates readiness and the authorized contract read dispatches once", { timeout: 180_000 }, async (t) => {
@@ -180,8 +195,8 @@ test("scenario 1-2: WSS device proof gates readiness and the authorized contract
   request.payloadDigest = remotePayloadDigest(request);
   const response = await h.send(request);
   assert.equal(response.admitted, true, JSON.stringify(response));
-  assert.equal(response.status, "completed");
   assert.ok(response.jobId);
+  assert.equal((await h.waitJob(response)).state, "completed");
   assert.equal(h.dispatchCount(), 1);
   assert.equal(h.results[0]?.isError, false);
   assert.match(JSON.stringify(h.results[0]?.content), /isolated relay read/);
@@ -223,6 +238,7 @@ test("scenario 3: mismatched scope, missing authorization and stale epoch are de
   // The authorized read still works after the denials.
   const ok = await h.send(makeRequest(h.device.deviceId, {}, 103));
   assert.equal(ok.admitted, true);
+  await h.waitJob(ok);
   assert.equal(h.dispatchCount(), 1);
 });
 
@@ -293,6 +309,7 @@ test("scenario 4-5: managed process and plugin tool pass; plugin crash degrades,
     payload: { command: process.execPath, args: ["-e", "console.log('managed-hello'); setInterval(() => {}, 1000);"] },
   }, 201));
   assert.equal(started.admitted, true, JSON.stringify(started));
+  await h.waitJob(started);
   const snapshot = h.results.at(-1)?.content.find((block) => block.type === "json" && !!block.value && typeof block.value === "object" && "processId" in block.value);
   assert.ok(snapshot && snapshot.type === "json");
   const processId = (snapshot.value as { processId: string }).processId;
@@ -300,6 +317,7 @@ test("scenario 4-5: managed process and plugin tool pass; plugin crash degrades,
     toolId: "process_read_output", operationClass: "read", payload: { processId, waitMs: 2_000 },
   }, 202));
   assert.equal(output.admitted, true, JSON.stringify(output));
+  await h.waitJob(output);
   assert.match(JSON.stringify(h.results.at(-1)?.content), /managed-hello/);
 
   // Approved plugin tool through the connector.
@@ -307,7 +325,7 @@ test("scenario 4-5: managed process and plugin tool pass; plugin crash degrades,
     toolId: plugin.relayToolId, operationClass: "read", payload: {},
   }, 203));
   assert.equal(read.admitted, true, JSON.stringify(read));
-  assert.equal(read.status, "completed", JSON.stringify(read));
+  assert.equal((await h.waitJob(read)).state, "completed");
   const callsBefore = await readFile(join(plugin.fixtureState, "calls.log"), "utf8");
   assert.match(callsBefore, / read/);
 
@@ -316,7 +334,7 @@ test("scenario 4-5: managed process and plugin tool pass; plugin crash degrades,
     toolId: plugin.relayToolId, operationClass: "read", payload: { crash: true },
   }, 204));
   assert.equal(crashed.admitted, true, JSON.stringify(crashed));
-  assert.equal(crashed.status, "outcome_unknown", JSON.stringify(crashed));
+  assert.equal((await h.waitJob(crashed)).state, "outcome_unknown");
   assert.equal(h.connector.state().state, "connected-degraded", JSON.stringify(h.connector.state()));
   assert.equal(h.connector.state().reasonCode, "optional_tool_unavailable");
   const callsAfterCrash = await readFile(join(plugin.fixtureState, "calls.log"), "utf8");
@@ -327,7 +345,7 @@ test("scenario 4-5: managed process and plugin tool pass; plugin crash degrades,
     toolId: plugin.relayToolId, operationClass: "read", payload: {},
   }, 205));
   assert.equal(recovered.admitted, true, JSON.stringify(recovered));
-  assert.equal(recovered.status, "completed", JSON.stringify(recovered));
+  assert.equal((await h.waitJob(recovered)).state, "completed");
   assert.equal(h.connector.state().state, "tool-ready", JSON.stringify(h.connector.state()));
   const launches = (await readFile(join(plugin.fixtureState, "launches.log"), "utf8")).trim().split(/\r?\n/);
   assert.ok(launches.length >= 2, `expected a supervised restart, launches: ${launches.join(",")}`);
@@ -428,9 +446,22 @@ test("scenario 6: SIGINT shutdown of the child Runner cleans its managed process
     return message.type === "response" ? message.response : (() => { throw new Error("expected response"); })();
   };
 
+  const waitChildJob = async (jobId: string) => {
+    let state = "";
+    await waitFor("child remote job settlement", async () => {
+      const request = dynamic({ toolId: "jobs_status", payload: { jobId } });
+      await relay.send({ type: "request", request, authorization: authority.authorize(request) });
+      const frame = await relay.nextMessage();
+      if (frame.type !== "response" || frame.response.errorCode) throw new Error("Child job status is unavailable.");
+      state = (frame.data as { job: { state: string } }).job.state;
+      return !["queued", "running", "awaiting_approval"].includes(state);
+    });
+    return state;
+  };
+
   const read = await send(dynamic());
   assert.equal(read.admitted, true, JSON.stringify(read));
-  assert.equal(read.status, "completed", JSON.stringify(read));
+  assert.equal(await waitChildJob(read.jobId!), "completed");
 
   const pidFile = join(root, "managed.pid");
   const script = `require("node:fs").writeFileSync(${JSON.stringify(pidFile.replaceAll("\\", "/"))}, "" + process.pid); setInterval(() => {}, 1000);`;
@@ -439,6 +470,7 @@ test("scenario 6: SIGINT shutdown of the child Runner cleans its managed process
     payload: { command: process.execPath, args: ["-e", script] },
   }));
   assert.equal(started.admitted, true, JSON.stringify(started));
+  assert.equal(await waitChildJob(started.jobId!), "completed");
   await waitFor("managed process pid file", () => existsSync(pidFile), 30_000);
   const managedPid = Number(await readFile(pidFile, "utf8"));
   assert.ok(Number.isInteger(managedPid) && managedPid > 0);
@@ -446,7 +478,7 @@ test("scenario 6: SIGINT shutdown of the child Runner cleans its managed process
 
   const pluginCall = await send(dynamic({ toolId: installed.relayToolId, operationClass: "read", payload: {} }));
   assert.equal(pluginCall.admitted, true, JSON.stringify(pluginCall));
-  assert.equal(pluginCall.status, "completed", JSON.stringify(pluginCall));
+  assert.equal(await waitChildJob(pluginCall.jobId!), "completed");
   const launchPids = (await readFile(join(installed.fixtureState, "launches.log"), "utf8"))
     .split(/\r?\n/).map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0);
   assert.ok(launchPids.length >= 1, "the MCP fixture child was launched by the child Runner");

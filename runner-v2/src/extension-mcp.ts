@@ -41,11 +41,13 @@ import { cleanupRecoveredMcpTransports, createExecutionHostMcpTransportFactory }
 import type { PermissionProfile } from "./contracts.js";
 import { canonicalMcpDigest, formatMcpCommand, parseMcpCommand, type McpServerSpec } from "./mcp-configuration.js";
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
+import { McpProtocolError } from "./mcp-rpc-peer.js";
 import { createMcpTools, createRemoteMcpTools, McpManager, type McpCallResult, type McpServerStatus, type McpTransportFactory } from "./mcp-tools.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { RemotePluginToolInfo, RemotePluginToolProvider } from "./remote-connector.js";
 import type { VerifiedRemoteIdentity } from "./remote-principal.js";
+import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
 import { createRunnerCapabilityContractSnapshot } from "./runner-capability-contract.js";
 import type { McpConfigurationAttestation, RunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
 import { runnerRunStateSegment } from "./run-state-identity.js";
@@ -876,6 +878,8 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
   const sessionId = options.sessionId ?? "remote-plugins";
   let current: { generation: number; admitted: ChatMcpTools; broker: ToolBroker } | undefined;
   let sequence = 0;
+  const activeCalls = new Set<string>();
+  const notSentCalls = new Set<string>();
   const load = async () => {
     const generation = await options.generation();
     if (current && current.generation === generation) return current;
@@ -890,9 +894,45 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
       permissionProfile: "full", workspacePath: options.workspacePath, artifacts: options.artifacts,
       ...(admitted.binding ? { executionGrants: admitted.binding.executionGrants } : {}),
     });
-    for (const tool of admitted.tools) broker.register(tool);
+    for (const tool of admitted.tools) broker.register({
+      ...tool,
+      execute: async (input, context) => {
+        try { return await tool.execute(input, context); }
+        catch (error) {
+          if (error instanceof McpProtocolError && error.outcome === "not_sent" && context.callId && activeCalls.has(context.callId)) {
+            notSentCalls.add(context.callId);
+          }
+          throw error;
+        }
+      },
+    });
     current = { generation, admitted, broker };
     return current;
+  };
+  const invoke = async (identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal,
+    beforeBroker?: () => boolean): Promise<RemoteInvocationResult> => {
+    const loaded = await load();
+    const tool = loaded.admitted.tools.find((entry) => entry.definition.name === relayToolId);
+    if (!tool) throw new Error("Plugin tool is not admitted for remote use.");
+    if (signal?.aborted || (beforeBroker && !beforeBroker())) {
+      throw new McpProtocolError("mcp_request_cancelled", "Remote plugin was refused before dispatch.", "not_sent");
+    }
+    const callId = `remote-plugin-${++sequence}`;
+    activeCalls.add(callId);
+    try {
+      const result = await loaded.broker.invoke(
+        { type: "tool_call", callId, name: relayToolId, arguments: args },
+        {
+          runId: loaded.admitted.binding?.runId ?? `remote-plugin-${loaded.generation}`,
+          sessionId, actor: { role: "remote", id: identity.clientId }, workspacePath: options.workspacePath,
+          ...(signal ? { signal } : {}),
+        },
+      );
+      return { result, brokerInvoked: true, ...(notSentCalls.has(callId) ? { stopEvidence: { effect: "no_effect" as const } } : {}) };
+    } finally {
+      activeCalls.delete(callId);
+      notSentCalls.delete(callId);
+    }
   };
   return {
     async list(): Promise<readonly RemotePluginToolInfo[]> {
@@ -910,19 +950,11 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
         };
       });
     },
-    async invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown): Promise<ToolResult> {
-      const loaded = await load();
-      const tool = loaded.admitted.tools.find((entry) => entry.definition.name === relayToolId);
-      if (!tool) throw new Error("Plugin tool is not admitted for remote use.");
-      sequence += 1;
-      return await loaded.broker.invoke(
-        { type: "tool_call", callId: `remote-plugin-${sequence}`, name: relayToolId, arguments: args },
-        {
-          runId: loaded.admitted.binding?.runId ?? `remote-plugin-${loaded.generation}`,
-          sessionId, actor: { role: "remote", id: identity.clientId }, workspacePath: options.workspacePath,
-        },
-      );
+    async invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal,
+      beforeBroker?: () => boolean): Promise<ToolResult> {
+      return (await invoke(identity, relayToolId, args, signal, beforeBroker)).result;
     },
+    invokeAdmitted: invoke,
     async close(): Promise<void> {
       const previous = current;
       current = undefined;

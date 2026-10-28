@@ -132,6 +132,11 @@ export function initializeRemoteAdmissionSchema(database: DatabaseSync, key: Uin
         throw new Error("Missing remote job transition guard.");
       }
     } else throw new Error("Unsupported remote store schema version.");
+    // The exact Runner-issued process link outlives result retention.
+    database.exec(`CREATE TABLE IF NOT EXISTS remote_job_processes (
+      job_id TEXT PRIMARY KEY REFERENCES remote_jobs(job_id) ON DELETE RESTRICT,
+      process_id TEXT NOT NULL
+    )`);
     database.prepare(`INSERT INTO remote_store_metadata (name, value) VALUES ('schema_version', '2')
       ON CONFLICT(name) DO UPDATE SET value = excluded.value`).run();
     database.exec("COMMIT");

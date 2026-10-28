@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { McpRpcPeer, McpProtocolError, parseMcpToolList } from "../src/mcp-rpc-peer.js";
+import type { OperationAuthorizationAssertion, SessionOperationAuthorization } from "../src/session-authority.js";
+import { createStreamingRequestOperation, type StreamingRequestChannel } from "../src/streaming-request-operation.js";
 
 const frame = (id: number, result: unknown) => Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
 function deferred() { let resolve!: () => void; const promise = new Promise<void>((done) => { resolve = done; }); return { promise, resolve }; }
@@ -78,7 +80,114 @@ for (const initially of [true, false]) test(`MCP RPC cancellation initially=${in
   if (initially) abort.abort();
   await assert.rejects(peer.request({ write: async () => { writes++; abort.abort(); } }, "tools/call", {}, 1000, abort.signal),
     (error: unknown) => error instanceof McpProtocolError && error.outcome === (initially ? "not_sent" : "outcome_unknown"));
-  assert.equal(writes, initially ? 0 : 1); peer.close();
+  assert.equal(writes, initially ? 0 : 2); peer.close();
+});
+
+test("MCP RPC sends one cancellation notification for the written request ID", async () => {
+  const peer = new McpRpcPeer({ maximumLineBytes: 1024 });
+  const abort = new AbortController();
+  const frames: Array<{ id?: number; method: string; params: unknown }> = [];
+  const writer = { write: async (bytes: Uint8Array) => {
+    frames.push(JSON.parse(Buffer.from(bytes).toString()) as { id?: number; method: string; params: unknown });
+  } };
+  const request = peer.request(writer, "tools/call", { name: "slow" }, 1000, abort.signal);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  abort.abort();
+  await assert.rejects(request, (error: unknown) =>
+    error instanceof McpProtocolError && error.code === "mcp_request_cancelled" && error.outcome === "outcome_unknown");
+  assert.equal(frames.length, 2);
+  assert.equal(frames[0]!.method, "tools/call");
+  assert.deepEqual(frames[1], {
+    jsonrpc: "2.0", method: "notifications/cancelled",
+    params: { requestId: frames[0]!.id, reason: "Cancelled by caller" },
+  });
+  peer.close();
+});
+
+test("the owned request channel permits only the acknowledged call's exact cancellation", async () => {
+  const writes: string[] = [];
+  let assertions = 0;
+  const request = createStreamingRequestOperation({
+    sessionId: "session", assert: () => { assertions++; },
+    write: async (payload, _timeout, assertCurrent) => { assertCurrent(); writes.push(Buffer.from(payload).toString()); },
+    waitForOutput: async () => false, deliver: async () => false,
+  });
+  const authorization = {} as SessionOperationAuthorization;
+  const assertion: OperationAuthorizationAssertion = {
+    sessionId: "session", operation: "request", requestAccess: [], credentialNames: [],
+    networkApproved: false, externalApproved: false, destructiveApproved: false,
+    binding: { runId: "run", sessionId: "agent", actor: { role: "remote", id: "client" },
+      toolName: "plugin_fixture", callId: "call", permissionProfile: "full" },
+  };
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value) + "\n");
+  const original = encode({ jsonrpc: "2.0", id: 7, method: "tools/call", params: {} });
+  const cancellation = encode({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 7, reason: "Cancelled by caller" } });
+  let retained!: StreamingRequestChannel;
+  await request(authorization, assertion, async (channel) => {
+    retained = channel;
+    await channel.write(original, 1000);
+    await assert.rejects(channel.write(encode({ jsonrpc: "2.0", id: 8, method: "tools/call", params: {} }), 1000));
+    await assert.rejects(channel.write(encode({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 8, reason: "Cancelled by caller" } }), 1000));
+    await channel.write(cancellation, 1000);
+    await assert.rejects(channel.write(cancellation, 1000));
+  }, 1000);
+  await assert.rejects(retained.write(cancellation, 1000));
+  assert.deepEqual(writes, [original.toString(), cancellation.toString()]);
+  assert.ok(assertions >= 2);
+});
+
+test("MCP cancellation notification traverses the owned request channel", async () => {
+  const frames: string[] = [];
+  const operation = createStreamingRequestOperation({
+    sessionId: "session", assert: () => undefined,
+    write: async (payload, _timeout, assertCurrent) => { assertCurrent(); frames.push(Buffer.from(payload).toString()); },
+    waitForOutput: async () => false, deliver: async () => false,
+  });
+  const assertion: OperationAuthorizationAssertion = {
+    sessionId: "session", operation: "request", requestAccess: [], credentialNames: [],
+    networkApproved: false, externalApproved: false, destructiveApproved: false,
+    binding: { runId: "run", sessionId: "agent", actor: { role: "remote", id: "client" },
+      toolName: "plugin_fixture", callId: "call", permissionProfile: "full" },
+  };
+  const peer = new McpRpcPeer({ maximumLineBytes: 1024 });
+  const abort = new AbortController();
+  const pending = operation({} as SessionOperationAuthorization, assertion,
+    (channel) => peer.request(channel, "tools/call", { name: "slow" }, 1000, abort.signal), 1000);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  abort.abort();
+  await assert.rejects(pending, (error: unknown) => error instanceof McpProtocolError && error.outcome === "outcome_unknown");
+  assert.equal(frames.length, 2);
+  assert.equal((JSON.parse(frames[1]!) as { method: string }).method, "notifications/cancelled");
+  peer.close();
+});
+
+test("the owned channel refuses cancellation before write acknowledgement or after authority loss", async () => {
+  const gate = deferred();
+  let revoked = false;
+  let writes = 0;
+  const operation = createStreamingRequestOperation({
+    sessionId: "session", assert: () => { if (revoked) throw new Error("authority revoked"); },
+    write: async (_payload, _timeout, assertCurrent) => { assertCurrent(); writes++; await gate.promise; },
+    waitForOutput: async () => false, deliver: async () => false,
+  });
+  const assertion: OperationAuthorizationAssertion = {
+    sessionId: "session", operation: "request", requestAccess: [], credentialNames: [],
+    networkApproved: false, externalApproved: false, destructiveApproved: false,
+    binding: { runId: "run", sessionId: "agent", actor: { role: "remote", id: "client" },
+      toolName: "plugin_fixture", callId: "call", permissionProfile: "full" },
+  };
+  const original = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: {} }) + "\n");
+  const cancellation = Buffer.from(JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled",
+    params: { requestId: 7, reason: "Cancelled by caller" } }) + "\n");
+  await assert.rejects(operation({} as SessionOperationAuthorization, assertion, async (channel) => {
+    const first = channel.write(original, 1000);
+    await assert.rejects(channel.write(cancellation, 1000));
+    gate.resolve();
+    await first;
+    revoked = true;
+    await assert.rejects(channel.write(cancellation, 1000));
+  }, 1000), /authority revoked/);
+  assert.equal(writes, 1);
 });
 
 test("MCP RPC has a bounded in-flight request count and monotonic exact IDs", async () => {
