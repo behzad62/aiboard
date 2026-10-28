@@ -95,7 +95,7 @@ test("one hundred concurrent retries commit once before the only dispatch", asyn
         assert.equal(row.state, "running");
         assert.equal(row.dispatching, 1);
         assert.deepEqual(store.events(identity, row.job_id).events.map((event) => event.state), ["queued", "running"]);
-        assert.deepEqual(store.readRequest(identity, row.job_id), request);
+        assert.throws(() => store.readRequest(identity, row.job_id), errorCode("invalid_request"));
       } finally { db.close(); }
       entered();
       await gate;
@@ -163,8 +163,8 @@ test("principals with the same key remain isolated, including requests and curso
     assert.equal(calls, 2);
     assert.notEqual(a.jobId, b.jobId);
     assert.equal(store.getJob(other, a.jobId as string), undefined);
-    assert.throws(() => store.readRequest(other, a.jobId as string), errorCode("unauthorized"));
-    assert.throws(() => store.events(other, a.jobId as string), errorCode("unauthorized"));
+    assert.throws(() => store.readRequest(other, a.jobId as string), errorCode("not_found"));
+    assert.throws(() => store.events(other, a.jobId as string), errorCode("not_found"));
     const cursor = store.events(identity, a.jobId as string, undefined, 1).nextCursor;
     assert.throws(() => store.events(other, b.jobId as string, cursor), errorCode("invalid_request"));
     assert.throws(() => store.events(identity, a.jobId as string, cursor.slice(0, -1) + "!"), errorCode("invalid_request"));

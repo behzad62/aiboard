@@ -4,10 +4,30 @@ import { dirname, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { ToolResult } from "./agent-contracts.js";
+import { initializeRemoteAdmissionSchema } from "./remote-admission-schema.js";
 import type { VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteEffectRequest, RemoteToolRuntimeOptions } from "./remote-tool-runtime.js";
 
-export type RemoteJobState = "queued" | "running" | "completed" | "failed" | "outcome_unknown" | "blocked_policy";
+export type RemoteJobState = "queued" | "awaiting_approval" | "running" | "completed" | "failed" |
+  "cancelled" | "outcome_unknown" | "blocked_policy" | "blocked_quota";
+
+export type RemoteTerminalState = Extract<RemoteJobState, "completed" | "failed" | "cancelled" | "outcome_unknown" | "blocked_policy" | "blocked_quota">;
+export interface RemoteCancellation {
+  requestedAt: string;
+  stop: "pending" | "stopped" | "unverified" | "not_applicable";
+  effect: "pending" | "no_effect" | "known" | "effect_outcome_unknown";
+}
+
+export interface RemoteCancelReceipt {
+  jobId: string;
+  cancelRequestId: string;
+  traceId: string;
+  delivery: "recorded";
+  cancellation: RemoteCancellation;
+}
+
+export interface RemoteJobResult { outputRef?: string; inline?: Uint8Array }
+export interface RemoteAdmissionStoreOptions { clock?: () => Date; resultTtlMs?: number; maxTombstones?: number }
 
 export interface RemoteJob {
   protocolVersion: string;
@@ -21,15 +41,21 @@ export interface RemoteJob {
   state: RemoteJobState;
   createdAt: string;
   updatedAt: string;
+  resultExpiresAt?: string;
+  cancellation?: RemoteCancellation;
+  outputRef?: string;
 }
+
+export interface RemoteJobView { authoritative: true; job: RemoteJob }
 
 export interface RemoteJobEvent {
   protocolVersion: string;
   jobId: string;
   sequence: string;
   occurredAt: string;
-  kind: "state_changed" | "reconciled";
+  kind: "state_changed" | "cancel_requested" | "stopped" | "effect_outcome_unknown" | "result_expired" | "reconciled";
   state: RemoteJobState;
+  cancellation?: RemoteCancellation;
   traceId: string;
 }
 
@@ -37,6 +63,7 @@ export interface RemoteEventPage {
   jobId: string;
   events: RemoteJobEvent[];
   nextCursor: string;
+  gap?: { earliestSequence: string };
 }
 
 export interface RemoteRequest {
@@ -59,7 +86,8 @@ export interface RemoteRequest {
 }
 
 type AdmissionCode = "invalid_request" | "unsupported_version" | "expired_request" |
-  "device_epoch_mismatch" | "idempotency_conflict" | "unauthorized";
+  "device_epoch_mismatch" | "idempotency_conflict" | "unauthorized" | "not_found" |
+  "result_expired" | "storage_exhausted" | "schema_migration_failed";
 
 export class RemoteAdmissionError extends Error {
   constructor(readonly code: AdmissionCode, message: string) {
@@ -73,8 +101,17 @@ type JobRow = {
   tool_id: string; operation_class: string; scope_ref: string; state: RemoteJobState;
   created_at: string; updated_at: string; trace_id: string; dispatching: number;
   last_sequence: number; request_iv: Uint8Array | null; request_tag: Uint8Array | null; request_ciphertext: Uint8Array | null;
+  result_expires_at: string | null; result_expired: number; output_ref: string | null;
+  result_iv: Uint8Array | null; result_tag: Uint8Array | null; result_ciphertext: Uint8Array | null;
+  reconciliation_evidence: string | null;
 };
-type EventRow = { sequence: number; occurred_at: string; kind: RemoteJobEvent["kind"]; state: RemoteJobState; trace_id: string };
+type EventRow = { sequence: number; occurred_at: string; kind: RemoteJobEvent["kind"]; state: RemoteJobState;
+  trace_id: string; cancellation_json: string | null };
+type CancellationRow = { job_id: string; cancel_request_id: string; trace_id: string; requested_at: string;
+  stop: RemoteCancellation["stop"]; effect: RemoteCancellation["effect"];
+  receipt_stop: RemoteCancellation["stop"]; receipt_effect: RemoteCancellation["effect"] };
+type TombstoneRow = { job_id: string; payload_digest: string; outcome: RemoteTerminalState; created_at: string;
+  updated_at: string; result_expires_at: string | null };
 
 export type AdmissionDecision =
   | { created: true; job: RemoteJob; request: RemoteRequest }
@@ -91,59 +128,42 @@ export class RemoteAdmissionStore {
   private readonly database: DatabaseSync;
   private readonly key: Buffer;
   private readonly cursorKey: Buffer;
+  private readonly clock: () => Date;
+  private readonly resultTtlMs: number;
+  private readonly maxTombstones: number;
   private reconciled = false;
 
-  constructor(databasePath: string, storageKey: Uint8Array, private readonly clock: () => Date = () => new Date()) {
+  constructor(databasePath: string, storageKey: Uint8Array,
+    clockOrOptions: (() => Date) | RemoteAdmissionStoreOptions = {}, extraOptions: RemoteAdmissionStoreOptions = {}) {
     if (!isAbsolute(databasePath)) throw new Error("Remote admission state path must be absolute.");
     if (!ArrayBuffer.isView(storageKey) || Object.prototype.toString.call(storageKey) !== "[object Uint8Array]" || storageKey.byteLength !== 32) {
       throw new Error("Remote admission requires a 32-byte storage key.");
     }
+    const options = typeof clockOrOptions === "function" ? { ...extraOptions, clock: clockOrOptions } : clockOrOptions;
+    this.clock = options.clock ?? (() => new Date());
+    this.resultTtlMs = options.resultTtlMs ?? 7 * 24 * 60 * 60 * 1000;
+    this.maxTombstones = options.maxTombstones ?? 1_000_000;
+    if (!Number.isSafeInteger(this.resultTtlMs) || this.resultTtlMs < 0 ||
+      !Number.isSafeInteger(this.maxTombstones) || this.maxTombstones < 0) throw new Error("Invalid remote store retention options.");
     this.key = Buffer.from(storageKey);
     this.cursorKey = createHmac("sha256", this.key).update("remote-admission-cursor-v1").digest();
     mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 });
     this.database = new DatabaseSync(databasePath);
-    this.database.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA synchronous = FULL;
-      PRAGMA foreign_keys = ON;
-      CREATE TABLE IF NOT EXISTS remote_device_epochs (
-        account_id TEXT NOT NULL, device_id TEXT NOT NULL, epoch TEXT NOT NULL,
-        PRIMARY KEY (account_id, device_id)
-      );
-      CREATE TABLE IF NOT EXISTS remote_store_metadata (
-        name TEXT PRIMARY KEY, value BLOB NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS remote_jobs (
-        job_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, client_id TEXT NOT NULL, device_id TEXT NOT NULL,
-        idempotency_key TEXT NOT NULL, payload_digest TEXT NOT NULL, protocol_version TEXT NOT NULL,
-        tool_id TEXT NOT NULL, operation_class TEXT NOT NULL, scope_ref TEXT NOT NULL,
-        state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'completed', 'failed', 'outcome_unknown', 'blocked_policy')),
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, trace_id TEXT NOT NULL,
-        dispatching INTEGER NOT NULL CHECK (dispatching IN (0, 1)), last_sequence INTEGER NOT NULL CHECK (last_sequence > 0),
-        request_iv BLOB, request_tag BLOB, request_ciphertext BLOB,
-        CHECK ((state = 'running' AND dispatching = 1) OR (state != 'running' AND dispatching = 0)),
-        CHECK ((request_iv IS NULL AND request_tag IS NULL AND request_ciphertext IS NULL) OR
-               (request_iv IS NOT NULL AND request_tag IS NOT NULL AND request_ciphertext IS NOT NULL)),
-        UNIQUE (account_id, client_id, device_id, idempotency_key)
-      );
-      CREATE TABLE IF NOT EXISTS remote_job_events (
-        job_id TEXT NOT NULL REFERENCES remote_jobs(job_id), sequence INTEGER NOT NULL,
-        occurred_at TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('state_changed', 'reconciled')),
-        state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'completed', 'failed', 'outcome_unknown', 'blocked_policy')),
-        trace_id TEXT NOT NULL,
-        PRIMARY KEY (job_id, sequence)
-      );
-    `);
     try {
-      this.transaction(() => {
-        const check = createHmac("sha256", this.key).update("remote-admission-key-check-v1").digest();
-        this.database.prepare("INSERT OR IGNORE INTO remote_store_metadata (name, value) VALUES ('key_check', ?)").run(check);
-        const stored = this.database.prepare("SELECT value FROM remote_store_metadata WHERE name = 'key_check'").get() as { value: Uint8Array };
-        if (stored.value.byteLength !== check.byteLength || !timingSafeEqual(stored.value, check)) throw new Error("Remote admission storage key does not match.");
-      });
+      this.database.exec("PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
+      initializeRemoteAdmissionSchema(this.database, this.key, this.resultTtlMs);
     } catch (error) {
       this.database.close(); this.key.fill(0); this.cursorKey.fill(0);
-      throw error;
+      if (error instanceof Error && error.message === "Remote admission storage key does not match.") throw error;
+      throw new RemoteAdmissionError("schema_migration_failed", "Remote admission schema initialization failed.");
+    }
+    try {
+      const mode = this.database.prepare("PRAGMA journal_mode = WAL").get() as { journal_mode: string } | undefined;
+      if (mode?.journal_mode.toLowerCase() !== "wal") throw new Error("WAL journal mode is unavailable.");
+    }
+    catch (error) {
+      this.database.close(); this.key.fill(0); this.cursorKey.fill(0);
+      throw new Error("Remote admission WAL initialization failed.", { cause: error });
     }
   }
 
@@ -176,8 +196,26 @@ export class RemoteAdmissionStore {
         if (existing.payload_digest !== request.payloadDigest) {
           throw new RemoteAdmissionError("idempotency_conflict", "Idempotency key was reused with different content.");
         }
-        return { created: false, job: toJob(existing), request };
+        return { created: false, job: this.toJob(existing), request };
       }
+      const tombstone = this.database.prepare(`SELECT * FROM remote_job_tombstones WHERE account_id = ? AND client_id = ?
+        AND device_id = ? AND idempotency_key = ?`).get(principal.accountId, principal.clientId, principal.deviceId,
+        request.idempotencyKey) as unknown as TombstoneRow | undefined;
+      if (tombstone) {
+        if (tombstone.payload_digest !== request.payloadDigest) {
+          throw new RemoteAdmissionError("idempotency_conflict", "Idempotency key was reused with different content.");
+        }
+        return { created: false, request, job: { protocolVersion: request.protocolVersion, jobId: tombstone.job_id,
+          principal, idempotencyKey: request.idempotencyKey, payloadDigest: tombstone.payload_digest,
+          toolId: request.toolId, operationClass: request.operationClass, scopeRef: request.scopeRef,
+          state: tombstone.outcome, createdAt: tombstone.created_at, updatedAt: tombstone.updated_at,
+          ...(tombstone.result_expires_at ? { resultExpiresAt: tombstone.result_expires_at } : {}) } };
+      }
+      // Reserve the future tombstone before admitting work, so settlement can never exhaust the bound.
+      const capacity = this.database.prepare(`SELECT
+        (SELECT COUNT(*) FROM remote_job_tombstones) +
+        (SELECT COUNT(*) FROM remote_jobs WHERE state IN ('queued', 'awaiting_approval', 'running')) AS used`).get() as { used: number };
+      if (capacity.used >= this.maxTombstones) throw new RemoteAdmissionError("storage_exhausted", "Remote job retention capacity is exhausted.");
       const jobId = "job-" + randomUUID();
       const now = this.clock().toISOString();
       const iv = randomBytes(12);
@@ -195,14 +233,19 @@ export class RemoteAdmissionStore {
       );
       this.database.prepare(`INSERT INTO remote_job_events (job_id, sequence, occurred_at, kind, state, trace_id)
         VALUES (?, 1, ?, 'state_changed', 'queued', ?)`).run(jobId, now, request.traceId);
-      return { created: true, job: toJob(this.ownedRow(principal, jobId)), request };
+      return { created: true, job: this.toJob(this.ownedRow(principal, jobId)), request };
     });
   }
 
   getJob(identity: VerifiedRemoteIdentity, jobId: string): RemoteJob | undefined {
     const principal = checkedPrincipal(identity);
     const row = this.findOwnedRow(principal, jobId);
-    return row ? toJob(row) : undefined;
+    return row ? this.toJob(row) : undefined;
+  }
+
+  view(identity: VerifiedRemoteIdentity, jobId: string): RemoteJobView {
+    const principal = checkedPrincipal(identity);
+    return { authoritative: true, job: this.toJob(this.ownedRow(principal, jobId)) };
   }
 
   /** Decryption is principal-scoped and intended only for freshly authorized queued recovery. */
@@ -228,8 +271,8 @@ export class RemoteAdmissionStore {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);
     return this.transaction(() => {
-      this.requireEpoch(principal, epoch);
       const row = this.ownedRow(principal, jobId);
+      this.requireEpoch(principal, epoch);
       if (row.state !== "queued" || row.dispatching !== 0) throw new Error("Remote job cannot be dispatched from its current state.");
       const request = this.decryptRequest(principal, row);
       if (request.payloadDigest !== row.payload_digest || remotePayloadDigest(request) !== row.payload_digest) {
@@ -237,27 +280,124 @@ export class RemoteAdmissionStore {
       }
       if (request.deviceEpoch !== epoch) throw new RemoteAdmissionError("device_epoch_mismatch", "Queued request requires fresh authorization.");
       if (Date.parse(request.expiresAt) <= this.clock().getTime()) throw new RemoteAdmissionError("expired_request", "Request has expired.");
-      return this.transition(row, "running", "state_changed", 1);
+      return this.transition(row, "running", "state_changed");
     });
   }
 
-  settle(identity: VerifiedRemoteIdentity, jobId: string, state: "completed" | "failed" | "outcome_unknown"): RemoteJob {
+  markAwaitingApproval(identity: VerifiedRemoteIdentity, jobId: string): RemoteJob {
+    return this.simpleTransition(identity, jobId, "queued", "awaiting_approval");
+  }
+
+  approve(identity: VerifiedRemoteIdentity, jobId: string): RemoteJob {
+    return this.simpleTransition(identity, jobId, "awaiting_approval", "queued");
+  }
+
+  denyApproval(identity: VerifiedRemoteIdentity, jobId: string): RemoteJob {
+    return this.simpleTransition(identity, jobId, "awaiting_approval", "blocked_policy");
+  }
+
+  blockQuota(identity: VerifiedRemoteIdentity, jobId: string): RemoteJob {
+    return this.simpleTransition(identity, jobId, "queued", "blocked_quota");
+  }
+
+  settle(identity: VerifiedRemoteIdentity, jobId: string, state: "completed" | "failed" | "outcome_unknown", result?: RemoteJobResult): RemoteJob {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);
+    if (!["completed", "failed", "outcome_unknown"].includes(state)) throw new RemoteAdmissionError("invalid_request", "Invalid settlement state.");
     return this.transaction(() => {
       const row = this.ownedRow(principal, jobId);
       if (row.state !== "running" || row.dispatching !== 1) throw new Error("Remote job has no active dispatch marker.");
-      return this.transition(row, state, "state_changed", 0);
+      const cancellation = this.cancellation(jobId);
+      if (cancellation) {
+        this.updateCancellation(cancellation, cancellation.stop, state === "outcome_unknown" ? "effect_outcome_unknown" : "known");
+      }
+      this.transition(row, state, "state_changed", result);
+      if (cancellation && state === "outcome_unknown") this.appendEvent(jobId, "effect_outcome_unknown", row.trace_id);
+      return this.toJob(this.ownedRow(principal, jobId));
     });
   }
 
   blockPolicy(identity: VerifiedRemoteIdentity, jobId: string): RemoteJob {
+    return this.simpleTransition(identity, jobId, "queued", "blocked_policy");
+  }
+
+  private simpleTransition(identity: VerifiedRemoteIdentity, jobId: string, from: RemoteJobState, to: RemoteJobState): RemoteJob {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);
     return this.transaction(() => {
       const row = this.ownedRow(principal, jobId);
-      if (row.state !== "queued" || row.dispatching !== 0) throw new Error("Remote job cannot be blocked from its current state.");
-      return this.transition(row, "blocked_policy", "state_changed", 0);
+      if (row.state !== from) throw new Error("Remote job cannot transition from its current state.");
+      return this.transition(row, to, "state_changed");
+    });
+  }
+
+  requestCancel(identity: VerifiedRemoteIdentity, jobId: string, cancelRequestId: string, traceId: string): RemoteCancelReceipt {
+    this.requireReconciled();
+    const principal = checkedPrincipal(identity);
+    checkedId(cancelRequestId); checkedId(traceId);
+    return this.transaction(() => {
+      const row = this.findOwnedRow(principal, jobId);
+      if (!row) {
+        const tombstone = this.database.prepare(`SELECT job_id FROM remote_job_tombstones WHERE job_id = ?
+          AND account_id = ? AND client_id = ? AND device_id = ?`).get(jobId, principal.accountId, principal.clientId, principal.deviceId);
+        const retained = tombstone ? this.cancellation(jobId) : undefined;
+        if (retained) return cancellationReceipt(retained);
+        throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
+      }
+      const existing = this.cancellation(jobId);
+      if (existing) return cancellationReceipt(existing);
+      const now = this.clock().toISOString();
+      const beforeDispatch = row.state === "queued" || row.state === "awaiting_approval";
+      const stop: RemoteCancellation["stop"] = beforeDispatch ? "stopped" : row.state === "running" ? "pending" :
+        row.state === "outcome_unknown" ? "unverified" : "not_applicable";
+      const effect: RemoteCancellation["effect"] = beforeDispatch || row.state === "blocked_policy" || row.state === "blocked_quota" ? "no_effect" :
+        row.state === "running" ? "pending" : row.state === "outcome_unknown" ? "effect_outcome_unknown" : "known";
+      this.database.prepare(`INSERT INTO remote_job_cancellations (job_id, cancel_request_id, trace_id, requested_at, stop, effect, receipt_stop, receipt_effect)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(jobId, cancelRequestId, traceId, now, stop, effect, stop, effect);
+      this.appendEvent(jobId, "cancel_requested", traceId, now);
+      if (beforeDispatch) this.transition(this.ownedRow(principal, jobId), "cancelled", "state_changed");
+      return cancellationReceipt(this.cancellation(jobId)!);
+    });
+  }
+
+  recordStop(identity: VerifiedRemoteIdentity, jobId: string, evidence: "verified" | "unverified"): RemoteJob {
+    this.requireReconciled();
+    const principal = checkedPrincipal(identity);
+    if (evidence !== "verified" && evidence !== "unverified") throw new RemoteAdmissionError("invalid_request", "Invalid stop evidence.");
+    return this.transaction(() => {
+      const row = this.ownedRow(principal, jobId);
+      const cancellation = this.cancellation(jobId);
+      if (!cancellation || cancellation.stop === "not_applicable") throw new Error("Remote job has no applicable cancellation.");
+      const stop = evidence === "verified" ? "stopped" : "unverified";
+      if (cancellation.stop === "stopped" && stop !== "stopped") throw new Error("Verified stop evidence cannot be downgraded.");
+      if (cancellation.stop !== stop) {
+        this.updateCancellation(cancellation, stop, cancellation.effect);
+        this.appendEvent(jobId, "stopped", cancellation.trace_id);
+      }
+      return this.toJob(this.ownedRow(principal, row.job_id));
+    });
+  }
+
+  settleCancelled(identity: VerifiedRemoteIdentity, jobId: string,
+    effect: "no_effect" | "known" | "effect_outcome_unknown", result?: RemoteJobResult): RemoteJob {
+    this.requireReconciled();
+    const principal = checkedPrincipal(identity);
+    if (!["no_effect", "known", "effect_outcome_unknown"].includes(effect) || (result && effect !== "known")) {
+      throw new RemoteAdmissionError("invalid_request", "Invalid cancellation settlement.");
+    }
+    return this.transaction(() => {
+      const row = this.ownedRow(principal, jobId);
+      const cancellation = this.cancellation(jobId);
+      if (row.state !== "running" || !cancellation) throw new Error("Remote job has no active cancellation.");
+      if (effect !== "effect_outcome_unknown" && cancellation.stop !== "stopped") {
+        throw new Error("Cancellation requires verified stop evidence.");
+      }
+      const stop = cancellation.stop === "pending" && effect === "effect_outcome_unknown" ? "unverified" : cancellation.stop;
+      this.updateCancellation(cancellation, stop, effect);
+      if (stop !== cancellation.stop) this.appendEvent(jobId, "stopped", cancellation.trace_id);
+      this.transition(this.ownedRow(principal, jobId), effect === "effect_outcome_unknown" ? "outcome_unknown" : "cancelled", "state_changed", result);
+      if (effect === "effect_outcome_unknown") this.appendEvent(jobId, "effect_outcome_unknown", cancellation.trace_id);
+      return this.toJob(this.ownedRow(principal, jobId));
     });
   }
 
@@ -266,10 +406,33 @@ export class RemoteAdmissionStore {
     if (this.reconciled) return [];
     const jobs = this.transaction(() => {
       const rows = this.database.prepare("SELECT * FROM remote_jobs WHERE state = 'running' AND dispatching = 1").all() as unknown as JobRow[];
-      return rows.map((row) => this.transition(row, "outcome_unknown", "reconciled", 0));
+      return rows.map((row) => {
+        const cancellation = this.cancellation(row.job_id);
+        if (cancellation) {
+          // A prior stop observation is not automatically fresh proof after an interrupted dispatch.
+          this.updateCancellation(cancellation, "unverified", "effect_outcome_unknown");
+          this.appendEvent(row.job_id, "stopped", cancellation.trace_id);
+          this.appendEvent(row.job_id, "effect_outcome_unknown", cancellation.trace_id);
+        }
+        return this.transition(this.ownedRow(rowIdentity(row), row.job_id), "outcome_unknown", "reconciled");
+      });
     });
     this.reconciled = true;
     return jobs;
+  }
+
+  reconcileUnknown(identity: VerifiedRemoteIdentity, jobId: string, resolution: "completed" | "failed", evidence: string): RemoteJob {
+    this.requireReconciled();
+    const principal = checkedPrincipal(identity);
+    if ((resolution !== "completed" && resolution !== "failed") || typeof evidence !== "string" ||
+      !evidence.trim() || evidence.length > 16_384) throw new RemoteAdmissionError("invalid_request", "Reconciliation requires evidence and a known outcome.");
+    return this.transaction(() => {
+      const row = this.ownedRow(principal, jobId);
+      if (row.state !== "outcome_unknown") throw new Error("Remote job outcome is not unknown.");
+      const cancellation = this.cancellation(jobId);
+      if (cancellation) this.updateCancellation(cancellation, cancellation.stop, "known");
+      return this.transition(row, resolution, "reconciled", undefined, evidence);
+    });
   }
 
   events(identity: VerifiedRemoteIdentity, jobId: string, cursor?: string, limit = 100): RemoteEventPage {
@@ -277,12 +440,111 @@ export class RemoteAdmissionStore {
     const job = this.ownedRow(principal, jobId);
     if (!Number.isInteger(limit) || limit < 1 || limit > 256) throw new RemoteAdmissionError("invalid_request", "Invalid event page size.");
     const after = cursor === undefined ? 0 : this.decodeCursor(principal, jobId, cursor);
-    const rows = this.database.prepare(`SELECT sequence, occurred_at, kind, state, trace_id FROM remote_job_events
+    if (after > job.last_sequence) throw new RemoteAdmissionError("invalid_request", "Event cursor is ahead of the journal.");
+    const first = this.database.prepare("SELECT MIN(sequence) AS sequence FROM remote_job_events WHERE job_id = ?").get(jobId) as { sequence: number | null };
+    const earliest = first.sequence === null ? BigInt(job.last_sequence) + 1n : BigInt(first.sequence);
+    const hasGap = earliest > 1n && BigInt(after) < earliest;
+    const rows = this.database.prepare(`SELECT sequence, occurred_at, kind, state, trace_id, cancellation_json FROM remote_job_events
       WHERE job_id = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?`).all(jobId, after, limit) as unknown as EventRow[];
     const events = rows.map((row): RemoteJobEvent => ({ protocolVersion: job.protocol_version,
-      jobId, sequence: String(row.sequence), occurredAt: row.occurred_at, kind: row.kind, state: row.state, traceId: row.trace_id }));
-    const next = rows.length ? rows[rows.length - 1].sequence : after;
-    return { jobId, events, nextCursor: this.encodeCursor(principal, jobId, next) };
+      jobId, sequence: String(row.sequence), occurredAt: row.occurred_at, kind: row.kind, state: row.state, traceId: row.trace_id,
+      ...(row.cancellation_json ? { cancellation: JSON.parse(row.cancellation_json) as RemoteCancellation } : {}) }));
+    const next = rows.length ? rows[rows.length - 1].sequence : hasGap ? job.last_sequence : after;
+    const earliestSequence = earliest.toString();
+    return { jobId, events, nextCursor: this.encodeCursor(principal, jobId, next), ...(hasGap ? { gap: { earliestSequence } } : {}) };
+  }
+
+  result(identity: VerifiedRemoteIdentity, jobId: string): { state: RemoteJobState; outputRef?: string; inline?: Uint8Array } {
+    const principal = checkedPrincipal(identity);
+    const row = this.findOwnedRow(principal, jobId);
+    if (!row) {
+      const tombstone = this.database.prepare(`SELECT result_expired FROM remote_job_tombstones WHERE job_id = ?
+        AND account_id = ? AND client_id = ? AND device_id = ?`).get(jobId, principal.accountId, principal.clientId, principal.deviceId) as { result_expired: number } | undefined;
+      if (tombstone?.result_expired) throw new RemoteAdmissionError("result_expired", "Remote job result has expired.");
+      throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
+    }
+    if (!isTerminal(row.state)) throw new RemoteAdmissionError("invalid_request", "Remote job has not settled.");
+    const expiry = row.result_expires_at ? Date.parse(row.result_expires_at) : NaN;
+    if (row.result_expired || !Number.isFinite(expiry) || expiry <= this.clock().getTime()) {
+      throw new RemoteAdmissionError("result_expired", "Remote job result has expired.");
+    }
+    let inline: Buffer | undefined;
+    if (row.result_iv && row.result_tag && row.result_ciphertext) {
+      const decipher = createDecipheriv("aes-256-gcm", this.key, row.result_iv);
+      decipher.setAAD(resultAad(principal, jobId, row.payload_digest));
+      decipher.setAuthTag(row.result_tag);
+      inline = Buffer.concat([decipher.update(row.result_ciphertext), decipher.final()]);
+    }
+    return { state: row.state, ...(row.output_ref ? { outputRef: row.output_ref } : {}), ...(inline ? { inline } : {}) };
+  }
+
+  expireResults(identity?: VerifiedRemoteIdentity): number {
+    this.requireReconciled();
+    const principal = identity === undefined ? undefined : checkedPrincipal(identity);
+    return this.transaction(() => {
+      const now = this.clock().toISOString();
+      const query = `SELECT * FROM remote_jobs WHERE result_expired = 0 AND result_expires_at IS NOT NULL AND result_expires_at <= ?` +
+        (principal ? " AND account_id = ? AND client_id = ? AND device_id = ?" : "");
+      const statement = this.database.prepare(query);
+      const rows = (principal ? statement.all(now, principal.accountId, principal.clientId, principal.deviceId) : statement.all(now)) as unknown as JobRow[];
+      for (const row of rows) {
+        const tombstone = this.database.prepare(`UPDATE remote_job_tombstones SET result_expired = 1
+          WHERE job_id = ? AND account_id = ? AND client_id = ? AND device_id = ? AND payload_digest = ? AND outcome = ?`)
+          .run(row.job_id, row.account_id, row.client_id, row.device_id, row.payload_digest, row.state);
+        if (Number(tombstone.changes) !== 1) throw new Error("Remote job tombstone is missing or inconsistent.");
+        this.database.prepare(`UPDATE remote_jobs SET result_expired = 1, output_ref = NULL,
+          result_iv = NULL, result_tag = NULL, result_ciphertext = NULL WHERE job_id = ?`).run(row.job_id);
+        this.appendEvent(row.job_id, "result_expired", row.trace_id, now);
+      }
+      return rows.length;
+    });
+  }
+
+  pruneEvents(olderThan: Date | string): number;
+  pruneEvents(identity: VerifiedRemoteIdentity | undefined, olderThan: Date | string): number;
+  pruneEvents(identityOrTime: VerifiedRemoteIdentity | Date | string | undefined, olderThan?: Date | string): number {
+    this.requireReconciled();
+    const principal = typeof identityOrTime === "string" || identityOrTime instanceof Date || identityOrTime === undefined ?
+      undefined : checkedPrincipal(identityOrTime);
+    const cutoff = checkedTime(olderThan ?? (identityOrTime as Date | string));
+    return this.transaction(() => {
+      const query = `SELECT job_id FROM remote_jobs WHERE state NOT IN ('running', 'outcome_unknown') AND NOT EXISTS
+        (SELECT 1 FROM remote_job_cancellations c WHERE c.job_id = remote_jobs.job_id AND c.stop IN ('pending', 'unverified'))` +
+        (principal ? " AND account_id = ? AND client_id = ? AND device_id = ?" : "");
+      const statement = this.database.prepare(query);
+      const jobs = (principal ? statement.all(principal.accountId, principal.clientId, principal.deviceId) : statement.all()) as { job_id: string }[];
+      let deleted = 0;
+      for (const job of jobs) {
+        const events = this.database.prepare("SELECT sequence, occurred_at FROM remote_job_events WHERE job_id = ? ORDER BY sequence").all(job.job_id) as { sequence: number; occurred_at: string }[];
+        let last = 0;
+        for (const event of events) {
+          if (!(Date.parse(event.occurred_at) < cutoff)) break;
+          last = event.sequence;
+        }
+        if (last) deleted += Number(this.database.prepare("DELETE FROM remote_job_events WHERE job_id = ? AND sequence <= ?").run(job.job_id, last).changes);
+      }
+      return deleted;
+    });
+  }
+
+  pruneJobs(olderThan: Date | string): number;
+  pruneJobs(identity: VerifiedRemoteIdentity | undefined, olderThan: Date | string): number;
+  pruneJobs(identityOrTime: VerifiedRemoteIdentity | Date | string | undefined, olderThan?: Date | string): number {
+    this.requireReconciled();
+    const principal = typeof identityOrTime === "string" || identityOrTime instanceof Date || identityOrTime === undefined ?
+      undefined : checkedPrincipal(identityOrTime);
+    const cutoff = new Date(checkedTime(olderThan ?? (identityOrTime as Date | string))).toISOString();
+    return this.transaction(() => {
+      const sql = `DELETE FROM remote_jobs WHERE state IN ('completed', 'failed', 'cancelled', 'blocked_policy', 'blocked_quota')
+        AND result_expired = 1 AND updated_at < ? AND EXISTS
+        (SELECT 1 FROM remote_job_tombstones t WHERE t.job_id = remote_jobs.job_id AND t.account_id = remote_jobs.account_id
+          AND t.client_id = remote_jobs.client_id AND t.device_id = remote_jobs.device_id AND t.idempotency_key = remote_jobs.idempotency_key
+          AND t.payload_digest = remote_jobs.payload_digest AND t.outcome = remote_jobs.state AND t.result_expired = 1) AND NOT EXISTS
+        (SELECT 1 FROM remote_job_cancellations c WHERE c.job_id = remote_jobs.job_id AND c.stop IN ('pending', 'unverified'))` +
+        (principal ? " AND account_id = ? AND client_id = ? AND device_id = ?" : "");
+      const statement = this.database.prepare(sql);
+      return Number((principal ? statement.run(cutoff, principal.accountId, principal.clientId, principal.deviceId) : statement.run(cutoff)).changes);
+    });
   }
 
   close(): void { this.database.close(); this.key.fill(0); this.cursorKey.fill(0); }
@@ -309,23 +571,103 @@ export class RemoteAdmissionStore {
 
   private ownedRow(identity: VerifiedRemoteIdentity, jobId: string): JobRow {
     const row = this.findOwnedRow(identity, jobId);
-    if (!row) throw new RemoteAdmissionError("unauthorized", "Remote job is unavailable.");
+    if (!row) throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
     return row;
   }
 
-  private transition(row: JobRow, state: RemoteJobState, kind: RemoteJobEvent["kind"], dispatching: number): RemoteJob {
-    if (!Number.isSafeInteger(row.last_sequence) || row.last_sequence >= Number.MAX_SAFE_INTEGER) throw new Error("Remote job event sequence exhausted.");
-    const sequence = row.last_sequence + 1;
+  private transition(row: JobRow, state: RemoteJobState, kind: RemoteJobEvent["kind"], result?: RemoteJobResult, evidence?: string): RemoteJob {
+    const allowed: Readonly<Record<RemoteJobState, readonly RemoteJobState[]>> = {
+      queued: ["awaiting_approval", "running", "cancelled", "blocked_policy", "blocked_quota"],
+      awaiting_approval: ["queued", "cancelled", "blocked_policy"], running: ["completed", "failed", "cancelled", "outcome_unknown"],
+      completed: [], failed: [], cancelled: [], outcome_unknown: ["completed", "failed"], blocked_policy: [], blocked_quota: [],
+    };
+    if (!allowed[row.state].includes(state) || (row.state === "outcome_unknown" && !evidence?.trim())) {
+      throw new Error("Invalid remote job transition.");
+    }
+    if (result && !isTerminal(state)) throw new RemoteAdmissionError("invalid_request", "Result requires terminal settlement.");
+    if (result?.outputRef !== undefined && (typeof result.outputRef !== "string" || !/^[0-9a-f]{64}$/.test(result.outputRef))) {
+      throw new RemoteAdmissionError("invalid_request", "Result reference must be an ArtifactStore hash.");
+    }
+    if (result?.inline !== undefined && (!(result.inline instanceof Uint8Array) || result.inline.byteLength > 256 * 1024)) {
+      throw new RemoteAdmissionError("invalid_request", "Inline result exceeds the size limit or is invalid.");
+    }
     const now = this.clock().toISOString();
-    const clearRequest = state === "completed" || state === "failed" || state === "blocked_policy";
-    this.database.prepare(`UPDATE remote_jobs SET state = ?, updated_at = ?, dispatching = ?, last_sequence = ?,
+    const terminal = isTerminal(state);
+    const expiresAt = terminal ? new Date(Date.parse(now) + this.resultTtlMs).toISOString() : null;
+    const keepResult = row.state === "outcome_unknown" && result === undefined && !row.result_expired &&
+      row.result_expires_at !== null && Date.parse(row.result_expires_at) > Date.parse(now);
+    const outputRef = result?.outputRef ?? (keepResult ? row.output_ref : null);
+    let iv: Uint8Array | null = keepResult ? row.result_iv : null;
+    let tag: Uint8Array | null = keepResult ? row.result_tag : null;
+    let ciphertext: Uint8Array | null = keepResult ? row.result_ciphertext : null;
+    if (result?.inline !== undefined) {
+      iv = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", this.key, iv);
+      cipher.setAAD(resultAad(rowIdentity(row), row.job_id, row.payload_digest));
+      ciphertext = Buffer.concat([cipher.update(result.inline), cipher.final()]);
+      tag = cipher.getAuthTag();
+    }
+    const clearRequest = state === "running" || terminal;
+    this.database.prepare(`UPDATE remote_jobs SET state = ?, updated_at = ?, dispatching = ?,
       request_iv = CASE WHEN ? THEN NULL ELSE request_iv END,
       request_tag = CASE WHEN ? THEN NULL ELSE request_tag END,
-      request_ciphertext = CASE WHEN ? THEN NULL ELSE request_ciphertext END WHERE job_id = ?`)
-      .run(state, now, dispatching, sequence, Number(clearRequest), Number(clearRequest), Number(clearRequest), row.job_id);
-    this.database.prepare("INSERT INTO remote_job_events (job_id, sequence, occurred_at, kind, state, trace_id) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(row.job_id, sequence, now, kind, state, row.trace_id);
-    return toJob({ ...row, state, updated_at: now, dispatching, last_sequence: sequence });
+      request_ciphertext = CASE WHEN ? THEN NULL ELSE request_ciphertext END,
+      result_expires_at = ?, result_expired = 0, output_ref = ?, result_iv = ?, result_tag = ?, result_ciphertext = ?,
+      reconciliation_evidence = ? WHERE job_id = ?`)
+      .run(state, now, Number(state === "running"), Number(clearRequest), Number(clearRequest), Number(clearRequest),
+        expiresAt, outputRef, iv, tag, ciphertext, evidence ?? row.reconciliation_evidence, row.job_id);
+    this.appendEvent(row.job_id, kind, row.trace_id, now);
+    if (terminal) {
+      const previous = this.database.prepare(`SELECT job_id, payload_digest, outcome FROM remote_job_tombstones
+        WHERE account_id = ? AND client_id = ? AND device_id = ? AND idempotency_key = ?`)
+        .get(row.account_id, row.client_id, row.device_id, row.idempotency_key) as { job_id: string; payload_digest: string; outcome: RemoteTerminalState } | undefined;
+      if (previous) {
+        if (previous.job_id !== row.job_id || previous.payload_digest !== row.payload_digest ||
+          row.state !== "outcome_unknown" || previous.outcome !== "outcome_unknown") {
+          throw new Error("Remote job tombstone does not match the admitted job.");
+        }
+        this.database.prepare(`UPDATE remote_job_tombstones SET outcome = ?, updated_at = ?, result_expires_at = ?, result_expired = 0
+          WHERE job_id = ?`).run(state, now, expiresAt, row.job_id);
+      } else {
+        this.database.prepare(`INSERT INTO remote_job_tombstones (account_id, client_id, device_id, idempotency_key,
+          payload_digest, job_id, outcome, created_at, updated_at, result_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(row.account_id, row.client_id, row.device_id, row.idempotency_key, row.payload_digest, row.job_id,
+            state, row.created_at, now, expiresAt);
+      }
+    }
+    return this.toJob(this.ownedRow(rowIdentity(row), row.job_id));
+  }
+
+  private cancellation(jobId: string): CancellationRow | undefined {
+    return this.database.prepare("SELECT * FROM remote_job_cancellations WHERE job_id = ?").get(jobId) as unknown as CancellationRow | undefined;
+  }
+
+  private updateCancellation(row: CancellationRow, stop: RemoteCancellation["stop"], effect: RemoteCancellation["effect"]): void {
+    this.database.prepare("UPDATE remote_job_cancellations SET stop = ?, effect = ? WHERE job_id = ? AND cancel_request_id = ?")
+      .run(stop, effect, row.job_id, row.cancel_request_id);
+  }
+
+  private appendEvent(jobId: string, kind: RemoteJobEvent["kind"], traceId: string, now = this.clock().toISOString()): void {
+    const row = this.database.prepare("SELECT * FROM remote_jobs WHERE job_id = ?").get(jobId) as unknown as JobRow;
+    if (!Number.isSafeInteger(row.last_sequence) || row.last_sequence >= Number.MAX_SAFE_INTEGER) throw new Error("Remote job event sequence exhausted.");
+    const sequence = row.last_sequence + 1;
+    const cancellation = this.cancellation(jobId);
+    this.database.prepare("UPDATE remote_jobs SET last_sequence = ?, updated_at = ? WHERE job_id = ?").run(sequence, now, jobId);
+    this.database.prepare(`INSERT INTO remote_job_events (job_id, sequence, occurred_at, kind, state, trace_id, cancellation_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(jobId, sequence, now, kind, row.state, traceId,
+      cancellation ? JSON.stringify(cancellationValue(cancellation)) : null);
+  }
+
+  private toJob(row: JobRow): RemoteJob {
+    const cancellation = this.cancellation(row.job_id);
+    return { protocolVersion: row.protocol_version, jobId: row.job_id, principal: rowIdentity(row),
+      idempotencyKey: row.idempotency_key, payloadDigest: row.payload_digest, toolId: row.tool_id,
+      operationClass: row.operation_class, scopeRef: row.scope_ref, state: row.state,
+      createdAt: row.created_at, updatedAt: row.updated_at,
+      ...(row.result_expires_at ? { resultExpiresAt: row.result_expires_at } : {}),
+      ...(cancellation ? { cancellation: cancellationValue(cancellation) } : {}),
+      ...(row.output_ref && !row.result_expired && row.result_expires_at && Date.parse(row.result_expires_at) > this.clock().getTime() ?
+        { outputRef: row.output_ref } : {}) };
   }
 
   private transaction<T>(work: () => T): T {
@@ -351,16 +693,35 @@ export class RemoteAdmissionStore {
   }
 }
 
-function toJob(row: JobRow): RemoteJob {
-  return { protocolVersion: row.protocol_version, jobId: row.job_id,
-    principal: { accountId: row.account_id, clientId: row.client_id, deviceId: row.device_id },
-    idempotencyKey: row.idempotency_key, payloadDigest: row.payload_digest, toolId: row.tool_id,
-    operationClass: row.operation_class, scopeRef: row.scope_ref, state: row.state,
-    createdAt: row.created_at, updatedAt: row.updated_at };
+function rowIdentity(row: JobRow): VerifiedRemoteIdentity {
+  return { accountId: row.account_id, clientId: row.client_id, deviceId: row.device_id };
+}
+
+function cancellationValue(row: CancellationRow): RemoteCancellation {
+  return { requestedAt: row.requested_at, stop: row.stop, effect: row.effect };
+}
+
+function cancellationReceipt(row: CancellationRow): RemoteCancelReceipt {
+  return { jobId: row.job_id, cancelRequestId: row.cancel_request_id, traceId: row.trace_id,
+    delivery: "recorded", cancellation: { requestedAt: row.requested_at, stop: row.receipt_stop, effect: row.receipt_effect } };
+}
+
+function isTerminal(state: RemoteJobState): state is RemoteTerminalState {
+  return ["completed", "failed", "cancelled", "outcome_unknown", "blocked_policy", "blocked_quota"].includes(state);
+}
+
+function checkedTime(value: Date | string): number {
+  const time = value instanceof Date ? value.getTime() : typeof value === "string" ? Date.parse(value) : NaN;
+  if (!Number.isFinite(time)) throw new RemoteAdmissionError("invalid_request", "Invalid retention cutoff.");
+  return time;
 }
 
 function requestAad(identity: VerifiedRemoteIdentity, jobId: string, digest: string): Buffer {
   return Buffer.from(JSON.stringify([identity.accountId, identity.clientId, identity.deviceId, jobId, digest]), "utf8");
+}
+
+function resultAad(identity: VerifiedRemoteIdentity, jobId: string, digest: string): Buffer {
+  return Buffer.from(JSON.stringify([identity.accountId, identity.clientId, identity.deviceId, jobId, digest, "result"]), "utf8");
 }
 
 function checkedId(value: unknown, maxLength = 256): asserts value is string {
@@ -511,10 +872,13 @@ const REMOTE_EFFECT_NAMES: Readonly<Record<string, string>> = Object.freeze({
 export function createRemoteAdmissionAdapter(store: RemoteAdmissionStore): NonNullable<RemoteToolRuntimeOptions["admitEffect"]> {
   return async (effect: Readonly<RemoteEffectRequest>, dispatch: () => Promise<ToolResult>): Promise<ToolResult> => {
     let parsed: RemoteRequest | undefined;
+    // The v1 wire error enum does not yet contain the local storage exhaustion code.
     const failure = (code: string, message: string): ToolResult => ({ callId: effect.callId, toolName: effect.toolName,
       content: parsed && code !== "effect_admission_required" ? [
-        { type: "json", value: { requestId: parsed.requestId, traceId: parsed.traceId, admitted: false, status: "rejected", errorCode: code } },
-        { type: "json", value: { protocolVersion: parsed.protocolVersion, code, message, requestId: parsed.requestId, traceId: parsed.traceId } },
+        { type: "json", value: { requestId: parsed.requestId, traceId: parsed.traceId, admitted: false, status: "rejected",
+          errorCode: code === "storage_exhausted" ? "internal_error" : code } },
+        { type: "json", value: { protocolVersion: parsed.protocolVersion, code: code === "storage_exhausted" ? "internal_error" : code,
+          message, requestId: parsed.requestId, traceId: parsed.traceId } },
       ] : [{ type: "text", text: message }], isError: true, error: { code, message } });
     if (effect.rawRequest === undefined) return failure("effect_admission_required", "A verified remote request is required.");
     let decision: AdmissionDecision;
