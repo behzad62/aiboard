@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcp.aiboard.me/schemas/v1/artifact-transfer.v1.schema.json",
+  "title": "ArtifactTransferFrame",
+  "description": "R3 device data plane: negotiated frame limits and the chunked, acknowledged, resumable artifact stream. A frame's encoded size never exceeds the negotiated maxFrameBytes; that bound is per connection and is enforced by the codec, not by this schema.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/announcement"
+    },
+    {
+      "$ref": "#/$defs/chunk"
+    },
+    {
+      "$ref": "#/$defs/chunkAck"
+    },
+    {
+      "$ref": "#/$defs/end"
+    },
+    {
+      "$ref": "#/$defs/transferError"
+    },
+    {
+      "$ref": "#/$defs/abort"
+    },
+    {
+      "$ref": "#/$defs/frameError"
+    }
+  ],
+  "$defs": {
+    "byteCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "limitsValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxFrameBytes"
+      ],
+      "properties": {
+        "maxFrameBytes": {
+          "type": "integer",
+          "minimum": 65536,
+          "maximum": 1048576
+        },
+        "chunkBytes": {
+          "type": "integer",
+          "minimum": 4096,
+          "maximum": 1048576
+        },
+        "window": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        }
+      },
+      "description": "The `limits` field of the device proof frame and of the relay authenticated frame. Each side uses the minimum of both offers; a malformed or out-of-range offer fails the handshake closed."
+    },
+    "announcement": {
+      "description": "`data` of the admitted response to an `artifacts_read` request. The transfer id is the request id; chunk frames follow.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transferId",
+        "hash",
+        "mediaType",
+        "byteLength",
+        "offset",
+        "chunkBytes",
+        "window"
+      ],
+      "properties": {
+        "transferId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "hash": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/sha256"
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "byteLength": {
+          "$ref": "#/$defs/byteCount"
+        },
+        "offset": {
+          "$ref": "#/$defs/byteCount"
+        },
+        "chunkBytes": {
+          "type": "integer",
+          "minimum": 4096,
+          "maximum": 1048576
+        },
+        "window": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        }
+      }
+    },
+    "chunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "transferId",
+        "seq",
+        "offset",
+        "length",
+        "sha256",
+        "data"
+      ],
+      "properties": {
+        "type": {
+          "const": "chunk"
+        },
+        "transferId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "offset": {
+          "$ref": "#/$defs/byteCount"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "sha256": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/sha256"
+        },
+        "data": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 1048576,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+        }
+      }
+    },
+    "chunkAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "transferId",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "chunk_ack"
+        },
+        "transferId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "seq": {
+          "$ref": "#/$defs/sequence"
+        }
+      }
+    },
+    "end": {
+      "description": "Sent only after every chunk is acknowledged and the whole artifact re-hashed to its address.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "transferId",
+        "byteLength",
+        "sha256"
+      ],
+      "properties": {
+        "type": {
+          "const": "artifact_end"
+        },
+        "transferId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "byteLength": {
+          "$ref": "#/$defs/byteCount"
+        },
+        "sha256": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "transferError": {
+      "description": "Terminal for the transfer. The receiver discards unverified bytes; `transfer_stalled` and `artifact_unavailable` may be resumed by a new request, `artifact_corrupt` may not.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "transferId",
+        "code"
+      ],
+      "properties": {
+        "type": {
+          "const": "artifact_error"
+        },
+        "transferId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "code": {
+          "enum": [
+            "transfer_stalled",
+            "artifact_corrupt",
+            "artifact_unavailable"
+          ]
+        }
+      }
+    },
+    "abort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "transferId"
+      ],
+      "properties": {
+        "type": {
+          "const": "artifact_abort"
+        },
+        "transferId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        }
+      }
+    },
+    "frameError": {
+      "description": "Answer to an inbound frame the codec refused. The connection and every other request survive it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "code"
+      ],
+      "properties": {
+        "type": {
+          "const": "frame_error"
+        },
+        "code": {
+          "enum": [
+            "frame_too_large",
+            "malformed_frame"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "frame_too_large",
+  "message": "The response exceeded the negotiated frame maximum.",
+  "requestId": "req-1",
+  "traceId": "trace-1"
+}

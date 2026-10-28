@@ -52,6 +52,8 @@
         "rate_limited",
         "device_selection_required",
         "unsupported_tool",
+        "frame_too_large",
+        "artifact_unavailable",
         "internal_error"
       ]
     }

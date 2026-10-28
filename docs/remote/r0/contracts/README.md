@@ -12,6 +12,7 @@
 | `connection-state.v1.schema.json` | ADR-A device connection states with proposed, state-specific reason codes and an authenticated epoch when connected. |
 | `local-pair-exchange.v1.schema.json` | ADR-F request `{version, code}` or response `{version, instanceId, kind, port, sessionToken, peers}`. |
 | `error.v1.schema.json` | Proposed typed error body and shared `errorCode` vocabulary used by the response. |
+| `artifact-transfer.v1.schema.json` | R3 data plane: the `artifacts_read` announcement and the `chunk` / `chunk_ack` / `artifact_end` / `artifact_error` / `artifact_abort` / `frame_error` frames, plus `$defs/limitsValue` for the `limits` field of the proof and authenticated handshake frames. Each side uses the minimum of both offers (64 KiB–1 MiB, window 1–16); every frame in both directions stays under the negotiated `maxFrameBytes`, which the codec enforces on raw bytes before parsing. A content hash is never authorization: `artifacts_read` serves only hashes reachable from the result of a job the same principal may read, under the current scope, before result expiry. |
 
 ## Versioning and bounds
 

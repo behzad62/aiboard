@@ -7,6 +7,8 @@ import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-sto
 import type { VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
 import type { CommandApprovalRequest, CommandApprovalSummary } from "./remote-approval.js";
+import { ArtifactTransferError, ArtifactTransferManager, type ArtifactTransferFrame } from "./remote-artifact-transfer.js";
+import { DEFAULT_REMOTE_FRAME_LIMITS, frameByteLength, negotiateFrameLimits, type RemoteFrameLimits } from "./remote-frame-codec.js";
 
 export type RemoteConnectionStateName =
   | "disconnected" | "authenticating" | "connected-degraded" | "tool-ready" | "suspended" | "revoked";
@@ -39,13 +41,19 @@ export interface RemoteResponseMessage {
 /** Injected duplex framing. The real WebSocket/TLS transport lands in R1e. */
 export type RemoteTransportMessage =
   | { readonly type: "challenge"; readonly challenge: RelayChallenge }
-  | { readonly type: "proof"; readonly deviceId: string; readonly publicKey: string; readonly signature: string }
-  | { readonly type: "authenticated"; readonly epoch: string }
+  | { readonly type: "proof"; readonly deviceId: string; readonly publicKey: string; readonly signature: string; readonly limits?: RemoteFrameLimits }
+  | { readonly type: "authenticated"; readonly epoch: string; readonly limits?: unknown }
   | { readonly type: "auth_error"; readonly code: string }
   | { readonly type: "request"; readonly request: RemoteRequest; readonly authorization?: RemoteAuthorization }
   | { readonly type: "response"; readonly response: RemoteResponseMessage; readonly data?: unknown }
   | { readonly type: "heartbeat"; readonly at: string }
-  | { readonly type: "revoked" };
+  | { readonly type: "revoked" }
+  | ArtifactTransferFrame
+  | { readonly type: "chunk_ack"; readonly transferId: string; readonly seq: number }
+  | { readonly type: "artifact_abort"; readonly transferId: string }
+  /** Emitted by a transport whose codec refused an inbound frame; the session survives it. */
+  | { readonly type: "frame_rejected"; readonly code: "frame_too_large" | "malformed_frame" }
+  | { readonly type: "frame_error"; readonly code: "frame_too_large" | "malformed_frame" };
 
 export interface RemoteTransport {
   connect(): Promise<void>;
@@ -63,6 +71,12 @@ export interface RemoteRequestRuntime {
   requiresCommandApproval?(identity: VerifiedRemoteIdentity, name: string): boolean;
   summarizeCommandApproval?(identity: VerifiedRemoteIdentity, jobId: string, code: string, name: string, args: unknown): CommandApprovalSummary;
   stopStartedProcess?(identity: VerifiedRemoteIdentity, processId: string): Promise<boolean>;
+}
+
+/** The content-addressed store remote tools write artifacts to (ExecutionHost.artifacts). */
+export interface RemoteArtifactSource {
+  put(bytes: Uint8Array, mediaType: string, label?: string): Promise<{ readonly hash: string }>;
+  stat(hash: string): Promise<{ readonly path: string; readonly byteLength: number; readonly mediaType: string }>;
 }
 
 /** One admitted extension tool as offered to the relay (plan P2 naming). */
@@ -106,6 +120,10 @@ export const REMOTE_TOOL_ID_TO_RUNNER: Readonly<Record<string, string>> = Object
 });
 
 const JOB_TOOL_IDS: ReadonlySet<string> = new Set(["jobs_status", "jobs_events", "jobs_result", "jobs_cancel"]);
+/** Results above this many encoded bytes are stored as an artifact and returned by outputRef. */
+const INLINE_RESULT_MAX_BYTES = 256 * 1024;
+/** Artifact hashes listed in a large-result stub; more are reachable only through the outputRef itself. */
+const MAX_STUB_ARTIFACTS = 256;
 const EFFECT_TOOL_IDS: ReadonlySet<string> = new Set(["files_write", "files_patch", "files_move", "files_delete",
   "process_start", "process_run", "process_write_stdin", "process_signal"]);
 
@@ -139,6 +157,14 @@ export interface RemoteConnectorOptions {
   readonly pluginTools?: RemotePluginToolProvider;
   readonly auditApproval?: (identity: VerifiedRemoteIdentity | undefined, jobId: string,
     decision: "requested" | "approved" | "denied" | "expired" | "fenced") => void;
+  /** Artifact store for large results and the R3 artifact data plane. */
+  readonly artifacts?: RemoteArtifactSource;
+  /** Metadata-only audit of artifact reads (job id and outcome; never the hash or bytes). */
+  readonly auditArtifactRead?: (identity: VerifiedRemoteIdentity, jobId: string, decision: "allowed" | "denied", outcomeCode: string) => void;
+  /** Local frame limits offered at the handshake; the relay may only lower them. */
+  readonly frameLimits?: RemoteFrameLimits;
+  readonly artifactStallTimeoutMs?: number;
+  readonly maxConcurrentArtifactTransfers?: number;
 }
 
 interface InFlight {
@@ -192,6 +218,10 @@ export class RemoteConnector {
   private established = false;
   private lastHeartbeatAt: string | undefined;
   private pluginDegradedReason: "optional_tool_unavailable" | "required_tool_unavailable" | undefined;
+  private readonly localLimits: RemoteFrameLimits;
+  /** Negotiated per connection; reset to the local offer on every connect. */
+  private limits: RemoteFrameLimits;
+  private readonly transfers: ArtifactTransferManager;
 
   constructor(private readonly options: RemoteConnectorOptions) {
     this.now = options.now ?? (() => new Date());
@@ -202,6 +232,18 @@ export class RemoteConnector {
       [options.cancellationGraceMs ?? 5_000, 1]] as const) {
       if (!Number.isSafeInteger(value) || value < minimum) throw new Error("Invalid remote job limits.");
     }
+    this.localLimits = negotiateFrameLimits(DEFAULT_REMOTE_FRAME_LIMITS, options.frameLimits);
+    this.limits = this.localLimits;
+    this.transfers = new ArtifactTransferManager({
+      limits: () => this.limits,
+      send: async (frame) => {
+        const transport = this.transport;
+        if (!transport) throw new Error("Remote transport closed.");
+        await transport.send(frame);
+      },
+      ...(options.artifactStallTimeoutMs !== undefined ? { stallTimeoutMs: options.artifactStallTimeoutMs } : {}),
+      ...(options.maxConcurrentArtifactTransfers !== undefined ? { maxConcurrent: options.maxConcurrentArtifactTransfers } : {}),
+    });
     const identity = options.deviceStore.load();
     this.current = Object.freeze({
       protocolVersion: PROTOCOL_VERSION,
@@ -315,6 +357,8 @@ export class RemoteConnector {
       return;
     }
     this.transition("authenticating", reason);
+    this.transfers.abortAll();
+    this.limits = this.localLimits;
     const transport = this.options.createTransport();
     this.transport = transport;
     transport.onMessage((message) => this.onMessage(message));
@@ -323,7 +367,7 @@ export class RemoteConnector {
       await transport.connect();
       const challenge = await this.waitForChallenge();
       const proof = this.options.authenticator.answerChallenge(challenge, this.options.session);
-      await transport.send({ type: "proof", deviceId: proof.deviceId, publicKey: proof.publicKey, signature: proof.signature });
+      await transport.send({ type: "proof", deviceId: proof.deviceId, publicKey: proof.publicKey, signature: proof.signature, limits: this.localLimits });
       await this.waitForAuthenticated();
     } catch {
       this.admitting = false;
@@ -421,14 +465,20 @@ export class RemoteConnector {
           this.earlyChallenge = message.challenge;
         }
         return;
-      case "authenticated":
+      case "authenticated": {
+        let accepted = true;
+        try { this.limits = negotiateFrameLimits(this.localLimits, message.limits); }
+        catch { accepted = false; }
         if (this.authWaiter) {
-          this.authWaiter.resolve();
+          // Unsupported frame limits fail closed exactly like a refused handshake.
+          if (accepted) this.authWaiter.resolve();
+          else this.authWaiter.reject(new Error("Remote frame limits are unsupported."));
           this.authWaiter = undefined;
         } else {
-          this.earlyAuth = true;
+          this.earlyAuth = accepted;
         }
         return;
+      }
       case "auth_error":
         if (this.authWaiter) {
           this.authWaiter.reject(new Error("Remote authentication was refused."));
@@ -460,6 +510,15 @@ export class RemoteConnector {
         await this.onRequest(request, message.authorization);
         return;
       }
+      case "chunk_ack":
+        this.transfers.ack(message.transferId, message.seq);
+        return;
+      case "artifact_abort":
+        this.transfers.abort(message.transferId);
+        return;
+      case "frame_rejected":
+        try { await this.transport?.send({ type: "frame_error", code: message.code }); } catch { /* socket loss is fenced by epoch */ }
+        return;
       default:
         return;
     }
@@ -472,6 +531,7 @@ export class RemoteConnector {
     this.challengeWaiter = undefined;
     this.authWaiter = undefined;
     this.admitting = false;
+    this.transfers.abortAll();
     if (this.current.state === "revoked" || this.current.state === "suspended") return;
     this.transition("disconnected", "socket_lost");
     // Only an established connection reconnects; auth failure fails closed.
@@ -502,7 +562,10 @@ export class RemoteConnector {
   private async onRequest(request: RemoteRequest, authorization?: RemoteAuthorization): Promise<void> {
     const transport = this.transport;
     const respond = async (response: RemoteResponseMessage, data?: unknown): Promise<void> => {
-      try { await transport?.send({ type: "response", response, ...(data !== undefined ? { data } : {}) }); }
+      let frame: RemoteTransportMessage = { type: "response", response, ...(data !== undefined ? { data } : {}) };
+      // Never emit a frame over the negotiated maximum; the job itself is unaffected.
+      if (frameByteLength(frame) > this.limits.maxFrameBytes) frame = { type: "response", response: rejected(request, "frame_too_large") };
+      try { await transport?.send(frame); }
       catch { /* A disconnected wait does not own the admitted job. */ }
     };
     if (this.options.deviceStore.isRevoked()) {
@@ -543,6 +606,10 @@ export class RemoteConnector {
       if (JOB_TOOL_IDS.has(request.toolId)) {
         const answer = this.jobTool(identity, request);
         await respond(answer.response, answer.data);
+        return;
+      }
+      if (request.toolId === "artifacts_read") {
+        await this.artifactRead(identity, request, respond);
         return;
       }
       const isPlugin = request.toolId.startsWith("plugin_");
@@ -619,14 +686,53 @@ export class RemoteConnector {
     }
   }
 
-  private jobTool(identity: VerifiedRemoteIdentity, request: RemoteRequest): { response: RemoteResponseMessage; data: unknown } {
-    const args = jobArguments(request);
-    const admission = this.options.admission;
-    const view = admission.view(identity, args.jobId);
+  /** The job must belong to this principal, under the current signed scope and current local policy. */
+  private authorizedJobView(identity: VerifiedRemoteIdentity, request: RemoteRequest, jobId: string): ReturnType<RemoteAdmissionStore["view"]> {
+    const view = this.options.admission.view(identity, jobId);
     // The current signed scope must still cover the original job.
     if (view.job.scopeRef !== request.scopeRef) throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
     const name = REMOTE_TOOL_ID_TO_RUNNER[view.job.toolId] ?? view.job.toolId;
     if (this.options.runtime.authorizeJob?.(identity, name)) throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
+    return view;
+  }
+
+  /**
+   * R3 data plane. A content hash is never authorization (ADR-C): the hash must
+   * be reachable from the result of a job this principal may read, and result
+   * expiry ends access. The response announces the transfer; chunk frames follow.
+   */
+  private async artifactRead(identity: VerifiedRemoteIdentity, request: RemoteRequest,
+    respond: (response: RemoteResponseMessage, data?: unknown) => Promise<void>): Promise<void> {
+    const args = artifactArguments(request);
+    const view = this.authorizedJobView(identity, request, args.jobId);
+    const artifacts = this.options.artifacts;
+    const audit = (decision: "allowed" | "denied", outcome: string) => {
+      try { this.options.auditArtifactRead?.(identity, args.jobId, decision, outcome); } catch { /* audit never blocks a read decision */ }
+    };
+    const refuse = async (code: string) => { audit("denied", code); await respond(rejected(request, code)); };
+    const result = this.options.admission.result(identity, args.jobId);
+    if (!artifacts || !reachableArtifacts(result).has(args.hash)) { await refuse("artifact_unavailable"); return; }
+    let record: { path: string; byteLength: number; mediaType: string };
+    try { record = await artifacts.stat(args.hash); }
+    catch { await refuse("artifact_unavailable"); return; }
+    const source = { path: record.path, hash: args.hash, byteLength: record.byteLength };
+    try { this.transfers.reserve(request.requestId, source, args.offset); }
+    catch (error) {
+      await refuse(error instanceof ArtifactTransferError && error.code === "transfer_limit" ? "rate_limited" : "invalid_request");
+      return;
+    }
+    audit("allowed", "transfer_started");
+    await respond(jobResponse(request, view.job), {
+      transferId: request.requestId, hash: args.hash, mediaType: record.mediaType, byteLength: record.byteLength,
+      offset: args.offset, chunkBytes: this.limits.chunkBytes, window: this.limits.window,
+    });
+    void this.transfers.run(request.requestId, source, args.offset);
+  }
+
+  private jobTool(identity: VerifiedRemoteIdentity, request: RemoteRequest): { response: RemoteResponseMessage; data: unknown } {
+    const args = jobArguments(request);
+    const admission = this.options.admission;
+    const view = this.authorizedJobView(identity, request, args.jobId);
     let data: unknown;
     if (request.toolId === "jobs_status") {
       data = view;
@@ -890,10 +996,8 @@ export class RemoteConnector {
         this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown"));
       } else {
         if (entry.controller.signal.aborted) admission.recordStop(identity, jobId, "unverified");
-        const bytes = Buffer.from(JSON.stringify(result), "utf8");
-        const inline = bytes.byteLength <= 256 * 1024 ? bytes : Buffer.from(JSON.stringify({ truncated: true }), "utf8");
-        this.finish(entry, admission.settle(identity, jobId, unknown ? "outcome_unknown" : result.isError ? "failed" : "completed",
-          unknown ? undefined : { inline }));
+        const state = unknown ? "outcome_unknown" : result.isError ? "failed" : "completed";
+        this.finish(entry, admission.settle(identity, jobId, state, unknown ? undefined : await this.storedResult(result)));
       }
     } catch {
       if (!entry.settled) {
@@ -905,6 +1009,24 @@ export class RemoteConnector {
         } catch { entry.settled = true; entry.resolve(rejected(entry.request, "internal_error")); }
       }
     }
+  }
+
+  /**
+   * A result over the inline cap is stored whole as an artifact and returned by
+   * outputRef with a small stub naming its artifacts — never silently truncated.
+   */
+  private async storedResult(result: ToolResult): Promise<{ inline: Uint8Array; outputRef?: string }> {
+    const bytes = Buffer.from(JSON.stringify(result), "utf8");
+    if (bytes.byteLength <= INLINE_RESULT_MAX_BYTES) return { inline: bytes };
+    const hashes = [...artifactHashes(result)].slice(0, MAX_STUB_ARTIFACTS);
+    if (!this.options.artifacts) {
+      return { inline: Buffer.from(JSON.stringify({ resultTooLarge: true, byteLength: bytes.byteLength, artifacts: hashes }), "utf8") };
+    }
+    const stored = await this.options.artifacts.put(bytes, "application/json", "remote-result");
+    return {
+      outputRef: stored.hash,
+      inline: Buffer.from(JSON.stringify({ outputRef: stored.hash, mediaType: "application/json", byteLength: bytes.byteLength, artifacts: hashes }), "utf8"),
+    };
   }
 
   private startProcessStop(identity: VerifiedRemoteIdentity, jobId: string, processId: string): void {
@@ -1006,6 +1128,43 @@ function jobArguments(request: RemoteRequest): JobArguments {
     ...(typeof payload.limit === "number" ? { limit: payload.limit } : {}),
     ...(typeof payload.maxBytes === "number" ? { maxBytes: payload.maxBytes } : {}),
   };
+}
+
+interface ArtifactArguments { jobId: string; hash: string; offset: number }
+
+function artifactArguments(request: RemoteRequest): ArtifactArguments {
+  if (!isRecord(request.payload)) throw new Error("Invalid artifact arguments.");
+  const payload = request.payload;
+  if (Object.keys(payload).some((key) => !["jobId", "hash", "offset"].includes(key)) ||
+    typeof payload.jobId !== "string" || !payload.jobId || payload.jobId.length > 256 ||
+    typeof payload.hash !== "string" || !/^[0-9a-f]{64}$/.test(payload.hash) ||
+    (payload.offset !== undefined && (!Number.isSafeInteger(payload.offset) || Number(payload.offset) < 0))) {
+    throw new Error("Invalid artifact arguments.");
+  }
+  return { jobId: payload.jobId, hash: payload.hash, offset: typeof payload.offset === "number" ? payload.offset : 0 };
+}
+
+function artifactHashes(result: ToolResult): Set<string> {
+  const hashes = new Set<string>();
+  for (const block of result.content) if (block.type === "artifact" && /^[0-9a-f]{64}$/.test(block.hash)) hashes.add(block.hash);
+  return hashes;
+}
+
+/** Hashes a job result makes readable: its outputRef plus artifacts named in the stored inline result or stub. */
+function reachableArtifacts(result: { outputRef?: string; inline?: Uint8Array }): Set<string> {
+  const reachable = new Set<string>();
+  if (result.outputRef) reachable.add(result.outputRef);
+  if (!result.inline) return reachable;
+  let parsed: unknown;
+  try { parsed = JSON.parse(Buffer.from(result.inline).toString("utf8")); } catch { return reachable; }
+  if (!isRecord(parsed)) return reachable;
+  for (const block of Array.isArray(parsed.content) ? parsed.content : []) {
+    if (isRecord(block) && block.type === "artifact" && typeof block.hash === "string" && /^[0-9a-f]{64}$/.test(block.hash)) reachable.add(block.hash);
+  }
+  for (const hash of Array.isArray(parsed.artifacts) ? parsed.artifacts : []) {
+    if (typeof hash === "string" && /^[0-9a-f]{64}$/.test(hash)) reachable.add(hash);
+  }
+  return reachable;
 }
 
 function resultCursor(jobId: string, offset: number): string {

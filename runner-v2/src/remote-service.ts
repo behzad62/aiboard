@@ -178,6 +178,13 @@ export class RemoteService {
       authenticator: this.composition.authenticator,
       admission,
       runtime: this.composition.runtime,
+      artifacts: this.options.host.artifacts,
+      auditArtifactRead: (identity, jobId, decision, outcomeCode) => {
+        const principals = this.composition.principals;
+        let enabled = true;
+        try { enabled = principals.policy(identity).audit; } catch { /* unknown principal: audit */ }
+        principals.auditStore.recordTool({ role: "remote", ...identity, toolName: "artifacts.read", decision, outcomeCode, jobId }, enabled);
+      },
       auditApproval: (identity, jobId, decision) => this.composition.principals.auditStore.recordApproval(identity, jobId, decision),
       session,
       createTransport: this.options.createTransport,
