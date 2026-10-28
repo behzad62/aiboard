@@ -70,6 +70,7 @@ class FakeRunner extends EventEmitter {
   server?: HttpServer;
   release?: () => void;
   healthy = true;
+  beforeReady?: () => void;
 
   send(message: unknown, callback?: (error: Error | null) => void): boolean {
     callback?.(null);
@@ -107,6 +108,7 @@ class FakeRunner extends EventEmitter {
       controlKey: Buffer.from(handshake.controlKey, "hex"), shutdown: () => { void this.stop(); },
       registerPair: () => undefined,
     });
+    this.beforeReady?.();
     this.emit("message", { type: "aiboard-launcher-ready", instance: this.control.instance });
   }
 
@@ -337,6 +339,51 @@ test("a verified unhealthy instance closes before its replacement starts", async
   } finally {
     await Promise.all(children.map((child) => child.stop()));
     await Promise.allSettled([first, ...(replacement ? [replacement] : [])]);
+    await f.cleanup();
+  }
+});
+
+test("remote pairing prompts and browser opening pass through launcher IPC", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [], opened: string[] = [];
+  const baseSpawner = fakeSpawner(children, calls);
+  const spawnRunner = (command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    const child = baseSpawner(command, args, options);
+    const fake = children[children.length - 1]!;
+    fake.beforeReady = () => {
+      fake.emit("message", { type: "aiboard-remote-pairing", userCode: "BCDF-GHJK", verificationUri: "https://mcp.aiboard.me/pair",
+        expiresAt: new Date(Date.now() + 600_000).toISOString(), deviceName: "Desktop" });
+      fake.emit("message", { type: "aiboard-remote-open", url: "https://mcp.aiboard.me/pair" });
+      fake.emit("message", { type: "aiboard-remote-session", deviceName: "Desktop", accountId: "account-1" });
+    };
+    return child;
+  };
+  const environment = process.platform === "win32" ? { LOCALAPPDATA: join(f.root, "data") } : { XDG_DATA_HOME: join(f.root, "data") };
+  const runtime = { cwd: f.project, home: f.root, environment, spawnRunner, write: (line: string) => output.push(line), openUrl: (url: string) => opened.push(url) };
+  const args = ["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--relay-url", "wss://mcp.aiboard.me/connect"];
+  const first = runLauncher(args, runtime);
+  void first.catch(() => undefined);
+  let second: Promise<void> | undefined;
+  try {
+    await waitUntil(() => output.some((line) => line.includes("Runner running")));
+    assert.ok(output.some((line) => line.includes("open https://mcp.aiboard.me/pair and enter code BCDF-GHJK")));
+    assert.ok(output.some((line) => line.includes("Desktop; account: account-1") && line.includes("Ctrl+C to disconnect")));
+    assert.equal(opened[0], "https://mcp.aiboard.me/pair");
+    assert.equal(opened[0]!.includes("BCDF"), false);
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await first;
+    const before = opened.length;
+    second = runLauncher([...args, "--no-open"], runtime);
+    void second.catch(() => undefined);
+    await waitUntil(() => children.length === 2 && output.filter((line) => line.includes("Runner running")).length === 2);
+    assert.equal(opened.length, before);
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await second;
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await Promise.allSettled([first, ...(second ? [second] : [])]);
     await f.cleanup();
   }
 });

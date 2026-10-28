@@ -455,6 +455,24 @@ test("revoked device and stale-epoch, replayed and unknown requests never dispat
   assert.equal(harness.transport.responses().at(-1)!.response.errorCode, "device_revoked");
 });
 
+test("relay revocation is persisted for the next start", async (t) => {
+  const harness = await stubHarness(t);
+  await handshake(harness);
+  await harness.transport.emit({ type: "revoked" });
+  assert.equal(harness.connector.state().state, "revoked");
+  assert.equal(new RemoteDeviceStore(harness.state).load()!.revoked, true);
+});
+
+test("an unauthenticated revoke frame cannot persist a device rotation", async (t) => {
+  const harness = await stubHarness(t);
+  const starting = harness.connector.start();
+  await tick();
+  await harness.transport.emit({ type: "revoked" });
+  await starting;
+  assert.equal(harness.connector.isReady(), false);
+  assert.equal(new RemoteDeviceStore(harness.state).load()!.revoked, false);
+});
+
 test("owner-lock loss suspends admission and unverified cleanup blocks it", async (t) => {
   let held = true;
   const harness = await stubHarness(t, { isOwnerLockHeld: () => held });
@@ -568,19 +586,19 @@ test("device key is a distinct user-only secret and never leaks into argv, env-f
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-test("logout wipes device credentials and session state", async () => {
+test("logout clears the session while retaining the device identity and key", async () => {
   const root = await temporary();
   const state = join(root, "state");
   await mkdir(state, { recursive: true });
   const deviceStore = new RemoteDeviceStore(state);
-  deviceStore.ensure(ACCOUNT);
+  const identity = deviceStore.ensure(ACCOUNT);
   deviceStore.saveSession(sessionFor());
   assert.equal(existsSync(join(state, "remote-device-key")), true);
   deviceStore.logout();
-  assert.equal(deviceStore.load(), undefined);
+  assert.deepEqual(deviceStore.load(), identity);
   assert.equal(deviceStore.loadSession(), undefined);
-  assert.equal(existsSync(join(state, "remote-device-key")), false);
-  assert.equal(existsSync(join(state, "remote-device.json")), false);
+  assert.equal(existsSync(join(state, "remote-device-key")), true);
+  assert.equal(existsSync(join(state, "remote-device.json")), true);
   assert.equal(existsSync(join(state, "remote-device-session.json")), false);
   // Launcher parsing for the remote command family.
   assert.equal(parseLauncherArguments(["remote", "--logout"]).command, "remote");
@@ -728,7 +746,7 @@ test("service shutdown is retryable, ordered, and logout returns to logged-out",
   await service.close(); // idempotent
   service.logout();
   assert.equal(service.status().state, "logged-out");
-  assert.equal(service.composition.deviceStore.load(), undefined);
+  assert.ok(service.composition.deviceStore.load());
 });
 
 test("control server exposes remote status only, behind the runner token", async (t) => {
@@ -869,7 +887,7 @@ test("one per-user device serves every project and admits a single remote owner 
   releaseA!();
   assert.equal(fromB.activeOwnerProject(), undefined);
   fromB.logout();
-  assert.equal(fromA.load(), undefined, "logout from either project wipes the shared device");
+  assert.equal(fromA.load()!.deviceId, shared.deviceId, "logout retains the shared device identity");
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 

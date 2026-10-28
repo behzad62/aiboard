@@ -518,11 +518,15 @@ export class RemoteConnector {
           this.suspend("owner_lock_lost");
         }
         return;
-      case "revoked":
+      case "revoked": {
+        const authenticated = this.current.state === "connected-degraded" || this.current.state === "tool-ready";
         this.admitting = false;
         this.transition("revoked", "device_key_revoked");
         this.cancelForRevocation();
+        // Only an authenticated, still-owned connection can persist a rotation trigger.
+        if (authenticated && (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld())) this.options.deviceStore.revoke();
         return;
+      }
       case "request": {
         // Strict codec at the trust boundary, before any authentication logic reads the fields.
         let request: RemoteRequest;

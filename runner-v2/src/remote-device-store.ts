@@ -28,6 +28,8 @@ export interface RemoteDeviceIdentity {
   readonly revoked: boolean;
   readonly publicKey: string;
   readonly createdAt: string;
+  /** The rotated key is staged separately so publishing the identity is atomic. */
+  readonly keyFile?: string;
 }
 
 /** Provisioned relay session metadata. No token material is stored here (P1). */
@@ -46,6 +48,7 @@ export interface RemoteDeviceSession {
   readonly relayKeys: readonly RemoteRelayKey[];
   /** Scope references this device session may be authorized for; anything else is refused. */
   readonly authorizedScopes: readonly string[];
+  readonly relayOrigin?: string;
 }
 
 const IDENTITY_FILE = "remote-device.json";
@@ -54,6 +57,7 @@ const SESSION_FILE = "remote-device-session.json";
 const NOTICE_FILE = "remote-notice.json";
 const OWNER_LOCK_FILE = "remote-device-owner.sqlite";
 const OWNER_RECORD_FILE = "remote-device-owner.json";
+const PAIRING_LOCK_FILE = "remote-device-pairing.sqlite";
 
 /**
  * Device custody: an Ed25519 keypair generated on this machine. The private key
@@ -67,6 +71,7 @@ export class RemoteDeviceStore {
   private readonly noticePath: string;
   private readonly lockPath: string;
   private readonly ownerRecordPath: string;
+  private readonly pairingLockPath: string;
   private ownerDatabase: DatabaseSync | undefined;
 
   constructor(readonly stateDirectory: string) {
@@ -77,6 +82,7 @@ export class RemoteDeviceStore {
     this.noticePath = join(stateDirectory, NOTICE_FILE);
     this.lockPath = join(stateDirectory, OWNER_LOCK_FILE);
     this.ownerRecordPath = join(stateDirectory, OWNER_RECORD_FILE);
+    this.pairingLockPath = join(stateDirectory, PAIRING_LOCK_FILE);
   }
 
   load(): RemoteDeviceIdentity | undefined {
@@ -88,25 +94,29 @@ export class RemoteDeviceStore {
       !(value.accountId === null || typeof value.accountId === "string") ||
       typeof value.epoch !== "string" || !/^[1-9][0-9]{0,18}$/.test(value.epoch) ||
       typeof value.revoked !== "boolean" || typeof value.publicKey !== "string" || !value.publicKey ||
-      typeof value.createdAt !== "string") {
+      typeof value.createdAt !== "string" ||
+      (value.keyFile !== undefined && (typeof value.keyFile !== "string" ||
+        !/^remote-device-key-device-[0-9a-f-]{36}$/.test(value.keyFile) ||
+        value.keyFile !== `remote-device-key-${value.deviceId}`))) {
       throw new Error("Remote device identity record is invalid.");
     }
     return Object.freeze({
       deviceId: value.deviceId, accountId: value.accountId, epoch: value.epoch,
       revoked: value.revoked, publicKey: value.publicKey, createdAt: value.createdAt,
+      ...(typeof value.keyFile === "string" ? { keyFile: value.keyFile } : {}),
     });
   }
 
   /**
    * Create the keypair on first use. An unclaimed device may be claimed by one
-   * account once; moving it to another account requires `aiboard remote --logout`.
+   * account once; moving it to another account requires revocation and re-pairing.
    */
   ensure(accountId?: string): RemoteDeviceIdentity {
     const existing = this.load();
     if (existing) {
       if (accountId === undefined || existing.accountId === accountId) return existing;
       if (existing.accountId !== null) {
-        throw new Error("This device is linked to another AIBoard account; run `aiboard remote --logout` first.");
+        throw new Error("This device is linked to another AIBoard account; revoke it before pairing again (remote --logout alone retains the identity).");
       }
       return this.save({ ...existing, accountId });
     }
@@ -166,6 +176,35 @@ export class RemoteDeviceStore {
     return this.load()?.revoked === true;
   }
 
+  /** Replace a revoked identity while holding the same per-device owner fence. */
+  rotateIdentity(): RemoteDeviceIdentity {
+    const release = this.ownerDatabase ? undefined : this.acquireOwnerLock();
+    if (!this.ownerDatabase) throw new Error("remote_active: Stop the remote Runner before rotating its identity.");
+    try {
+      const old = this.requireIdentity();
+      if (!old.revoked) throw new Error("Only a revoked remote device identity may be rotated.");
+      const pair = generateKeyPairSync("ed25519");
+      const deviceId = `device-${randomUUID()}`;
+      const keyFile = `remote-device-key-${deviceId}`;
+      const keyPath = join(this.stateDirectory, keyFile);
+      const privateDer = pair.privateKey.export({ type: "pkcs8", format: "der" });
+      const identity: RemoteDeviceIdentity = {
+        deviceId, accountId: null, epoch: "1", revoked: false, keyFile,
+        publicKey: pair.publicKey.export({ type: "spki", format: "der" }).toString("base64url"),
+        createdAt: new Date().toISOString(),
+      };
+      // Clear the old session before publishing a new identity. A crash cannot
+      // associate the old account's session with a newly generated key.
+      try { unlinkSync(this.sessionPath); } catch (error) { if (!isMissing(error)) throw error; }
+      writePrivateExclusive(keyPath, Buffer.from(privateDer.toString("base64url"), "utf8"));
+      try { this.save(identity); }
+      catch (error) { try { unlinkSync(keyPath); } catch { /* preserve the original failure */ } throw error; }
+      try { unlinkSync(old.keyFile ? join(this.stateDirectory, old.keyFile) : this.keyPath); }
+      catch (error) { if (!isMissing(error)) throw error; }
+      return Object.freeze(identity);
+    } finally { release?.(); }
+  }
+
   saveSession(session: RemoteDeviceSession): void {
     // checkedSession validates every field, including pinned relay keys and scopes.
     if (!checkedSession(session)) {
@@ -185,6 +224,7 @@ export class RemoteDeviceStore {
     }
     return Object.freeze({
       accountId: value.accountId, clientId: value.clientId, scope: value.scope, issuedAt: value.issuedAt, relayKeys: checkedSessionShape(value)!.relayKeys, authorizedScopes: checkedSessionShape(value)!.authorizedScopes,
+      ...(typeof value.relayOrigin === "string" ? { relayOrigin: value.relayOrigin } : {}),
     });
   }
 
@@ -243,7 +283,24 @@ export class RemoteDeviceStore {
     }
   }
 
-  /** `remote --logout`: wipe device credentials and local session state, never under a live owner. */
+  /** A separate, crash-released fence serializes pairing even across processes. */
+  acquirePairingLock(): (() => void) | null {
+    const database = new DatabaseSync(this.pairingLockPath, { timeout: 0 });
+    try { database.exec("BEGIN IMMEDIATE"); }
+    catch (error) {
+      database.close();
+      if (/database is locked|database is busy|SQLITE_BUSY/i.test(String(error))) return null;
+      throw error;
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      try { database.exec("ROLLBACK"); } finally { database.close(); }
+    };
+  }
+
+  /** `remote --logout`: clear the session while retaining the device key and identity. */
   logout(): void {
     if (this.ownerDatabase) throw new Error("Stop the remote Runner before logging out.");
     const release = this.acquireOwnerLock();
@@ -252,9 +309,7 @@ export class RemoteDeviceStore {
       throw new Error(`remote_active: Stop the remote Runner${project ? ` for ${project}` : ""} before logging out.`);
     }
     try {
-      for (const path of [this.keyPath, this.identityPath, this.sessionPath]) {
-        try { unlinkSync(path); } catch (error) { if (!isMissing(error)) throw error; }
-      }
+      try { unlinkSync(this.sessionPath); } catch (error) { if (!isMissing(error)) throw error; }
     } finally { release(); }
   }
 
@@ -270,8 +325,13 @@ export class RemoteDeviceStore {
   }
 
   private privateKey(): KeyObject {
-    const encoded = readPrivateText(this.keyPath).trim();
-    return createPrivateKey({ key: Buffer.from(encoded, "base64url"), type: "pkcs8", format: "der" });
+    const identity = this.requireIdentity();
+    const encoded = readPrivateText(identity.keyFile ? join(this.stateDirectory, identity.keyFile) : this.keyPath).trim();
+    const key = createPrivateKey({ key: Buffer.from(encoded, "base64url"), type: "pkcs8", format: "der" });
+    if (createPublicKey(key.export({ type: "pkcs8", format: "pem" })).export({ type: "spki", format: "der" }).toString("base64url") !== identity.publicKey) {
+      throw new Error("Remote device key does not match its identity.");
+    }
+    return key;
   }
 }
 
@@ -321,7 +381,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function checkedSessionShape(value: unknown): RemoteDeviceSession | undefined {
   if (!isRecord(value) || typeof value.accountId !== "string" || !value.accountId || typeof value.clientId !== "string" || !value.clientId ||
     typeof value.scope !== "string" || !value.scope || typeof value.issuedAt !== "string" || !value.issuedAt ||
-    !Array.isArray(value.relayKeys) || !Array.isArray(value.authorizedScopes)) return undefined;
+    !Array.isArray(value.relayKeys) || !Array.isArray(value.authorizedScopes) ||
+    (value.relayOrigin !== undefined && (typeof value.relayOrigin !== "string" || !value.relayOrigin))) return undefined;
   const keyIds = new Set<string>();
   const relayKeys: RemoteRelayKey[] = [];
   for (const entry of value.relayKeys as unknown[]) {
@@ -342,6 +403,7 @@ export function checkedSessionShape(value: unknown): RemoteDeviceSession | undef
   return Object.freeze({
     accountId: value.accountId, clientId: value.clientId, scope: value.scope, issuedAt: value.issuedAt,
     relayKeys: Object.freeze(relayKeys), authorizedScopes: Object.freeze([...scopes]),
+    ...(typeof value.relayOrigin === "string" ? { relayOrigin: value.relayOrigin } : {}),
   });
 }
 

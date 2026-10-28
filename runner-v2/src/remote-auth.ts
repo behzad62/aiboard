@@ -16,7 +16,7 @@ const MAX_LIFETIME_MS = 10 * 60_000;
 const CLOCK_SKEW_MS = 60_000;
 /** Live nonces kept per cache; at capacity new ones are refused, never evicted early. */
 const MAX_LIVE_NONCES = 4096;
-/** P1-gated stub: real pairing/claim issuance is not built yet. */
+/** Pairing URL used when no relay transport is configured. */
 export const STUB_REMOTE_PAIRING_URL = "https://mcp.aiboard.me/pair";
 
 export interface RelayChallenge {
@@ -77,11 +77,12 @@ export class RemoteAuthError extends Error {
 }
 
 /**
- * Injected claim issuer. P1 provides the real relay implementation; R1 ships
- * only this interface plus a stub that fails closed. No network calls here.
+ * Injected claim issuer. The stub remains available when no relay is configured.
  */
 export interface RemoteSessionIssuer {
   readonly pairingUrl: string;
+  /** The issuer must validate a persisted session before the service uses it. */
+  readonly requiresSessionRestore?: boolean;
   requestSession(identity: { deviceId: string; publicKey: string }): Promise<RemoteDeviceSession>;
   restoreSession(): Promise<RemoteDeviceSession | undefined>;
 }

@@ -1,0 +1,8 @@
+{
+  "pairingId": "AAAAAAAAAAAAAAAAAAAAAA",
+  "pollSecret": "FxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxc",
+  "userCode": "AB12-CDEF",
+  "verificationUri": "https://mcp.aiboard.me/pair",
+  "expiresAt": "2026-10-27T12:10:00.000Z",
+  "intervalSeconds": 5
+}

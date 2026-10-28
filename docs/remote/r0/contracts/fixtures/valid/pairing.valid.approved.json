@@ -1,0 +1,21 @@
+{
+  "status": "approved",
+  "session": {
+    "accountId": "account-1",
+    "clientId": "runner",
+    "scope": "aiboard.remote",
+    "issuedAt": "2026-10-27T12:00:00.000Z",
+    "relayKeys": [
+      {
+        "keyId": "relay-1",
+        "publicKey": "MCowBQYDK2VwAyEA-H9fcRUR-1SSE1fw-yuofxEwqpOFbkkl7QlyCibYLQA"
+      }
+    ],
+    "authorizedScopes": [
+      "scope-default"
+    ],
+    "relayOrigin": "https://mcp.aiboard.me",
+    "envelopeKeyId": "fixture-root-v1",
+    "envelopeSignature": "CI0Ej703FEV-ntd6uESdvHf3jCdkx2oqxDMftL7_DQl_pB7ME5tKQyBSxZimbwpcWdvpc2IFGIsLciRrEJ3rDQ"
+  }
+}

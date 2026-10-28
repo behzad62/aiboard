@@ -69,12 +69,15 @@ import { LocalMcpSessions } from "./local-stdio-mcp.js";
 import { LocalPairing } from "./local-pairing.js";
 import { RemoteService } from "./remote-service.js";
 import { StubRemoteSessionIssuer, type RemoteSessionIssuer } from "./remote-auth.js";
+import { RemoteDeviceStore, type RemoteDeviceSession } from "./remote-device-store.js";
+import { RelayPairingIssuer, RemotePairingError, pairingRelayConfiguration, type PairingPresentation } from "./remote-pairing.js";
 import type { RemoteTransport, RemoteTransportContext } from "./remote-connector.js";
 import { validateRelayUrl, WebSocketRemoteTransport } from "./remote-websocket-transport.js";
 import type { RemoteDevicePolicy } from "./remote-principal.js";
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 import { resolveProtectedLocations } from "./protected-locations.js";
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
+import { openPairUrl } from "./launcher.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -98,6 +101,7 @@ interface CliOptions {
   remoteDeviceDirectory?: string;
   /** Relay WebSocket URL (wss://, or ws:// to loopback); without it the remote transport is unavailable. */
   remoteRelayUrl?: string;
+  remoteRelayRootKeys: string[];
   remotePolicyPatch: Partial<RemoteDevicePolicy>;
 }
 
@@ -106,6 +110,8 @@ interface CliOptions {
 export interface RunnerStartSeams {
   readonly createTransport?: (context: RemoteTransportContext) => RemoteTransport;
   readonly issuer?: RemoteSessionIssuer;
+  readonly presentPairing?: (presentation: PairingPresentation) => void;
+  readonly openPairingUrl?: (url: string) => void;
   readonly controlListener?: "loopback" | "none";
   readonly location?: StateLocationOptions;
   readonly onLocalAgentsReady?: (agents: { builds: NativeBuildManager; toolBench: ToolBenchSessions; chatSessions: ChatAgentSessions }) => void;
@@ -128,6 +134,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
   let launcherControl: Awaited<ReturnType<typeof startLauncherControl>> | undefined;
   let launcherStopRequested = false;
   let requestLauncherShutdown: (() => void) | undefined;
+  const pairingAbort = new AbortController();
   try {
     assertSupportedNodeVersion(process.versions.node);
     const args = parseRunnerArguments([...argv]);
@@ -139,10 +146,11 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       process.on("message", (message: unknown) => {
         if (typeof message === "object" && message !== null && "type" in message && message.type === "aiboard-launcher-stop") {
           launcherStopRequested = true;
+          pairingAbort.abort();
           requestLauncherShutdown?.();
         }
       });
-      process.once("disconnect", () => { launcherStopRequested = true; requestLauncherShutdown?.(); });
+      process.once("disconnect", () => { launcherStopRequested = true; pairingAbort.abort(); requestLauncherShutdown?.(); });
     }
     if (isHelpRequested(args)) { printHelp(); return { started: false, shutdown: async () => undefined }; }
     const options = parseArguments(args);
@@ -421,7 +429,6 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     }
     let remoteService: RemoteService | undefined;
     if (options.remote) {
-      // A relay transport exists only when a relay URL was given; pairing with the hosted relay is P1.
       const relayUrl = options.remoteRelayUrl;
       const configuredTransport = relayUrl
         ? (context: RemoteTransportContext): RemoteTransport => new WebSocketRemoteTransport({ url: relayUrl, deviceId: context.deviceId })
@@ -433,6 +440,21 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         onMessage: () => undefined,
         onClose: () => undefined,
       });
+      const pairing = !seams.issuer && relayUrl ? new RelayPairingIssuer({
+        relayUrl, rootKeys: options.remoteRelayRootKeys, deviceStore: new RemoteDeviceStore(options.remoteDeviceDirectory!),
+        signal: pairingAbort.signal,
+        present: seams.presentPairing ?? ((presentation) => {
+          if (launcher && process.connected) process.send?.({ type: "aiboard-remote-pairing", ...presentation });
+          else {
+            const minutes = Math.max(1, Math.ceil((Date.parse(presentation.expiresAt) - Date.now()) / 60_000));
+            process.stdout.write(`Pair this computer: open ${presentation.verificationUri} and enter code ${presentation.userCode} (expires in ${minutes} min)\n`);
+          }
+        }),
+        openUrl: seams.openPairingUrl ?? ((url) => {
+          if (launcher && process.connected) process.send?.({ type: "aiboard-remote-open", url });
+          else openPairUrl(url, process.platform);
+        }),
+      }) : undefined;
       remoteService = new RemoteService({
         stateDirectory: options.stateDirectory,
         deviceDirectory: options.remoteDeviceDirectory!,
@@ -444,7 +466,11 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         protectedLocations,
         ...(buildRecoveryUnverified ? { reconcileStartup: async () => { throw new Error("Build ownership recovery remains unverified."); } } : {}),
         createTransport: seams.createTransport ?? configuredTransport ?? unavailableTransport,
-        issuer: seams.issuer ?? new StubRemoteSessionIssuer(),
+        issuer: seams.issuer ?? pairing ?? new StubRemoteSessionIssuer(),
+        ...(pairing ? { onSession: (session: RemoteDeviceSession) => {
+          if (launcher && process.connected) process.send?.({ type: "aiboard-remote-session", deviceName: pairing.deviceName, accountId: session.accountId });
+          else process.stdout.write(`Remote device: ${pairing.deviceName}; account: ${session.accountId}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);
+        } } : {}),
         policyPatch: options.remotePolicyPatch,
         pluginTools: createRemotePluginToolProvider(managedMcp, {
           generation: async () => (await extensions.generation()).generation,
@@ -600,6 +626,9 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     };
   } catch (error) {
     seams.onStartupError?.(error);
+    if (launcher && process.connected && error instanceof RemotePairingError) {
+      process.send?.({ type: "aiboard-remote-pairing-error", code: error.code, message: error.message });
+    }
     let cleanupError: unknown;
     try { await launcherControl?.close(); } catch (closeError) { cleanupError = closeError; }
     try { await closeRunnerResources(resources); }
@@ -758,12 +787,18 @@ export function parseArguments(args: string[]): CliOptions {
   const allowOrigins: string[] = [];
   const allowOriginSet = new Set<string>();
   const setAsideRuns = new Set<string>();
+  const remoteRelayRootKeys: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
     if (!flag?.startsWith("--")) {
       throw new Error(`invalid_arguments: Unknown token ${flag ?? "argument"}.`);
     }
     if (flag === "--remote") { remote = true; continue; }
+    if (flag === "--relay-root-key") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) throw new Error("invalid_arguments: Expected a value after --relay-root-key.");
+      remoteRelayRootKeys.push(value); index += 1; continue;
+    }
     const policyFlag = REMOTE_POLICY_FLAGS[flag];
     if (policyFlag) {
       const [key, value] = policyFlag;
@@ -855,9 +890,9 @@ export function parseArguments(args: string[]): CliOptions {
   const remoteRelayUrl = values.get("--relay-url");
   if (remoteRelayUrl !== undefined) {
     if (!remote) throw new Error("invalid_arguments: --relay-url requires --remote.");
-    try { validateRelayUrl(remoteRelayUrl); }
+    try { validateRelayUrl(remoteRelayUrl); pairingRelayConfiguration(remoteRelayUrl, remoteRelayRootKeys); }
     catch (error) { throw new Error(`invalid_arguments: ${(error as Error).message}`); }
-  }
+  } else if (remoteRelayRootKeys.length) throw new Error("invalid_arguments: --relay-root-key requires --relay-url.");
   const extensionsHome = optionalAbsolutePath(values, "--extensions-home") ?? join(homedir(), ".aiboard", "runner-extensions");
   const portText = values.get("--port") ?? "0";
   const port = Number(portText);
@@ -881,6 +916,7 @@ export function parseArguments(args: string[]): CliOptions {
     setAsideRuns,
     remote,
     remotePolicyPatch: policyPatch,
+    remoteRelayRootKeys,
     ...(remoteDeviceDirectory ? { remoteDeviceDirectory } : {}),
     ...(remoteRelayUrl ? { remoteRelayUrl } : {}),
   };
@@ -932,6 +968,8 @@ function printHelp(): void {
     "  --allow-origin <url>    Allowed browser CORS origin (repeatable, comma-separated list supported).",
     "  --set-aside-run <id>    Start without rebuilding this run; it stays paused and untouched (repeatable).",
     "  --remote                Also start the Runner-owned remote service (aiboard remote).",
+    "  --relay-url <url>       Connect to a relay (wss://, or loopback ws://).",
+    "  --relay-root-key <key>  Pin an Ed25519 SPKI key for a custom relay (repeatable).",
     "                         Defaults to loopback origins + aiboard.me.",
     "  --help, -h              Show this help text.",
     "",

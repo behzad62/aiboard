@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionHost } from "./execution-host.js";
 import type { RemoteSessionIssuer } from "./remote-auth.js";
+import type { RemoteDeviceSession } from "./remote-device-store.js";
 import {
   RemoteConnector,
   type RemoteConnectionState,
@@ -26,7 +27,7 @@ export const REMOTE_FIRST_RUN_NOTICE = [
   "anything your account can read on this machine. There is no per-action",
   "approval by default; every call is audited locally. Restrict this device with",
   "--read-only, --only-here or --no-shell; inspect aiboard remote --audit.",
-  "disconnect with Ctrl+C, or wipe the device identity with:",
+  "disconnect with Ctrl+C, or clear the saved session with:",
   "  aiboard remote --logout",
   "File-tool exclusions do not confine shell commands; they run as your OS user.",
 ].join("\n");
@@ -66,6 +67,7 @@ export interface RemoteServiceOptions {
   readonly onShutdownStep?: (step: string) => void;
   readonly pluginTools?: RemotePluginToolProvider;
   readonly policyPatch?: Partial<RemoteDevicePolicy>;
+  readonly onSession?: (session: RemoteDeviceSession) => void;
 }
 
 /**
@@ -155,21 +157,23 @@ export class RemoteService {
     }
     this.releaseOwnerLock = release;
     let identity = deviceStore.ensure();
-    let session = this.safeSession();
+    if (identity.revoked) identity = deviceStore.rotateIdentity();
+    let session = this.options.issuer.requiresSessionRestore ? undefined : this.safeSession();
     if (!session) {
       try {
         session = await this.options.issuer.restoreSession()
           ?? await this.options.issuer.requestSession({ deviceId: identity.deviceId, publicKey: identity.publicKey });
-      } catch {
-        // P1 is not built yet: stay logged out and disconnected, fail closed.
+      } catch (error) {
         this.writeStatusFile(this.status());
+        if (this.options.issuer.requiresSessionRestore) throw error;
         if (Object.keys(this.options.policyPatch ?? {}).length > 0) throw new Error("remote_policy_identity_required: Pair this device before changing its policy.");
         return;
       }
-      deviceStore.saveSession(session);
     }
     identity = deviceStore.ensure(session.accountId);
     if (identity.revoked) throw new Error("Remote device is revoked.");
+    deviceStore.saveSession(session);
+    this.options.onSession?.(session);
     const verified = { accountId: session.accountId, clientId: session.clientId, deviceId: identity.deviceId };
     this.composition.principals.getOrCreate(verified);
     if (Object.keys(this.options.policyPatch ?? {}).length > 0) this.composition.principals.updatePolicy(verified, this.options.policyPatch!, "local");
@@ -246,7 +250,7 @@ export class RemoteService {
     }
   }
 
-  /** `remote --logout`: stop first, then wipe credentials and session state. */
+  /** `remote --logout`: stop first, then clear the saved session. */
   logout(): void {
     if (this.connector && !this.closed) throw new Error("Stop the remote Runner before logging out.");
     const release = this.releaseOwnerLock;

@@ -24,6 +24,7 @@ import { RemoteAuditStore } from "./remote-audit-store.js";
 import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 import { promptCommandApproval } from "./remote-approval.js";
+import { pairingRelayConfiguration } from "./remote-pairing.js";
 
 export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
 const RUNNER_KINDS: readonly RunnerKind[] = ["runner", "accounts", "legacy", "bench"];
@@ -51,8 +52,8 @@ export interface LauncherArguments {
   policyFlags?: boolean;
 }
 
-const VALUE_FLAGS = new Set(["--project", "--state-dir", "--port", "--capabilities-config", "--extensions-home", "--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run"]);
-const REPEATABLE_FLAGS = new Set(["--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run"]);
+const VALUE_FLAGS = new Set(["--project", "--state-dir", "--port", "--capabilities-config", "--extensions-home", "--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run", "--relay-url", "--relay-root-key"]);
+const REPEATABLE_FLAGS = new Set(["--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run", "--relay-root-key"]);
 const POLICY_FLAGS: Readonly<Record<string, string>> = Object.freeze({
   "--only-here": "scope", "--anywhere": "scope", "--read-only": "writes", "--writable": "writes",
   "--no-shell": "shell", "--shell": "shell", "--approve-commands": "approvals", "--no-approve-commands": "approvals",
@@ -154,6 +155,13 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
     ((result.logout || result.policy || result.audit) && (result.policyFlags || result.acknowledgeRemote || result.runnerFlags.length > 0)) ||
     (result.auditLimit !== undefined && !result.audit)) throw new Error("invalid_arguments: Conflicting remote options.");
   if (result.command !== "start" && result.command !== "remote" && result.command !== "mcp" && result.runnerFlags.length > 0) throw new Error("invalid_arguments: Runner options apply only when starting a Runner.");
+  const relayIndex = result.runnerFlags.indexOf("--relay-url");
+  const rootKeys = result.runnerFlags.flatMap((flag, index) => flag === "--relay-root-key" ? [result.runnerFlags[index + 1]!] : []);
+  if (relayIndex >= 0 || rootKeys.length) {
+    if (result.command !== "remote" || relayIndex < 0) throw new Error("invalid_arguments: Relay options require aiboard remote --relay-url.");
+    try { pairingRelayConfiguration(result.runnerFlags[relayIndex + 1]!, rootKeys); }
+    catch (error) { throw new Error(`invalid_arguments: ${error instanceof Error ? error.message : "Invalid relay configuration."}`); }
+  }
   return result;
 }
 
@@ -217,11 +225,11 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     : undefined;
   if (args.command === "remote" && args.logout) {
     const deviceStore = new RemoteDeviceStore(deviceDirectory!);
-    const present = deviceStore.load() !== undefined;
+    const present = deviceStore.loadSession() !== undefined;
     deviceStore.logout();
     write(present
-      ? "Remote device logged out. Device credentials and session state were wiped.\n"
-      : "Remote device logged out. No device credentials were present.\n");
+      ? "Remote device logged out. The saved session was cleared; the device key was retained.\n"
+      : "Remote device logged out. No saved session was present.\n");
     return;
   }
   await assertWindowsStatePath(requestedState, windowsDefault);
@@ -464,7 +472,17 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         v2Child.stderr?.on("data", captureDiagnostics);
         v2Child.stdout?.resume();
         v2Closed = childClose(v2Child);
-        const ready = childReady(v2Child, handshake);
+        const ready = childReady(v2Child, handshake, (message) => {
+          if (message.type === "aiboard-remote-pairing" && typeof message.verificationUri === "string" && typeof message.userCode === "string" &&
+            typeof message.expiresAt === "string" && /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(message.userCode)) {
+            const minutes = Math.max(1, Math.ceil((Date.parse(message.expiresAt) - Date.now()) / 60_000));
+            write(`Pair this computer: open ${message.verificationUri} and enter code ${message.userCode} (expires in ${minutes} min)\n`);
+          } else if (message.type === "aiboard-remote-open" && typeof message.url === "string" && !args.noOpen) {
+            try { (runtime.openUrl ?? ((target: string) => openPairUrl(target, runtime.platform ?? process.platform)))(message.url); } catch { /* terminal instructions are the fallback */ }
+          } else if (message.type === "aiboard-remote-session" && typeof message.deviceName === "string" && typeof message.accountId === "string") {
+            write(`Remote device: ${message.deviceName}; account: ${message.accountId}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);
+          }
+        });
         const instance = await Promise.race([
           ready,
           v2Closed.then(() => { throw new Error("runner_start_failed: Runner exited before it became ready."); }),
@@ -524,7 +542,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
       showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime);
     }
-    if (args.command === "remote" && !new RemoteDeviceStore(deviceDirectory!).loadSession()) {
+    if (args.command === "remote" && !args.runnerFlags.includes("--relay-url") && !new RemoteDeviceStore(deviceDirectory!).loadSession()) {
       write("Remote pairing: " + STUB_REMOTE_PAIRING_URL + "\n");
       if (args.noOpen !== true) {
         try { (runtime.openUrl ?? ((target: string) => openPairUrl(target, runtime.platform ?? process.platform)))(STUB_REMOTE_PAIRING_URL); } catch { /* printed URL is the fallback */ }
@@ -773,11 +791,20 @@ async function waitForControlDown(instance: LauncherInstance): Promise<void> {
   }
 }
 
-function childReady(child: ChildProcess, handshake: LauncherHandshake): Promise<LauncherInstance> {
+function childReady(child: ChildProcess, handshake: LauncherHandshake, onRemoteMessage?: (message: Record<string, unknown>) => void): Promise<LauncherInstance> {
   return new Promise((resolve, reject) => {
     let initialized = false;
     const onMessage = (message: unknown) => {
       if (typeof message !== "object" || message === null || !("type" in message)) return;
+      if (message.type === "aiboard-remote-pairing-error" && "code" in message && "message" in message && typeof message.code === "string" && typeof message.message === "string") {
+        child.off("message", onMessage); child.off("error", reject);
+        reject(new Error(`${message.code}: ${message.message}`));
+        return;
+      }
+      if (typeof message.type === "string" && message.type.startsWith("aiboard-remote-")) {
+        onRemoteMessage?.(message as Record<string, unknown>);
+        return;
+      }
       if (message.type === "aiboard-launcher-awaiting-init" && !initialized) {
         initialized = true;
         child.send(handshake, (error) => { if (error) reject(new Error("launcher_ipc_unavailable: Cannot send the Runner handshake.")); });
@@ -816,7 +843,7 @@ function showPairing(code: string, ports: readonly number[], noOpen: boolean, wr
   catch { /* The printed code and URL are the manual fallback. */ }
 }
 
-function openPairUrl(url: string, platform: NodeJS.Platform): void {
+export function openPairUrl(url: string, platform: NodeJS.Platform): void {
   const base: SpawnOptions = { stdio: "ignore", windowsHide: true, detached: true };
   let command = "xdg-open";
   let args: string[] = [url];
@@ -901,7 +928,8 @@ function help(): string {
     "  --port <number>           Runner port (0 selects an available port).",
     "  --capabilities-config, --extensions-home, --mcp, --mcp-envelope,",
     "  --allow-origin, --set-aside-run  Pass existing Runner options through.",
-    "  aiboard remote            Start Runner V2 with the remote service; --logout wipes the device.",
+    "  aiboard remote            Start Runner V2 with the remote service; --logout clears the session.",
+    "  remote --relay-url <wss-url> [--relay-root-key <base64url-spki> ...]",
     "  remote --only-here|--anywhere --read-only|--writable --no-shell|--shell",
     "  remote --approve-commands|--no-approve-commands  Set per-command approval.",
     "  remote --no-audit|--audit-on  Set local device policy; --policy shows it.",

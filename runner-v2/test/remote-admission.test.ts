@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createPublicKey, verify } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -339,7 +340,7 @@ type Schema = { [key: string]: unknown };
 
 /** Small structural Draft 2020-12 subset, using the checked-in schemas and their references. */
 async function validate(name: string, value: unknown): Promise<void> {
-  const names = ["job", "job-event", "remote-request", "remote-response", "error"];
+  const names = ["job", "job-event", "remote-request", "remote-response", "error", "pairing"];
   const registry = new Map<string, Schema>();
   for (const entry of names) {
     const schema = JSON.parse(await readFile(join(contracts, entry + ".v1.schema.json"), "utf8")) as Schema;
@@ -371,6 +372,9 @@ function matches(value: unknown, schema: Schema, root: Schema, registry: Map<str
   if (schema.type === "null" && value !== null) return false;
   if (schema.type === "boolean" && typeof value !== "boolean") return false;
   if (schema.type === "number" && (typeof value !== "number" || !Number.isFinite(value))) return false;
+  if (schema.type === "integer" && (typeof value !== "number" || !Number.isSafeInteger(value))) return false;
+  if (typeof value === "number" && typeof schema.minimum === "number" && value < schema.minimum) return false;
+  if (typeof value === "number" && typeof schema.maximum === "number" && value > schema.maximum) return false;
   if (schema.type === "string") {
     if (typeof value !== "string") return false;
     const length = [...value].length;
@@ -381,7 +385,9 @@ function matches(value: unknown, schema: Schema, root: Schema, registry: Map<str
   }
   if (schema.type === "array") {
     if (!Array.isArray(value)) return false;
+    if (typeof schema.minItems === "number" && value.length < schema.minItems) return false;
     if (typeof schema.maxItems === "number" && value.length > schema.maxItems) return false;
+    if (schema.uniqueItems === true && new Set(value.map((entry) => JSON.stringify(entry))).size !== value.length) return false;
     if (schema.items && !value.every((entry) => matches(entry, schema.items as Schema, root, registry))) return false;
   }
   if (schema.type === "object") {
@@ -411,4 +417,29 @@ test("structural schema checks cover contract fixture shapes", async () => {
   }
   const invalidJob = { ...(JSON.parse(await readFile(join(fixtures, "valid", "job.valid.queued.json"), "utf8")) as object), state: "dispatching" };
   await assert.rejects(validate("job", invalidJob));
+});
+
+test("pairing contract accepts valid fixtures and refuses invalid fixtures", async () => {
+  for (const kind of ["valid", "invalid"] as const) {
+    const names = (await readdir(join(fixtures, kind))).filter((name) => name.startsWith(`pairing.${kind}.`));
+    assert.ok(names.length > 0, `missing ${kind} pairing fixtures`);
+    for (const name of names) {
+      const value: unknown = JSON.parse(await readFile(join(fixtures, kind, name), "utf8"));
+      if (kind === "valid") await validate("pairing", value);
+      else await assert.rejects(validate("pairing", value), name);
+    }
+  }
+});
+
+test("valid pairing fixtures carry signatures from the documented synthetic keys", async () => {
+  const request = JSON.parse(await readFile(join(fixtures, "valid", "pairing.valid.start-request.json"), "utf8")) as Record<string, string>;
+  const { signature, ...unsignedRequest } = request;
+  const deviceKey = createPublicKey({ key: Buffer.from(request.publicKey!, "base64url"), type: "spki", format: "der" });
+  assert.equal(verify(null, Buffer.from(canonicalJson(unsignedRequest)), deviceKey, Buffer.from(signature!, "base64url")), true);
+  const schema = JSON.parse(await readFile(join(contracts, "pairing.v1.schema.json"), "utf8")) as { $comment: string };
+  const fixtureRoot = schema.$comment.split(": ").at(-1)!;
+  const approved = JSON.parse(await readFile(join(fixtures, "valid", "pairing.valid.approved.json"), "utf8")) as { session: Record<string, unknown> };
+  const { envelopeSignature, ...unsignedSession } = approved.session;
+  const relayRoot = createPublicKey({ key: Buffer.from(fixtureRoot, "base64url"), type: "spki", format: "der" });
+  assert.equal(verify(null, Buffer.from(canonicalJson(unsignedSession)), relayRoot, Buffer.from(envelopeSignature as string, "base64url")), true);
 });
