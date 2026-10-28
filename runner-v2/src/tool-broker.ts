@@ -26,6 +26,7 @@ import {
   type ExecutionGrantAuthority,
   type OpaqueExecutionGrant,
 } from "./execution-grants.js";
+import { RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
 import { PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES } from "./runner-extension.js";
 import {
   ToolRegistry,
@@ -64,6 +65,8 @@ export interface ToolAuditRecord {
   outsideWorkspace: boolean;
   isError: boolean;
   errorCode?: string;
+  pathCategory?: string;
+  pathDenialReason?: string;
 }
 
 export interface ToolBrokerOptions {
@@ -79,6 +82,7 @@ export interface ToolBrokerOptions {
   budget?: BudgetLedger;
   budgetScopeId?: string;
   executionGrants?: ExecutionGrantAuthority;
+  pathGuard?: RemotePathGuard;
 }
 
 interface InvocationCacheEntry {
@@ -87,10 +91,16 @@ interface InvocationCacheEntry {
 }
 
 interface InvocationDecision {
+  pathCategory?: string;
+  pathDenialReason?: string;
   decision: ToolAuditRecord["decision"];
   capability?: string;
   outsideWorkspace: boolean;
 }
+
+const REMOTE_GUARDED_FILE_TOOLS: ReadonlySet<string> = new Set([
+  "fs.read", "fs.list", "fs.search", "fs.stat", "fs.write", "fs.patch", "fs.move", "fs.delete", "image.inspect",
+]);
 
 class ToolTimeoutError extends Error {}
 
@@ -108,6 +118,7 @@ export class ToolBroker implements AgentToolRuntime {
   private readonly budget?: BudgetLedger;
   private readonly budgetScopeId?: string;
   private readonly executionGrants: ExecutionGrantAuthority;
+  private readonly pathGuard?: RemotePathGuard;
   private readonly invocationCache = new Map<string, InvocationCacheEntry>();
   private readonly audit: ToolAuditRecord[] = [];
   private readonly decisions = new Map<string, InvocationDecision>();
@@ -126,6 +137,7 @@ export class ToolBroker implements AgentToolRuntime {
     this.budget = options.budget;
     this.budgetScopeId = options.budgetScopeId;
     this.executionGrants = options.executionGrants ?? createExecutionGrantAuthority();
+    this.pathGuard = options.pathGuard;
     if (Boolean(this.budget) !== Boolean(this.budgetScopeId)) {
       throw new Error("Tool budget and budgetScopeId must be configured together.");
     }
@@ -254,6 +266,8 @@ export class ToolBroker implements AgentToolRuntime {
         outsideWorkspace: decision.outsideWorkspace,
         isError: result.isError,
         ...(result.error ? { errorCode: result.error.code } : {}),
+        ...(decision.pathCategory ? { pathCategory: decision.pathCategory } : {}),
+        ...(decision.pathDenialReason ? { pathDenialReason: decision.pathDenialReason } : {}),
       })
     );
     return result;
@@ -274,6 +288,8 @@ export class ToolBroker implements AgentToolRuntime {
     const access = tool.assessAccess?.(input, toolContext) ?? {
       capability: tool.definition.effect,
     };
+    const pathDenial = await this.checkRemotePaths(tool.definition.name, access, toolContext);
+    if (pathDenial) return pathDenial;
     // Capture identities before any approval/grant await can allow substitution.
     const mutationCapture = isFilesystemMutation(tool.definition.name)
       ? captureFilesystemMutation(workspacePath, tool.definition.name, access.paths ?? [])
@@ -447,6 +463,8 @@ export class ToolBroker implements AgentToolRuntime {
           toolName: tool.definition.name, callId, permissionProfile: this.git?.permissionProfile ?? this.permissionProfile },
         signal,
       }) : undefined;
+      const lastMileDenial = await this.checkRemotePaths(tool.definition.name, access, toolContext);
+      if (lastMileDenial) return lastMileDenial;
       const invocationContext = { ...toolContext, signal, executionGrant, filesystemMutation };
       const execution = this.git
         ? this.git.withCall(invocationContext, () => tool.execute(input, invocationContext))
@@ -525,6 +543,30 @@ export class ToolBroker implements AgentToolRuntime {
       { callId, toolName, ...output },
       this.clock()
     );
+  }
+
+  private async checkRemotePaths(
+    toolName: string,
+    access: ToolAccessRequest,
+    context: ToolExecutionContext,
+  ): Promise<ToolExecutionOutput | undefined> {
+    if (!this.pathGuard || !REMOTE_GUARDED_FILE_TOOLS.has(toolName)) return undefined;
+    if (context.actor.role !== "remote" && context.actor.role !== "local_mcp") return undefined;
+    for (const entry of access.paths ?? []) {
+      const target = isAbsolute(entry.path) ? resolve(entry.path) : resolve(this.workspacePath, entry.path);
+      const mode = entry.access === "read" ? "read" as const : entry.access === "delete" ? "delete" as const : "write" as const;
+      try {
+        await this.pathGuard.assertAllowed(target, mode, { toolName, principal: `${context.actor.role}:${context.actor.id}` });
+      } catch (error) {
+        if (!(error instanceof RemotePathDeniedError)) throw error;
+        this.decisions.set(context.callId ?? "unknown", {
+          decision: "denied", capability: access.capability, outsideWorkspace: false,
+          pathCategory: error.category, pathDenialReason: error.reason,
+        });
+        return outputFailure(error.code, error.message);
+      }
+    }
+    return undefined;
   }
 
   private async hasOutsidePath(access: ToolAccessRequest): Promise<boolean> {

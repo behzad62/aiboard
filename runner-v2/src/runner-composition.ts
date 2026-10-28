@@ -29,6 +29,7 @@ export interface RemoteCompositionOptions {
   readonly host: ExecutionHost;
   readonly permissionProfile: PermissionProfile;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
+  readonly extensionsHome?: string;
   readonly now?: () => Date;
 }
 
@@ -39,7 +40,8 @@ export interface RemoteCompositionOptions {
  */
 export function composeRemoteRuntime(options: RemoteCompositionOptions): RemoteComposition {
   const deviceStore = new RemoteDeviceStore(options.deviceDirectory);
-  const principals = new RemotePrincipalStore(join(options.stateDirectory, "remote-principals.sqlite"));
+  const principals = new RemotePrincipalStore(join(options.stateDirectory, "remote-principals.sqlite"), undefined,
+    join(options.deviceDirectory, "remote-device-policy.sqlite"));
   const storageKey = new FileStorageKeyProvider(options.stateDirectory).getKey({ createIfMissing: true });
   let admission: RemoteAdmissionStore;
   try {
@@ -54,6 +56,9 @@ export function composeRemoteRuntime(options: RemoteCompositionOptions): RemoteC
     permissionProfile: options.permissionProfile,
     capabilitiesConfig: options.capabilitiesConfig,
     admitEffect: createRemoteAdmissionAdapter(admission),
+    stateDirectory: options.stateDirectory,
+    deviceDirectory: options.deviceDirectory,
+    ...(options.extensionsHome ? { extensionDirectories: [options.extensionsHome] } : {}),
   });
   const authenticator = new RemoteAuthenticator(deviceStore, options.now ? { now: options.now } : {});
   return { deviceStore, principals, admission, runtime, authenticator };

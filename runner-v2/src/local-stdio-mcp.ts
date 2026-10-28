@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { isAbsolute } from "node:path";
+import { existsSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Readable, Writable } from "node:stream";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -10,7 +11,9 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { LOCAL_MCP_DEPTH_LIMIT } from "./child-environment.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionHost } from "./execution-host.js";
-import { createLocalMcpOwner, LocalMcpToolSession, type LocalMcpOwner } from "./remote-tool-runtime.js";
+import { createLocalMcpOwner, LocalMcpToolSession, type LocalMcpOwner, type LocalMcpPolicyOptions } from "./remote-tool-runtime.js";
+import { RemoteDeviceStore } from "./remote-device-store.js";
+import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-principal.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 
 const IDLE_TTL_MS = 5 * 60_000;
@@ -32,11 +35,33 @@ export class LocalMcpSessions {
   private closing = false;
   private databaseClosed = false;
   private closePending?: Promise<void>;
-
-  constructor(private readonly options: {
+  private readonly principals?: RemotePrincipalStore;
+  private readonly options: {
     host: ExecutionHost; workspacePath: string; statePath: string; permissionProfile: PermissionProfile; capabilitiesConfig: RunnerCapabilitiesConfig;
-  }) {
+    stateDirectory?: string; deviceDirectory?: string; extensionDirectories?: readonly string[]; installerBinDirectories?: readonly string[];
+    protectedLocations?: import("./protected-locations.js").ProtectedLocations; pathGuard?: import("./remote-path-guard.js").RemotePathGuard;
+  } & LocalMcpPolicyOptions;
+
+  constructor(options: {
+    host: ExecutionHost; workspacePath: string; statePath: string; permissionProfile: PermissionProfile; capabilitiesConfig: RunnerCapabilitiesConfig;
+    stateDirectory?: string; deviceDirectory?: string; extensionDirectories?: readonly string[]; installerBinDirectories?: readonly string[];
+    protectedLocations?: import("./protected-locations.js").ProtectedLocations; pathGuard?: import("./remote-path-guard.js").RemotePathGuard;
+  } & LocalMcpPolicyOptions) {
     if (options.statePath !== ":memory:" && !isAbsolute(options.statePath)) throw new Error("Local MCP state path must be absolute.");
+    const devicePolicyPath = options.deviceDirectory && existsSync(join(options.deviceDirectory, "remote-device.json"))
+      ? join(options.deviceDirectory, "remote-device-policy.sqlite") : undefined;
+    this.principals = options.stateDirectory ? new RemotePrincipalStore(join(options.stateDirectory, "remote-principals.sqlite"), undefined, devicePolicyPath) : undefined;
+    const device = options.deviceDirectory ? new RemoteDeviceStore(options.deviceDirectory) : undefined;
+    const policyIdentity = options.policyIdentity ?? (() => {
+      const identity = device?.load();
+      const session = device?.loadSession();
+      if (!identity || !session) return undefined;
+      if (identity.accountId !== session.accountId) throw new Error("Remote device identity does not match its session.");
+      return { accountId: session.accountId, clientId: session.clientId, deviceId: identity.deviceId };
+    });
+    this.options = { ...options, policyIdentity,
+      policy: options.policy ?? (() => { const identity = policyIdentity(); return identity && this.principals ? this.principals.policy(identity) : DEFAULT_REMOTE_DEVICE_POLICY; }),
+      ...(options.auditStore || this.principals ? { auditStore: options.auditStore ?? this.principals!.auditStore } : {}) };
     this.database = new DatabaseSync(options.statePath);
     this.database.exec(`PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;
       CREATE TABLE IF NOT EXISTS local_mcp_owners (
@@ -160,6 +185,7 @@ export class LocalMcpSessions {
     }
     if (failures.length) throw new AggregateError(failures, "Local MCP cleanup remains unverified.");
     this.database.close();
+    this.principals?.close();
     this.databaseClosed = true;
   }
 

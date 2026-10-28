@@ -280,7 +280,7 @@ test("real broker binds remote grants and preserves exact managed-process owners
     assert.equal(ledgerCount(ledgerPath, owner.runId), beforeApproval);
     assert.equal(admissions, admissionsBeforeApproval);
     principals.updatePolicy(alice, { approvals: false, onlyHere: true }, "local");
-    assert.equal((await runtime.invoke(alice, "fs.read", { path: "fixture.txt" })).error?.code, "policy_unavailable");
+    assert.equal((await runtime.invoke(alice, "fs.read", { path: "fixture.txt" })).isError, false);
     principals.updatePolicy(alice, { onlyHere: false }, "local");
     assert.equal(json(await runtime.invoke(reconnected.identity, "process.signal", { processId, signal: "SIGTERM" })).status, "stopped");
     let admissionEntered!: () => void, releaseAdmission!: () => void;

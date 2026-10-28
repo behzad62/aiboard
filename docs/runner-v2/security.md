@@ -23,6 +23,7 @@ Legacy or missing lifecycle scope never upgrades authority: readers may retain o
 - `full` is explicitly `unconfined_explicit_full`; it is never presented as confinement.
 - Windows Job containment is optional. It can strengthen current-host lifecycle containment for `contained_workload` requests, but its absence does not weaken the portable `process_group` contract or justify a false confinement claim.
 - Output is bounded. Durable observations expose loss when evidence cannot be complete; consumers must not infer unseen bytes.
+- The remote/local-MCP file-tool denylist (S1a protected locations) and optional `--only-here` scope bind Runner file tools only. Under `--only-here`, process tools start in the workspace, but commands and their descendants still run with the OS user's authority and can access paths outside it. Command confinement is future S2 work (D17).
 
 ## Recovery and cleanup trust
 

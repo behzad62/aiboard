@@ -78,3 +78,6 @@ next-env.d.ts
 
 # Ed25519 private key for signing runner self-updates (never commit)
 /scripts/.runner-signing-key.pem
+
+# Test temp roots (certified fixtures keep them on failure for diagnosis)
+runner-v2/test/.*/

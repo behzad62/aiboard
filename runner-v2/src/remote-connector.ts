@@ -56,7 +56,7 @@ export interface RemoteTransport {
 
 /** The slice of RemoteToolRuntime the connector may use. Never an authority. */
 export interface RemoteRequestRuntime {
-  invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult>;
+  invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string, jobId?: string): Promise<ToolResult>;
   invokeAdmitted?(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal: AbortSignal, rawRequest: string, jobId: string, beforeBroker?: () => boolean): Promise<RemoteInvocationResult>;
   authorizeJob?(identity: VerifiedRemoteIdentity, name?: string, args?: unknown): string | undefined;
   stopStartedProcess?(identity: VerifiedRemoteIdentity, processId: string): Promise<boolean>;
@@ -720,7 +720,7 @@ export class RemoteConnector {
           brokerInvoked = outcome.brokerInvoked;
           stopEvidence = outcome.stopEvidence;
         } else {
-          result = await this.options.runtime.invoke(identity, entry.runnerName, request.payload, entry.controller.signal, entry.rawRequest);
+          result = await this.options.runtime.invoke(identity, entry.runnerName, request.payload, entry.controller.signal, entry.rawRequest, jobId);
         }
       } catch (error) {
         if (entry.settled) return;

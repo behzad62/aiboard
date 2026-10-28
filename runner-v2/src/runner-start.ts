@@ -61,13 +61,14 @@ import {
 } from "./runner-resource-cleanup.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
-import { assertExternalState, projectIdentity, tryAcquireLock } from "./launcher-instance.js";
+import { assertExternalState, projectIdentity, remoteDeviceDirectory, tryAcquireLock } from "./launcher-instance.js";
 import { receiveLauncherHandshake, startLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
 import { LocalMcpSessions } from "./local-stdio-mcp.js";
 import { LocalPairing } from "./local-pairing.js";
 import { RemoteService } from "./remote-service.js";
 import { StubRemoteSessionIssuer, type RemoteSessionIssuer } from "./remote-auth.js";
 import type { RemoteTransport } from "./remote-connector.js";
+import type { RemoteDevicePolicy } from "./remote-principal.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -89,6 +90,7 @@ interface CliOptions {
   remote: boolean;
   /** Per-user remote device custody directory, required with --remote (launcher-supplied). */
   remoteDeviceDirectory?: string;
+  remotePolicyPatch: Partial<RemoteDevicePolicy>;
 }
 
 
@@ -395,8 +397,10 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         host: executionHost,
         permissionProfile: "full",
         capabilitiesConfig,
+        extensionsHome: options.extensionsHome,
         createTransport: seams.createTransport ?? unavailableTransport,
         issuer: seams.issuer ?? new StubRemoteSessionIssuer(),
+        policyPatch: options.remotePolicyPatch,
         pluginTools: createRemotePluginToolProvider(managedMcp, {
           generation: async () => (await extensions.generation()).generation,
           artifacts, workspacePath: options.projectPath,
@@ -406,7 +410,9 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       await remoteService.start();
     }
     const localMcp = launcher ? new LocalMcpSessions({ host: executionHost, workspacePath: options.projectPath, statePath: join(options.stateDirectory, "local-mcp-owners.sqlite"),
-      permissionProfile: "full", capabilitiesConfig }) : undefined;
+      permissionProfile: "full", capabilitiesConfig, stateDirectory: options.stateDirectory,
+      deviceDirectory: options.remoteDeviceDirectory ?? remoteDeviceDirectory({ platform: process.platform, environment: process.env, home: homedir() }),
+      extensionDirectories: [options.extensionsHome] }) : undefined;
     const server = new ControlServer({
       ...(remoteService ? { remoteStatus: () => remoteService.status() } : {}),
       localPairing,
@@ -672,6 +678,8 @@ function isHelpRequested(args: string[]): boolean {
 function parseArguments(args: string[]): CliOptions {
   const values = new Map<string, string>();
   let remote = false;
+  const policyPatch: Partial<RemoteDevicePolicy> = {};
+  const policyFields = new Set<keyof RemoteDevicePolicy>();
   const mcpServers: McpServerSpec[] = [];
   const mcpEnvelopes: string[] = [];
   const allowOrigins: string[] = [];
@@ -683,6 +691,14 @@ function parseArguments(args: string[]): CliOptions {
       throw new Error(`invalid_arguments: Unknown token ${flag ?? "argument"}.`);
     }
     if (flag === "--remote") { remote = true; continue; }
+    const policyFlag = REMOTE_POLICY_FLAGS[flag];
+    if (policyFlag) {
+      const [key, value] = policyFlag;
+      if (policyFields.has(key)) throw new Error(`invalid_arguments: Duplicate or conflicting remote policy option ${flag}.`);
+      policyFields.add(key);
+      Object.assign(policyPatch, { [key]: value });
+      continue;
+    }
     if (flag === "--mcp-envelope") {
       const value = args[index + 1];
       if (value === undefined || value.startsWith("--")) throw new Error("invalid_arguments: Expected name=JSON after --mcp-envelope.");
@@ -761,6 +777,7 @@ function parseArguments(args: string[]): CliOptions {
   if (remote !== (remoteDeviceDirectory !== undefined)) {
     throw new Error("invalid_arguments: --remote and --remote-device-dir must be given together.");
   }
+  if (!remote && policyFields.size > 0) throw new Error("invalid_arguments: Remote policy options require --remote.");
   const extensionsHome = optionalAbsolutePath(values, "--extensions-home") ?? join(homedir(), ".aiboard", "runner-extensions");
   const portText = values.get("--port") ?? "0";
   const port = Number(portText);
@@ -783,9 +800,17 @@ function parseArguments(args: string[]): CliOptions {
     ...(capabilitiesConfigPath ? { capabilitiesConfigPath } : {}),
     setAsideRuns,
     remote,
+    remotePolicyPatch: policyPatch,
     ...(remoteDeviceDirectory ? { remoteDeviceDirectory } : {}),
   };
 }
+
+const REMOTE_POLICY_FLAGS: Readonly<Record<string, readonly [keyof RemoteDevicePolicy, boolean]>> = Object.freeze({
+  "--only-here": ["onlyHere", true], "--anywhere": ["onlyHere", false],
+  "--read-only": ["readOnly", true], "--writable": ["readOnly", false],
+  "--no-shell": ["shell", false], "--shell": ["shell", true],
+  "--no-audit": ["audit", false], "--audit-on": ["audit", true],
+});
 
 function parseAllowOriginValue(raw: string): string[] {
   const entries = raw
