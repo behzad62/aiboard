@@ -35,6 +35,10 @@ test("remote device policy and audit flags are validated and forwarded", () => {
   }
 });
 
+/** Tests must never open the developer's real browser: start-mode pairing URLs are captured here. */
+const interceptedBrowserOpens: string[] = [];
+const neverOpenBrowser = (url: string): void => { interceptedBrowserOpens.push(url); };
+
 async function fixture(): Promise<{ root: string; project: string; state: string; cleanup: () => Promise<void> }> {
   const prefix = join(tmpdir(), "aiboard-l1b-");
   const root = await mkdtemp(prefix);
@@ -247,7 +251,7 @@ test("racing same-project launches reuse one verified Runner and never disclose 
   const children: FakeRunner[] = [];
   const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
   const output: string[] = [];
-  const runtime = { cwd: f.project, write: (text: string) => output.push(text), spawnRunner: fakeSpawner(children, calls) };
+  const runtime = { cwd: f.project, write: (text: string) => output.push(text), spawnRunner: fakeSpawner(children, calls), openUrl: neverOpenBrowser };
   const flags = ["--state-dir", f.state, "--port", "0", "--no-open", "--allow-origin", "https://aiboard.me"];
   await mkdir(f.state, { mode: 0o700 });
   const first = runLauncher(flags, runtime);
@@ -285,7 +289,7 @@ test("the default state location is keyed to the canonical cwd and reused across
   const output: string[] = [];
   const environment = process.platform === "win32" ? { LOCALAPPDATA: join(f.root, "data").toLowerCase() } : { XDG_DATA_HOME: join(f.root, "data") };
   const home = process.platform === "win32" ? f.root.toUpperCase() : f.root;
-  const runtime = { cwd: f.project, home, environment, spawnRunner: fakeSpawner(children, calls), write: (line: string) => output.push(line) };
+  const runtime = { cwd: f.project, home, environment, spawnRunner: fakeSpawner(children, calls), write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
   const first = runLauncher(["--no-open"], runtime);
   const second = runLauncher(["--no-open"], runtime);
   void first.catch(() => undefined); void second.catch(() => undefined);
@@ -315,12 +319,13 @@ test("a verified unhealthy instance closes before its replacement starts", async
   const children: FakeRunner[] = [];
   const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
   const output: string[] = [];
-  const runtime = { cwd: f.project, spawnRunner: fakeSpawner(children, calls), write: (line: string) => output.push(line) };
+  const runtime = { cwd: f.project, spawnRunner: fakeSpawner(children, calls), write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
   const first = runLauncher(["--state-dir", f.state], runtime);
   void first.catch(() => undefined);
   let replacement: Promise<void> | undefined;
   try {
     await waitUntil(() => output.some((line) => line.includes("Runner running")));
+    assert.ok(interceptedBrowserOpens.some((url) => url.startsWith("https://aiboard.me/connect#pair=")), "start mode routes its pairing URL through the injected opener");
     children[0]!.healthy = false;
     replacement = runLauncher(["--state-dir", f.state], runtime);
     void replacement.catch(() => undefined);
@@ -342,8 +347,8 @@ test("two projects have separate instances and stop only their own", async () =>
   const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
   const spawnRunner = fakeSpawner(children, calls);
   const output: string[] = [];
-  const runtimeA = { cwd: a.project, spawnRunner, write: (line: string) => output.push(line) };
-  const runtimeB = { cwd: b.project, spawnRunner, write: (line: string) => output.push(line) };
+  const runtimeA = { cwd: a.project, spawnRunner, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const runtimeB = { cwd: b.project, spawnRunner, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
   const first = runLauncher(["--state-dir", a.state], runtimeA);
   const second = runLauncher(["--state-dir", b.state], runtimeB);
   void first.catch(() => undefined); void second.catch(() => undefined);
@@ -370,7 +375,7 @@ test("stop refuses foreign identity, pid reuse, stale records, and unauthenticat
   const children: FakeRunner[] = [];
   const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
   const output: string[] = [];
-  const runtime = { cwd: f.project, spawnRunner: fakeSpawner(children, calls), write: (line: string) => output.push(line) };
+  const runtime = { cwd: f.project, spawnRunner: fakeSpawner(children, calls), write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
   const running = runLauncher(["--state-dir", f.state], runtime);
   void running.catch(() => undefined);
   try {
