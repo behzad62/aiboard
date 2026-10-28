@@ -745,3 +745,17 @@ function errorContains(error: unknown, expected: string, seen = new Set<unknown>
   }
   return false;
 }
+
+test("ExecutionHost accepts Runner state on another Windows drive and still refuses state inside the project", { skip: process.platform !== "win32" }, async () => {
+  // path.relative across drives returns an absolute path rather than "..": a project on D: with state under
+  // %LOCALAPPDATA% on C: used to be rejected as "state inside the project".
+  const state = join(tmpdir(), `aiboard-crossdrive-${randomUUID()}`);
+  const otherDrive = state.slice(0, 2).toUpperCase() === "C:" ? "D:" : "C:";
+  const project = `${otherDrive}/aiboard-crossdrive-project-${randomUUID()}`;
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state,
+    artifacts: new ArtifactStore(join(state, "artifacts")) });
+  await host.close();
+  assert.throws(() => createExecutionHost({ projectRoot: project, stateDirectory: join(project, ".aiboard-state"),
+    artifacts: new ArtifactStore(join(state, "artifacts")) }), /state must remain outside the project root/u);
+  await rm(state, { recursive: true, force: true });
+});

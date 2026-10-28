@@ -538,3 +538,28 @@ async function childOutput(child: ChildProcess): Promise<{ code: number | null; 
   const result = await childClose(child);
   return { code: result.code, stdout, stderr };
 }
+
+test("a Runner that exits before it is ready surfaces its own error, with launcher secrets redacted", async () => {
+  const f = await fixture();
+  const spawnRunner = (): ChildProcess => {
+    const child = new FakeRunner();
+    child.send = (message: unknown, callback?: (error: Error | null) => void) => {
+      callback?.(null);
+      const handshake = message as LauncherHandshake;
+      if (handshake.type === "aiboard-launcher-init") {
+        child.stderr.write(`{"error":"ExecutionHost state must remain outside the project root."} token=${handshake.token}\n`);
+        setImmediate(() => { child.stdout.end(); child.stderr.end(); child.emit("close", 1, null); });
+      }
+      return true;
+    };
+    setImmediate(() => child.emit("message", { type: "aiboard-launcher-awaiting-init" }));
+    return child as unknown as ChildProcess;
+  };
+  try {
+    const failure = await runLauncher(["--state-dir", f.state, "--no-open"], { cwd: f.project, spawnRunner, write: () => undefined, openUrl: neverOpenBrowser })
+      .then(() => undefined, (error: unknown) => error as Error);
+    assert.ok(failure);
+    assert.match(failure.message, /^runner_start_failed: Runner exited before it became ready\.\n.*ExecutionHost state must remain outside the project root/su);
+    assert.match(failure.message, /token=\[redacted\]/u);
+  } finally { await f.cleanup(); }
+});

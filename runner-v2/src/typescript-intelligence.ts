@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { dirname, extname, relative, resolve, sep } from "node:path";
+import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import * as ts from "typescript";
 
 import type {
@@ -345,7 +345,7 @@ function containedFile(root: string, path: string): string {
 
 function isContained(root: string, path: string): boolean {
   const relation = relative(root, resolve(path));
-  return relation === "" || (relation !== ".." && !relation.startsWith(`..${sep}`));
+  return relation === "" || (relation !== ".." && !relation.startsWith(`..${sep}`) && !isAbsolute(relation));
 }
 
 function displayPath(root: string, path: string): string {

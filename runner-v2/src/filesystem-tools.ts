@@ -896,7 +896,7 @@ function entryIsSearchable(entry: RepositoryEntry, input: Input): boolean {
 
 function isWithin(root: string, path: string): boolean {
   const relation = relative(root, path);
-  return relation === "" || (relation !== ".." && !relation.startsWith(`..${sep}`));
+  return relation === "" || (relation !== ".." && !relation.startsWith(`..${sep}`) && !isAbsolute(relation));
 }
 
 function normalizeDisplayPath(root: string, path: string): string {

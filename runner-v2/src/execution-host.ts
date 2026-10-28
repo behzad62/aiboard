@@ -959,7 +959,8 @@ function canonicalRoot(path: string, label: string): string {
 
 function contains(parent: string, child: string): boolean {
   const path = relative(parent, child);
-  return path === "" || (!path.startsWith(`..${sep}`) && path !== "..");
+  // A path on another drive comes back absolute, not as "..", and is never inside.
+  return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
 }
 
 function safeSegment(value: string): string {

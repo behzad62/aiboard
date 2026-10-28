@@ -485,7 +485,11 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         });
         const instance = await Promise.race([
           ready,
-          v2Closed.then(() => { throw new Error("runner_start_failed: Runner exited before it became ready."); }),
+          v2Closed.then(() => {
+            // The Runner's own error is the only diagnosis of an early exit; show it with launcher secrets redacted.
+            const detail = redact(diagnostics.join(""), [v2Token, ...[...tickets.values()].flatMap((ticket) => [ticket.code, ticket.digest])]).slice(-4_000);
+            throw new Error(`runner_start_failed: Runner exited before it became ready.${detail ? `\n${detail}` : ""}`);
+          }),
         ]);
         if (instance.instanceId !== instanceId || instance.pid !== v2Child.pid || instance.version !== version) {
           throw new Error("instance_unverified: Runner startup identity does not match its child handle.");
