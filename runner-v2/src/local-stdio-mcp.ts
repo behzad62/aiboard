@@ -35,6 +35,8 @@ export class LocalMcpSessions {
 
   constructor(private readonly options: {
     host: ExecutionHost; workspacePath: string; statePath: string; permissionProfile: PermissionProfile; capabilitiesConfig: RunnerCapabilitiesConfig;
+    stateDirectory?: string; deviceDirectory?: string; extensionDirectories?: readonly string[]; installerBinDirectories?: readonly string[];
+    protectedLocations?: import("./protected-locations.js").ProtectedLocations; pathGuard?: import("./remote-path-guard.js").RemotePathGuard;
   }) {
     if (options.statePath !== ":memory:" && !isAbsolute(options.statePath)) throw new Error("Local MCP state path must be absolute.");
     this.database = new DatabaseSync(options.statePath);

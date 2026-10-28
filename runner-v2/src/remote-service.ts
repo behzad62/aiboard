@@ -46,6 +46,7 @@ export interface RemoteServiceOptions {
   readonly host: ExecutionHost;
   readonly permissionProfile: PermissionProfile;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
+  readonly extensionsHome?: string;
   readonly createTransport: () => RemoteTransport;
   readonly issuer: RemoteSessionIssuer;
   /** Real startup reconciliation (reconcileRunnerStartup) in the CLI. */
@@ -79,6 +80,7 @@ export class RemoteService {
       host: options.host,
       permissionProfile: options.permissionProfile,
       capabilitiesConfig: options.capabilitiesConfig,
+      ...(options.extensionsHome ? { extensionsHome: options.extensionsHome } : {}),
       ...(options.now ? { now: options.now } : {}),
     });
   }

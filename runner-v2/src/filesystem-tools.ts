@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { fencedWrite, fencedPatch, fencedMove, fencedDelete, filesystemMutationFailure,
   FilesystemMutationError, isFilesystemMutation } from "./filesystem-mutation-fence.js";
 import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
 import { isAbsolute, posix, relative, resolve, sep } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
@@ -31,6 +32,8 @@ export interface FilesystemToolsOptions {
   maxSearchMatches?: number;
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
+  /** Remote/local_mcp deny guard (S1a); unset for local Build brokers. */
+  pathGuard?: RemotePathGuard;
   /** Resumable fs.search sessions; injectable for tests (clock). */
   searchSessions?: SearchSessionStore;
 }
@@ -89,6 +92,18 @@ export function createFilesystemTools(
   const maxEntries = options.maxEntries ?? 5_000;
   const maxSearchMatches = options.maxSearchMatches ?? 500;
   const searchSessions = options.searchSessions ?? new SearchSessionStore();
+  const guard = options.pathGuard;
+  const guardContext = (context: ToolExecutionContext) => ({ toolName: context.toolName ?? "fs", principal: context.actor ? `${context.actor.role}:${context.actor.id}` : "unknown" });
+  const guardDeny = async (context: ToolExecutionContext, path: string, mode: "read" | "write" | "delete" | "list" | "search"): Promise<ToolExecutionOutput | undefined> => {
+    if (!guard) return undefined;
+    try { await guard.assertAllowed(path, mode, guardContext(context)); return undefined; }
+    catch (cause) { if (cause instanceof RemotePathDeniedError) return error(cause.code, cause.message); throw cause; }
+  };
+  const guardTreeDeny = async (context: ToolExecutionContext, path: string, mode: "write" | "delete"): Promise<ToolExecutionOutput | undefined> => {
+    if (!guard) return undefined;
+    try { await guard.assertTreeAllowed(path, mode, guardContext(context)); return undefined; }
+    catch (cause) { if (cause instanceof RemotePathDeniedError) return error(cause.code, cause.message); throw cause; }
+  };
   // The revision each session last read or wrote per file. A write or patch without expectedSha256
   // replaces only that revision, so replacing a file the worker has read needs no extra round trip,
   // while content it has not seen is still refused (tunnel run: the refusal cost a model call).
@@ -136,6 +151,8 @@ export function createFilesystemTools(
         if (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths)) {
           return hiddenPathError(context, path);
         }
+        const deniedRead = await guardDeny(context, path, "read");
+        if (deniedRead) return deniedRead;
         const bytes = await readFile(path);
         const hash = sha256(bytes);
         rememberRevision(context, path, hash);
@@ -262,6 +279,8 @@ export function createFilesystemTools(
       }),
       execute: async (input, context) => {
         const path = toolPath(context, input.path as string);
+        const deniedStat = await guardDeny(context, path, "read");
+        if (deniedStat) return deniedStat;
         if (matchesPolicyPath(context, path, options.hiddenPaths)) {
           return hiddenPathError(context, path);
         }
@@ -302,6 +321,8 @@ export function createFilesystemTools(
       assessAccess: (input) => repositoryReadAccess(input),
       execute: async (input, context) => {
         const root = toolPath(context, input.path as string);
+        const deniedList = await guardDeny(context, root, "list");
+        if (deniedList) return deniedList;
         const depth = integer(input.maxDepth, 1, 0, 20);
         const entries: Array<{ path: string; type: string }> = [];
         if (options.repository && context.workspacePath) {
@@ -319,10 +340,11 @@ export function createFilesystemTools(
           ));
         } else {
           await walk(root, depth, async (path, type) => {
+            if (guard && await guard.isDenied(path)) return true;
             if (entries.length >= maxEntries) return false;
             entries.push({ path: displayPath(context, path), type });
             return true;
-          }, context.signal);
+          }, context.signal, 0, guard ? async (path) => await guard.isDenied(path) : undefined);
         }
         const visibleEntries = hasPolicyPaths(options.hiddenPaths)
           ? await filterHiddenListEntries(context, entries, options.hiddenPaths)
@@ -337,6 +359,8 @@ export function createFilesystemTools(
       assessAccess: (input) => repositoryReadAccess(input),
       execute: async (input, context) => {
         const root = toolPath(context, input.path as string);
+        const deniedSearch = await guardDeny(context, root, "search");
+        if (deniedSearch) return deniedSearch;
         const limit = integer(
           input.maxMatches,
           Math.min(100, maxSearchMatches),
@@ -373,6 +397,7 @@ export function createFilesystemTools(
           searchWorkspaceCanonical = await canonicalOrNull(context.workspacePath);
         }
         const hidden = async (path: string) => matchesPolicyPath(context, path, options.hiddenPaths) ||
+          (guard ? await guard.isDenied(path) : false) ||
           (hasPolicyPaths(options.hiddenPaths) && await matchesCanonicalPolicyTarget(context, path, options.hiddenPaths, searchWorkspaceCanonical));
         let session: SearchSession, offset = 0;
         if (input.cursor !== undefined) {
@@ -417,7 +442,7 @@ export function createFilesystemTools(
               if (type !== "file") return true;
               if (candidates.length >= 20_000) { snapshotTruncated = true; return false; }
               await admit(path); return true;
-            }, context.signal);
+            }, context.signal, 0, guard ? async (path) => await guard.isDenied(path) : undefined);
           }
           // The snapshot leaves ignored files out entirely, so a non-empty directory it lists nothing
           // under (node_modules, dist) is itself ignored.
@@ -471,6 +496,8 @@ export function createFilesystemTools(
       execute: async (input, context) =>
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
+          const deniedWrite = await guardDeny(context, path, "write");
+          if (deniedWrite) return deniedWrite;
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
@@ -481,6 +508,7 @@ export function createFilesystemTools(
             // Missing parents are created by default (the same fenced creation as the explicit flag):
             // the opt-in only made workers regenerate and resend whole files (tunnel run).
             expectedRevision(input, context, path), input.createDirectories !== false);
+          if (guard) { const recheck = await guardDeny(context, path, "write"); if (recheck) return recheck; }
           rememberRevision(context, path, sha256(bytes));
           return await successRevision(context, path, bytes, options.diagnostics);
         }),
@@ -497,6 +525,8 @@ export function createFilesystemTools(
       execute: async (input, context) =>
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
+          const deniedPatch = await guardDeny(context, path, "write");
+          if (deniedPatch) return deniedPatch;
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
@@ -561,6 +591,10 @@ export function createFilesystemTools(
         await mutate(async () => {
           const source = toolPath(context, input.source as string);
           const destination = toolPath(context, input.destination as string);
+          const deniedMoveSource = await guardTreeDeny(context, source, "delete");
+          if (deniedMoveSource) return deniedMoveSource;
+          const deniedMoveDest = await guardDeny(context, destination, "write");
+          if (deniedMoveDest) return deniedMoveDest;
           if (matchesPolicyPath(context, source, options.protectedPaths)) {
             return protectedPathError(context, source);
           }
@@ -591,6 +625,8 @@ export function createFilesystemTools(
       execute: async (input, context) =>
         await mutate(async () => {
           const path = toolPath(context, input.path as string);
+          const deniedDelete = await guardTreeDeny(context, path, "delete");
+          if (deniedDelete) return deniedDelete;
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
@@ -1162,7 +1198,8 @@ async function walk(
   maxDepth: number,
   visit: (path: string, type: string) => Promise<boolean>,
   signal?: AbortSignal,
-  depth = 0
+  depth = 0,
+  prune?: (path: string) => Promise<boolean>
 ): Promise<void> {
   if (signal?.aborted) throw new Error("Search cancelled.");
   const entries = await readdir(root, { withFileTypes: true });
@@ -1170,10 +1207,11 @@ async function walk(
   for (const entry of entries) {
     if (BUILD_OUTPUT_DIR_NAMES.has(entry.name.toLowerCase())) continue;
     const path = resolve(root, entry.name);
+    if (prune && await prune(path)) continue;
     const type = entry.isDirectory() ? "directory" : entry.isFile() ? "file" : entry.isSymbolicLink() ? "symlink" : "other";
     if (!(await visit(path, type))) return;
     if (entry.isDirectory() && depth < maxDepth) {
-      await walk(path, maxDepth, visit, signal, depth + 1);
+      await walk(path, maxDepth, visit, signal, depth + 1, prune);
     }
   }
 }

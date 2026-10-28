@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -16,6 +17,8 @@ import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
 import { RemotePrincipalStore, type LocalMcpIdentity, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
+import { resolveProtectedLocations, type ProtectedLocations } from "./protected-locations.js";
+import { createRemotePathGuard, RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
 import { ToolBroker } from "./tool-broker.js";
 
 export interface RemoteToolRuntimeOptions {
@@ -27,6 +30,13 @@ export interface RemoteToolRuntimeOptions {
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
   /** Runner-owned admission, supplied only by trusted composition after S1 and R2. */
   readonly admitEffect?: (request: Readonly<RemoteEffectRequest>, dispatch: () => Promise<ToolResult>) => Promise<ToolResult>;
+  /** Trusted local protected-location configuration (S1a); never from tool input. */
+  readonly protectedLocations?: ProtectedLocations;
+  readonly pathGuard?: RemotePathGuard;
+  readonly stateDirectory?: string;
+  readonly deviceDirectory?: string;
+  readonly extensionDirectories?: readonly string[];
+  readonly installerBinDirectories?: readonly string[];
 }
 
 export interface RemoteEffectRequest {
@@ -45,6 +55,18 @@ interface BoundRemote {
   readonly binding: ExecutionHostRunBinding;
   readonly broker: ToolBroker;
   readonly ledger: SqliteToolLedger;
+  readonly pathGuard: RemotePathGuard;
+}
+
+export function remotePathGuardFor(options: Pick<RemoteToolRuntimeOptions, "protectedLocations" | "pathGuard" | "stateDirectory" | "deviceDirectory" | "extensionDirectories" | "installerBinDirectories">): RemotePathGuard {
+  if (options.pathGuard) return options.pathGuard;
+  return createRemotePathGuard(options.protectedLocations ?? resolveProtectedLocations({
+    platform: process.platform, env: process.env, home: homedir(),
+    ...(options.stateDirectory ? { stateDirectory: options.stateDirectory } : {}),
+    ...(options.deviceDirectory ? { deviceDirectory: options.deviceDirectory } : {}),
+    ...(options.extensionDirectories ? { extensionDirectories: options.extensionDirectories } : {}),
+    ...(options.installerBinDirectories ? { installerBinDirectories: options.installerBinDirectories } : {}),
+  }));
 }
 
 const ALLOWED_TOOLS = new Set(roleAllowList("remote", "remote"));
@@ -68,11 +90,15 @@ export class RemoteToolRuntime {
   private readonly partialBindings = new Map<string, { binding: ExecutionHostRunBinding; ledger?: SqliteToolLedger }>();
   private readonly active = new Set<Promise<ToolResult>>();
   private closing = false;
+  readonly pathGuard: RemotePathGuard;
 
   constructor(private readonly options: RemoteToolRuntimeOptions) {
     if (!isAbsolute(options.workspacePath)) throw new Error("Remote workspace must be an absolute local path.");
     this.workspacePath = resolve(options.workspacePath);
+    this.pathGuard = remotePathGuardFor(options);
   }
+
+  pathAuditRecords(): readonly import("./remote-path-guard.js").RemotePathAuditRecord[] { return this.pathGuard.auditRecords(); }
 
   invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string): Promise<ToolResult> {
     const callId = `remote-call-${randomUUID()}`;
@@ -122,11 +148,19 @@ export class RemoteToolRuntime {
     const dispatch = async (): Promise<ToolResult> => {
       const denied = authorize();
       if (denied) return denied;
-      return await bound.broker.invoke({ type: "tool_call", callId, name, arguments: args }, {
+      const result = await bound.broker.invoke({ type: "tool_call", callId, name, arguments: args }, {
         runId: principal.runId, sessionId: principal.sessionId,
         actor: { role: "remote", id: principal.principalId }, workspacePath: this.workspacePath,
         ...(signal ? { signal } : {}),
       });
+      if (!result.isError && (name === "fs.write" || name === "fs.move") && args && typeof args === "object" && !Array.isArray(args)) {
+        const dest = (args as Record<string, unknown>)[name === "fs.write" ? "path" : "destination"];
+        if (typeof dest === "string") {
+          try { await this.pathGuard.assertAllowedAfterCreate(resolve(this.workspacePath, dest), "write", { toolName: name, principal: principal.principalId }); }
+          catch (cause) { if (cause instanceof RemotePathDeniedError) return failure(callId, name, cause.code, cause.message); throw cause; }
+        }
+      }
+      return result;
     };
     if (isMutating(name, args)) {
       return await this.options.admitEffect!({ principal, callId, toolName: name, workspacePath: this.workspacePath,
@@ -148,7 +182,7 @@ export class RemoteToolRuntime {
   }
 
   private async createBinding(principal: RemotePrincipal): Promise<BoundRemote> {
-    return await createGovernedBinding(this.options, this.workspacePath, principal.runId, ALLOWED_TOOLS,
+    return await createGovernedBinding({ ...this.options, pathGuard: this.pathGuard }, this.workspacePath, principal.runId, ALLOWED_TOOLS,
       (binding, ledger) => this.partialBindings.set(principal.principalId, { binding, ledger }));
   }
 
@@ -172,7 +206,7 @@ export class RemoteToolRuntime {
   }
 }
 
-type GovernedOptions = Pick<RemoteToolRuntimeOptions, "host" | "permissionProfile" | "capabilitiesConfig">;
+type GovernedOptions = Pick<RemoteToolRuntimeOptions, "host" | "permissionProfile" | "capabilitiesConfig" | "protectedLocations" | "pathGuard" | "stateDirectory" | "deviceDirectory" | "extensionDirectories" | "installerBinDirectories">;
 
 async function createGovernedBinding(
   options: GovernedOptions, workspacePath: string, runId: string, allowed: ReadonlySet<string>,
@@ -192,16 +226,17 @@ async function createGovernedBinding(
       throw new Error("Remote execution recovery is blocked.");
     }
     ledger = new SqliteToolLedger(join(binding.runRoot, "remote-tool-ledger.sqlite"));
+    const pathGuard = remotePathGuardFor(options);
     const broker = new ToolBroker({ permissionProfile: localMcpDepth === undefined ? options.permissionProfile : "project", workspacePath,
-      git: binding.git, artifacts: options.host.artifacts, executionGrants: binding.executionGrants, ledger,
+      git: binding.git, artifacts: options.host.artifacts, executionGrants: binding.executionGrants, ledger, pathGuard,
       ...(localMcpDepth !== undefined ? { approve: async (request) => !request.outsideWorkspace } : {}) });
     const tools = [
-      ...createFilesystemTools({ artifacts: options.host.artifacts }), ...createGitTools(binding.git),
+      ...createFilesystemTools({ artifacts: options.host.artifacts, pathGuard }), ...createGitTools(binding.git),
       ...createProcessTools({ execution: binding.commandExecution }), ...createManagedProcessTools(binding.managedProcesses),
-      ...createImageTools({ artifacts: options.host.artifacts }),
+      ...createImageTools({ artifacts: options.host.artifacts, pathGuard }),
     ];
     for (const tool of tools) if (allowed.has(tool.definition.name) && tool.definition.lifecycle !== true) broker.register(tool);
-    return { binding, broker, ledger };
+    return { binding, broker, ledger, pathGuard };
   } catch (error) {
     try { await binding.close(); ledger?.close(); }
     catch (cleanup) {
@@ -261,6 +296,10 @@ export class LocalMcpToolSession {
   }
 
   async recover(): Promise<void> { await this.binding(); }
+
+  async pathAuditRecords(): Promise<readonly import("./remote-path-guard.js").RemotePathAuditRecord[]> {
+    return (await this.binding()).pathGuard.auditRecords();
+  }
 
   async list(): Promise<LocalMcpToolDefinition[]> {
     const bound = await this.binding();

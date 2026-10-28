@@ -395,6 +395,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         host: executionHost,
         permissionProfile: "full",
         capabilitiesConfig,
+        extensionsHome: options.extensionsHome,
         createTransport: seams.createTransport ?? unavailableTransport,
         issuer: seams.issuer ?? new StubRemoteSessionIssuer(),
         pluginTools: createRemotePluginToolProvider(managedMcp, {
@@ -406,7 +407,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       await remoteService.start();
     }
     const localMcp = launcher ? new LocalMcpSessions({ host: executionHost, workspacePath: options.projectPath, statePath: join(options.stateDirectory, "local-mcp-owners.sqlite"),
-      permissionProfile: "full", capabilitiesConfig }) : undefined;
+      permissionProfile: "full", capabilitiesConfig, stateDirectory: options.stateDirectory, extensionDirectories: [options.extensionsHome] }) : undefined;
     const server = new ControlServer({
       ...(remoteService ? { remoteStatus: () => remoteService.status() } : {}),
       localPairing,

@@ -29,6 +29,7 @@ export interface RemoteCompositionOptions {
   readonly host: ExecutionHost;
   readonly permissionProfile: PermissionProfile;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
+  readonly extensionsHome?: string;
   readonly now?: () => Date;
 }
 
@@ -54,6 +55,9 @@ export function composeRemoteRuntime(options: RemoteCompositionOptions): RemoteC
     permissionProfile: options.permissionProfile,
     capabilitiesConfig: options.capabilitiesConfig,
     admitEffect: createRemoteAdmissionAdapter(admission),
+    stateDirectory: options.stateDirectory,
+    deviceDirectory: options.deviceDirectory,
+    ...(options.extensionsHome ? { extensionDirectories: [options.extensionsHome] } : {}),
   });
   const authenticator = new RemoteAuthenticator(deviceStore, options.now ? { now: options.now } : {});
   return { deviceStore, principals, admission, runtime, authenticator };
