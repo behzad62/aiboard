@@ -16,6 +16,7 @@ import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
 import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore, type LocalMcpIdentity, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteAuditStore } from "./remote-audit-store.js";
+import { APPROVAL_TOOLS, commandApprovalSummary, type CommandApprovalSummary } from "./remote-approval.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
 import { resolveProtectedLocations, type ProtectedLocations } from "./protected-locations.js";
 import { createRemotePathGuard, RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
@@ -115,9 +116,9 @@ export class RemoteToolRuntime {
   }
 
   async invokeAdmitted(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal: AbortSignal,
-    rawRequest: string, jobId: string, beforeBroker?: () => boolean): Promise<RemoteInvocationResult> {
+    rawRequest: string, jobId: string, beforeBroker?: () => boolean, approvalGranted = false): Promise<RemoteInvocationResult> {
     let brokerInvoked = false;
-    const result = await this.beginInvocation(identity, name, args, signal, rawRequest, jobId, () => { brokerInvoked = true; }, beforeBroker);
+    const result = await this.beginInvocation(identity, name, args, signal, rawRequest, jobId, () => { brokerInvoked = true; }, beforeBroker, undefined, approvalGranted);
     return { result, brokerInvoked };
   }
 
@@ -127,8 +128,16 @@ export class RemoteToolRuntime {
     if (principal.revoked || this.closing) return "unauthorized";
     const policy = this.options.principals.policy(identity);
     if (name?.startsWith("plugin_") && policy.readOnly) return "permission_denied";
-    if (name) return policyRefusal(policy, name, args)?.code;
+    if (name) return policyRefusal(policy, name, args, true)?.code;
     return undefined;
+  }
+
+  requiresCommandApproval(identity: VerifiedRemoteIdentity, name: string): boolean {
+    return this.options.principals.policy(identity).approvals && APPROVAL_TOOLS.has(name);
+  }
+
+  summarizeCommandApproval(identity: VerifiedRemoteIdentity, jobId: string, code: string, name: string, args: unknown): CommandApprovalSummary {
+    return commandApprovalSummary(jobId, code, name, args, this.workspacePath, this.options.principals.policy(identity).onlyHere);
   }
 
   /** Stop only a process issued to this exact Runner-owned remote principal. */
@@ -145,7 +154,8 @@ export class RemoteToolRuntime {
     return stopped?.status === "stopped";
   }
   private beginInvocation(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal,
-    rawRequest?: string, admittedJobId?: string, onBrokerInvoke?: () => void, beforeBroker?: () => boolean, auditJobId?: string): Promise<ToolResult> {
+    rawRequest?: string, admittedJobId?: string, onBrokerInvoke?: () => void, beforeBroker?: () => boolean, auditJobId?: string,
+    approvalGranted = false): Promise<ToolResult> {
     const callId = `remote-call-${randomUUID()}`;
     const jobId = admittedJobId ?? auditJobId;
     const work = this.pathGuard.withWorkspaceScope(this.workspacePath, () => this.options.principals.policy(identity).onlyHere, async (scope) => {
@@ -160,7 +170,7 @@ export class RemoteToolRuntime {
           result = snapshot === undefined && args !== undefined
             ? failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely.")
             : await this.invokeChecked(identity, name, snapshot, callId, signal, rawRequest, admittedJobId, onBrokerInvoke, beforeBroker,
-              (value) => { dispatched = value; });
+              (value) => { dispatched = value; }, approvalGranted && admittedJobId !== undefined);
         }
       } catch (error) {
         this.options.principals.auditStore.recordTool({ role: "remote", ...identity, toolName: safeToolName(name, ALLOWED_TOOLS),
@@ -181,7 +191,7 @@ export class RemoteToolRuntime {
 
   private async invokeChecked(identity: VerifiedRemoteIdentity, name: string, args: unknown, callId: string,
     signal?: AbortSignal, rawRequest?: string, admittedJobId?: string, onBrokerInvoke?: () => void, beforeBroker?: () => boolean,
-    onDispatch?: (result: ToolResult) => void): Promise<ToolResult> {
+    onDispatch?: (result: ToolResult) => void, approvalGranted = false): Promise<ToolResult> {
     let principal = this.options.principals.getOrCreate(identity);
     identity = principal.identity;
     if (principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
@@ -194,7 +204,7 @@ export class RemoteToolRuntime {
     if (name === "image.inspect" && args && typeof args === "object" && Object.hasOwn(args, "artifactHash")) {
       return failure(callId, name, "tool_unavailable", "Artifact-hash inspection is not authorized for remote principals.");
     }
-    let refusal = policyRefusal(this.options.principals.policy(identity), name, args);
+    let refusal = policyRefusal(this.options.principals.policy(identity), name, args, approvalGranted);
     if (refusal) return failure(callId, name, refusal.code, refusal.message);
     try { await constrainArguments(this.pathGuard, this.workspacePath, this.options.principals.policy(identity), name, args, `remote:${principal.principalId}`); }
     catch (error) { if (error instanceof RemotePathDeniedError) return failure(callId, name, error.code, error.message); throw error; }
@@ -205,13 +215,13 @@ export class RemoteToolRuntime {
     // Binding and recovery can await; revocation and narrowing must win before dispatch.
     principal = this.options.principals.find(identity)!;
     if (!principal || principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
-    refusal = policyRefusal(this.options.principals.policy(identity), name, args);
+    refusal = policyRefusal(this.options.principals.policy(identity), name, args, approvalGranted);
     if (refusal) return failure(callId, name, refusal.code, refusal.message);
     const authorize = (): ToolResult | undefined => {
       const current = this.options.principals.find(identity);
       if (!current || current.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
       principal = current;
-      const currentRefusal = policyRefusal(this.options.principals.policy(identity), name, args);
+      const currentRefusal = policyRefusal(this.options.principals.policy(identity), name, args, approvalGranted);
       if (currentRefusal) return failure(callId, name, currentRefusal.code, currentRefusal.message);
       if (this.closing || signal?.aborted) return failure(callId, name, "tool_cancelled", "Remote invocation was cancelled.");
       if (beforeBroker && !beforeBroker()) return failure(callId, name, "unauthorized", "Remote authorization changed before dispatch.");
@@ -516,13 +526,12 @@ export class LocalMcpToolSession {
   }
 }
 
-function policyRefusal(policy: Readonly<RemoteDevicePolicy>, name: string, args: unknown): { code: string; message: string } | undefined {
+function policyRefusal(policy: Readonly<RemoteDevicePolicy>, name: string, args: unknown, approvalGranted = false): { code: string; message: string } | undefined {
   if (policy.readOnly && isMutating(name, args)) {
     return { code: "permission_denied", message: "Device policy is read-only." };
   }
   if (!policy.shell && SHELL_TOOLS.has(name)) return { code: "permission_denied", message: "Device policy disables process launch and input." };
-  // Job-bound terminal/dashboard approvals are added after R2. Never treat Full or model input as approval.
-  if (policy.approvals && SHELL_TOOLS.has(name)) return { code: "approval_required", message: "A local command approval is required." };
+  if (policy.approvals && APPROVAL_TOOLS.has(name) && !approvalGranted) return { code: "approval_required", message: "A local command approval is required." };
   return undefined;
 }
 

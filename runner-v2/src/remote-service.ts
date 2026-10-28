@@ -178,11 +178,15 @@ export class RemoteService {
       authenticator: this.composition.authenticator,
       admission,
       runtime: this.composition.runtime,
+      auditApproval: (identity, jobId, decision) => this.composition.principals.auditStore.recordApproval(identity, jobId, decision),
       session,
       createTransport: this.options.createTransport,
       ...(this.options.pluginTools ? { pluginTools: this.options.pluginTools } : {}),
       reconcile: async () => {
-        admission.reconcileStartup();
+        const reconciled = admission.reconcileStartup();
+        for (const job of reconciled) if (job.state === "blocked_policy") {
+          this.composition.principals.auditStore.recordApproval(job.principal, job.jobId, "expired");
+        }
         await this.options.reconcileStartup?.();
       },
       ...(this.options.now ? { now: this.options.now } : {}),
@@ -200,6 +204,12 @@ export class RemoteService {
     this.connector = connector;
     this.writeStatusFile(connector.state());
     await connector.start();
+  }
+
+  pendingCommandApproval() { return this.connector?.pendingCommandApproval(); }
+
+  answerCommandApproval(jobId: string, nonce: string, approved: boolean): boolean {
+    return this.connector?.answerCommandApproval(jobId, nonce, approved) ?? false;
   }
 
   /** Test/CLI hook: the owner lock was lost underneath a running service. */

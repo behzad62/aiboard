@@ -13,7 +13,7 @@ import {
   projectDataDirectory, projectIdentity, readControlKey, readInstance, remoteDeviceDirectory, tryAcquireLock, writeInstance,
   type LauncherIdentity, type LauncherInstance,
 } from "./launcher-instance.js";
-import { openLauncherMcpSession, requestLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
+import { openLauncherMcpSession, requestLauncherApproval, requestLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
 import { LOCAL_MCP_DEPTH_LIMIT, parseMcpDepth } from "./child-environment.js";
 import { serveLocalStdioMcp } from "./local-stdio-mcp.js";
 import { createLocalPairTicket, type LocalPairPeer } from "./local-pairing.js";
@@ -23,6 +23,7 @@ import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-pri
 import { RemoteAuditStore } from "./remote-audit-store.js";
 import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
+import { promptCommandApproval } from "./remote-approval.js";
 
 export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
 const RUNNER_KINDS: readonly RunnerKind[] = ["runner", "accounts", "legacy", "bench"];
@@ -54,7 +55,8 @@ const VALUE_FLAGS = new Set(["--project", "--state-dir", "--port", "--capabiliti
 const REPEATABLE_FLAGS = new Set(["--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run"]);
 const POLICY_FLAGS: Readonly<Record<string, string>> = Object.freeze({
   "--only-here": "scope", "--anywhere": "scope", "--read-only": "writes", "--writable": "writes",
-  "--no-shell": "shell", "--shell": "shell", "--no-audit": "audit", "--audit-on": "audit",
+  "--no-shell": "shell", "--shell": "shell", "--approve-commands": "approvals", "--no-approve-commands": "approvals",
+  "--no-audit": "audit", "--audit-on": "audit",
 });
 const runnerEntry = fileURLToPath(new URL("../bin/aiboard-runner-v2.mjs", import.meta.url));
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
@@ -537,6 +539,13 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     const onInterrupt = () => { interrupted = true; requestStop(); };
     process.once("SIGINT", onInterrupt);
     process.once("SIGTERM", requestStop);
+    const approvals = new AbortController();
+    let approvalWork: Promise<void> | undefined;
+    if (args.command === "remote" && process.stdin.isTTY) {
+      const key = await readControlKey(stateDirectory);
+      approvalWork = runTerminalApprovals(instances.get("runner")!, key, write, approvals.signal, onInterrupt)
+        .finally(() => key.fill(0));
+    }
     const closedPromises = freshChildren.map((fresh) => childClose(fresh).catch(() => ({ code: null, signal: null })));
     let firstSettled = false;
     for (const closedPromise of closedPromises) {
@@ -553,6 +562,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         if (detail) process.stderr.write(`${detail}\n`);
       }
     } finally {
+      approvals.abort();
+      await approvalWork;
       process.off("SIGINT", onInterrupt);
       process.off("SIGTERM", requestStop);
     }
@@ -583,6 +594,53 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     for (const key of ownedKeys) key.fill(0);
     releaseDiscovery();
     if (child?.connected && !started) child.disconnect();
+  }
+}
+
+async function runTerminalApprovals(instance: LauncherInstance, key: Buffer, write: (message: string) => void,
+  signal: AbortSignal, interrupt: () => void): Promise<void> {
+  const pause = () => new Promise<void>((resolve) => {
+    const timer = setTimeout(done, 1_000);
+    function done() { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); }
+    signal.addEventListener("abort", done, { once: true });
+    if (signal.aborted) done();
+  });
+  while (!signal.aborted) {
+    try {
+      const request = (await requestLauncherApproval(instance, key)).approval;
+      if (!request) { await pause(); continue; }
+      const promptAbort = new AbortController();
+      const abort = () => promptAbort.abort();
+      signal.addEventListener("abort", abort, { once: true });
+      try {
+        const prompted = promptCommandApproval(request, process.stdin, write, promptAbort.signal, interrupt);
+        let answer: boolean | undefined;
+        while (!signal.aborted) {
+          const result = await Promise.race([
+            prompted.then((value) => ({ done: true as const, value })),
+            pause().then(() => ({ done: false as const })),
+          ]);
+          if (result.done) { answer = result.value; break; }
+          const current = (await requestLauncherApproval(instance, key)).approval;
+          if (!current || current.summary.jobId !== request.summary.jobId || current.nonce !== request.nonce) {
+            promptAbort.abort();
+            await prompted;
+            break;
+          }
+        }
+        if (answer !== undefined && !signal.aborted) {
+          const result = await requestLauncherApproval(instance, key, {
+            jobId: request.summary.jobId, nonce: request.nonce, approved: answer,
+          });
+          if (!result.accepted) write("Approval is no longer pending.\n");
+        }
+      } finally {
+        promptAbort.abort();
+        signal.removeEventListener("abort", abort);
+      }
+    } catch {
+      if (!signal.aborted) await pause();
+    }
   }
 }
 
@@ -845,6 +903,7 @@ function help(): string {
     "  --allow-origin, --set-aside-run  Pass existing Runner options through.",
     "  aiboard remote            Start Runner V2 with the remote service; --logout wipes the device.",
     "  remote --only-here|--anywhere --read-only|--writable --no-shell|--shell",
+    "  remote --approve-commands|--no-approve-commands  Set per-command approval.",
     "  remote --no-audit|--audit-on  Set local device policy; --policy shows it.",
     "  remote --audit [--limit N]  Show recent local audit records.",
     "  aiboard mcp serve --stdio Serve local tools through this project's Runner (maximum MCP nesting depth: 2).",

@@ -569,6 +569,10 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
           if (buildRecoveryUnverified) throw new Error("Build ownership recovery remains unverified.");
           return localMcp.mint(depth);
         },
+        ...(remoteService ? {
+          nextApproval: () => remoteService.pendingCommandApproval(),
+          answerApproval: (jobId: string, nonce: string, approved: boolean) => remoteService.answerCommandApproval(jobId, nonce, approved),
+        } : {}),
         shutdown: requestLauncherShutdown,
       });
       if (process.connected) process.send?.({ type: "aiboard-launcher-ready", instance: launcherControl.instance });
@@ -869,6 +873,7 @@ const REMOTE_POLICY_FLAGS: Readonly<Record<string, readonly [keyof RemoteDeviceP
   "--only-here": ["onlyHere", true], "--anywhere": ["onlyHere", false],
   "--read-only": ["readOnly", true], "--writable": ["readOnly", false],
   "--no-shell": ["shell", false], "--shell": ["shell", true],
+  "--approve-commands": ["approvals", true], "--no-approve-commands": ["approvals", false],
   "--no-audit": ["audit", false], "--audit-on": ["audit", true],
 });
 

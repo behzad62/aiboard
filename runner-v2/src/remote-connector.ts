@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import type { ToolResult } from "./agent-contracts.js";
 import { RemoteAdmissionError, parseRemoteRequest, remotePayloadDigest, type RemoteAdmissionStore, type RemoteJob, type RemoteRequest } from "./remote-admission-store.js";
@@ -6,6 +6,7 @@ import { RemoteAuthError, type RelayChallenge, type RemoteAuthorization, type Re
 import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
 import type { VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
+import type { CommandApprovalRequest, CommandApprovalSummary } from "./remote-approval.js";
 
 export type RemoteConnectionStateName =
   | "disconnected" | "authenticating" | "connected-degraded" | "tool-ready" | "suspended" | "revoked";
@@ -57,8 +58,10 @@ export interface RemoteTransport {
 /** The slice of RemoteToolRuntime the connector may use. Never an authority. */
 export interface RemoteRequestRuntime {
   invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string, jobId?: string): Promise<ToolResult>;
-  invokeAdmitted?(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal: AbortSignal, rawRequest: string, jobId: string, beforeBroker?: () => boolean): Promise<RemoteInvocationResult>;
+  invokeAdmitted?(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal: AbortSignal, rawRequest: string, jobId: string, beforeBroker?: () => boolean, approvalGranted?: boolean): Promise<RemoteInvocationResult>;
   authorizeJob?(identity: VerifiedRemoteIdentity, name?: string, args?: unknown): string | undefined;
+  requiresCommandApproval?(identity: VerifiedRemoteIdentity, name: string): boolean;
+  summarizeCommandApproval?(identity: VerifiedRemoteIdentity, jobId: string, code: string, name: string, args: unknown): CommandApprovalSummary;
   stopStartedProcess?(identity: VerifiedRemoteIdentity, processId: string): Promise<boolean>;
 }
 
@@ -134,6 +137,8 @@ export interface RemoteConnectorOptions {
   readonly onShutdownStep?: (step: string) => void;
   /** Admitted extension tools for the current generation/policy (R1c), when composed. */
   readonly pluginTools?: RemotePluginToolProvider;
+  readonly auditApproval?: (identity: VerifiedRemoteIdentity | undefined, jobId: string,
+    decision: "requested" | "approved" | "denied" | "expired" | "fenced") => void;
 }
 
 interface InFlight {
@@ -150,6 +155,10 @@ interface InFlight {
   readonly resolve: (response: RemoteResponseMessage) => void;
   started: boolean;
   settled: boolean;
+  approval?: CommandApprovalRequest;
+  approvalDeadline?: number;
+  approvalGranted?: boolean;
+  approvalTimer?: ReturnType<typeof setTimeout>;
   physicalDone?: Promise<void>;
 }
 const PROTOCOL_VERSION = "1.0.0";
@@ -567,7 +576,8 @@ export class RemoteConnector {
       }
       // The store checks an existing key before rejecting a new admission at capacity.
       const rawRequest = JSON.stringify(request);
-      const full = this.runningCount() >= this.concurrentLimit() && this.queue.length >= this.queueLimit();
+      const needsApproval = !isPlugin && this.options.runtime.requiresCommandApproval?.(identity, runnerName) === true;
+      const full = this.queue.length >= this.queueLimit() && (needsApproval || this.runningCount() >= this.concurrentLimit());
       const decision = this.options.admission.admit(identity, rawRequest, { rejectNew: full });
       const deadline = Math.min(Date.parse(request.expiresAt),
         Date.parse(decision.job.createdAt) + (this.options.toolDeadlineMs ?? 300_000));
@@ -578,7 +588,7 @@ export class RemoteConnector {
           return;
         }
         if (existing) {
-          if (!existing.settled) {
+          if (!existing.settled && !existing.approvalGranted) {
             this.options.admission.refreshQueuedRequest(identity, decision.job.jobId, rawRequest);
             existing.rawRequest = rawRequest;
             existing.request = request;
@@ -601,6 +611,7 @@ export class RemoteConnector {
       };
       this.inFlight.add(entry);
       this.queue.push(entry);
+      if (needsApproval) this.prepareApproval(entry);
       this.pump();
       await respond(jobResponse(request, this.options.admission.view(identity, entry.jobId).job));
     } catch (error) {
@@ -647,17 +658,124 @@ export class RemoteConnector {
     return { response: jobResponse(request, admission.view(identity, args.jobId).job), data };
   }
 
+  /** Only the authenticated launcher control channel calls these methods. */
+  pendingCommandApproval(): CommandApprovalRequest | undefined {
+    for (const entry of [...this.queue]) {
+      if (entry.approval && entry.approvalDeadline !== undefined && this.now().getTime() >= entry.approvalDeadline) {
+        this.expireApproval(entry);
+      }
+    }
+    this.pump();
+    return this.queue.find((entry) => !entry.settled && entry.approval)?.approval;
+  }
+
+  answerCommandApproval(jobId: string, nonce: string, approved: boolean): boolean {
+    const entry = [...this.inFlight].find((item) => item.jobId === jobId);
+    const record = (decision: "approved" | "denied" | "fenced") =>
+      this.options.auditApproval?.(entry?.identity, jobId, decision);
+    if (!entry || entry.settled || !entry.approval || typeof approved !== "boolean" ||
+      entry.approval.nonce !== nonce || entry.approvalDeadline === undefined) {
+      record("fenced");
+      return false;
+    }
+    if (this.now().getTime() >= entry.approvalDeadline) {
+      this.expireApproval(entry);
+      record("fenced");
+      this.pump();
+      return false;
+    }
+    const job = this.options.admission.getJob(entry.identity, jobId);
+    if (!job || job.state !== "awaiting_approval" || job.payloadDigest !== entry.request.payloadDigest) {
+      record("fenced");
+      return false;
+    }
+    record(approved ? "approved" : "denied");
+    entry.approval = undefined;
+    if (approved) {
+      this.options.admission.approve(entry.identity, jobId);
+      entry.approvalGranted = true;
+    } else {
+      if (entry.approvalTimer) clearTimeout(entry.approvalTimer);
+      entry.approvalTimer = undefined;
+      this.removeWaiting(entry);
+      this.finish(entry, this.options.admission.denyApproval(entry.identity, jobId, "approval_denied"));
+      this.inFlight.delete(entry);
+    }
+    this.pump();
+    return true;
+  }
+
+  private prepareApproval(entry: InFlight): void {
+    try {
+      if (!this.options.runtime.summarizeCommandApproval) throw new Error("Approval summary unavailable.");
+      const code = randomBytes(3).toString("hex").toUpperCase();
+      const summary = this.options.runtime.summarizeCommandApproval(entry.identity, entry.jobId, code, entry.runnerName, entry.request.payload);
+      const job = this.options.admission.markAwaitingApproval(entry.identity, entry.jobId);
+      const deadline = Math.min(Date.parse(entry.request.expiresAt), Date.parse(job.createdAt) + 120_000);
+      entry.approvalDeadline = deadline;
+      entry.approval = Object.freeze({ summary, nonce: randomBytes(32).toString("hex") });
+      this.options.auditApproval?.(entry.identity, entry.jobId, "requested");
+      if (this.now().getTime() >= deadline) { this.expireApproval(entry); return; }
+      entry.approvalTimer = setTimeout(() => {
+        this.expireApproval(entry);
+        this.pump();
+      }, Math.max(1, deadline - this.now().getTime()));
+      entry.approvalTimer.unref();
+    } catch {
+      const job = this.options.admission.getJob(entry.identity, entry.jobId);
+      if (!job || entry.settled) return;
+      this.removeWaiting(entry);
+      const blocked = job.state === "awaiting_approval"
+        ? this.options.admission.denyApproval(entry.identity, entry.jobId, "approval_denied")
+        : job.state === "queued" ? this.options.admission.blockPolicy(entry.identity, entry.jobId, "invalid_arguments") : job;
+      this.finish(entry, blocked);
+      this.inFlight.delete(entry);
+    }
+  }
+
+  private expireApproval(entry: InFlight): void {
+    if (entry.settled) return;
+    const job = this.options.admission.getJob(entry.identity, entry.jobId);
+    if (!job || (job.state !== "awaiting_approval" && !(job.state === "queued" && entry.approvalGranted))) return;
+    if (entry.approvalTimer) clearTimeout(entry.approvalTimer);
+    entry.approvalTimer = undefined;
+    entry.approval = undefined;
+    this.removeWaiting(entry);
+    const blocked = job.state === "awaiting_approval"
+      ? this.options.admission.denyApproval(entry.identity, entry.jobId, "approval_expired")
+      : this.options.admission.blockPolicy(entry.identity, entry.jobId, "approval_expired");
+    try { this.options.auditApproval?.(entry.identity, entry.jobId, "expired"); }
+    finally {
+      this.finish(entry, blocked);
+      this.inFlight.delete(entry);
+    }
+  }
+
+  private removeWaiting(entry: InFlight): void {
+    const index = this.queue.indexOf(entry);
+    if (index >= 0) this.queue.splice(index, 1);
+  }
+
   private concurrentLimit(): number { return this.options.maxConcurrentJobsPerDevice ?? 8; }
   private queueLimit(): number { return this.options.maxQueuedJobsPerDevice ?? 64; }
   private runningCount(): number { return [...this.inFlight].filter((entry) => entry.started).length; }
 
   private pump(): void {
     if (this.closing || this.closed || this.current.state === "revoked" || this.current.state === "suspended") return;
+    for (const entry of [...this.queue]) {
+      if (!entry.settled && !entry.approval && !entry.approvalGranted &&
+        !entry.isPlugin && this.options.runtime.requiresCommandApproval?.(entry.identity, entry.runnerName)) this.prepareApproval(entry);
+      if (entry.approvalGranted && entry.approvalDeadline !== undefined && this.now().getTime() >= entry.approvalDeadline) {
+        this.expireApproval(entry);
+      }
+    }
     while (this.queue.length && this.runningCount() < this.concurrentLimit()) {
-      const clients = [...new Set(this.queue.map((entry) => entry.identity.clientId))];
+      const ready = this.queue.filter((entry) => !entry.approval && !entry.settled);
+      if (!ready.length) return;
+      const clients = [...new Set(ready.map((entry) => entry.identity.clientId))];
       const last = this.lastClientId === undefined ? -1 : clients.indexOf(this.lastClientId);
       const selected = clients[(last + 1) % clients.length];
-      const index = this.queue.findIndex((entry) => entry.identity.clientId === selected);
+      const index = this.queue.findIndex((entry) => !entry.approval && !entry.settled && entry.identity.clientId === selected);
       const entry = this.queue.splice(index, 1)[0]!;
       entry.started = true;
       this.lastClientId = selected;
@@ -699,6 +817,8 @@ export class RemoteConnector {
         return;
       }
       admission.markDispatching(identity, jobId, request.deviceEpoch);
+      if (entry.approvalTimer) clearTimeout(entry.approvalTimer);
+      entry.approvalTimer = undefined;
       let result: ToolResult;
       let brokerInvoked = true;
       let stopEvidence: RemoteInvocationResult["stopEvidence"];
@@ -715,7 +835,7 @@ export class RemoteConnector {
           }
         } else if (this.options.runtime.invokeAdmitted) {
           const outcome = await this.options.runtime.invokeAdmitted(identity, entry.runnerName, request.payload,
-            entry.controller.signal, entry.rawRequest, jobId, () => this.canDispatch(entry));
+            entry.controller.signal, entry.rawRequest, jobId, () => this.canDispatch(entry), entry.approvalGranted === true);
           result = outcome.result;
           brokerInvoked = outcome.brokerInvoked;
           stopEvidence = outcome.stopEvidence;
@@ -808,6 +928,8 @@ export class RemoteConnector {
         (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld()) &&
         this.options.deviceStore.load()?.epoch === entry.request.deviceEpoch &&
         this.now().getTime() < entry.deadline &&
+        (!this.options.runtime.requiresCommandApproval?.(entry.identity, entry.runnerName) ||
+          (entry.approvalGranted === true && entry.approvalDeadline !== undefined && this.now().getTime() < entry.approvalDeadline)) &&
         !this.options.runtime.authorizeJob?.(entry.identity, entry.runnerName, entry.request.payload);
     } catch { return false; }
   }
@@ -828,6 +950,7 @@ export class RemoteConnector {
     }
   }
   private cancelEntry(entry: InFlight): void {
+    if (entry.approvalTimer) clearTimeout(entry.approvalTimer);
     entry.controller.abort();
     if (!entry.started) {
       const index = this.queue.indexOf(entry);

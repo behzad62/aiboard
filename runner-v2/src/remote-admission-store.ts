@@ -320,8 +320,9 @@ export class RemoteAdmissionStore {
     return this.simpleTransition(identity, jobId, "awaiting_approval", "queued");
   }
 
-  denyApproval(identity: VerifiedRemoteIdentity, jobId: string): RemoteJob {
-    return this.simpleTransition(identity, jobId, "awaiting_approval", "blocked_policy");
+  denyApproval(identity: VerifiedRemoteIdentity, jobId: string, reason?: "approval_denied" | "approval_expired"): RemoteJob {
+    const result = reason ? { inline: Buffer.from(JSON.stringify({ reason }), "utf8") } : undefined;
+    return this.simpleTransition(identity, jobId, "awaiting_approval", "blocked_policy", result);
   }
 
   blockQuota(identity: VerifiedRemoteIdentity, jobId: string): RemoteJob {
@@ -474,6 +475,10 @@ export class RemoteAdmissionStore {
         }
         return this.transition(this.ownedRow(rowIdentity(row), row.job_id), "outcome_unknown", "reconciled");
       });
+      // An interrupted terminal approval has lost its nonce and must never be replayed.
+      const awaiting = this.database.prepare("SELECT * FROM remote_jobs WHERE state = 'awaiting_approval'").all() as unknown as JobRow[];
+      for (const row of awaiting) reconciled.push(this.transition(row, "blocked_policy", "reconciled",
+        { inline: Buffer.from(JSON.stringify({ reason: "approval_expired" }), "utf8") }));
       const pending = this.database.prepare(`SELECT j.job_id FROM remote_jobs j JOIN remote_job_cancellations c ON c.job_id = j.job_id
         WHERE j.state != 'running' AND c.stop = 'pending'`).all() as { job_id: string }[];
       for (const row of pending) {

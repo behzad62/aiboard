@@ -5,6 +5,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import type { LauncherIdentity, LauncherInstance } from "./launcher-instance.js";
 import { isLocalPairPeer, type LocalPairPeer } from "./local-pairing.js";
 import { LOCAL_MCP_DEPTH_LIMIT } from "./child-environment.js";
+import type { CommandApprovalRequest } from "./remote-approval.js";
 
 /** The inherited Node IPC pipe carries secrets; neither argv nor the environment carries them. */
 export interface LauncherHandshake {
@@ -20,7 +21,7 @@ export interface LauncherHandshake {
   legacyToken?: string;
 }
 
-type ControlAction = "status" | "stop" | "pair" | "local_mcp";
+type ControlAction = "status" | "stop" | "pair" | "local_mcp" | "approval_next" | "approval_answer";
 interface ControlRequest {
   action: ControlAction;
   nonce: string;
@@ -28,6 +29,9 @@ interface ControlRequest {
   pairDigest?: string;
   peers?: LocalPairPeer[];
   depth?: number;
+  jobId?: string;
+  approvalNonce?: string;
+  approved?: boolean;
   instance: LauncherInstance;
   mac: string;
 }
@@ -38,6 +42,8 @@ interface ControlResponse {
   mac: string;
   sessionToken?: string;
   remoteOnly?: true;
+  approval?: CommandApprovalRequest;
+  accepted?: boolean;
 }
 
 const MAX_MESSAGE_BYTES = 16_384;
@@ -92,6 +98,8 @@ export async function startLauncherControl(options: {
   shutdown: () => void;
   registerPair?: (digest: string, peers?: LocalPairPeer[]) => void;
   registerLocalMcp?: (depth: number) => { token: string; revoke: () => void };
+  nextApproval?: () => CommandApprovalRequest | undefined;
+  answerApproval?: (jobId: string, nonce: string, approved: boolean) => boolean;
 }): Promise<{ instance: LauncherInstance; close: () => Promise<void> }> {
   const usedNonces = new Map<string, number>();
   const sockets = new Set<Socket>();
@@ -122,6 +130,15 @@ export async function startLauncherControl(options: {
         response.mac = sign(options.controlKey, responseBody(response));
         socket.setTimeout(0);
         socket.write(`${JSON.stringify(response)}\n`);
+        return;
+      }
+      if (value.action === "approval_next" || value.action === "approval_answer") {
+        if (!options.nextApproval || !options.answerApproval) throw new Error("approval unavailable");
+        const response: ControlResponse = { nonce: value.nonce, healthy: true, instance, mac: "",
+          ...(value.action === "approval_next" ? { approval: options.nextApproval() } :
+            { accepted: options.answerApproval(value.jobId!, value.approvalNonce!, value.approved!) }) };
+        response.mac = sign(options.controlKey, responseBody(response));
+        socket.end(`${JSON.stringify(response)}\n`);
         return;
       }
       const healthy = value.action === "status" ? await runnerHealth(options.port, options.token, options.identity.projectPath) : true;
@@ -155,7 +172,7 @@ export async function startLauncherControl(options: {
   };
 }
 
-export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: Exclude<ControlAction, "local_mcp">, pairDigest?: string, peers?: LocalPairPeer[]): Promise<{ healthy: boolean; remoteOnly?: true }> {
+export async function requestLauncherControl(instance: LauncherInstance, key: Buffer, action: "status" | "stop" | "pair", pairDigest?: string, peers?: LocalPairPeer[]): Promise<{ healthy: boolean; remoteOnly?: true }> {
   if (action === "pair" ? !pairDigest || !/^[0-9a-f]{64}$/.test(pairDigest) : pairDigest !== undefined) {
     throw new Error("Invalid launcher control request.");
   }
@@ -174,6 +191,46 @@ export async function requestLauncherControl(instance: LauncherInstance, key: Bu
         !validMac(key, responseBody(value), value.mac)) throw new Error("instance_unverified: The Runner did not prove its identity.");
     return { healthy: value.healthy, ...(value.remoteOnly ? { remoteOnly: true } : {}) };
   } finally { socket.destroy(); }
+}
+
+/** Poll or answer over the same per-instance HMAC-keyed launcher control channel. */
+export async function requestLauncherApproval(instance: LauncherInstance, key: Buffer,
+  answer?: { jobId: string; nonce: string; approved: boolean }): Promise<{ approval?: CommandApprovalRequest; accepted?: boolean }> {
+  if (answer && (!/^[A-Za-z0-9._:-]{1,128}$/.test(answer.jobId) ||
+    !/^[0-9a-f]{64}$/.test(answer.nonce) || typeof answer.approved !== "boolean")) throw new Error("Invalid approval answer.");
+  const request: ControlRequest = { action: answer ? "approval_answer" : "approval_next",
+    nonce: randomBytes(32).toString("hex"), sentAt: Date.now(), instance, mac: "",
+    ...(answer ? { jobId: answer.jobId, approvalNonce: answer.nonce, approved: answer.approved } : {}) };
+  request.mac = sign(key, requestBody(request));
+  const socket = createConnection({ host: "127.0.0.1", port: instance.controlPort });
+  socket.on("error", () => socket.destroy());
+  socket.setTimeout(5_000, () => socket.destroy(new Error("launcher control timed out")));
+  try {
+    socket.once("connect", () => socket.write(`${JSON.stringify(request)}\n`));
+    const value: unknown = JSON.parse(await readLine(socket));
+    if (!isControlResponse(value) || value.nonce !== request.nonce || !sameInstance(value.instance, instance) ||
+      !validMac(key, responseBody(value), value.mac) || !value.healthy ||
+      (answer ? typeof value.accepted !== "boolean" || value.approval !== undefined :
+        value.accepted !== undefined || (value.approval !== undefined && !isCommandApprovalRequest(value.approval)))) {
+      throw new Error("instance_unverified: The Runner did not prove its identity.");
+    }
+    return { ...(value.approval ? { approval: value.approval } : {}),
+      ...(value.accepted !== undefined ? { accepted: value.accepted } : {}) };
+  } finally { socket.destroy(); }
+}
+
+function isCommandApprovalRequest(value: unknown): value is CommandApprovalRequest {
+  if (!isObject(value) || Object.keys(value).length !== 2 || typeof value.nonce !== "string" ||
+    !/^[0-9a-f]{64}$/.test(value.nonce) || !isObject(value.summary)) return false;
+  const summary = value.summary;
+  const safe = (item: unknown, max: number) => typeof item === "string" && item.length <= max &&
+    !/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(item);
+  return Object.keys(summary).length === 7 && typeof summary.jobId === "string" &&
+    /^[A-Za-z0-9._:-]{1,128}$/.test(summary.jobId) && typeof summary.code === "string" && /^[0-9A-F]{6}$/.test(summary.code) &&
+    ["process.start", "process.run", "process.write_stdin", "process.signal"].includes(String(summary.toolName)) &&
+    safe(summary.executable, 200) && safe(summary.commandLine, 200) &&
+    Number.isSafeInteger(summary.argumentCount) && Number(summary.argumentCount) >= 0 &&
+    ["inside launch dir", "outside", "not applicable"].includes(String(summary.cwdCategory));
 }
 
 /** The authenticated socket remains open for the lifetime of the in-memory session. */
@@ -247,12 +304,14 @@ function readLine(socket: Socket): Promise<string> {
 function requestBody(request: ControlRequest): string {
   const fields: unknown[] = ["request", request.action, request.nonce, request.sentAt, request.pairDigest ?? null, instanceFields(request.instance), request.peers ?? null];
   if (request.action === "local_mcp") fields.push(request.depth);
+  if (request.action === "approval_answer") fields.push(request.jobId, request.approvalNonce, request.approved);
   return JSON.stringify(fields);
 }
 function responseBody(response: ControlResponse): string {
   const fields: unknown[] = ["response", response.nonce, response.healthy, instanceFields(response.instance)];
   if (response.sessionToken !== undefined) fields.push(response.sessionToken);
   if (response.remoteOnly === true) fields.push("remote-only");
+  if (response.approval !== undefined || response.accepted !== undefined) fields.push(response.approval ?? null, response.accepted ?? null);
   return JSON.stringify(fields);
 }
 function instanceFields(value: LauncherInstance): unknown[] {
@@ -265,11 +324,14 @@ function validMac(key: Buffer, body: string, mac: string): boolean {
   return timingSafeEqual(Buffer.from(sign(key, body), "hex"), Buffer.from(mac, "hex"));
 }
 function isControlRequest(value: unknown): value is ControlRequest {
-  return isObject(value) && (value.action === "status" || value.action === "stop" || value.action === "pair" || value.action === "local_mcp") && typeof value.nonce === "string" &&
+  return isObject(value) && (value.action === "status" || value.action === "stop" || value.action === "pair" || value.action === "local_mcp" || value.action === "approval_next" || value.action === "approval_answer") && typeof value.nonce === "string" &&
     /^[0-9a-f]{64}$/.test(value.nonce) && Number.isSafeInteger(value.sentAt) && isObject(value.instance) && typeof value.mac === "string" &&
     (value.action === "pair" ? typeof value.pairDigest === "string" && /^[0-9a-f]{64}$/.test(value.pairDigest) : value.pairDigest === undefined) &&
     (value.peers === undefined || (value.action === "pair" && Array.isArray(value.peers) && value.peers.length <= 3 && value.peers.every(isLocalPairPeer))) &&
-    (value.action === "local_mcp" ? Number.isSafeInteger(value.depth) && (value.depth as number) >= 0 : value.depth === undefined);
+    (value.action === "local_mcp" ? Number.isSafeInteger(value.depth) && (value.depth as number) >= 0 : value.depth === undefined) &&
+    (value.action === "approval_answer" ? typeof value.jobId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value.jobId) &&
+      typeof value.approvalNonce === "string" && /^[0-9a-f]{64}$/.test(value.approvalNonce) && typeof value.approved === "boolean" :
+      value.jobId === undefined && value.approvalNonce === undefined && value.approved === undefined);
 }
 function isControlResponse(value: unknown): value is ControlResponse {
   return isObject(value) && typeof value.nonce === "string" && typeof value.healthy === "boolean" && isObject(value.instance) && typeof value.mac === "string" &&

@@ -7,7 +7,7 @@ import type { RemoteDevicePolicy, VerifiedRemoteIdentity } from "./remote-princi
 export interface RemoteAuditRecord {
   readonly id: number;
   readonly occurredAt: string;
-  readonly kind: "tool" | "policy" | "pruned";
+  readonly kind: "tool" | "policy" | "approval" | "pruned";
   readonly role: "remote" | "local_mcp" | "local" | "system";
   readonly accountId: string | null;
   readonly clientId: string | null;
@@ -73,6 +73,12 @@ export class RemoteAuditStore {
     this.append({ ...record, kind: "tool", origin: null, beforeFlags: null, afterFlags: null });
   }
 
+  recordApproval(identity: VerifiedRemoteIdentity | undefined, jobId: string,
+    decision: "requested" | "approved" | "denied" | "expired" | "fenced"): void {
+    this.append({ kind: "approval", role: "local", ...(identity ?? {}), jobId,
+      decision, outcomeCode: "recorded", origin: "local", beforeFlags: null, afterFlags: null });
+  }
+
   recordPolicy(identity: VerifiedRemoteIdentity, origin: "local" | "remote" | "system", before: Readonly<RemoteDevicePolicy>, after: Readonly<RemoteDevicePolicy>): void {
     this.append({ kind: "policy", role: origin, accountId: identity.accountId, clientId: identity.clientId,
       deviceId: identity.deviceId, toolName: null, decision: "allowed", reasonCode: "policy_changed",
@@ -92,7 +98,7 @@ export class RemoteAuditStore {
   close(): void { this.database.close(); }
 
   private append(record: {
-    kind: "tool" | "policy"; role: string; accountId?: string | null; clientId?: string | null;
+    kind: "tool" | "policy" | "approval"; role: string; accountId?: string | null; clientId?: string | null;
     deviceId?: string | null; toolName?: string | null; decision: string; reasonCode?: string | null;
     pathCategory?: string | null; jobId?: string | null; outcomeCode: string; origin: string | null;
     beforeFlags: string | null; afterFlags: string | null;
