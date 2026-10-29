@@ -619,7 +619,7 @@ function invalid<T>(issue: string): ValidationResult<T> {
   return { ok: false, issues: [issue] };
 }
 
-function emptySchema() { return { type: "object", additionalProperties: false }; }
+function emptySchema() { return { type: "object", properties: {}, additionalProperties: false }; }
 function urlSchema() { return { type: "object", properties: { url: { type: "string" } }, required: ["url"], additionalProperties: false }; }
 function selectorSchema() { return { type: "object", properties: { selector: { type: "string" } }, required: ["selector"], additionalProperties: false }; }
 function fillSchema() { return { type: "object", properties: { selector: { type: "string" }, value: { type: "string" } }, required: ["selector", "value"], additionalProperties: false }; }

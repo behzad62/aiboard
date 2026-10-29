@@ -87,7 +87,10 @@ test("skill tools list and read bounded project skills without lifecycle authori
       maxSkillBytes: 64,
     });
     const registry = new ToolRegistry();
-    for (const tool of createSkillTools(catalog)) registry.register(tool);
+    for (const tool of createSkillTools(catalog)) {
+      assert.equal(typeof tool.definition.inputSchema.properties, "object", `Skill tool ${tool.definition.name} must provide schema properties`);
+      registry.register(tool);
+    }
     const context = {
       runId: "run_1",
       sessionId: "worker_1",

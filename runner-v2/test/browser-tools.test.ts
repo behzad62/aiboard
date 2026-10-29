@@ -84,6 +84,7 @@ test("browser tools keep one task session and persist DOM and screenshot artifac
       evidenceStore: evidence,
       taskId: "task_ui",
     })) {
+      assert.equal(typeof tool.definition.inputSchema.properties, "object", `Browser tool ${tool.definition.name} must provide schema properties`);
       broker.register(tool);
     }
     const context = {
