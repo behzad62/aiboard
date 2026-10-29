@@ -8,6 +8,7 @@ const html = renderToStaticMarkup(<CustomModelsManager />);
 for (const text of [
   "Supported inputs",
   "Declared tool support",
+  "Default reasoning effort",
   "Function calling",
   "Web search",
   "Chat Completions",
