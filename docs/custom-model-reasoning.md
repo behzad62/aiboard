@@ -16,9 +16,9 @@ AIBoard custom OpenAI-compatible models now have a configurable **default reason
 On Ollama localhost:11434/v1 with `mule-mimo-q4` and `mule-mellum-q4`:
 - MiMo with `none`: AIBoard settings live probe returned `The model test works.`; AIBoard custom streaming adapter returned `READY`.
 - MiMo with `none`: AIBoard custom streaming adapter emitted a real `add_numbers({a:4,b:7})` tool call.
-- MiMo with `low`: OpenAI-compatible and Ollama native endpoints returned empty visible output; native `think: true` returned 1 output token with empty content and empty thinking. This is an observed runtime/model incompatibility, **not** evidence that AIBoard should disable reasoning for every custom provider.
+- MiMo with `low` **before the Ollama template repair**: returned an empty, one-token answer. The imported GGUF included `PARAMETER stop <think>` and a hard-coded `<think></think>` assistant prefill. This was diagnosed and corrected in the model configuration on 2026-10-29.
 - Mellum with `low`: AIBoard settings live probe passed, returning `Yes, the test works.`.
-- These are connectivity and tool-call smoke tests, not full certified ToolBench runs.
+- After repair, MiMo `mule-mimo-q4` passes AIBoard connection tests with default, none and low, emits a native function call, and can return separate reasoning on nontrivial tasks. The original broken configuration is preserved as `mule-mimo-original-q4`. See `D:\repos\mule-mcp\docs\MIMO-OLLAMA-TEMPLATE-FIX.md` for the reproducible fix. These remain connectivity and tool-call smoke tests, not full certified ToolBench runs.
 
 ## Reproduce (without paid calls)
 
