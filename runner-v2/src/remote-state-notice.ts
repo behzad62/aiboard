@@ -15,6 +15,12 @@ const SUSPENDED: Partial<Record<RemoteConnectionReason, string>> = {
   device_clone_detected: "this device's key is in use on another computer",
 };
 
+/** `[HH:MM:SS] ` in local time, so a long-running window shows when each drop and recovery happened. */
+export function stampRemoteNotice(line: string, at: Date = new Date()): string {
+  const two = (value: number) => String(value).padStart(2, "0");
+  return `[${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}] ${line}`;
+}
+
 /**
  * Turns connector state changes into the few lines a person at the terminal
  * needs: lost / back / off for good. Transitional states print nothing.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createRemoteStateNotices } from "../src/remote-state-notice.js";
+import { createRemoteStateNotices, stampRemoteNotice } from "../src/remote-state-notice.js";
 
 const run = (steps: ReadonlyArray<readonly [string, string]>) => {
   const notices = createRemoteStateNotices();
@@ -45,4 +45,8 @@ test("malformed IPC fields print nothing", () => {
   for (const [state, reason] of [[undefined, "ready"], ["tool-ready", 7], ["exploded", "x"], [{}, "socket_lost"], ["revoked", null]] as const) {
     assert.equal(notices(state, reason), undefined);
   }
+});
+
+test("notices carry a local [HH:MM:SS] stamp", () => {
+  assert.equal(stampRemoteNotice("AIBoard Remote: reconnected.\n", new Date(2026, 9, 29, 7, 3, 9)), "[07:03:09] AIBoard Remote: reconnected.\n");
 });

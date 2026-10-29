@@ -30,6 +30,8 @@ import {
   type RemoteSessionIssuer,
 } from "../src/remote-auth.js";
 import {
+  DEFAULT_RECONNECT,
+  reconnectDelayMs,
   RemoteConnector,
   type RemoteConnectionState,
   type RemoteRequestRuntime,
@@ -531,7 +533,7 @@ test("owner-lock loss suspends admission and unverified cleanup blocks it", asyn
   assert.equal(blocked.dispatches.count, 0);
 });
 
-test("reconnect after socket loss is bounded and never replays readiness", async (t) => {
+test("reconnect after socket loss never replays readiness", async (t) => {
   const harness = await stubHarness(t);
   await handshake(harness);
   assert.equal(harness.connector.state().state, "tool-ready");
@@ -539,22 +541,37 @@ test("reconnect after socket loss is bounded and never replays readiness", async
   assert.equal(harness.connector.state().state, "disconnected");
   for (let i = 0; i < 40; i += 1) await tick();
   assert.notEqual(harness.connector.state().state, "tool-ready");
-  // 1 initial connect + at most 8 capped attempts (default policy).
-  assert.ok(harness.transport.connectCount <= 9, `connectCount=${harness.transport.connectCount}`);
   assert.equal(harness.dispatches.count, 0);
 });
 
-test("a failed reconnect schedules another bounded attempt", async (t) => {
+test("a lost connection keeps retrying past the old 8-attempt cap until the device is revoked", async (t) => {
   const harness = await stubHarness(t);
   await handshake(harness);
   harness.transport.drop();
-  const deadline = Date.now() + 2000;
-  while (harness.transport.connectCount < 3 && Date.now() < deadline) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 5));
-  }
-  assert.ok(harness.transport.connectCount >= 3, `connectCount=${harness.transport.connectCount}`);
-  assert.ok(harness.transport.connectCount <= 9, `connectCount=${harness.transport.connectCount}`);
+  const waitFor = async (done: () => boolean, ms: number) => {
+    const deadline = Date.now() + ms;
+    while (!done() && Date.now() < deadline) await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  };
+  // 1 initial connect + 8 attempts was the old ceiling.
+  await waitFor(() => harness.transport.connectCount >= 15, 10_000);
+  assert.ok(harness.transport.connectCount >= 15, `connectCount=${harness.transport.connectCount}`);
   assert.notEqual(harness.connector.state().state, "tool-ready");
+  assert.equal(harness.dispatches.count, 0);
+  harness.deviceStore.revoke();
+  await waitFor(() => harness.connector.state().state === "revoked", 2_000);
+  assert.equal(harness.connector.state().state, "revoked");
+  const stopped = harness.transport.connectCount;
+  await new Promise<void>((resolve) => setTimeout(resolve, 300));
+  assert.equal(harness.transport.connectCount, stopped, "a revoked device stops retrying");
+});
+
+test("reconnect waits grow exponentially and never exceed 30 s, jitter included", () => {
+  assert.equal(DEFAULT_RECONNECT.maxAttempts, Number.POSITIVE_INFINITY);
+  const waits = Array.from({ length: 2_000 }, (_, attempt) => reconnectDelayMs(attempt, DEFAULT_RECONNECT, 0.999));
+  assert.equal(reconnectDelayMs(0, DEFAULT_RECONNECT, 0), 500);
+  assert.equal(reconnectDelayMs(3, DEFAULT_RECONNECT, 0), 4_000);
+  assert.ok(waits.every((wait) => Number.isFinite(wait) && wait >= 500 && wait <= 30_000), String(Math.max(...waits)));
+  assert.equal(waits.at(-1), 30_000);
 });
 
 test("ordered shutdown settles in-flight work as outcome_unknown", async (t) => {

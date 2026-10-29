@@ -378,6 +378,7 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
     children[0]!.emit("message", { type: "aiboard-remote-state", state: "revoked", reasonCode: "device_key_revoked" });
     await waitUntil(() => output.some((line) => line.includes("removed from your AIBoard account")));
     assert.equal(output.filter((line) => line.includes("reconnecting...")).length, 1);
+    assert.match(output.find((line) => line.includes("removed from your AIBoard account"))!, /^\[\d{2}:\d{2}:\d{2}\] AIBoard Remote: /u);
     await runLauncher(["stop", "--state-dir", f.state], runtime);
     await first;
     const before = opened.length;

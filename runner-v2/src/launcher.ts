@@ -22,7 +22,7 @@ import { RemoteDeviceStore } from "./remote-device-store.js";
 import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-principal.js";
 import { RemoteAuditStore } from "./remote-audit-store.js";
 import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
-import { createRemoteStateNotices, REMOTE_STATE_MESSAGE } from "./remote-state-notice.js";
+import { createRemoteStateNotices, REMOTE_STATE_MESSAGE, stampRemoteNotice } from "./remote-state-notice.js";
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 import { promptCommandApproval } from "./remote-approval.js";
 import { pairingRelayConfiguration } from "./remote-pairing.js";
@@ -481,7 +481,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
             const { type, state, reasonCode } = message as Record<string, unknown>;
             if (type !== REMOTE_STATE_MESSAGE) return;
             const line = notices(state, reasonCode);
-            if (line) write(line);
+            if (line) write(stampRemoteNotice(line));
           });
         }
         const ready = childReady(v2Child, handshake, (message) => {

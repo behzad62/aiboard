@@ -19,6 +19,18 @@ export type RemoteConnectionReason =
   | "ready" | "local_pause" | "owner_lock_lost" | "device_policy_expired" | "entitlement_expired"
   | "recovery_unresolved" | "device_clone_detected" | "device_key_revoked";
 
+/**
+ * Owner decision 2026-10-29: an established connection retries until the person closes the Runner, waiting at
+ * most 30 s between attempts. Revocation, suspension and close still stop it.
+ */
+export const DEFAULT_RECONNECT = { baseDelayMs: 500, maxDelayMs: 30_000, maxAttempts: Number.POSITIVE_INFINITY } as const;
+
+/** Exponential backoff with up to one base delay of jitter; the jitter never pushes a wait past maxDelayMs. */
+export function reconnectDelayMs(attempt: number, config: { readonly baseDelayMs: number; readonly maxDelayMs: number }, random: number): number {
+  const backoff = Math.min(config.maxDelayMs, config.baseDelayMs * 2 ** Math.min(attempt, 30));
+  return Math.min(config.maxDelayMs, backoff + Math.floor(random * config.baseDelayMs));
+}
+
 /** Shape of connection-state.v1 (pinned contract data, redeclared locally). */
 export interface RemoteConnectionState {
   readonly protocolVersion: string;
@@ -567,13 +579,12 @@ export class RemoteConnector {
   }
 
   private scheduleReconnect(): void {
-    const config = this.options.reconnect ?? { baseDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 8 };
+    const config = this.options.reconnect ?? DEFAULT_RECONNECT;
     if (this.reconnectAttempts >= config.maxAttempts) return;
     if (this.reconnectTimer) return;
     const attempt = this.reconnectAttempts;
     this.reconnectAttempts += 1;
-    const backoff = Math.min(config.maxDelayMs, config.baseDelayMs * 2 ** attempt);
-    const delay = backoff + Math.floor(this.random() * config.baseDelayMs);
+    const delay = reconnectDelayMs(attempt, config, this.random());
     const pending = (async () => {
       await this.sleep(delay);
       if (this.closing || this.closed) return;

@@ -72,7 +72,7 @@ import { StubRemoteSessionIssuer, type RemoteSessionIssuer } from "./remote-auth
 import { RemoteDeviceStore, type RemoteDeviceSession } from "./remote-device-store.js";
 import { RelayPairingIssuer, RemotePairingError, pairingRelayConfiguration, type PairingPresentation } from "./remote-pairing.js";
 import type { RemoteConnectionState, RemoteTransport, RemoteTransportContext } from "./remote-connector.js";
-import { createRemoteStateNotices, REMOTE_STATE_MESSAGE } from "./remote-state-notice.js";
+import { createRemoteStateNotices, REMOTE_STATE_MESSAGE, stampRemoteNotice } from "./remote-state-notice.js";
 import { validateRelayUrl, WebSocketRemoteTransport } from "./remote-websocket-transport.js";
 import type { RemoteDevicePolicy } from "./remote-principal.js";
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
@@ -476,7 +476,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
           const notices = createRemoteStateNotices();
           return (state: RemoteConnectionState) => {
             if (launcher && process.connected) process.send?.({ type: REMOTE_STATE_MESSAGE, state: state.state, reasonCode: state.reasonCode });
-            else { const line = notices(state.state, state.reasonCode); if (line) process.stdout.write(line); }
+            else { const line = notices(state.state, state.reasonCode); if (line) process.stdout.write(stampRemoteNotice(line)); }
           };
         })() } : {}),
         policyPatch: options.remotePolicyPatch,
