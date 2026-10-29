@@ -10,7 +10,7 @@ function listSkillsTool(catalog: SkillCatalog): NativeTool<Record<string, never>
     definition: {
       name: "list_skills",
       description: "List available skills (project, installed, user and built-in) with source, scope, version and digests. A skill with shadowedBy loses to a higher-precedence skill of the same name.",
-      inputSchema: { type: "object", additionalProperties: false },
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
       readOnly: true,
       effect: "none",
     },
