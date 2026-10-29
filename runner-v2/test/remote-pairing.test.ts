@@ -274,10 +274,14 @@ test("revoked identity rotates under its owner fence and the next service start 
     connect: async () => { throw new Error("offline"); }, close: async () => undefined, send: () => undefined,
     onMessage: () => undefined, onClose: () => undefined,
   };
+  const seen: string[] = [];
   const service = new RemoteService({ stateDirectory: h.state, deviceDirectory: h.device, workspacePath: h.project, host,
-    permissionProfile: "full", capabilitiesConfig: emptyRunnerCapabilitiesConfig(), createTransport: () => transport, issuer: h.makeIssuer() });
+    permissionProfile: "full", capabilitiesConfig: emptyRunnerCapabilitiesConfig(), createTransport: () => transport, issuer: h.makeIssuer(),
+    onStateChange: (state) => { seen.push(`${state.state}/${state.reasonCode}`); throw new Error("a notice failure is contained"); } });
   try {
     await service.start();
+    // The terminal notices see the same transitions as the status file; a throwing listener cannot break the connector.
+    assert.deepEqual(seen, ["authenticating/connecting", "disconnected/authentication_failed"]);
     const rotated = h.store.load()!;
     assert.notEqual(rotated.deviceId, h.identity.deviceId);
     assert.notEqual(rotated.publicKey, h.identity.publicKey);

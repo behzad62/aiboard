@@ -68,6 +68,8 @@ export interface RemoteServiceOptions {
   readonly pluginTools?: RemotePluginToolProvider;
   readonly policyPatch?: Partial<RemoteDevicePolicy>;
   readonly onSession?: (session: RemoteDeviceSession) => void;
+  /** Every connector state change, after the status file is written (terminal notices). */
+  readonly onStateChange?: (state: RemoteConnectionState) => void;
 }
 
 /**
@@ -210,7 +212,10 @@ export class RemoteService {
       ...(this.options.toolDeadlineMs !== undefined ? { toolDeadlineMs: this.options.toolDeadlineMs } : {}),
       ...(this.options.cancellationGraceMs !== undefined ? { cancellationGraceMs: this.options.cancellationGraceMs } : {}),
       isOwnerLockHeld: () => this.releaseOwnerLock !== undefined,
-      onStateChange: (state) => this.writeStatusFile(state),
+      onStateChange: (state) => {
+        this.writeStatusFile(state);
+        try { this.options.onStateChange?.(state); } catch { /* a notice can never alter the connection */ }
+      },
       ...(this.options.onShutdownStep ? { onShutdownStep: this.options.onShutdownStep } : {}),
     });
     this.connector = connector;

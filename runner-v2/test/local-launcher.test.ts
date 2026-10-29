@@ -357,6 +357,7 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
         expiresAt: new Date(Date.now() + 600_000).toISOString(), deviceName: "Desktop" });
       fake.emit("message", { type: "aiboard-remote-open", url: "https://mcp.aiboard.me/pair" });
       fake.emit("message", { type: "aiboard-remote-session", deviceName: "Desktop", accountId: "account-1" });
+      fake.emit("message", { type: "aiboard-remote-state", state: "tool-ready", reasonCode: "ready" });
     };
     return child;
   };
@@ -372,6 +373,11 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
     assert.ok(output.some((line) => line.includes("Desktop; account: account-1") && line.includes("Ctrl+C to disconnect")));
     assert.equal(opened[0], "https://mcp.aiboard.me/pair");
     assert.equal(opened[0]!.includes("BCDF"), false);
+    // Live: a device revoked while running printed nothing; state changes after ready must still reach the terminal.
+    children[0]!.emit("message", { type: "aiboard-remote-state", state: "disconnected", reasonCode: "socket_lost" });
+    children[0]!.emit("message", { type: "aiboard-remote-state", state: "revoked", reasonCode: "device_key_revoked" });
+    await waitUntil(() => output.some((line) => line.includes("removed from your AIBoard account")));
+    assert.equal(output.filter((line) => line.includes("reconnecting...")).length, 1);
     await runLauncher(["stop", "--state-dir", f.state], runtime);
     await first;
     const before = opened.length;

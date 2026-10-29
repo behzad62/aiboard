@@ -22,6 +22,7 @@ import { RemoteDeviceStore } from "./remote-device-store.js";
 import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-principal.js";
 import { RemoteAuditStore } from "./remote-audit-store.js";
 import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
+import { createRemoteStateNotices, REMOTE_STATE_MESSAGE } from "./remote-state-notice.js";
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 import { promptCommandApproval } from "./remote-approval.js";
 import { pairingRelayConfiguration } from "./remote-pairing.js";
@@ -472,6 +473,17 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         v2Child.stderr?.on("data", captureDiagnostics);
         v2Child.stdout?.resume();
         v2Closed = childClose(v2Child);
+        if (args.command === "remote") {
+          // Lives for the whole session (childReady detaches at ready): lost / reconnected / revoked reach the terminal.
+          const notices = createRemoteStateNotices();
+          v2Child.on("message", (message: unknown) => {
+            if (typeof message !== "object" || message === null) return;
+            const { type, state, reasonCode } = message as Record<string, unknown>;
+            if (type !== REMOTE_STATE_MESSAGE) return;
+            const line = notices(state, reasonCode);
+            if (line) write(line);
+          });
+        }
         const ready = childReady(v2Child, handshake, (message) => {
           if (message.type === "aiboard-remote-pairing" && typeof message.verificationUri === "string" && typeof message.userCode === "string" &&
             typeof message.expiresAt === "string" && /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(message.userCode)) {

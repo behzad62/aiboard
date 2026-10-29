@@ -31,10 +31,12 @@ import {
 } from "../src/remote-auth.js";
 import {
   RemoteConnector,
+  type RemoteConnectionState,
   type RemoteRequestRuntime,
   type RemoteTransport,
   type RemoteTransportMessage,
 } from "../src/remote-connector.js";
+import { createRemoteStateNotices } from "../src/remote-state-notice.js";
 import { RemoteDeviceStore, type RemoteDeviceSession } from "../src/remote-device-store.js";
 import { RemoteService } from "../src/remote-service.js";
 import { composeRemoteRuntime, closeRemoteComposition } from "../src/runner-composition.js";
@@ -196,6 +198,7 @@ async function stubHarness(t: test.TestContext, options: {
   onShutdownStep?: (step: string) => void;
   drainTimeoutMs?: number;
   runtime?: RemoteRequestRuntime;
+  onStateChange?: (state: RemoteConnectionState) => void;
 } = {}): Promise<Harness> {
   const root = await temporary();
   const state = join(root, "state");
@@ -219,6 +222,7 @@ async function stubHarness(t: test.TestContext, options: {
     ...(options.isOwnerLockHeld ? { isOwnerLockHeld: options.isOwnerLockHeld } : {}),
     ...(options.onShutdownStep ? { onShutdownStep: options.onShutdownStep } : {}),
     ...(options.drainTimeoutMs !== undefined ? { drainTimeoutMs: options.drainTimeoutMs } : {}),
+    ...(options.onStateChange ? { onStateChange: options.onStateChange } : {}),
   });
   t.after(async () => {
     await connector.close().catch(() => undefined);
@@ -461,6 +465,35 @@ test("relay revocation is persisted for the next start", async (t) => {
   await harness.transport.emit({ type: "revoked" });
   assert.equal(harness.connector.state().state, "revoked");
   assert.equal(new RemoteDeviceStore(harness.state).load()!.revoked, true);
+});
+
+test("the terminal hears about a revoke, a dropped socket and a first connection that fails", async (t) => {
+  const printed = (lines: string[]) => { const notices = createRemoteStateNotices(); return (state: RemoteConnectionState) => {
+    const line = notices(state.state, state.reasonCode); if (line) lines.push(line); }; };
+  const revokedLines: string[] = [];
+  const revoked = await stubHarness(t, { onStateChange: printed(revokedLines) });
+  await handshake(revoked);
+  assert.deepEqual(revokedLines, [], "a clean start prints nothing beyond the session line");
+  await revoked.transport.emit({ type: "revoked" });
+  assert.equal(revokedLines.length, 1);
+  assert.match(revokedLines[0]!, /removed from your AIBoard account/u);
+
+  const droppedLines: string[] = [];
+  const dropped = await stubHarness(t, { onStateChange: printed(droppedLines) });
+  await handshake(dropped);
+  dropped.transport.drop();
+  for (let i = 0; i < 40; i += 1) await tick();
+  assert.deepEqual(droppedLines, ["AIBoard Remote: lost the connection to the relay; reconnecting...\n"], "failed retries stay quiet");
+
+  const failedLines: string[] = [];
+  const failed = await stubHarness(t, { onStateChange: printed(failedLines) });
+  const starting = failed.connector.start();
+  await tick(); await tick();
+  failed.transport.onProof = () => { void failed.transport.emit({ type: "auth_error", code: "unauthorized" }); };
+  await failed.transport.emit(signedChallenge(failed.challenge));
+  await starting;
+  assert.equal(failedLines.length, 1);
+  assert.match(failedLines[0]!, /could not connect to the relay/u);
 });
 
 test("an unauthenticated revoke frame cannot persist a device rotation", async (t) => {
