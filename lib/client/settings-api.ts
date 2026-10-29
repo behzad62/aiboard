@@ -9,11 +9,11 @@ import { v4 as uuidv4 } from "uuid";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI, type Model as GoogleModel } from "@google/genai";
-import type { CustomModel, UserSettings } from "@/lib/db/schema";
+import type { CustomModel, UserSettings, ReasoningEffort } from "@/lib/db/schema";
 import type { ModelInfo, StreamChunk } from "@/lib/providers/base";
 import { extractModelMetadata, validateModelMetadataOverrides, type ModelMetadataDetails, type ModelMetadataValues } from "@/lib/providers/model-metadata";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
-import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
+import { streamOpenAICompatibleChat, isLoopbackOllamaEndpoint } from "@/lib/providers/openai-compat";
 import { META_MODEL_API_BASE_URL } from "@/lib/providers/meta";
 import {
   resolveModelContextProfile,
@@ -1243,6 +1243,7 @@ export interface CustomModelView {
   capabilities: { image: boolean; document: boolean; audio: boolean; video: boolean };
   toolCapabilityOverrides: ToolCapabilityDescriptor[];
   compatibleTransports: ProviderTransportId[];
+  reasoningEffort?: ReasoningEffort;
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
 }
@@ -1257,6 +1258,7 @@ function redactCustom(m: CustomModel): CustomModelView {
     capabilities: m.capabilities ?? { ...NO_CAPS },
     toolCapabilityOverrides: m.toolCapabilityOverrides ?? [],
     compatibleTransports: customCompatibleTransports(m.compatibleTransports),
+    reasoningEffort: m.reasoningEffort ?? "default",
     lastValidationSucceeded: m.lastValidationSucceeded ?? null,
     lastValidatedAt: m.lastValidatedAt ?? null,
   };
@@ -1274,6 +1276,7 @@ export function addCustomModel(input: {
   capabilities?: CustomModelView["capabilities"];
   toolCapabilityOverrides?: ToolCapabilityDescriptor[];
   compatibleTransports?: ProviderTransportId[];
+  reasoningEffort?: ReasoningEffort;
 }): CustomModelView {
   const record: CustomModel = {
     id: uuidv4(),
@@ -1285,6 +1288,7 @@ export function addCustomModel(input: {
     capabilities: input.capabilities ?? { ...NO_CAPS },
     toolCapabilityOverrides: input.toolCapabilityOverrides ?? [],
     compatibleTransports: customCompatibleTransports(input.compatibleTransports),
+    reasoningEffort: input.reasoningEffort ?? "default",
     createdAt: new Date().toISOString(),
   };
   storeAddCustomModel(record);
@@ -1310,6 +1314,9 @@ export function updateCustomModelToolConfiguration(
     compatibleTransports: customCompatibleTransports(input.compatibleTransports),
   });
 }
+export function updateCustomModelReasoning(id: string, effort: ReasoningEffort): void {
+  storeUpdateCustomModel(id, { reasoningEffort: effort, lastValidationSucceeded: null });
+}
 export function deleteCustomModel(id: string): void {
   storeDeleteCustomModel(id);
 }
@@ -1318,15 +1325,18 @@ export async function testCustomModel(input: {
   baseURL: string;
   model: string;
   apiKey?: string;
+  capabilities?: { image?: boolean };
+  reasoningEffort?: ReasoningEffort;
 }): Promise<ModelTestResult> {
+  const localOllama = isLoopbackOllamaEndpoint(input.baseURL);
   const client = new OpenAI({
     apiKey: input.apiKey || "not-needed",
     baseURL: input.baseURL,
     dangerouslyAllowBrowser: true,
   });
-  // Force image capability on so the compat layer attaches the test image; the
-  // text fallback covers endpoints that don't accept images.
-  return runModelTest((prompt, attachments) =>
+  // A text-only model must not waste its first probe on an unsupported image.
+  // Cold-starting Ollama on a 10 GB GPU may exceed the cloud-model timeout.
+  const result = await runModelTest((prompt, attachments, signal) =>
     streamOpenAICompatibleChat(
       client,
       {
@@ -1337,16 +1347,24 @@ export async function testCustomModel(input: {
           { role: "user", content: prompt },
         ],
         attachments,
-        // No token cap — local models are free, and "thinking" models need room
-        // to finish reasoning before they emit any content.
+        // Keep the connection test cheap when thinking is disabled, but allow
+        // thinking-capable local models enough tokens to reach a visible answer.
+        maxTokens: localOllama && input.reasoningEffort === "none" ? 256 : TEST_MAX_TOKENS,
+        reasoningEffort: input.reasoningEffort ?? "default",
         temperature: 0.2,
-        capabilities: { image: true, document: false, audio: false, video: false },
+        signal,
+        capabilities: { image: input.capabilities?.image === true, document: false, audio: false, video: false },
       },
       CUSTOM_PROVIDER_ID,
       input.model,
       "max_tokens"
-    )
+    ),
+    { allowImage: input.capabilities?.image === true, timeoutMs: localOllama ? 90_000 : undefined }
   );
+  if (localOllama && !result.valid && result.error === "No response received from model") {
+    return { ...result, error: `Ollama returned no visible answer using reasoning ${input.reasoningEffort ?? "default"}. Choose Off to verify text generation, or select a supported reasoning level and retest.` };
+  }
+  return result;
 }
 
 /** Test a saved custom model by id (uses its stored key/base URL), and record
@@ -1358,6 +1376,8 @@ export async function testSavedCustomModel(id: string): Promise<ModelTestResult>
     baseURL: model.baseURL,
     model: model.model,
     apiKey: model.apiKey,
+    capabilities: model.capabilities,
+    reasoningEffort: model.reasoningEffort,
   });
   storeUpdateCustomModel(id, {
     lastValidationSucceeded: result.valid,

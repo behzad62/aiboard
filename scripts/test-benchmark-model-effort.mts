@@ -29,7 +29,7 @@ assert.deepEqual(
     modelId: "custom:plain-model",
     providerId: "custom",
   }),
-  ["default"]
+  ["default", "none", "low", "medium", "high"]
 );
 assert.equal(
   normalizeBenchmarkEffortForModel(

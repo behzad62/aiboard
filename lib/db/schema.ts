@@ -489,6 +489,8 @@ export interface CustomModel {
   toolCapabilityOverrides?: ToolCapabilityDescriptor[];
   /** OpenAI-compatible transports this endpoint explicitly declares. */
   compatibleTransports?: ProviderTransportId[];
+    /** Optional default reasoning effort for this custom endpoint. */
+    reasoningEffort?: ReasoningEffort;
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
   createdAt: string;

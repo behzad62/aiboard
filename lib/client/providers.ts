@@ -249,6 +249,7 @@ function customModelToInfo(model: CustomModel): ModelInfo {
     providerId: CUSTOM_PROVIDER_ID,
     description: `Custom · ${model.model}`,
     capabilities: model.capabilities ?? { ...TEXT_ONLY },
+
   };
 }
 
@@ -442,6 +443,9 @@ export async function* streamCustomChat(
     ...params,
     model: model.model,
     capabilities: model.capabilities ?? { ...TEXT_ONLY },
+    reasoningEffort: params.reasoningEffort && params.reasoningEffort !== "default"
+      ? params.reasoningEffort
+      : (model.reasoningEffort ?? "default"),
   };
   if (params.callPlan?.transport === "responses") {
     yield* streamOpenAIResponses(client, prepared, "custom");

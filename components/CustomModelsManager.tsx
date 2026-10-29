@@ -19,6 +19,7 @@ import {
   testCustomModel,
   testSavedCustomModel,
   updateCustomModelCapabilities,
+  updateCustomModelReasoning,
   updateCustomModelToolConfiguration,
 } from "@/lib/client/settings-api";
 import { ensureReady } from "@/lib/client/api";
@@ -27,6 +28,7 @@ import {
   CUSTOM_DECLARABLE_TOOL_CAPABILITIES,
   type CustomDeclarableToolCapabilityId,
 } from "@/lib/providers/custom-capabilities";
+import type { ReasoningEffort } from "@/lib/db/schema";
 import type {
   ProviderTransportId,
   ToolCapabilityDescriptor,
@@ -54,6 +56,7 @@ interface CustomModelView {
   capabilities?: ModelCaps;
   toolCapabilityOverrides?: ToolCapabilityDescriptor[];
   compatibleTransports?: ProviderTransportId[];
+  reasoningEffort?: ReasoningEffort;
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
   createdAt?: string;
@@ -73,6 +76,13 @@ const NO_CAPS: ModelCaps = {
   video: false,
 };
 const CUSTOM_PROVIDER_ID = "custom";
+const CUSTOM_REASONING: Array<{id: ReasoningEffort; label: string}> = [
+  {id: "default", label: "Endpoint default"},
+  {id: "none", label: "Off"},
+  {id: "low", label: "Low"},
+  {id: "medium", label: "Medium"},
+  {id: "high", label: "High"},
+];
 const TOOL_LABELS: Record<CustomDeclarableToolCapabilityId, string> = {
   function_calling: "Function calling",
   web_search: "Web search",
@@ -104,6 +114,7 @@ export function CustomModelsManager({
   const [capabilities, setCapabilities] = useState<ModelCaps>({ ...NO_CAPS });
   const [declaredTools, setDeclaredTools] = useState<CustomDeclarableToolCapabilityId[]>([]);
   const [compatibleTransports, setCompatibleTransports] = useState<ProviderTransportId[]>(["chat_completions"]);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("default");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -127,6 +138,7 @@ export function CustomModelsManager({
     setCapabilities({ ...NO_CAPS });
     setDeclaredTools([]);
     setCompatibleTransports(["chat_completions"]);
+    setReasoningEffort("default");
   };
 
   const canSubmit =
@@ -147,6 +159,7 @@ export function CustomModelsManager({
         capabilities,
         toolCapabilityOverrides: buildCustomToolCapabilityOverrides(declaredTools),
         compatibleTransports,
+        reasoningEffort,
       });
       setMessage("Custom model added.");
       reset();
@@ -167,6 +180,8 @@ export function CustomModelsManager({
         baseURL,
         model,
         apiKey: apiKey || undefined,
+        capabilities,
+        reasoningEffort,
       });
       setMessage(
         data.valid
@@ -203,6 +218,11 @@ export function CustomModelsManager({
     }
   };
 
+  const changeSavedReasoning = async (m: CustomModelView, effort: ReasoningEffort) => {
+    updateCustomModelReasoning(m.id, effort);
+    await load();
+    onChanged?.();
+  };
   const remove = async (id: string) => {
     deleteCustomModel(id);
     await load();
@@ -420,6 +440,21 @@ export function CustomModelsManager({
                     {testResults[m.id]}
                   </p>
                 )}
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                  <label htmlFor={`custom-reasoning-${m.id}`} className="font-medium">Reasoning effort</label>
+                  <select
+                    id={`custom-reasoning-${m.id}`}
+                    aria-label={`Reasoning effort for ${m.label}`}
+                    value={m.reasoningEffort ?? "default"}
+                    onChange={(event) => changeSavedReasoning(m, event.target.value as ReasoningEffort)}
+                    className="rounded-md border bg-background px-2 py-1"
+                  >
+                    {CUSTOM_REASONING.map((option) => (
+                      <option key={option.id} value={option.id}>{option.label}</option>
+                    ))}
+                  </select>
+                  <span className="text-muted-foreground">Used when a benchmark or chat does not select an explicit effort. Retest after changing.</span>
+                </div>
                 <ProviderCapabilityTable
                   rows={resolvedCapabilityRows}
                   title="Declared tool support & readiness"
@@ -520,6 +555,20 @@ export function CustomModelsManager({
           </p>
         </div>
 
+        <div className="space-y-1.5">
+          <Label htmlFor="custom-reasoning-new">Default reasoning effort</Label>
+          <select
+            id="custom-reasoning-new"
+            value={reasoningEffort}
+            onChange={(event) => setReasoningEffort(event.target.value as ReasoningEffort)}
+            className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+          >
+            {CUSTOM_REASONING.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">Auto leaves the endpoint in charge; Off, Low, Medium and High explicitly request the selected reasoning mode. Actual support depends on the endpoint. ToolBench can override this per run.</p>
+        </div>
         <div className="space-y-1.5">
           <Label>Declared tool support</Label>
           <p className="text-xs text-muted-foreground">

@@ -126,6 +126,9 @@ export function supportedBenchmarkReasoningEfforts(
 ): ReasoningEffort[] {
   const providerId = model.providerId.trim().toLowerCase();
   const providerModel = providerModelName(model.modelId);
+  // Custom models declare their own compatibility; unsupported effort values
+  // are not silently downgraded. Ollama and compatible endpoints can use these.
+  if (providerId === "custom") return ["default", "none", "low", "medium", "high"];
   if (!providerSupportsReasoningEffortFeature(providerId, providerModel)) {
     return ["default"];
   }

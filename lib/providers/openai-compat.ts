@@ -16,6 +16,19 @@ import {
   toolChoiceForChatCompletions,
 } from "./openrouter-tools";
 
+/** Ollama's OpenAI-compatible endpoint defaults to thinking for some models.
+ * On a local endpoint this can return only reasoning and no visible text/tool call.
+ * Do not inject Ollama-specific fields into other custom OpenAI-compatible APIs. */
+export function isLoopbackOllamaEndpoint(baseURL: string | undefined): boolean {
+  if (!baseURL) return false;
+  try {
+    const url = new URL(baseURL);
+    return (url.protocol === "http:" || url.protocol === "https:") &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname.toLowerCase()) &&
+      url.port === "11434" && /^\/v1\/?$/.test(url.pathname);
+  } catch { return false; }
+}
+
 // Non-cryptographic stable hash (browser-safe — avoids Node's crypto module).
 // Only used to derive a stable OpenAI prompt_cache_key string.
 function stableHash(input: string): string {
@@ -357,6 +370,15 @@ export async function* streamOpenAICompatibleChat(
       ? { reasoning: { effort: reasoningValue } }
       : { reasoning_effort: reasoningValue }
     : {};
+  // Custom providers can have their own reasoning settings. Only send a
+  // reasoning_effort value when explicitly selected; "default" leaves the
+  // endpoint in control. This applies to Ollama and compatible remote APIs.
+  const customReasoningField =
+    providerId === "custom" &&
+    params.reasoningEffort &&
+    params.reasoningEffort !== "default"
+      ? { reasoning_effort: params.reasoningEffort }
+      : {};
 
   // Temperature: omitted for OpenAI (newer models reject the parameter), but
   // OpenRouter forwards it and silently drops it for models that don't
@@ -443,6 +465,7 @@ export async function* streamOpenAICompatibleChat(
         ...temperatureField,
         ...openAIPromptCaching,
         ...(reasoningField as Record<string, never>),
+        ...(customReasoningField as Record<string, never>),
         ...(structuredOutputField as Record<string, never>),
         ...(combinedToolField as Record<string, never>),
         ...(streamOptionsField as Record<string, never>),

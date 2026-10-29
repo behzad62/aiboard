@@ -365,7 +365,7 @@ export async function* streamOpenAIResponses(
   const reasoningValue =
     providerId === "openrouter"
       ? openRouterReasoningEffort(params.reasoningEffort ?? "default", params.model)
-      : providerId === "openai"
+      : providerId === "openai" || providerId === "custom"
         ? openAIReasoningEffort(params.reasoningEffort ?? "default", params.model)
         : undefined;
   const structuredOutputField = openAIResponsesTextFormatField(
