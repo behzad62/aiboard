@@ -3,6 +3,10 @@ import type { RemoteConnectionReason, RemoteConnectionStateName } from "./remote
 /** Runner → launcher IPC message carrying `{ state, reasonCode }`; one constant so the two ends cannot drift. */
 export const REMOTE_STATE_MESSAGE = "aiboard-remote-state";
 
+/** Launcher line when a persisted revoke restarts the Runner into pairing with a new key. */
+export const REMOTE_REPAIR_NOTICE =
+  "AIBoard Remote: this computer was removed from your AIBoard account; pairing it again with a new key. Press Ctrl+C to stop instead.\n";
+
 const STATES: ReadonlySet<string> = new Set<RemoteConnectionStateName>(
   ["disconnected", "authenticating", "connected-degraded", "tool-ready", "suspended", "revoked"]);
 

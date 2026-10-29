@@ -22,7 +22,7 @@ import { RemoteDeviceStore } from "./remote-device-store.js";
 import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-principal.js";
 import { RemoteAuditStore } from "./remote-audit-store.js";
 import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
-import { createRemoteStateNotices, REMOTE_STATE_MESSAGE, stampRemoteNotice } from "./remote-state-notice.js";
+import { createRemoteStateNotices, REMOTE_REPAIR_NOTICE, REMOTE_STATE_MESSAGE, stampRemoteNotice } from "./remote-state-notice.js";
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 import { promptCommandApproval } from "./remote-approval.js";
 import { pairingRelayConfiguration } from "./remote-pairing.js";
@@ -263,6 +263,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   const freshChildren: ChildProcess[] = [];
   const freshKinds = new Set<RunnerKind>();
   const ownedKeys: Buffer[] = [];
+  /** Set when the Runner reports a revoke it persisted; after a clean stop, the launcher runs again to pair a new key. */
+  let rePairRequested = false;
   try {
     await assertProjectBinding(stateDirectory, identity);
     if (args.command === "remote") {
@@ -478,8 +480,17 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           const notices = createRemoteStateNotices();
           v2Child.on("message", (message: unknown) => {
             if (typeof message !== "object" || message === null) return;
-            const { type, state, reasonCode } = message as Record<string, unknown>;
+            const { type, state, reasonCode, persisted } = message as Record<string, unknown>;
             if (type !== REMOTE_STATE_MESSAGE) return;
+            if (state === "revoked" && persisted === true) {
+              // The next start rotates the identity and pairs (tested path); stop this Runner cleanly, then run again.
+              if (!rePairRequested) {
+                rePairRequested = true;
+                write(stampRemoteNotice(REMOTE_REPAIR_NOTICE));
+                if (v2Child?.connected) v2Child.send({ type: "aiboard-launcher-stop" });
+              }
+              return;
+            }
             const line = notices(state, reasonCode);
             if (line) write(stampRemoteNotice(line));
           });
@@ -588,6 +599,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     try {
       const results = await Promise.all(closedPromises);
       const v2Result = v2Child ? results[freshChildren.indexOf(v2Child)] : undefined;
+      // Ctrl+C or an unclean Runner exit wins over the re-pair restart.
+      if (interrupted || v2Result?.code || v2Result?.signal) rePairRequested = false;
       if (v2Result?.code) process.exitCode = v2Result.code;
       else if (interrupted) process.exitCode = 130;
       if (v2Result?.signal) process.exitCode = 1;
@@ -629,6 +642,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     releaseDiscovery();
     if (child?.connected && !started) child.disconnect();
   }
+  if (rePairRequested) await runLauncher(raw.includes("--no-open") ? raw : [...raw, "--no-open"], runtime);
 }
 
 async function runTerminalApprovals(instance: LauncherInstance, key: Buffer, write: (message: string) => void,

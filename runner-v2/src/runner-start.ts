@@ -475,7 +475,9 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         ...(pairing ? { onStateChange: (() => {
           const notices = createRemoteStateNotices();
           return (state: RemoteConnectionState) => {
-            if (launcher && process.connected) process.send?.({ type: REMOTE_STATE_MESSAGE, state: state.state, reasonCode: state.reasonCode });
+            // persisted: the revoke is on disk, so the next start rotates the key and pairs; the launcher restarts for that.
+            const persisted = state.state === "revoked" && remoteService?.composition.deviceStore.isRevoked() === true;
+            if (launcher && process.connected) process.send?.({ type: REMOTE_STATE_MESSAGE, state: state.state, reasonCode: state.reasonCode, persisted });
             else { const line = notices(state.state, state.reasonCode); if (line) process.stdout.write(stampRemoteNotice(line)); }
           };
         })() } : {}),

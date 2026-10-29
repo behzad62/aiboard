@@ -498,6 +498,35 @@ test("the terminal hears about a revoke, a dropped socket and a first connection
   assert.match(failedLines[0]!, /could not connect to the relay/u);
 });
 
+test("a revoke answered to this attempt's verified relay challenge persists and stops retrying", async (t) => {
+  // Live gap: a device revoked while its Runner was offline retried forever and could never re-pair. The relay now
+  // answers its proof with `revoked`; the relay-signed challenge proves the peer, so the next start can rotate.
+  const harness = await stubHarness(t);
+  const starting = harness.connector.start();
+  await tick(); await tick();
+  harness.transport.onProof = () => { void harness.transport.emit({ type: "revoked" }).then(() => harness.transport.drop()); };
+  await harness.transport.emit(signedChallenge(harness.challenge));
+  await starting;
+  assert.equal(harness.deviceStore.load()!.revoked, true);
+  assert.equal(harness.connector.state().state, "revoked", "nothing overwrites the revoke with authentication_failed");
+  const connects = harness.transport.connectCount;
+  for (let i = 0; i < 20; i += 1) await tick();
+  assert.equal(harness.transport.connectCount, connects);
+});
+
+test("a revoke after a forged relay challenge persists nothing", async (t) => {
+  const harness = await stubHarness(t);
+  const starting = harness.connector.start();
+  await tick(); await tick();
+  const attacker = generateKeyPairSync("ed25519");
+  const signed = signedChallenge(harness.challenge);
+  await harness.transport.emit({ ...signed, signature: cryptoSign(null, Buffer.from(canonicalJson(harness.challenge)), attacker.privateKey).toString("base64url") });
+  await harness.transport.emit({ type: "revoked" });
+  await starting;
+  assert.equal(harness.deviceStore.load()!.revoked, false);
+  assert.equal(harness.transport.sent.some((message) => message.type === "proof"), false);
+});
+
 test("an unauthenticated revoke frame cannot persist a device rotation", async (t) => {
   const harness = await stubHarness(t);
   const starting = harness.connector.start();

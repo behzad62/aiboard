@@ -395,6 +395,55 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
   }
 });
 
+test("a persisted revoke stops the Runner and starts it again to pair a new key, without opening the browser", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [], opened: string[] = [];
+  const baseSpawner = fakeSpawner(children, calls);
+  const spawnRunner = (command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    const child = baseSpawner(command, args, options);
+    const fake = children[children.length - 1]!;
+    fake.beforeReady = () => {
+      fake.emit("message", { type: "aiboard-remote-open", url: "https://mcp.aiboard.me/pair" });
+      fake.emit("message", { type: "aiboard-remote-state", state: "tool-ready", reasonCode: "ready" });
+    };
+    return child;
+  };
+  const environment = process.platform === "win32" ? { LOCALAPPDATA: join(f.root, "data") } : { XDG_DATA_HOME: join(f.root, "data") };
+  const runtime = { cwd: f.project, home: f.root, environment, spawnRunner, write: (line: string) => output.push(line), openUrl: (url: string) => opened.push(url) };
+  const args = ["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--relay-url", "wss://mcp.aiboard.me/connect"];
+  const first = runLauncher(args, runtime);
+  void first.catch(() => undefined);
+  try {
+    await waitUntil(() => output.some((line) => line.includes("Runner running")));
+    const openedByFirstRun = opened.length;
+    assert.ok(openedByFirstRun >= 1);
+    // Not on disk (e.g. an unverified frame): the off line, and no restart.
+    children[0]!.emit("message", { type: "aiboard-remote-state", state: "revoked", reasonCode: "device_key_revoked", persisted: false });
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    assert.equal(children.length, 1);
+    assert.equal(children[0]!.stops, 0);
+    children[0]!.emit("message", { type: "aiboard-remote-state", state: "revoked", reasonCode: "device_key_revoked", persisted: true });
+    children[0]!.emit("message", { type: "aiboard-remote-state", state: "revoked", reasonCode: "device_key_revoked", persisted: true });
+    await waitUntil(() => children.length === 2 && output.filter((line) => line.includes("Runner running")).length === 2);
+    assert.equal(children[0]!.stops, 1);
+    assert.equal(output.filter((line) => line.includes("pairing it again with a new key")).length, 1);
+    assert.match(output.find((line) => line.includes("pairing it again with a new key"))!, /^\[\d{2}:\d{2}:\d{2}\] /u);
+    assert.equal(opened.length, openedByFirstRun, "the restart runs with --no-open");
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await first;
+    assert.equal(children.length, 2, "a clean stop after the restart does not restart again");
+  } finally {
+    // A failed assertion can land while a restart is still spawning; stop whatever exists, bounded, never hang.
+    for (let round = 0; round < 3; round += 1) {
+      await Promise.all(children.map((child) => child.stop()));
+      await Promise.race([Promise.allSettled([first]), new Promise<void>((resolve) => setTimeout(resolve, 1_000))]);
+    }
+    await f.cleanup();
+  }
+});
+
 test("two projects have separate instances and stop only their own", async () => {
   const a = await fixture(); const b = await fixture();
   const children: FakeRunner[] = [];

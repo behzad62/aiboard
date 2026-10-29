@@ -532,11 +532,15 @@ export class RemoteConnector {
         return;
       case "revoked": {
         const authenticated = this.current.state === "connected-degraded" || this.current.state === "tool-ready";
+        // pendingEpoch is set only after this attempt's relay-signed challenge verified against a pinned root, so the
+        // peer is the relay; the relay sends `revoked` to a revoked device only after its proof verified too.
+        const relayVerified = this.pendingEpoch !== undefined;
         this.admitting = false;
         this.transition("revoked", "device_key_revoked");
         this.cancelForRevocation();
-        // Only an authenticated, still-owned connection can persist a rotation trigger.
-        if (authenticated && (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld())) this.options.deviceStore.revoke();
+        // Only a relay-verified, still-owned connection can persist a rotation trigger.
+        if ((authenticated || relayVerified) && (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld())) this.options.deviceStore.revoke();
+        if (relayVerified && this.authWaiter) { this.authWaiter.reject(new Error("Remote device is revoked.")); this.authWaiter = undefined; }
         return;
       }
       case "request": {
