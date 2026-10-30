@@ -47,6 +47,8 @@ const expiresDays = Number(option("expires-days") ?? "180");
 if (!Number.isInteger(expiresDays) || expiresDays < 7 || expiresDays > 400) throw new Error("--expires-days must be 7-400.");
 
 const sequenceOption = option("sequence") ?? "auto";
+const jumpReason = option("allow-sequence-jump");
+if (jumpReason !== undefined && !jumpReason.trim()) throw new Error("--allow-sequence-jump needs a nonempty reason.");
 // The prior manifest must be authenticated even if an explicit sequence is used.
 const published = join(root, "public", "release", config.channel, "manifest.json");
 const hasManifest = existsSync(published);
@@ -58,7 +60,7 @@ const previous = hasManifest ? { bytes: readFileSync(published), signature: read
 const historicalPath = join(root, "release", "previous-channel.json");
 const historicalConfig = existsSync(historicalPath) ? parseReleaseChannelConfig(JSON.parse(readFileSync(historicalPath, "utf8"))) : undefined;
 const selectSequence = (reservedFloor: number) => {
-  try { return selectReleaseSequence(sequenceOption, config, previous, new Date(), historicalConfig, reservedFloor); }
+  try { return selectReleaseSequence(sequenceOption, config, previous, new Date(), historicalConfig, reservedFloor, jumpReason); }
   catch (error) { throw new Error(`Cannot select a release sequence (${error instanceof Error ? error.message : String(error)}). An expired prior manifest requires an explicit higher --sequence.`); }
 };
 // Dry selection first so bad input fails before anything is reserved; the reserved run repeats it against the reservations.
@@ -89,7 +91,7 @@ let sequence: number;
 if (reserveRemote) {
   if (!requireCommit) throw new Error("--reserve-remote needs --require-commit (the dispatched commit).");
   sequence = reserveReleaseSequence({
-    git: gitRunner(root), remote: reserveRemote, branch: option("reserve-branch") ?? "main", channel: config.channel, commit: requireCommit,
+    git: gitRunner(root), remote: reserveRemote, branch: option("reserve-branch") ?? "main", channel: config.channel, epoch: config.epoch ?? 0, commit: requireCommit, jumpReason,
     choose: selectSequence, runLabel: process.env.GITHUB_RUN_ID ? `run ${process.env.GITHUB_RUN_ID}.${process.env.GITHUB_RUN_ATTEMPT ?? "1"}` : undefined,
   });
   process.stdout.write(`Reserved ${config.channel} release sequence ${sequence} on ${reserveRemote}.
@@ -102,7 +104,9 @@ const manifest: ReleaseManifest = {
   product: RELEASE_PRODUCT,
   channel: config.channel,
   version,
+  epoch: config.epoch ?? 0,
   sequence,
+  signingKeys: [],
   createdAt: isoSeconds(now),
   expiresAt: isoSeconds(new Date(now.getTime() + expiresDays * 24 * 60 * 60 * 1000)),
   minInstallerVersion: INSTALLER_PROTOCOL,

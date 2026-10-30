@@ -1,6 +1,12 @@
 # Release sequence recovery: design proposal (2026-10-31)
 
-Status: **proposal for owner review.** Nothing here is implemented yet.
+Status: **implemented (pending hosted CI).** Owner decision 2026-10-31: adopt epochs and the offline recovery key, with a sequence-jump threshold of 1000. The discussion below records the original design and incident rationale.
+
+Reservation tags are `release-sequence/<channel>/epoch-<epoch>/<n>`. The `epoch-` prefix keeps them from colliding in Git with pre-epoch `release-sequence/<channel>/<n>` tags, which still count as epoch 0. No reservation tag had been pushed when this changed.
+
+An installed client must see the recovery-signed epoch-opening manifest while it is served. If it is offline until that manifest is replaced by an ordinary release in the new epoch, it cannot authenticate the new signing keys and must reinstall using an installer with the new anchor. The first release carrying this implementation and the recovery public key must reach a client before an incident; older clients do not understand epochs.
+
+New manifests use schema 2 and include `epoch` and `signingKeys` in the canonical signed bytes; ordinary manifests carry an empty signing-key list. Schema 1 keeps its original bytes and is parsed as epoch 0, so existing signatures remain verifiable. Installer protocol 2 prevents older clients from treating schema 2 as an ordinary release. The local anchor digest uses the channel, epoch and sorted ordinary and recovery public-key sets; URLs and the sequence floor are not part of that digest.
 
 ## What the sequence protects
 
@@ -70,7 +76,7 @@ Case A is the one with no procedure. Today it degrades into case C, except that 
 - `release-manifest.ts`: add the `epoch` field and the `recoveryKeys` config; use (epoch, sequence) ordering; accept an epoch bump only with a recovery signature.
 - `self-update.ts`: store the `epoch:sequence` high-water mark and the anchor digest.
 - `install.ps1` and `install.sh`: the same ordering, plus the anchor-digest reset rule.
-- `sign-manifest.mts`, `signing-sequence.mts` and `sequence-reservation.mts`: add epoch-aware reservation tags (`release-sequence/<channel>/<epoch>/<n>`) and the jump guard.
+- `sign-manifest.mts`, `signing-sequence.mts` and `sequence-reservation.mts`: add epoch-aware reservation tags (`release-sequence/<channel>/epoch-<epoch>/<n>`) and the jump guard.
 - `release-keys.mts`: add the `pin-recovery` and `sign-epoch` commands, and `verify` support for epochs.
 - Tests:
   - a replay within an epoch is refused;

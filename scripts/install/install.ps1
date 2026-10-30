@@ -12,12 +12,18 @@
   $ManifestUrl = '__AIBOARD_MANIFEST_URL__'
   $ArtifactPrefix = '__AIBOARD_ARTIFACT_PREFIX__'
   $Channel = '__AIBOARD_CHANNEL__'
+  $Epoch = __AIBOARD_EPOCH__
+  $AnchorDigest = '__AIBOARD_ANCHOR_DIGEST__'
+  $TrustConfig = '__AIBOARD_TRUST_CONFIG__'
   $MinSequence = __AIBOARD_MIN_SEQUENCE__
   $AllowLoopback = __AIBOARD_ALLOW_LOOPBACK_PS__
   $TrustedKeys = @(
 __AIBOARD_TRUSTED_KEYS_PS__
   )
-  $InstallerProtocol = 1
+  $RecoveryKeys = @(
+__AIBOARD_RECOVERY_KEYS_PS__
+  )
+  $InstallerProtocol = 2
 
   function Fail([string]$Message) { throw "AIBoard install failed: $Message" }
   function Say([string]$Message) { Write-Host $Message }
@@ -88,6 +94,24 @@ __AIBOARD_TRUSTED_KEYS_PS__
     if ($value) { return $value } else { return $null }
   }
 
+  function Test-RecordedSequence([string]$Root, [long]$manifestEpoch, [long]$Sequence, [string]$AnchorDigest) {
+    $recorded = Read-Pointer (Join-Path $Root 'sequence')
+    $recordedAnchor = Read-Pointer (Join-Path $Root 'sequence-anchor')
+    if ((Test-Path -LiteralPath (Join-Path $Root 'sequence-anchor')) -and -not $recordedAnchor) { Fail 'the stored release trust anchor is corrupt.' }
+    if ($recordedAnchor) {
+      if ($recordedAnchor -notmatch '^[0-9a-f]{64}$') { Fail 'the stored release trust anchor is corrupt.' }
+      if ($recordedAnchor -ne $AnchorDigest) { $recorded = $null }
+    } else { $recorded = $null }
+    if ((Test-Path -LiteralPath (Join-Path $Root 'sequence')) -and -not $recorded -and $recordedAnchor -eq $AnchorDigest) { Fail 'the stored release sequence is corrupt.' }
+    if ($recorded) {
+      if ($recorded -notmatch '^(?:(0|[1-9][0-9]*):)?([1-9][0-9]*)$') { Fail 'the stored release sequence is corrupt.' }
+      $recordedEpoch = if ($Matches[1]) { [long]$Matches[1] } else { [long]0 }
+      $recordedSequence = [long]$Matches[2]
+      if ($recordedEpoch -gt 1048576 -or $recordedSequence -gt 1099511627776) { Fail 'the stored release sequence is corrupt.' }
+      if ($manifestEpoch -lt $recordedEpoch -or ($manifestEpoch -eq $recordedEpoch -and $Sequence -lt $recordedSequence)) { Fail 'this machine already accepted a newer AIBoard release; refusing an older manifest.' }
+    }
+  }
+
   # Runs one staged-bundle command for at most $Seconds. A command that outlives the bound is killed and must
   # be seen to exit; if it cannot be, $State.Unsettled keeps the install lock and staging in place, so nothing
   # is released or deleted while it may still run.
@@ -142,26 +166,37 @@ __AIBOARD_TRUSTED_KEYS_PS__
     if ($manifestBytes.Length -gt 65536) { Fail 'the release manifest is too large.' }
     try { $signature = [Convert]::FromBase64String(([IO.File]::ReadAllText("$manifestPath.sig")).Trim()) } catch { Fail 'the release signature is not valid base64.' }
     $signer = $null
-    foreach ($key in $TrustedKeys) {
-      $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
-      try {
-        $parameters = New-Object Security.Cryptography.RSAParameters
-        $parameters.Modulus = [Convert]::FromBase64String($key.Modulus)
-        $parameters.Exponent = [Convert]::FromBase64String($key.Exponent)
-        $rsa.ImportParameters($parameters)
-        if ($rsa.VerifyData($manifestBytes, 'SHA256', $signature)) { $signer = $key.Id; break }
-      } finally { $rsa.Dispose() }
+    $signerRole = $null
+    foreach ($set in @(@{ Role = 'ordinary'; Items = $TrustedKeys }, @{ Role = 'recovery'; Items = $RecoveryKeys })) {
+      foreach ($key in $set.Items) {
+        $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
+        try {
+          $parameters = New-Object Security.Cryptography.RSAParameters
+          $parameters.Modulus = [Convert]::FromBase64String($key.Modulus)
+          $parameters.Exponent = [Convert]::FromBase64String($key.Exponent)
+          $rsa.ImportParameters($parameters)
+          if ($rsa.VerifyData($manifestBytes, 'SHA256', $signature)) { $signer = $key.Id; $signerRole = $set.Role; break }
+        } finally { $rsa.Dispose() }
+      }
+      if ($signer) { break }
     }
     if (-not $signer) { Fail 'the release manifest signature does not verify against the trusted AIBoard release key. Nothing was installed.' }
     $manifest = [Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json
-    if ($manifest.schemaVersion -ne 1 -or $manifest.product -ne 'aiboard-runner' -or $manifest.channel -ne $Channel) { Fail 'the release manifest is for another product or channel.' }
+    if ($manifest.schemaVersion -ne 1 -and $manifest.schemaVersion -ne 2) { Fail 'unsupported release manifest version.' }
+    if ($manifest.product -ne 'aiboard-runner' -or $manifest.channel -ne $Channel) { Fail 'the release manifest is for another product or channel.' }
+    $manifestEpoch = if ($manifest.schemaVersion -eq 1) { [long]0 } else { [long]$manifest.epoch }
+    if ($manifestEpoch -lt 0 -or $manifestEpoch -gt 1048576 -or $manifestEpoch -lt $Epoch) { Fail 'the release manifest has an invalid or older epoch.' }
+    if ($manifestEpoch -gt $Epoch) {
+      if ($signerRole -ne 'recovery' -or @($manifest.signingKeys).Count -eq 0) { Fail 'a new epoch requires a recovery signature and new signing keys.' }
+    } elseif ($signerRole -ne 'ordinary') { Fail 'a recovery key cannot sign an ordinary release.' }
     if ($manifest.keyId -ne $signer) { Fail 'the release manifest names a different key than the one that signed it.' }
     if ([int]$manifest.minInstallerVersion -gt $InstallerProtocol) { Fail 'this release needs a newer installer; download it again from https://aiboard.me.' }
     if ((ConvertTo-UtcDate $manifest.expiresAt) -le [DateTime]::UtcNow) { Fail 'the release manifest has expired; try again later.' }
     $Version = [string]$manifest.version
     if ($Version -notmatch '^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})(-[0-9A-Za-z][0-9A-Za-z.]{0,31})?$') { Fail 'the release manifest has an invalid version.' }
     $Sequence = [long]$manifest.sequence
-    if ($Sequence -lt $MinSequence) { Fail 'the release manifest is older than this installer allows (possible replay).' }
+    if ($Sequence -lt 1 -or $Sequence -gt 1099511627776) { Fail 'the release manifest has an invalid sequence.' }
+    if ($manifestEpoch -eq $Epoch -and $Sequence -lt $MinSequence) { Fail 'the release manifest is older than this installer allows (possible replay).' }
     $artifact = @($manifest.artifacts | Where-Object { $_.target -eq $Target })
     if ($artifact.Count -ne 1) { Fail "the release has no bundle for $Target." }
     $artifact = $artifact[0]
@@ -181,8 +216,7 @@ __AIBOARD_TRUSTED_KEYS_PS__
     # A cleanup left by an earlier uninstall must never run against this new install.
     Remove-Item -LiteralPath (Join-Path $Root 'uninstall-pending.cmd') -Force -ErrorAction SilentlyContinue
 
-    $recorded = Read-Pointer (Join-Path $Root 'sequence')
-    if ($recorded -and $Sequence -lt [long]$recorded) { Fail 'this machine already accepted a newer AIBoard release; refusing an older manifest.' }
+    Test-RecordedSequence $Root $manifestEpoch $Sequence $AnchorDigest
     $current = Read-Pointer (Join-Path $Root 'current')
     $destination = Join-Path $Versions $Version
     $node = Join-Path $destination 'node\node.exe'
@@ -244,6 +278,32 @@ import(pathToFileURL(resolve(verified, 'app/runner-v2/src/self-update.js')).href
       $inventory = Invoke-Bounded $stagedNode @($inventoryPath, $staging, $staging, $Version, $Target) 600 'Bundle inventory verification'
       if ($inventory.ExitCode -ne 0) { Fail "bundle inventory verification failed. Nothing was installed. $($inventory.Output)" }
 
+      $trustConfigPath = Join-Path $Work 'trust-config.json'
+      $nextTrustPath = Join-Path $Work 'next-trust.json'
+      $nextAnchorPath = Join-Path $Work 'next-anchor'
+      [IO.File]::WriteAllText($trustConfigPath, $TrustConfig, (New-Object Text.UTF8Encoding($false)))
+      [IO.File]::WriteAllText($nextTrustPath, $TrustConfig, (New-Object Text.UTF8Encoding($false)))
+      [IO.File]::WriteAllText($nextAnchorPath, $AnchorDigest, (New-Object Text.UTF8Encoding($false)))
+      if ($manifest.schemaVersion -eq 2) {
+        $trustScript = @'
+const { readFileSync, writeFileSync } = require('node:fs');
+const { resolve } = require('node:path');
+const { pathToFileURL } = require('node:url');
+const [dir, manifest, signature, configPath, out, anchor] = process.argv.slice(2);
+import(pathToFileURL(resolve(dir, 'app/runner-v2/src/release-manifest.js')).href).then(m => {
+  const config = m.parseReleaseChannelConfig(JSON.parse(readFileSync(configPath, 'utf8')));
+  const release = m.verifyReleaseManifest(readFileSync(manifest), readFileSync(signature, 'utf8'), config, { now: new Date() });
+  const next = release.epoch > config.epoch ? m.parseReleaseChannelConfig({ ...config, epoch: release.epoch, keys: release.signingKeys, minSequence: 1 }) : config;
+  writeFileSync(out, JSON.stringify(next), { mode: 0o600 });
+  writeFileSync(anchor, m.releaseAnchorDigest(next), { mode: 0o600 });
+}).catch(e => { console.error(e.message); process.exitCode = 1; });
+'@
+        $trustPath = Join-Path $Work 'verify-trust.cjs'
+        [IO.File]::WriteAllText($trustPath, $trustScript, (New-Object Text.UTF8Encoding($false)))
+        $trust = Invoke-Bounded $stagedNode @($trustPath, $staging, $manifestPath, "$manifestPath.sig", $trustConfigPath, $nextTrustPath, $nextAnchorPath) 120 'Release trust verification'
+        if ($trust.ExitCode -ne 0) { Fail "release trust verification failed. Nothing was installed. $($trust.Output)" }
+      }
+
       # 5. Bounded smoke check with the bundle's own Node before switching.
       $smoke = Invoke-Bounded $stagedNode @((Join-Path $staging 'app\runner-v2\bin\aiboard.mjs'), 'version') 120 'The new version'
       if ($smoke.ExitCode -ne 0 -or $smoke.Output -ne "AIBoard Runner V2 $Version") { Fail "the new version did not start: $($smoke.Output)" }
@@ -274,9 +334,9 @@ import(pathToFileURL(resolve(verified, 'app/runner-v2/src/self-update.js')).href
       'exit /b %ERRORLEVEL%'
     ) -join "`r`n"
     [IO.File]::WriteAllText((Join-Path $Bin 'aiboard.cmd'), "$shim`r`n", (New-Object Text.ASCIIEncoding))
-    $highest = $Sequence
-    if ($recorded -and [long]$recorded -gt $highest) { $highest = [long]$recorded }
-    Write-Pointer (Join-Path $Root 'sequence') ([string]$highest)
+    Write-Pointer (Join-Path $Root 'trusted-channel.json') ([IO.File]::ReadAllText($nextTrustPath))
+    Write-Pointer (Join-Path $Root 'sequence') ("${manifestEpoch}:${Sequence}")
+    Write-Pointer (Join-Path $Root 'sequence-anchor') ([IO.File]::ReadAllText($nextAnchorPath))
     if ($current -and $current -ne $Version) { Write-Pointer (Join-Path $Root 'previous') $current }
     Write-Pointer (Join-Path $Root 'current') $Version
     $marker = Join-Path $Root 'install.json'

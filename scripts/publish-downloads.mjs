@@ -437,6 +437,6 @@ if (only === "account-runner") {
   await publishRjsWorkBenchRunner();
   // One-line installers (L2): until a release key is pinned they render as "not released yet" and refuse to install.
   const channel = JSON.parse(fs.readFileSync(path.join(root, "release", "channel.json"), "utf8"));
-  const installers = writeInstallers(publicDirectory, channel, { minSequence: publishedSequence(channel.channel, publicDirectory) });
+  const installers = writeInstallers(publicDirectory, channel, { minSequence: publishedSequence(channel.channel, publicDirectory, channel.epoch ?? 0) });
   console.log(`Published ${path.relative(root, path.join(publicDirectory, "install.ps1"))} and install.sh (release keys: ${installers.keyIds.join(", ") || "none"}).`);
 }

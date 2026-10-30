@@ -9,10 +9,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-function sequenceOf(bytes: Buffer, where: string): number {
-  const value = JSON.parse(bytes.toString("utf8")) as { sequence?: unknown };
-  if (!Number.isSafeInteger(value.sequence)) throw new Error(`${where} has no valid sequence.`);
-  return value.sequence as number;
+function sequenceOf(bytes: Buffer, where: string): { epoch: number; sequence: number } {
+  const value = JSON.parse(bytes.toString("utf8")) as { schemaVersion?: unknown; epoch?: unknown; sequence?: unknown };
+  if ((value.schemaVersion !== 1 && value.schemaVersion !== 2) || (value.schemaVersion === 1 && value.epoch !== undefined) || (value.schemaVersion === 2 && value.epoch === undefined)) throw new Error(`${where} has no valid schema and epoch.`);
+  const epoch = value.epoch ?? 0;
+  if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 0 || epoch > 2 ** 20 ||
+      typeof value.sequence !== "number" || !Number.isSafeInteger(value.sequence) || value.sequence < 1 || value.sequence > 2 ** 40) throw new Error(`${where} has no valid epoch and sequence.`);
+  return { epoch, sequence: value.sequence };
 }
 
 /** Returns a description of each checked channel; throws if any committed manifest regressed. */
@@ -28,8 +31,9 @@ export function checkPublicationOrder(repository: string, base: string): string[
     const after = readFileSync(current);
     if (after.equals(before)) { notes.push(`${path}: unchanged`); continue; }
     const [from, to] = [sequenceOf(before, `${path} at ${base}`), sequenceOf(after, path)];
-    if (to <= from) throw new Error(`${path} sequence ${to} does not exceed the previously deployed ${from}; publish drafts in sequence order.`);
-    notes.push(`${path}: ${from} -> ${to}`);
+    const display = (value: { epoch: number; sequence: number }) => value.epoch === 0 ? String(value.sequence) : `${value.epoch}:${value.sequence}`;
+    if (to.epoch < from.epoch || (to.epoch === from.epoch && to.sequence <= from.sequence)) throw new Error(`${path} sequence ${display(to)} does not exceed the previously deployed ${display(from)}; publish drafts in sequence order.`);
+    notes.push(`${path}: ${display(from)} -> ${display(to)}`);
   }
   return notes;
 }

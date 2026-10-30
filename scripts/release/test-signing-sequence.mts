@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   INSTALLER_PROTOCOL, PREVIEW_TARGETS, RELEASE_PRODUCT, RELEASE_TARGETS, serializeManifest,
@@ -37,6 +39,11 @@ assert.equal(selectReleaseSequence("3", config, undefined, now), 3);
 const previous = signed();
 assert.equal(selectReleaseSequence("auto", config, previous, now), 8);
 assert.equal(selectReleaseSequence("8", config, previous, now), 8);
+assert.equal(selectReleaseSequence("1007", config, previous, now), 1007);
+assert.throws(() => selectReleaseSequence("1008", config, previous, now), /allow-sequence-jump/);
+assert.throws(() => selectReleaseSequence("1008", config, previous, now, undefined, 0, "   "), /allow-sequence-jump/);
+assert.equal(selectReleaseSequence("1008", config, previous, now, undefined, 0, "documented emergency"), 1008);
+assert.equal(selectReleaseSequence("auto", { ...config, epoch: 1 }, previous, now, config), 1);
 for (const sequence of ["1", "6", "7"]) assert.throws(() => selectReleaseSequence(sequence, config, previous, now), /higher than.*7/);
 for (const sequence of ["0", "1e2", "NaN", "1099511627777"]) assert.throws(() => selectReleaseSequence(sequence, config, previous, now));
 assert.throws(() => selectReleaseSequence("8", config, signed({}, wrong.privateKey), now), /signature does not verify/);
@@ -67,8 +74,48 @@ for (const sequence of ["0", "01", "1099511627777", "1e2"]) assert.notEqual(vali
 for (const version of ["0.2", "v0.2.0", "1.2.3-beta"]) assert.notEqual(validate("auto", version).status, 0, version);
 for (const expiry of ["", "1e2", "1000"]) assert.notEqual(validate("auto", "0.2.0", expiry).status, 0, expiry);
 assert.throws(() => selectReleaseSequence("auto", config, signed({ sequence: 2 ** 40 }), now), /No higher release sequence/);
+
+// Offline key ceremony: pin only a public recovery key, then use its private half to open an epoch.
+{
+  const work = mkdtempSync(join(tmpdir(), "aiboard-recovery-sign-"));
+  try {
+    const recovery = generateKeyPairSync("rsa", { modulusLength: 3072 });
+    const next = generateKeyPairSync("rsa", { modulusLength: 3072 });
+    const configPath = join(work, "old.json");
+    const nextPath = join(work, "next.json");
+    const recoveryPublic = join(work, "recovery.pub.pem");
+    const recoveryPrivate = join(work, "recovery.pem");
+    const template = join(work, "template.json");
+    const out = join(work, "signed");
+    mkdirSync(out);
+    writeFileSync(configPath, JSON.stringify({ ...config, epoch: 0, recoveryKeys: [] }));
+    writeFileSync(recoveryPublic, recovery.publicKey.export({ type: "spki", format: "pem" }));
+    writeFileSync(recoveryPrivate, recovery.privateKey.export({ type: "pkcs8", format: "pem" }));
+    const helper = fileURLToPath(new URL("./release-keys.mts", import.meta.url));
+    const tsx = fileURLToPath(new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url));
+    const run = (...args: string[]) => spawnSync(process.execPath, [tsx, helper, ...args], { encoding: "utf8" });
+    assert.equal(run("pin-recovery", "--config", configPath, "--key-id", "recovery-test", "--public-key", recoveryPublic).status, 0);
+    const priorConfig = JSON.parse(readFileSync(configPath, "utf8"));
+    assert.equal(priorConfig.recoveryKeys[0].keyId, "recovery-test");
+    const newConfig = { ...priorConfig, epoch: 1, keys: [trustedKeyFromPublicKey("replacement-test", next.publicKey)] };
+    writeFileSync(nextPath, JSON.stringify(newConfig));
+    writeFileSync(template, signed({ expiresAt: "2099-12-01T00:00:00Z" }).bytes);
+    const signedEpoch = run("sign-epoch", "--config", configPath, "--new-config", nextPath, "--manifest", template, "--key-file", recoveryPrivate, "--out", out);
+    assert.equal(signedEpoch.status, 0, signedEpoch.stderr);
+    const bytes = readFileSync(join(out, "manifest.json"));
+    const signature = readFileSync(join(out, "manifest.json.sig"), "utf8");
+    const opening = verifyReleaseManifest(bytes, signature, priorConfig, { now: new Date() });
+    assert.equal(opening.epoch, 1);
+    assert.equal(opening.sequence, 1);
+    assert.deepEqual(opening.signingKeys, newConfig.keys);
+    assert.throws(() => verifyReleaseManifest(bytes, signature, { ...priorConfig, recoveryKeys: [] }, { now: new Date() }), /signature does not verify/);
+    const checked = run("verify", "--config", configPath, "--manifest", join(out, "manifest.json"), "--committed", join(work, "no-committed-manifest"));
+    assert.equal(checked.status, 0, checked.stderr);
+  } finally { rmSync(work, { recursive: true, force: true }); }
+}
 const workflow = readFileSync(new URL("../../.github/workflows/runner-release.yml", import.meta.url), "utf8");
 assert.match(workflow, /run: node scripts\/release\/validate-workflow-inputs\.mjs/);
+assert.match(workflow, /Require an offline recovery public key before signing[\s\S]*?recoveryKeys\.length === 0/);
 for (const field of ["VERSION: ${{ inputs.version }}", "SEQUENCE: ${{ inputs.sequence }}", "EXPIRY_DAYS: ${{ inputs.expires_days }}"]) {
   assert.ok(workflow.includes(`AIBOARD_RELEASE_${field}`), `workflow must pass ${field}`);
 }

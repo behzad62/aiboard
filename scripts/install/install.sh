@@ -10,11 +10,15 @@ set -eu
 MANIFEST_URL='__AIBOARD_MANIFEST_URL__'
 ARTIFACT_PREFIX='__AIBOARD_ARTIFACT_PREFIX__'
 CHANNEL='__AIBOARD_CHANNEL__'
+EPOCH=__AIBOARD_EPOCH__
+ANCHOR_DIGEST='__AIBOARD_ANCHOR_DIGEST__'
+TRUST_CONFIG='__AIBOARD_TRUST_CONFIG__'
 MIN_SEQUENCE=__AIBOARD_MIN_SEQUENCE__
 ALLOW_LOOPBACK=__AIBOARD_ALLOW_LOOPBACK_SH__
-INSTALLER_PROTOCOL=1
+INSTALLER_PROTOCOL=2
 # "<key id> <base64 DER SubjectPublicKeyInfo>" per line.
 TRUSTED_KEYS='__AIBOARD_TRUSTED_KEYS_SH__'
+RECOVERY_KEYS='__AIBOARD_RECOVERY_KEYS_SH__'
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'AIBoard install failed: %s\n' "$*" >&2; exit 1; }
@@ -102,6 +106,23 @@ manifest_value() { sed -n "s/^\"$1\":\(.*\),\$/\1/p" "$2"; }
 unquote() { printf '%s' "$1" | sed -n 's/^"\([^"\\]*\)"$/\1/p'; }
 digits() { printf '%s' "$1" | tr -cd '0-9'; }
 
+check_recorded_sequence() {
+  recorded=$(cat "$root/sequence" 2>/dev/null || true)
+  recorded_anchor=$(cat "$root/sequence-anchor" 2>/dev/null || true)
+  if [ -f "$root/sequence-anchor" ] && [ -z "$recorded_anchor" ]; then fail "$root/sequence-anchor is corrupt."; fi
+  if [ -n "$recorded_anchor" ]; then
+    printf '%s' "$recorded_anchor" | grep -Eq '^[0-9a-f]{64}$' || fail "$root/sequence-anchor is corrupt."
+    [ "$recorded_anchor" = "$ANCHOR_DIGEST" ] || recorded=""
+  else recorded=""; fi
+  if [ -f "$root/sequence" ] && [ -z "$recorded" ] && [ "$recorded_anchor" = "$ANCHOR_DIGEST" ]; then fail "$root/sequence is corrupt."; fi
+  if [ -n "$recorded" ]; then
+    printf '%s' "$recorded" | grep -Eq '^((0|[1-9][0-9]*):)?[1-9][0-9]*$' || fail "$root/sequence is corrupt."
+    case "$recorded" in *:*) recorded_epoch=${recorded%%:*}; recorded_sequence=${recorded#*:} ;; *) recorded_epoch=0; recorded_sequence=$recorded ;; esac
+    [ "${#recorded_epoch}" -le 7 ] && [ "${#recorded_sequence}" -le 13 ] && [ "$recorded_epoch" -le 1048576 ] && [ "$recorded_sequence" -ge 1 ] && [ "$recorded_sequence" -le 1099511627776 ] || fail "$root/sequence is corrupt."
+    if [ "$epoch" -lt "$recorded_epoch" ] || { [ "$epoch" -eq "$recorded_epoch" ] && [ "$sequence" -lt "$recorded_sequence" ]; }; then fail "this machine already accepted a newer AIBoard release; refusing an older manifest."; fi
+  fi
+}
+
 detect_target() {
   os=$(uname -s)
   arch=$(uname -m)
@@ -148,18 +169,31 @@ main() {
   [ "$(wc -c < "$manifest" | tr -d ' ')" -le 65536 ] || fail "the release manifest is too large."
   tr -d ' \r\n' < "$work/manifest.sig.b64" | openssl base64 -d -A -out "$work/manifest.sig" 2>/dev/null || fail "the release signature is not valid base64."
   signer=""
-  printf '%s\n' "$TRUSTED_KEYS" > "$work/keys"
-  while read -r key_id key_der; do
+  signer_role=""
+  printf '%s\n' "$TRUSTED_KEYS" | sed 's/^/ordinary /' > "$work/keys"
+  printf '%s\n' "$RECOVERY_KEYS" | sed 's/^/recovery /' >> "$work/keys"
+  while read -r key_role key_id key_der; do
     [ -n "$key_id" ] || continue
     { echo "-----BEGIN PUBLIC KEY-----"; printf '%s\n' "$key_der" | fold -w 64; echo "-----END PUBLIC KEY-----"; } > "$work/key.pem"
     if openssl dgst -sha256 -verify "$work/key.pem" -signature "$work/manifest.sig" "$manifest" >/dev/null 2>&1; then
-      signer=$key_id; break
+      signer=$key_id; signer_role=$key_role; break
     fi
   done < "$work/keys"
   [ -n "$signer" ] || fail "the release manifest signature does not verify against the trusted AIBoard release key. Nothing was installed."
 
   [ "$(head -n 1 "$manifest")" = "{" ] || fail "the release manifest is not in the expected format."
-  [ "$(manifest_value schemaVersion "$manifest")" = 1 ] || fail "unsupported release manifest version."
+  schema=$(manifest_value schemaVersion "$manifest")
+  case "$schema" in 1) epoch=0 ;; 2) epoch=$(manifest_value epoch "$manifest") ;; *) fail "unsupported release manifest version." ;; esac
+  case "$epoch" in ''|*[!0-9]*) fail "the release manifest has an invalid epoch." ;; esac
+  [ "${#epoch}" -le 7 ] && [ "$epoch" -le 1048576 ] || fail "the release manifest has an invalid epoch."
+  [ "$epoch" -ge "$EPOCH" ] || fail "the release manifest is from an older epoch."
+  if [ "$epoch" -gt "$EPOCH" ]; then
+    [ "$signer_role" = recovery ] || fail "a new epoch requires a recovery signature."
+    signing_keys=$(manifest_value signingKeys "$manifest")
+    [ "$signing_keys" != '[]' ] && [ -n "$signing_keys" ] || fail "a new epoch needs signing keys."
+  else
+    [ "$signer_role" = ordinary ] || fail "a recovery key cannot sign an ordinary release."
+  fi
   [ "$(unquote "$(manifest_value product "$manifest")")" = aiboard-runner ] || fail "the release manifest is for another product."
   [ "$(unquote "$(manifest_value channel "$manifest")")" = "$CHANNEL" ] || fail "the release manifest is for another channel."
   [ "$(unquote "$(manifest_value keyId "$manifest")")" = "$signer" ] || fail "the release manifest names a different key than the one that signed it."
@@ -173,7 +207,8 @@ main() {
   printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})(-[0-9A-Za-z][0-9A-Za-z.]{0,31})?$' || fail "the release manifest has an invalid version."
   sequence=$(manifest_value sequence "$manifest")
   case "$sequence" in ''|*[!0-9]*) fail "the release manifest is invalid." ;; esac
-  [ "$sequence" -ge "$MIN_SEQUENCE" ] || fail "the release manifest is older than this installer allows (possible replay)."
+  [ "${#sequence}" -le 13 ] && [ "$sequence" -ge 1 ] && [ "$sequence" -le 1099511627776 ] || fail "the release manifest has an invalid sequence."
+  if [ "$epoch" -eq "$EPOCH" ]; then [ "$sequence" -ge "$MIN_SEQUENCE" ] || fail "the release manifest is older than this installer allows (possible replay)."; fi
   [ "$(grep -c "^{\"target\":\"$target\"," "$manifest")" = 1 ] || fail "the release has no bundle for $target."
   line=$(grep "^{\"target\":\"$target\"," "$manifest")
   url=$(printf '%s' "$line" | sed -n 's/.*"url":"\([^"\\]*\)"}.*/\1/p')
@@ -195,9 +230,7 @@ main() {
   lock="$root/install.lock"
   lock_owner="$pending_owner"
 
-  recorded=$(cat "$root/sequence" 2>/dev/null || true)
-  case "$recorded" in *[!0-9]*) fail "$root/sequence is corrupt; remove $root and reinstall." ;; esac
-  if [ -n "$recorded" ] && [ "$sequence" -lt "$recorded" ]; then fail "this machine already accepted a newer AIBoard release; refusing an older manifest."; fi
+  check_recorded_sequence
   current=$(cat "$root/current" 2>/dev/null || true)
   destination="$root/versions/$version"
 
@@ -235,6 +268,27 @@ NODE
     # The archive's signed checksum authenticates the bundled Node and verifier before they run.
     run_bounded 600 "$work/inventory.log" "$staging/node/node" "$work/verify-inventory.cjs" "$staging" "$staging" "$version" "$target" || fail "bundle inventory verification failed or did not finish within 600 seconds. Nothing was installed. $(cat "$work/inventory.log")"
 
+    # Schema 2 is checked again by the authenticated bundle's verifier, including canonical bytes and key shape.
+    printf '%s' "$TRUST_CONFIG" > "$work/trust-config.json"
+    printf '%s' "$TRUST_CONFIG" > "$work/next-trust.json"
+    printf '%s' "$ANCHOR_DIGEST" > "$work/next-anchor"
+    if [ "$schema" = 2 ]; then
+      cat > "$work/verify-trust.cjs" <<'NODE'
+const { readFileSync, writeFileSync } = require('node:fs');
+const { resolve } = require('node:path');
+const { pathToFileURL } = require('node:url');
+const [dir, manifest, signature, configPath, out, anchor] = process.argv.slice(2);
+import(pathToFileURL(resolve(dir, 'app/runner-v2/src/release-manifest.js')).href).then(m => {
+  const config = m.parseReleaseChannelConfig(JSON.parse(readFileSync(configPath, 'utf8')));
+  const release = m.verifyReleaseManifest(readFileSync(manifest), readFileSync(signature, 'utf8'), config, { now: new Date() });
+  const next = release.epoch > config.epoch ? m.parseReleaseChannelConfig({ ...config, epoch: release.epoch, keys: release.signingKeys, minSequence: 1 }) : config;
+  writeFileSync(out, JSON.stringify(next), { mode: 0o600 });
+  writeFileSync(anchor, m.releaseAnchorDigest(next), { mode: 0o600 });
+}).catch(e => { console.error(e.message); process.exitCode = 1; });
+NODE
+      run_bounded 120 "$work/trust.log" "$staging/node/node" "$work/verify-trust.cjs" "$staging" "$manifest" "$work/manifest.sig.b64" "$work/trust-config.json" "$work/next-trust.json" "$work/next-anchor" || fail "release trust verification failed. Nothing was installed. $(cat "$work/trust.log")"
+    fi
+
     # 5. Bounded smoke check with the bundle's own Node before switching.
     run_bounded 120 "$work/smoke.log" "$staging/node/node" "$staging/app/runner-v2/bin/aiboard.mjs" version || fail "the new version did not start within 120 seconds: $(cat "$work/smoke.log")"
     smoke=$(cat "$work/smoke.log")
@@ -263,9 +317,9 @@ exec "$root/versions/$version/node/node" "$root/versions/$version/app/runner-v2/
 SHIM
   chmod 755 "$root/bin/aiboard.tmp"
   mv -f "$root/bin/aiboard.tmp" "$root/bin/aiboard"
-  highest=$sequence
-  if [ -n "$recorded" ] && [ "$recorded" -gt "$highest" ]; then highest=$recorded; fi
-  printf '%s' "$highest" > "$root/sequence.tmp" && mv -f "$root/sequence.tmp" "$root/sequence"
+  (umask 077; cat "$work/next-trust.json" > "$root/trusted-channel.json.tmp" && mv -f "$root/trusted-channel.json.tmp" "$root/trusted-channel.json")
+  (umask 077; printf '%s:%s' "$epoch" "$sequence" > "$root/sequence.tmp" && mv -f "$root/sequence.tmp" "$root/sequence")
+  (umask 077; cat "$work/next-anchor" > "$root/sequence-anchor.tmp" && mv -f "$root/sequence-anchor.tmp" "$root/sequence-anchor")
   if [ -n "$current" ] && [ "$current" != "$version" ]; then
     printf '%s' "$current" > "$root/previous.tmp" && mv -f "$root/previous.tmp" "$root/previous"
   fi

@@ -6,6 +6,7 @@ Plan packet L2, ADR-E, owner decision D18 (GitHub Releases + CI signing in a pro
 - **One signing key.** An RSA-3072 key signs `manifest.json`, which lists the six bundles with their size and SHA-256. Its private half lives only in:
   - the `release` GitHub environment secret;
   - your encrypted offline backups.
+- **One separate offline recovery key.** Its public half is pinned in `recoveryKeys` before the first signed release. It can open a new epoch and replace ordinary signing keys, but cannot sign an ordinary release in the same epoch. Keep the private half offline, never in GitHub secrets.
 - **The public half is pinned in `release/channel.json`.** From there it reaches every client in two ways:
   - **Installers.** `npm run publish-downloads` renders `public/install.ps1` and `public/install.sh` with the pinned keys baked in. This happens on every deploy of aiboard.me.
   - **Updater.** Every bundle carries `app/runner-v2/release-channel.json`, which `aiboard update` trusts. An installed Runner therefore trusts the keys that were pinned when *its* version was built.
@@ -48,6 +49,11 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
    - This adds `{keyId, n, e}` to `release/channel.json`.
    - It refuses a file containing `PRIVATE KEY`.
    - Commit the change, then check `npx tsx scripts/release/test-installers.mts`.
+3a. **Generate and pin the recovery key offline before the first signed release.** On an offline trusted machine, generate a separate RSA-3072 key and public half, using the same commands as step 1 with a different name such as `aiboard-recovery-2026a`. Encrypt and test two offline backups as in step 2. Keep the private key and backups offline; never add it to GitHub secrets. Transfer only the public half to the repository and run:
+   ```bash
+   npx tsx scripts/release/release-keys.mts pin-recovery --key-id aiboard-recovery-2026a --public-key aiboard-recovery-2026a.pub.pem
+   ```
+   Review and commit the public `recoveryKeys` entry. The release workflow refuses to sign while the list is empty.
 4. **Create the `release` environment.** In GitHub, open behzad62/aiboard → Settings → Environments → New environment → `release`.
    - **Required reviewers:** add yourself (`behzad62`). Leave "Prevent self-review" off, because you both dispatch and approve.
    - **Deployment branches and tags:** choose "Selected branches", then add `main` only.
@@ -74,7 +80,7 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
    - Check **rollback compatibility:** `aiboard update --rollback` runs the previous version against the state the new version wrote. A release must not change persisted state in a way the previous release cannot read, or its notes must say rollback is unsupported.
 2. **Run the release workflow.** Actions → "Runner release (L2, manual)" → Run workflow on `main`.
    - **version:** `0.2.0`, for example. Tag `v0.2.0` must not exist yet.
-   - **sequence:** `auto` picks one more than the highest of the committed `public/release/stable/manifest.json` and every reserved sequence (below), or 1 for the first release. An explicit sequence must be higher than both.
+   - **sequence:** `auto` picks one more than the highest committed and reserved sequence in the current epoch, or 1 for the first release in an epoch. An explicit sequence must be higher than both. A jump over 1000 from the previous committed sequence is refused unless the signing command receives `--allow-sequence-jump <reason>`; the reason is recorded in the reservation tag. The workflow does not supply an override.
    - **expires_days:** 180.
 
    The workflow then:
@@ -84,7 +90,7 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
 3. **Approve the signing job.** The signing job:
    - signs with `--require-commit`, which refuses bundles that were not built from a clean checkout of the dispatched commit;
    - refuses to sign if `main` has moved since the dispatch, so a queued run cannot sign with an older key policy; re-dispatch from the current `main`;
-   - reserves its sequence before signing by creating the tag `release-sequence/stable/<n>` on the repository. Every run gets a different sequence, even if a draft is later deleted, so no two signed manifests share one. A run whose reservation fails stops before signing; sequences may have gaps;
+   - reserves its sequence before signing by creating the tag `release-sequence/stable/epoch-<epoch>/<n>` on the repository. Legacy `release-sequence/stable/<n>` tags count in epoch 0. Every run gets a different sequence, even if a draft is later deleted. A run whose reservation fails stops before signing; sequences may have gaps;
    - checks the signature again with `openssl`, exactly as `install.sh` does;
    - creates a **draft** release `v<version>` with the six bundles, `manifest.json` and `manifest.json.sig`.
 
@@ -123,11 +129,18 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
 4. After most installs have updated, remove the old key from `release/channel.json` and cut another release. Before removing it, copy the channel configuration that authenticated the currently committed manifest to `release/previous-channel.json` and commit it. This file is a signing-time history witness only; installers and new bundles still trust only `release/channel.json`.
 
 ## Key compromise
-1. Copy the channel configuration that authenticated the committed manifest to `release/previous-channel.json`, then remove the compromised key from `release/channel.json`. The previous configuration is used only to authenticate the repository's committed history for the sequence check; it is not shipped as a client trust anchor.
-2. Pin a new key and replace the secret.
-3. Do not assume a higher sequence is always available. A compromised signer could have issued the protocol maximum (`2 ** 40`), or an unobserved sequence higher than the one in the repository. Reinstall with the new trust anchor and follow a separately reviewed recovery procedure for preserving user state; do not simply reset an existing installation's sequence or claim an update can recover it. Durable sequence reservation is implemented (`release-sequence/<channel>/<n>` tags). An exhaustion/reset (epoch) procedure is not, so a compromise that consumed the sequence space still needs that separately reviewed procedure.
+The requested epoch-qualified reservation path conflicts with a legacy tag whose sequence equals the new epoch (typically legacy sequence 1 versus epoch 1). Git cannot hold both refs. Resolve the reservation namespace design before signing in that epoch; do not remove protected legacy tags.
 
-Installed Runners that only trust the compromised key cannot be fixed by update. They must reinstall with the one-line installer. Announce this. Installers served after the fix trust only the new key.
+1. Declare the incident and disable the release workflow. Preserve the current channel configuration as `release/previous-channel.json` for authentication of the published history. Keep the current installer anchor in place while the opening manifest is served.
+2. Generate and back up a new ordinary signing key offline. Prepare a new channel configuration with `epoch` increased by one, only the replacement ordinary keys in `keys`, the same `recoveryKeys`, and `minSequence: 1`. Keep the compromised key out of the new set.
+3. Build known-good bundles. Create a schema-2 manifest template for those bundles using the new ordinary key and the new channel configuration, with sequence 1; keep that ordinary signature private and do not publish it. For example, use `sign-manifest.mts --channel-config <new-channel.json> --version <version> --bundles <bundle-dir> --out <template-dir> --sequence 1 --key-file <new-signing-key.pem>` with `release/previous-channel.json` present. Transfer the template and public configuration to the offline recovery machine. Create an output directory there and run:
+   ```bash
+   npx tsx scripts/release/release-keys.mts sign-epoch --config release/previous-channel.json --new-config <new-channel.json> --manifest <template-dir>/manifest.json --key-file <offline-recovery-key.pem> --out <recovery-output-dir>
+   ```
+   Verify the output against the previous configuration and the known-good archives, then publish the bundles and the recovery-signed manifest with epoch `old + 1` and sequence 1. Protect and record this manual reservation in the release log before any other signing in the new epoch.
+4. Keep the old-anchor installers and the recovery-signed manifest available long enough for installed clients to update. The accepted manifest replaces their ordinary signing keys and records the new epoch locally. Clients that missed this manifest cannot authenticate a later ordinary release in the new epoch; announce that they must reinstall with the new installer. Clients predating this implementation also need to reinstall.
+5. Rotate the GitHub `AIBOARD_RELEASE_SIGNING_KEY` secret to the new ordinary key. Publish a subsequent ordinary release in the new epoch, then deploy its manifest together with the new channel configuration and installers. Coordinate or temporarily pause automatic site deployment so new-epoch installers are not served while the site still serves only the recovery-signed opening manifest: those installers correctly refuse a recovery signature within their own epoch. Resume the release workflow after the new policy is in place.
+6. If the recovery key itself is suspected compromised, publish installers with a new recovery key and announce a reinstall. A reinstall with a different trust anchor ignores the previous install root's high-water mark; an older installation with no recorded anchor is also treated as unbound on reinstall. The installed updater still enforces its legacy bare-integer high-water mark. User state remains in its separate state directory.
 
 ## Bumping the bundled Node
 1. Download `SHASUMS256.txt` and `SHASUMS256.txt.asc` for the new Node 24 version.

@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 import { extractFiles, readArchive } from "./release-archive.js";
 import {
-  isReleaseVersion, parseReleaseChannelConfig, RELEASE_PRODUCT, RELEASE_TARGETS, verifyReleaseManifest,
+  isReleaseVersion, parseReleaseChannelConfig, releaseAnchorDigest, RELEASE_PRODUCT, RELEASE_TARGETS, verifyReleaseManifest,
   type ReleaseChannelConfig, type ReleaseManifest, type ReleaseTarget,
 } from "./release-manifest.js";
 
@@ -122,8 +122,8 @@ function notManaged(): Error {
   return new Error("not_managed_install: This aiboard was not installed by the one-line installer (developer checkout or ZIP). Update it with git pull or reinstall from https://aiboard.me/runner-guide.");
 }
 
-async function loadBundledConfig(layout: InstallLayout): Promise<ReleaseChannelConfig> {
-  const path = join(layout.versionsDirectory, layout.runningVersion, "app", "runner-v2", "release-channel.json");
+async function loadBundledConfig(layout: InstallLayout, version = layout.runningVersion): Promise<ReleaseChannelConfig> {
+  const path = join(layout.versionsDirectory, version, "app", "runner-v2", "release-channel.json");
   return parseReleaseChannelConfig(JSON.parse(await readFile(path, "utf8")));
 }
 
@@ -140,24 +140,66 @@ async function readVersionPointer(path: string): Promise<string | undefined> {
   return value;
 }
 
-export interface InstallState { current?: string; previous?: string; sequence?: number }
+export interface InstallState { current?: string; previous?: string; epoch?: number; sequence?: number }
 
 export async function readInstallState(layout: InstallLayout): Promise<InstallState> {
-  const sequenceText = await readPointer(join(layout.root, "sequence"));
-  const sequence = sequenceText === undefined ? undefined : Number(sequenceText);
-  if (sequence !== undefined && (!Number.isSafeInteger(sequence) || sequence < 1)) throw new Error("install_state_invalid: sequence is corrupt; reinstall with the one-line installer.");
+  const sequencePath = join(layout.root, "sequence");
+  const sequenceText = await readPointer(sequencePath);
+  if (sequenceText === undefined && existsSync(sequencePath)) throw new Error("install_state_invalid: sequence is corrupt; reinstall with the one-line installer.");
+  const match = sequenceText === undefined ? undefined : /^(?:(0|[1-9][0-9]*):)?([1-9][0-9]*)$/.exec(sequenceText);
+  const epoch = match ? Number(match[1] ?? 0) : undefined;
+  const sequence = match ? Number(match[2]) : undefined;
+  if (sequenceText !== undefined && (!match || !Number.isSafeInteger(sequence) || sequence! > 2 ** 40 || !Number.isSafeInteger(epoch) || epoch! > 2 ** 20)) throw new Error("install_state_invalid: sequence is corrupt; reinstall with the one-line installer.");
   return {
     current: await readVersionPointer(join(layout.root, "current")),
     previous: await readVersionPointer(join(layout.root, "previous")),
-    ...(sequence !== undefined ? { sequence } : {}),
+    ...(sequence !== undefined ? { epoch, sequence } : {}),
   };
 }
 
-async function writeAtomic(path: string, content: string): Promise<void> {
+async function writeAtomic(path: string, content: string, mode = 0o644): Promise<void> {
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, content, { flag: "wx", mode: 0o644 });
+  await writeFile(temporary, content, { flag: "wx", mode });
   try { await rename(temporary, path); }
   catch (error) { await unlink(temporary).catch(() => undefined); throw error; }
+}
+
+async function effectiveConfig(layout: InstallLayout, bundled: ReleaseChannelConfig, state: InstallState): Promise<ReleaseChannelConfig> {
+  bundled = parseReleaseChannelConfig(bundled);
+  const localPath = join(layout.root, "trusted-channel.json");
+  const local = await readPointer(localPath);
+  if (local === undefined && existsSync(localPath)) throw new Error("install_state_invalid: the stored release trust anchor is empty.");
+  const config = local === undefined ? bundled : parseReleaseChannelConfig(JSON.parse(local));
+  if (config.channel !== bundled.channel || JSON.stringify(config.recoveryKeys ?? []) !== JSON.stringify(bundled.recoveryKeys ?? [])) {
+    throw new Error("install_state_invalid: the stored trust anchor does not match this installation; reinstall with the one-line installer.");
+  }
+  const digestPath = join(layout.root, "sequence-anchor");
+  const digest = await readPointer(digestPath);
+  if (digest === undefined && existsSync(digestPath)) throw new Error("install_state_invalid: the stored release trust digest is empty.");
+  if ((digest !== undefined && digest !== releaseAnchorDigest(config)) || (local !== undefined && digest === undefined) ||
+      (state.epoch !== undefined && state.epoch !== (config.epoch ?? 0))) {
+    throw new Error("install_state_invalid: the stored release trust anchor is inconsistent; reinstall with the one-line installer.");
+  }
+  return config;
+}
+
+async function recordAcceptedRelease(layout: InstallLayout, config: ReleaseChannelConfig, manifest: ReleaseManifest, bundledNext?: ReleaseChannelConfig): Promise<void> {
+  const epoch = manifest.epoch ?? 0;
+  let next = epoch > (config.epoch ?? 0)
+    ? parseReleaseChannelConfig({ ...config, epoch, keys: manifest.signingKeys, minSequence: 1 })
+    : config;
+  // A verified ordinary-release bundle may carry the next phase of planned same-epoch key rotation.
+  if (bundledNext && epoch === (config.epoch ?? 0) && (bundledNext.epoch ?? 0) === epoch) {
+    if (bundledNext.channel !== config.channel || bundledNext.manifestUrl !== config.manifestUrl || bundledNext.artifactPrefix !== config.artifactPrefix ||
+        JSON.stringify(bundledNext.recoveryKeys ?? []) !== JSON.stringify(config.recoveryKeys ?? []) || !bundledNext.keys.length) {
+      throw new Error("bundle_invalid: the bundled release trust anchor is inconsistent.");
+    }
+    next = bundledNext;
+  }
+  // An interrupted transition leaves inconsistent records, which effectiveConfig refuses to use.
+  await writeAtomic(join(layout.root, "trusted-channel.json"), JSON.stringify(next), 0o600);
+  await writeAtomic(join(layout.root, "sequence"), `${epoch}:${manifest.sequence}`, 0o600);
+  await writeAtomic(join(layout.root, "sequence-anchor"), releaseAnchorDigest(next), 0o600);
 }
 
 /** Releases the lock; `ownerName` is this owner's marker inside install.lock, so a deferred cleanup can prove it still owns the lock. */
@@ -342,16 +384,16 @@ export async function runUpdateCommand(raw: string[], runtime: SelfUpdateRuntime
       await rollback(layout, state, target, write);
       return;
     }
-    const config = runtime.config ?? await loadBundledConfig(layout);
+    const config = await effectiveConfig(layout, runtime.config ?? await loadBundledConfig(layout), state);
     const fetchImpl = runtime.fetch ?? fetch;
     const manifestBytes = await fetchLimited(fetchImpl, config.manifestUrl, MANIFEST_LIMIT);
     const signature = (await fetchLimited(fetchImpl, `${config.manifestUrl}.sig`, SIGNATURE_LIMIT)).toString("utf8");
     const manifest = verifyReleaseManifest(manifestBytes, signature, config, {
       now: (runtime.now ?? (() => new Date()))(),
-      ...(state.sequence !== undefined ? { highWaterSequence: state.sequence } : {}),
+      ...(state.sequence !== undefined ? { highWaterSequence: state.sequence, highWaterEpoch: state.epoch } : {}),
     });
     if (manifest.version === state.current) {
-      if (!args.check && manifest.sequence > (state.sequence ?? 0)) await writeAtomic(join(layout.root, "sequence"), String(manifest.sequence));
+      if (!args.check) await recordAcceptedRelease(layout, config, manifest);
       write(`AIBoard Runner ${state.current} is up to date.\n`);
       return;
     }
@@ -359,13 +401,13 @@ export async function runUpdateCommand(raw: string[], runtime: SelfUpdateRuntime
       write(`Update available: ${manifest.version} (installed ${state.current}). Run: aiboard update\n`);
       return;
     }
-    await installVersion(layout, state, target, manifest, fetchImpl, runtime, write);
+    await installVersion(layout, state, target, manifest, config, fetchImpl, runtime, write);
   } finally {
     await release();
   }
 }
 
-async function installVersion(layout: InstallLayout, state: InstallState, target: ReleaseTarget, manifest: ReleaseManifest,
+async function installVersion(layout: InstallLayout, state: InstallState, target: ReleaseTarget, manifest: ReleaseManifest, config: ReleaseChannelConfig,
   fetchImpl: typeof fetch, runtime: SelfUpdateRuntime, write: (message: string) => void): Promise<void> {
   const artifact = manifest.artifacts.find((entry) => entry.target === target);
   if (!artifact) throw new Error(`update_unavailable: Release ${manifest.version} has no bundle for ${target}.`);
@@ -392,7 +434,11 @@ async function installVersion(layout: InstallLayout, state: InstallState, target
     }
   }
   await smoke(destination, manifest.version);
-  await writeAtomic(join(layout.root, "sequence"), String(Math.max(manifest.sequence, state.sequence ?? 0)));
+  const bundledNext = await loadBundledConfig(layout, manifest.version).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  });
+  await recordAcceptedRelease(layout, config, manifest, bundledNext);
   await writeShim(layout, process.platform);
   await writeAtomic(join(layout.root, "previous"), state.current!);
   await writeAtomic(join(layout.root, "current"), manifest.version);
@@ -562,7 +608,7 @@ export async function runUninstallCommand(raw: string[], runtime: SelfUpdateRunt
     const versions = platform === "win32"
       ? (await readdir(layout.versionsDirectory).catch(() => [] as string[])).filter((name) => name !== layout.runningVersion).map((name) => join(layout.versionsDirectory, name))
       : [layout.versionsDirectory, layout.binDirectory];
-    const managed = [...versions, ...["current", "previous", "sequence", "install.json", "path-was-absent"].map((name) => join(layout.root, name))];
+    const managed = [...versions, ...["current", "previous", "sequence", "sequence-anchor", "trusted-channel.json", "install.json", "path-was-absent"].map((name) => join(layout.root, name))];
     const state = removeState ? userStatePaths({ platform, environment, home, root: layout.root }) : [];
     for (const path of [...managed, ...state]) {
       try { await rm(path, { recursive: true, force: true, maxRetries: 2 }); }

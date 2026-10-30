@@ -18,6 +18,8 @@ import {
 
 const key = generateKeyPairSync("rsa", { modulusLength: 3072 });
 const otherKey = generateKeyPairSync("rsa", { modulusLength: 3072 });
+const recoveryKey = generateKeyPairSync("rsa", { modulusLength: 3072 });
+const replacementKey = generateKeyPairSync("rsa", { modulusLength: 3072 });
 const origin = "http://127.0.0.1:1";
 const config: ReleaseChannelConfig = {
   channel: "stable", manifestUrl: `${origin}/release/stable/manifest.json`, artifactPrefix: `${origin}/downloads/`,
@@ -35,12 +37,13 @@ function bundle(version: string, extra: ArchiveFile[] = []): Buffer {
 }
 
 interface Release { manifest: Buffer; signature: string; archives: Map<string, Buffer> }
-function release(version: string, sequence: number, options: { archive?: Buffer; signWith?: typeof key.privateKey; checksumOf?: Buffer } = {}): Release {
+function release(version: string, sequence: number, options: { archive?: Buffer; signWith?: typeof key.privateKey; checksumOf?: Buffer; epoch?: number; keyId?: string; signingKeys?: ReleaseChannelConfig["keys"] } = {}): Release {
   const archive = options.archive ?? bundle(version);
   const hashed = options.checksumOf ?? archive;
   const manifest = Buffer.from(serializeManifest({
-    schemaVersion: 1, product: RELEASE_PRODUCT, channel: "stable", version, sequence, createdAt: "2026-10-29T00:00:00Z", expiresAt: "2027-10-29T00:00:00Z",
-    minInstallerVersion: INSTALLER_PROTOCOL, keyId: "test-key", nodeVersion: "24.18.0",
+    schemaVersion: options.epoch === undefined ? 1 : 2, product: RELEASE_PRODUCT, channel: "stable", version, sequence,
+    ...(options.epoch === undefined ? {} : { epoch: options.epoch, signingKeys: options.signingKeys ?? [] }), createdAt: "2026-10-29T00:00:00Z", expiresAt: "2027-10-29T00:00:00Z",
+    minInstallerVersion: INSTALLER_PROTOCOL, keyId: options.keyId ?? "test-key", nodeVersion: "24.18.0",
     artifacts: RELEASE_TARGETS.map((target) => ({
       target, format: targetFormat(target), preview: PREVIEW_TARGETS.has(target),
       bytes: target === "linux-x64" ? hashed.length : 1, sha256: target === "linux-x64" ? sha256(hashed) : "0".repeat(64),
@@ -85,10 +88,10 @@ test("update verifies, smoke-checks and atomically switches; rollback returns wi
     await runUpdateCommand(["--check"], runtime);
     assert.equal(await pointer(layout, "current"), "0.1.0", "--check changes nothing");
     await runUpdateCommand([], runtime);
-    assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "previous"), await pointer(layout, "sequence")], ["0.2.0", "0.1.0", "2"]);
+    assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "previous"), await pointer(layout, "sequence")], ["0.2.0", "0.1.0", "0:2"]);
     assert.deepEqual(smoked, ["0.2.0", "0.2.0"], "staged and final directories are both smoke-checked");
     await runUpdateCommand(["--rollback"], runtime);
-    assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "previous"), await pointer(layout, "sequence")], ["0.1.0", "0.2.0", "2"]);
+    assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "previous"), await pointer(layout, "sequence")], ["0.1.0", "0.2.0", "0:2"]);
     // Updating again re-proves the retained directory instead of downloading it.
     state.calls.length = 0;
     await runUpdateCommand([], runtime);
@@ -245,6 +248,37 @@ test("update fails closed and leaves the active version untouched", async () => 
     const offline = (async () => { throw new TypeError("fetch failed"); }) as unknown as typeof fetch;
     await assert.rejects(runUpdateCommand([], { layout, config, fetch: offline, write: () => undefined }), /update_offline: .*nothing was changed/);
     assert.equal(await pointer(layout, "current"), "0.1.0");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a recovery-signed epoch replaces compromised keys and preserves the new high-water mark", async () => {
+  const { dir, layout } = await installedLayout();
+  const recovery = trustedKeyFromPublicKey("recovery-key", recoveryKey.publicKey);
+  const replacement = trustedKeyFromPublicKey("replacement-key", replacementKey.publicKey);
+  const initial = { ...config, epoch: 0, recoveryKeys: [recovery] };
+  const state = { release: release("0.2.0", 1, { epoch: 1, signingKeys: [replacement] }), calls: [] as string[] };
+  const runtime = { layout, config: initial, fetch: fetchFrom(state), write: () => undefined, smoke: async () => undefined };
+  try {
+    await writeFile(join(layout.root, "sequence"), "1099511627776"); // Legacy bare integer is epoch 0.
+    await assert.rejects(runUpdateCommand([], runtime), /recovery signature/);
+    state.release = release("0.2.0", 1, { epoch: 1, signingKeys: [replacement], keyId: recovery.keyId, signWith: recoveryKey.privateKey });
+    await runUpdateCommand([], runtime);
+    assert.equal(await pointer(layout, "sequence"), "1:1");
+    assert.equal(JSON.parse((await pointer(layout, "trusted-channel.json"))!).keys[0].keyId, replacement.keyId);
+    assert.match((await pointer(layout, "sequence-anchor"))!, /^[0-9a-f]{64}$/);
+
+    state.release = release("0.3.0", 2, { epoch: 1, keyId: replacement.keyId, signWith: replacementKey.privateKey });
+    await runUpdateCommand([], runtime);
+    assert.equal(await pointer(layout, "sequence"), "1:2");
+    state.release = release("0.4.0", 3, { epoch: 1 });
+    await assert.rejects(runUpdateCommand([], runtime), /signature does not verify/);
+    state.release = release("0.4.0", 3, { epoch: 1, keyId: recovery.keyId, signWith: recoveryKey.privateKey });
+    await assert.rejects(runUpdateCommand([], runtime), /recovery key cannot sign/);
+    state.release = release("0.4.0", 1, { epoch: 1, keyId: replacement.keyId, signWith: replacementKey.privateKey });
+    await assert.rejects(runUpdateCommand([], runtime), /already accepted/);
+    state.release = release("0.4.0", 999, { epoch: 0, keyId: replacement.keyId, signWith: replacementKey.privateKey });
+    await assert.rejects(runUpdateCommand([], runtime), /older.*epoch/);
+    assert.equal(await pointer(layout, "current"), "0.3.0");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

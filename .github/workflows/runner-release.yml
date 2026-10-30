@@ -165,6 +165,8 @@ jobs:
         with:
           name: bundles-ubuntu-latest
           path: dist/release
+      - name: Require an offline recovery public key before signing
+        run: node -e "const c=require('./release/channel.json'); if (!Array.isArray(c.recoveryKeys) || c.recoveryKeys.length === 0) throw new Error('Pin an offline recovery key before signing a release.')"
       - name: Sign (key from the release environment; never printed)
         env:
           AIBOARD_RELEASE_SIGNING_KEY: ${{ secrets.AIBOARD_RELEASE_SIGNING_KEY }}
