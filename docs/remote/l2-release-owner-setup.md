@@ -114,7 +114,7 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
 ## Key compromise
 1. Copy the channel configuration that authenticated the committed manifest to `release/previous-channel.json`, then remove the compromised key from `release/channel.json`. The previous configuration is used only to authenticate the repository's committed history for the sequence check; it is not shipped as a client trust anchor.
 2. Pin a new key and replace the secret.
-3. Cut a release with a sequence higher than anything the attacker could have published.
+3. Do not assume a higher sequence is always available. A compromised signer could have issued the protocol maximum (`2 ** 40`), or an unobserved sequence higher than the one in the repository. Reinstall with the new trust anchor and follow a separately reviewed recovery procedure for preserving user state; do not simply reset an existing installation's sequence or claim an update can recover it. A durable release-sequence reservation and an exhaustion/reset procedure are not implemented yet, so signing remains blocked until those are resolved.
 
 Installed Runners that only trust the compromised key cannot be fixed by update. They must reinstall with the one-line installer. Announce this. Installers served after the fix trust only the new key.
 
