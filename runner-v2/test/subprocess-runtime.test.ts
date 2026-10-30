@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { spawn } from "node:child_process";
 import { inspect } from "node:util";
+import { assertSubprocessCleanupSettled } from "../src/inspection-cleanup.js";
+import { describeFailureChain, describeFailureWithCauses } from "../src/lifecycle-diagnostics.js";
 
 import { createChildEnvironmentFactory } from "../src/child-environment.js";
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -3325,4 +3327,58 @@ test("subprocess runtime durably records the selected backend semantic capabilit
   const record = f.store.readByInvocation("task11-capabilities");
   assert.ok(record?.backendBinding);
   assert.deepEqual(record.backendBinding.capabilities, capabilities);
+});
+
+test("backend_unavailable keeps the failed backend operation, its system error fields, and the process identity (diagnostic only)", async () => {
+  const f = fixture();
+  const failure = Object.assign(new Error("OpenProcess failed"), { code: "EPERM", errno: -4048, syscall: "OpenProcess" });
+  f.backend.observeGate = Promise.reject(new Error("observation transport closed", { cause: failure }));
+  const thrown = await f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {} }).then(() => undefined, (error: unknown) => error);
+  assert.ok(thrown instanceof SubprocessRuntimeError);
+  assert.equal(thrown.code, "backend_unavailable");
+  assert.equal(thrown.message, "Process observation or termination failed.");
+  const chain = describeFailureChain(thrown);
+  assert.match(chain, /\[backend_observe\] Error: observation transport closed \{phase=observe state=\w+ backend=fake rootPid=42/);
+  assert.match(chain, /caused by Error\(code=EPERM errno=-4048 syscall=OpenProcess\): OpenProcess failed/);
+  const record = f.store.readByInvocation("invoke-1")!;
+  assert.equal(record.state, "backend_unavailable");
+  const reason = record.history.at(-1)?.reason ?? "";
+  assert.match(reason, /^Process observation or termination failed\. \[backend_observe\] Error: observation transport closed \{phase=observe state=running backend=fake rootPid=42 pendingEffects=backend_observe:started\}/);
+  assert.match(reason, /code=EPERM errno=-4048 syscall=OpenProcess/);
+  assert.doesNotMatch(reason, /opaque-1/, "the opaque process identity is never written to diagnostics");
+  assert.throws(() => assertSubprocessCleanupSettled(f.store as never), /cleanup remains unverified in backend_unavailable\. Last transition: Process observation or termination failed\. \[backend_observe\]/);
+  assert.match(describeFailureWithCauses(thrown), /^Process observation or termination failed\. \[diagnostic: SubprocessRuntimeError\(code=backend_unavailable\): .*\[backend_observe\]/);
+});
+
+test("a lease heartbeat failure during observation is named as such, not as an observe failure (diagnostic only)", async () => {
+  const backend = new Backend();
+  const clock = new Clock();
+  let failNextRead = false;
+  let trappedAt = "";
+  // The kernel keeps the clock's functions, so the trap is installed before the runtime is built.
+  clock.now = () => {
+    if (failNextRead) {
+      failNextRead = false;
+      const error = new Error("lease renewal stalled");
+      trappedAt = error.stack ?? "";
+      throw error;
+    }
+    return new Date(clock.current);
+  };
+  const outputs = new Outputs();
+  const composed = runtimeFor({ kind: "memory" }, new Uint8Array(32).fill(9), backend, clock, outputs, { leaseDurationMs: 1_000, leaseHeartbeatMs: 5 });
+  const gate = deferred();
+  backend.observeGate = gate.promise;
+  backend.onObserve = () => {
+    // Once observation is under way, the next clock read is the heartbeat's lease renewal: it fails
+    // once, as a stalled store would on a slow machine.
+    setTimeout(() => { failNextRead = true; setTimeout(() => gate.resolve(), 50); }, 1);
+  };
+  const thrown = await composed.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {} }).then(() => undefined, (error: unknown) => error);
+  assert.match(trappedAt, /startHeartbeat|renew/, trappedAt);
+  // Existing control flow: the heartbeat failure dropped the fence, so recording backend_unavailable
+  // fails and that recording error escapes. The diagnostic now names the failure it could not record.
+  assert.ok(thrown instanceof Error && thrown.message === "Process owner fencing authority is unavailable.", String(thrown));
+  assert.match(describeFailureChain(thrown), /\{while recording backend_unavailable: \[backend_observe\.lease_heartbeat\] Error: lease renewal stalled \{effect settled before the heartbeat stopped\}/);
+  assert.notEqual(composed.readOnlyStore.readByInvocation("invoke-1")!.state, "backend_unavailable");
 });

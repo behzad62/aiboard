@@ -78,7 +78,9 @@ export function assertSubprocessCleanupSettled(
       record.cleanup.state === "not_required";
     const cleaned = record?.state === "cleaned" && record.cleanup.state === "verified_empty";
     if (!record || record.pendingEffects.length || (!noLaunch && !cleaned)) {
-      throw new Error(`Subprocess ${invocationId} cleanup remains unverified in ${record?.state ?? "missing"}.`);
+      // Diagnostic only: the last transition reason carries the failure detail recorded for this state.
+      const reason = record?.history?.at(-1)?.reason;
+      throw new Error(`Subprocess ${invocationId} cleanup remains unverified in ${record?.state ?? "missing"}.${reason ? ` Last transition: ${reason}` : ""}`);
     }
   }
 }

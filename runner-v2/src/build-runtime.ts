@@ -173,6 +173,7 @@ import {
   type PlanRiskLevel,
   type PlanRiskReason,
 } from "./plan-critique-contracts.js";
+import { describeFailureWithCauses } from "./lifecycle-diagnostics.js";
 export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
@@ -4694,7 +4695,8 @@ export class BuildRuntime {
       } catch (error) {
         if (boundarySignal.aborted) return await boundaryInterrupted();
         await this.recordCleanupSearch("verification");
-        return this.pauseForDeliveryGate(task.id, "delivery_boundary_unavailable", error instanceof Error ? error.message : String(error));
+        // Diagnostic only: the pause detail keeps the message, then the cause chain when there is one.
+        return this.pauseForDeliveryGate(task.id, "delivery_boundary_unavailable", describeFailureWithCauses(error));
       }
       if (boundarySignal.aborted) return await boundaryInterrupted();
       this.store.append({

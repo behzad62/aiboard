@@ -34,6 +34,8 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { captureGitBaseline, NativeBuildFactory, runGit } from "./support/git-fixture.js";
 import { qualificationArtifactRoot, writeQualificationDiagnostics } from "./support/qualification-harness.js";
 import { observeAsyncFailures } from "./support/async-failure-observer.js";
+import { reportProcessResidue } from "./support/process-residue.js";
+import { describeFailureChain } from "../src/lifecycle-diagnostics.js";
 import { AuthenticatedWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { WindowsJobObjectProcessBackend } from "../src/windows-process-backend.js";
 
@@ -1416,6 +1418,14 @@ test("native patch factory applies refused then normal V4A patches through the w
       }
     }
     if (teardownErrors.length > 0) {
+      // Diagnostic only: each closer's full cause chain, then what still holds this process (active
+      // handles and live descendants) now and later, so a teardown that leaves the job hanging names why.
+      try {
+        teardownErrors.forEach((error, index) => process.stderr.write(`[factory-diagnostic] closer ${index + 1}/${teardownErrors.length}: ${describeFailureChain(error)}\n`));
+        reportProcessResidue(FACTORY_DIAGNOSTIC_SCENARIO, (line) => process.stderr.write(`[factory-diagnostic] ${line}`));
+      } catch (captureError) {
+        diagnosticFailures.push(captureError);
+      }
       try {
         if (diagnosticEvidenceRoot === undefined) {
           diagnosticEvidenceRoot = qualificationArtifactRoot();

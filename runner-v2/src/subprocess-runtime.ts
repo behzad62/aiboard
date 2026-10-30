@@ -7,6 +7,7 @@ import type {
 } from "./bounded-output-spool.js";
 import type { ChildEnvironmentFactory } from "./child-environment.js";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
+import { annotateFailure, describeFailureChain, lifecycleTrace } from "./lifecycle-diagnostics.js";
 import {
   lifecycleScopeSatisfies,
   parseExecutionInvocationIntent,
@@ -853,11 +854,15 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           fence,
         ),
     );
+    lifecycleTrace("process.launched", { invocationId: record.invocationId, backend: binding.backendId, rootPid: binding.rootPid });
     let observedJournal: Awaited<typeof observePromise>;
     let observation: ReturnType<typeof parseProcessObservation>;
+    let phase = "observe";
     try {
       if (record.stopIntent) {
+        phase = "escalate_before_observe";
         await this.escalate(record);
+        phase = "observe_after_escalate";
         observedJournal = await observePromise;
       } else {
         const race = await Promise.race([
@@ -868,17 +873,31 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           stopPromise.then((stop) => ({ kind: "stop" as const, stop })),
         ]);
         if (race.kind === "stop") {
+          lifecycleTrace("process.stop_requested", { invocationId: record.invocationId, reason: race.stop.reason });
           record = this.requestStopLatest(
             record.invocationId,
             race.stop.reason,
           );
+          phase = `escalate_on_${race.stop.reason}`;
           await this.escalate(record);
+          phase = "observe_after_escalate";
           observedJournal = await observePromise;
         } else observedJournal = race.value;
       }
+      phase = "parse_observation";
       observation = parseProcessObservation(observedJournal.result);
     } catch (error) {
       const current = this.current(record.invocationId);
+      // Diagnostic only: the durable detail and the thrown error's cause chain name the failed
+      // operation, its system error fields, and the process identity. The message stays unchanged.
+      let diagnostic = "(diagnostic unavailable)";
+      try {
+        annotateFailure(error, { context: processFailureContext(phase, current, binding) });
+        diagnostic = describeFailureChain(error);
+      } catch {
+        // Diagnostics never change the failure path.
+      }
+      lifecycleTrace("process.backend_unavailable", { invocationId: record.invocationId, diagnostic });
       if (
         [
           "launching",
@@ -888,18 +907,27 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           "verifying_empty",
           "backend_unavailable",
         ].includes(current.state)
-      )
-        this.applyFailure(
-          current,
-          "backend_unavailable",
-          "Process observation or termination failed.",
-        );
+      ) {
+        try {
+          this.applyFailure(
+            current,
+            "backend_unavailable",
+            `Process observation or termination failed. ${diagnostic}`,
+          );
+        } catch (recordError) {
+          // Unchanged control flow: the recording error still escapes. A lease or fence failure has
+          // already dropped the fence, so name the failure that could not be recorded.
+          annotateFailure(recordError, { context: `while recording backend_unavailable: ${diagnostic}` });
+          throw recordError;
+        }
+      }
       throw new SubprocessRuntimeError(
         "backend_unavailable",
         "Process observation or termination failed.",
         { cause: error },
       );
     }
+    lifecycleTrace("process.observed", { invocationId: record.invocationId, exitCode: observation.exitCode, signal: observation.signal });
     record = this.current(record.invocationId);
     record = this.mutate({
       type: "record_exit",
@@ -1254,6 +1282,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       } catch (error) {
         detail = error instanceof Error ? error.message : "Signal failed";
       }
+      lifecycleTrace("process.signal", { invocationId: record.invocationId, action, reattested: Boolean(selected && binding), ...(detail ? { detail } : {}) });
       if (selected && binding) {
         const signalled = await this.journaledEffect(
           record.invocationId,
@@ -1279,6 +1308,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         ...(detail ? { detail } : {}),
         ...(signalEffectId ? { effectId: signalEffectId } : {}),
       });
+      lifecycleTrace("process.signal_result", { invocationId: record.invocationId, action, outcome, state: record.state });
       if (record.state === "exited") return;
       if (outcome === "failed") {
         if (record.state === "cleanup_blocked")
@@ -1965,6 +1995,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     active.set(effectId, family);
     this.activeJournalEffects.set(invocationId, active);
     const heartbeat = this.startHeartbeat(invocationId, fence);
+    lifecycleTrace("effect.begin", { invocationId, family, effectId });
     let result: T | undefined;
     let failure: unknown;
     let rejected = false;
@@ -1984,6 +2015,16 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     } catch (error) {
       fenceFailure = error;
     }
+    // Diagnostic only: name which of the three outcomes ended the effect. A lease or fence failure
+    // replaces the effect's own outcome, so the log must say so.
+    if (rejected) annotateFailure(failure, { operation: family });
+    if (heartbeatFailure != null) annotateFailure(heartbeatFailure, { operation: `${family}.lease_heartbeat`, context: `effect ${rejected ? "rejected" : "settled"} before the heartbeat stopped` });
+    if (fenceFailure !== undefined) annotateFailure(fenceFailure, { operation: `${family}.fence_check`, context: `effect ${rejected ? "rejected" : "settled"} before the fence check` });
+    lifecycleTrace("effect.end", {
+      invocationId, family, effectId,
+      outcome: heartbeatFailure != null ? "lease_heartbeat_failed" : fenceFailure !== undefined ? "fence_failed" : rejected ? "rejected" : "settled",
+      ...(rejected ? { error: describeFailureChain(failure) } : {}),
+    });
     if (heartbeatFailure != null || fenceFailure !== undefined) {
       this.fences.delete(invocationId);
       throw heartbeatFailure ?? fenceFailure;
@@ -2063,6 +2104,18 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       ? Promise.race(candidates)
       : new Promise(() => undefined);
   }
+}
+
+/** Diagnostic text for a backend_unavailable failure: never the opaque identity or fencing token. */
+function processFailureContext(
+  phase: string,
+  record: DurableSubprocessRecord,
+  binding: { readonly backendId: string; readonly rootPid?: number },
+): string {
+  const escalation = record.escalation.map((entry) => `${entry.action}:${entry.outcome}${entry.detail ? `(${entry.detail})` : ""}`).join(",");
+  const pending = record.pendingEffects.map((entry) => `${entry.family}:${entry.phase}`).join(",");
+  return `phase=${phase} state=${record.state} backend=${binding.backendId} rootPid=${binding.rootPid ?? "unknown"}` +
+    `${escalation ? ` escalation=${escalation}` : ""}${pending ? ` pendingEffects=${pending}` : ""}`;
 }
 
 export function createSubprocessRuntimeKernel(
