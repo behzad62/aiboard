@@ -3,6 +3,8 @@
   "channel": "stable",
   "manifestUrl": "https://aiboard.me/release/stable/manifest.json",
   "artifactPrefix": "https://github.com/behzad62/aiboard/releases/download/",
+  "epoch": 0,
+  "recoveryKeys": [],
   "keys": [
     {
       "keyId": "aiboard-release-2026a",

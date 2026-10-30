@@ -10,8 +10,8 @@
 //   <root>/bin/aiboard(.cmd)   PATH shims
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { chmod, mkdir, readdir, readFile, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { existsSync, type Stats } from "node:fs";
+import { chmod, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 import { extractFiles, readArchive } from "./release-archive.js";
 import {
-  isReleaseVersion, parseReleaseChannelConfig, RELEASE_PRODUCT, RELEASE_TARGETS, verifyReleaseManifest,
+  isReleaseVersion, parseReleaseChannelConfig, releaseAnchorDigest, RELEASE_PRODUCT, RELEASE_TARGETS, verifyReleaseEpochOpening, verifyReleaseManifest,
   type ReleaseChannelConfig, type ReleaseManifest, type ReleaseTarget,
 } from "./release-manifest.js";
 
@@ -59,8 +59,11 @@ export interface SelfUpdateRuntime {
 
 const MANIFEST_LIMIT = 64 * 1024;
 const SIGNATURE_LIMIT = 4 * 1024;
+const MAX_RECOVERY_EPOCHS = 16;
 const PROFILE_MARKER_START = "# >>> aiboard installer >>>";
 const PROFILE_MARKER_END = "# <<< aiboard installer <<<";
+const PROFILE_BLOCK = [PROFILE_MARKER_START, 'case ":${PATH}:" in *":$HOME/.aiboard/bin:"*) ;; *) export PATH="$HOME/.aiboard/bin:$PATH" ;; esac', PROFILE_MARKER_END].join("\n");
+const FISH_CONFIG = "contains -- $HOME/.aiboard/bin $PATH; or set -gx PATH $HOME/.aiboard/bin $PATH\n";
 export const POSIX_PROFILE_FILES = [".profile", ".bashrc", ".bash_profile", ".zshrc", ".zprofile"] as const;
 export const UNINSTALL_PENDING_SCRIPT = "uninstall-pending.cmd";
 
@@ -122,8 +125,8 @@ function notManaged(): Error {
   return new Error("not_managed_install: This aiboard was not installed by the one-line installer (developer checkout or ZIP). Update it with git pull or reinstall from https://aiboard.me/runner-guide.");
 }
 
-async function loadBundledConfig(layout: InstallLayout): Promise<ReleaseChannelConfig> {
-  const path = join(layout.versionsDirectory, layout.runningVersion, "app", "runner-v2", "release-channel.json");
+async function loadBundledConfig(layout: InstallLayout, version = layout.runningVersion): Promise<ReleaseChannelConfig> {
+  const path = join(layout.versionsDirectory, version, "app", "runner-v2", "release-channel.json");
   return parseReleaseChannelConfig(JSON.parse(await readFile(path, "utf8")));
 }
 
@@ -140,24 +143,72 @@ async function readVersionPointer(path: string): Promise<string | undefined> {
   return value;
 }
 
-export interface InstallState { current?: string; previous?: string; sequence?: number }
+export interface InstallState { current?: string; previous?: string; epoch?: number; sequence?: number }
 
 export async function readInstallState(layout: InstallLayout): Promise<InstallState> {
-  const sequenceText = await readPointer(join(layout.root, "sequence"));
-  const sequence = sequenceText === undefined ? undefined : Number(sequenceText);
-  if (sequence !== undefined && (!Number.isSafeInteger(sequence) || sequence < 1)) throw new Error("install_state_invalid: sequence is corrupt; reinstall with the one-line installer.");
+  const sequencePath = join(layout.root, "sequence");
+  const sequenceText = await readPointer(sequencePath);
+  if (sequenceText === undefined && existsSync(sequencePath)) throw new Error("install_state_invalid: sequence is corrupt; reinstall with the one-line installer.");
+  const match = sequenceText === undefined ? undefined : /^(?:(0|[1-9][0-9]*):)?([1-9][0-9]*)$/.exec(sequenceText);
+  const epoch = match ? Number(match[1] ?? 0) : undefined;
+  const sequence = match ? Number(match[2]) : undefined;
+  if (sequenceText !== undefined && (!match || !Number.isSafeInteger(sequence) || sequence! > 2 ** 40 || !Number.isSafeInteger(epoch) || epoch! > 2 ** 20)) throw new Error("install_state_invalid: sequence is corrupt; reinstall with the one-line installer.");
   return {
     current: await readVersionPointer(join(layout.root, "current")),
     previous: await readVersionPointer(join(layout.root, "previous")),
-    ...(sequence !== undefined ? { sequence } : {}),
+    ...(sequence !== undefined ? { epoch, sequence } : {}),
   };
 }
 
-async function writeAtomic(path: string, content: string): Promise<void> {
+async function writeAtomic(path: string, content: string, mode = 0o644): Promise<void> {
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, content, { flag: "wx", mode: 0o644 });
+  await writeFile(temporary, content, { flag: "wx", mode });
   try { await rename(temporary, path); }
   catch (error) { await unlink(temporary).catch(() => undefined); throw error; }
+}
+
+async function effectiveConfig(layout: InstallLayout, bundled: ReleaseChannelConfig, state: InstallState): Promise<ReleaseChannelConfig> {
+  bundled = parseReleaseChannelConfig(bundled);
+  const localPath = join(layout.root, "trusted-channel.json");
+  const local = await readPointer(localPath);
+  if (local === undefined && existsSync(localPath)) throw new Error("install_state_invalid: the stored release trust anchor is empty.");
+  const config = local === undefined ? bundled : parseReleaseChannelConfig(JSON.parse(local));
+  if (config.channel !== bundled.channel || JSON.stringify(config.recoveryKeys ?? []) !== JSON.stringify(bundled.recoveryKeys ?? [])) {
+    throw new Error("install_state_invalid: the stored trust anchor does not match this installation; reinstall with the one-line installer.");
+  }
+  const digestPath = join(layout.root, "sequence-anchor");
+  const digest = await readPointer(digestPath);
+  if (digest === undefined && existsSync(digestPath)) throw new Error("install_state_invalid: the stored release trust digest is empty.");
+  if ((digest !== undefined && digest !== releaseAnchorDigest(config)) || (local !== undefined && digest === undefined) ||
+      (state.epoch !== undefined && state.epoch !== (config.epoch ?? 0))) {
+    throw new Error("install_state_invalid: the stored release trust anchor is inconsistent; reinstall with the one-line installer.");
+  }
+  return config;
+}
+
+function acceptedConfig(config: ReleaseChannelConfig, manifest: ReleaseManifest, bundledNext?: ReleaseChannelConfig): ReleaseChannelConfig {
+  const epoch = manifest.epoch ?? 0;
+  let next = epoch > (config.epoch ?? 0)
+    ? parseReleaseChannelConfig({ ...config, epoch, keys: manifest.signingKeys, minSequence: 1 })
+    : config;
+  // A verified ordinary-release bundle may carry the next phase of planned same-epoch key rotation.
+  if (bundledNext && epoch === (config.epoch ?? 0) && (bundledNext.epoch ?? 0) === epoch) {
+    if (bundledNext.channel !== config.channel || bundledNext.manifestUrl !== config.manifestUrl || bundledNext.artifactPrefix !== config.artifactPrefix ||
+        JSON.stringify(bundledNext.recoveryKeys ?? []) !== JSON.stringify(config.recoveryKeys ?? []) || !bundledNext.keys.length) {
+      throw new Error("bundle_invalid: the bundled release trust anchor is inconsistent.");
+    }
+    next = bundledNext;
+  }
+  return next;
+}
+
+async function recordAcceptedRelease(layout: InstallLayout, config: ReleaseChannelConfig, manifest: ReleaseManifest, bundledNext?: ReleaseChannelConfig): Promise<void> {
+  const epoch = manifest.epoch ?? 0;
+  const next = acceptedConfig(config, manifest, bundledNext);
+  // An interrupted transition leaves inconsistent records, which effectiveConfig refuses to use.
+  await writeAtomic(join(layout.root, "trusted-channel.json"), JSON.stringify(next), 0o600);
+  await writeAtomic(join(layout.root, "sequence"), `${epoch}:${manifest.sequence}`, 0o600);
+  await writeAtomic(join(layout.root, "sequence-anchor"), releaseAnchorDigest(next), 0o600);
 }
 
 /** Releases the lock; `ownerName` is this owner's marker inside install.lock, so a deferred cleanup can prove it still owns the lock. */
@@ -232,6 +283,44 @@ async function fetchLimited(fetchImpl: typeof fetch, url: string, limit: number)
   return Buffer.concat(chunks);
 }
 
+async function verifyCurrentRelease(bytes: Buffer, signature: string, initial: ReleaseChannelConfig, state: InstallState,
+  fetchImpl: typeof fetch, now: Date): Promise<{ manifest: ReleaseManifest; config: ReleaseChannelConfig }> {
+  const options = { now, ...(state.sequence !== undefined ? { highWaterSequence: state.sequence, highWaterEpoch: state.epoch } : {}) };
+  try {
+    const manifest = verifyReleaseManifest(bytes, signature, initial, options);
+    if ((manifest.epoch ?? 0) - (initial.epoch ?? 0) > MAX_RECOVERY_EPOCHS) throw new Error("too many epochs");
+    return { manifest, config: initial };
+  } catch (error) {
+    // This untrusted field is only a bounded hint for fixed sibling URLs; no keys or release data are trusted from it.
+    let epoch: unknown;
+    try {
+      const hint = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { schemaVersion?: unknown; epoch?: unknown };
+      if (hint.schemaVersion === 2) epoch = hint.epoch;
+    } catch { /* Preserve the original verification error. */ }
+    if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= (initial.epoch ?? 0)) throw error;
+    try {
+      if (epoch > 2 ** 20) throw new Error("invalid epoch");
+      if (epoch - (initial.epoch ?? 0) > MAX_RECOVERY_EPOCHS) throw new Error("too many epochs");
+      let config = initial;
+      let highWaterSequence = state.sequence;
+      let highWaterEpoch = state.epoch;
+      for (let next = (initial.epoch ?? 0) + 1; next <= epoch; next += 1) {
+        const url = new URL(`epoch-${next}.json`, initial.manifestUrl).href;
+        const openingBytes = await fetchLimited(fetchImpl, url, MANIFEST_LIMIT);
+        const openingSignature = (await fetchLimited(fetchImpl, `${url}.sig`, SIGNATURE_LIMIT)).toString("utf8");
+        const opening = verifyReleaseEpochOpening(openingBytes, openingSignature, config, now);
+        config = acceptedConfig(config, opening);
+        highWaterEpoch = opening.epoch;
+        highWaterSequence = opening.sequence;
+      }
+      const manifest = verifyReleaseManifest(bytes, signature, config, { now, highWaterEpoch, highWaterSequence });
+      return { manifest, config };
+    } catch (cause) {
+      throw new Error(`release_manifest_rejected: Could not verify the release recovery history (${cause instanceof Error ? cause.message : String(cause)}); reinstall with the one-line installer.`);
+    }
+  }
+}
+
 function sha256(data: Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
@@ -304,13 +393,15 @@ async function cleanOldVersions(layout: InstallLayout, keep: ReadonlySet<string>
   for (const entry of entries) {
     if (keep.has(entry)) continue;
     const path = join(layout.versionsDirectory, entry);
-    if (entry.startsWith(".staging-")) {
-      const age = Date.now() - (await stat(path).catch(() => ({ mtimeMs: Date.now() }))).mtimeMs;
-      if (age < 60 * 60_000) continue;
-    } else if (!isReleaseVersion(entry)) continue;
+    // A staging name alone does not prove this run created it.
+    if (!isReleaseVersion(entry)) continue;
     // A Runner still running an old version keeps its files on Windows; retried on the next update.
     await rm(path, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+function sameDirectory(before: Stats, after: Stats): boolean {
+  return before.isDirectory() && after.isDirectory() && before.dev === after.dev && before.ino === after.ino;
 }
 
 interface UpdateArguments { check: boolean; rollback: boolean }
@@ -342,16 +433,13 @@ export async function runUpdateCommand(raw: string[], runtime: SelfUpdateRuntime
       await rollback(layout, state, target, write);
       return;
     }
-    const config = runtime.config ?? await loadBundledConfig(layout);
+    const initial = await effectiveConfig(layout, runtime.config ?? await loadBundledConfig(layout), state);
     const fetchImpl = runtime.fetch ?? fetch;
-    const manifestBytes = await fetchLimited(fetchImpl, config.manifestUrl, MANIFEST_LIMIT);
-    const signature = (await fetchLimited(fetchImpl, `${config.manifestUrl}.sig`, SIGNATURE_LIMIT)).toString("utf8");
-    const manifest = verifyReleaseManifest(manifestBytes, signature, config, {
-      now: (runtime.now ?? (() => new Date()))(),
-      ...(state.sequence !== undefined ? { highWaterSequence: state.sequence } : {}),
-    });
+    const manifestBytes = await fetchLimited(fetchImpl, initial.manifestUrl, MANIFEST_LIMIT);
+    const signature = (await fetchLimited(fetchImpl, `${initial.manifestUrl}.sig`, SIGNATURE_LIMIT)).toString("utf8");
+    const { manifest, config } = await verifyCurrentRelease(manifestBytes, signature, initial, state, fetchImpl, (runtime.now ?? (() => new Date()))());
     if (manifest.version === state.current) {
-      if (!args.check && manifest.sequence > (state.sequence ?? 0)) await writeAtomic(join(layout.root, "sequence"), String(manifest.sequence));
+      if (!args.check) await recordAcceptedRelease(layout, config, manifest);
       write(`AIBoard Runner ${state.current} is up to date.\n`);
       return;
     }
@@ -359,13 +447,13 @@ export async function runUpdateCommand(raw: string[], runtime: SelfUpdateRuntime
       write(`Update available: ${manifest.version} (installed ${state.current}). Run: aiboard update\n`);
       return;
     }
-    await installVersion(layout, state, target, manifest, fetchImpl, runtime, write);
+    await installVersion(layout, state, target, manifest, config, fetchImpl, runtime, write);
   } finally {
     await release();
   }
 }
 
-async function installVersion(layout: InstallLayout, state: InstallState, target: ReleaseTarget, manifest: ReleaseManifest,
+async function installVersion(layout: InstallLayout, state: InstallState, target: ReleaseTarget, manifest: ReleaseManifest, config: ReleaseChannelConfig,
   fetchImpl: typeof fetch, runtime: SelfUpdateRuntime, write: (message: string) => void): Promise<void> {
   const artifact = manifest.artifacts.find((entry) => entry.target === target);
   if (!artifact) throw new Error(`update_unavailable: Release ${manifest.version} has no bundle for ${target}.`);
@@ -381,18 +469,36 @@ async function installVersion(layout: InstallLayout, state: InstallState, target
       throw new Error("update_checksum_mismatch: The downloaded bundle does not match the signed release manifest; nothing was installed.");
     }
     const staging = join(layout.versionsDirectory, `.staging-${manifest.version}-${process.pid}-${Date.now()}`);
+    const extracted = join(staging, "bundle");
+    let created: Stats | undefined;
     try {
-      await extractFiles(readArchive(archive, artifact.format), staging);
-      await verifyVersionDirectory(staging, { version: manifest.version, target });
-      await smoke(staging, manifest.version);
-      await rename(staging, destination);
+      await mkdir(staging);
+      created = await lstat(staging);
+      if (!created.isDirectory()) throw new Error("update_staging_invalid: The staging directory changed during creation.");
+      await extractFiles(readArchive(archive, artifact.format), extracted);
+      await verifyVersionDirectory(extracted, { version: manifest.version, target });
+      await smoke(extracted, manifest.version);
+      if (!sameDirectory(created, await lstat(staging))) throw new Error("update_staging_invalid: The staging directory changed during extraction.");
+      await rename(extracted, destination);
+      if (!sameDirectory(created, await lstat(staging))) throw new Error("update_staging_invalid: The staging directory changed during extraction.");
+      await rmdir(staging);
+      created = undefined;
     } catch (error) {
-      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      if (created?.isDirectory()) {
+        const current = await lstat(staging).catch(() => undefined);
+        if (current && sameDirectory(created, current)) {
+          await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+        }
+      }
       throw error;
     }
   }
   await smoke(destination, manifest.version);
-  await writeAtomic(join(layout.root, "sequence"), String(Math.max(manifest.sequence, state.sequence ?? 0)));
+  const bundledNext = await loadBundledConfig(layout, manifest.version).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  });
+  await recordAcceptedRelease(layout, config, manifest, bundledNext);
   await writeShim(layout, process.platform);
   await writeAtomic(join(layout.root, "previous"), state.current!);
   await writeAtomic(join(layout.root, "current"), manifest.version);
@@ -442,26 +548,63 @@ export function userStatePaths(options: { platform: NodeJS.Platform; environment
 }
 
 export function stripProfileBlock(content: string): string {
-  const lines = content.split("\n");
-  const kept: string[] = [];
-  let inside = false;
-  for (const line of lines) {
-    if (line.trim() === PROFILE_MARKER_START) { inside = true; continue; }
-    if (inside && line.trim() === PROFILE_MARKER_END) { inside = false; continue; }
-    if (!inside) kept.push(line);
+  let offset = 0;
+  for (;;) {
+    const start = content.indexOf(PROFILE_BLOCK, offset);
+    if (start < 0) return content;
+    const end = start + PROFILE_BLOCK.length;
+    if ((start === 0 || content[start - 1] === "\n") && (end === content.length || content[end] === "\n")) {
+      content = content.slice(0, start) + content.slice(end + (content[end] === "\n" ? 1 : 0));
+      offset = start;
+    } else {
+      offset = end;
+    }
   }
-  return inside ? content : kept.join("\n");
 }
 
-async function removePosixPath(home: string): Promise<void> {
+function sameRegularFile(before: Stats, after: Stats): boolean {
+  return before.isFile() && after.isFile() && before.dev === after.dev && before.ino === after.ino &&
+    before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
+}
+
+async function removePosixPath(home: string, write: (message: string) => void): Promise<void> {
+  let canonicalHome: string;
+  try { canonicalHome = await realpath(home); } catch { return; }
   for (const name of POSIX_PROFILE_FILES) {
-    const path = join(home, name);
-    let content: string;
-    try { content = await readFile(path, "utf8"); } catch { continue; }
-    const stripped = stripProfileBlock(content);
-    if (stripped !== content) await writeAtomic(path, stripped);
+    const path = join(canonicalHome, name);
+    try {
+      const before = await lstat(path);
+      if (!before.isFile()) continue;
+      const bytes = await readFile(path);
+      const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      const stripped = stripProfileBlock(content);
+      if (stripped === content || !sameRegularFile(before, await lstat(path))) continue;
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      await writeFile(temporary, stripped, { flag: "wx", mode: before.mode & 0o7777 });
+      let temporaryOwned = true;
+      try {
+        if (!sameRegularFile(before, await lstat(path)) || !(await readFile(path)).equals(bytes)) continue;
+        await rename(temporary, path);
+        temporaryOwned = false;
+      } finally { if (temporaryOwned) await unlink(temporary).catch(() => undefined); }
+    } catch { /* Leave unreadable or changed user files alone. */ }
   }
-  await unlink(join(home, ".config", "fish", "conf.d", "aiboard.fish")).catch(() => undefined);
+
+  const fishParent = join(canonicalHome, ".config", "fish", "conf.d");
+  const fishName = join(fishParent, "aiboard.fish");
+  const kept = () => write(`Kept ${fishName}: it is not the unchanged installer-owned fish configuration.\n`);
+  try {
+    const parent = await realpath(fishParent);
+    const rel = relative(canonicalHome, parent);
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) { kept(); return; }
+    const path = join(parent, "aiboard.fish");
+    const before = await lstat(path);
+    if (!before.isFile() || await readFile(path, "utf8") !== FISH_CONFIG ||
+        !sameRegularFile(before, await lstat(path)) || await readFile(path, "utf8") !== FISH_CONFIG) { kept(); return; }
+    await unlink(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") kept();
+  }
 }
 
 /** PowerShell body that removes one directory from the user PATH, keeping other entries unexpanded and the value kind unchanged. */
@@ -556,13 +699,13 @@ export async function runUninstallCommand(raw: string[], runtime: SelfUpdateRunt
   let lockHandedOff = false;
   try {
     if (platform === "win32") await (runtime.editUserPath ?? ((bin: string) => runPowerShell(windowsRemovePathScript(bin, existsSync(join(layout.root, "path-was-absent"))))))(layout.binDirectory);
-    else await (runtime.editUserPath ?? (() => removePosixPath(home)))(layout.binDirectory);
+    else await (runtime.editUserPath ?? (() => removePosixPath(home, write)))(layout.binDirectory);
     // Windows keeps the running node.exe and the cmd shim open until this process exits: remove them afterwards.
     const deferred = platform === "win32" ? [join(layout.versionsDirectory, layout.runningVersion), layout.versionsDirectory, layout.binDirectory] : [];
     const versions = platform === "win32"
       ? (await readdir(layout.versionsDirectory).catch(() => [] as string[])).filter((name) => name !== layout.runningVersion).map((name) => join(layout.versionsDirectory, name))
       : [layout.versionsDirectory, layout.binDirectory];
-    const managed = [...versions, ...["current", "previous", "sequence", "install.json", "path-was-absent"].map((name) => join(layout.root, name))];
+    const managed = [...versions, ...["current", "previous", "sequence", "sequence-anchor", "trusted-channel.json", "install.json", "path-was-absent"].map((name) => join(layout.root, name))];
     const state = removeState ? userStatePaths({ platform, environment, home, root: layout.root }) : [];
     for (const path of [...managed, ...state]) {
       try { await rm(path, { recursive: true, force: true, maxRetries: 2 }); }

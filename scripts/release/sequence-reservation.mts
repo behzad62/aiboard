@@ -1,5 +1,5 @@
 // Durable release-sequence reservations for the signing job (plan D18, ADR-E).
-// Each signing run creates one annotated tag refs/tags/release-sequence/<channel>/<n> on the release
+// Each signing run creates one annotated tag refs/tags/release-sequence/<channel>/epoch-<e>/<n> on the release
 // repository BEFORE it signs. Creating a tag ref is atomic: a push never replaces an existing tag with a
 // different object without --force, and each reservation is a unique tag object (run id + nonce), so two
 // runs can never both hold the same sequence, even if the workflow's concurrency group were bypassed or
@@ -19,22 +19,27 @@ export function gitRunner(cwd: string): GitRunner {
   return (args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
 }
 
-export function reservationRef(channel: string, sequence: number): string {
+export function reservationRef(channel: string, sequence: number, epoch = 0): string {
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(channel)) throw new Error(`Invalid channel ${channel}.`);
+  if (!Number.isSafeInteger(epoch) || epoch < 0 || epoch > 2 ** 20) throw new Error(`Invalid epoch ${epoch}.`);
   if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence > MAX_SEQUENCE) throw new Error(`Invalid sequence ${sequence}.`);
-  return `${RESERVATION_PREFIX}${channel}/${sequence}`;
+  return `${RESERVATION_PREFIX}${channel}/epoch-${epoch}/${sequence}`;
 }
 
 /** sequence -> tag object id of every reservation on the remote for this channel. */
-export function listReservations(git: GitRunner, remote: string, channel: string): Map<number, string> {
+export function listReservations(git: GitRunner, remote: string, channel: string, epoch = 0): Map<number, string> {
+  reservationRef(channel, 1, epoch);
   const prefix = `${RESERVATION_PREFIX}${channel}/`;
   const reservations = new Map<number, string>();
   for (const line of git(["ls-remote", "--refs", remote, `${prefix}*`]).split("\n")) {
     if (!line.trim()) continue;
-    const match = /^([0-9a-f]{40,64})\trefs\/tags\/release-sequence\/([^/]+)\/([^/]+)$/.exec(line.trim());
+    // `<channel>/<n>` is the pre-epoch form and reads as epoch 0; `<channel>/epoch-<e>/<n>` never collides with it in Git.
+    const match = /^([0-9a-f]{40,64})\trefs\/tags\/release-sequence\/([^/]+)\/(?:epoch-([^/]+)\/)?([^/]+)$/.exec(line.trim());
     if (!match || `${RESERVATION_PREFIX}${match[2]}/` !== prefix) throw new Error(`Unexpected reservation ref: ${line.trim()}`);
-    if (!/^[1-9][0-9]*$/.test(match[3]!) || Number(match[3]) > MAX_SEQUENCE) throw new Error(`Malformed reservation ref ${prefix}${match[3]}; refusing to choose a sequence.`);
-    reservations.set(Number(match[3]), match[1]!);
+    const tagEpoch = match[3] ?? "0";
+    const number = match[4]!;
+    if (!/^(0|[1-9][0-9]*)$/.test(tagEpoch) || Number(tagEpoch) > 2 ** 20 || !/^[1-9][0-9]*$/.test(number) || Number(number) > MAX_SEQUENCE) throw new Error(`Malformed reservation ref ${line.trim()}; refusing to choose a sequence.`);
+    if (Number(tagEpoch) === epoch) reservations.set(Number(number), match[1]!);
   }
   return reservations;
 }
@@ -52,10 +57,12 @@ export interface ReserveOptions {
   remote: string;
   branch: string;
   channel: string;
+  epoch?: number;
   commit: string;
   /** Picks the sequence given the highest existing reservation (0 if none); must throw if none is acceptable. */
   choose: (reservedFloor: number) => number;
   runLabel?: string;
+  jumpReason?: string;
 }
 
 /** Reserves a fresh sequence by atomically creating its tag; returns the reserved sequence. */
@@ -63,20 +70,21 @@ export function reserveReleaseSequence(options: ReserveOptions): number {
   const { git, remote, channel, commit } = options;
   if (!/^[0-9a-f]{40,64}$/.test(commit)) throw new Error("--require-commit must be a full commit id to reserve a sequence.");
   assertBranchTip(git, remote, options.branch, commit);
-  const existing = listReservations(git, remote, channel);
+  const epoch = options.epoch ?? 0;
+  const existing = listReservations(git, remote, channel, epoch);
   const floor = Math.max(0, ...existing.keys());
   const sequence = options.choose(floor);
   if (existing.has(sequence) || sequence <= floor) throw new Error(`Sequence ${sequence} is already reserved (highest reservation ${floor}).`);
-  const ref = reservationRef(channel, sequence);
+  const ref = reservationRef(channel, sequence, epoch);
   const name = ref.slice("refs/tags/".length);
   const nonce = `${options.runLabel ?? "local"} ${randomUUID()} ${new Date().toISOString()}`;
-  git(["-c", "user.name=AIBoard release", "-c", "user.email=release@aiboard.invalid", "tag", "--no-sign", "-a", "-m", `Reserve ${channel} release sequence ${sequence}\n\n${nonce}`, name, commit]);
+  git(["-c", "user.name=AIBoard release", "-c", "user.email=release@aiboard.invalid", "tag", "--no-sign", "-a", "-m", `Reserve ${channel} release sequence ${epoch}:${sequence}\n\n${nonce}${options.jumpReason ? `\n\nSequence jump reason: ${options.jumpReason}` : ""}`, name, commit]);
   try {
     const object = git(["rev-parse", ref]).trim();
     try { git(["push", "--porcelain", remote, `${ref}:${ref}`]); }
     catch (error) { throw new Error(`Could not reserve sequence ${sequence}; another signing run may hold it. Re-dispatch the release. (${error instanceof Error ? error.message.split("\n")[0] : String(error)})`); }
     // Confirm the remote now holds exactly this run's tag object, not an identical-looking one.
-    if (listReservations(git, remote, channel).get(sequence) !== object) throw new Error(`Sequence ${sequence} is reserved by another signing run; refusing to sign.`);
+    if (listReservations(git, remote, channel, epoch).get(sequence) !== object) throw new Error(`Sequence ${sequence} is reserved by another signing run; refusing to sign.`);
     return sequence;
   } finally {
     try { git(["tag", "-d", name]); } catch { /* local scratch tag only */ }

@@ -1,6 +1,12 @@
 # Release sequence recovery: design proposal (2026-10-31)
 
-Status: **proposal for owner review.** Nothing here is implemented yet.
+Status: **implemented (pending hosted CI).** Owner decision 2026-10-31: adopt epochs and the offline recovery key, with a sequence-jump threshold of 1000. The discussion below records the original design and incident rationale.
+
+Reservation tags are `release-sequence/<channel>/epoch-<epoch>/<n>`. The `epoch-` prefix keeps them from colliding in Git with pre-epoch `release-sequence/<channel>/<n>` tags, which still count as epoch 0. No reservation tag had been pushed when this changed.
+
+Each recovery-signed epoch-opening manifest and detached signature are retained permanently as `epoch-<n>.json` and `epoch-<n>.json.sig` beside the channel's `manifest.json`. An installed updater that missed the opening fetches these records in order, verifies each recovery signature and advances exactly one epoch at a time, then verifies the currently served release with the resulting keys. A run follows at most 16 epochs; a missing, invalid or longer chain fails closed with reinstall guidance. Opening records may be expired because they are authenticated trust history, never installed releases; the current manifest must still be unexpired and pass replay checks. `--check` and failed updates do not persist the intermediate anchors. A release carrying this history-following updater and the recovery public key must reach a client before an incident; earlier epoch-aware updaters still need the opening while it is current, and clients predating epoch support need to reinstall.
+
+New manifests use schema 2 and include `epoch` and `signingKeys` in the canonical signed bytes; ordinary manifests carry an empty signing-key list. Schema 1 keeps its original bytes and is parsed as epoch 0, so existing signatures remain verifiable. Installer protocol 2 prevents older clients from treating schema 2 as an ordinary release. The local anchor digest uses the channel, epoch and sorted ordinary and recovery public-key sets; URLs and the sequence floor are not part of that digest.
 
 ## What the sequence protects
 
@@ -55,7 +61,7 @@ Case A is the one with no procedure. Today it degrades into case C, except that 
 1. Declare the incident, and stop the release workflow by disabling it.
 2. Generate a new signing key offline, then pin it with `release-keys.mts pin`.
 3. Using the offline recovery key, sign an epoch-bump manifest with `epoch = current + 1` and `sequence = 1`, carrying the new signing key set and a release built from known-good source.
-4. Publish it. Installed Runners update into the new epoch and drop the compromised key.
+4. Publish it as both `manifest.json(.sig)` and the permanent sibling `epoch-<n>.json(.sig)`. Installed Runners update into the new epoch and drop the compromised key, including clients that come back after a later ordinary manifest is served.
 5. Rotate the GitHub `AIBOARD_RELEASE_SIGNING_KEY` secret to the new key, and remove the compromised key from `channel.json`.
 6. If the recovery key itself is suspected compromised: reinstall-only. Publish new installers with a new recovery key, and announce the reinstall. This is today's case C procedure, plus decision 3.
 
@@ -70,7 +76,7 @@ Case A is the one with no procedure. Today it degrades into case C, except that 
 - `release-manifest.ts`: add the `epoch` field and the `recoveryKeys` config; use (epoch, sequence) ordering; accept an epoch bump only with a recovery signature.
 - `self-update.ts`: store the `epoch:sequence` high-water mark and the anchor digest.
 - `install.ps1` and `install.sh`: the same ordering, plus the anchor-digest reset rule.
-- `sign-manifest.mts`, `signing-sequence.mts` and `sequence-reservation.mts`: add epoch-aware reservation tags (`release-sequence/<channel>/<epoch>/<n>`) and the jump guard.
+- `sign-manifest.mts`, `signing-sequence.mts` and `sequence-reservation.mts`: add epoch-aware reservation tags (`release-sequence/<channel>/epoch-<epoch>/<n>`) and the jump guard.
 - `release-keys.mts`: add the `pin-recovery` and `sign-epoch` commands, and `verify` support for epochs.
 - Tests:
   - a replay within an epoch is refused;
@@ -78,3 +84,5 @@ Case A is the one with no procedure. Today it degrades into case C, except that 
   - an epoch bump with one is accepted and resets the sequence;
   - a reinstall with a new anchor ignores the old high-water mark, while the same anchor still enforces it;
   - the jump guard works.
+
+The follow-up adds permanent opening files to `sign-epoch` output, checks their presence and immutability at publication, and protects already deployed copies during site sync. Regression cases for an offline client, forged or missing history, the chain bound, and uninstall ownership are in `runner-v2/test/self-update.test.ts`; publishing guard cases are in the release scripts' tests. These tests were written but not run in this change.

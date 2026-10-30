@@ -1,11 +1,11 @@
 // Signed release manifest (ADR-E): exact UTF-8 bytes, detached RSA-3072/SHA-256 PKCS#1 v1.5 signature.
 // The signature is verified against the pinned keys BEFORE the bytes are parsed or any URL/hash is trusted.
-import { createPublicKey, sign as rsaSign, verify as rsaVerify, constants, type KeyObject } from "node:crypto";
+import { createHash, createPublicKey, sign as rsaSign, verify as rsaVerify, constants, type KeyObject } from "node:crypto";
 
 export const RELEASE_PRODUCT = "aiboard-runner";
-export const RELEASE_SCHEMA_VERSION = 1;
+export const RELEASE_SCHEMA_VERSION = 2;
 /** Bumped when installers/updaters must refuse manifests they cannot fully honor. */
-export const INSTALLER_PROTOCOL = 1;
+export const INSTALLER_PROTOCOL = 2;
 export const RELEASE_TARGETS = ["win-x64", "win-arm64", "darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64"] as const;
 export type ReleaseTarget = typeof RELEASE_TARGETS[number];
 /** win-arm64 ships as preview until its Windows helper is qualified on arm64 (plan §1.2). */
@@ -25,6 +25,9 @@ export interface ReleaseChannelConfig {
   /** Every artifact URL must start with this prefix. */
   artifactPrefix: string;
   keys: TrustedReleaseKey[];
+  /** Missing fields in old bundled configurations mean epoch zero and no recovery keys. */
+  epoch?: number;
+  recoveryKeys?: TrustedReleaseKey[];
   /** Bootstrap replay bound: the lowest sequence a fresh install accepts. */
   minSequence: number;
 }
@@ -39,11 +42,14 @@ export interface ReleaseArtifact {
 }
 
 export interface ReleaseManifest {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   product: string;
   channel: string;
   version: string;
+  /** Absent only in schema 1, whose signed bytes remain unchanged. */
+  epoch?: number;
   sequence: number;
+  signingKeys?: TrustedReleaseKey[];
   createdAt: string;
   expiresAt: string;
   minInstallerVersion: number;
@@ -58,6 +64,7 @@ const KEY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{2,63}$/;
 const CHANNEL_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const URL_PATTERN = /^https?:\/\/[A-Za-z0-9.:[\]-]+\/[A-Za-z0-9._~/%+-]*$/;
 const MANIFEST_KEYS = ["schemaVersion", "product", "channel", "version", "sequence", "createdAt", "expiresAt", "minInstallerVersion", "keyId", "nodeVersion", "artifacts"] as const;
+const MANIFEST_V2_KEYS = ["schemaVersion", "product", "channel", "version", "epoch", "sequence", "signingKeys", "createdAt", "expiresAt", "minInstallerVersion", "keyId", "nodeVersion", "artifacts"] as const;
 const ARTIFACT_KEYS = ["target", "format", "preview", "bytes", "sha256", "url"] as const;
 /** Clock skew tolerated for a manifest created "in the future". */
 const CREATED_SKEW_MS = 24 * 60 * 60 * 1000;
@@ -89,7 +96,9 @@ export function serializeManifest(manifest: ReleaseManifest): string {
     `"product":${JSON.stringify(manifest.product)},`,
     `"channel":${JSON.stringify(manifest.channel)},`,
     `"version":${JSON.stringify(manifest.version)},`,
+    ...(manifest.schemaVersion === 2 ? [`"epoch":${JSON.stringify(manifest.epoch)},`] : []),
     `"sequence":${JSON.stringify(manifest.sequence)},`,
+    ...(manifest.schemaVersion === 2 ? [`"signingKeys":${JSON.stringify((manifest.signingKeys ?? []).map((key) => ({ keyId: key.keyId, n: key.n, e: key.e })).sort((a, b) => a.keyId < b.keyId ? -1 : a.keyId > b.keyId ? 1 : 0))},`] : []),
     `"createdAt":${JSON.stringify(manifest.createdAt)},`,
     `"expiresAt":${JSON.stringify(manifest.expiresAt)},`,
     `"minInstallerVersion":${JSON.stringify(manifest.minInstallerVersion)},`,
@@ -125,6 +134,7 @@ export interface VerifyManifestOptions {
   now: Date;
   /** Highest sequence already accepted on this machine (updater); undefined on first install. */
   highWaterSequence?: number;
+  highWaterEpoch?: number;
 }
 
 /** Verifies the detached signature first, then parses and validates the exact signed bytes. */
@@ -137,16 +147,35 @@ export function verifyHistoricalReleaseManifest(bytes: Uint8Array, signatureText
   return verifyManifest(bytes, signatureText, config, { now }, true);
 }
 
+/** Authenticate a permanent, possibly expired opening solely as trust history, never as an installable release. */
+export function verifyReleaseEpochOpening(bytes: Uint8Array, signatureText: string, config: ReleaseChannelConfig, now: Date): ReleaseManifest {
+  const manifest = verifyManifest(bytes, signatureText, config, { now }, true);
+  if ((manifest.epoch ?? 0) !== (config.epoch ?? 0) + 1) throw new ReleaseVerificationError("recovery history must advance exactly one epoch");
+  return manifest;
+}
+
 function verifyManifest(bytes: Uint8Array, signatureText: string, config: ReleaseChannelConfig, options: VerifyManifestOptions, allowExpired: boolean): ReleaseManifest {
+  const configuredEpoch = config.epoch ?? 0;
+  if (!Number.isSafeInteger(configuredEpoch) || configuredEpoch < 0 || configuredEpoch > 2 ** 20 ||
+      config.keys.some((key) => (config.recoveryKeys ?? []).some((other) => key.keyId === other.keyId || (key.n === other.n && key.e === other.e)))) {
+    throw new ReleaseVerificationError("invalid or overlapping release trust anchors");
+  }
+  if ((options.highWaterEpoch !== undefined && (!Number.isSafeInteger(options.highWaterEpoch) || options.highWaterEpoch < 0 || options.highWaterEpoch > 2 ** 20)) ||
+      (options.highWaterSequence !== undefined && (!Number.isSafeInteger(options.highWaterSequence) || options.highWaterSequence < 1 || options.highWaterSequence > 2 ** 40))) {
+    throw new ReleaseVerificationError("invalid recorded release high-water mark");
+  }
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_MANIFEST_BYTES) throw new ReleaseVerificationError("manifest size is out of range");
   if (config.keys.length === 0) throw new ReleaseVerificationError("no trusted release key is configured; this build cannot install or update");
   const trimmed = signatureText.trim();
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed) || trimmed.length % 4 !== 0) throw new ReleaseVerificationError("signature is not base64");
   const signature = Buffer.from(trimmed, "base64");
   let signer: TrustedReleaseKey | undefined;
-  for (const key of config.keys) {
+  let recovery = false;
+  for (const key of [...config.keys, ...(config.recoveryKeys ?? [])]) {
     const publicKey = publicKeyFromTrusted(key);
-    if (rsaVerify("sha256", bytes, { key: publicKey, padding: constants.RSA_PKCS1_PADDING }, signature)) { signer = key; break; }
+    if (rsaVerify("sha256", bytes, { key: publicKey, padding: constants.RSA_PKCS1_PADDING }, signature)) {
+      signer = key; recovery = (config.recoveryKeys ?? []).includes(key); break;
+    }
   }
   if (!signer) throw new ReleaseVerificationError("signature does not verify against any trusted release key");
 
@@ -159,6 +188,19 @@ function verifyManifest(bytes: Uint8Array, signatureText: string, config: Releas
   const manifest = validateManifestShape(value);
   if (serializeManifest(manifest) !== text) throw new ReleaseVerificationError("manifest is not in canonical form");
   if (manifest.keyId !== signer.keyId) throw new ReleaseVerificationError("manifest names a different key than the one that signed it");
+  const epoch = manifest.epoch ?? 0;
+  const trustedEpoch = config.epoch ?? 0;
+  const highWaterEpoch = options.highWaterEpoch ?? trustedEpoch;
+  if (highWaterEpoch > trustedEpoch) throw new ReleaseVerificationError("trusted signing keys for the recorded epoch are missing");
+  if (epoch < trustedEpoch || epoch < highWaterEpoch) throw new ReleaseVerificationError("manifest epoch is older than this machine's trusted epoch");
+  if (epoch > trustedEpoch) {
+    if (!recovery || !manifest.signingKeys?.length) throw new ReleaseVerificationError("a new epoch requires a recovery signature and new signing keys");
+    parseReleaseChannelConfig({ ...config, epoch, keys: manifest.signingKeys, minSequence: 1 });
+  } else if (recovery) {
+    if (!(allowExpired && manifest.signingKeys?.length && JSON.stringify(manifest.signingKeys) === JSON.stringify(config.keys))) {
+      throw new ReleaseVerificationError("a recovery key cannot sign an ordinary release");
+    }
+  } else if (manifest.signingKeys?.length) throw new ReleaseVerificationError("an ordinary release cannot change signing keys");
   if (manifest.product !== RELEASE_PRODUCT) throw new ReleaseVerificationError("manifest is for another product");
   if (manifest.channel !== config.channel) throw new ReleaseVerificationError(`manifest is for channel ${manifest.channel}, expected ${config.channel}`);
   if (manifest.minInstallerVersion > INSTALLER_PROTOCOL) throw new ReleaseVerificationError("this release needs a newer installer; reinstall with the one-line installer");
@@ -166,8 +208,8 @@ function verifyManifest(bytes: Uint8Array, signatureText: string, config: Releas
   if (!allowExpired && Date.parse(manifest.expiresAt) <= now) throw new ReleaseVerificationError("manifest has expired");
   if (Date.parse(manifest.createdAt) > now + CREATED_SKEW_MS) throw new ReleaseVerificationError("manifest creation time is in the future");
   if (Date.parse(manifest.createdAt) >= Date.parse(manifest.expiresAt)) throw new ReleaseVerificationError("manifest expires before it was created");
-  if (manifest.sequence < config.minSequence) throw new ReleaseVerificationError("manifest sequence is older than this installer's minimum");
-  if (options.highWaterSequence !== undefined && manifest.sequence < options.highWaterSequence) {
+  if (epoch === trustedEpoch && manifest.sequence < config.minSequence) throw new ReleaseVerificationError("manifest sequence is older than this installer's minimum");
+  if (epoch === highWaterEpoch && options.highWaterSequence !== undefined && manifest.sequence < options.highWaterSequence) {
     throw new ReleaseVerificationError("manifest sequence is older than a release this machine already accepted");
   }
   for (const artifact of manifest.artifacts) {
@@ -182,8 +224,9 @@ export function isLoopbackUrl(url: string): boolean {
 }
 
 function validateManifestShape(value: unknown): ReleaseManifest {
-  const record = exactRecord(value, MANIFEST_KEYS, "manifest");
-  if (record.schemaVersion !== RELEASE_SCHEMA_VERSION) throw new ReleaseVerificationError("unsupported manifest schemaVersion");
+  const schema = (typeof value === "object" && value !== null && !Array.isArray(value)) ? (value as Record<string, unknown>).schemaVersion : undefined;
+  if (schema !== 1 && schema !== 2) throw new ReleaseVerificationError("unsupported manifest schemaVersion");
+  const record = exactRecord(value, schema === 1 ? MANIFEST_KEYS : MANIFEST_V2_KEYS, "manifest");
   const text = (key: string, pattern: RegExp) => {
     const field = record[key];
     if (typeof field !== "string" || !pattern.test(field)) throw new ReleaseVerificationError(`manifest ${key} is invalid`);
@@ -195,10 +238,12 @@ function validateManifestShape(value: unknown): ReleaseManifest {
     return field;
   };
   const manifest: ReleaseManifest = {
-    schemaVersion: 1,
+    schemaVersion: schema,
     product: text("product", /^[a-z-]{1,32}$/),
     channel: text("channel", CHANNEL_PATTERN),
     version: text("version", VERSION_PATTERN),
+    epoch: schema === 2 ? integer("epoch", 0, 2 ** 20) : 0,
+    ...(schema === 2 ? { signingKeys: parseKeys(record.signingKeys, "signingKeys") } : {}),
     sequence: integer("sequence", 1, 2 ** 40),
     createdAt: text("createdAt", TIMESTAMP_PATTERN),
     expiresAt: text("expiresAt", TIMESTAMP_PATTERN),
@@ -237,16 +282,25 @@ function exactRecord(value: unknown, keys: readonly string[], label: string): Re
 export function parseReleaseChannelConfig(value: unknown): ReleaseChannelConfig {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("invalid_release_config: not an object");
   const record = value as Record<string, unknown>;
-  const allowed = new Set(["channel", "manifestUrl", "artifactPrefix", "keys", "minSequence", "$comment"]);
+  const allowed = new Set(["channel", "manifestUrl", "artifactPrefix", "keys", "epoch", "recoveryKeys", "minSequence", "$comment"]);
   if (Object.keys(record).some((key) => !allowed.has(key))) throw new Error("invalid_release_config: unexpected field");
   const { channel, manifestUrl, artifactPrefix, keys, minSequence } = record;
+  const epoch = record.epoch ?? 0;
+  if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 0 || epoch > 2 ** 20) throw new Error("invalid_release_config: epoch");
   if (typeof channel !== "string" || !CHANNEL_PATTERN.test(channel)) throw new Error("invalid_release_config: channel");
   for (const [name, url] of [["manifestUrl", manifestUrl], ["artifactPrefix", artifactPrefix]] as const) {
     if (typeof url !== "string" || !URL_PATTERN.test(url) || (!url.startsWith("https://") && !isLoopbackUrl(url))) throw new Error(`invalid_release_config: ${name} must be https (or http://127.0.0.1 for tests)`);
   }
   if (!(artifactPrefix as string).endsWith("/")) throw new Error("invalid_release_config: artifactPrefix must end with /");
   if (typeof minSequence !== "number" || !Number.isSafeInteger(minSequence) || minSequence < 1) throw new Error("invalid_release_config: minSequence");
-  if (!Array.isArray(keys)) throw new Error("invalid_release_config: keys");
+  const parsed = parseKeys(keys, "keys");
+  const recoveryKeys = parseKeys(record.recoveryKeys ?? [], "recoveryKeys");
+  if (parsed.some((key) => recoveryKeys.some((other) => key.keyId === other.keyId || (key.n === other.n && key.e === other.e)))) throw new Error("invalid_release_config: release and recovery keys must be distinct");
+  return { channel, manifestUrl: manifestUrl as string, artifactPrefix: artifactPrefix as string, keys: parsed, epoch, recoveryKeys, minSequence };
+}
+
+function parseKeys(keys: unknown, label: string): TrustedReleaseKey[] {
+  if (!Array.isArray(keys)) throw new Error(`invalid_release_config: ${label}`);
   const parsed: TrustedReleaseKey[] = keys.map((key: unknown) => {
     if (typeof key !== "object" || key === null) throw new Error("invalid_release_config: key");
     const { keyId, n, e } = key as Record<string, unknown>;
@@ -257,5 +311,12 @@ export function parseReleaseChannelConfig(value: unknown): ReleaseChannelConfig 
     return trusted;
   });
   if (new Set(parsed.map((key) => key.keyId)).size !== parsed.length) throw new Error("invalid_release_config: duplicate keyId");
-  return { channel, manifestUrl: manifestUrl as string, artifactPrefix: artifactPrefix as string, keys: parsed, minSequence };
+  if (new Set(parsed.map((key) => `${key.n}:${key.e}`)).size !== parsed.length) throw new Error("invalid_release_config: duplicate key");
+  return parsed.sort((a, b) => a.keyId < b.keyId ? -1 : a.keyId > b.keyId ? 1 : 0);
+}
+
+/** Canonical trust anchor shared with rendered installers; key sets are ordered by key id. */
+export function releaseAnchorDigest(config: Pick<ReleaseChannelConfig, "channel" | "epoch" | "keys" | "recoveryKeys">): string {
+  const keys = (list: TrustedReleaseKey[]) => list.map(({ keyId, n, e }) => ({ keyId, n, e })).sort((a, b) => a.keyId < b.keyId ? -1 : a.keyId > b.keyId ? 1 : 0);
+  return createHash("sha256").update(JSON.stringify({ channel: config.channel, epoch: config.epoch ?? 0, keys: keys(config.keys), recoveryKeys: keys(config.recoveryKeys ?? []) })).digest("hex");
 }

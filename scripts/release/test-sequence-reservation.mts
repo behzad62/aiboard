@@ -23,9 +23,10 @@ const config = {
   keys: [trustedKeyFromPublicKey("release-test", key.publicKey)], minSequence: 1,
 };
 const now = new Date();
-function signed(sequence: number) {
+function signed(sequence: number, epoch?: number) {
   const manifest: ReleaseManifest = {
-    schemaVersion: 1, product: RELEASE_PRODUCT, channel: "stable", version: `0.${sequence}.0`, sequence,
+    schemaVersion: epoch === undefined ? 1 : 2, product: RELEASE_PRODUCT, channel: "stable", version: `0.${sequence}.0`, sequence,
+    ...(epoch === undefined ? {} : { epoch, signingKeys: [] }),
     createdAt: "2026-10-01T00:00:00Z", expiresAt: "2099-12-01T00:00:00Z",
     minInstallerVersion: INSTALLER_PROTOCOL, keyId: "release-test", nodeVersion: "24.18.0",
     artifacts: RELEASE_TARGETS.map((target) => ({
@@ -56,12 +57,17 @@ try {
 
   // Before: selection from the committed manifest alone gives two serialized drafts the same sequence.
   const previous = { bytes: signed(7).bytes, signature: signed(7).signature };
+  sh(signer, ["tag", "-a", "-m", "legacy reservation", "release-sequence/stable/7", commit]);
+  sh(signer, ["push", "-q", "origin", "refs/tags/release-sequence/stable/7"]);
+  sh(signer, ["tag", "-d", "release-sequence/stable/7"]);
+  assert.equal(listReservations(git, "origin", "stable", 0).has(7), true, "legacy tags belong to epoch zero");
+  assert.equal(listReservations(git, "origin", "stable", 1).has(7), false);
   assert.equal(selectReleaseSequence("auto", config, previous, now), 8);
   assert.equal(selectReleaseSequence("auto", config, previous, now), 8);
   // After: each signing run reserves durably on the remote, so the second draft gets a fresh sequence.
   assert.equal(reserve(), 8);
   assert.equal(reserve(), 9);
-  assert.deepEqual([...listReservations(git, "origin", "stable").keys()].sort(), [8, 9]);
+  assert.deepEqual([...listReservations(git, "origin", "stable").keys()].sort(), [7, 8, 9]);
   assert.throws(() => selectReleaseSequence("9", config, previous, now, undefined, 9), /highest reserved sequence 9/);
   assert.equal(reserve(() => selectReleaseSequence("12", config, previous, now, undefined, 9)), 12);
   assert.throws(() => reserve(() => 12), /already reserved/);
@@ -69,8 +75,8 @@ try {
   // A concurrent run that creates the same reservation between the listing and the push wins; this run fails closed.
   const rival = clone("rival");
   assert.throws(() => reserve((floor) => {
-    sh(rival, ["tag", "-a", "-m", "rival", "release-sequence/stable/13", commit]);
-    sh(rival, ["push", "-q", "origin", "refs/tags/release-sequence/stable/13"]);
+    sh(rival, ["tag", "-a", "-m", "rival", "release-sequence/stable/epoch-0/13", commit]);
+    sh(rival, ["push", "-q", "origin", "refs/tags/release-sequence/stable/epoch-0/13"]);
     return floor + 1;
   }), /Could not reserve sequence 13/);
   assert.equal(execFileSync("git", ["tag", "-l"], { cwd: signer, encoding: "utf8" }).trim(), "", "the local scratch tag is removed");
@@ -83,6 +89,19 @@ try {
   assert.equal(listReservations(git, "origin", "stable").has(14), false, "nothing is reserved for a stale commit");
   sh(signer, ["fetch", "-q", "origin", "main"]);
   assert.equal(reserve(undefined, sh(rival, ["rev-parse", "HEAD"])), 14);
+  const latest = sh(rival, ["rev-parse", "HEAD"]);
+  assert.throws(() => selectReleaseSequence("1015", config, previous, now, undefined, 14), /allow-sequence-jump/);
+  assert.equal(reserveReleaseSequence({ git, remote: "origin", branch: "main", channel: "stable", epoch: 0, commit: latest,
+    choose: (floor) => selectReleaseSequence("1015", config, previous, now, undefined, floor, "incident recovery"), jumpReason: "incident recovery" }), 1015);
+  sh(signer, ["fetch", "-q", "origin", "refs/tags/release-sequence/stable/epoch-0/1015:refs/tags/inspection-sequence"]);
+  assert.match(sh(signer, ["cat-file", "-p", "refs/tags/inspection-sequence"]), /Sequence jump reason: incident recovery/);
+  assert.equal(reserveReleaseSequence({ git, remote: "origin", branch: "main", channel: "stable", epoch: 1, commit: latest, choose: (floor) => floor + 1 }), 1);
+  assert.equal(listReservations(git, "origin", "stable", 1).has(1), true);
+  sh(rival, ["tag", "-a", "-m", "legacy first release", "release-sequence/blocked/1", latest]);
+  sh(rival, ["push", "-q", "origin", "refs/tags/release-sequence/blocked/1"]);
+  // A pre-epoch tag `<channel>/1` reads as epoch 0 and does not collide with `<channel>/epoch-1/1` in Git.
+  assert.equal(listReservations(git, "origin", "blocked", 0).has(1), true);
+  assert.equal(reserveReleaseSequence({ git, remote: "origin", branch: "main", channel: "blocked", epoch: 1, commit: latest, choose: (floor) => floor + 1 }), 1);
 
   // A malformed reservation is not ignored: the floor cannot be established.
   sh(rival, ["tag", "release-sequence/stable/not-a-number", commit]);
@@ -93,6 +112,8 @@ try {
   assert.doesNotThrow(() => assertPublicationOrder(signed(10).manifest, signed(9).manifest));
   for (const older of [8, 9]) assert.throws(() => assertPublicationOrder(signed(older).manifest, signed(9).manifest), /not higher than the committed/);
   assert.doesNotThrow(() => assertPublicationOrder(signed(1).manifest, undefined));
+  assert.doesNotThrow(() => assertPublicationOrder(signed(1, 1).manifest, signed(9).manifest));
+  assert.throws(() => assertPublicationOrder(signed(10).manifest, signed(1, 1).manifest), /not higher/);
 
   const site = clone("site");
   const published = join(site, "public", "release", "stable");
@@ -107,6 +128,28 @@ try {
   assert.throws(() => checkPublicationOrder(site, deployed), /sequence 8 does not exceed the previously deployed 9/);
   writeFileSync(join(published, "manifest.json"), signed(10).bytes);
   assert.deepEqual(checkPublicationOrder(site, deployed), ["public/release/stable/manifest.json: 9 -> 10"]);
+  writeFileSync(join(published, "manifest.json"), signed(1, 1).bytes);
+  assert.throws(() => checkPublicationOrder(site, deployed), /must be published with the new epoch/);
+  const openingBytes = Buffer.from(serializeManifest({ ...signed(1, 1).manifest, signingKeys: config.keys }));
+  const openingSignature = signManifestBytes(openingBytes, key.privateKey);
+  writeFileSync(join(published, "epoch-1.json"), openingBytes);
+  writeFileSync(join(published, "epoch-1.json.sig"), openingSignature);
+  assert.deepEqual(checkPublicationOrder(site, deployed), ["public/release/stable/manifest.json: 9 -> 1:1"]);
+  writeFileSync(join(published, "manifest.json"), openingBytes);
+  assert.throws(() => checkPublicationOrder(site, deployed), /must match the served epoch-opening manifest and signature/);
+  writeFileSync(join(published, "manifest.json.sig"), openingSignature);
+  assert.deepEqual(checkPublicationOrder(site, deployed), ["public/release/stable/manifest.json: 9 -> 1:1"]);
+  sh(site, ["add", "public/release/stable"]);
+  sh(site, ["commit", "-qm", "publish epoch one"]);
+  const epochDeployed = sh(site, ["rev-parse", "HEAD"]);
+  writeFileSync(join(published, "epoch-1.json"), "changed");
+  assert.throws(() => checkPublicationOrder(site, epochDeployed), /permanent release recovery history/);
+  writeFileSync(join(published, "epoch-1.json"), openingBytes);
+  rmSync(join(published, "epoch-1.json.sig"));
+  assert.throws(() => checkPublicationOrder(site, epochDeployed), /permanent release recovery history/);
+  writeFileSync(join(published, "epoch-1.json.sig"), openingSignature);
+  writeFileSync(join(published, "manifest.json"), signed(10).bytes);
+  assert.throws(() => checkPublicationOrder(site, epochDeployed), /does not exceed/);
   rmSync(join(published, "manifest.json"));
   assert.throws(() => checkPublicationOrder(site, deployed), /was removed/);
 

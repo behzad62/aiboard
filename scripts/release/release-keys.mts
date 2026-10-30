@@ -9,13 +9,14 @@
 //       checks a signed manifest exactly as the updater does (and, with --bundles, every archive's size + SHA-256)
 //       before it is committed to public/release/<channel>/, and refuses one whose sequence is not higher than
 //       the manifest already committed there (publication order)
-import { createHash, createPublicKey, generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  parseReleaseChannelConfig, trustedKeyFromPublicKey, verifyHistoricalReleaseManifest, verifyReleaseManifest, type ReleaseManifest,
+  INSTALLER_PROTOCOL, parseReleaseChannelConfig, RELEASE_SCHEMA_VERSION, serializeManifest, signManifestBytes, trustedKeyFromPublicKey,
+  verifyHistoricalReleaseManifest, verifyReleaseManifest, type ReleaseManifest,
 } from "../../runner-v2/src/release-manifest.js";
 import { assertPublicationOrder } from "./signing-sequence.mjs";
 
@@ -30,7 +31,7 @@ function option(name: string): string | undefined {
   return value;
 }
 
-if (command === "pin" || command === "show") {
+if (command === "pin" || command === "pin-recovery" || command === "show") {
   const pem = readFileSync(resolve(option("public-key") ?? ""), "utf8");
   if (/PRIVATE KEY/.test(pem)) throw new Error("This is a PRIVATE key. Pass the .pub.pem public half; the private key never enters the repository.");
   const entry = trustedKeyFromPublicKey(option("key-id") ?? "unnamed-key", createPublicKey(pem));
@@ -38,14 +39,42 @@ if (command === "pin" || command === "show") {
     process.stdout.write(`${JSON.stringify(entry, null, 2)}\n`);
   } else {
     const path = resolve(option("config") ?? join(root, "release", "channel.json"));
-    const raw = JSON.parse(readFileSync(path, "utf8")) as { keys: unknown[] };
+    const raw = JSON.parse(readFileSync(path, "utf8")) as { keys: unknown[]; recoveryKeys?: unknown[] };
     const config = parseReleaseChannelConfig(raw);
-    if (config.keys.some((key) => key.keyId === entry.keyId || key.n === entry.n)) throw new Error(`${entry.keyId} (or the same key) is already pinned.`);
-    raw.keys = [...raw.keys, entry];
+    if ([...config.keys, ...(config.recoveryKeys ?? [])].some((key) => key.keyId === entry.keyId || key.n === entry.n)) throw new Error(`${entry.keyId} (or the same key) is already pinned.`);
+    if (command === "pin-recovery") raw.recoveryKeys = [...(raw.recoveryKeys ?? []), entry];
+    else raw.keys = [...raw.keys, entry];
     parseReleaseChannelConfig(raw);
     writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`);
     process.stdout.write(`Pinned ${entry.keyId} in ${path}. Commit it, then rebuild the installers and bundles.\n`);
   }
+} else if (command === "sign-epoch") {
+  // The template supplies the known-good bundle descriptions. No private key is read from the environment.
+  const config = parseReleaseChannelConfig(JSON.parse(readFileSync(resolve(option("config") ?? join(root, "release", "previous-channel.json")), "utf8")));
+  const next = parseReleaseChannelConfig(JSON.parse(readFileSync(resolve(option("new-config") ?? join(root, "release", "channel.json")), "utf8")));
+  if (next.channel !== config.channel || next.manifestUrl !== config.manifestUrl || next.artifactPrefix !== config.artifactPrefix || (next.epoch ?? 0) !== (config.epoch ?? 0) + 1 ||
+      JSON.stringify(next.recoveryKeys ?? []) !== JSON.stringify(config.recoveryKeys ?? []) || !next.keys.length) throw new Error("The new configuration must advance exactly one epoch, retain the channel, manifest URL, artifact origin and recovery keys, and contain new signing keys.");
+  if (next.keys.some((key) => config.keys.some((old) => old.n === key.n && old.e === key.e))) throw new Error("The new epoch must not retain a previous ordinary signing key.");
+  const keyFile = option("key-file");
+  if (!keyFile) throw new Error("sign-epoch requires the offline recovery --key-file.");
+  const privateKey = createPrivateKey(readFileSync(resolve(keyFile)));
+  const publicKey = trustedKeyFromPublicKey("derived-key", createPublicKey(privateKey));
+  const signer = (config.recoveryKeys ?? []).find((key) => key.n === publicKey.n && key.e === publicKey.e);
+  if (!signer) throw new Error("The supplied recovery key is not pinned in the previous channel configuration.");
+  const template = JSON.parse(readFileSync(resolve(option("manifest") ?? ""), "utf8")) as ReleaseManifest;
+  const manifest: ReleaseManifest = { ...template, schemaVersion: RELEASE_SCHEMA_VERSION, epoch: next.epoch, sequence: 1,
+    signingKeys: next.keys, keyId: signer.keyId, minInstallerVersion: INSTALLER_PROTOCOL };
+  const bytes = Buffer.from(serializeManifest(manifest));
+  const signature = signManifestBytes(bytes, privateKey);
+  verifyReleaseManifest(bytes, signature, config, { now: new Date() });
+  const out = resolve(option("out") ?? ".");
+  const history = join(out, `epoch-${next.epoch}.json`);
+  writeFileSync(history, bytes, { flag: "wx" });
+  try { writeFileSync(`${history}.sig`, `${signature}\n`, { flag: "wx" }); }
+  catch (error) { unlinkSync(history); throw error; }
+  writeFileSync(join(out, "manifest.json"), bytes);
+  writeFileSync(join(out, "manifest.json.sig"), `${signature}\n`);
+  process.stdout.write(`Signed recovery manifest for epoch ${next.epoch}, sequence 1, with ${signer.keyId}. Publish manifest.json(.sig) and keep epoch-${next.epoch}.json(.sig) permanently.\n`);
 } else if (command === "generate-test") {
   const out = resolve(option("out") ?? "");
   const origin = option("origin") ?? "http://127.0.0.1:8765";
@@ -68,15 +97,25 @@ if (command === "pin" || command === "show") {
   const manifestPath = resolve(option("manifest") ?? "");
   const config = parseReleaseChannelConfig(JSON.parse(readFileSync(resolve(option("config") ?? join(root, "release", "channel.json")), "utf8")));
   const bytes = readFileSync(manifestPath);
-  const manifest = verifyReleaseManifest(bytes, readFileSync(option("sig") ?? `${manifestPath}.sig`, "utf8"), config, { now: new Date() });
-  process.stdout.write(`OK ${manifest.version} sequence ${manifest.sequence}, signed by ${manifest.keyId}, expires ${manifest.expiresAt}\n`);
+  const signature = readFileSync(option("sig") ?? `${manifestPath}.sig`, "utf8");
+  const historicalPath = join(root, "release", "previous-channel.json");
+  let manifest: ReleaseManifest;
+  try { manifest = verifyReleaseManifest(bytes, signature, config, { now: new Date() }); }
+  catch (error) {
+    if (!existsSync(historicalPath)) throw error;
+    const previousConfig = parseReleaseChannelConfig(JSON.parse(readFileSync(historicalPath, "utf8")));
+    const opening = verifyReleaseManifest(bytes, signature, previousConfig, { now: new Date() });
+    if ((opening.epoch ?? 0) !== (config.epoch ?? 0) || (opening.epoch ?? 0) <= (previousConfig.epoch ?? 0) ||
+        JSON.stringify(opening.signingKeys) !== JSON.stringify(config.keys) || JSON.stringify(config.recoveryKeys ?? []) !== JSON.stringify(previousConfig.recoveryKeys ?? [])) throw error;
+    manifest = opening;
+  }
+  process.stdout.write(`OK ${manifest.version} epoch ${manifest.epoch ?? 0} sequence ${manifest.sequence}, signed by ${manifest.keyId}, expires ${manifest.expiresAt}\n`);
   // Publication order: the committed manifest (authenticated, even if expired, under the current or the
   // reviewed previous trust configuration) must have a lower sequence than the one about to replace it.
   const committedPath = resolve(option("committed") ?? join(root, "public", "release", manifest.channel, "manifest.json"));
   if (existsSync(committedPath) && !readFileSync(committedPath).equals(bytes)) {
     const committedBytes = readFileSync(committedPath);
     const committedSignature = readFileSync(`${committedPath}.sig`, "utf8");
-    const historicalPath = join(root, "release", "previous-channel.json");
     let committed: ReleaseManifest;
     try { committed = verifyHistoricalReleaseManifest(committedBytes, committedSignature, config, new Date()); }
     catch (error) {
@@ -97,5 +136,5 @@ if (command === "pin" || command === "show") {
     process.stdout.write(`  ${artifact.target.padEnd(13)} ${artifact.sha256} ${artifact.url}${note}\n`);
   }
 } else {
-  throw new Error("Usage: release-keys.mts pin|show|generate-test|verify ...");
+  throw new Error("Usage: release-keys.mts pin|pin-recovery|sign-epoch|show|generate-test|verify ...");
 }

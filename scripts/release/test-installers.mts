@@ -7,7 +7,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseReleaseChannelConfig, trustedKeyFromPublicKey } from "../../runner-v2/src/release-manifest.js";
+import { INSTALLER_PROTOCOL, parseReleaseChannelConfig, PREVIEW_TARGETS, RELEASE_PRODUCT, RELEASE_TARGETS, releaseAnchorDigest,
+  serializeManifest, signManifestBytes, targetFormat, trustedKeyFromPublicKey } from "../../runner-v2/src/release-manifest.js";
 import { POSIX_SHIM, WINDOWS_SHIM } from "../../runner-v2/src/self-update.js";
 import { renderInstallers } from "./render-installers.mjs";
 
@@ -129,6 +130,53 @@ check("install.ps1 keeps the lock and staging when a staged process cannot be co
 check("installers run every staged-bundle command through the bound",
   !/& \(Join-Path \$staging 'node\\node\.exe'\)/.test(rendered.ps1) && !/^\s*(smoke=\$\()?"\$staging\/node\/node"/m.test(rendered.sh));
 
+// Exercise the actual installer replay checks with the same and different trust anchors.
+{
+  const stateDir = mkdtempSync(join(tmpdir(), "aiboard-anchor-"));
+  const anchor = releaseAnchorDigest(production);
+  const otherAnchor = "f".repeat(64) === anchor ? "e".repeat(64) : "f".repeat(64);
+  try {
+    const shCheck = /\ncheck_recorded_sequence\(\) \{[\s\S]*?\n\}\n/.exec(rendered.sh)?.[0];
+    if (process.platform !== "win32") {
+      const invoke = (epoch: number, sequence: number) => spawnSync("sh", ["-c",
+        `set -eu\nfail() { echo "$*" >&2; exit 1; }\n${shCheck}\nroot=$1; ANCHOR_DIGEST=$2; epoch=$3; sequence=$4; check_recorded_sequence`,
+        "sh", stateDir, anchor, String(epoch), String(sequence)], { encoding: "utf8" });
+      writeFileSync(join(stateDir, "sequence"), "0:9");
+      writeFileSync(join(stateDir, "sequence-anchor"), anchor);
+      check("install.sh same anchor refuses replay", invoke(0, 8).status !== 0);
+      writeFileSync(join(stateDir, "sequence-anchor"), otherAnchor);
+      check("install.sh different anchor resets the high-water mark", invoke(0, 8).status === 0);
+      writeFileSync(join(stateDir, "sequence"), "1:1");
+      writeFileSync(join(stateDir, "sequence-anchor"), anchor);
+      check("install.sh refuses a lower epoch with the same anchor", invoke(0, 100).status !== 0);
+      writeFileSync(join(stateDir, "sequence"), "9");
+      check("install.sh reads a legacy bare sequence as epoch zero", invoke(0, 8).status !== 0 && invoke(1, 1).status === 0);
+      rmSync(join(stateDir, "sequence-anchor"));
+      check("install.sh resets an unanchored legacy reinstall", invoke(0, 8).status === 0);
+    } else {
+      const readPointer = /\n {2}function Read-Pointer[\s\S]*?\n {2}\}\n/.exec(rendered.ps1)?.[0];
+      const replayCheck = /\n {2}function Test-RecordedSequence[\s\S]*?\n {2}\}\n/.exec(rendered.ps1)?.[0];
+      const escaped = stateDir.replace(/'/g, "''");
+      const invoke = (epoch: number, sequence: number) => {
+        const script = `$ErrorActionPreference = 'Stop'\nfunction Fail([string]$m) { throw $m }\n${readPointer}\n${replayCheck}\nTest-RecordedSequence '${escaped}' ${epoch} ${sequence} '${anchor}'`;
+        return spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
+      };
+      writeFileSync(join(stateDir, "sequence"), "0:9");
+      writeFileSync(join(stateDir, "sequence-anchor"), anchor);
+      check("install.ps1 same anchor refuses replay", invoke(0, 8).status !== 0);
+      writeFileSync(join(stateDir, "sequence-anchor"), otherAnchor);
+      check("install.ps1 different anchor resets the high-water mark", invoke(0, 8).status === 0);
+      writeFileSync(join(stateDir, "sequence"), "1:1");
+      writeFileSync(join(stateDir, "sequence-anchor"), anchor);
+      check("install.ps1 refuses a lower epoch with the same anchor", invoke(0, 100).status !== 0);
+      writeFileSync(join(stateDir, "sequence"), "9");
+      check("install.ps1 reads a legacy bare sequence as epoch zero", invoke(0, 8).status !== 0 && invoke(1, 1).status === 0);
+      rmSync(join(stateDir, "sequence-anchor"));
+      check("install.ps1 resets an unanchored legacy reinstall", invoke(0, 8).status === 0);
+    }
+  } finally { rmSync(stateDir, { recursive: true, force: true }); }
+}
+
 // Redirects: every hop is checked before it is contacted, so a download can never leave the allowed
 // transport (HTTPS in production; this loopback render additionally allows http://127.0.0.1 only).
 {
@@ -190,6 +238,60 @@ check("installers run every staged-bundle command through the bound",
     server.close();
     rmSync(work, { recursive: true, force: true });
   }
+}
+
+// Drive the rendered installer through signature and epoch checks. A valid opening manifest reaches
+// the deliberately missing bundle; invalid signatures must stop before the bundle is requested.
+{
+  const ordinary = generateKeyPairSync("rsa", { modulusLength: 3072 });
+  const recovery = generateKeyPairSync("rsa", { modulusLength: 3072 });
+  const replacement = generateKeyPairSync("rsa", { modulusLength: 3072 });
+  const oldKey = trustedKeyFromPublicKey("ordinary-test", ordinary.publicKey);
+  const offlineKey = trustedKeyFromPublicKey("recovery-test", recovery.publicKey);
+  const nextKey = trustedKeyFromPublicKey("replacement-test", replacement.publicKey);
+  let body = Buffer.alloc(0);
+  let signature = "";
+  let bundleRequests = 0;
+  const server = createServer((request, response) => {
+    if (request.url === "/m") response.end(body);
+    else if (request.url === "/m.sig") response.end(signature);
+    else { bundleRequests++; response.writeHead(404); response.end(); }
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const channel = { channel: "stable", manifestUrl: `${origin}/m`, artifactPrefix: `${origin}/d/`, keys: [oldKey], recoveryKeys: [offlineKey], epoch: 0, minSequence: 1 };
+  const scripts = renderInstallers(channel);
+  const home = mkdtempSync(join(tmpdir(), "aiboard-epoch-installer-"));
+  const installer = join(home, process.platform === "win32" ? "install.ps1" : "install.sh");
+  writeFileSync(installer, process.platform === "win32" ? scripts.ps1 : scripts.sh);
+  const now = new Date();
+  const stamp = (date: Date) => date.toISOString().replace(/\.\d{3}Z$/, "Z");
+  const make = (epoch: number, keyId: string, signer: typeof ordinary.privateKey, signingKeys: typeof channel.keys) => {
+    body = Buffer.from(serializeManifest({ schemaVersion: 2, product: RELEASE_PRODUCT, channel: "stable", version: "0.2.0", epoch,
+      sequence: 1, signingKeys, createdAt: stamp(now), expiresAt: stamp(new Date(now.getTime() + 86400_000)),
+      minInstallerVersion: INSTALLER_PROTOCOL, keyId, nodeVersion: "24.18.0", artifacts: RELEASE_TARGETS.map((target) => ({
+        target, format: targetFormat(target), preview: PREVIEW_TARGETS.has(target), bytes: 1, sha256: "a".repeat(64), url: `${origin}/d/${target}`,
+      })) }));
+    signature = signManifestBytes(body, signer);
+  };
+  const run = () => new Promise<{ output: string; requested: number }>((done) => {
+    bundleRequests = 0;
+    const command = process.platform === "win32" ? "powershell.exe" : "sh";
+    const args = process.platform === "win32" ? ["-NoProfile", "-NonInteractive", "-File", installer] : [installer];
+    execFile(command, args, { encoding: "utf8", timeout: 60_000, env: { ...process.env, HOME: home, LOCALAPPDATA: home, AIBOARD_ALLOW_ROOT: "1", AIBOARD_NO_MODIFY_PATH: "1" } },
+      (_error, stdout, stderr) => done({ output: stdout + stderr, requested: bundleRequests }));
+  });
+  try {
+    make(1, oldKey.keyId, ordinary.privateKey, [nextKey]);
+    const ordinaryBump = await run();
+    check("installer refuses an epoch bump signed only by the ordinary key", /new epoch requires a recovery signature/i.test(ordinaryBump.output) && ordinaryBump.requested === 0, ordinaryBump);
+    make(1, offlineKey.keyId, recovery.privateKey, [nextKey]);
+    const recoveryBump = await run();
+    check("installer accepts a recovery-signed epoch bump before fetching its bundle", recoveryBump.requested > 0 && /could not download/i.test(recoveryBump.output), recoveryBump);
+    make(0, offlineKey.keyId, recovery.privateKey, []);
+    const ordinaryRecovery = await run();
+    check("installer refuses a recovery key on an ordinary same-epoch manifest", /recovery key cannot sign an ordinary release/i.test(ordinaryRecovery.output) && ordinaryRecovery.requested === 0, ordinaryRecovery);
+  } finally { server.close(); rmSync(home, { recursive: true, force: true }); }
 }
 
 if (failures > 0) { console.error(`${failures} installer check(s) failed.`); process.exit(1); }
