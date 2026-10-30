@@ -12,6 +12,7 @@ const STATES: ReadonlySet<string> = new Set<RemoteConnectionStateName>(
 
 const SUSPENDED: Partial<Record<RemoteConnectionReason, string>> = {
   owner_lock_lost: "another AIBoard Runner took over this device",
+  superseded: "another AIBoard Runner connected as this device and replaced this connection",
   local_pause: "paused on this computer",
   device_policy_expired: "this device's policy expired",
   entitlement_expired: "your AIBoard Remote plan is not active",

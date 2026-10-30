@@ -64,7 +64,7 @@ export class WebSocketRemoteTransport implements RemoteTransport {
   private socket: WebSocketLike | undefined;
   private limits: RemoteFrameLimits = DEFAULT_REMOTE_FRAME_LIMITS;
   private messageHandler: ((message: RemoteTransportMessage) => void | Promise<void>) | undefined;
-  private closeHandler: (() => void) | undefined;
+  private closeHandler: ((info?: { readonly code?: number }) => void) | undefined;
   /** Inbound frames are handled strictly in arrival order. */
   private inbound: Promise<void> = Promise.resolve();
   private inboundMessages = 0;
@@ -110,9 +110,9 @@ export class WebSocketRemoteTransport implements RemoteTransport {
         resolve();
       });
       socket.addEventListener("error", () => fail(new Error("Relay connection failed.")));
-      socket.addEventListener("close", () => {
+      socket.addEventListener("close", (event: CloseEvent) => {
         fail(new Error("Relay connection closed during connect."));
-        this.markClosed();
+        this.markClosed(event.code);
       });
       socket.addEventListener("message", (event: MessageEvent) => { this.receive(event.data); });
     });
@@ -186,7 +186,7 @@ export class WebSocketRemoteTransport implements RemoteTransport {
     this.messageHandler = handler;
   }
 
-  onClose(handler: () => void): void {
+  onClose(handler: (info?: { readonly code?: number }) => void): void {
     this.closeHandler = handler;
   }
 
@@ -217,10 +217,10 @@ export class WebSocketRemoteTransport implements RemoteTransport {
     try { this.socket?.close(1008, "transport limit"); } catch { /* already closing */ }
   }
 
-  private markClosed(): void {
+  private markClosed(code?: number): void {
     if (this.closed) return;
     this.closed = true;
     for (const cancel of [...this.pendingSends]) cancel(new Error("Remote transport closed while sending."));
-    this.closeHandler?.();
+    this.closeHandler?.(code === undefined ? undefined : { code });
   }
 }

@@ -17,7 +17,10 @@ export type RemoteConnectionReason =
   | "initial" | "connecting" | "reconnecting" | "socket_lost" | "authentication_failed" | "reprovisioned"
   | "reconciliation_pending" | "required_tool_unavailable" | "optional_tool_unavailable" | "recovery_unverified"
   | "ready" | "local_pause" | "owner_lock_lost" | "device_policy_expired" | "entitlement_expired"
-  | "recovery_unresolved" | "device_clone_detected" | "device_key_revoked";
+  | "recovery_unresolved" | "device_clone_detected" | "device_key_revoked" | "superseded";
+
+/** Relay close code: a newer verified connection for this device id replaced this one. */
+export const SUPERSEDED_CLOSE_CODE = 4001;
 
 /**
  * Owner decision 2026-10-29: an established connection retries until the person closes the Runner, waiting at
@@ -82,7 +85,8 @@ export interface RemoteTransport {
   /** Check beforeSend synchronously at the socket write, after any queue or backpressure wait. */
   send(message: RemoteTransportMessage, signal?: AbortSignal, beforeSend?: () => boolean): Promise<void> | void;
   onMessage(handler: (message: RemoteTransportMessage) => void | Promise<void>): void;
-  onClose(handler: () => void): void;
+  /** `code` is the WebSocket close code when the transport knows it. */
+  onClose(handler: (info?: { readonly code?: number }) => void): void;
   /** Limits negotiated at the handshake, for a transport that encodes frames itself. */
   setFrameLimits?(limits: RemoteFrameLimits): void;
 }
@@ -400,7 +404,7 @@ export class RemoteConnector {
     const transport = this.options.createTransport({ deviceId: deviceStore.load()?.deviceId ?? "device-unprovisioned" });
     this.transport = transport;
     transport.onMessage((message) => this.onMessage(message));
-    transport.onClose(() => { if (this.transport === transport) this.onTransportClose(); });
+    transport.onClose((info) => { if (this.transport === transport) this.onTransportClose(info?.code); });
     try {
       await transport.connect();
       const challenge = await this.waitForChallenge();
@@ -585,7 +589,7 @@ export class RemoteConnector {
     }
   }
 
-  private onTransportClose(): void {
+  private onTransportClose(code?: number): void {
     if (this.closing || this.closed) return;
     this.challengeWaiter?.reject(new Error("Remote transport closed."));
     this.authWaiter?.reject(new Error("Remote transport closed."));
@@ -594,6 +598,8 @@ export class RemoteConnector {
     this.admitting = false;
     this.transfers.abortAll();
     if (this.current.state === "revoked" || this.current.state === "suspended") return;
+    // Another connection for this device id took over; reconnecting would only knock it off in turn.
+    if (code === SUPERSEDED_CLOSE_CODE) { this.transition("suspended", "superseded"); return; }
     this.transition("disconnected", "socket_lost");
     // Only an established connection reconnects; auth failure fails closed.
     if (this.established) this.scheduleReconnect();

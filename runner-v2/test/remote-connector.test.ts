@@ -88,13 +88,13 @@ class FakeTransport implements RemoteTransport {
   connectCount = 0;
   onProof: ((proof: { deviceId: string; publicKey: string; signature: string }) => void) | undefined;
   private handler: ((message: RemoteTransportMessage) => void | Promise<void>) | undefined;
-  private closeHandler: (() => void) | undefined;
+  private closeHandler: ((info?: { readonly code?: number }) => void) | undefined;
 
   async connect(): Promise<void> { this.connectCount += 1; }
 
-  /** Simulate socket loss without a clean close. */
-  drop(): void {
-    this.closeHandler?.();
+  /** Simulate socket loss without a clean close, optionally with the relay's close code. */
+  drop(code?: number): void {
+    this.closeHandler?.(code === undefined ? undefined : { code });
   }
 
   async close(): Promise<void> {
@@ -112,7 +112,7 @@ class FakeTransport implements RemoteTransport {
     this.handler = handler;
   }
 
-  onClose(handler: () => void): void {
+  onClose(handler: (info?: { readonly code?: number }) => void): void {
     this.closeHandler = handler;
   }
 
@@ -835,6 +835,29 @@ test("reconnect after socket loss never replays readiness", async (t) => {
   for (let i = 0; i < 40; i += 1) await tick();
   assert.notEqual(harness.connector.state().state, "tool-ready");
   assert.equal(harness.dispatches.count, 0);
+});
+
+test("a connection superseded by the relay (close 4001) stops reconnecting and says why", async (t) => {
+  const harness = await stubHarness(t);
+  await handshake(harness);
+  const connects = harness.transport.connectCount;
+  harness.transport.drop(4001);
+  assert.deepEqual([harness.connector.state().state, harness.connector.state().reasonCode], ["suspended", "superseded"]);
+  await new Promise<void>((resolve) => setTimeout(resolve, 300));
+  assert.equal(harness.transport.connectCount, connects, "a superseded connection does not reconnect");
+  assert.equal(harness.dispatches.count, 0);
+  assert.match(createRemoteStateNotices()("suspended", "superseded") ?? "", /replaced this connection/);
+});
+
+test("any other close code still reconnects", async (t) => {
+  const harness = await stubHarness(t);
+  await handshake(harness);
+  const connects = harness.transport.connectCount;
+  harness.transport.drop(1006);
+  assert.equal(harness.connector.state().state, "disconnected");
+  const deadline = Date.now() + 5_000;
+  while (harness.transport.connectCount === connects && Date.now() < deadline) await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  assert.ok(harness.transport.connectCount > connects, "an ordinary loss reconnects");
 });
 
 test("a lost connection keeps retrying past the old 8-attempt cap until the device is revoked", async (t) => {
