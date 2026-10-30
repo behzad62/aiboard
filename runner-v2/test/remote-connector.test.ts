@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
+import { generateKeyPairSync, sign as cryptoSign, type KeyObject } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -22,11 +22,15 @@ import {
 } from "../src/remote-admission-store.js";
 import {
   RemoteAuthenticator,
+  RemoteAuthError,
   verifyDeviceProof,
   REMOTE_CONNECT_SCOPE,
   REMOTE_RELAY_AUDIENCE,
   type RelayChallenge,
   type RemoteAuthorization,
+  type RemoteAuthenticatorOptions,
+  type RelayKeySetStatement,
+  type SignedRelayKeySet,
   type RemoteSessionIssuer,
 } from "../src/remote-auth.js";
 import {
@@ -138,10 +142,31 @@ interface Harness {
 const relayPair = generateKeyPairSync("ed25519");
 const RELAY_KEY_ID = "relay-test-1";
 const relayPublicKey = relayPair.publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+const rootPair = generateKeyPairSync("ed25519");
+const rotatedPair = generateKeyPairSync("ed25519");
+const ROOT_KEY_ID = "root-test-1";
+const ROTATED_KEY_ID = "relay-test-2";
+const RELAY_ORIGIN = "https://relay.test";
+const rootPublicKey = rootPair.publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+const rotatedPublicKey = rotatedPair.publicKey.export({ type: "spki", format: "der" }).toString("base64url");
 
-function signedChallenge(challenge: RelayChallenge): Extract<RemoteTransportMessage, { type: "challenge" }> {
-  return { type: "challenge", challenge, keyId: RELAY_KEY_ID,
-    signature: cryptoSign(null, Buffer.from(canonicalJson(challenge)), relayPair.privateKey).toString("base64url") };
+function signedChallenge(challenge: RelayChallenge, key = relayPair.privateKey, keyId = RELAY_KEY_ID,
+  keySet?: SignedRelayKeySet): Extract<RemoteTransportMessage, { type: "challenge" }> {
+  return { type: "challenge", challenge, keyId,
+    signature: cryptoSign(null, Buffer.from(canonicalJson(challenge)), key).toString("base64url"),
+    ...(keySet !== undefined ? { keySet } : {}) };
+}
+
+function signedKeySet(overrides: Partial<RelayKeySetStatement> = {}, signer: KeyObject = rootPair.privateKey): SignedRelayKeySet {
+  const statement: RelayKeySetStatement = {
+    relayOrigin: RELAY_ORIGIN,
+    keys: [{ keyId: ROTATED_KEY_ID, publicKey: rotatedPublicKey }],
+    issuedAt: new Date(fixedNow.getTime() + 60_000).toISOString(),
+    expiresAt: new Date(fixedNow.getTime() + 24 * 60 * 60_000).toISOString(),
+    ...overrides,
+  };
+  return { statement, rootKeyId: ROOT_KEY_ID,
+    signature: cryptoSign(null, Buffer.from(canonicalJson(statement)), signer).toString("base64url") };
 }
 
 function sessionFor(): RemoteDeviceSession {
@@ -203,15 +228,18 @@ async function stubHarness(t: test.TestContext, options: {
   runtime?: RemoteRequestRuntime;
   onStateChange?: (state: RemoteConnectionState) => void;
   statusReport?: () => RemoteStatusReport | undefined;
+  sleep?: (ms: number) => Promise<void>;
+  session?: RemoteDeviceSession;
+  relayRoots?: RemoteAuthenticatorOptions["relayRoots"];
 } = {}): Promise<Harness> {
   const root = await temporary();
   const state = join(root, "state");
   await mkdir(state, { recursive: true });
   const deviceStore = new RemoteDeviceStore(state);
   const identity = deviceStore.ensure(ACCOUNT);
-  const session = sessionFor();
+  const session = options.session ?? sessionFor();
   deviceStore.saveSession(session);
-  const authenticator = new RemoteAuthenticator(deviceStore, { now: clock });
+  const authenticator = new RemoteAuthenticator(deviceStore, { now: clock, relayRoots: options.relayRoots });
   const admission = new RemoteAdmissionStore(join(state, "remote-admission.sqlite"), Buffer.alloc(32, 7), clock);
   const transport = new FakeTransport();
   const dispatches = { count: 0, results: [] as ToolResult[] };
@@ -221,7 +249,7 @@ async function stubHarness(t: test.TestContext, options: {
     createTransport: () => transport,
     reconcile: options.reconcile ?? (async () => { admission.reconcileStartup(); }),
     now: clock,
-    sleep: testSleep,
+    sleep: options.sleep ?? testSleep,
     handshakeTimeoutMs: 60_000,
     ...(options.isOwnerLockHeld ? { isOwnerLockHeld: options.isOwnerLockHeld } : {}),
     ...(options.onShutdownStep ? { onShutdownStep: options.onShutdownStep } : {}),
@@ -274,6 +302,218 @@ function makeRequest(deviceId: string, overrides: Partial<RemoteRequest> = {}): 
   request.payloadDigest = remotePayloadDigest(request);
   return request;
 }
+
+const rotationRoots = { [RELAY_ORIGIN]: [{ keyId: ROOT_KEY_ID, publicKey: rootPublicKey }] };
+const rotationSession = (): RemoteDeviceSession => ({ ...sessionFor(), relayOrigin: RELAY_ORIGIN });
+
+test("a root-signed rotation is persisted and the connector immediately accepts the new authorization key", async (t) => {
+  const harness = await stubHarness(t, { session: rotationSession(), relayRoots: rotationRoots });
+  const keySet = signedKeySet();
+  const started = harness.connector.start();
+  await tick(); await tick();
+  harness.transport.onProof = (proof) => {
+    assert.equal(verifyDeviceProof(harness.deviceStore.load()!.publicKey, harness.challenge, proof.signature), true);
+    void harness.transport.emit({ type: "authenticated", epoch: harness.challenge.epoch });
+  };
+  await harness.transport.emit(signedChallenge(harness.challenge, rotatedPair.privateKey, ROTATED_KEY_ID, keySet));
+  await started;
+  assert.equal(harness.connector.state().state, "tool-ready");
+  const expected = { ...harness.session, relayKeys: keySet.statement.keys, relayKeysIssuedAt: keySet.statement.issuedAt };
+  assert.deepEqual(harness.deviceStore.loadSession(), expected);
+  assert.deepEqual(new RemoteDeviceStore(harness.state).loadSession(), expected, "a fresh store reloads the adopted timestamp");
+
+  const request = makeRequest(harness.deviceStore.load()!.deviceId);
+  const unsigned = authorize(request, {}, ROTATED_KEY_ID);
+  const authorization = { ...unsigned, signature: cryptoSign(null, Buffer.from(canonicalJson(unsigned.claims)),
+    rotatedPair.privateKey).toString("base64url") };
+  await emitRequest(harness.transport, request, authorization);
+  assert.equal(harness.transport.responses().at(-1)!.response.admitted, true);
+  assert.equal(harness.dispatches.count, 1);
+
+  await emitRequest(harness.transport, makeRequest(harness.deviceStore.load()!.deviceId));
+  assert.equal(harness.transport.responses().at(-1)!.response.errorCode, "unauthorized", "the removed key cannot authorize requests");
+  assert.equal(harness.dispatches.count, 1);
+});
+
+test("after adopting a key set, a reconnect whose challenge omits it is refused (no downgrade to the session keys)", async (t) => {
+  const harness = await stubHarness(t, {
+    session: rotationSession(), relayRoots: rotationRoots,
+    sleep: (ms) => ms === 60_000 ? new Promise<void>(() => undefined) : Promise.resolve(),
+  });
+  const started = harness.connector.start();
+  await tick(); await tick();
+  harness.transport.onProof = () => { void harness.transport.emit({ type: "authenticated", epoch: "5" }); };
+  await harness.transport.emit(signedChallenge(harness.challenge, rotatedPair.privateKey, ROTATED_KEY_ID, signedKeySet()));
+  await started;
+  assert.equal(harness.connector.isReady(), true);
+  harness.transport.drop();
+  await tick(); await tick();
+  assert.equal(harness.transport.connectCount, 2);
+  const next = challengeFor(harness.deviceStore.load()!.deviceId, { nonce: "reconnect-after-rotation" });
+  await harness.transport.emit(signedChallenge(next, rotatedPair.privateKey, ROTATED_KEY_ID));
+  await tick(); await tick();
+  assert.equal(harness.connector.isReady(), false);
+  assert.equal(harness.transport.sent.filter((message) => message.type === "proof").length, 1, "no proof without the key set");
+
+});
+
+const attackerPair = generateKeyPairSync("ed25519");
+const otherAlgorithmKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).publicKey
+  .export({ type: "spki", format: "der" }).toString("base64url");
+const invalidKeySets: readonly {
+  name: string;
+  keySet: () => SignedRelayKeySet;
+  challengeKey?: KeyObject;
+  challengeKeyId?: string;
+}[] = [
+  { name: "a null key set", keySet: () => null as unknown as SignedRelayKeySet },
+  { name: "a non-root signer", keySet: () => signedKeySet({}, attackerPair.privateKey) },
+  { name: "an unknown root id", keySet: () => ({ ...signedKeySet(), rootKeyId: "other-root" }) },
+  { name: "a malformed root signature", keySet: () => ({ ...signedKeySet(), signature: "bad" }) },
+  { name: "a wrong origin", keySet: () => signedKeySet({ relayOrigin: "https://other.test" }) },
+  { name: "an expired statement", keySet: () => signedKeySet({ expiresAt: new Date(fixedNow.getTime() - 1).toISOString() }) },
+  { name: "a statement expiring now", keySet: () => signedKeySet({ expiresAt: fixedNow.toISOString() }) },
+  { name: "a lifetime over seven days", keySet: () => signedKeySet({
+    expiresAt: new Date(fixedNow.getTime() + 7 * 24 * 60 * 60_000 + 120_000).toISOString(),
+  }) },
+  { name: "an issued time more than five minutes ahead", keySet: () => signedKeySet({
+    issuedAt: new Date(fixedNow.getTime() + 5 * 60_000 + 1).toISOString(),
+  }) },
+  { name: "duplicate key ids", keySet: () => signedKeySet({
+    keys: [{ keyId: ROTATED_KEY_ID, publicKey: rotatedPublicKey }, { keyId: ROTATED_KEY_ID, publicKey: relayPublicKey }],
+  }) },
+  { name: "no keys", keySet: () => signedKeySet({ keys: [] }) },
+  { name: "more than eight keys", keySet: () => signedKeySet({
+    keys: Array.from({ length: 9 }, (_, index) => ({ keyId: String(index), publicKey: rotatedPublicKey })),
+  }) },
+  { name: "an invalid Ed25519 SPKI", keySet: () => signedKeySet({ keys: [{ keyId: ROTATED_KEY_ID, publicKey: "bad" }] }) },
+  { name: "a non-Ed25519 SPKI", keySet: () => signedKeySet({ keys: [{ keyId: ROTATED_KEY_ID, publicKey: otherAlgorithmKey }] }) },
+  { name: "a non-canonical SPKI encoding", keySet: () => signedKeySet({
+    keys: [{ keyId: ROTATED_KEY_ID, publicKey: rotatedPublicKey + "=" }],
+  }) },
+  { name: "a statement older than pairing", keySet: () => signedKeySet({
+    issuedAt: new Date(fixedNow.getTime() - 1).toISOString(),
+  }) },
+  { name: "a challenge signed outside the statement", keySet: () => signedKeySet(),
+    challengeKey: relayPair.privateKey, challengeKeyId: RELAY_KEY_ID },
+  { name: "a challenge signed by the wrong private key", keySet: () => signedKeySet(), challengeKey: attackerPair.privateKey },
+];
+
+for (const scenario of invalidKeySets) {
+  test("rotation refuses " + scenario.name + " without changing the stored session", async (t) => {
+    const harness = await stubHarness(t, { session: rotationSession(), relayRoots: rotationRoots });
+    const file = join(harness.state, "remote-device-session.json");
+    const before = await readFile(file, "utf8");
+    const frame = signedChallenge(harness.challenge, scenario.challengeKey ?? rotatedPair.privateKey,
+      scenario.challengeKeyId ?? ROTATED_KEY_ID, scenario.keySet());
+    assert.throws(() => harness.authenticator.answerChallenge(frame, harness.session),
+      (error: unknown) => error instanceof RemoteAuthError && error.code === "unauthorized");
+    assert.equal(await readFile(file, "utf8"), before);
+  });
+}
+
+test("an invalid key set fails the connector handshake without a proof", async (t) => {
+  const harness = await stubHarness(t, { session: rotationSession(), relayRoots: rotationRoots });
+  const before = await readFile(join(harness.state, "remote-device-session.json"), "utf8");
+  const started = harness.connector.start();
+  await tick(); await tick();
+  await harness.transport.emit(signedChallenge(harness.challenge, rotatedPair.privateKey, ROTATED_KEY_ID,
+    signedKeySet({}, attackerPair.privateKey)));
+  await started;
+  assert.equal(harness.connector.state().reasonCode, "authentication_failed");
+  assert.equal(harness.transport.sent.some((message) => message.type === "proof"), false);
+  assert.equal(await readFile(join(harness.state, "remote-device-session.json"), "utf8"), before);
+});
+
+test("replaying an older root-signed key set is refused even with a stale session object", async (t) => {
+  const harness = await stubHarness(t, { session: rotationSession(), relayRoots: rotationRoots });
+  const current = signedKeySet();
+  harness.authenticator.answerChallenge(signedChallenge(harness.challenge, rotatedPair.privateKey, ROTATED_KEY_ID, current), harness.session);
+  const file = join(harness.state, "remote-device-session.json");
+  const before = await readFile(file, "utf8");
+  const stale = signedKeySet({ issuedAt: fixedNow.toISOString(), keys: harness.session.relayKeys });
+  const challenge = challengeFor(harness.deviceStore.load()!.deviceId, { nonce: "replayed-set" });
+  assert.throws(() => harness.authenticator.answerChallenge(signedChallenge(challenge, relayPair.privateKey, RELAY_KEY_ID, stale), harness.session),
+    (error: unknown) => error instanceof RemoteAuthError && error.code === "unauthorized");
+  assert.equal(await readFile(file, "utf8"), before);
+});
+
+test("the same root-signed issuance can be used again with a fresh challenge", async (t) => {
+  const harness = await stubHarness(t, { session: rotationSession(), relayRoots: rotationRoots });
+  const keySet = signedKeySet();
+  harness.authenticator.answerChallenge(signedChallenge(harness.challenge, rotatedPair.privateKey, ROTATED_KEY_ID, keySet), harness.session);
+  const challenge = challengeFor(harness.deviceStore.load()!.deviceId, { nonce: "same-key-set" });
+  const proof = harness.authenticator.answerChallenge(
+    signedChallenge(challenge, rotatedPair.privateKey, ROTATED_KEY_ID, keySet), harness.session);
+  assert.equal(verifyDeviceProof(harness.deviceStore.load()!.publicKey, challenge, proof.signature), true);
+  assert.equal(harness.deviceStore.loadSession()!.relayKeysIssuedAt, keySet.statement.issuedAt);
+});
+
+test("a valid statement cannot be persisted when its challenge is invalid", async (t) => {
+  const harness = await stubHarness(t, { session: rotationSession(), relayRoots: rotationRoots });
+  const file = join(harness.state, "remote-device-session.json");
+  const before = await readFile(file, "utf8");
+  const challenge = { ...harness.challenge, audience: "wrong" };
+  assert.throws(() => harness.authenticator.answerChallenge(
+    signedChallenge(challenge, rotatedPair.privateKey, ROTATED_KEY_ID, signedKeySet()), harness.session),
+  (error: unknown) => error instanceof RemoteAuthError && error.code === "unauthorized");
+  assert.equal(await readFile(file, "utf8"), before);
+});
+
+test("the five-minute skew, seven-day lifetime and eight-key limits are inclusive", async (t) => {
+  const harness = await stubHarness(t, { session: rotationSession(), relayRoots: rotationRoots });
+  const issued = fixedNow.getTime() + 5 * 60_000;
+  const keys = Array.from({ length: 8 }, (_, index) => ({ keyId: index === 0 ? ROTATED_KEY_ID : "overlap-" + index, publicKey: rotatedPublicKey }));
+  const keySet = signedKeySet({ keys, issuedAt: new Date(issued).toISOString(),
+    expiresAt: new Date(issued + 7 * 24 * 60 * 60_000).toISOString() });
+  const proof = harness.authenticator.answerChallenge(
+    signedChallenge(harness.challenge, rotatedPair.privateKey, ROTATED_KEY_ID, keySet), harness.session);
+  assert.equal(verifyDeviceProof(harness.deviceStore.load()!.publicKey, harness.challenge, proof.signature), true);
+  assert.deepEqual(harness.deviceStore.loadSession()!.relayKeys, keys);
+});
+
+test("legacy challenges leave the session unchanged and persisted key-set timestamps are validated", async (t) => {
+  const harness = await stubHarness(t);
+  const file = join(harness.state, "remote-device-session.json");
+  const before = await readFile(file, "utf8");
+  const proof = harness.authenticator.answerChallenge(signedChallenge(harness.challenge), harness.session);
+  assert.equal(verifyDeviceProof(harness.deviceStore.load()!.publicKey, harness.challenge, proof.signature), true);
+  assert.equal(await readFile(file, "utf8"), before);
+  assert.equal(new RemoteDeviceStore(harness.state).loadSession()!.relayKeysIssuedAt, undefined);
+  for (const invalid of ["not-a-date", "", null, 123]) {
+    const session = { ...harness.session, relayKeysIssuedAt: invalid } as unknown as RemoteDeviceSession;
+    assert.throws(() => harness.deviceStore.saveSession(session), /invalid/i);
+    await writeFile(file, JSON.stringify(session));
+    assert.throws(() => harness.deviceStore.loadSession(), /invalid/i);
+  }
+});
+
+test("runtime composition resolves custom relay roots using the pairing configuration", async (t) => {
+  const root = await temporary();
+  const project = join(root, "project");
+  const state = join(root, "state");
+  await mkdir(project); await mkdir(state);
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
+  const composition = composeRemoteRuntime({
+    stateDirectory: state, deviceDirectory: state, workspacePath: project, host, permissionProfile: "full",
+    capabilitiesConfig: emptyRunnerCapabilitiesConfig(), now: clock,
+    relayUrl: "ws://127.0.0.1:8788/connect", relayRootKeys: [rootPublicKey],
+  });
+  t.after(async () => {
+    await closeRemoteComposition(composition);
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+  const identity = composition.deviceStore.ensure(ACCOUNT);
+  const session = { ...sessionFor(), relayOrigin: "http://127.0.0.1:8788" };
+  composition.deviceStore.saveSession(session);
+  const challenge = challengeFor(identity.deviceId);
+  const keySet = signedKeySet({ relayOrigin: session.relayOrigin });
+  const proof = composition.authenticator.answerChallenge(
+    signedChallenge(challenge, rotatedPair.privateKey, ROTATED_KEY_ID, keySet), session);
+  assert.equal(verifyDeviceProof(identity.publicKey, challenge, proof.signature), true);
+  assert.deepEqual(composition.deviceStore.loadSession()!.relayKeys, keySet.statement.keys);
+});
 
 test("authenticated epoch handshake fences admission and reaches tool-ready", async (t) => {
   const harness = await stubHarness(t);

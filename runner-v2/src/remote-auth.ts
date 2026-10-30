@@ -1,7 +1,8 @@
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 
 import { canonicalJson, type RemoteRequest } from "./remote-admission-store.js";
-import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
+import type { RemoteDeviceSession, RemoteDeviceStore, RemoteRelayKey } from "./remote-device-store.js";
+import type { RelayRoot } from "./remote-pairing.js";
 
 /** Relay identity the Runner expects in every challenge (D12). */
 export const REMOTE_RELAY_AUDIENCE = "mcp.aiboard.me";
@@ -14,6 +15,8 @@ export const REMOTE_CONNECT_SCOPE = "aiboard.remote";
 const MAX_LIFETIME_MS = 10 * 60_000;
 /** Tolerated relay clock lead for a request's issuedAt. */
 const CLOCK_SKEW_MS = 60_000;
+const KEY_SET_CLOCK_SKEW_MS = 5 * 60_000;
+const MAX_KEY_SET_LIFETIME_MS = 7 * 24 * 60 * 60_000;
 /** Live nonces kept per cache; at capacity new ones are refused, never evicted early. */
 const MAX_LIVE_NONCES = 4096;
 /** Pairing URL used when no relay transport is configured. */
@@ -32,6 +35,20 @@ export interface RelayChallenge {
 export interface SignedRelayChallenge {
   readonly challenge: RelayChallenge;
   readonly keyId: string;
+  readonly signature: string;
+  readonly keySet?: SignedRelayKeySet;
+}
+
+export interface RelayKeySetStatement {
+  readonly relayOrigin: string;
+  readonly keys: readonly RemoteRelayKey[];
+  readonly issuedAt: string;
+  readonly expiresAt: string;
+}
+
+export interface SignedRelayKeySet {
+  readonly statement: RelayKeySetStatement;
+  readonly rootKeyId: string;
   readonly signature: string;
 }
 
@@ -121,6 +138,8 @@ export interface RemoteAuthenticatorOptions {
   readonly now?: () => Date;
   readonly expectedAudience?: string;
   readonly expectedScope?: string;
+  /** The same origin-scoped root pins used to verify pairing envelopes. */
+  readonly relayRoots?: Readonly<Record<string, readonly RelayRoot[]>>;
 }
 
 /**
@@ -132,6 +151,7 @@ export class RemoteAuthenticator {
   private readonly now: () => Date;
   private readonly expectedAudience: string;
   private readonly expectedScope: string;
+  private readonly relayRoots: Readonly<Record<string, readonly RelayRoot[]>>;
   private readonly seenChallengeNonces = new Map<string, number>();
   private readonly seenRequestNonces = new Map<string, number>();
 
@@ -142,6 +162,7 @@ export class RemoteAuthenticator {
     this.now = options.now ?? (() => new Date());
     this.expectedAudience = options.expectedAudience ?? REMOTE_RELAY_AUDIENCE;
     this.expectedScope = options.expectedScope ?? REMOTE_CONNECT_SCOPE;
+    this.relayRoots = options.relayRoots ?? {};
   }
 
   validateChallenge(challenge: RelayChallenge, session: RemoteDeviceSession): void {
@@ -191,7 +212,12 @@ export class RemoteAuthenticator {
       Object.keys(challenge).length !== fields.length || fields.some((field) => !Object.hasOwn(challenge, field))) {
       throw new RemoteAuthError("unauthorized", "Relay challenge fields are invalid.");
     }
-    const pinned = session.relayKeys.find((entry) => entry.keyId === signed.keyId);
+    // Once a root-signed key set was adopted, a challenge without one is a downgrade: an old key must not outlive its statement.
+    if (!Object.hasOwn(signed, "keySet") && (session.relayKeysIssuedAt !== undefined || this.storedKeySetAdopted())) {
+      throw new RemoteAuthError("unauthorized", "Relay key set is required.");
+    }
+    const updatedSession = Object.hasOwn(signed, "keySet") ? this.verifyKeySet(signed.keySet, session) : undefined;
+    const pinned = (updatedSession ?? session).relayKeys.find((entry) => entry.keyId === signed.keyId);
     let verified = false;
     try {
       if (pinned) {
@@ -202,15 +228,79 @@ export class RemoteAuthenticator {
       }
     } catch { verified = false; }
     if (!verified) throw new RemoteAuthError("unauthorized", "Relay challenge signature does not verify.");
-    this.validateChallenge(challenge, session);
+    if (updatedSession) {
+      try { this.validateChallenge(challenge, updatedSession); }
+      catch { throw new RemoteAuthError("unauthorized", "Relay challenge is invalid."); }
+    } else {
+      this.validateChallenge(challenge, session);
+    }
     const identity = this.deviceStore.load()!;
-    this.seenChallengeNonces.set(challenge.nonce, Date.parse(challenge.expiresAt));
-    const signature = this.deviceStore.sign(canonicalChallenge(challenge));
+    if (!updatedSession) this.seenChallengeNonces.set(challenge.nonce, Date.parse(challenge.expiresAt));
+    let signature: Buffer;
+    if (updatedSession) {
+      try {
+        signature = this.deviceStore.sign(canonicalChallenge(challenge));
+        this.deviceStore.saveSession(updatedSession);
+      } catch {
+        throw new RemoteAuthError("unauthorized", "Relay key set could not be adopted.");
+      }
+      this.seenChallengeNonces.set(challenge.nonce, Date.parse(challenge.expiresAt));
+    } else {
+      signature = this.deviceStore.sign(canonicalChallenge(challenge));
+    }
     return Object.freeze({
       deviceId: identity.deviceId,
       publicKey: identity.publicKey,
       signature: signature.toString("base64url"),
     });
+  }
+
+  private storedKeySetAdopted(): boolean {
+    try { return this.deviceStore.loadSession()?.relayKeysIssuedAt !== undefined; } catch { return true; }
+  }
+
+  /** Verify the root-signed statement before allowing any of its keys to sign the challenge. */
+  private verifyKeySet(value: unknown, session: RemoteDeviceSession): RemoteDeviceSession {
+    const fail = (): never => { throw new RemoteAuthError("unauthorized", "Relay key set is invalid."); };
+    let stored: RemoteDeviceSession | undefined;
+    try { stored = this.deviceStore.loadSession(); } catch { return fail(); }
+    if (!stored || !stored.relayOrigin || stored.relayOrigin !== session.relayOrigin ||
+      stored.accountId !== session.accountId || stored.clientId !== session.clientId ||
+      stored.scope !== session.scope || stored.issuedAt !== session.issuedAt) return fail();
+    if (!isRecord(value) || !hasFields(value, ["statement", "rootKeyId", "signature"]) ||
+      !isRecord(value.statement) || !printableId(value.rootKeyId) || !encodedSignature(value.signature)) return fail();
+    const statement = value.statement;
+    const roots = Object.hasOwn(this.relayRoots, stored.relayOrigin) ? this.relayRoots[stored.relayOrigin] : undefined;
+    let verified = false;
+    try {
+      const bytes = Buffer.from(canonicalJson(statement), "utf8");
+      verified = roots?.some((root) => {
+        // Custom pairing pins have no key id; their public key is still required to verify.
+        if (root.keyId !== undefined && root.keyId !== value.rootKeyId) return false;
+        try { return cryptoVerify(null, bytes, ed25519PublicKey(root.publicKey), Buffer.from(value.signature as string, "base64url")); }
+        catch { return false; }
+      }) ?? false;
+    } catch { return fail(); }
+    if (!verified || !hasFields(statement, ["relayOrigin", "keys", "issuedAt", "expiresAt"]) ||
+      statement.relayOrigin !== stored.relayOrigin || !isoTime(statement.issuedAt) || !isoTime(statement.expiresAt) ||
+      !Array.isArray(statement.keys) || statement.keys.length < 1 || statement.keys.length > 8) return fail();
+    const issuedAt = Date.parse(statement.issuedAt);
+    const expiresAt = Date.parse(statement.expiresAt);
+    const previousIssuedAt = Date.parse(stored.relayKeysIssuedAt ?? stored.issuedAt);
+    const now = this.now().getTime();
+    if (!Number.isFinite(previousIssuedAt) || !Number.isFinite(now) || issuedAt > now + KEY_SET_CLOCK_SKEW_MS ||
+      expiresAt <= now || expiresAt <= issuedAt || expiresAt - issuedAt > MAX_KEY_SET_LIFETIME_MS ||
+      issuedAt < previousIssuedAt) return fail();
+    const keys: RemoteRelayKey[] = [];
+    const ids = new Set<string>();
+    for (const entry of statement.keys as unknown[]) {
+      if (!isRecord(entry) || !hasFields(entry, ["keyId", "publicKey"]) ||
+        !printableId(entry.keyId) || typeof entry.publicKey !== "string" || ids.has(entry.keyId)) return fail();
+      try { ed25519PublicKey(entry.publicKey); } catch { return fail(); }
+      ids.add(entry.keyId);
+      keys.push({ keyId: entry.keyId, publicKey: entry.publicKey });
+    }
+    return { ...stored, relayKeys: keys, relayKeysIssuedAt: statement.issuedAt };
   }
 
   /**
@@ -293,4 +383,38 @@ export class RemoteAuthenticator {
     if (seenUntil !== undefined && seenUntil > now) throw new RemoteAuthError("unauthorized", message);
     if (seen.size >= MAX_LIVE_NONCES) throw new RemoteAuthError("unauthorized", "Too many live remote nonces; retry shortly.");
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasFields(value: Record<string, unknown>, fields: readonly string[]): boolean {
+  return Object.keys(value).length === fields.length && fields.every((field) => Object.hasOwn(value, field));
+}
+
+function printableId(value: unknown): value is string {
+  return typeof value === "string" && /^[\x21-\x7e]{1,256}$/.test(value);
+}
+
+function isoTime(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/.test(value) &&
+    Number.isFinite(Date.parse(value));
+}
+
+function encodedSignature(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{86}$/.test(value)) return false;
+  const bytes = Buffer.from(value, "base64url");
+  return bytes.length === 64 && bytes.toString("base64url") === value;
+}
+
+function ed25519PublicKey(value: string) {
+  if (!/^[A-Za-z0-9_-]+$/.test(value) || Buffer.from(value, "base64url").toString("base64url") !== value) {
+    throw new Error("Invalid relay public key.");
+  }
+  const key = createPublicKey({ key: Buffer.from(value, "base64url"), type: "spki", format: "der" });
+  if (key.asymmetricKeyType !== "ed25519" || key.export({ type: "spki", format: "der" }).toString("base64url") !== value) {
+    throw new Error("Invalid relay public key.");
+  }
+  return key;
 }

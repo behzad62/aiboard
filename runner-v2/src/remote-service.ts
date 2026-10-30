@@ -58,6 +58,8 @@ export interface RemoteServiceOptions {
   /** Real startup reconciliation (reconcileRunnerStartup) in the CLI. */
   readonly reconcileStartup?: () => Promise<void>;
   readonly now?: () => Date;
+  readonly relayUrl?: string;
+  readonly relayRootKeys?: readonly string[];
   readonly sleep?: (ms: number) => Promise<void>;
   readonly random?: () => number;
   readonly drainTimeoutMs?: number;
@@ -97,6 +99,7 @@ export class RemoteService {
       ...(options.extensionsHome ? { extensionsHome: options.extensionsHome } : {}),
       ...(options.protectedLocations ? { protectedLocations: options.protectedLocations } : {}),
       ...(options.now ? { now: options.now } : {}),
+      ...(options.relayUrl ? { relayUrl: options.relayUrl, relayRootKeys: options.relayRootKeys } : {}),
     });
   }
 

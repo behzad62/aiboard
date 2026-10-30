@@ -465,6 +465,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         capabilitiesConfig,
         extensionsHome: options.extensionsHome,
         protectedLocations,
+        ...(relayUrl ? { relayUrl, relayRootKeys: options.remoteRelayRootKeys } : {}),
         ...(buildRecoveryUnverified ? { reconcileStartup: async () => { throw new Error("Build ownership recovery remains unverified."); } } : {}),
         createTransport: seams.createTransport ?? configuredTransport ?? unavailableTransport,
         issuer: seams.issuer ?? pairing ?? new StubRemoteSessionIssuer(),

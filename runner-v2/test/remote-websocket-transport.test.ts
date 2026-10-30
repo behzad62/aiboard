@@ -94,6 +94,27 @@ function mockSocket() {
   return { socket, emit };
 }
 
+test("the WebSocket codec passes a challenge key set through unchanged", async () => {
+  const { socket, emit } = mockSocket();
+  const transport = new WebSocketRemoteTransport({ url: "ws://127.0.0.1:1/connect", createSocket: () => socket as unknown as WebSocket });
+  const received: RemoteTransportMessage[] = [];
+  transport.onMessage((message) => { received.push(message); });
+  const connected = transport.connect(); emit("open"); await connected;
+  const frame = {
+    type: "challenge",
+    challenge: { audience: "relay", accountId: "account", deviceId: "device", scope: "scope", nonce: "nonce", epoch: "1",
+      expiresAt: "2026-10-27T12:05:00.000Z" },
+    keyId: "new-key", signature: "challenge-signature",
+    keySet: { statement: { relayOrigin: "https://relay.test", keys: [{ keyId: "new-key", publicKey: "public-key" }],
+      issuedAt: "2026-10-27T12:00:00.000Z", expiresAt: "2026-10-28T12:00:00.000Z" },
+    rootKeyId: "root-key", signature: "root-signature" },
+  };
+  emit("message", { data: JSON.stringify(frame) });
+  await tick();
+  assert.deepEqual(received, [frame]);
+  await transport.close();
+});
+
 test("inbound count and byte limits close the transport when a handler is stalled", async () => {
   for (const mode of ["count", "bytes"] as const) {
     const { socket, emit } = mockSocket();

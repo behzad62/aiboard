@@ -8,7 +8,9 @@ import {
 } from "./remote-admission-store.js";
 import { RemoteAuthenticator } from "./remote-auth.js";
 import { RemoteDeviceStore } from "./remote-device-store.js";
+import { pairingRelayConfiguration } from "./remote-pairing.js";
 import { RemotePrincipalStore } from "./remote-principal.js";
+import { REMOTE_RELAY_ROOTS } from "./remote-relay-roots.js";
 import { RemoteToolRuntime } from "./remote-tool-runtime.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { FileStorageKeyProvider } from "./storage-key.js";
@@ -33,6 +35,8 @@ export interface RemoteCompositionOptions {
   readonly extensionsHome?: string;
   readonly protectedLocations?: ProtectedLocations;
   readonly now?: () => Date;
+  readonly relayUrl?: string;
+  readonly relayRootKeys?: readonly string[];
 }
 
 /**
@@ -41,6 +45,8 @@ export interface RemoteCompositionOptions {
  * key comes from the project storage key; the device key never does.
  */
 export function composeRemoteRuntime(options: RemoteCompositionOptions): RemoteComposition {
+  const relay = options.relayUrl ? pairingRelayConfiguration(options.relayUrl, options.relayRootKeys) : undefined;
+  const relayRoots = relay ? { ...REMOTE_RELAY_ROOTS, [relay.origin]: relay.roots } : REMOTE_RELAY_ROOTS;
   const deviceStore = new RemoteDeviceStore(options.deviceDirectory);
   const principals = new RemotePrincipalStore(join(options.stateDirectory, "remote-principals.sqlite"), undefined,
     join(options.deviceDirectory, "remote-device-policy.sqlite"), options.now);
@@ -63,7 +69,7 @@ export function composeRemoteRuntime(options: RemoteCompositionOptions): RemoteC
     ...(options.extensionsHome ? { extensionDirectories: [options.extensionsHome] } : {}),
     ...(options.protectedLocations ? { protectedLocations: options.protectedLocations } : {}),
   });
-  const authenticator = new RemoteAuthenticator(deviceStore, options.now ? { now: options.now } : {});
+  const authenticator = new RemoteAuthenticator(deviceStore, { relayRoots, ...(options.now ? { now: options.now } : {}) });
   return { deviceStore, principals, admission, runtime, authenticator };
 }
 
