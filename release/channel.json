@@ -3,6 +3,12 @@
   "channel": "stable",
   "manifestUrl": "https://aiboard.me/release/stable/manifest.json",
   "artifactPrefix": "https://github.com/behzad62/aiboard/releases/download/",
-  "keys": [],
+  "keys": [
+    {
+      "keyId": "aiboard-release-2026a",
+      "n": "tTit3KNq1LTpPKaVSuQmHw-m1Jv5wdq2CXVymSZaIM9oQ4gizBOrFg_0DkpNQ7Cii0MJN2P0a5VigGHtxPjXuLs7q4cu4pOsVspbAzx2-EynyK1uI8_EUCTiAzI4-UStvc6wJslfj7Yw-Uat2Mx0V8wlnp0oRWsad0TAiy76APcTlJM9tLfKQB4wf91ZsWDpClQ1yMO4TiWdJfBzUCFPlCxAb3tuAKVLjd1-TraRajv9zVXk6TmN9prZeWAh1_46_uIq84uVBLuQ0rzScsS_PBoO5xQlMeyhrragwjslQ5s0VIVixFVlzntKH1xN17zFdDRirQ0M-YjMpUkXnSPNTUin_CfvqtI1tQ11qGYbhTythzvYJh1npGTTYXI1nB_TyaDsBGOwVAt8Zg3145JDK4_3Jtee1V-0Ju71qzL1JcDUN7pXjPEl0zoLKT-vAlMgTG8Fd5-QeL73LcnvhIUxj6Rdma-Tl76AQlrRryARW1laURLKCgxJmhZHpel39CAJ",
+      "e": "AQAB"
+    }
+  ],
   "minSequence": 1
 }
