@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BarChart3, MessagesSquare, MonitorSmartphone, Settings } from "lucide-react";
-import { SITE_REMOTE_URL } from "@/lib/site";
+import { SITE_REMOTE_ENABLED, SITE_REMOTE_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const LINKS = [
@@ -42,16 +42,18 @@ export function AppNav() {
           </Link>
         );
       })}
-      <a
-        href={SITE_REMOTE_URL}
-        onClick={(event) => {
-          event.currentTarget.href = remoteHref();
-        }}
-        className={navItem}
-      >
-        <MonitorSmartphone className="h-4 w-4" aria-hidden="true" />
-        <span className="sr-only sm:not-sr-only">Remote</span>
-      </a>
+      {SITE_REMOTE_ENABLED && (
+        <a
+          href={SITE_REMOTE_URL}
+          onClick={(event) => {
+            event.currentTarget.href = remoteHref();
+          }}
+          className={navItem}
+        >
+          <MonitorSmartphone className="h-4 w-4" aria-hidden="true" />
+          <span className="sr-only sm:not-sr-only">Remote</span>
+        </a>
+      )}
     </nav>
   );
 }
