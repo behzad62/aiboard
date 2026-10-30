@@ -596,6 +596,25 @@ test("t8: supervisor-startup wait still fails closed when a reset status request
   });
 });
 
+test("t8: supervisor-startup wait never accepts a terminal status from another supervisor after a reset", { timeout: 15_000 }, async (t) => {
+  if (!needsWindows(t)) return;
+  await withResettingSupervisor(t,
+    (statusPath) => appendFileSync(statusPath, supervisorLine({ port: 9, status: "stopped", exitCode: 0, ownershipReleased: true, supervisorPid: 4343 })),
+    async (statusPath, port) => {
+      appendFileSync(statusPath, supervisorLine({ port, status: "running", childPid: 4343 }));
+      await assert.rejects(
+        waitForSupervisor(
+          { protocol: SUPERVISOR_PROTOCOL, token: "t".repeat(32), statusPath, supervisorPid: 4242, port: 0 },
+          "px2b-wait",
+          10_000,
+        ),
+        (error: NodeJS.ErrnoException) => error.code === "ECONNRESET",
+        "a durable terminal line with another supervisor identity proves nothing about this supervisor",
+      );
+    });
+});
+
+
 // D3 — the authenticated long-poll helper against a stub supervisor.
 async function withStatusStub(
   t: TestContext,

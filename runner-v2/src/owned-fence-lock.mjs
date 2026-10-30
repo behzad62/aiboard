@@ -257,14 +257,17 @@ export function currentProcessBirthFingerprint(remainingMs = DEFAULT_DEADLINE_MS
   // On Windows the probe is a cold powershell.exe start: 155-218 ms idle, but 5.3-7.4 s measured on
   // two contended CPUs, so one 2 s attempt failed every acquisition even with a 10 s caller deadline.
   // Like the native backend's waitForBirth, escalate the per-attempt bound (2 s, 4 s, ...) inside the
-  // caller's own deadline. An inspection still unknown when that deadline is spent fails closed, and
-  // an unknown result is never cached.
+  // caller's own deadline. A timed-out attempt is killed and gives the next one no head start, so
+  // when the time left could not also hold the next, doubled attempt, this attempt takes all of it
+  // (a 10 s caller gets 2 s, then about 8 s). An inspection still unknown when that deadline is spent
+  // fails closed, and an unknown result is never cached.
   const deadline = Date.now() + remainingMs;
   let attemptMs = SELF_BIRTH_FIRST_ATTEMPT_MS;
   for (let attempt = 1; attempt <= SELF_BIRTH_MAX_ATTEMPTS; attempt += 1) {
     const left = deadline - Date.now();
     if (left < 1) break;
-    const inspected = inspectProcessBirth(process.pid, left, attemptMs);
+    const bound = attempt === SELF_BIRTH_MAX_ATTEMPTS || left - attemptMs < attemptMs * 2 ? left : attemptMs;
+    const inspected = inspectProcessBirth(process.pid, left, bound);
     if (inspected.state === "same") {
       cachedCurrentBirth = inspected;
       return inspected.fingerprint;

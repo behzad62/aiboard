@@ -83,41 +83,52 @@ test("current holder birth never caches an unknown self-inspection and fails clo
 
 // T8 slow-machine reproduction (profile A): on two contended CPUs a cold powershell.exe start took
 // 5.3-7.4 s (155-218 ms idle), so the single 2 s self-probe failed every fence acquisition although
-// withProjectionLock granted 10 s. The probe now escalates inside the caller's own deadline.
+// withProjectionLock granted 10 s. Each attempt is a fresh cold start that a timeout kills, so the
+// fake clock charges every attempt its full bound: a schedule that never gives one attempt the cold
+// start fails here.
+function coldStartProbe(coldStartMs: number) {
+  const clock = { now: 1_000_000 };
+  const probeTimeouts: number[] = [];
+  const execFileSync = (_file: string, _args: string[], options: { timeout: number }) => {
+    probeTimeouts.push(options.timeout);
+    if (options.timeout < coldStartMs) {
+      clock.now += options.timeout;
+      throw Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }
+    clock.now += coldStartMs;
+    return "PRESENT:2026-10-31T00:43:01.1234567Z\r\n";
+  };
+  return { clock, probeTimeouts, globals: { execFileSync, Date: { now: () => clock.now } } };
+}
+
 test("current holder birth is obtained within the caller's deadline when the Windows probe cold start exceeds 2 s", () => {
   const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
-  const probeTimeouts: number[] = [];
-  const context = selfBirthContext(source, {
-    execFileSync: (_file: string, _args: string[], options: { timeout: number }) => {
-      probeTimeouts.push(options.timeout);
-      if (options.timeout < 2_500) throw Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
-      return "PRESENT:2026-10-31T00:43:01.1234567Z\r\n";
-    },
-  }, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const probe = coldStartProbe(6_000);
+  const context = selfBirthContext(source, probe.globals, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const started = probe.clock.now;
 
   assert.equal(vm.runInContext("currentProcessBirthFingerprint(10_000)", context), "2026-10-31T00:43:01.123456Z");
-  assert.equal(probeTimeouts[0], 2_000, "the first attempt keeps the 2 s probe bound");
-  assert.ok(probeTimeouts.every((timeout) => timeout <= 10_000), "no attempt outlives the caller's deadline");
+  assert.equal(probe.probeTimeouts[0], 2_000, "the first attempt keeps the 2 s probe bound");
+  assert.ok(probe.clock.now - started <= 10_000, `the probe stays inside the caller's deadline: ${probe.probeTimeouts.join(",")}`);
 });
 
 test("current holder birth escalation is bounded by the caller's deadline and still fails closed", () => {
   const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
-  const probeTimeouts: number[] = [];
-  const context = selfBirthContext(source, {
-    execFileSync: (_file: string, _args: string[], options: { timeout: number }) => {
-      probeTimeouts.push(options.timeout);
-      throw Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
-    },
-  }, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const probe = coldStartProbe(Number.POSITIVE_INFINITY);
+  const context = selfBirthContext(source, probe.globals, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const started = probe.clock.now;
 
-  const started = Date.now();
   assert.throws(
     () => vm.runInContext("currentProcessBirthFingerprint(10_000)", context),
     /Current owned fence holder birth identity is unavailable/,
   );
-  assert.ok(Date.now() - started < 10_000, "an always-failing probe never waits past the caller's deadline");
-  assert.ok(probeTimeouts.length <= 4, `attempts are bounded: ${probeTimeouts.join(",")}`);
-  assert.ok(probeTimeouts.every((timeout, index) => timeout <= 10_000 && (index === 0 || timeout >= probeTimeouts[index - 1]!)), probeTimeouts.join(","));
+  assert.ok(probe.clock.now - started <= 10_000, `an always-failing probe never runs past the caller's deadline: ${probe.probeTimeouts.join(",")}`);
+  assert.ok(probe.probeTimeouts.length <= 4, `attempts are bounded: ${probe.probeTimeouts.join(",")}`);
+
+  const defaultProbe = coldStartProbe(Number.POSITIVE_INFINITY);
+  const defaultContext = selfBirthContext(source, defaultProbe.globals, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  assert.throws(() => vm.runInContext("currentProcessBirthFingerprint()", defaultContext), /birth identity is unavailable/);
+  assert.deepEqual(defaultProbe.probeTimeouts, [2_000], "a default 2 s caller still gets exactly one 2 s attempt");
 });
 
 test("a single-link legacy coordination database migrates to immutable exact-path authority", () => {
