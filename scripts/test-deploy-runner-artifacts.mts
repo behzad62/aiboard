@@ -109,6 +109,7 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
       };
       const rootPackageJson = JSON.parse(read("package.json")) as {
         license?: string;
+        dependencies?: Record<string, string>;
         devDependencies?: Record<string, string>;
       };
       const expectedTypeScriptVersion = rootPackageJson.devDependencies?.typescript
@@ -125,6 +126,9 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
         packageJson.scripts?.["setup:browser"] === "playwright install chromium"
       );
       check(`${path} includes tsx`, typeof packageJson.dependencies?.tsx === "string");
+      const expectedMcpSdkVersion = rootPackageJson.dependencies?.["@modelcontextprotocol/sdk"]
+        ?.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0];
+      check(`${path} pins the MCP SDK from the root package`, !!expectedMcpSdkVersion && packageJson.dependencies?.["@modelcontextprotocol/sdk"] === expectedMcpSdkVersion);
       check(`${path} includes Playwright`, typeof packageJson.dependencies?.playwright === "string");
       check(
         `${path} pins TypeScript from the root package`,
