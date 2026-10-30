@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -34,6 +35,7 @@ import {
   type BenchRunnerHealth,
 } from "@/lib/client/bench-runner";
 import { getEnabledModels } from "@/lib/client/providers";
+import { getUserSettings, updateUserSettings } from "@/lib/client/store";
 import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE } from "@/lib/benchmark/native-suites";
 
 import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
@@ -91,12 +93,40 @@ export function CertifiedRunPanel({
   const [workBenchRunnerHealth, setWorkBenchRunnerHealth] =
     useState<BenchRunnerHealth | null>(null);
   const [checkingWorkBenchRunner, setCheckingWorkBenchRunner] = useState(false);
+  const runnerCheck = useRef<AbortController | null>(null);
   const tabRun = useSyncExternalStore(
     certifiedTabRunCoordinator.subscribe,
     certifiedTabRunCoordinator.getSnapshot,
     certifiedTabRunCoordinator.getSnapshot
   );
   const busy = tabRun.owner !== null;
+
+  useEffect(() => {
+    const saved = getUserSettings().benchmarkRunner;
+    if (saved) {
+      setWorkBenchRunnerUrl(saved.url);
+      setWorkBenchRunnerToken(saved.token);
+      if (saved.url.trim() && saved.token.trim()) {
+        const controller = new AbortController();
+        runnerCheck.current = controller;
+        setCheckingWorkBenchRunner(true);
+        void checkBenchRunner({ url: saved.url.trim(), token: saved.token.trim() }, controller.signal).then((health) => {
+          if (!controller.signal.aborted) setWorkBenchRunnerHealth(health);
+        }).finally(() => {
+          if (!controller.signal.aborted) setCheckingWorkBenchRunner(false);
+        });
+      }
+    }
+    return () => { runnerCheck.current?.abort(); };
+  }, []);
+
+  function saveRunnerConnection(url: string, token: string) {
+    runnerCheck.current?.abort();
+    runnerCheck.current = null;
+    setCheckingWorkBenchRunner(false);
+    setWorkBenchRunnerHealth(null);
+    updateUserSettings({ benchmarkRunner: { url, token } });
+  }
 
   useEffect(() => {
     if (tabRun.error) setMessage(tabRun.error);
@@ -240,11 +270,11 @@ export function CertifiedRunPanel({
               checking={checkingWorkBenchRunner}
               onUrlChange={(value) => {
                 setWorkBenchRunnerUrl(value);
-                setWorkBenchRunnerHealth(null);
+                saveRunnerConnection(value, workBenchRunnerToken);
               }}
               onTokenChange={(value) => {
                 setWorkBenchRunnerToken(value);
-                setWorkBenchRunnerHealth(null);
+                saveRunnerConnection(workBenchRunnerUrl, value);
               }}
               onCheck={() => void checkWorkBenchRunner(focusedPack?.cases.find(item => item.case.nativeQualification?.requiresBrowser)?.case ?? focusedPack?.cases[0]?.case)}
             />
@@ -323,13 +353,17 @@ export function CertifiedRunPanel({
   }
 
   async function checkWorkBenchRunner(benchmarkCase?: WorkBenchCase) {
+    runnerCheck.current?.abort();
+    const controller = new AbortController();
+    runnerCheck.current = controller;
     setCheckingWorkBenchRunner(true);
     setMessage(null);
     try {
       const health = await checkBenchRunner({
         url: workBenchRunnerUrl.trim(),
         token: workBenchRunnerToken.trim(),
-      });
+      }, controller.signal);
+      if (controller.signal.aborted) return;
       setWorkBenchRunnerHealth(health);
       const readiness = getTrustedBenchRunnerReadiness(
         health,
@@ -341,7 +375,7 @@ export function CertifiedRunPanel({
           : readiness.error ?? "Bench runner check failed."
       );
     } finally {
-      setCheckingWorkBenchRunner(false);
+      if (!controller.signal.aborted) setCheckingWorkBenchRunner(false);
     }
   }
 }

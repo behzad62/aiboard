@@ -203,6 +203,7 @@ export interface ModelIntelligenceTrackBreakdown {
 }
 
 export interface ModelIntelligenceRow {
+  resultSetId: string | null;
   modelId: string;
   reasoningEffort: string;
   variantKey: string;
@@ -421,6 +422,7 @@ export function readModelIntelligence(certified: unknown): ModelIntelligenceRow[
           (item): item is ModelIntelligenceTrackBreakdown => item !== null
         );
       return {
+        resultSetId: readString(row.resultSetId),
         modelId,
         reasoningEffort,
         variantKey,
