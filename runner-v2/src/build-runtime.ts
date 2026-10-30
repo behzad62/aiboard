@@ -4524,7 +4524,7 @@ export class BuildRuntime {
       });
     } catch (error) {
       await this.recordCleanupSearch("verification");
-      return this.pauseForDeliveryGate(task.id, "delivery_review_failed", error instanceof Error ? error.message : String(error));
+      return this.pauseForDeliveryGate(task.id, "delivery_review_failed", describeFailureWithCauses(error));
     }
     // T6b repair (R2-B6): the OA-17 cleanup search also runs after this
     // checkout-backed step (no-op for legacy runs).

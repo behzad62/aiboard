@@ -759,7 +759,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       await this.failBeforeLaunch(
         record,
         output,
-        "Launch failed before identity was proven.",
+        this.launchFailureDetail("Launch failed before identity was proven.", error, record, selected),
       );
       throw new SubprocessRuntimeError(
         "launch_not_proven",
@@ -802,7 +802,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         await this.failBeforeLaunch(
           record,
           output,
-          "Launch did not return identity.",
+          this.launchFailureDetail("Launch did not return identity.", error, record, selected),
         );
         throw new SubprocessRuntimeError(
           "launch_not_proven",
@@ -815,7 +815,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     try {
       launch = parseProcessLaunchResult(rawLaunch);
     } catch (error) {
-      await this.failBeforeLaunch(record, output, "Malformed launch result.");
+      await this.failBeforeLaunch(record, output, this.launchFailureDetail("Malformed launch result.", error, record, selected));
       throw new SubprocessRuntimeError(
         "launch_not_proven",
         "Process launch was not proven.",
@@ -1839,6 +1839,16 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     await this.fencedEffect(record.invocationId, (fence) =>
       output.cleanup(fence),
     );
+  }
+  /** Diagnostic only: the launch failure's reason plus the backend error chain. Never throws. */
+  private launchFailureDetail(reason: string, error: unknown, record: DurableSubprocessRecord, selected: SelectedProcessBackend): string {
+    let diagnostic = "(diagnostic unavailable)";
+    try {
+      annotateFailure(error, { operation: "backend_launch", context: `backend=${selected.attestation.backendId}` });
+      diagnostic = describeFailureChain(error);
+    } catch { /* Diagnostics never change the failure path. */ }
+    lifecycleTrace("process.launch_failed", { invocationId: record.invocationId, reason, diagnostic });
+    return `${reason} ${diagnostic}`;
   }
   private async failBeforeLaunch(
     record: DurableSubprocessRecord,

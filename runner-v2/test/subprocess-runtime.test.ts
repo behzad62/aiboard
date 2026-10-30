@@ -3382,3 +3382,20 @@ test("a lease heartbeat failure during observation is named as such, not as an o
   assert.match(describeFailureChain(thrown), /\{while recording backend_unavailable: \[backend_observe\.lease_heartbeat\] Error: lease renewal stalled \{effect settled before the heartbeat stopped; phase=observe state=\w+ backend=fake rootPid=42 /);
   assert.notEqual(composed.readOnlyStore.readByInvocation("invoke-1")!.state, "backend_unavailable");
 });
+
+test("a failed launch keeps the backend error chain in its durable reason (diagnostic only)", async () => {
+  const f = fixture();
+  f.backend.launchError = new Error("Windows Job supervisor did not start.", {
+    cause: Object.assign(new Error("Supervisor request timed out."), { code: "ETIMEDOUT", syscall: "connect" }),
+  });
+  const thrown = await f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {} }).then(() => undefined, (error: unknown) => error);
+  assert.ok(thrown instanceof SubprocessRuntimeError);
+  assert.equal(thrown.code, "launch_not_proven");
+  assert.equal(thrown.message, "Process launch was not proven.");
+  const record = f.store.readByInvocation("invoke-1")!;
+  assert.equal(record.state, "launch_not_proven");
+  assert.equal(record.history.at(-1)?.reason,
+    "Launch failed before identity was proven. [backend_launch] Error: Windows Job supervisor did not start. {backend=fake} " +
+    "<- caused by Error(code=ETIMEDOUT syscall=connect): Supervisor request timed out.");
+  assert.match(describeFailureWithCauses(thrown), /^Process launch was not proven\. \[diagnostic: SubprocessRuntimeError\(code=launch_not_proven\): .*\[backend_launch\] .*code=ETIMEDOUT/);
+});
