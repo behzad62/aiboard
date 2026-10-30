@@ -93,7 +93,9 @@ jobs:
         run: |
           sudo sysadminctl -addUser aibtest -password "Aa1-$(uuidgen)" -home /Users/aibtest
           sudo createhomedir -c -u aibtest >/dev/null
-          sudo -u aibtest -H env PATH=/usr/bin:/bin:/usr/sbin:/sbin "$(command -v node)" "$AIB_L2/e2e.mjs" \
+          git_dir="$(dirname "$(command -v git)")"
+          sudo -u aibtest -H "$(command -v git)" --version
+          sudo -u aibtest -H env PATH=/usr/bin:/bin:/usr/sbin:/sbin AIB_E2E_GIT_DIR="$git_dir" "$(command -v node)" "$AIB_L2/e2e.mjs" \
             --work /Users/aibtest/w --bundles "$AIB_L2/bundles" --key-dir "$AIB_L2/key" --templates "$AIB_L2/templates"
       - name: E2E on Windows (${{ matrix.shell }})
         if: runner.os == 'Windows'

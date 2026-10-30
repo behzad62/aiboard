@@ -138,7 +138,7 @@ const home = join(work, "home");
 const localAppData = join(home, "AppData", "Local");
 const root = windows ? join(localAppData, "AIBoard") : join(home, ".aiboard");
 const baseEnv: NodeJS.ProcessEnv = windows
-  ? { ...process.env, LOCALAPPDATA: localAppData }
+  ? { ...process.env, USERPROFILE: home, LOCALAPPDATA: localAppData }
   : { ...process.env, HOME: home, XDG_DATA_HOME: join(home, ".local", "share"), SHELL: "/bin/sh" };
 delete baseEnv.AIBOARD_NO_MODIFY_PATH;
 function resetHome(): void {
@@ -176,7 +176,7 @@ async function aiboard(args: string, cwd = work): Promise<RunResult> {
       `if (-not (Get-Command aiboard -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine('aiboard: command not found'); exit 127 }; aiboard ${args}; exit $LASTEXITCODE`);
     return run(command, argv, { env: baseEnv, cwd });
   }
-  return run("sh", ["-lc", `aiboard ${args}`], { env: { ...baseEnv, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" }, cwd });
+  return run("sh", ["-lc", `export PATH="$PATH\${AIB_E2E_GIT_DIR:+:$AIB_E2E_GIT_DIR}"; aiboard ${args}`], { env: { ...baseEnv, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" }, cwd });
 }
 
 function pointer(name: string): string | undefined {
@@ -235,7 +235,7 @@ try {
   const started = windows
     ? spawn(powershellCommand(`$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User'); aiboard ${startArgs}`)[0],
       powershellCommand(`$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User'); aiboard ${startArgs}`)[1], { cwd: project, env: baseEnv, windowsHide: true })
-    : spawn("sh", ["-lc", `aiboard ${startArgs}`], { cwd: project, env: { ...baseEnv, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" } });
+    : spawn("sh", ["-lc", `export PATH="$PATH\${AIB_E2E_GIT_DIR:+:$AIB_E2E_GIT_DIR}"; aiboard ${startArgs}`], { cwd: project, env: { ...baseEnv, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" } });
   let startOutput = "";
   started.stdout?.on("data", (chunk: Buffer) => { startOutput += chunk.toString("utf8"); });
   started.stderr?.on("data", (chunk: Buffer) => { startOutput += chunk.toString("utf8"); });
