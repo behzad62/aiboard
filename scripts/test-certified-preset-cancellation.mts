@@ -151,6 +151,42 @@ async function assertNoCertifiedPersistence(): Promise<void> {
   );
 }
 
+// The suite includes a browser case. A runner without that capability must be
+// rejected before any model call or result persistence.
+{
+  configureStore();
+  const noBrowser = installNativeBenchmarkTestTransport(true, { browser: false });
+  const model = selectedModel("browser-unavailable");
+  let message: string | null = null;
+  let modelCalls = 0;
+  const originalStreamChat = openaiProvider.streamChat;
+  openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
+    modelCalls++;
+    yield { type: "token", content: "unexpected" };
+  };
+  try {
+    await runSelected({
+      runNativeWorkBenchBuild: nativeBuildForTests,
+      runSoloToolBench: nativeBuildForTests,
+      selectedTrack: "toolreliability", suiteId: toolReliabilityLeg.suiteId,
+      models: [model], modelId: model.modelId, teamModelIds: [], teamIqStrategy: "panel",
+      includeSoloBaselines: true, workBenchModelIds: [], workBenchRoleMode: "solo",
+      workBenchRunnerUrl: "http://native-benchmark.test", workBenchRunnerToken: "test",
+      effectiveHarnessProfile: DIRECT_MODEL_HARNESS, certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
+      effortByModelId: {}, signal: new AbortController().signal, runAbortRef: { current: null },
+      setRunning: () => {}, setRunPhase: () => {}, setSummary: () => {},
+      setMessage: (next) => { message = next; }, onComplete: async () => {},
+    });
+    assert.match(message ?? "", /requires the runner browser/i);
+    assert.equal(modelCalls, 0);
+    await assertNoCertifiedPersistence();
+  } finally {
+    openaiProvider.streamChat = originalStreamChat;
+    noBrowser.restore();
+  }
+  console.log("PASS browser-unavailable ToolBench refuses before persistence");
+}
+
 {
   configureStore();
   const model = selectedModel("pre-aborted-toolrel");
