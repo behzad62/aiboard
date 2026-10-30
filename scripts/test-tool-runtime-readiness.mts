@@ -168,10 +168,11 @@ console.log("PASS setup-required rows lead to a real Tools settings surface inst
 for (const prerequisite of [
   "local_shell_executor",
   "local_editor_executor",
-  "remote_mcp_server",
+  "openai_vector_store",
 ] as const) {
   assert.equal(toolRuntimeSetupTarget(prerequisite), "/settings?tab=tools");
 }
+assert.equal(toolRuntimeSetupTarget("remote_mcp_server"), "/settings?tab=extensions");
 assert.equal(toolRuntimeSetupTarget("computer_executor"), undefined);
 assert.equal(toolRuntimeSetupTarget("browser_executor"), undefined);
 console.log("PASS only tools with real setup controls receive Configure tools links");

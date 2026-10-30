@@ -340,12 +340,13 @@ export default function SettingsPage() {
           <ToolRuntimeSettingsPanel
             settings={data?.settings.toolRuntime}
             onChanged={load}
+            onOpenExtensions={() => setTab("extensions")}
           />
         </TabsContent>
 
         {/* ── Extensions ────────────────────────────────────────── */}
         <TabsContent value="extensions">
-          <ExtensionsSettings />
+          <ExtensionsSettings settings={data?.settings.toolRuntime} onChanged={load} onOpenTools={() => setTab("tools")} />
         </TabsContent>
 
         {/* ── Capability Lab ───────────────────────────────────── */}

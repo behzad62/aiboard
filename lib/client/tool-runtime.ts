@@ -108,10 +108,10 @@ export function applyToolRuntimeToRequest(
 export function toolRuntimeSetupTarget(
   prerequisiteId: string,
 ): string | undefined {
+  if (prerequisiteId === "remote_mcp_server") return "/settings?tab=extensions";
   return [
     "local_shell_executor",
     "local_editor_executor",
-    "remote_mcp_server",
     "openai_vector_store",
   ].includes(prerequisiteId)
     ? "/settings?tab=tools"
@@ -205,7 +205,7 @@ export async function resolveToolRuntimeResourceState(input: {
     : {
         configured: Boolean(remote?.name || remote?.url),
         ready: false,
-        detail: "Add and enable an approved http(s) remote MCP server in Tools settings.",
+        detail: "Add and enable a provider-hosted HTTP(S) MCP server in Extensions settings.",
       };
 
   const openaiFileSearchIntent = configuredOpenAIFileSearchIntent(settings.openaiFileSearch);
