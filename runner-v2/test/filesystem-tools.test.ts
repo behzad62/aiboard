@@ -934,8 +934,9 @@ test("hidden same-object alias is refused for stat and file search while visible
       assert.equal(hiddenExact.isError, true);
       assert.equal(hiddenExact.error?.code, "benchmark_hidden_path");
     } else {
-      assert.equal(aliasStat.isError, true);
-      assert.notEqual(aliasStat.error?.code, "benchmark_hidden_path");
+      assert.equal(aliasStat.isError, false);
+      assert.deepEqual(json(aliasStat), { path: "SECRET.txt", exists: false });
+      assert.doesNotMatch(text(aliasStat), /hidden-content/);
       assert.equal(aliasFileSearch.isError, true);
       assert.notEqual(aliasFileSearch.error?.code, "benchmark_hidden_path");
       writeFileSync(join(workspace, "SECRET.txt"), "upper-distinct needle\n");
