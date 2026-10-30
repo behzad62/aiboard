@@ -45,4 +45,13 @@ assert.throws(() => selectReleaseSequence("7", config, expired, now), /higher th
 assert.equal(selectReleaseSequence("8", config, expired, now), 8);
 assert.throws(() => verifyReleaseManifest(expired.bytes, expired.signature, config, { now }), /expired/);
 assert.throws(() => selectReleaseSequence("8", config, signed({ createdAt: "2026-11-10T00:00:00Z", expiresAt: "2026-12-01T00:00:00Z" }), now), /future/);
+const replacement = generateKeyPairSync("rsa", { modulusLength: 3072 });
+const replacementConfig = { ...config, keys: [trustedKeyFromPublicKey("release-new", replacement.publicKey)], minSequence: 9,
+  artifactPrefix: "https://github.com/behzad62/aiboard-new/releases/download/" };
+assert.throws(() => selectReleaseSequence("10", replacementConfig, previous, now), /signature does not verify/);
+assert.equal(selectReleaseSequence("10", replacementConfig, previous, now, config), 10);
+assert.equal(selectReleaseSequence("auto", replacementConfig, previous, now, config), 9);
+assert.throws(() => selectReleaseSequence("7", replacementConfig, previous, now, config), /--sequence/);
+assert.throws(() => selectReleaseSequence("10", replacementConfig, signed({}, wrong.privateKey), now, config), /signature does not verify/);
+assert.throws(() => selectReleaseSequence("10", replacementConfig, previous, now, { ...config, channel: "beta" }), /historical channel/);
 console.log("PASS signed release sequences strictly increase, including after expiry");

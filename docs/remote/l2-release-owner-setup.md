@@ -109,10 +109,10 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
 1. Generate a new key, back it up and pin it next to the old one (step 3). `release/channel.json` then lists both keys.
 2. Cut a release still signed with the **old** key. Its bundles carry both keys, so updated installs trust the new key.
 3. Replace the `AIBOARD_RELEASE_SIGNING_KEY` secret with the new key. From now on, releases are signed with the new key.
-4. After most installs have updated, remove the old key from `release/channel.json` and cut another release.
+4. After most installs have updated, remove the old key from `release/channel.json` and cut another release. Before removing it, copy the channel configuration that authenticated the currently committed manifest to `release/previous-channel.json` and commit it. This file is a signing-time history witness only; installers and new bundles still trust only `release/channel.json`.
 
 ## Key compromise
-1. Remove the compromised key from `release/channel.json`.
+1. Copy the channel configuration that authenticated the committed manifest to `release/previous-channel.json`, then remove the compromised key from `release/channel.json`. The previous configuration is used only to authenticate the repository's committed history for the sequence check; it is not shipped as a client trust anchor.
 2. Pin a new key and replace the secret.
 3. Cut a release with a sequence higher than anything the attacker could have published.
 

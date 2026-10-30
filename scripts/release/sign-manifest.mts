@@ -49,8 +49,12 @@ const hasManifest = existsSync(published);
 const hasSignature = existsSync(`${published}.sig`);
 if (hasManifest !== hasSignature) throw new Error(`The previous manifest or signature is missing at ${published}; refusing to sign.`);
 const previous = hasManifest ? { bytes: readFileSync(published), signature: readFileSync(`${published}.sig`, "utf8") } : undefined;
+// Optional repository-reviewed previous trust configuration is only a history witness;
+// it is never included in installers or the new release's bundled trust anchors.
+const historicalPath = join(root, "release", "previous-channel.json");
+const historicalConfig = existsSync(historicalPath) ? parseReleaseChannelConfig(JSON.parse(readFileSync(historicalPath, "utf8"))) : undefined;
 let sequence: number;
-try { sequence = selectReleaseSequence(sequenceOption, config, previous, new Date()); }
+try { sequence = selectReleaseSequence(sequenceOption, config, previous, new Date(), historicalConfig); }
 catch (error) { throw new Error(`Cannot select a release sequence (${error instanceof Error ? error.message : String(error)}). An expired prior manifest requires an explicit higher --sequence.`); }
 
 const keyPem = option("key-file") ? readFileSync(resolve(option("key-file")!), "utf8") : process.env.AIBOARD_RELEASE_SIGNING_KEY;

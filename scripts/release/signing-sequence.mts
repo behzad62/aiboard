@@ -6,11 +6,22 @@ export function selectReleaseSequence(
   config: ReleaseChannelConfig,
   previous: { bytes: Uint8Array; signature: string } | undefined,
   now: Date,
+  historicalConfig?: ReleaseChannelConfig,
 ): number {
-  const prior = previous ? verifyHistoricalReleaseManifest(previous.bytes, previous.signature, config, now) : undefined;
+  if (historicalConfig && historicalConfig.channel !== config.channel) throw new Error("The historical channel must match the current channel.");
+  let previousConfig = config;
+  let prior;
+  if (previous) {
+    try { prior = verifyHistoricalReleaseManifest(previous.bytes, previous.signature, config, now); }
+    catch (currentError) {
+      if (!historicalConfig) throw currentError;
+      prior = verifyHistoricalReleaseManifest(previous.bytes, previous.signature, historicalConfig, now);
+      previousConfig = historicalConfig;
+    }
+  }
   if (option === "auto") {
-    if (previous) verifyReleaseManifest(previous.bytes, previous.signature, config, { now });
-    const next = prior ? prior.sequence + 1 : config.minSequence;
+    if (previous) verifyReleaseManifest(previous.bytes, previous.signature, previousConfig, { now });
+    const next = prior ? Math.max(prior.sequence + 1, config.minSequence) : config.minSequence;
     if (!Number.isSafeInteger(next) || next > 2 ** 40) throw new Error("No higher release sequence is available.");
     return next;
   }
