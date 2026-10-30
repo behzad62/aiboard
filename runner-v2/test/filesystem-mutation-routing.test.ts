@@ -19,10 +19,38 @@ const privateOwners = new Set([
   "managed-process-supervisor.mjs", "managed-process.ts", "native-build-factory.ts", "native-process-backend.ts",
   "oci-execution-isolation-provider.ts", "owned-fence-lock.mjs", "permission-store.ts", "plugin-loader.ts",
   "portable-process-channel.ts", "portable-process-child.mjs", "portable-process-protocol.mjs", "portable-process-supervisor.mjs",
+  "release-archive.ts", // fresh release bundle extraction under the managed install's versions staging directory.
   "runner-capability-contract.ts", "runner-internal-execution-context.ts", "runner-internal-process-kernel.ts",
   "sqlite-agent-session-store.ts", "sqlite-budget-ledger.ts", "sqlite-build-spec-store.ts", "sqlite-context-manifest-store.ts", "sqlite-event-store.ts",
   "sqlite-evidence-store.ts", "sqlite-project-memory.ts", "sqlite-scheduler-store.ts", "sqlite-tool-ledger.ts",
   "streaming-session-store.ts", "verification-workspace.ts", "windows-job-process-host.ts", "windows-process-semantic-probes.ts", "workspace-manager.ts",
+  // Reviewed 2026-10-31 (docs/runner-v2/filesystem-owner-review-2026-10-31.md). State and extension
+  // home are refused at startup when they resolve into the project, lexically or through a link
+  // (runner-start isInsideProject); remote-only nested state is deliberate and its owned roots are
+  // protected from Remote tools. Ownership-hardening follow-ups are tracked in that review.
+  "build-user-media.ts", // user-input media manifests/objects under state/user-input-media; expired-run cleanup there.
+  "chat-agent-session.ts", // chat session records under state/chat-sessions.
+  "credential-migration.ts", // credential journal, pointer and generations under state.
+  "delivery-execution.ts", // removes only its own .aiboard-report-* residue in the run-owned verification workspace, canonically confined.
+  "extension-management-service.ts", // upload staging under extension-home/uploads.
+  "extension-mcp-launcher.ts", // MCP runtime launcher and per-server secret files under extension home.
+  "extension-mcp.ts", // MCP runtimes, OAuth/policy JSON under extension home; discovery run under state/builds.
+  "extension-package-store.ts", // digest-addressed packages, staging and GC under extension home.
+  "extension-registry.ts", // extension registry, generations and lock under extension home.
+  "extension-run-bindings.ts", // per-run extension bindings under state/extension-bindings.
+  "extension-sources.ts", // random Git scratch directory under extension-home/scratch.
+  "launcher-instance.ts", // launcher identity, instance and control-key files under launcher state.
+  "launcher.ts", // peer records and peer control keys under launcher state.
+  "proven-snapshot-links.ts", // appends proof records to the Build run root under state.
+  "remote-admission-store.ts", // parent directory of state/remote-admission.sqlite.
+  "remote-audit-store.ts", // parent directory of state/remote-audit.sqlite.
+  "remote-device-store.ts", // Remote device identity, session, owner record and keys under device state.
+  "remote-principal.ts", // parent directories of principal and device-policy databases under state/device state.
+  "remote-service.ts", // state/remote-status.json.
+  "runner-start.ts", // creates the configured state directory and state/artifacts after the overlap check.
+  "self-update.ts", // managed install (versions, bin, staging, lock); on uninstall removes only its own marked profile block and fish file.
+  "storage-key.ts", // state/storage-key via exclusive temp plus hard link.
+  "toolbench-session.ts", // ToolBench session snapshots/manifests/transcripts under state/toolbench.
 ]);
 // Read-handle-only owners: exact reviewed mutation-capable import per module.
 // Async open owners keep ["open"]; the sync report reader keeps ["openSync"].
@@ -34,6 +62,8 @@ const privateOwners = new Set([
 const readHandleOwners = new Map<string, readonly string[]>([
   ["artifact-reachability.ts", ["open"]],
   ["mcp-executable-digest.ts", ["open"]],
+  ["remote-artifact-transfer.ts", ["open"]], // opens the artifact source with "r" for streaming.
+  ["remote-connector.ts", ["open"]], // opens the artifact index with "r" for reading.
   ["repository-intelligence.ts", ["open"]],
   ["test-report-readers.ts", ["openSync"]],
   ["windows-birth-inspection.mjs", ["openSync"]],
