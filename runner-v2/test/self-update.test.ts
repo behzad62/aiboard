@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -170,4 +171,34 @@ test("profile and Windows PATH edits only touch the installer's own entries", ()
   assert.match(script, /\$bin = 'C:\\Users\\o''brien\\AppData\\Local\\AIBoard\\bin'/);
   assert.match(script, /DoNotExpandEnvironmentNames/);
   assert.match(script, /GetValueKind\('Path'\)/);
+});
+
+test("Windows PATH removal preserves other entries, empty entries, and registry value kind", { skip: process.platform !== "win32" }, () => {
+  const bin = "C:\\AIBoard\\bin";
+  for (const scenario of [
+    { before: `C:\\Tools;;C:\\Other;;${bin}`, expected: "C:\\Tools;;C:\\Other;", kind: "ExpandString", absent: false },
+    { before: `C:\\Tools;${bin};C:\\Other`, expected: "C:\\Tools;C:\\Other", kind: "String", absent: false },
+    { before: bin, expected: "", kind: "ExpandString", absent: false },
+    { before: bin, expected: null, kind: "ExpandString", absent: true },
+  ]) {
+    const keyPath = `Software\\AIBoardPathTest-${randomUUID()}`;
+    const edit = windowsRemovePathScript(bin, scenario.absent)
+      .replace("OpenSubKey('Environment', $true)", `OpenSubKey('${keyPath}', $true)`)
+      .replaceAll("  [Environment]::SetEnvironmentVariable('AIBOARD_PATH_REFRESH', '1', 'User')", "")
+      .replaceAll("  [Environment]::SetEnvironmentVariable('AIBOARD_PATH_REFRESH', $null, 'User')", "");
+    const script = [
+      `$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${keyPath}')`,
+      `$k.SetValue('Path', '${scenario.before}', [Microsoft.Win32.RegistryValueKind]::${scenario.kind}); $k.Close()`,
+      "try {",
+      edit,
+      `$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${keyPath}')`,
+      "$exists = $k.GetValueNames() -contains 'Path'",
+      "$value = if ($exists) { [string]$k.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } else { $null }",
+      "$kind = if ($exists) { [string]$k.GetValueKind('Path') } else { $null }; $k.Close()",
+      "[Console]::Out.Write((ConvertTo-Json -Compress @{ value = $value; kind = $kind }))",
+      `} finally { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey('${keyPath}', $false) }`,
+    ].join("\n");
+    const output = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
+    assert.deepEqual(JSON.parse(output), { value: scenario.expected, kind: scenario.expected === null ? null : scenario.kind });
+  }
 });

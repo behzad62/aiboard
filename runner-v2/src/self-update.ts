@@ -440,7 +440,7 @@ async function removePosixPath(home: string): Promise<void> {
 }
 
 /** PowerShell body that removes one directory from the user PATH, keeping other entries unexpanded and the value kind unchanged. */
-export function windowsRemovePathScript(binDirectory: string): string {
+export function windowsRemovePathScript(binDirectory: string, pathWasAbsent = false): string {
   const literal = binDirectory.replace(/'/g, "''");
   return [
     "$ErrorActionPreference = 'Stop'",
@@ -449,11 +449,11 @@ export function windowsRemovePathScript(binDirectory: string): string {
     "$old = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",
     "$norm = { param($p) ([Environment]::ExpandEnvironmentVariables($p)).TrimEnd('\\').ToLowerInvariant() }",
     "$target = & $norm $bin",
-    "$kept = @($old -split ';' | Where-Object { $_ -ne '' -and (& $norm $_) -ne $target })",
+    "$kept = @($old -split ';' | Where-Object { (& $norm $_) -ne $target })",
     "$new = $kept -join ';'",
     "if ($new -ne $old) {",
     "  $kind = $key.GetValueKind('Path')",
-    "  if ($new) { $key.SetValue('Path', $new, $kind) } else { $key.DeleteValue('Path', $false) }",
+    `  if (-not $new -and ${pathWasAbsent ? "$true" : "$false"}) { $key.DeleteValue('Path', $false) } else { $key.SetValue('Path', $new, $kind) }`,
     "  [Environment]::SetEnvironmentVariable('AIBOARD_PATH_REFRESH', '1', 'User')",
     "  [Environment]::SetEnvironmentVariable('AIBOARD_PATH_REFRESH', $null, 'User')",
     "}",
@@ -513,14 +513,14 @@ export async function runUninstallCommand(raw: string[], runtime: SelfUpdateRunt
   const release = await acquireInstallLock(layout.root);
   const leftovers: string[] = [];
   try {
-    if (platform === "win32") await (runtime.editUserPath ?? ((bin: string) => runPowerShell(windowsRemovePathScript(bin))))(layout.binDirectory);
+    if (platform === "win32") await (runtime.editUserPath ?? ((bin: string) => runPowerShell(windowsRemovePathScript(bin, existsSync(join(layout.root, "path-was-absent"))))))(layout.binDirectory);
     else await (runtime.editUserPath ?? (() => removePosixPath(home)))(layout.binDirectory);
     // Windows keeps the running node.exe and the cmd shim open until this process exits: remove them afterwards.
     const deferred = platform === "win32" ? [join(layout.versionsDirectory, layout.runningVersion), layout.versionsDirectory, layout.binDirectory] : [];
     const versions = platform === "win32"
       ? (await readdir(layout.versionsDirectory).catch(() => [] as string[])).filter((name) => name !== layout.runningVersion).map((name) => join(layout.versionsDirectory, name))
       : [layout.versionsDirectory, layout.binDirectory];
-    const managed = [...versions, ...["current", "previous", "sequence", "install.json"].map((name) => join(layout.root, name))];
+    const managed = [...versions, ...["current", "previous", "sequence", "install.json", "path-was-absent"].map((name) => join(layout.root, name))];
     const state = removeState ? userStatePaths({ platform, environment, home, root: layout.root }) : [];
     for (const path of [...managed, ...state]) {
       try { await rm(path, { recursive: true, force: true, maxRetries: 2 }); }

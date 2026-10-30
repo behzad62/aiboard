@@ -139,7 +139,11 @@ __AIBOARD_TRUSTED_KEYS_PS__
       Say "Downloading AI Board Runner $Version for $Target..."
       Get-Download $url $archive
       if ((Get-Item -LiteralPath $archive).Length -ne [long]$artifact.bytes) { Fail 'the downloaded bundle has the wrong size. Nothing was installed.' }
-      if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$artifact.sha256) { Fail 'the downloaded bundle does not match the signed checksum. Nothing was installed.' }
+      $sha256 = [Security.Cryptography.SHA256]::Create()
+      $stream = [IO.File]::OpenRead($archive)
+      try { $digest = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+      finally { $stream.Dispose(); $sha256.Dispose() }
+      if ($digest -ne [string]$artifact.sha256) { Fail 'the downloaded bundle does not match the signed checksum. Nothing was installed.' }
 
       # 4. Extract into a fresh staging folder, refusing traversal, links and oversize content.
       $staging = Join-Path $Versions (".s-" + $PID)
@@ -219,9 +223,12 @@ __AIBOARD_TRUSTED_KEYS_PS__
         $old = [string]$registry.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         $parts = @($old -split ';' | Where-Object { $_ -ne '' })
         $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
-        if ($registry.GetValueNames() -contains 'Path') { $kind = $registry.GetValueKind('Path') }
+        $pathExisted = $registry.GetValueNames() -contains 'Path'
+        if ($pathExisted) { $kind = $registry.GetValueKind('Path') }
         if (@($parts | Where-Object { (& $norm $_) -eq (& $norm $Bin) }).Count -eq 0) {
-          $registry.SetValue('Path', ((@($parts) + $Bin) -join ';'), $kind)
+          if (-not $pathExisted) { [IO.File]::WriteAllText((Join-Path $Root 'path-was-absent'), '') }
+          $newPath = if ($old) { "$old;$Bin" } else { $Bin }
+          $registry.SetValue('Path', $newPath, $kind)
           [Environment]::SetEnvironmentVariable('AIBOARD_PATH_REFRESH', '1', 'User')
           [Environment]::SetEnvironmentVariable('AIBOARD_PATH_REFRESH', $null, 'User')
         }
