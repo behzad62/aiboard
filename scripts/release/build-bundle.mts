@@ -29,7 +29,6 @@ const PEER_FILES = [
   "scripts/runner-help.html",
 ];
 const LEGAL_FILES = ["LICENSE", "NOTICE", "TRADEMARKS.md"];
-const TEXT_EXTENSIONS = new Set([".ts", ".mts", ".mjs", ".js", ".cjs", ".json", ".md", ".ps1", ".cs", ".html", ".txt"]);
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -43,16 +42,16 @@ function sha256(data: Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-function extension(path: string): string {
-  const name = path.slice(path.lastIndexOf("/") + 1);
-  const dot = name.lastIndexOf(".");
-  return dot < 0 ? "" : name.slice(dot).toLowerCase();
-}
-
-/** Repository bytes are line-ending independent of the checkout (the index stores LF). */
+let lfInIndex: Set<string> | undefined;
+/**
+ * Repository bytes are independent of the checkout: a Windows checkout (core.autocrlf) turns LF into CRLF only
+ * for files whose index copy is LF, so exactly those are converted back (extensionless LICENSE/NOTICE included).
+ */
 function repoFile(relativePath: string): Buffer {
+  lfInIndex ??= new Set(execFileSync("git", ["-C", root, "ls-files", "-z", "--eol"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+    .split("\0").filter((entry) => entry.startsWith("i/lf ")).map((entry) => entry.slice(entry.indexOf("\t") + 1)));
   const bytes = readFileSync(join(root, ...relativePath.split("/")));
-  return TEXT_EXTENSIONS.has(extension(relativePath)) ? Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"), "utf8") : bytes;
+  return lfInIndex.has(relativePath) ? Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"), "utf8") : bytes;
 }
 
 function trackedFiles(...paths: string[]): string[] {
