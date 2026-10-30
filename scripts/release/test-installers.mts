@@ -1,7 +1,9 @@
 /* Rendered one-line installer checks (run: npx tsx scripts/release/test-installers.mts) */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -126,6 +128,69 @@ check("install.ps1 keeps the lock and staging when a staged process cannot be co
   /if \(\$State\.Unsettled\) \{[\s\S]*?\$Lock = \$null; \$staging = \$null; \$Work = \$null/.test(rendered.ps1));
 check("installers run every staged-bundle command through the bound",
   !/& \(Join-Path \$staging 'node\\node\.exe'\)/.test(rendered.ps1) && !/^\s*(smoke=\$\()?"\$staging\/node\/node"/m.test(rendered.sh));
+
+// Redirects: every hop is checked before it is contacted, so a download can never leave the allowed
+// transport (HTTPS in production; this loopback render additionally allows http://127.0.0.1 only).
+{
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url ?? "");
+    const port = (server.address() as AddressInfo).port;
+    const go = (location: string) => { response.writeHead(302, { Location: location }); response.end(); };
+    if (request.url === "/file") { response.writeHead(200); response.end("payload"); }
+    else if (request.url === "/relative") go("/file");
+    else if (request.url === "/absolute") go(`http://127.0.0.1:${port}/file`);
+    else if (request.url === "/downgrade") go(`http://localhost:${port}/secret`);
+    else if (request.url === "/loop") go("/loop");
+    else { response.writeHead(404); response.end(); }
+  });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const loopback = renderInstallers({ ...production, manifestUrl: `${origin}/m.json`, artifactPrefix: `${origin}/d/` });
+  const run = (command: string, args: string[]) => new Promise<{ code: number | null; output: string }>((resolveRun) => {
+    execFile(command, args, { encoding: "utf8", timeout: 60_000 }, (error, stdout, stderr) => resolveRun({ code: error ? (typeof error.code === "number" ? error.code : 1) : 0, output: stdout + stderr }));
+  });
+  const work = mkdtempSync(join(tmpdir(), "aiboard-redirect-"));
+  const routes = ["relative", "absolute", "downgrade", "loop"];
+  const expectations = (label: string, results: Record<string, string>) => {
+    check(`${label} follows relative and absolute redirects on the allowed transport`, results.relative === "ok:payload" && results.absolute === "ok:payload", results);
+    check(`${label} refuses a redirect off the allowed transport before contacting it`, /refusing a non-HTTPS download or redirect: http:\/\/localhost:\d+\/secret/.test(results.downgrade ?? "") && !requests.includes("/secret"), { results, requests });
+    check(`${label} stops after five redirects`, /too many redirects/.test(results.loop ?? ""), results);
+  };
+  try {
+    if (process.platform === "win32") {
+      const pick = (pattern: RegExp) => pattern.exec(loopback.ps1)?.[0] ?? "";
+      const functions = [
+        pick(/\n {2}\$AllowLoopback = .*\n/), pick(/\n {2}function Fail.*\n/),
+        pick(/\n {2}function Test-AllowedUrl[\s\S]*?\n {2}\}\n/), pick(/\n {2}function Get-Download[\s\S]*?\n {2}\}\n/),
+      ].join("");
+      const script = [
+        "$ErrorActionPreference = 'Stop'", functions,
+        ...routes.map((route) => `try { Get-Download '${origin}/${route}' '${join(work, route)}'; [Console]::Out.WriteLine('${route}=ok:' + [IO.File]::ReadAllText('${join(work, route)}')) } catch { [Console]::Out.WriteLine('${route}=' + $_.Exception.Message) }`),
+      ].join("\n");
+      for (const shell of ["powershell.exe", ...(spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).status === 0 ? ["pwsh"] : [])]) {
+        requests.length = 0;
+        const { output } = await run(shell, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]);
+        expectations(`install.ps1 Get-Download (${shell})`, Object.fromEntries(routes.map((route) => [route, new RegExp(`^${route}=(.*)$`, "m").exec(output)?.[1]?.trim() ?? output])));
+      }
+    }
+    const wget = spawnSync("wget", ["--version"], { encoding: "utf8" });
+    if (process.platform !== "win32" && wget.status === 0 && /GNU Wget/.test(wget.stdout)) {
+      const pick = (pattern: RegExp) => pattern.exec(loopback.sh)?.[0] ?? "";
+      const functions = [pick(/\nALLOW_LOOPBACK=.*\n/), pick(/\nfail\(\) .*\n/), pick(/\nallowed_url\(\) \{[\s\S]*?\n\}\n/), pick(/\nwget_checked\(\) \{[\s\S]*?\n\}\n/)].join("");
+      const results: Record<string, string> = {};
+      requests.length = 0;
+      for (const route of routes) {
+        const { code, output } = await run("sh", ["-c", `set -eu\n${functions}\nwget_checked "$1" "$2"`, "sh", `${origin}/${route}`, join(work, route)]);
+        results[route] = code === 0 ? `ok:${readFileSync(join(work, route), "utf8")}` : output;
+      }
+      expectations("install.sh wget fallback", results);
+    }
+  } finally {
+    server.close();
+    rmSync(work, { recursive: true, force: true });
+  }
+}
 
 if (failures > 0) { console.error(`${failures} installer check(s) failed.`); process.exit(1); }
 console.log("All installer checks passed.");

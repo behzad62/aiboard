@@ -42,10 +42,38 @@ __AIBOARD_TRUSTED_KEYS_PS__
     return ($AllowLoopback -and $Url -match '^http://127\.0\.0\.1:[0-9]{1,5}/')
   }
 
+  # Redirects are followed by hand (at most 5) and every hop is checked before it is contacted, so an
+  # HTTPS download can never be redirected to plain HTTP (Windows PowerShell's automatic redirects allow that).
   function Get-Download([string]$Url, [string]$Path) {
-    if (-not (Test-AllowedUrl $Url)) { Fail "refusing a non-HTTPS download: $Url" }
-    try { Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing -TimeoutSec 600 }
-    catch { Fail "could not download $Url ($($_.Exception.Message)). Check your connection and retry; nothing was changed." }
+    $next = $Url
+    for ($hop = 0; ; $hop++) {
+      if (-not (Test-AllowedUrl $next)) { Fail "refusing a non-HTTPS download or redirect: $next" }
+      if ($hop -gt 5) { Fail "too many redirects downloading $Url." }
+      $request = [Net.HttpWebRequest]::Create($next)
+      $request.AllowAutoRedirect = $false
+      $request.Timeout = 600000
+      $request.ReadWriteTimeout = 600000
+      $request.UserAgent = 'AIBoard-Installer'
+      $response = $null
+      try { $response = $request.GetResponse() }
+      catch [Net.WebException] { $response = $_.Exception.Response; if (-not $response) { Fail "could not download $Url ($($_.Exception.Message)). Check your connection and retry; nothing was changed." } }
+      catch { Fail "could not download $Url ($($_.Exception.Message)). Check your connection and retry; nothing was changed." }
+      try {
+        $status = [int]$response.StatusCode
+        if ($status -ge 300 -and $status -lt 400) {
+          $location = $response.Headers['Location']
+          if (-not $location) { Fail "could not download $Url (redirect without a location)." }
+          $next = (New-Object Uri((New-Object Uri($next)), $location)).AbsoluteUri
+          continue
+        }
+        if ($status -ne 200) { Fail "could not download $Url (HTTP $status). Check your connection and retry; nothing was changed." }
+        $stream = $response.GetResponseStream()
+        $file = [IO.File]::Create($Path)
+        try { $stream.CopyTo($file) } catch { Fail "could not download $Url ($($_.Exception.Message)). Check your connection and retry; nothing was changed." }
+        finally { $file.Dispose(); $stream.Dispose() }
+        return
+      } finally { $response.Dispose() }
+    }
   }
 
   function Write-Pointer([string]$Path, [string]$Value) {

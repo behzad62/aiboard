@@ -37,8 +37,29 @@ download() {
       curl -fsSL --retry 2 --proto =https --proto-redir =https -o "$2" "$1" || fail "could not download $1. Check your connection and retry; nothing was changed."
     fi
   else
-    wget -q -O "$2" "$1" || fail "could not download $1. Check your connection and retry; nothing was changed."
+    wget_checked "$1" "$2" || fail "could not download $1. Check your connection and retry; nothing was changed."
   fi
+}
+
+# wget has no option that keeps redirects on HTTPS, so redirects are followed by hand (at most 5) and
+# every hop is checked with allowed_url before it is contacted. Needs GNU wget (--max-redirect, -S).
+wget_checked() {
+  wget --version 2>/dev/null | grep -q 'GNU Wget' || fail "curl or GNU wget is required."
+  wget_next=$1
+  wget_hop=0
+  while :; do
+    allowed_url "$wget_next" || fail "refusing a non-HTTPS download or redirect: $wget_next"
+    if wget -S --max-redirect=0 -O "$2" "$wget_next" 2> "$2.headers"; then rm -f "$2.headers"; return 0; fi
+    wget_location=$(sed -n 's/^ *[Ll]ocation: *\([^[:space:]]*\).*/\1/p' "$2.headers" | tail -n 1)
+    rm -f "$2.headers"
+    case "$wget_location" in
+      https://*|http://*) wget_next=$wget_location ;;
+      /*) wget_next=$(printf '%s' "$wget_next" | sed 's#^\([a-z]*://[^/]*\).*#\1#')$wget_location ;;
+      *) return 1 ;;
+    esac
+    wget_hop=$((wget_hop + 1))
+    [ "$wget_hop" -le 5 ] || fail "too many redirects downloading $1."
+  done
 }
 
 sha256_of() {
