@@ -64,6 +64,10 @@ jobs:
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-installers.mts
       - name: Signing sequence monotonicity
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-signing-sequence.mts
+      - name: Copilot platform package verification
+        run: node node_modules/tsx/dist/cli.mjs scripts/release/test-copilot-bundle.mts
+      - name: Copilot unresponsive-runtime handling
+        run: node scripts/release/test-copilot-smoke.mjs
 
       - name: Prepare test release (key, host bundles, bundled driver)
         shell: bash
