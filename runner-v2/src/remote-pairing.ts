@@ -42,7 +42,7 @@ export interface RelayPairingOptions {
   readonly runnerVersion?: string;
 }
 
-interface RelayRoot { readonly keyId?: string; readonly publicKey: string }
+export interface RelayRoot { readonly keyId?: string; readonly publicKey: string }
 
 /** Validate pins at argument parsing time, before Runner startup or any network access. */
 export function pairingRelayConfiguration(relayUrl: string, customKeys: readonly string[] = []): { origin: string; roots: readonly RelayRoot[] } {

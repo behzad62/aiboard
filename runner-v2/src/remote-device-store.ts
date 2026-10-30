@@ -44,8 +44,10 @@ export interface RemoteDeviceSession {
   readonly clientId: string;
   readonly scope: string;
   readonly issuedAt: string;
-  /** Relay signing keys pinned at provisioning; request signatures must verify under one. */
+  /** Relay signing keys pinned at provisioning or adopted from a root-signed statement. */
   readonly relayKeys: readonly RemoteRelayKey[];
+  /** Issuance time of the most recently adopted root-signed relay key set. */
+  readonly relayKeysIssuedAt?: string;
   /** Scope references this device session may be authorized for; anything else is refused. */
   readonly authorizedScopes: readonly string[];
   readonly relayOrigin?: string;
@@ -218,14 +220,9 @@ export class RemoteDeviceStore {
     try { raw = readPrivateText(this.sessionPath); }
     catch (error) { if (isMissing(error)) return undefined; throw error; }
     const value: unknown = JSON.parse(raw);
-    if (!isRecord(value) || !checkedSessionShape(value) || typeof value.accountId !== "string" || typeof value.clientId !== "string" ||
-      typeof value.scope !== "string" || typeof value.issuedAt !== "string") {
-      throw new Error("Remote device session record is invalid.");
-    }
-    return Object.freeze({
-      accountId: value.accountId, clientId: value.clientId, scope: value.scope, issuedAt: value.issuedAt, relayKeys: checkedSessionShape(value)!.relayKeys, authorizedScopes: checkedSessionShape(value)!.authorizedScopes,
-      ...(typeof value.relayOrigin === "string" ? { relayOrigin: value.relayOrigin } : {}),
-    });
+    const checked = checkedSessionShape(value);
+    if (!checked) throw new Error("Remote device session record is invalid.");
+    return checked;
   }
 
   noticeAcknowledged(): boolean {
@@ -382,6 +379,9 @@ export function checkedSessionShape(value: unknown): RemoteDeviceSession | undef
   if (!isRecord(value) || typeof value.accountId !== "string" || !value.accountId || typeof value.clientId !== "string" || !value.clientId ||
     typeof value.scope !== "string" || !value.scope || typeof value.issuedAt !== "string" || !value.issuedAt ||
     !Array.isArray(value.relayKeys) || !Array.isArray(value.authorizedScopes) ||
+    (value.relayKeysIssuedAt !== undefined && (typeof value.relayKeysIssuedAt !== "string" ||
+      !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/.test(value.relayKeysIssuedAt) ||
+      !Number.isFinite(Date.parse(value.relayKeysIssuedAt)))) ||
     (value.relayOrigin !== undefined && (typeof value.relayOrigin !== "string" || !value.relayOrigin))) return undefined;
   const keyIds = new Set<string>();
   const relayKeys: RemoteRelayKey[] = [];
@@ -403,6 +403,7 @@ export function checkedSessionShape(value: unknown): RemoteDeviceSession | undef
   return Object.freeze({
     accountId: value.accountId, clientId: value.clientId, scope: value.scope, issuedAt: value.issuedAt,
     relayKeys: Object.freeze(relayKeys), authorizedScopes: Object.freeze([...scopes]),
+    ...(typeof value.relayKeysIssuedAt === "string" ? { relayKeysIssuedAt: value.relayKeysIssuedAt } : {}),
     ...(typeof value.relayOrigin === "string" ? { relayOrigin: value.relayOrigin } : {}),
   });
 }

@@ -230,6 +230,7 @@ export class RemoteConnector {
   private readonly now: () => Date;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
+  private session: RemoteDeviceSession;
   private transport: RemoteTransport | undefined;
   private current: RemoteConnectionState;
   private admitting = false;
@@ -257,6 +258,7 @@ export class RemoteConnector {
   private readonly transfers: ArtifactTransferManager;
 
   constructor(private readonly options: RemoteConnectorOptions) {
+    this.session = options.session;
     this.now = options.now ?? (() => new Date());
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.random = options.random ?? Math.random;
@@ -402,7 +404,12 @@ export class RemoteConnector {
     try {
       await transport.connect();
       const challenge = await this.waitForChallenge();
-      const proof = this.options.authenticator.answerChallenge(challenge, this.options.session);
+      const proof = this.options.authenticator.answerChallenge(challenge, this.session);
+      if (Object.hasOwn(challenge, "keySet")) {
+        const updated = deviceStore.loadSession();
+        if (!updated) throw new Error("The updated relay session is unavailable.");
+        this.session = updated;
+      }
       this.pendingEpoch = challenge.challenge.epoch;
       await transport.send({ type: "proof", deviceId: proof.deviceId, publicKey: proof.publicKey, signature: proof.signature, limits: this.localLimits });
       await this.waitForAuthenticated();
@@ -423,7 +430,7 @@ export class RemoteConnector {
     }
     const identity = deviceStore.load()!;
     this.options.admission.registerAuthenticatedEpoch(
-      { accountId: this.options.session.accountId, deviceId: identity.deviceId }, identity.epoch);
+      { accountId: this.session.accountId, deviceId: identity.deviceId }, identity.epoch);
     this.transition("connected-degraded", "reconciliation_pending");
     try {
       if (!this.startupReconciled) {
@@ -645,7 +652,7 @@ export class RemoteConnector {
       return;
     }
     try {
-      this.options.authenticator.verifyAuthorization(request, authorization, this.options.session);
+      this.options.authenticator.verifyAuthorization(request, authorization, this.session);
     } catch {
       await respond(rejected(request, "unauthorized"));
       return;
@@ -660,7 +667,7 @@ export class RemoteConnector {
       return;
     }
     try {
-      this.options.authenticator.verifyRequest(request, this.options.session);
+      this.options.authenticator.verifyRequest(request, this.session);
       if (remotePayloadDigest(request) !== request.payloadDigest) throw new Error("Invalid digest.");
     } catch (error) {
       await respond(rejected(request, error instanceof RemoteAuthError ? error.code : "invalid_request"));
@@ -707,7 +714,7 @@ export class RemoteConnector {
       }
       // Plugin discovery may await; shutdown, fencing and policy still win before admission.
       if (this.closing || !this.isReady()) { await respond(rejected(request, "device_offline")); return; }
-      this.options.authenticator.verifyAuthorization(request, authorization, this.options.session);
+      this.options.authenticator.verifyAuthorization(request, authorization, this.session);
       if (this.options.deviceStore.isRevoked() ||
         (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) ||
         this.options.deviceStore.load()?.epoch !== request.deviceEpoch ||
@@ -1035,7 +1042,7 @@ export class RemoteConnector {
       // Recheck the original relay grant, local policy, deadline and current epoch
       // after every asynchronous preparation and immediately before the marker.
       try {
-        this.options.authenticator.verifyAuthorization(request, entry.authorization, this.options.session);
+        this.options.authenticator.verifyAuthorization(request, entry.authorization, this.session);
         if (this.options.deviceStore.isRevoked() ||
           (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) ||
           this.options.deviceStore.load()?.epoch !== request.deviceEpoch ||
@@ -1176,7 +1183,7 @@ export class RemoteConnector {
   }
   private canDispatch(entry: InFlight): boolean {
     try {
-      this.options.authenticator.verifyAuthorization(entry.request, entry.authorization, this.options.session);
+      this.options.authenticator.verifyAuthorization(entry.request, entry.authorization, this.session);
       return !this.closing && !entry.settled && !entry.controller.signal.aborted &&
         !this.options.deviceStore.isRevoked() &&
         (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld()) &&
