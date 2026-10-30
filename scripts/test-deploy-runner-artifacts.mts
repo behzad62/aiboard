@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { relative } from "node:path";
 import JSZip from "jszip";
+import { ACCOUNT_RUNNER_VERSION } from "../lib/providers/provider-registry";
 
 let failures = 0;
 
@@ -225,7 +226,8 @@ async function checkAccountRunnerArchive(path: string): Promise<void> {
         `${path} account runner matches source after normalized line endings`,
         normalizeLf(archivedRunner) === normalizeLf(read(sourceAccountRunner))
       );
-      check(`${path} account runner publishes protocol version 28`, /const VERSION = 28;/.test(archivedRunner));
+      const runnerVersion = Number(/const VERSION = (\d+);/.exec(archivedRunner)?.[1]);
+      check(`${path} account runner publishes protocol version ${ACCOUNT_RUNNER_VERSION}`, runnerVersion === ACCOUNT_RUNNER_VERSION, runnerVersion);
       check(`${path} account runner publishes capability schema v1`, /const RUNNER_CAPABILITY_SCHEMA_VERSION = 1;/.test(archivedRunner));
       check(`${path} account runner exposes provider capability endpoint`, /action === "capabilities"/.test(archivedRunner));
       check(`${path} account runner includes ChatGPT capability handler`, /chatGptRunnerCapabilities\(\)/.test(archivedRunner));
