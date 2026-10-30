@@ -48,6 +48,34 @@ sha256_of() {
   fi
 }
 
+# Runs a staged-bundle command for at most $1 seconds, its output in $2. A command that outlives the bound
+# gets TERM, then KILL, and is reaped by `wait` before this returns, so the install lock and staging are
+# never released while it can still run. Returns 124 on timeout, otherwise the command's status.
+run_bounded() {
+  bounded_limit=$1; bounded_output=$2; shift 2
+  rm -f "$bounded_output.timeout"
+  "$@" > "$bounded_output" 2>&1 &
+  bounded_child=$!
+  (
+    bounded_sleep=""
+    trap '[ -z "$bounded_sleep" ] || kill "$bounded_sleep" 2>/dev/null; exit 0' TERM
+    sleep "$bounded_limit" & bounded_sleep=$!
+    wait "$bounded_sleep"
+    : > "$bounded_output.timeout"
+    kill -TERM "$bounded_child" 2>/dev/null || exit 0
+    sleep 5 & bounded_sleep=$!
+    wait "$bounded_sleep"
+    kill -KILL "$bounded_child" 2>/dev/null || true
+  ) &
+  bounded_watchdog=$!
+  bounded_status=0
+  wait "$bounded_child" || bounded_status=$?
+  kill -TERM "$bounded_watchdog" 2>/dev/null || true
+  wait "$bounded_watchdog" 2>/dev/null || true
+  if [ -f "$bounded_output.timeout" ]; then return 124; fi
+  return "$bounded_status"
+}
+
 # Top-level members of the canonical manifest are one per line: "name":value,
 manifest_value() { sed -n "s/^\"$1\":\(.*\),\$/\1/p" "$2"; }
 unquote() { printf '%s' "$1" | sed -n 's/^"\([^"\\]*\)"$/\1/p'; }
@@ -184,13 +212,14 @@ NODE
       || fail "the bundle does not describe the release it was published as."
 
     # The archive's signed checksum authenticates the bundled Node and verifier before they run.
-    "$staging/node/node" "$work/verify-inventory.cjs" "$staging" "$staging" "$version" "$target" || fail "bundle inventory verification failed. Nothing was installed."
+    run_bounded 600 "$work/inventory.log" "$staging/node/node" "$work/verify-inventory.cjs" "$staging" "$staging" "$version" "$target" || fail "bundle inventory verification failed or did not finish within 600 seconds. Nothing was installed. $(cat "$work/inventory.log")"
 
     # 5. Bounded smoke check with the bundle's own Node before switching.
-    smoke=$("$staging/node/node" "$staging/app/runner-v2/bin/aiboard.mjs" version 2>&1) || fail "the new version did not start: $smoke"
+    run_bounded 120 "$work/smoke.log" "$staging/node/node" "$staging/app/runner-v2/bin/aiboard.mjs" version || fail "the new version did not start within 120 seconds: $(cat "$work/smoke.log")"
+    smoke=$(cat "$work/smoke.log")
     [ "$smoke" = "AIBoard Runner V2 $version" ] || fail "the new version did not start: $smoke"
     if [ "$current" = "$version" ] && [ -d "$destination" ]; then
-      "$staging/node/node" "$work/verify-inventory.cjs" "$staging" "$destination" "$version" "$target" || fail "the existing version failed its inventory check. After stopping all AIBoard processes, remove $destination and run the installer again."
+      run_bounded 600 "$work/inventory.log" "$staging/node/node" "$work/verify-inventory.cjs" "$staging" "$destination" "$version" "$target" || fail "the existing version failed its inventory check. After stopping all AIBoard processes, remove $destination and run the installer again. $(cat "$work/inventory.log")"
       [ -x "$destination/node/node" ] || fail "the existing version's Node runtime is not executable. After stopping all AIBoard processes, remove $destination and run the installer again."
       say "AI Board Runner $version is already installed; repairing the command and PATH."
     else

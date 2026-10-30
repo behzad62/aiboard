@@ -72,5 +72,60 @@ try {
   }
 } finally { rmSync(dir, { recursive: true, force: true }); }
 
+// Staged-bundle processes are bounded: a hung command is stopped and confirmed gone before the installer
+// can release its lock or delete staging. The real rendered functions are extracted and driven directly.
+const node = process.execPath;
+const hang = "require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)";
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+if (process.platform !== "win32") {
+  const runBounded = /\nrun_bounded\(\) \{\n[\s\S]*?\n\}\n/.exec(rendered.sh)?.[0];
+  check("install.sh defines run_bounded", Boolean(runBounded));
+  const bounded = mkdtempSync(join(tmpdir(), "aiboard-bounded-"));
+  try {
+    const script = `set -eu\n${runBounded}\n` +
+      `status=0; run_bounded "$1" "$2/out" "$3" -e "$4" "$2/pid" || status=$?; echo "status=$status"\n` +
+      `ok=0; run_bounded 30 "$2/ok" "$3" -e 'console.log("ready"); process.exit(3)' || ok=$?; echo "ok=$ok $(cat "$2/ok")"\n`;
+    const started = Date.now();
+    const result = spawnSync("sh", ["-c", script, "sh", "1", bounded, node, hang], { encoding: "utf8", timeout: 60_000 });
+    const pid = Number(readFileSync(join(bounded, "pid"), "utf8"));
+    check("install.sh stops a hung staged command at its bound (124) and reaps it", /status=124/.test(result.stdout) && !alive(pid) && Date.now() - started < 30_000,
+      { stdout: result.stdout, stderr: result.stderr, alive: alive(pid) });
+    check("install.sh passes through a finished command's status and output", /ok=3 ready/.test(result.stdout), result.stdout);
+  } finally { rmSync(bounded, { recursive: true, force: true }); }
+} else {
+  const invokeBounded = /\n {2}\$State = @\{ Unsettled = \$false \}\n {2}function Invoke-Bounded[\s\S]*?\n {2}\}\n/.exec(rendered.ps1)?.[0];
+  check("install.ps1 defines Invoke-Bounded", Boolean(invokeBounded));
+  const bounded = mkdtempSync(join(tmpdir(), "aiboard-bounded-"));
+  try {
+    const pidFile = join(bounded, "pid");
+    const args = ["a b", 'q"x', "tail\\", "é✓"];
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+      "function Fail([string]$Message) { throw \"AIBoard install failed: $Message\" }",
+      invokeBounded,
+      `$echo = Invoke-Bounded '${node}' @('-e', 'console.log(JSON.stringify(process.argv.slice(1)))', ${args.map((arg) => `'${arg.replace(/'/g, "''")}'`).join(", ")}) 30 'Echo'`,
+      "[Console]::Out.WriteLine('echo=' + $echo.ExitCode + ' ' + $echo.Output)",
+      "$started = Get-Date",
+      `try { Invoke-Bounded '${node}' @('-e', "${hang.replace(/"/g, '`"')}", '${pidFile}') 2 'The test command' | Out-Null; [Console]::Out.WriteLine('no-timeout') }`,
+      "catch { [Console]::Out.WriteLine('timeout=' + $_.Exception.Message + ' seconds=' + [int]((Get-Date) - $started).TotalSeconds + ' unsettled=' + $State.Unsettled) }",
+    ].join("\n");
+    const shells = ["powershell.exe", ...(spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).status === 0 ? ["pwsh"] : [])];
+    for (const shell of shells) {
+      const output = execFileSync(shell, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8", timeout: 60_000 });
+      const echoed = /echo=0 (.*)/.exec(output)?.[1]?.trim();
+      check(`install.ps1 Invoke-Bounded passes arguments with spaces, quotes, trailing backslashes and Unicode (${shell})`, echoed === JSON.stringify(args), { output });
+      const pid = Number(readFileSync(pidFile, "utf8"));
+      check(`install.ps1 Invoke-Bounded stops a hung staged command and confirms it exited (${shell})`, /timeout=AIBoard install failed: The test command did not finish within 2 seconds\. Nothing was installed\. seconds=\d+ unsettled=False/.test(output) && !alive(pid),
+        { output, alive: alive(pid) });
+      rmSync(pidFile, { force: true });
+    }
+  } finally { rmSync(bounded, { recursive: true, force: true }); }
+}
+check("install.ps1 keeps the lock and staging when a staged process cannot be confirmed stopped",
+  /if \(\$State\.Unsettled\) \{[\s\S]*?\$Lock = \$null; \$staging = \$null; \$Work = \$null/.test(rendered.ps1));
+check("installers run every staged-bundle command through the bound",
+  !/& \(Join-Path \$staging 'node\\node\.exe'\)/.test(rendered.ps1) && !/^\s*(smoke=\$\()?"\$staging\/node\/node"/m.test(rendered.sh));
+
 if (failures > 0) { console.error(`${failures} installer check(s) failed.`); process.exit(1); }
 console.log("All installer checks passed.");

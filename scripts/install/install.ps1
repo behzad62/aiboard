@@ -60,6 +60,37 @@ __AIBOARD_TRUSTED_KEYS_PS__
     if ($value) { return $value } else { return $null }
   }
 
+  # Runs one staged-bundle command for at most $Seconds. A command that outlives the bound is killed and must
+  # be seen to exit; if it cannot be, $State.Unsettled keeps the install lock and staging in place, so nothing
+  # is released or deleted while it may still run.
+  $State = @{ Unsettled = $false }
+  function Invoke-Bounded([string]$File, [string[]]$Arguments, [int]$Seconds, [string]$What) {
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $File
+    $info.Arguments = (@($Arguments | ForEach-Object { '"' + (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"' }) -join ' ')
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $info.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $process = [Diagnostics.Process]::Start($info)
+    try {
+      $stdout = $process.StandardOutput.ReadToEndAsync()
+      $stderr = $process.StandardError.ReadToEndAsync()
+      if (-not $process.WaitForExit($Seconds * 1000)) {
+        try { $process.Kill() } catch { }
+        if (-not $process.WaitForExit(15000)) {
+          $State.Unsettled = $true
+          Fail "$What did not finish within $Seconds seconds and could not be stopped (process $($process.Id)). The install lock and staging folder were kept; end that process, then remove them and retry."
+        }
+        Fail "$What did not finish within $Seconds seconds. Nothing was installed."
+      }
+      $process.WaitForExit()
+      return New-Object PSObject -Property @{ ExitCode = $process.ExitCode; Output = ($stdout.Result + $stderr.Result).Trim() }
+    } finally { $process.Dispose() }
+  }
+
   function ConvertTo-UtcDate($Value) {
     if ($Value -is [DateTime]) { return $Value.ToUniversalTime() }
     if ([string]$Value -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$') { Fail 'the release manifest has an invalid timestamp.' }
@@ -181,24 +212,16 @@ import(pathToFileURL(resolve(verified, 'app/runner-v2/src/self-update.js')).href
       if ($release.version -ne $Version -or $release.target -ne $Target) { Fail 'the bundle does not describe the release it was published as.' }
 
       # The archive's signed checksum authenticates the bundled Node and verifier before they run.
-      $ErrorActionPreference = 'Continue'
-      $inventoryOutput = & (Join-Path $staging 'node\node.exe') $inventoryPath $staging $staging $Version $Target 2>&1 | Out-String
-      $inventoryExit = $LASTEXITCODE
-      $ErrorActionPreference = 'Stop'
-      if ($inventoryExit -ne 0) { Fail "bundle inventory verification failed. Nothing was installed. $($inventoryOutput.Trim())" }
+      $stagedNode = Join-Path $staging 'node\node.exe'
+      $inventory = Invoke-Bounded $stagedNode @($inventoryPath, $staging, $staging, $Version, $Target) 600 'Bundle inventory verification'
+      if ($inventory.ExitCode -ne 0) { Fail "bundle inventory verification failed. Nothing was installed. $($inventory.Output)" }
 
       # 5. Bounded smoke check with the bundle's own Node before switching.
-      $ErrorActionPreference = 'Continue'
-      $smoke = & (Join-Path $staging 'node\node.exe') (Join-Path $staging 'app\runner-v2\bin\aiboard.mjs') version 2>&1 | Out-String
-      $smokeExit = $LASTEXITCODE
-      $ErrorActionPreference = 'Stop'
-      if ($smokeExit -ne 0 -or $smoke.Trim() -ne "AIBoard Runner V2 $Version") { Fail "the new version did not start: $($smoke.Trim())" }
+      $smoke = Invoke-Bounded $stagedNode @((Join-Path $staging 'app\runner-v2\bin\aiboard.mjs'), 'version') 120 'The new version'
+      if ($smoke.ExitCode -ne 0 -or $smoke.Output -ne "AIBoard Runner V2 $Version") { Fail "the new version did not start: $($smoke.Output)" }
       if ($current -eq $Version -and (Test-Path -LiteralPath $destination)) {
-        $ErrorActionPreference = 'Continue'
-        $inventoryOutput = & (Join-Path $staging 'node\node.exe') $inventoryPath $staging $destination $Version $Target 2>&1 | Out-String
-        $inventoryExit = $LASTEXITCODE
-        $ErrorActionPreference = 'Stop'
-        if ($inventoryExit -ne 0) { Fail "the existing version failed its inventory check. After stopping all AIBoard processes, remove $destination and run the installer again. $($inventoryOutput.Trim())" }
+        $inventory = Invoke-Bounded $stagedNode @($inventoryPath, $staging, $destination, $Version, $Target) 600 'The existing version''s inventory check'
+        if ($inventory.ExitCode -ne 0) { Fail "the existing version failed its inventory check. After stopping all AIBoard processes, remove $destination and run the installer again. $($inventory.Output)" }
         Say "AI Board Runner $Version is already installed; repairing the command and PATH."
       } else {
         if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
@@ -268,6 +291,11 @@ import(pathToFileURL(resolve(verified, 'app/runner-v2/src/self-update.js')).href
     Say 'Let ChatGPT or Claude use this computer:  aiboard remote'
     Say 'Open a new terminal if the aiboard command is not found yet. Update: aiboard update. Remove: aiboard uninstall.'
   } finally {
+    if ($State.Unsettled) {
+      # A staged process may still be running: keep everything it could be using, and the lock that guards it.
+      Write-Warning "Kept the install lock $Lock, the staging folder $staging and $Work because a staged process may still be running."
+      $Lock = $null; $staging = $null; $Work = $null
+    }
     if ($staging -and (Test-Path -LiteralPath $staging)) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
     if ($Lock) {
       try {
@@ -276,6 +304,6 @@ import(pathToFileURL(resolve(verified, 'app/runner-v2/src/self-update.js')).href
         [IO.Directory]::Delete($Lock)
       } catch { Write-Warning "Could not release install lock $Lock. Confirm no install, update, or uninstall is running before removing it." }
     }
-    Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
+    if ($Work) { Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue }
   }
 }
