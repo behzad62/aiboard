@@ -131,23 +131,17 @@ __AIBOARD_TRUSTED_KEYS_PS__
 
     $inventoryScript = @'
 const { resolve } = require('node:path');
+const { readFileSync } = require('node:fs');
 const { pathToFileURL } = require('node:url');
-const [dir, version, target] = process.argv.slice(2);
-import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
+const [verified, dir, version, target] = process.argv.slice(2);
+if (!readFileSync(resolve(verified, 'release.json')).equals(readFileSync(resolve(dir, 'release.json')))) throw new Error('release inventory differs from signed bundle');
+import(pathToFileURL(resolve(verified, 'app/runner-v2/src/self-update.js')).href)
   .then(m => m.verifyVersionDirectory(dir, { version, target }))
   .catch(e => { console.error(e.message); process.exitCode = 1; });
 '@
     $inventoryPath = Join-Path $Work 'verify-inventory.cjs'
     [IO.File]::WriteAllText($inventoryPath, $inventoryScript, (New-Object Text.UTF8Encoding($false)))
 
-    if ($current -eq $Version -and (Test-Path -LiteralPath $node)) {
-      $ErrorActionPreference = 'Continue'
-      $inventoryOutput = & $node $inventoryPath $destination $Version $Target 2>&1 | Out-String
-      $inventoryExit = $LASTEXITCODE
-      $ErrorActionPreference = 'Stop'
-      if ($inventoryExit -ne 0) { Fail "the existing version failed its inventory check. After stopping all AIBoard processes, remove $destination and run the installer again. $($inventoryOutput.Trim())" }
-      Say "AI Board Runner $Version is already installed; repairing the command and PATH."
-    } else {
       # 3. Bundle: size and SHA-256 must match the signed manifest before extraction.
       $archive = Join-Path $Work "aiboard-$Version-$Target.zip"
       Say "Downloading AI Board Runner $Version for $Target..."
@@ -188,7 +182,7 @@ import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
 
       # The archive's signed checksum authenticates the bundled Node and verifier before they run.
       $ErrorActionPreference = 'Continue'
-      $inventoryOutput = & (Join-Path $staging 'node\node.exe') $inventoryPath $staging $Version $Target 2>&1 | Out-String
+      $inventoryOutput = & (Join-Path $staging 'node\node.exe') $inventoryPath $staging $staging $Version $Target 2>&1 | Out-String
       $inventoryExit = $LASTEXITCODE
       $ErrorActionPreference = 'Stop'
       if ($inventoryExit -ne 0) { Fail "bundle inventory verification failed. Nothing was installed. $($inventoryOutput.Trim())" }
@@ -199,9 +193,18 @@ import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
       $smokeExit = $LASTEXITCODE
       $ErrorActionPreference = 'Stop'
       if ($smokeExit -ne 0 -or $smoke.Trim() -ne "AIBoard Runner V2 $Version") { Fail "the new version did not start: $($smoke.Trim())" }
-      if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
-      Move-Item -LiteralPath $staging -Destination $destination
-    }
+      if ($current -eq $Version -and (Test-Path -LiteralPath $destination)) {
+        $ErrorActionPreference = 'Continue'
+        $inventoryOutput = & (Join-Path $staging 'node\node.exe') $inventoryPath $staging $destination $Version $Target 2>&1 | Out-String
+        $inventoryExit = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($inventoryExit -ne 0) { Fail "the existing version failed its inventory check. After stopping all AIBoard processes, remove $destination and run the installer again. $($inventoryOutput.Trim())" }
+        Say "AI Board Runner $Version is already installed; repairing the command and PATH."
+      } else {
+        if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
+        Move-Item -LiteralPath $staging -Destination $destination
+        $staging = $null
+      }
 
     # 6. Command shim, then the atomic version switch.
     New-Item -ItemType Directory -Force -Path $Bin | Out-Null

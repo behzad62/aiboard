@@ -264,6 +264,15 @@ try {
     check("corrupt reinstall leaves the active version unchanged", pointer("current") === "0.9.1" && readFileSync(installedLicense, "utf8") === "corrupted installed file");
   } finally { writeFileSync(installedLicense, originalLicense); }
 
+  const installedVerifier = join(root, "versions", "0.9.1", "app", "runner-v2", "src", "self-update.js");
+  const originalVerifier = readFileSync(installedVerifier);
+  try {
+    writeFileSync(installedVerifier, "export async function verifyVersionDirectory() { return {}; }\n");
+    const replacedVerifier = await runInstaller();
+    check("same-version installer does not trust an installed replacement verifier", replacedVerifier.code !== 0 && /existing version failed its inventory check/i.test(replacedVerifier.stdout + replacedVerifier.stderr), replacedVerifier.stdout + replacedVerifier.stderr);
+    check("replacement verifier leaves active version unchanged", pointer("current") === "0.9.1");
+  } finally { writeFileSync(installedVerifier, originalVerifier); }
+
   const releaseHeldLock = await acquireInstallLock(root);
   try {
     const blockedInstaller = await runInstaller();
