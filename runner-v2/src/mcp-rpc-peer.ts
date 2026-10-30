@@ -76,13 +76,31 @@ export class McpRpcPeer {
     void response.catch(() => undefined);
     this.pending = current;
     const timeout = setTimeout(() => this.fail("mcp_request_timeout", "MCP request exceeded its write/response deadline."), timeoutMs);
-    const cancel = () => this.fail("mcp_request_cancelled", "MCP request was cancelled; protocol idleness is not established.");
+    let written: Promise<void> | undefined;
+    const cancel = () => {
+      if (!current.started || !written) {
+        this.fail("mcp_request_cancelled", "MCP request was cancelled before write.");
+        return;
+      }
+      // Keep the owned writer alive long enough to send the protocol notification,
+      // but never treat its acknowledgement as proof that the effect stopped.
+      const cancellation = Buffer.from(JSON.stringify({
+        jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id, reason: "Cancelled by caller" },
+      }) + "\n");
+      const fail = () => this.fail("mcp_request_cancelled", "MCP request was cancelled; protocol idleness is not established.");
+      const deadline = setTimeout(fail, Math.min(timeoutMs, 1_000));
+      void written.then(async () => {
+        if (!this.failure && cancellation.length <= this.maximumLineBytes) {
+          await writer.write(cancellation, Math.min(timeoutMs, 1_000));
+        }
+      }).catch(() => undefined).finally(() => { clearTimeout(deadline); fail(); });
+    };
     signal?.addEventListener("abort", cancel, { once: true });
     try {
-      current.started = true;
       // Promise.resolve().then also owns a writer that throws synchronously.
-      const written = Promise.resolve().then(() => {
+      written = Promise.resolve().then(() => {
         if (this.failure) throw this.failure;
+        current.started = true;
         return writer.write(payload, Math.min(timeoutMs, 30_000));
       }).catch((cause: unknown) => {
         if (!this.failure) this.fail("mcp_write_outcome_unknown", "MCP request write acknowledgement is unavailable.", cause);

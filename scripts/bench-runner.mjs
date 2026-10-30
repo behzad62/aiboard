@@ -6,6 +6,8 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, lstat, open, writeFile, readdir, cp } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { homedir, userInfo } from "node:os";
+import { createPairingEndpoint } from "./local-pair-runner.mjs";
 import { specializeTrustedModule } from "./workbench-rjs-support.mjs";
 import { readNativeToolEvidence } from "./bench-native-tool-evidence.mjs";
 
@@ -68,6 +70,7 @@ await mkdir(attemptMetaRoot, { recursive: true });
 await mkdir(runnerStateRoot, { recursive: true });
 await mkdir(rjsReplayStateRoot, { recursive: true });
 
+const pairing = createPairingEndpoint({ kind: "bench", getPort: () => port, shutdown: () => { void Promise.allSettled([...managedAttemptRunners.values()].map((managed) => terminateChild(managed.child))).then(() => { try { server.close(() => process.exit(0)); } catch { process.exit(0); } }); } });
 const server = createServer(async (req, res) => {
   const requestAbort = new AbortController();
   const abortRequest = () => requestAbort.abort();
@@ -76,6 +79,7 @@ const server = createServer(async (req, res) => {
     if (!res.writableEnded) abortRequest();
   });
   try {
+    if (await pairing.handle(req, res)) return;
     if (!req.url) throw new HttpError(400, "Missing request URL.");
     const url = new URL(req.url, `http://${host}:${port}`);
     if (!url.pathname.startsWith("/bench/")) {
@@ -85,7 +89,7 @@ const server = createServer(async (req, res) => {
       sendNoContent(req, res, 204);
       return;
     }
-    if (req.headers["x-runner-token"] !== token) {
+    if (req.headers["x-runner-token"] !== token && !pairing.hasSession(req.headers["x-runner-token"])) {
       throw new HttpError(401, "Bench runner token required.");
     }
     if (req.method !== "GET" && req.method !== "POST") {
@@ -108,12 +112,14 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, host, () => {
+  void pairing.attach();
   console.log("AI Board - bench runner");
   console.log("-----------------------");
   console.log(`Version : v${VERSION}`);
   console.log(`URL     : http://${host}:${port}`);
   console.log(`Root    : ${root}`);
-  console.log(`Token   : ${token}`);
+  // A launcher-started runner never prints its reusable token; the browser pairs through aiboard instead.
+  console.log(`Token   : ${process.send ? "held by aiboard (this tab pairs automatically)" : token}`);
   if (runnerV2Launcher) {
     console.log(`Managed Runner V2: ready (${runnerV2Launcher.source})`);
   } else {
@@ -801,19 +807,19 @@ async function startAttemptRunner(body) {
   await rm(statePath, { recursive: true, force: true });
   await mkdir(statePath, { recursive: true });
   const token = randomBytes(32).toString("hex");
-  const invocation = runnerV2Invocation(runnerV2Launcher, attemptRoot, statePath, token);
+  const invocation = await runnerV2Invocation(runnerV2Launcher, attemptRoot, statePath, token);
   const sourceDigest = await runnerSourceDigest(runnerV2Launcher);
   const child = trackBenchChild(spawn(invocation.command, invocation.args, {
     cwd: runnerV2Launcher.directory,
     windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   }));
   const managed = { attemptId, child, token, projectPath: attemptRoot, statePath, starting: true, sourceDigest, platform: process.platform };
   managedAttemptRunners.set(attemptId, managed);
   child.once("exit", () => { managed.exited = true; });
   try {
     const startupDeadline = Date.now() + 45_000;
-    const started = await waitForRunnerV2Startup(child, 45_000);
+    const started = await waitForRunnerV2Startup(child, 45_000, invocation.handshake);
     const health = await readManagedRunnerHealth(
       started.url,
       token,
@@ -1404,25 +1410,60 @@ async function nativeBrowserAvailable() {
   } catch { return false; }
 }
 
-function runnerV2Invocation(launcher, projectPath, statePath, runnerToken) {
+async function runnerV2Invocation(launcher, projectPath, statePath, runnerToken) {
+  // The Runner V2 control token travels only over the inherited IPC channel
+  // (the L1b launcher handshake); it never appears in the child argv.
+  const { realpath } = await import("node:fs/promises");
+  const canonicalProject = await realpath(projectPath);
+  const instanceId = randomBytes(16).toString("hex");
+  const pairCode = `v1.${instanceId}.${randomBytes(32).toString("base64url")}`;
+  const user = userInfo();
+  const handshake = {
+    type: "aiboard-launcher-init",
+    token: runnerToken,
+    controlKey: randomBytes(32).toString("hex"),
+    instanceId,
+    pairDigest: createHash("sha256").update(pairCode, "utf8").digest("hex"),
+    identity: {
+      projectPath: canonicalProject,
+      projectKey: process.platform === "win32" ? canonicalProject.toLowerCase() : canonicalProject,
+      owner: process.platform === "win32" ? `windows:${user.username.toLowerCase()}:${homedir().toLowerCase()}` : `uid:${user.uid}`,
+    },
+    stateDirectory: statePath,
+    version: "bench-managed",
+  };
   return {
+    handshake,
     command: process.execPath,
     args: [
       join(launcher.directory, "node_modules", "tsx", "dist", "cli.mjs"),
       launcher.cli,
       "--project",
-      projectPath,
+      canonicalProject,
       "--state-dir",
       statePath,
       "--port",
       "0",
-      "--token",
-      runnerToken,
+      "--launcher-ipc",
     ],
   };
 }
 
-function waitForRunnerV2Startup(child, timeoutMs) {
+function waitForRunnerV2Startup(child, timeoutMs, handshake) {
+  if (handshake) {
+    let sentHandshake = false;
+    child.on("message", (message) => {
+      if (!message || typeof message !== "object") return;
+      if (message.type === "aiboard-launcher-awaiting-init" && !sentHandshake) {
+        sentHandshake = true;
+        child.send(handshake);
+        return;
+      }
+      if (message.type === "aiboard-launcher-ready" && message.instance && typeof message.instance.port === "number") {
+        child.stdout?.emit("data", Buffer.from(`${JSON.stringify({ url: `http://127.0.0.1:${message.instance.port}` })}\n`));
+      }
+    });
+  }
   return new Promise((resolveStartup, rejectStartup) => {
     let stdout = "";
     let stderr = "";

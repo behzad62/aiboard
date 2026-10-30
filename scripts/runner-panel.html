@@ -224,17 +224,10 @@
   "use strict";
   const KEY = "aiboard_runner_token";
 
-  // ── Token: fragment → sessionStorage → scrub; else paste gate ──────────────
+  // ── Token: paste gate → sessionStorage → scrub; else paste gate ──────────────
   let token = "";
-  const hash = location.hash.replace(/^#/, "");
-  const m = /(?:^|&)token=([^&]+)/.exec(hash);
-  if (m) {
-    token = decodeURIComponent(m[1]);
-    try { sessionStorage.setItem(KEY, token); } catch {}
-    history.replaceState(null, "", location.pathname + location.search);
-  } else {
-    try { token = sessionStorage.getItem(KEY) || ""; } catch {}
-  }
+  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+  try { token = sessionStorage.getItem(KEY) || ""; } catch {}
 
   const $ = (id) => document.getElementById(id);
   const gate = $("gate");

@@ -20,7 +20,11 @@ interface ConfiguredServer {
   error?: string;
   invalidation?: Promise<void>;
   invalidationOrigin?: Slot;
+  readonly degradedSlots: Set<string>;
+  recoveryAttempts: number;
 }
+const SERVER_RECOVERY_PENDING = "server-recovery-pending";
+
 interface Slot {
   readonly key: string;
   readonly agent: string;
@@ -69,7 +73,7 @@ export class McpSessionManager {
       const tools = valid ? parseMcpToolList({ tools: recorded.tools }) : [];
       const available = valid && recorded.schemaDigest === canonicalMcpDigest(tools) && /^[a-f0-9]{64}$/u.test(recorded.executableDigest);
       return { spec, ...(recorded ? { discovered: Object.freeze(structuredClone(recorded)) } : {}), tools: available ? tools : [],
-        available, status: "stopped" as const };
+        available, status: "stopped" as const, degradedSlots: new Set<string>(), recoveryAttempts: 0 };
     }));
   }
 
@@ -188,10 +192,14 @@ export class McpSessionManager {
         throw new McpSessionError("mcp_attestation_mismatch", "MCP executable or configuration changed after discovery.");
       if (slot.closing) await slot.closing;
       if (!slot.transport) {
-        if (slot.attempts > this.maximumRestarts) throw new McpSessionError("mcp_restart_exhausted", "MCP restart budget is exhausted; a call will not be replayed.");
+        if (slot.attempts > this.maximumRestarts || (server.degradedSlots.size > 0 && server.recoveryAttempts >= this.maximumRestarts))
+          throw new McpSessionError("mcp_restart_exhausted", "MCP restart budget is exhausted; a call will not be replayed.");
+        if (server.degradedSlots.size > 0) server.recoveryAttempts++;
         slot.attempts++;
+        if (slot.attempts > 1 && server.degradedSlots.size === 0) server.status = "starting";
         const peer = new McpRpcPeer({ maximumLineBytes: this.options.maximumLineBytes, onFailure: (error) => {
-          server.error = error.message; server.status = "error";
+          if (slot.closed || this.closed) return;
+          server.error = error.message; server.status = "degraded"; server.degradedSlots.add(slot.key);
           if (error.code === "mcp_schema_changed") this.invalidateServer(server, slot.busy ? slot : undefined);
           else if (!slot.busy) void this.retire(slot).catch((failure: unknown) => { server.error = `MCP cleanup is unverified: ${asError(failure).message}`; });
         } });
@@ -212,12 +220,16 @@ export class McpSessionManager {
         slot.transport = transport;
         if (slot.closed || this.closed || owner.context.signal?.aborted) throw new McpProtocolError("mcp_request_cancelled", "MCP owner closed during live acquisition.", "outcome_unknown");
         if (peer.error) throw peer.error;
+        server.degradedSlots.delete(slot.key);
+        server.degradedSlots.delete(SERVER_RECOVERY_PENDING);
+        server.status = server.degradedSlots.size ? "degraded" : "ready";
+        if (!server.degradedSlots.size) server.error = undefined;
       }
       if (!slot.transport.request) throw new McpSessionError("mcp_authority_required", "MCP transport lacks exact session-request authorization.");
       const result = await slot.transport.request(owner,
         (writer) => slot.peer!.request(writer, "tools/call", { name, arguments: args }, timeoutMs, owner.context.signal), timeoutMs);
       if (!result || typeof result !== "object" || Array.isArray(result)) throw new McpProtocolError("mcp_protocol_invalid", "MCP tools/call result is invalid.", "outcome_unknown");
-      server.status = "ready"; server.error = undefined;
+      if (!server.degradedSlots.size) { server.status = "ready"; server.error = undefined; server.recoveryAttempts = 0; }
       return result as McpCallResult;
     } catch (cause) {
       // The shared runtime may observe session loss before the JSON-RPC pump.
@@ -228,8 +240,8 @@ export class McpSessionManager {
         slot.peer.close(cause);
         primary = slot.peer.error!;
       }
-      server.status = "error"; server.error = asError(primary).message;
       if (primary instanceof McpProtocolError && primary.code === "mcp_remote_error" && slot.peer?.idle) throw primary;
+      server.status = "degraded"; server.error = asError(primary).message; server.degradedSlots.add(slot.key);
       if (primary instanceof McpSessionError && ["mcp_schema_changed", "mcp_attestation_mismatch"].includes(primary.code) ||
           primary instanceof McpProtocolError && primary.code === "mcp_schema_changed") this.invalidateServer(server, slot);
       try {
@@ -290,6 +302,7 @@ export class McpSessionManager {
       slot.closed = true; slot.controller?.abort(); slot.peer?.close(new Error("MCP owning agent/run terminated."));
       await slot.tail;
       await this.retire(slot);
+      if (slot.server.degradedSlots.delete(slot.key) && !slot.server.degradedSlots.size && !this.closed) slot.server.degradedSlots.add(SERVER_RECOVERY_PENDING);
       if (this.slots.get(slot.key) === slot) this.slots.delete(slot.key);
     }));
     const errors = results.flatMap((entry) => entry.status === "rejected" ? [entry.reason as unknown] : []);

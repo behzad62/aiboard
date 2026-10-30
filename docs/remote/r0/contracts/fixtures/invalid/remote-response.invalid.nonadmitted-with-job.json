@@ -1,0 +1,8 @@
+{
+  "requestId": "req-1",
+  "traceId": "trace-1",
+  "admitted": false,
+  "jobId": "job-1",
+  "status": "awaiting_device",
+  "uncertainty": "admission_unknown"
+}

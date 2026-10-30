@@ -1,0 +1,8 @@
+{
+  "protocolVersion": "1.0.0",
+  "deviceId": "device-1",
+  "state": "connected-degraded",
+  "reasonCode": "reconciliation_pending",
+  "changedAt": "2026-10-27T11:59:00Z",
+  "deviceEpoch": "5"
+}

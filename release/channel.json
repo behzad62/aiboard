@@ -1,0 +1,8 @@
+{
+  "$comment": "Production release channel (plan D18, ADR-E). keys holds only PUBLIC halves of the offline release signing keys; add one with scripts/release/release-keys.mts (docs/remote/l2-release-owner-setup.md). While keys is empty, rendered installers refuse to install and bundles refuse to update.",
+  "channel": "stable",
+  "manifestUrl": "https://aiboard.me/release/stable/manifest.json",
+  "artifactPrefix": "https://github.com/behzad62/aiboard/releases/download/",
+  "keys": [],
+  "minSequence": 1
+}

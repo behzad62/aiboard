@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { NativeTool, ToolExecutionContext, ToolExecutionOutput, ValidationResult } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { isHiddenWorkspacePath } from "./filesystem-tools.js";
+import { RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
 import { IMAGE_LIMITS, ImageInspectionError, prepareImageForModel, type ImageCrop, type PreparedImage } from "./image-inspection.js";
 
 /** Runner tools whose artifact blocks may carry model-visible image metadata. */
@@ -13,6 +14,7 @@ type Input = Record<string, unknown>;
 export interface ImageToolsOptions {
   readonly artifacts: ArtifactStore;
   readonly hiddenPaths?: readonly string[];
+  readonly pathGuard?: RemotePathGuard;
 }
 
 export function createImageTools(options: ImageToolsOptions): NativeTool<unknown>[] {
@@ -39,7 +41,7 @@ export function createImageTools(options: ImageToolsOptions): NativeTool<unknown
       : { capability: "image.inspect" },
     execute: async (input, context) => {
       try {
-        const loaded = typeof input.path === "string" ? await readWorkspaceImage(context, input.path, options.hiddenPaths) : await readArtifactImage(options.artifacts, input.artifactHash as string);
+        const loaded = typeof input.path === "string" ? await readWorkspaceImage(context, input.path, options.hiddenPaths, options.pathGuard) : await readArtifactImage(options.artifacts, input.artifactHash as string);
         const prepared = prepareImageForModel(loaded.bytes, {
           ...(input.crop ? { crop: input.crop as ImageCrop } : {}),
           ...(input.maxDimension !== undefined ? { maxDimension: input.maxDimension as number } : {}),
@@ -55,7 +57,7 @@ export function createImageTools(options: ImageToolsOptions): NativeTool<unknown
         }
         return await deliver(options.artifacts, prepared, sourceFacts, loaded.label);
       } catch (error) {
-        const code = error instanceof ImageInspectionError ? error.code : "image_unreadable";
+        const code = error instanceof RemotePathDeniedError ? error.code : error instanceof ImageInspectionError ? error.code : "image_unreadable";
         const message = error instanceof Error ? error.message : String(error);
         return { content: [{ type: "text", text: message }], isError: true, error: { code, message } };
       }
@@ -95,7 +97,7 @@ async function deliver(artifacts: ArtifactStore, prepared: PreparedImage, source
   };
 }
 
-async function readWorkspaceImage(context: ToolExecutionContext, path: string, hiddenPaths?: readonly string[]) {
+async function readWorkspaceImage(context: ToolExecutionContext, path: string, hiddenPaths?: readonly string[], pathGuard?: RemotePathGuard) {
   if (!context.workspacePath) throw new ImageInspectionError("image_unreadable", "Image inspection requires a workspace.");
   const workspace = await realpath(context.workspacePath);
   const target = resolve(context.workspacePath, path);
@@ -105,6 +107,7 @@ async function readWorkspaceImage(context: ToolExecutionContext, path: string, h
   const inside = relative(workspace, canonical);
   if (inside === "" || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) throw new ImageInspectionError("image_outside_workspace", "Images can only be inspected inside the workspace.");
   if (await isHiddenWorkspacePath(context, target, hiddenPaths)) throw new ImageInspectionError("image_hidden_path", "This path is hidden from agents.");
+  if (pathGuard) await pathGuard.assertAllowed(canonical, "read", { toolName: "image.inspect", principal: `${context.actor.role}:${context.actor.id}` });
   const details = await lstat(canonical);
   if (!details.isFile()) throw new ImageInspectionError("image_unreadable", `${path} is not a regular file.`);
   if (details.size > IMAGE_LIMITS.maxSourceBytes) throw new ImageInspectionError("image_too_large", `Image exceeds ${IMAGE_LIMITS.maxSourceBytes} bytes.`);

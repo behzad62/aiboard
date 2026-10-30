@@ -1,0 +1,17 @@
+{
+  "protocolVersion": "1.0.0",
+  "jobId": "job-1",
+  "principal": {
+    "accountId": "account-1",
+    "clientId": "client-1",
+    "deviceId": "device-1"
+  },
+  "idempotencyKey": "key-write-1",
+  "payloadDigest": "e360979f6033145a1c2fa0aef40456bab8088f0058182b9073267c4499b62846",
+  "toolId": "files_write",
+  "operationClass": "write",
+  "scopeRef": "scope-project",
+  "state": "outcome_unknown",
+  "createdAt": "2026-10-27T11:59:00Z",
+  "updatedAt": "2026-10-27T12:00:01Z"
+}

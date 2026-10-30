@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "outcome_unknown",
+  "message": "The effect outcome cannot be established.",
+  "requestId": "req-1",
+  "traceId": "trace-1"
+}

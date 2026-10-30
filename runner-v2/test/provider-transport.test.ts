@@ -24,11 +24,11 @@ import {
 } from "../src/provider-config-store.js";
 import { serializedInputUsage } from "../src/provider-model-utils.js";
 
-test("provider configuration is encrypted at rest and rejects the wrong runner token", () => {
+test("provider configuration is encrypted at rest and rejects the wrong storage key", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-provider-config-"));
   const path = join(root, "providers.enc");
   try {
-    let store = new EncryptedProviderConfigStore(path, "runner-token-secret");
+    let store = new EncryptedProviderConfigStore(path, Buffer.alloc(32, 1));
     store.save([
       {
         runtimeId: "chatgpt:gpt-5.5",
@@ -47,12 +47,12 @@ test("provider configuration is encrypted at rest and rejects the wrong runner t
     assert.equal(bytes.includes(Buffer.from("account-runner-secret")), false);
     assert.equal(bytes.includes(Buffer.from("gpt-5.5")), false);
 
-    store = new EncryptedProviderConfigStore(path, "runner-token-secret");
+    store = new EncryptedProviderConfigStore(path, Buffer.alloc(32, 1));
     assert.equal(store.load()[0].secret, "account-runner-secret");
     assert.equal(store.load()[0].billingBasis, "account_not_metered");
     store.close();
     assert.throws(
-      () => new EncryptedProviderConfigStore(path, "wrong-runner-token-secret").load(),
+      () => new EncryptedProviderConfigStore(path, Buffer.alloc(32, 2)).load(),
       /decrypt provider configuration/i
     );
   } finally {

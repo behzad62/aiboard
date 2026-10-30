@@ -620,6 +620,7 @@ export class NativeBuildFactory {
     const managedBuildTools: import("./managed-build-tools.js").ManagedBuildToolSource | undefined =
       !spec.benchmark && this.options.extensions?.managedMcp && executionHostBinding ? {
         generation: () => this.options.extensions!.bindings.generation(spec.runId),
+        policyRevision: (generation) => this.options.extensions!.bindings.policyRevision(generation),
         tools: generation => this.options.extensions!.managedMcp!.buildTools(generation, executionHostBinding!, spec.permissionProfile, this.artifacts),
       } : undefined;
     initializationStage = "execution_isolation";

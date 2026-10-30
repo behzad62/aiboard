@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcp.aiboard.me/schemas/v1/remote-authorization.v1.schema.json",
+  "title": "RemoteAuthorization",
+  "description": "Relay-signed per-request authorization (ADR-A). The signature is base64url Ed25519 over the RFC 8785 canonical JSON of claims; every claim must equal the corresponding remote-request.v1 field, the audience must be the relay identity, and scopeRef must be locally authorized. Schema validation alone never admits a request.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "keyId",
+    "claims",
+    "signature"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "keyId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "audience",
+        "accountId",
+        "clientId",
+        "deviceId",
+        "deviceEpoch",
+        "scopeRef",
+        "toolId",
+        "operationClass",
+        "requestId",
+        "nonce",
+        "payloadDigest",
+        "issuedAt",
+        "expiresAt"
+      ],
+      "properties": {
+        "audience": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "accountId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "clientId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "deviceId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "deviceEpoch": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/positiveDecimal"
+        },
+        "scopeRef": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "toolId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "operationClass": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "requestId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "nonce": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/opaque"
+        },
+        "payloadDigest": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/sha256"
+        },
+        "issuedAt": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/utcTimestamp"
+        },
+        "expiresAt": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/utcTimestamp"
+        }
+      }
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 86,
+      "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    }
+  }
+}

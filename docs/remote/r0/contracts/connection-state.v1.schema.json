@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcp.aiboard.me/schemas/v1/connection-state.v1.schema.json",
+  "title": "RemoteConnectionState",
+  "description": "Device connection snapshot; transitions, epoch fencing and per-tool readiness need contextual checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "deviceId",
+    "state",
+    "reasonCode",
+    "changedAt"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/protocolVersion"
+    },
+    "deviceId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "deviceEpoch": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/positiveDecimal"
+    },
+    "state": {
+      "type": "string",
+      "maxLength": 64,
+      "enum": [
+        "disconnected",
+        "authenticating",
+        "connected-degraded",
+        "tool-ready",
+        "suspended",
+        "revoked"
+      ]
+    },
+    "reasonCode": {
+      "type": "string",
+      "maxLength": 64,
+      "enum": [
+        "initial",
+        "connecting",
+        "reconnecting",
+        "socket_lost",
+        "authentication_failed",
+        "reprovisioned",
+        "reconciliation_pending",
+        "required_tool_unavailable",
+        "optional_tool_unavailable",
+        "recovery_unverified",
+        "ready",
+        "local_pause",
+        "owner_lock_lost",
+        "device_policy_expired",
+        "entitlement_expired",
+        "recovery_unresolved",
+        "device_clone_detected",
+        "device_key_revoked"
+      ]
+    },
+    "changedAt": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/utcTimestamp"
+    },
+    "traceId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "disconnected"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "reasonCode": {
+            "type": "string",
+            "maxLength": 64,
+            "enum": [
+              "initial",
+              "socket_lost",
+              "authentication_failed",
+              "reprovisioned"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "authenticating"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "reasonCode": {
+            "type": "string",
+            "maxLength": 64,
+            "enum": [
+              "connecting",
+              "reconnecting"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "connected-degraded"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "reasonCode": {
+            "type": "string",
+            "maxLength": 64,
+            "enum": [
+              "reconciliation_pending",
+              "required_tool_unavailable",
+              "optional_tool_unavailable",
+              "recovery_unverified"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "tool-ready"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "reasonCode": {
+            "type": "string",
+            "maxLength": 64,
+            "enum": [
+              "ready"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "suspended"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "reasonCode": {
+            "type": "string",
+            "maxLength": 64,
+            "enum": [
+              "local_pause",
+              "owner_lock_lost",
+              "device_policy_expired",
+              "entitlement_expired",
+              "recovery_unresolved",
+              "device_clone_detected"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "revoked"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "reasonCode": {
+            "type": "string",
+            "maxLength": 64,
+            "enum": [
+              "device_key_revoked"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "maxLength": 64,
+            "enum": [
+              "connected-degraded",
+              "tool-ready"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "deviceEpoch": {
+            "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/positiveDecimal"
+          }
+        },
+        "required": [
+          "deviceEpoch"
+        ]
+      }
+    }
+  ]
+}

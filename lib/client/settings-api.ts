@@ -56,6 +56,7 @@ import {
   resolveModelCapabilities,
 } from "./providers";
 import { formatModelId } from "@/lib/providers/base";
+import { getPeerConnection } from "./local-runner-handoff";
 import { DEEPSEEK_BASE_URL } from "@/lib/providers/deepseek";
 import type { ProviderId } from "@/lib/providers/provider-registry";
 import type {
@@ -155,6 +156,19 @@ export async function resolveProviderCapabilityStatus(input: {
     allowedTransports: customContext?.allowedTransports ?? runner.allowedTransports,
   });
 }
+/** Tab-scoped account Runner connection issued by `aiboard accounts`, if any. Never persisted. */
+export function getLauncherAccountRunnerConnection(): { baseURL: string; runnerToken: string } | null {
+  const connection = getPeerConnection("accounts");
+  return connection ? { baseURL: connection.url, runnerToken: connection.token } : null;
+}
+
+/** A launcher-issued account session wins; a saved manual connection keeps working. */
+export function resolveAccountRunnerConnection(saved?: { baseURL?: string | null; runnerToken?: string | null } | null): { baseURL: string; runnerToken: string } | null {
+  const launcher = getLauncherAccountRunnerConnection();
+  if (launcher) return launcher;
+  return saved?.baseURL && saved?.runnerToken ? { baseURL: saved.baseURL, runnerToken: saved.runnerToken } : null;
+}
+
 export function saveOpenAIConnectionMode(mode: "api" | "subscription"): void {
   updateUserSettings({ openAIConnectionMode: mode });
 }

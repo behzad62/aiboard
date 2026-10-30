@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "device_offline",
+  "message": "The selected device is offline.",
+  "requestId": "req-offline",
+  "traceId": "trace-offline"
+}

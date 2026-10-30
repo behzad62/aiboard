@@ -1,0 +1,7 @@
+{
+  "requestId": "req-quota",
+  "traceId": "trace-quota",
+  "admitted": false,
+  "status": "blocked_quota",
+  "errorCode": "blocked_quota"
+}

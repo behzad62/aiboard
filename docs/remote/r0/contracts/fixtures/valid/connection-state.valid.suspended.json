@@ -1,0 +1,8 @@
+{
+  "protocolVersion": "1.0.0",
+  "deviceId": "device-1",
+  "state": "suspended",
+  "reasonCode": "owner_lock_lost",
+  "changedAt": "2026-10-27T12:00:00Z",
+  "deviceEpoch": "5"
+}

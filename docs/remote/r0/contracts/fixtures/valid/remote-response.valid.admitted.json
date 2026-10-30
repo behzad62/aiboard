@@ -1,0 +1,7 @@
+{
+  "requestId": "req-write-1",
+  "traceId": "trace-write-1",
+  "admitted": true,
+  "jobId": "job-1",
+  "status": "awaiting_approval"
+}

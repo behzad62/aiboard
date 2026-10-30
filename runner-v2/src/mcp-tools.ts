@@ -1,5 +1,5 @@
 import { McpSessionManager } from "./mcp-session-manager.js";
-import type { McpDiscoveryResult, McpRuntimeServerLaunch } from "./runner-internal-execution-context.js";
+import type { McpDiscoveryResult, McpDiscoveryTool, McpRuntimeServerLaunch } from "./runner-internal-execution-context.js";
 import type { StreamingSessionEnvelope } from "./streaming-session-store.js";
 import { createHash } from "node:crypto";
 
@@ -24,7 +24,7 @@ export interface McpCallResult {
 export interface McpServerStatus {
   name: string;
   command: string;
-  status: "stopped" | "starting" | "ready" | "error";
+  status: "stopped" | "starting" | "ready" | "degraded" | "error";
   toolCount: number;
   error?: string;
 }
@@ -65,7 +65,7 @@ export interface LiveMcpStatusRegistry extends McpStatusSource {
 
 /**
  * Projects configured MCP status from the live per-run managers. When several
- * runs share one configured server, ready wins, then starting, then error; the
+ * runs share one configured server, any degraded owner keeps the aggregate degraded; the
  * tool count is the maximum reported by one manager rather than an inflated
  * sum of identical per-run definitions.
  */
@@ -112,6 +112,7 @@ function aggregateMcpStatus(
     error: 1,
     starting: 2,
     ready: 3,
+    degraded: 4,
   };
   const state = [...matching].sort((left, right) =>
     rank[right.status] - rank[left.status])[0]!.status;
@@ -120,8 +121,8 @@ function aggregateMcpStatus(
   return {
     ...server,
     status: state,
-    toolCount: Math.max(...matching.map((status) => status.toolCount)),
-    ...(state === "error" && errors.length > 0 ? { error: errors.join("; ") } : {}),
+    toolCount: state === "degraded" ? 0 : Math.max(...matching.map((status) => status.toolCount)),
+    ...((state === "error" || state === "degraded") && errors.length > 0 ? { error: errors.join("; ") } : {}),
   };
 }
 
@@ -153,14 +154,22 @@ export function formatMcpToolDescription(serverName: string, description: string
   return `[MCP ${serverName}] ${body}`.slice(0, MCP_TOOL_DESCRIPTION_MAX_CHARS);
 }
 
+export interface McpMaterializationPolicy {
+  /** Applied before a tool enters any model-visible list. */
+  readonly admit?: (server: string, tool: McpDiscoveryTool) => boolean;
+  readonly name?: (server: string, tool: McpDiscoveryTool) => string;
+  readonly guard?: (tool: NativeTool<Record<string, unknown>>, server: string, discovered: McpDiscoveryTool) => NativeTool<Record<string, unknown>>;
+}
+
 export function createMcpTools(
   manager: McpManager,
-  artifacts: ArtifactStore
+  artifacts: ArtifactStore,
+  policy: McpMaterializationPolicy = {},
 ): NativeTool<Record<string, unknown>>[] {
   const used = new Set<string>();
-  return manager.toolEntries().map(({ client, tool }) => {
-    const name = uniqueToolName(client.spec.name, tool.name, used);
-    return {
+  return manager.toolEntries().filter(({ client, tool }) => policy.admit?.(client.spec.name, tool) ?? true).map(({ client, tool }) => {
+    const name = policy.name?.(client.spec.name, tool) ?? uniqueToolName(client.spec.name, tool.name, used);
+    const created: NativeTool<Record<string, unknown>> = {
       definition: {
         name,
         description: formatMcpToolDescription(client.spec.name, tool.description, tool.name),
@@ -178,6 +187,7 @@ export function createMcpTools(
         `${client.spec.name}.${tool.name}`
       ),
     };
+    return policy.guard?.(created, client.spec.name, tool) ?? created;
   });
 }
 
@@ -191,11 +201,12 @@ export function createRemoteMcpTools(
   tools: readonly McpDiscoveryResult["servers"][number]["tools"][number][],
   call: (name: string, args: Record<string, unknown>, context: ToolExecutionContext) => Promise<McpCallResult>,
   artifacts: ArtifactStore,
+  policy: McpMaterializationPolicy = {},
 ): NativeTool<Record<string, unknown>>[] {
   const used = new Set<string>();
-  return tools.map((tool) => {
-    const name = uniqueToolName(server, tool.name, used);
-    return {
+  return tools.filter((tool) => policy.admit?.(server, tool) ?? true).map((tool) => {
+    const name = policy.name?.(server, tool) ?? uniqueToolName(server, tool.name, used);
+    const created: NativeTool<Record<string, unknown>> = {
       definition: {
         name,
         description: formatMcpToolDescription(server, tool.description, tool.name),
@@ -207,6 +218,7 @@ export function createRemoteMcpTools(
       assessAccess: () => ({ capability: `mcp.${server}.${tool.name}`, external: true, destructive: tool.annotations?.destructiveHint !== false, network: true }),
       execute: async (input, context) => await mcpOutput(await call(tool.name, input, context), artifacts, `${server}.${tool.name}`),
     };
+    return policy.guard?.(created, server, tool) ?? created;
   });
 }
 

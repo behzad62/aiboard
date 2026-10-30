@@ -9,3 +9,6 @@ runner-v2/src/windows-birth/*.mjs text eol=lf
 runner-v2/src/windows-birth/*.cs text eol=lf
 runner-v2/src/windows-birth/*.json text eol=lf
 runner-v2/src/windows-birth/native/** binary
+
+# One-line installers are served to sh and PowerShell as rendered; keep the templates LF everywhere.
+scripts/install/* text eol=lf

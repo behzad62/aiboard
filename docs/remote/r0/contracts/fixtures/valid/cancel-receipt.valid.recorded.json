@@ -1,0 +1,11 @@
+{
+  "jobId": "job-1",
+  "cancelRequestId": "cancel-1",
+  "traceId": "trace-1",
+  "delivery": "recorded",
+  "cancellation": {
+    "requestedAt": "2026-10-27T12:00:00Z",
+    "stop": "pending",
+    "effect": "pending"
+  }
+}

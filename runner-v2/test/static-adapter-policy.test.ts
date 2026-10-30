@@ -9,6 +9,7 @@ const sourceRoot = join(runnerRoot, "src");
 const binRoot = join(runnerRoot, "bin");
 const auditRoots = [sourceRoot, binRoot];
 const allowedRawProcessBoundaries = new Set([
+  "src/launcher.ts",
   "src/native-process-backend.ts",
   "src/oci-execution-isolation-provider.ts",
   "src/windows-job-process-host.ts",
@@ -19,6 +20,8 @@ const allowedRawProcessBoundaries = new Set([
   "src/portable-process-child.mjs",
   "src/portable-process-posix-control.mjs",
   "src/portable-process-supervisor.mjs",
+  "src/extension-mcp-launcher.ts",
+  "src/self-update.ts",
 ]);
 const allowedNativeScriptProcessBoundaries = new Set([
   "src/managed-process-job-host.ps1",
@@ -56,6 +59,24 @@ test("raw child_process access is confined to explicit audited platform adapter 
   }
   assert.deepEqual(offenders, [], `Unexpected raw process boundaries: ${offenders.join(", ")}`);
   assert.deepEqual(missingMarkers, [], `Raw process boundaries lack audit markers: ${missingMarkers.join(", ")}`);
+});
+
+test("launcher bootstrap starts only the fixed Runner V2 and peer runner entrypoints and the OS URL opener", () => {
+  const launcher = readFileSync(join(sourceRoot, "launcher.ts"), "utf8");
+  assert.match(launcher, /new URL\("\.\.\/bin\/aiboard-runner-v2\.mjs", import\.meta\.url\)/);
+  assert.match(launcher, /spawnRunner\(process\.execPath, runnerSpawnArguments\(identity, stateDirectory, args\.runnerFlags\)/);
+  assert.match(launcher, /stdio: \["ignore", "pipe", "pipe", "ipc"\]/);
+  assert.equal((launcher.match(/\bspawnRunner\s*\(/g) ?? []).length, 1);
+  // Combined launches (L1e) start only the three fixed in-repo peer runners, by Node, with fixed arguments.
+  for (const entry of ["../../lib/account-provider-runner.mjs", "../../scripts/runner.mjs", "../../scripts/bench-runner.mjs"]) {
+    assert.ok(launcher.includes(`fileURLToPath(new URL("${entry}", import.meta.url))`), entry);
+  }
+  assert.match(launcher, /spawnPeer\(kind, process\.execPath, peerSpawnArguments\(kind, input\.identity, input\.stateDirectory, input\.port\)/);
+  assert.equal((launcher.match(/\bspawnPeer\s*\(/g) ?? []).length, 1);
+  assert.match(launcher, /\(\(_kind, command, args, options\) => spawn\(command, args, options\)\)/);
+  assert.equal((launcher.match(/\bspawn\s*\(/g) ?? []).length, 2);
+  assert.match(launcher, /const child = spawn\(command, args, options\);/);
+  assert.doesNotMatch(launcher, /\b(?:exec|execFile|fork|spawnSync|execSync|execFileSync)\s*\(/);
 });
 
 

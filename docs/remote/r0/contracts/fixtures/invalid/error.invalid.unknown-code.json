@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "maybe_ok",
+  "message": "Unknown error code.",
+  "requestId": "req-1",
+  "traceId": "trace-1"
+}

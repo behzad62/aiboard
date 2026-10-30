@@ -83,6 +83,7 @@ export type ExecutionHostPlatform = "posix" | "windows";
 export interface ExecutionHostOptions {
   readonly projectRoot: string;
   readonly stateDirectory: string;
+  readonly allowNestedRunnerState?: boolean;
   readonly artifacts: ArtifactStore;
   readonly platform?: ExecutionHostPlatform;
   readonly ambientEnvironment?: Readonly<Record<string, string | undefined>>;
@@ -123,6 +124,8 @@ export interface ExecutionHostRunBindingInput {
   readonly permissionProfile: PermissionProfile;
   readonly capabilityContract: RunnerCapabilityContract;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
+  /** Trusted ancestry of the local MCP proxy, if this is its private binding. */
+  readonly localMcpDepth?: number;
 }
 
 export interface ExecutionHostRunBindingSnapshot {
@@ -194,7 +197,7 @@ export interface ExecutionHost {
 export function createExecutionHost(options: ExecutionHostOptions): ExecutionHost {
   const projectRoot = canonicalRoot(options.projectRoot, "projectRoot");
   const stateDirectory = canonicalRoot(options.stateDirectory, "stateDirectory");
-  if (contains(projectRoot, stateDirectory)) {
+  if (!options.allowNestedRunnerState && contains(projectRoot, stateDirectory)) {
     throw new Error("ExecutionHost state must remain outside the project root.");
   }
   const platform = options.platform ?? (process.platform === "win32" ? "windows" : "posix");
@@ -264,10 +267,12 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           runId,
           projectRoot,
           stateDirectory,
+          allowNestedRunnerState: options.allowNestedRunnerState,
           permissionProfile: input.permissionProfile,
           capabilityContractDigest: digest,
           capabilitiesConfig: input.capabilitiesConfig,
           ambientEnvironment,
+          ...(input.localMcpDepth !== undefined ? { mcpChildDepth: input.localMcpDepth + 1 } : {}),
           artifacts: input.artifacts ?? options.artifacts,
           managedProcesses,
           windowsJobHost,
@@ -450,10 +455,12 @@ interface CreateRunBindingInput {
   readonly runId: string;
   readonly projectRoot: string;
   readonly stateDirectory: string;
+  readonly allowNestedRunnerState?: boolean;
   readonly permissionProfile: PermissionProfile;
   readonly capabilityContractDigest: string;
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
   readonly ambientEnvironment: Readonly<Record<string, string>>;
+  readonly mcpChildDepth?: number;
   readonly artifacts: ArtifactStore;
   readonly managedProcesses: ManagedProcessService;
   readonly windowsJobHost: WindowsJobProcessHost;
@@ -484,6 +491,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       if (blockers.length > 0) throw new Error(blockers.join(" "));
     });
     const childEnvironments = createChildEnvironmentFactory({
+      ...(input.mcpChildDepth !== undefined ? { mcpChildDepth: input.mcpChildDepth } : {}),
       credentialResolver: {
         consume: () => {
           throw new Error("No Runner child-environment credential grant is configured.");
@@ -501,6 +509,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       outputs: createBoundedProcessOutputFactory({
         spillRoot: join(runRoot, "subprocess-output"),
         projectRoot: input.projectRoot,
+        allowNestedRunnerState: input.allowNestedRunnerState,
         artifacts: input.artifacts,
       }),
     });
@@ -549,6 +558,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       output: createStreamingOutputOptions({
         runRoot,
         projectRoot: input.projectRoot,
+        allowNestedRunnerState: input.allowNestedRunnerState,
         artifacts: input.artifacts,
         overrides: input.streamingOutput,
       }),
@@ -840,6 +850,7 @@ async function createWindowsBackends(input: CreateRunBindingInput, runRoot: stri
 function createStreamingOutputOptions(input: {
   readonly runRoot: string;
   readonly projectRoot: string;
+  readonly allowNestedRunnerState?: boolean;
   readonly artifacts: ArtifactStore;
   readonly overrides?: Pick<
     StreamingRuntimeOptions["output"],
@@ -857,6 +868,7 @@ function createStreamingOutputOptions(input: {
       const spool = new BoundedOutputSpool({
         spillRoot: join(input.runRoot, `streaming-output-${createHash("sha256").update(sessionId).digest("hex").slice(0, 20)}`),
         projectRoot: input.projectRoot,
+        allowNestedRunnerState: input.allowNestedRunnerState,
         ownershipId: `streaming-${safeSegment(sessionId)}`,
         artifactStore: input.artifacts,
       });
@@ -947,7 +959,8 @@ function canonicalRoot(path: string, label: string): string {
 
 function contains(parent: string, child: string): boolean {
   const path = relative(parent, child);
-  return path === "" || (!path.startsWith(`..${sep}`) && path !== "..");
+  // A path on another drive comes back absolute, not as "..", and is never inside.
+  return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
 }
 
 function safeSegment(value: string): string {

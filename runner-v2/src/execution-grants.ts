@@ -560,7 +560,7 @@ function cloneBinding(value: ExecutionGrantBinding): ExecutionGrantBinding {
   if (!["guarded", "project", "full"].includes(value.permissionProfile)) {
     throw grantError("grant_mismatch");
   }
-  if (!["architect", "worker", "subagent", "verifier", "runner_internal"].includes(value.actor.role)) {
+  if (!["architect", "worker", "subagent", "verifier", "remote", "local_mcp", "runner_internal"].includes(value.actor.role)) {
     throw grantError("grant_mismatch");
   }
   return deepFreeze({

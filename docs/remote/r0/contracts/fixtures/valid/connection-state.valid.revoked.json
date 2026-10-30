@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "deviceId": "device-1",
+  "state": "revoked",
+  "reasonCode": "device_key_revoked",
+  "changedAt": "2026-10-27T12:01:00Z"
+}

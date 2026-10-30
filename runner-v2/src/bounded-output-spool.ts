@@ -93,6 +93,7 @@ export interface OutputArtifactStore {
 export interface BoundedOutputSpoolOptions {
   readonly spillRoot: string;
   readonly projectRoot: string;
+  readonly allowNestedRunnerState?: boolean;
   readonly ownershipId: string;
   readonly tailBytes?: number;
   readonly spillBytes?: number;
@@ -130,6 +131,7 @@ interface MutableOutputLossReason {
 interface OwnedSpillRoot {
   readonly canonicalRoot: string;
   readonly projectRoot: string;
+  readonly allowNestedRunnerState: boolean;
   readonly ownershipId: string;
   readonly rootId: string;
   readonly rootIdentity: string;
@@ -154,6 +156,7 @@ const SPILL_ATTESTATION_KEYS = new Set([
 export class BoundedOutputSpool {
   private readonly spillRoot: string;
   private readonly projectRoot: string;
+  private readonly allowNestedRunnerState: boolean;
   private readonly ownershipId: string;
   private readonly tailBytes: number;
   private readonly maximumSpillBytes: number;
@@ -175,6 +178,7 @@ export class BoundedOutputSpool {
   constructor(options: BoundedOutputSpoolOptions) {
     this.spillRoot = resolve(requiredText(options.spillRoot, "spillRoot"));
     this.projectRoot = resolve(requiredText(options.projectRoot, "projectRoot"));
+    this.allowNestedRunnerState = options.allowNestedRunnerState === true;
     this.ownershipId = ownershipIdentity(options.ownershipId);
     this.tailBytes = positiveInteger(options.tailBytes ?? DEFAULT_TAIL_BYTES, "tailBytes");
     this.maximumSpillBytes = positiveInteger(options.spillBytes ?? DEFAULT_SPILL_BYTES, "spillBytes");
@@ -354,7 +358,8 @@ export class BoundedOutputSpool {
           this.spillRoot,
           this.projectRoot,
           this.ownershipId,
-          this.storageAttestation.currentPrincipalIdentity
+          this.storageAttestation.currentPrincipalIdentity,
+          this.allowNestedRunnerState
         );
       } catch {
         return "spill_root_invalid";
@@ -615,7 +620,7 @@ export function createNodeOutputSpillStorage(): OutputSpillStorage {
 }
 
 export async function cleanupOutputSpillRoot(
-  options: Pick<BoundedOutputSpoolOptions, "spillRoot" | "projectRoot" | "ownershipId"> & {
+  options: Pick<BoundedOutputSpoolOptions, "spillRoot" | "projectRoot" | "ownershipId" | "allowNestedRunnerState"> & {
     readonly storage?: OutputSpillStorage;
   }
 ): Promise<void> {
@@ -639,7 +644,8 @@ export async function cleanupOutputSpillRoot(
     resolve(requiredText(options.projectRoot, "projectRoot")),
     ownershipIdentity(options.ownershipId),
     false,
-    attestation.currentPrincipalIdentity
+    attestation.currentPrincipalIdentity,
+    options.allowNestedRunnerState === true
   );
   if (!attestation.unlinkedEntries) {
     for (const name of await readdir(lease.canonicalRoot)) {
@@ -659,7 +665,8 @@ async function prepareOwnedRoot(
   root: string,
   projectRoot: string,
   ownershipId: string,
-  currentPrincipalIdentity?: string
+  currentPrincipalIdentity?: string,
+  allowNestedRunnerState = false
 ): Promise<OwnedSpillRoot> {
   const projectReal = await realpath(projectRoot);
   let created = false;
@@ -669,7 +676,7 @@ async function prepareOwnedRoot(
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     const parentReal = await realpath(dirname(root));
     const candidate = join(parentReal, basename(root));
-    assertExternal(candidate, projectReal);
+    if (!allowNestedRunnerState) assertExternal(candidate, projectReal);
     await mkdir(candidate, { mode: 0o700 });
     created = true;
     const marker = {
@@ -685,7 +692,7 @@ async function prepareOwnedRoot(
     }
   }
   try {
-    return await validateOwnedRoot(root, projectReal, ownershipId, true, currentPrincipalIdentity);
+    return await validateOwnedRoot(root, projectReal, ownershipId, true, currentPrincipalIdentity, allowNestedRunnerState);
   } catch (error) {
     if (created) {
       await unlink(join(root, OWNER_MARKER)).catch(() => undefined);
@@ -700,7 +707,8 @@ async function validateOwnedRoot(
   projectRoot: string,
   ownershipId: string,
   projectAlreadyReal = false,
-  currentPrincipalIdentity?: string
+  currentPrincipalIdentity?: string,
+  allowNestedRunnerState = false
 ): Promise<OwnedSpillRoot> {
   const rootEntry = await lstat(root);
   if (!rootEntry.isDirectory() || rootEntry.isSymbolicLink()) throw new Error("Output spill root is not a private directory.");
@@ -721,7 +729,7 @@ async function validateOwnedRoot(
     projectAlreadyReal ? Promise.resolve(projectRoot) : realpath(projectRoot),
   ]);
   if (!samePath(rootReal, root)) throw new Error("Output spill root aliases another path.");
-  assertExternal(rootReal, projectReal);
+  if (!allowNestedRunnerState) assertExternal(rootReal, projectReal);
 
   const markerPath = join(rootReal, OWNER_MARKER);
   const markerEntry = await lstat(markerPath);
@@ -751,6 +759,7 @@ async function validateOwnedRoot(
   return {
     canonicalRoot: rootReal,
     projectRoot: projectReal,
+    allowNestedRunnerState,
     ownershipId,
     rootId,
     rootIdentity: fileIdentity(rootEntry),
@@ -819,7 +828,8 @@ async function removeOwnedEntry(
     lease.projectRoot,
     lease.ownershipId,
     true,
-    lease.currentPrincipalIdentity
+    lease.currentPrincipalIdentity,
+    lease.allowNestedRunnerState
   );
   assertSameOwnedRoot(lease, current);
   const name = basename(path);
@@ -894,7 +904,8 @@ async function removeOwnedRootIfEmpty(lease: OwnedSpillRoot): Promise<void> {
     lease.projectRoot,
     lease.ownershipId,
     true,
-    lease.currentPrincipalIdentity
+    lease.currentPrincipalIdentity,
+    lease.allowNestedRunnerState
   );
   assertSameOwnedRoot(lease, current);
   const entries = await readdir(lease.canonicalRoot);

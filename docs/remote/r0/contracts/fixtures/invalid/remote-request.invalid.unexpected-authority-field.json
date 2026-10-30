@@ -1,0 +1,21 @@
+{
+  "protocolVersion": "1.0.0",
+  "requestId": "req-read-1",
+  "accountId": "account-1",
+  "clientId": "client-1",
+  "deviceId": "device-1",
+  "deviceEpoch": "5",
+  "toolId": "files_read",
+  "operationClass": "read",
+  "scopeRef": "scope-project",
+  "issuedAt": "2026-10-27T11:59:00Z",
+  "expiresAt": "2026-10-27T12:05:00Z",
+  "nonce": "nonce-read-1",
+  "idempotencyKey": "key-read-1",
+  "payloadDigest": "4fe402a7590c3eaa3adc8142b60858125ee3151f7b673c732343367e2815c872",
+  "traceId": "trace-read-1",
+  "payload": {
+    "path": "README.md"
+  },
+  "approved": true
+}

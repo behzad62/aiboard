@@ -30,6 +30,7 @@ import {
 import {
   checkBenchRunner,
   DEFAULT_BENCH_RUNNER_URL,
+  getLauncherBenchRunnerConfig,
   getTrustedBenchRunnerReadiness,
   type BenchRunnerHealth,
 } from "@/lib/client/bench-runner";
@@ -101,6 +102,15 @@ export function CertifiedRunPanel({
   useEffect(() => {
     if (tabRun.error) setMessage(tabRun.error);
   }, [setMessage, tabRun.error]);
+
+  // A bench session issued by `aiboard bench` in this tab prefills the shared
+  // connection (in memory only); manual URL + token entry keeps working.
+  useEffect(() => {
+    const launcher = getLauncherBenchRunnerConfig();
+    if (!launcher) return;
+    setWorkBenchRunnerUrl(launcher.url);
+    setWorkBenchRunnerToken(launcher.token);
+  }, []);
 
   useEffect(() => {
     const enabled = getEnabledModels().map((model) => ({

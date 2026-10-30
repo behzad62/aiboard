@@ -387,7 +387,7 @@ function bound(value: number, minimum: number, maximum: number): number {
   return value;
 }
 function exactCall(context: ToolExecutionContext, toolName: string): Readonly<ToolExecutionContext> {
-  if (!context || !context.runId || !context.sessionId || !context.actor?.id || !["architect", "worker", "subagent", "verifier"].includes(context.actor.role) ||
+  if (!context || !context.runId || !context.sessionId || !context.actor?.id || !["architect", "worker", "subagent", "verifier", "remote", "local_mcp"].includes(context.actor.role) ||
       !context.callId || context.toolName !== toolName || !context.executionGrant || !context.workspacePath || !isAbsolute(context.workspacePath)) {
     throw new ManagedProcessError("process_authority_required", "Managed invocation requires its exact original ToolBroker grant and identity.");
   }

@@ -1,0 +1,7 @@
+{
+  "requestId": "req-conflict",
+  "traceId": "trace-conflict",
+  "admitted": false,
+  "status": "rejected",
+  "errorCode": "idempotency_conflict"
+}

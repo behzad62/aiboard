@@ -1,0 +1,21 @@
+{
+  "protocolVersion": "1.0.0",
+  "requestId": "req-write-1",
+  "accountId": "account-1",
+  "clientId": "client-1",
+  "deviceId": "device-1",
+  "deviceEpoch": "5",
+  "toolId": "files_write",
+  "operationClass": "write",
+  "scopeRef": "scope-project",
+  "issuedAt": "2026-10-27T11:59:00Z",
+  "expiresAt": "2026-10-27T12:05:00Z",
+  "nonce": "nonce-write-1",
+  "idempotencyKey": "key-write-1",
+  "payloadDigest": "e360979f6033145a1c2fa0aef40456bab8088f0058182b9073267c4499b62846",
+  "traceId": "trace-write-1",
+  "payload": {
+    "path": "notes.txt",
+    "content": "Hello\n"
+  }
+}

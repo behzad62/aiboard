@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcp.aiboard.me/schemas/v1/remote-request.v1.schema.json",
+  "title": "RemoteRequestEnvelope",
+  "description": "Untrusted transport claims and tool payload; authorization and canonical digest verification are required separately.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "requestId",
+    "accountId",
+    "clientId",
+    "deviceId",
+    "deviceEpoch",
+    "toolId",
+    "operationClass",
+    "scopeRef",
+    "issuedAt",
+    "expiresAt",
+    "nonce",
+    "idempotencyKey",
+    "payloadDigest",
+    "traceId",
+    "payload"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/protocolVersion"
+    },
+    "requestId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "accountId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "clientId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "deviceId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "deviceEpoch": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/positiveDecimal"
+    },
+    "toolId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "operationClass": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "scopeRef": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "issuedAt": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/utcTimestamp"
+    },
+    "expiresAt": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/utcTimestamp"
+    },
+    "nonce": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/opaque"
+    },
+    "idempotencyKey": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "payloadDigest": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/sha256"
+    },
+    "traceId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "payload": {
+      "$ref": "#/$defs/jsonValue"
+    }
+  },
+  "$defs": {
+    "jsonValue": {
+      "description": "Deliberately open tool-specific JSON value; the receiving tool schema and transport resource limits also apply.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    }
+  }
+}

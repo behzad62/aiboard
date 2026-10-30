@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "idempotency_conflict",
+  "message": "The idempotency key is already bound to another digest.",
+  "requestId": "req-1",
+  "traceId": "trace-1"
+}

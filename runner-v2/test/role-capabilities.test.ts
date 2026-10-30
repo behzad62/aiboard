@@ -446,6 +446,20 @@ const DERIVED: readonly {
   { role: "verifier", broker: "delivery_commands", required: VERIFIER_DELIVERY_COMMANDS_REQUIRED, full: VERIFIER_DELIVERY_COMMANDS_FULL },
   { role: "plan-critic", broker: "inspection", required: PLAN_CRITIC, full: PLAN_CRITIC },
   { role: "worker", broker: "task", required: WORKER_REQUIRED, full: WORKER_FULL },
+  { role: "remote", broker: "remote", required: [], full: [
+    "browser.click", "browser.close", "browser.drag", "browser.events", "browser.fill",
+    "browser.navigate", "browser.open", "browser.screenshot", "browser.snapshot", "browser.wheel",
+    "fs.delete", "fs.list", "fs.move", "fs.patch", "fs.read", "fs.search", "fs.write",
+    "git.diff", "git.log", "git.status", "image.inspect",
+    "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
+    "process.start", "process.write_stdin",
+  ] },
+  { role: "local_mcp", broker: "local_mcp", required: [], full: [
+    "fs.delete", "fs.list", "fs.move", "fs.patch", "fs.read", "fs.search", "fs.write",
+    "git.diff", "git.log", "git.status", "image.inspect",
+    "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
+    "process.start", "process.write_stdin",
+  ] },
 ];
 
 test("every role broker has an exact derived allow-list in both directions", () => {

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { access, constants, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import type { NativeTool } from "./agent-contracts.js";
+import type { NativeTool, ToolResult } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { ExtensionCredentialStore } from "./extension-credentials.js";
 import {
@@ -39,10 +39,15 @@ import {
 import type { ExecutionHost, ExecutionHostRunBinding } from "./execution-host.js";
 import { cleanupRecoveredMcpTransports, createExecutionHostMcpTransportFactory } from "./execution-host-mcp-transport.js";
 import type { PermissionProfile } from "./contracts.js";
-import { formatMcpCommand, parseMcpCommand, type McpServerSpec } from "./mcp-configuration.js";
+import { canonicalMcpDigest, formatMcpCommand, parseMcpCommand, type McpServerSpec } from "./mcp-configuration.js";
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
-import { createMcpTools, createRemoteMcpTools, McpManager, type McpCallResult, type McpTransportFactory } from "./mcp-tools.js";
+import { McpProtocolError } from "./mcp-rpc-peer.js";
+import { createMcpTools, createRemoteMcpTools, McpManager, type McpCallResult, type McpServerStatus, type McpTransportFactory } from "./mcp-tools.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
+import { ToolBroker } from "./tool-broker.js";
+import type { RemotePluginToolInfo, RemotePluginToolProvider } from "./remote-connector.js";
+import type { VerifiedRemoteIdentity } from "./remote-principal.js";
+import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
 import { createRunnerCapabilityContractSnapshot } from "./runner-capability-contract.js";
 import type { McpConfigurationAttestation, RunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
 import { runnerRunStateSegment } from "./run-state-identity.js";
@@ -96,6 +101,7 @@ export interface ChatMcpTools {
   readonly tools: NativeTool<unknown>[];
   readonly binding?: ExecutionHostRunBinding;
   readonly unavailable: Array<{ serverName: string; reason: string }>;
+  readonly status?: () => McpServerStatus[];
   close(): Promise<void>;
 }
 
@@ -391,7 +397,8 @@ export class ManagedMcpRuntime {
     const version = { versionId };
     const missing = this.missingCredentials(extension.id, component);
     if (missing.length) return { state: "needs_auth", checkedAt: now, detail: `Enter ${missing.join(", ")} in Settings → Extensions.` };
-    if (component.transport === "streamable_http") return await this.checkRemote(extension.id, component);
+    if (component.route !== "runner") return { state: "unsupported", checkedAt: now, detail: "Provider-hosted tools cannot be filtered by the Runner." };
+    if (component.transport === "streamable_http") return await this.checkRemote(extension.id, version.versionId, component);
     const runId = `ext-check-${randomBytes(8).toString("hex")}`;
     try {
       const plan = await this.launchPlan({ extensionId: extension.id, versionId: version.versionId, generation: -1, component });
@@ -409,6 +416,8 @@ export class ManagedMcpRuntime {
         return { state: "failed", checkedAt: now, lastError: { code: "mcp_handshake_failed", message: "The server started but did not complete the MCP handshake and tool listing.", at: now } };
       }
       const names = server.tools.map((tool) => tool.name);
+      if (!server.schemaDigest || !server.cleanupVerified) throw new Error("MCP discovery was not verified.");
+      await this.requireService().recordMcpDiscovery(extension.id, version.versionId, { componentId: component.componentId, schemaDigest: server.schemaDigest, toolNames: names });
       return { state: "ready", checkedAt: now, detail: `${names.length} tool${names.length === 1 ? "" : "s"}: ${names.slice(0, 12).join(", ")}${names.length > 12 ? ", …" : ""}` };
     } catch (error) {
       return { state: "failed", checkedAt: now, lastError: { code: "mcp_start_failed", message: describe(error), at: now } };
@@ -417,12 +426,14 @@ export class ManagedMcpRuntime {
     }
   }
 
-  private async checkRemote(extensionId: string, component: McpServerComponent): Promise<ExtensionReadiness> {
+  private async checkRemote(extensionId: string, versionId: string, component: McpServerComponent): Promise<ExtensionReadiness> {
     const now = new Date().toISOString();
     const client = this.remoteClient(extensionId, component);
     try {
       const session = await client.initialize();
-      const names = (await client.listTools()).map((tool) => tool.name);
+      const listed = await client.listTools();
+      const names = listed.map((tool) => tool.name);
+      await this.requireService().recordMcpDiscovery(extensionId, versionId, { componentId: component.componentId, schemaDigest: canonicalMcpDigest(listed), toolNames: names });
       return { state: "ready", checkedAt: now, detail: `${names.length} tool${names.length === 1 ? "" : "s"}: ${names.slice(0, 12).join(", ")}${names.length > 12 ? ", …" : ""} (MCP ${session.protocolVersion})` };
     } catch (error) {
       if (error instanceof RemoteMcpError && (error.code === "needs_auth" || error.code === "insufficient_scope")) {
@@ -561,6 +572,7 @@ export class ManagedMcpRuntime {
         tools: [...local.tools, ...remote.tools],
         ...(local.binding ? { binding: local.binding } : {}),
         unavailable: [...local.unavailable, ...remote.unavailable],
+        ...(local.status ? { status: local.status } : {}),
         close: async () => { try { await local.close(); } finally { await remote.close(); } },
       };
     } catch (error) {
@@ -569,40 +581,68 @@ export class ManagedMcpRuntime {
     }
   }
 
+  /** The only extension tool surface offered to a future remote connector. */
+  async remoteAdmittedTools(generation: number, sessionId: string, artifacts: ArtifactStore): Promise<ChatMcpTools> {
+    const remote = await this.remoteChatTools(generation, artifacts, true);
+    try {
+      const local = await this.stdioChatTools(generation, sessionId, artifacts, undefined, true);
+      return { tools: [...local.tools, ...remote.tools], ...(local.binding ? { binding: local.binding } : {}),
+        unavailable: [...local.unavailable, ...remote.unavailable],
+        ...(local.status ? { status: local.status } : {}),
+        close: async () => { try { await local.close(); } finally { await remote.close(); } } };
+    } catch (error) { await remote.close(); throw error; }
+  }
+
   /** Managed local and remote tools using the Build's existing authority/profile. */
   async buildTools(generation: number, binding: ExecutionHostRunBinding, permissionProfile: PermissionProfile, artifacts: ArtifactStore): Promise<ChatMcpTools> {
     const remote = await this.remoteChatTools(generation, artifacts);
     try {
       const local = await this.stdioChatTools(generation, binding.runId, artifacts, { binding, permissionProfile });
       return { tools: [...local.tools, ...remote.tools], binding, unavailable: [...local.unavailable, ...remote.unavailable],
+        ...(local.status ? { status: local.status } : {}),
         close: async () => { try { await local.close(); } finally { await remote.close(); } } };
     } catch (error) { await remote.close(); throw error; }
   }
 
   /** Runner-hosted remote servers: one session per agent turn/generation, no local process. */
-  private async remoteChatTools(generation: number, artifacts: ArtifactStore): Promise<ChatMcpTools> {
+  private async remoteChatTools(generation: number, artifacts: ArtifactStore, remotelyExposed = false): Promise<ChatMcpTools> {
     const tools: NativeTool<unknown>[] = [];
     const unavailable: Array<{ serverName: string; reason: string }> = [];
     const clients: RemoteMcpClient[] = [];
     const reserved = new Set(this.options.reservedServerNames ?? []);
     for (const entry of await this.requireService().managedMcpServers(generation)) {
       const component = entry.component;
-      if (component.transport !== "streamable_http" || component.route !== "runner" || !component.url) continue;
+      if (component.route === "provider_hosted") {
+        unavailable.push({ serverName: component.serverName, reason: "Provider-hosted filtering is unsupported." });
+        continue;
+      }
+      if (component.transport !== "streamable_http" || !component.url) continue;
+      if (!await this.requireService().managedMcpServerEligible(entry, remotelyExposed)) continue;
       if (reserved.has(component.serverName)) { unavailable.push({ serverName: component.serverName, reason: "A command-line MCP server already uses this name." }); continue; }
       const client = this.remoteClient(entry.extensionId, component);
       try {
         await client.initialize();
         const listed = await client.listTools();
+        const snapshot = { schemaDigest: canonicalMcpDigest(listed), names: listed.map((tool) => tool.name) };
+        const decisions = await Promise.all(listed.map((tool) => this.requireService().managedMcpToolAdmitted(entry, snapshot.schemaDigest, snapshot.names, tool.name, remotelyExposed)));
+        const admitted = new Set(listed.filter((_tool, index) => decisions[index]).map((tool) => tool.name));
         clients.push(client);
         const created = createRemoteMcpTools(component.serverName, listed, async (name, args, context) => {
           try {
             return await client.callTool(name, args, context.signal) as McpCallResult;
           } catch (error) {
             const unknown = error instanceof RemoteMcpError && error.code === "outcome_unknown";
-            return { isError: true, content: [{ type: "text", text: `${unknown ? "OUTCOME UNKNOWN (not retried): " : ""}${describe(error)}` }] };
+            return { isError: true, content: [{ type: "text", text: (unknown ? "OUTCOME UNKNOWN (not retried): " : "") + describe(error) }] };
           }
-        }, artifacts) as NativeTool<unknown>[];
-        tools.push(...created.map((tool) => this.guard(tool, entry)));
+        }, artifacts, {
+          admit: (_server, tool) => admitted.has(tool.name),
+          ...(remotelyExposed ? { name: (_server: string, tool: { name: string }) => remoteToolName(entry, tool.name, snapshot.schemaDigest) } : {}),
+          guard: (tool, _server, discovered) => this.guard(tool, entry, discovered.name, snapshot, remotelyExposed, async () => {
+            const current = await client.listTools();
+            return { schemaDigest: canonicalMcpDigest(current), names: current.map((item) => item.name) };
+          }),
+        }) as NativeTool<unknown>[];
+        tools.push(...created);
       } catch (error) {
         await client.close();
         unavailable.push({ serverName: component.serverName, reason: error instanceof RemoteMcpError && error.code === "needs_auth" ? "Needs sign-in in Settings → Extensions." : describe(error) });
@@ -611,11 +651,23 @@ export class ManagedMcpRuntime {
     return { tools, unavailable, close: async () => { await Promise.allSettled(clients.map((client) => client.close())); } };
   }
 
-  private guard(tool: NativeTool<unknown>, entry: ManagedMcpServerEntry): NativeTool<unknown> {
+  private guard<T>(tool: NativeTool<T>, entry: ManagedMcpServerEntry, toolName: string,
+    snapshot: { schemaDigest: string; names: readonly string[] }, remotelyExposed: boolean,
+    refresh?: () => Promise<{ schemaDigest: string; names: readonly string[] }>): NativeTool<T> {
     return {
       ...tool,
       execute: async (input, context) => {
-        const refusal = await this.refusal(entry, tool.assessAccess?.(input, context)?.destructive !== false);
+        let admitted = false;
+        try {
+          const current = refresh ? await refresh() : snapshot;
+          admitted = await this.requireService().managedMcpToolAdmitted(entry, current.schemaDigest, current.names, toolName, remotelyExposed);
+        } catch { /* An unavailable policy or changed server fails closed. */ }
+        const refusal = await this.refusal(entry, tool.assessAccess?.(input, context)?.destructive !== false).catch(() => undefined);
+        if (!admitted) {
+          // Local callers keep the actionable disabled/removed reason; remote callers see only unavailable.
+          if (!remotelyExposed && refusal) return { isError: true, content: [{ type: "text", text: refusal }], error: { code: "permission_denied", message: refusal } };
+          return { isError: true, content: [{ type: "text", text: "Tool is unavailable." }], error: { code: "tool_unavailable", message: "Tool is unavailable." } };
+        }
         if (refusal) return { isError: true, content: [{ type: "text", text: refusal }], error: { code: "permission_denied", message: refusal } };
         return await tool.execute(input, context);
       },
@@ -623,8 +675,11 @@ export class ManagedMcpRuntime {
   }
 
   private async stdioChatTools(generation: number, sessionId: string, artifacts: ArtifactStore,
-    build?: { binding: ExecutionHostRunBinding; permissionProfile: PermissionProfile }): Promise<ChatMcpTools> {
-    const { plans, unavailable } = await this.launchPlans(generation);
+    build?: { binding: ExecutionHostRunBinding; permissionProfile: PermissionProfile }, remotelyExposed = false): Promise<ChatMcpTools> {
+    const launched = await this.launchPlans(generation);
+    const unavailable = launched.unavailable;
+    const eligible = await Promise.all(launched.plans.map((plan) => this.requireService().managedMcpServerEligible(plan.entry, remotelyExposed)));
+    const plans = launched.plans.filter((_plan, index) => eligible[index]);
     if (!plans.length || !this.options.executionHost) return { tools: [], unavailable, close: async () => undefined };
     const host = this.options.executionHost;
     const servers = plans.map((plan) => plan.spec);
@@ -638,6 +693,7 @@ export class ManagedMcpRuntime {
     const binding = build?.binding ?? await host.bindRun({ runId, permissionProfile,
       capabilityContract: await createRunnerCapabilityContractSnapshot(capabilitiesConfig, this.options.stateDirectory), capabilitiesConfig });
     let manager: McpManager | undefined;
+    const snapshots = new Map<string, { schemaDigest: string; names: readonly string[] }>();
     try {
       if (!build) {
         await binding.recover({ maxRecords: 1_024, timeoutMs: 30_000 });
@@ -658,7 +714,10 @@ export class ManagedMcpRuntime {
         transportFactory: this.wrapTransport(createExecutionHostMcpTransportFactory({ run: binding, permissionProfile, projectDirectory: this.options.projectRoot, launches }), async (name) => await this.beforeLaunch(plans, name)),
       });
       await manager.start();
-      for (const server of discovered.servers) if (server.status !== "ready") unavailable.push({ serverName: server.name, reason: "It did not complete the MCP handshake." });
+      for (const server of discovered.servers) {
+        if (server.status !== "ready" || !server.schemaDigest) unavailable.push({ serverName: server.name, reason: "It did not complete the MCP handshake." });
+        else snapshots.set(server.name, { schemaDigest: server.schemaDigest, names: server.tools.map((tool) => tool.name) });
+      }
     } catch (error) {
       await manager?.close().catch(() => undefined);
       if (!build) await binding.close().catch(() => undefined);
@@ -666,14 +725,24 @@ export class ManagedMcpRuntime {
     }
     const owned = manager;
     const entries = new Map(plans.map((plan) => [plan.spec.name, plan.entry]));
-    const tools = (createMcpTools(owned, artifacts) as NativeTool<unknown>[]).flatMap((tool) => {
-      const entry = entries.get(/^mcp\.([^.]+)\./.exec(tool.definition.name)?.[1] ?? "");
-      return entry ? [this.guard(tool, entry)] : [];
-    });
+    const admitted = new Set<string>();
+    for (const { client, tool } of owned.toolEntries()) {
+      const entry = entries.get(client.spec.name);
+      const snapshot = snapshots.get(client.spec.name);
+      if (entry && snapshot && await this.requireService().managedMcpToolAdmitted(entry, snapshot.schemaDigest, snapshot.names, tool.name, remotelyExposed)) {
+        admitted.add(JSON.stringify([client.spec.name, tool.name]));
+      }
+    }
+    const tools = createMcpTools(owned, artifacts, {
+      admit: (server, tool) => admitted.has(JSON.stringify([server, tool.name])),
+      ...(remotelyExposed ? { name: (server: string, tool: { name: string }) => remoteToolName(entries.get(server)!, tool.name, snapshots.get(server)!.schemaDigest) } : {}),
+      guard: (tool, server, discovered) => this.guard(tool, entries.get(server)!, discovered.name, snapshots.get(server)!, remotelyExposed),
+    }) as NativeTool<unknown>[];
     return {
       tools,
       binding,
       unavailable,
+      status: () => owned.status(),
       close: async () => {
         try { await owned.close(); } finally { if (!build) await binding.close(); }
       },
@@ -687,7 +756,7 @@ export class ManagedMcpRuntime {
     const current = await this.requireService().extensionRecord(entry.extensionId);
     if (!current?.enabled) return `${entry.component.serverName} was disabled or removed; its tools can no longer be called.`;
     const policy = (await this.toolPolicy(entry.extensionId)) ?? entry.component.toolApproval ?? "all";
-    if (policy === "non_destructive" && destructive) return `${entry.component.serverName} is limited to tools it marks as non-destructive; the user can allow all tools in Settings → Extensions.`;
+    if ((policy === "non_destructive" || entry.pinnedApproval === "non_destructive") && destructive) return `${entry.component.serverName} is limited to tools it marks as non-destructive; the user can allow all tools in Settings → Extensions.`;
     return undefined;
   }
 
@@ -735,19 +804,40 @@ export class ManagedMcpRuntime {
   }
 
   private async toolPolicy(extensionId: string): Promise<"all" | "non_destructive" | undefined> {
-    const policy = await readFile(join(this.options.home, "mcp-tool-policy.json"), "utf8").then((text) => JSON.parse(text) as Record<string, string>).catch(() => ({} as Record<string, string>));
+    let raw: unknown;
+    try { raw = JSON.parse(await readFile(join(this.options.home, "mcp-tool-policy.json"), "utf8")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw new ExtensionManagementError("tool_policy_invalid", "MCP approval policy is unreadable.", 500);
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ExtensionManagementError("tool_policy_invalid", "MCP approval policy is malformed.", 500);
+    const policy = raw as Record<string, unknown>;
+    for (const [id, value] of Object.entries(policy)) {
+      if (!/^ext_[a-z0-9_-]{4,80}$/.test(id) || (value !== "all" && value !== "non_destructive")) throw new ExtensionManagementError("tool_policy_invalid", "MCP approval policy is malformed.", 500);
+    }
     const value = policy[extensionId];
     return value === "all" || value === "non_destructive" ? value : undefined;
   }
 
   /** Settings choice: let the assistant call every tool, or only tools the server marks non-destructive. */
   async setToolPolicy(extensionId: string, policy: "all" | "non_destructive"): Promise<void> {
-    const path = join(this.options.home, "mcp-tool-policy.json");
-    const current = await readFile(path, "utf8").then((text) => JSON.parse(text) as Record<string, string>).catch(() => ({} as Record<string, string>));
-    current[extensionId] = policy;
-    await mkdir(this.options.home, { recursive: true });
-    await writeFile(`${path}.tmp`, JSON.stringify(current));
-    await rename(`${path}.tmp`, path);
+    await this.requireService().registry.mutate(async (state) => {
+      if (!state.extension(extensionId)) throw new ExtensionManagementError("extension_not_found", "No such MCP server.", 404);
+      await this.toolPolicy(extensionId);
+      const path = join(this.options.home, "mcp-tool-policy.json");
+      const current = await readFile(path, "utf8").then((text) => JSON.parse(text) as Record<string, string>).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return {} as Record<string, string>;
+        throw error;
+      });
+      current[extensionId] = policy;
+      await mkdir(this.options.home, { recursive: true });
+      await writeFile(path + ".tmp", JSON.stringify(current));
+      await rename(path + ".tmp", path);
+      state.setToolApproval(extensionId, policy);
+      const extension = state.extension(extensionId)!;
+      state.putExtension({ ...extension, desiredGeneration: state.registry.currentGeneration + 1, updatedAt: new Date().toISOString() });
+      state.publishGeneration(undefined, new Date().toISOString());
+    });
   }
 
   async toolPolicyFor(extensionId: string, component?: McpServerComponent): Promise<"all" | "non_destructive"> {
@@ -769,7 +859,123 @@ export class ManagedMcpRuntime {
   }
 }
 
+
+/** Options for the connector-facing admitted extension tool provider (R1c + plan P2). */
+export interface RemotePluginToolProviderOptions {
+  readonly generation: () => Promise<number>;
+  readonly artifacts: ArtifactStore;
+  readonly workspacePath: string;
+  readonly sessionId?: string;
+  readonly requiredRelayToolIds?: ReadonlySet<string>;
+}
+
+/**
+ * Routes relay plugin ids to the current generation's `remoteAdmittedTools`.
+ * Tools are executed through a ToolBroker bound to the admitted binding, so
+ * grants and the manager's re-attested restart semantics stay Runner-owned.
+ */
+export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, options: RemotePluginToolProviderOptions): RemotePluginToolProvider {
+  const sessionId = options.sessionId ?? "remote-plugins";
+  let current: { generation: number; admitted: ChatMcpTools; broker: ToolBroker } | undefined;
+  let sequence = 0;
+  const activeCalls = new Set<string>();
+  const notSentCalls = new Set<string>();
+  const load = async () => {
+    const generation = await options.generation();
+    if (current && current.generation === generation) return current;
+    const previous = current;
+    current = undefined;
+    if (previous) await previous.admitted.close().catch(() => undefined);
+    const admitted = await runtime.remoteAdmittedTools(generation, sessionId, options.artifacts);
+    const broker = new ToolBroker({
+      // A crashed MCP server must settle as outcome_unknown promptly, not at
+      // the generic two-minute broker ceiling; recovery is a fresh request.
+      toolTimeoutMs: 30_000,
+      permissionProfile: "full", workspacePath: options.workspacePath, artifacts: options.artifacts,
+      ...(admitted.binding ? { executionGrants: admitted.binding.executionGrants } : {}),
+    });
+    for (const tool of admitted.tools) broker.register({
+      ...tool,
+      execute: async (input, context) => {
+        try { return await tool.execute(input, context); }
+        catch (error) {
+          if (error instanceof McpProtocolError && error.outcome === "not_sent" && context.callId && activeCalls.has(context.callId)) {
+            notSentCalls.add(context.callId);
+          }
+          throw error;
+        }
+      },
+    });
+    current = { generation, admitted, broker };
+    return current;
+  };
+  const invoke = async (identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal,
+    beforeBroker?: () => boolean): Promise<RemoteInvocationResult> => {
+    const loaded = await load();
+    const tool = loaded.admitted.tools.find((entry) => entry.definition.name === relayToolId);
+    if (!tool) throw new Error("Plugin tool is not admitted for remote use.");
+    if (signal?.aborted || (beforeBroker && !beforeBroker())) {
+      throw new McpProtocolError("mcp_request_cancelled", "Remote plugin was refused before dispatch.", "not_sent");
+    }
+    const callId = `remote-plugin-${++sequence}`;
+    activeCalls.add(callId);
+    try {
+      const result = await loaded.broker.invoke(
+        { type: "tool_call", callId, name: relayToolId, arguments: args },
+        {
+          runId: loaded.admitted.binding?.runId ?? `remote-plugin-${loaded.generation}`,
+          sessionId, actor: { role: "remote", id: identity.clientId }, workspacePath: options.workspacePath,
+          ...(signal ? { signal } : {}),
+        },
+      );
+      return { result, brokerInvoked: true, ...(notSentCalls.has(callId) ? { stopEvidence: { effect: "no_effect" as const } } : {}) };
+    } finally {
+      activeCalls.delete(callId);
+      notSentCalls.delete(callId);
+    }
+  };
+  return {
+    async list(): Promise<readonly RemotePluginToolInfo[]> {
+      const loaded = await load();
+      const statuses = loaded.admitted.status?.() ?? [];
+      return loaded.admitted.tools.map((tool) => {
+        const relayToolId = tool.definition.name;
+        const status = statuses
+          .filter((entry) => relayToolId.startsWith(`plugin_${entry.name}_`))
+          .sort((a, b) => b.name.length - a.name.length)[0];
+        return {
+          relayToolId,
+          required: options.requiredRelayToolIds?.has(relayToolId) ?? false,
+          available: !status || status.status === "ready",
+        };
+      });
+    },
+    async invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal,
+      beforeBroker?: () => boolean): Promise<ToolResult> {
+      return (await invoke(identity, relayToolId, args, signal, beforeBroker)).result;
+    },
+    invokeAdmitted: invoke,
+    async close(): Promise<void> {
+      const previous = current;
+      current = undefined;
+      if (previous) await previous.admitted.close();
+    },
+  };
+}
+
 // ---- Helpers ---------------------------------------------------------------------------------------------
+
+/** Plan P2 relay naming: plugin_<server>_<tool>_<digest8>, digest8 from the R1c schema digest. */
+export function remotePluginToolId(serverName: string, toolName: string, schemaDigest: string): string {
+  const clean = (value: string) => value.replace(/[^A-Za-z0-9_-]+/g, "_");
+  return `plugin_${clean(serverName)}_${clean(toolName)}_${schemaDigest.slice(0, 8)}`;
+}
+
+function remoteToolName(entry: ManagedMcpServerEntry, toolName: string, schemaDigest: string): string {
+  return remotePluginToolId(entry.component.serverName, toolName, schemaDigest);
+}
+
+
 
 /** npm installs keep a lock file (entry + lock are digested); Python installs digest the console script. */
 async function exists(path: string): Promise<boolean> {

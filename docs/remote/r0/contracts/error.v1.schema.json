@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcp.aiboard.me/schemas/v1/error.v1.schema.json",
+  "title": "RemoteError",
+  "description": "Proposed typed error body; errorCode in RemoteResponse refers to the same code set.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "code",
+    "message"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/protocolVersion"
+    },
+    "code": {
+      "$ref": "#/$defs/errorCode"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "requestId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    },
+    "traceId": {
+      "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+    }
+  },
+  "$defs": {
+    "errorCode": {
+      "type": "string",
+      "maxLength": 64,
+      "enum": [
+        "unsupported_version",
+        "blocked_quota",
+        "blocked_policy",
+        "device_offline",
+        "idempotency_conflict",
+        "outcome_unknown",
+        "effect_outcome_unknown",
+        "admission_unknown",
+        "result_expired",
+        "result_withheld_by_policy",
+        "invalid_request",
+        "expired_request",
+        "device_epoch_mismatch",
+        "device_revoked",
+        "unauthorized",
+        "forbidden",
+        "rate_limited",
+        "device_selection_required",
+        "unsupported_tool",
+        "frame_too_large",
+        "artifact_unavailable",
+        "internal_error"
+      ]
+    }
+  }
+}

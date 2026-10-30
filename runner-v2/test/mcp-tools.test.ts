@@ -1,6 +1,5 @@
 import { McpProtocolError } from "../src/mcp-rpc-peer.js";
 import { canonicalMcpDigest, mcpConfigurationDigest, fixedMcpEnvelope, type McpServerSpec } from "../src/mcp-configuration.js";
-import type { ToolExecutionContext } from "../src/agent-contracts.js";
 import type { McpDiscoveryResult, McpDiscoveryTool } from "../src/runner-internal-execution-context.js";
 import type { OpaqueExecutionGrant } from "../src/execution-grants.js";
 import assert from "node:assert/strict";
@@ -555,7 +554,7 @@ test("post-ready transport failure closes automatically and explicit close retri
     await waitFor(() => closeAttempts === 1 &&
       /cleanup.*unverified/i.test(manager.status()[0]?.error ?? ""));
     assert.deepEqual(manager.status().map(({ status, toolCount }) => ({ status, toolCount })), [
-      { status: "error", toolCount: 0 },
+      { status: "degraded", toolCount: 0 },
     ]);
     assert.match(manager.status()[0]?.error ?? "", /transport|cleanup/i);
 
@@ -608,7 +607,7 @@ test("a terminal failure during transport opening cannot be overwritten as ready
   await assert.rejects(manager.toolEntries()[0]!.client.call("unsafe_ready", {}, configured.context), /transport|closed/i);
   await waitFor(() => closeAttempts === 1);
   assert.deepEqual(manager.status().map(({ status, toolCount }) => ({ status, toolCount })), [
-    { status: "error", toolCount: 0 },
+    { status: "degraded", toolCount: 0 },
   ]);
   assert.match(manager.status()[0]?.error ?? "", /transport|closed/i);
   assert.doesNotMatch(manager.status()[0]?.error ?? "", /cleanup verification failed/i);
@@ -787,7 +786,7 @@ test("strict public MCP uses the separately attested portable image command and 
     await absolute.manager.start();
     assert.equal(absolute.manager.status()[0]?.status, "ready", "host discovery is not permission to launch in the strict image");
     await assert.rejects(absolute.invoke("lookup", { query: "must-refuse" }), /isolation|provider|image|executable|unavailable/i);
-    assert.equal(absolute.manager.status()[0]?.status, "error");
+    assert.equal(absolute.manager.status()[0]?.status, "degraded");
     assert.match(absolute.manager.status()[0]?.error ?? "", /isolation|provider|launch|image|executable|unavailable|discovery/i);
     assert.equal(dockerOwnedContainers(docker, providerIds[2]!), "");
   } catch (error) {
@@ -954,7 +953,7 @@ for (const mode of ["self-exit", "oversized-line"] as const) {
         assert.equal(fixtureOwner.manager.status()[0]?.error, callResult.reason.message);
       }
       try {
-        await waitFor(() => fixtureOwner.manager.status()[0]?.status === "error" &&
+        await waitFor(() => fixtureOwner.manager.status()[0]?.status === "degraded" &&
           fixtureOwner.mcpSessionStates().every((state) => state === "released") &&
           !processExists(serverPid), 30_000);
       } catch (error) {

@@ -40,6 +40,7 @@ import {
   type NativeRunnerConnection,
 } from "./runner-v2";
 import { requestSpecificationSource } from "./native-planning-view";
+import { resolveRunnerConnection } from "./local-runner-handoff";
 import { loadAttachmentPayloads } from "./attachments";
 import { initialNativeBuildTextAttachments } from "./build-guidance-files";
 import { followUpObjective } from "./build-notes";
@@ -144,12 +145,18 @@ export async function runNativeBuildDiscussion(
   signal: AbortSignal,
   planningOptions?: NativePlanningProvisioningOptions
 ): Promise<void> {
-  if (!discussion.runnerUrl || !discussion.runnerToken) {
-    throw new Error("Build mode requires a connected Runner V2 instance.");
+  const resolved = resolveRunnerConnection(discussion);
+  if (!resolved) {
+    throw new Error(
+      discussion.runnerUrl
+        ? "Reconnect: run `aiboard` again to reconnect this Build to its Runner."
+        : "Build mode requires a connected Runner V2 instance."
+    );
   }
   const connection: NativeRunnerConnection = {
-    url: discussion.runnerUrl,
-    token: discussion.runnerToken,
+    url: resolved.url,
+    token: resolved.token,
+    source: resolved.source,
   };
   const syncDurablePolicy = createNativeBuildPolicySynchronizer(
     discussion.buildRunPolicy ?? "finish",

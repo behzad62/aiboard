@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { parseMcpDepth } from "./child-environment.js";
 
 import type { ExecutionInvocationKind } from "./execution-safety-contracts.js";
 import type {
@@ -138,7 +139,8 @@ export function createRunnerInternalProcessKernel(options: {
           issuedAt: new Date().toISOString(),
           access: input.access.map((entry) => ({ ...entry })),
         },
-        environment: Object.freeze({ ...input.environment }),
+        environment: Object.freeze({ ...Object.fromEntries(Object.entries(input.environment).filter(([name]) => name.toUpperCase() !== "AIBOARD_MCP_DEPTH")),
+          AIBOARD_MCP_DEPTH: String(parseMcpDepth(process.env.AIBOARD_MCP_DEPTH) + 1) }),
         outputOwnerId: `internal-output-${createHash("sha256")
           .update(`${input.principalId}\0${input.callId}`)
           .digest("hex")}`,

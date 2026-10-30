@@ -27,6 +27,19 @@ export function supportsSafeMcpBridge(version: number | undefined): boolean {
   return typeof version === "number" && version >= SAFE_MCP_RUNNER_VERSION;
 }
 
+import { getPeerConnection } from "./local-runner-handoff";
+
+/** Tab-scoped legacy Runner connection issued by `aiboard legacy`, if any. */
+export function getLauncherLegacyRunnerConfig(): RunnerConfig | null {
+  const connection = getPeerConnection("legacy");
+  return connection ? { url: connection.url, token: connection.token } : null;
+}
+
+/** A launcher-issued legacy session wins; a manual URL + token keeps working. */
+export function resolveRunnerConfig(fallback?: RunnerConfig | null): RunnerConfig | null {
+  return getLauncherLegacyRunnerConfig() ?? fallback ?? null;
+}
+
 /** Shared header set for runner requests (JSON + the runner auth token). */
 export function headers(token: string): HeadersInit {
   return { "content-type": "application/json", "x-runner-token": token };

@@ -1,0 +1,5 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "result_withheld_by_policy",
+  "message": "This result is withheld after the device policy narrowed."
+}

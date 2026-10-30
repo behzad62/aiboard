@@ -1,0 +1,1413 @@
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { open } from "node:fs/promises";
+
+import type { ToolResult } from "./agent-contracts.js";
+import { RemoteAdmissionError, parseRemoteRequest, remotePayloadDigest, type RemoteAdmissionStore, type RemoteJob, type RemoteRequest } from "./remote-admission-store.js";
+import { RemoteAuthError, type SignedRelayChallenge, type RemoteAuthorization, type RemoteAuthenticator } from "./remote-auth.js";
+import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
+import type { VerifiedRemoteIdentity } from "./remote-principal.js";
+import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
+import type { CommandApprovalRequest, CommandApprovalSummary } from "./remote-approval.js";
+import { ArtifactTransferError, ArtifactTransferManager, type ArtifactTransferFrame } from "./remote-artifact-transfer.js";
+import { DEFAULT_REMOTE_FRAME_LIMITS, frameByteLength, negotiateFrameLimits, type RemoteFrameLimits } from "./remote-frame-codec.js";
+
+export type RemoteConnectionStateName =
+  | "disconnected" | "authenticating" | "connected-degraded" | "tool-ready" | "suspended" | "revoked";
+export type RemoteConnectionReason =
+  | "initial" | "connecting" | "reconnecting" | "socket_lost" | "authentication_failed" | "reprovisioned"
+  | "reconciliation_pending" | "required_tool_unavailable" | "optional_tool_unavailable" | "recovery_unverified"
+  | "ready" | "local_pause" | "owner_lock_lost" | "device_policy_expired" | "entitlement_expired"
+  | "recovery_unresolved" | "device_clone_detected" | "device_key_revoked";
+
+/**
+ * Owner decision 2026-10-29: an established connection retries until the person closes the Runner, waiting at
+ * most 30 s between attempts. Revocation, suspension and close still stop it.
+ */
+export const DEFAULT_RECONNECT = { baseDelayMs: 500, maxDelayMs: 30_000, maxAttempts: Number.POSITIVE_INFINITY } as const;
+
+/** Exponential backoff with up to one base delay of jitter; the jitter never pushes a wait past maxDelayMs. */
+export function reconnectDelayMs(attempt: number, config: { readonly baseDelayMs: number; readonly maxDelayMs: number }, random: number): number {
+  const backoff = Math.min(config.maxDelayMs, config.baseDelayMs * 2 ** Math.min(attempt, 30));
+  return Math.min(config.maxDelayMs, backoff + Math.floor(random * config.baseDelayMs));
+}
+
+/** Shape of connection-state.v1 (pinned contract data, redeclared locally). */
+export interface RemoteConnectionState {
+  readonly protocolVersion: string;
+  readonly deviceId: string;
+  readonly state: RemoteConnectionStateName;
+  readonly reasonCode: RemoteConnectionReason;
+  readonly changedAt: string;
+  readonly deviceEpoch?: string;
+}
+
+/** What the dashboard shows about this device; never paths, names of files or anything from a request. */
+export interface RemoteStatusReport {
+  readonly runnerVersion: string;
+  readonly platform: "win32" | "darwin" | "linux";
+  readonly policy: { readonly shell: boolean; readonly approvals: boolean; readonly readOnly: boolean; readonly onlyHere: boolean; readonly audit: boolean };
+}
+
+export interface RemoteResponseMessage {
+  readonly requestId: string;
+  readonly traceId: string;
+  readonly admitted: boolean;
+  readonly status: string;
+  readonly jobId?: string;
+  readonly errorCode?: string;
+  readonly uncertainty?: string;
+}
+
+/** Injected duplex framing. The real WebSocket/TLS transport lands in R1e. */
+export type RemoteTransportMessage =
+  | ({ readonly type: "challenge" } & SignedRelayChallenge)
+  | { readonly type: "proof"; readonly deviceId: string; readonly publicKey: string; readonly signature: string; readonly limits?: RemoteFrameLimits }
+  | { readonly type: "authenticated"; readonly epoch: string; readonly limits?: unknown }
+  | { readonly type: "auth_error"; readonly code: string }
+  | { readonly type: "request"; readonly request: RemoteRequest; readonly authorization?: RemoteAuthorization }
+  | { readonly type: "response"; readonly response: RemoteResponseMessage; readonly data?: unknown }
+  | { readonly type: "heartbeat"; readonly at: string }
+  | ({ readonly type: "status"; readonly state: "tool-ready" | "connected-degraded"; readonly reasonCode: RemoteConnectionReason } & RemoteStatusReport)
+  | { readonly type: "revoked" }
+  | ArtifactTransferFrame
+  | { readonly type: "chunk_ack"; readonly transferId: string; readonly seq: number }
+  | { readonly type: "artifact_abort"; readonly transferId: string }
+  /** Emitted by a transport whose codec refused an inbound frame; the session survives it. */
+  | { readonly type: "frame_rejected"; readonly code: "frame_too_large" | "malformed_frame" }
+  | { readonly type: "frame_error"; readonly code: "frame_too_large" | "malformed_frame" };
+
+export interface RemoteTransport {
+  connect(): Promise<void>;
+  close(): Promise<void>;
+  /** Check beforeSend synchronously at the socket write, after any queue or backpressure wait. */
+  send(message: RemoteTransportMessage, signal?: AbortSignal, beforeSend?: () => boolean): Promise<void> | void;
+  onMessage(handler: (message: RemoteTransportMessage) => void | Promise<void>): void;
+  onClose(handler: () => void): void;
+  /** Limits negotiated at the handshake, for a transport that encodes frames itself. */
+  setFrameLimits?(limits: RemoteFrameLimits): void;
+}
+
+export interface RemoteTransportContext { readonly deviceId: string }
+
+/** The slice of RemoteToolRuntime the connector may use. Never an authority. */
+export interface RemoteRequestRuntime {
+  invoke(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal, rawRequest?: string, jobId?: string): Promise<ToolResult>;
+  invokeAdmitted?(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal: AbortSignal, rawRequest: string, jobId: string, beforeBroker?: () => boolean, approvalGranted?: boolean): Promise<RemoteInvocationResult>;
+  authorizeJob?(identity: VerifiedRemoteIdentity, name?: string, args?: unknown): string | undefined;
+  latestPolicyNarrowing(identity: VerifiedRemoteIdentity): string | undefined;
+  requiresCommandApproval?(identity: VerifiedRemoteIdentity, name: string): boolean;
+  summarizeCommandApproval?(identity: VerifiedRemoteIdentity, jobId: string, code: string, name: string, args: unknown): CommandApprovalSummary;
+  stopStartedProcess?(identity: VerifiedRemoteIdentity, processId: string): Promise<boolean>;
+}
+
+/** The content-addressed store remote tools write artifacts to (ExecutionHost.artifacts). */
+export interface RemoteArtifactSource {
+  put(bytes: Uint8Array, mediaType: string, label?: string): Promise<{ readonly hash: string }>;
+  stat(hash: string): Promise<{ readonly path: string; readonly byteLength: number; readonly mediaType: string }>;
+}
+
+/** One admitted extension tool as offered to the relay (plan P2 naming). */
+export interface RemotePluginToolInfo {
+  readonly relayToolId: string;
+  readonly required: boolean;
+  readonly available: boolean;
+}
+
+/**
+ * Extension tools admitted for remote use (R1c `remoteAdmittedTools` for the
+ * current generation and policy). The connector routes only listed relay ids;
+ * an unavailable listed tool degrades the connection, never fakes readiness.
+ */
+export interface RemotePluginToolProvider {
+  list(): Promise<readonly RemotePluginToolInfo[]>;
+  invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal, beforeBroker?: () => boolean): Promise<ToolResult>;
+  invokeAdmitted?(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal: AbortSignal, beforeBroker?: () => boolean): Promise<RemoteInvocationResult>;
+  close?(): Promise<void>;
+}
+
+/** Relay tool ids (remote-tool-surface.md) mapped to Runner broker names. */
+export const REMOTE_TOOL_ID_TO_RUNNER: Readonly<Record<string, string>> = Object.freeze({
+  files_read: "fs.read",
+  files_list: "fs.list",
+  files_search: "fs.search",
+  files_write: "fs.write",
+  files_patch: "fs.patch",
+  files_move: "fs.move",
+  files_delete: "fs.delete",
+  process_start: "process.start",
+  process_run: "process.run",
+  process_read_output: "process.read_output",
+  process_list: "process.list",
+  process_write_stdin: "process.write_stdin",
+  process_signal: "process.signal",
+  git_status: "git.status",
+  git_diff: "git.diff",
+  git_log: "git.log",
+  image_inspect: "image.inspect",
+});
+
+const JOB_TOOL_IDS: ReadonlySet<string> = new Set(["jobs_status", "jobs_events", "jobs_result", "jobs_cancel"]);
+/** Results above this many encoded bytes are stored as an artifact and returned by outputRef. */
+const INLINE_RESULT_MAX_BYTES = 256 * 1024;
+/** Artifact hashes listed directly in a large-result stub. */
+const MAX_STUB_ARTIFACTS = 256;
+const MAX_INDEX_ARTIFACTS = 100_000;
+const MAX_INDEX_BYTES = MAX_INDEX_ARTIFACTS * 67 + 2;
+const EFFECT_TOOL_IDS: ReadonlySet<string> = new Set(["files_write", "files_patch", "files_move", "files_delete",
+  "process_start", "process_run", "process_write_stdin", "process_signal"]);
+
+export interface RemoteConnectorOptions {
+  readonly deviceStore: RemoteDeviceStore;
+  readonly authenticator: RemoteAuthenticator;
+  readonly admission: RemoteAdmissionStore;
+  readonly runtime: RemoteRequestRuntime;
+  readonly session: RemoteDeviceSession;
+  /** One fresh transport per connection attempt; `deviceId` (public, never a secret) lets a transport address the device route. */
+  readonly createTransport: (context: RemoteTransportContext) => RemoteTransport;
+  /** Startup reconciliation gate (reconcileRunnerStartup + admission). */
+  readonly reconcile: () => Promise<void>;
+  readonly now?: () => Date;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly random?: () => number;
+  readonly handshakeTimeoutMs?: number;
+  readonly drainTimeoutMs?: number;
+  /** Maximum live dispatches per device; defaults to 8. */
+  readonly maxConcurrentJobsPerDevice?: number;
+  /** Maximum waiting admissions per device; defaults to 64. */
+  readonly maxQueuedJobsPerDevice?: number;
+  /** Deadline measured from admission, capped by request expiry; defaults to five minutes. */
+  readonly toolDeadlineMs?: number;
+  /** Time to await stop evidence after cancellation; defaults to five seconds. */
+  readonly cancellationGraceMs?: number;
+  readonly reconnect?: { readonly baseDelayMs: number; readonly maxDelayMs: number; readonly maxAttempts: number };
+  readonly isOwnerLockHeld?: () => boolean;
+  readonly onStateChange?: (state: RemoteConnectionState) => void;
+  /** Reported to the relay on every authenticated readiness change, so the dashboard never shows an open socket as ready. */
+  readonly statusReport?: () => RemoteStatusReport | undefined;
+  readonly onShutdownStep?: (step: string) => void;
+  /** Admitted extension tools for the current generation/policy (R1c), when composed. */
+  readonly pluginTools?: RemotePluginToolProvider;
+  readonly auditApproval?: (identity: VerifiedRemoteIdentity | undefined, jobId: string,
+    decision: "requested" | "approved" | "denied" | "expired" | "fenced") => void;
+  /** Artifact store for large results and the R3 artifact data plane. */
+  readonly artifacts?: RemoteArtifactSource;
+  /** Metadata-only audit of artifact reads (job id and outcome; never the hash or bytes). */
+  readonly auditArtifactRead?: (identity: VerifiedRemoteIdentity, jobId: string, decision: "allowed" | "denied", outcomeCode: string) => void;
+  /** Local frame limits offered at the handshake; the relay may only lower them. */
+  readonly frameLimits?: RemoteFrameLimits;
+  readonly artifactStallTimeoutMs?: number;
+  readonly maxConcurrentArtifactTransfers?: number;
+}
+
+interface InFlight {
+  readonly identity: VerifiedRemoteIdentity;
+  readonly jobId: string;
+  rawRequest: string;
+  request: RemoteRequest;
+  authorization: RemoteAuthorization;
+  readonly runnerName: string;
+  readonly isPlugin: boolean;
+  readonly controller: AbortController;
+  deadline: number;
+  readonly done: Promise<RemoteResponseMessage>;
+  readonly resolve: (response: RemoteResponseMessage) => void;
+  started: boolean;
+  settled: boolean;
+  approval?: CommandApprovalRequest;
+  approvalDeadline?: number;
+  approvalGranted?: boolean;
+  approvalTimer?: ReturnType<typeof setTimeout>;
+  physicalDone?: Promise<void>;
+}
+const PROTOCOL_VERSION = "1.0.0";
+
+/**
+ * One outbound device connection inside Runner ownership. It verifies relay
+ * claims, admits through R1b, dispatches through R1a, and is never itself an
+ * execution authority. A heartbeat alone never grants readiness.
+ */
+export class RemoteConnector {
+  private readonly now: () => Date;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
+  private session: RemoteDeviceSession;
+  private transport: RemoteTransport | undefined;
+  private current: RemoteConnectionState;
+  private admitting = false;
+  private closing = false;
+  private closed = false;
+  private readonly completedSteps = new Set<string>();
+  private readonly inFlight = new Set<InFlight>();
+  private readonly queue: InFlight[] = [];
+  private readonly processStops = new Map<string, { identity: VerifiedRemoteIdentity; promise: Promise<void> }>();
+  private lastClientId: string | undefined;
+  private startupReconciled = false;
+  private challengeWaiter: { resolve: (challenge: SignedRelayChallenge) => void; reject: (error: Error) => void } | undefined;
+  private authWaiter: { resolve: () => void; reject: (error: Error) => void } | undefined;
+  private earlyChallenge: SignedRelayChallenge | undefined;
+  private earlyAuth: boolean | undefined;
+  private pendingEpoch: string | undefined;
+  private reconnectTimer: Promise<void> | undefined;
+  private reconnectAttempts = 0;
+  private established = false;
+  private lastHeartbeatAt: string | undefined;
+  private pluginDegradedReason: "optional_tool_unavailable" | "required_tool_unavailable" | undefined;
+  private readonly localLimits: RemoteFrameLimits;
+  /** Negotiated per connection; reset to the local offer on every connect. */
+  private limits: RemoteFrameLimits;
+  private readonly transfers: ArtifactTransferManager;
+
+  constructor(private readonly options: RemoteConnectorOptions) {
+    this.session = options.session;
+    this.now = options.now ?? (() => new Date());
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.random = options.random ?? Math.random;
+    for (const [value, minimum] of [[options.maxConcurrentJobsPerDevice ?? 8, 1],
+      [options.maxQueuedJobsPerDevice ?? 64, 0], [options.toolDeadlineMs ?? 300_000, 1],
+      [options.cancellationGraceMs ?? 5_000, 1]] as const) {
+      if (!Number.isSafeInteger(value) || value < minimum) throw new Error("Invalid remote job limits.");
+    }
+    this.localLimits = negotiateFrameLimits(DEFAULT_REMOTE_FRAME_LIMITS, options.frameLimits);
+    this.limits = this.localLimits;
+    this.transfers = new ArtifactTransferManager({
+      limits: () => this.limits,
+      send: async (frame, signal, beforeSend) => {
+        const transport = this.transport;
+        if (!transport) throw new Error("Remote transport closed.");
+        await transport.send(frame, signal, beforeSend);
+      },
+      ...(options.artifactStallTimeoutMs !== undefined ? { stallTimeoutMs: options.artifactStallTimeoutMs } : {}),
+      ...(options.maxConcurrentArtifactTransfers !== undefined ? { maxConcurrent: options.maxConcurrentArtifactTransfers } : {}),
+    });
+    const identity = options.deviceStore.load();
+    this.current = Object.freeze({
+      protocolVersion: PROTOCOL_VERSION,
+      deviceId: identity?.deviceId ?? "device-unprovisioned",
+      state: identity?.revoked ? "revoked" : "disconnected",
+      reasonCode: identity?.revoked ? "device_key_revoked" : "initial",
+      changedAt: this.now().toISOString(),
+      ...(identity ? { deviceEpoch: identity.epoch } : {}),
+    });
+  }
+
+  state(): RemoteConnectionState {
+    return this.current;
+  }
+
+  /** Healthy admitted tools may be called in plugin-degraded state; nothing else may. */
+  pluginDegraded(): boolean {
+    return this.pluginDegradedReason !== undefined;
+  }
+
+  isReady(): boolean {
+    if (!this.admitting) return false;
+    if (this.current.state === "tool-ready") return true;
+    // Plugin degradation admits only individually healthy tools (ADR-A).
+    return this.current.state === "connected-degraded" && this.pluginDegradedReason !== undefined;
+  }
+
+  heartbeatObservedAt(): string | undefined {
+    return this.lastHeartbeatAt;
+  }
+
+  async start(): Promise<void> {
+    if (this.closed || this.closing) return;
+    if (this.options.deviceStore.isRevoked()) {
+      this.transition("revoked", "device_key_revoked");
+      return;
+    }
+    this.reconnectAttempts = 0;
+    await this.connectOnce("connecting");
+  }
+
+  /** Owner-lock loss or unverified cleanup: stop admitting, fail closed. */
+  suspend(reason: "owner_lock_lost" | "recovery_unresolved"): void {
+    this.admitting = false;
+    if (this.current.state !== "revoked") this.transition("suspended", reason);
+  }
+
+  resumeAfterSuspension(): void {
+    if (this.current.state === "suspended") this.transition("disconnected", "socket_lost");
+  }
+
+  /** Ordered, retryable shutdown: admission, in-flight settle, transport. */
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closing = true;
+    if (!this.completedSteps.has("admission-stopped")) {
+      this.admitting = false;
+      this.completedSteps.add("admission-stopped");
+      this.options.onShutdownStep?.("admission-stopped");
+    }
+    if (!this.completedSteps.has("inflight-settled")) {
+      for (const entry of [...this.inFlight]) {
+        if (entry.settled) continue;
+        this.options.admission.requestCancel(entry.identity, entry.jobId, "shutdown-" + randomUUID(), entry.request.traceId);
+        this.cancelEntry(entry);
+      }
+      const drainMs = this.options.drainTimeoutMs ?? 5_000;
+      const all = Promise.allSettled([
+        ...[...this.inFlight].map((entry) => entry.physicalDone ?? entry.done),
+        ...[...this.processStops.values()].map((entry) => entry.promise),
+      ]);
+      await Promise.race([all, this.sleep(drainMs)]);
+      for (const entry of [...this.inFlight]) {
+        if (entry.settled) continue;
+        const job = this.options.admission.getJob(entry.identity, entry.jobId);
+        if (job?.state === "running") {
+          this.options.admission.recordStop(entry.identity, entry.jobId, "unverified");
+          this.finish(entry, this.options.admission.settleCancelled(entry.identity, entry.jobId, "effect_outcome_unknown"));
+        } else if (job) this.finish(entry, job);
+      }
+      for (const [jobId, entry] of this.processStops) {
+        try { this.options.admission.recordStop(entry.identity, jobId, "unverified"); } catch { /* Retain unresolved evidence. */ }
+      }
+      this.completedSteps.add("inflight-settled");
+      this.options.onShutdownStep?.("inflight-settled");
+    }
+    if (!this.completedSteps.has("transport-closed")) {
+      const transport = this.transport;
+      this.transport = undefined;
+      if (transport) await transport.close();
+      await this.options.pluginTools?.close?.();
+      this.completedSteps.add("transport-closed");
+      this.options.onShutdownStep?.("transport-closed");
+    }
+    if ([...this.inFlight].some((entry) => entry.started) || this.processStops.size > 0) {
+      throw new Error("Remote dispatch cleanup remains unverified.");
+    }
+    this.closed = true;
+    this.closing = false;
+    if (this.current.state !== "revoked") this.transition("disconnected", "socket_lost");
+  }
+
+  private async connectOnce(reason: "connecting" | "reconnecting"): Promise<void> {
+    const deviceStore = this.options.deviceStore;
+    if (deviceStore.isRevoked()) {
+      this.transition("revoked", "device_key_revoked");
+      return;
+    }
+    if (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) {
+      this.suspend("owner_lock_lost");
+      return;
+    }
+    this.transition("authenticating", reason);
+    this.transfers.abortAll();
+    this.limits = this.localLimits;
+    this.earlyChallenge = undefined;
+    this.earlyAuth = undefined;
+    this.pendingEpoch = undefined;
+    const transport = this.options.createTransport({ deviceId: deviceStore.load()?.deviceId ?? "device-unprovisioned" });
+    this.transport = transport;
+    transport.onMessage((message) => this.onMessage(message));
+    transport.onClose(() => { if (this.transport === transport) this.onTransportClose(); });
+    try {
+      await transport.connect();
+      const challenge = await this.waitForChallenge();
+      const proof = this.options.authenticator.answerChallenge(challenge, this.session);
+      if (Object.hasOwn(challenge, "keySet")) {
+        const updated = deviceStore.loadSession();
+        if (!updated) throw new Error("The updated relay session is unavailable.");
+        this.session = updated;
+      }
+      this.pendingEpoch = challenge.challenge.epoch;
+      await transport.send({ type: "proof", deviceId: proof.deviceId, publicKey: proof.publicKey, signature: proof.signature, limits: this.localLimits });
+      await this.waitForAuthenticated();
+      if (deviceStore.isRevoked() || (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld())) throw new Error("Remote device is unavailable.");
+      const currentEpoch = deviceStore.load()?.epoch;
+      if (!currentEpoch || BigInt(challenge.challenge.epoch) < BigInt(currentEpoch)) throw new Error("Remote epoch is stale.");
+      deviceStore.advanceEpochTo(challenge.challenge.epoch);
+      this.pendingEpoch = undefined;
+    } catch {
+      this.pendingEpoch = undefined;
+      this.admitting = false;
+      if (!deviceStore.isRevoked() && this.current.state !== "suspended") {
+        this.transition("disconnected", "authentication_failed");
+      }
+      if (this.transport === transport) this.transport = undefined;
+      try { await transport.close(); } catch { /* the next start retries cleanly */ }
+      return;
+    }
+    const identity = deviceStore.load()!;
+    this.options.admission.registerAuthenticatedEpoch(
+      { accountId: this.session.accountId, deviceId: identity.deviceId }, identity.epoch);
+    this.transition("connected-degraded", "reconciliation_pending");
+    try {
+      if (!this.startupReconciled) {
+        await this.options.reconcile();
+        this.startupReconciled = true;
+      }
+    } catch {
+      this.admitting = false;
+      this.transition("connected-degraded", "recovery_unverified");
+      return;
+    }
+    if (this.closing || this.closed) return;
+    if (deviceStore.isRevoked()) {
+      this.transition("revoked", "device_key_revoked");
+      return;
+    }
+    if (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) {
+      this.suspend("owner_lock_lost");
+      return;
+    }
+    this.admitting = true;
+    await this.refreshPluginState();
+    this.established = true;
+    this.reconnectAttempts = 0;
+    // refreshPluginState above already transitioned to tool-ready or plugin-degraded.
+  }
+
+  /** Recompute plugin degradation from the admitted set; healthy again returns to tool-ready. */
+  async refreshPluginState(): Promise<void> {
+    const provider = this.options.pluginTools;
+    if (!provider) {
+      this.pluginDegradedReason = undefined;
+      if (this.admitting) this.transition("tool-ready", "ready");
+      return;
+    }
+    let tools: readonly RemotePluginToolInfo[];
+    try { tools = await provider.list(); } catch { this.pluginDegradedReason = "optional_tool_unavailable"; if (!this.closing && !this.closed) this.transition("connected-degraded", this.pluginDegradedReason); return; }
+    const unavailable = tools.filter((tool) => !tool.available);
+    if (unavailable.length === 0) {
+      const wasDegraded = this.pluginDegradedReason !== undefined;
+      this.pluginDegradedReason = undefined;
+      if (this.admitting && (wasDegraded || this.current.state !== "tool-ready")) this.transition("tool-ready", "ready");
+      return;
+    }
+    this.pluginDegradedReason = unavailable.some((tool) => tool.required) ? "required_tool_unavailable" : "optional_tool_unavailable";
+    if (!this.closing && !this.closed) this.transition("connected-degraded", this.pluginDegradedReason);
+  }
+
+  private waitForChallenge(): Promise<SignedRelayChallenge> {
+    if (this.earlyChallenge) {
+      const challenge = this.earlyChallenge;
+      this.earlyChallenge = undefined;
+      return Promise.resolve(challenge);
+    }
+    const timeout = this.options.handshakeTimeoutMs ?? 10_000;
+    return Promise.race([
+      new Promise<SignedRelayChallenge>((resolve, reject) => { this.challengeWaiter = { resolve, reject }; }),
+      this.sleep(timeout).then(() => { throw new Error("Remote handshake timed out."); }),
+    ]);
+  }
+
+  private waitForAuthenticated(): Promise<void> {
+    if (this.earlyAuth !== undefined) {
+      const ok = this.earlyAuth;
+      this.earlyAuth = undefined;
+      return ok ? Promise.resolve() : Promise.reject(new Error("Remote authentication was refused."));
+    }
+    const timeout = this.options.handshakeTimeoutMs ?? 10_000;
+    return Promise.race([
+      new Promise<void>((resolve, reject) => { this.authWaiter = { resolve, reject }; }),
+      this.sleep(timeout).then(() => { throw new Error("Remote authentication timed out."); }),
+    ]);
+  }
+
+  private async onMessage(message: RemoteTransportMessage): Promise<void> {
+    switch (message.type) {
+      case "challenge":
+        if (this.challengeWaiter) {
+          this.challengeWaiter.resolve(message);
+          this.challengeWaiter = undefined;
+        } else {
+          this.earlyChallenge = message;
+        }
+        return;
+      case "authenticated": {
+        if (this.pendingEpoch === undefined) return;
+        let accepted = message.epoch === this.pendingEpoch;
+        try {
+          this.limits = negotiateFrameLimits(this.localLimits, message.limits);
+          this.transport?.setFrameLimits?.(this.limits);
+        } catch { accepted = false; }
+        if (this.authWaiter) {
+          // Unsupported frame limits fail closed exactly like a refused handshake.
+          if (accepted) this.authWaiter.resolve();
+          else this.authWaiter.reject(new Error("Remote frame limits are unsupported."));
+          this.authWaiter = undefined;
+        } else {
+          this.earlyAuth = accepted;
+        }
+        return;
+      }
+      case "auth_error":
+        if (this.authWaiter) {
+          this.authWaiter.reject(new Error("Remote authentication was refused."));
+          this.authWaiter = undefined;
+        } else {
+          this.earlyAuth = false;
+        }
+        return;
+      case "heartbeat":
+        // Liveness only. Readiness requires handshake + reconciliation.
+        this.lastHeartbeatAt = message.at;
+        if (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld() && this.admitting) {
+          this.suspend("owner_lock_lost");
+        }
+        return;
+      case "revoked": {
+        const authenticated = this.current.state === "connected-degraded" || this.current.state === "tool-ready";
+        // pendingEpoch is set only after this attempt's relay-signed challenge verified against a pinned root, so the
+        // peer is the relay; the relay sends `revoked` to a revoked device only after its proof verified too.
+        const relayVerified = this.pendingEpoch !== undefined;
+        this.admitting = false;
+        this.transition("revoked", "device_key_revoked");
+        this.cancelForRevocation();
+        // Only a relay-verified, still-owned connection can persist a rotation trigger.
+        if ((authenticated || relayVerified) && (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld())) this.options.deviceStore.revoke();
+        if (relayVerified && this.authWaiter) { this.authWaiter.reject(new Error("Remote device is revoked.")); this.authWaiter = undefined; }
+        return;
+      }
+      case "request": {
+        // Strict codec at the trust boundary, before any authentication logic reads the fields.
+        let request: RemoteRequest;
+        try { request = parseRemoteRequest(JSON.stringify(message.request)); }
+        catch {
+          try { await this.transport?.send({ type: "response", response: malformed(message.request) }); } catch { /* socket loss is fenced by epoch */ }
+          return;
+        }
+        await this.onRequest(request, message.authorization);
+        return;
+      }
+      case "chunk_ack":
+        this.transfers.ack(message.transferId, message.seq);
+        return;
+      case "artifact_abort":
+        this.transfers.abort(message.transferId);
+        return;
+      case "frame_rejected":
+        try { await this.transport?.send({ type: "frame_error", code: message.code }); } catch { /* socket loss is fenced by epoch */ }
+        return;
+      default:
+        return;
+    }
+  }
+
+  private onTransportClose(): void {
+    if (this.closing || this.closed) return;
+    this.challengeWaiter?.reject(new Error("Remote transport closed."));
+    this.authWaiter?.reject(new Error("Remote transport closed."));
+    this.challengeWaiter = undefined;
+    this.authWaiter = undefined;
+    this.admitting = false;
+    this.transfers.abortAll();
+    if (this.current.state === "revoked" || this.current.state === "suspended") return;
+    this.transition("disconnected", "socket_lost");
+    // Only an established connection reconnects; auth failure fails closed.
+    if (this.established) this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
+    const config = this.options.reconnect ?? DEFAULT_RECONNECT;
+    if (this.reconnectAttempts >= config.maxAttempts) return;
+    if (this.reconnectTimer) return;
+    const attempt = this.reconnectAttempts;
+    this.reconnectAttempts += 1;
+    const delay = reconnectDelayMs(attempt, config, this.random());
+    const pending = (async () => {
+      await this.sleep(delay);
+      if (this.closing || this.closed) return;
+      await this.connectOnce("reconnecting");
+    })();
+    this.reconnectTimer = pending;
+    void pending.finally(() => {
+      if (this.reconnectTimer === pending) this.reconnectTimer = undefined;
+      if (!this.isReady() && !this.closing && !this.closed &&
+        this.current.state !== "suspended" && this.current.state !== "revoked") this.scheduleReconnect();
+    }).catch(() => undefined);
+  }
+
+  private async onRequest(request: RemoteRequest, authorization?: RemoteAuthorization): Promise<void> {
+    const transport = this.transport;
+    const respond = async (response: RemoteResponseMessage, data?: unknown, beforeSend?: () => boolean): Promise<boolean> => {
+      let frame: RemoteTransportMessage = { type: "response", response, ...(data !== undefined ? { data } : {}) };
+      // Never emit a frame over the negotiated maximum; the job itself is unaffected.
+      const oversized = frameByteLength(frame) > this.limits.maxFrameBytes;
+      if (oversized) frame = { type: "response", response: rejected(request, "frame_too_large") };
+      try {
+        if (!transport) return false;
+        await transport.send(frame, undefined, beforeSend);
+        return !oversized;
+      }
+      catch {
+        // A policy change while a response waits for socket space must not release the old result.
+        if (beforeSend && !beforeSend()) {
+          try {
+            if (request.toolId === "jobs_status") {
+              const refreshed = this.jobTool({ accountId: request.accountId, clientId: request.clientId, deviceId: request.deviceId }, request);
+              await transport?.send({ type: "response", response: refreshed.response, data: refreshed.data });
+            } else await transport?.send({ type: "response", response: rejected(request, "result_withheld_by_policy") });
+          } catch { /* socket loss */ }
+        }
+        return false;
+      }
+    };
+    if (this.options.deviceStore.isRevoked()) {
+      this.admitting = false;
+      this.transition("revoked", "device_key_revoked");
+      this.cancelForRevocation();
+      await respond(rejected(request, "device_revoked"));
+      return;
+    }
+    try {
+      this.options.authenticator.verifyAuthorization(request, authorization, this.session);
+    } catch {
+      await respond(rejected(request, "unauthorized"));
+      return;
+    }
+    if (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) {
+      this.suspend("owner_lock_lost");
+      await respond(rejected(request, "unauthorized"));
+      return;
+    }
+    if (!this.isReady()) {
+      await respond(rejected(request, "device_offline"));
+      return;
+    }
+    try {
+      this.options.authenticator.verifyRequest(request, this.session);
+      if (remotePayloadDigest(request) !== request.payloadDigest) throw new Error("Invalid digest.");
+    } catch (error) {
+      await respond(rejected(request, error instanceof RemoteAuthError ? error.code : "invalid_request"));
+      return;
+    }
+    const identity: VerifiedRemoteIdentity = {
+      accountId: request.accountId, clientId: request.clientId, deviceId: request.deviceId,
+    };
+    try {
+      const refusal = this.options.runtime.authorizeJob?.(identity);
+      if (refusal) { await respond(rejected(request, "unauthorized")); return; }
+      if (JOB_TOOL_IDS.has(request.toolId)) {
+        const answer = this.jobTool(identity, request);
+        const jobId = request.toolId === "jobs_result" || (request.toolId === "jobs_status" &&
+          (answer.data as { job?: RemoteJob }).job?.outputRef) ? jobArguments(request).jobId : undefined;
+        await respond(answer.response, answer.data, jobId ? () => {
+          try {
+            const job = this.options.admission.getJob(identity, jobId);
+            return !!job && !this.resultWithheld(identity, job);
+          } catch { return false; }
+        } : undefined);
+        return;
+      }
+      if (request.toolId === "artifacts_read") {
+        await this.artifactRead(identity, request, respond);
+        return;
+      }
+      const isPlugin = request.toolId.startsWith("plugin_");
+      const runnerName = isPlugin ? request.toolId : REMOTE_TOOL_ID_TO_RUNNER[request.toolId];
+      if (!runnerName || (isPlugin && !this.options.pluginTools)) {
+        await respond(rejected(request, "unsupported_tool"));
+        return;
+      }
+      if (!isPlugin && isEffect(request) && !this.options.runtime.invokeAdmitted) {
+        await respond(rejected(request, "internal_error"));
+        return;
+      }
+      if (isPlugin) {
+        const tools = await this.options.pluginTools!.list();
+        if (!tools.some((tool) => tool.relayToolId === request.toolId)) {
+          await respond(rejected(request, "unsupported_tool"));
+          return;
+        }
+      }
+      // Plugin discovery may await; shutdown, fencing and policy still win before admission.
+      if (this.closing || !this.isReady()) { await respond(rejected(request, "device_offline")); return; }
+      this.options.authenticator.verifyAuthorization(request, authorization, this.session);
+      if (this.options.deviceStore.isRevoked() ||
+        (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) ||
+        this.options.deviceStore.load()?.epoch !== request.deviceEpoch ||
+        this.options.runtime.authorizeJob?.(identity, runnerName, request.payload)) {
+        await respond(rejected(request, "unauthorized")); return;
+      }
+      if (Date.parse(request.expiresAt) <= this.now().getTime()) {
+        await respond(rejected(request, "expired_request")); return;
+      }
+      // The store checks an existing key before rejecting a new admission at capacity.
+      const rawRequest = JSON.stringify(request);
+      const needsApproval = !isPlugin && this.options.runtime.requiresCommandApproval?.(identity, runnerName) === true;
+      const full = this.queue.length >= this.queueLimit() && (needsApproval || this.runningCount() >= this.concurrentLimit());
+      const decision = this.options.admission.admit(identity, rawRequest, { rejectNew: full,
+        policyNarrowing: this.options.runtime.latestPolicyNarrowing(identity) ?? null });
+      const deadline = Math.min(Date.parse(request.expiresAt),
+        Date.parse(decision.job.createdAt) + (this.options.toolDeadlineMs ?? 300_000));
+      if (!decision.created) {
+        const existing = [...this.inFlight].find((item) => item.jobId === decision.job.jobId);
+        if (decision.job.state !== "queued") {
+          await respond(jobResponse(request, decision.job));
+          return;
+        }
+        if (existing) {
+          if (!existing.settled && !existing.approvalGranted) {
+            this.options.admission.refreshQueuedRequest(identity, decision.job.jobId, rawRequest);
+            existing.rawRequest = rawRequest;
+            existing.request = request;
+            existing.authorization = authorization!;
+            existing.deadline = deadline;
+          }
+          await respond(jobResponse(request, decision.job));
+          return;
+        }
+        if (full) { await respond(jobResponse(request, decision.job)); return; }
+        this.options.admission.refreshQueuedRequest(identity, decision.job.jobId, rawRequest);
+      }
+      let resolve!: (response: RemoteResponseMessage) => void;
+      const done = new Promise<RemoteResponseMessage>((accept) => { resolve = accept; });
+      const entry: InFlight = {
+        identity, request, rawRequest, authorization: authorization!, runnerName, isPlugin,
+        jobId: decision.job.jobId, controller: new AbortController(),
+        deadline,
+        done, resolve, started: false, settled: false,
+      };
+      this.inFlight.add(entry);
+      this.queue.push(entry);
+      if (needsApproval) this.prepareApproval(entry);
+      this.pump();
+      await respond(jobResponse(request, this.options.admission.view(identity, entry.jobId).job));
+    } catch (error) {
+      await respond(rejected(request, admissionCode(error)));
+    }
+  }
+
+  /** The job must belong to this principal, under the current signed scope and current local policy. */
+  private authorizedJobView(identity: VerifiedRemoteIdentity, request: RemoteRequest, jobId: string): ReturnType<RemoteAdmissionStore["view"]> {
+    const view = this.options.admission.view(identity, jobId);
+    // The current signed scope must still cover the original job.
+    if (view.job.scopeRef !== request.scopeRef) throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
+    const name = REMOTE_TOOL_ID_TO_RUNNER[view.job.toolId] ?? view.job.toolId;
+    if (this.options.runtime.authorizeJob?.(identity, this.resultWithheld(identity, view.job) ? undefined : name)) {
+      throw new RemoteAdmissionError("not_found", "Remote job is unavailable.");
+    }
+    return view;
+  }
+
+  private resultWithheld(identity: VerifiedRemoteIdentity, job: RemoteJob): boolean {
+    const narrowedAt = this.options.runtime.latestPolicyNarrowing(identity);
+    if (narrowedAt === undefined) return false;
+    return this.options.admission.policyNarrowingAtAdmission(identity, job.jobId) !== narrowedAt;
+  }
+
+  private requireResultAccess(identity: VerifiedRemoteIdentity, job: RemoteJob): void {
+    if (this.resultWithheld(identity, job)) throw new RemoteAdmissionError("result_withheld_by_policy", "Result is withheld after device policy narrowed.");
+  }
+
+  /**
+   * R3 data plane. A content hash is never authorization (ADR-C): the hash must
+   * be reachable from the result of a job this principal may read, and result
+   * expiry ends access. The response announces the transfer; chunk frames follow.
+   */
+  private async artifactRead(identity: VerifiedRemoteIdentity, request: RemoteRequest,
+    respond: (response: RemoteResponseMessage, data?: unknown, beforeSend?: () => boolean) => Promise<boolean>): Promise<void> {
+    const args = artifactArguments(request);
+    const view = this.authorizedJobView(identity, request, args.jobId);
+    const artifacts = this.options.artifacts;
+    const audit = (decision: "allowed" | "denied", outcome: string) => {
+      try { this.options.auditArtifactRead?.(identity, args.jobId, decision, outcome); } catch { /* audit never blocks a read decision */ }
+    };
+    const refuse = async (code: string) => { audit("denied", code); await respond(rejected(request, code)); };
+    if (this.resultWithheld(identity, view.job)) { await refuse("result_withheld_by_policy"); return; }
+    const result = this.options.admission.result(identity, args.jobId);
+    const reachable = artifacts ? await reachableArtifacts(result, artifacts) : new Set<string>();
+    if (this.resultWithheld(identity, view.job)) { await refuse("result_withheld_by_policy"); return; }
+    if (!artifacts || !reachable.has(args.hash)) { await refuse("artifact_unavailable"); return; }
+    let record: { path: string; byteLength: number; mediaType: string };
+    try { record = await artifacts.stat(args.hash); }
+    catch { await refuse(this.resultWithheld(identity, view.job) ? "result_withheld_by_policy" : "artifact_unavailable"); return; }
+    this.authorizedJobView(identity, request, args.jobId);
+    if (this.resultWithheld(identity, view.job)) { await refuse("result_withheld_by_policy"); return; }
+    this.options.admission.result(identity, args.jobId);
+    if (!this.isReady() || this.options.deviceStore.isRevoked() ||
+      (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) ||
+      this.options.deviceStore.load()?.epoch !== request.deviceEpoch || Date.parse(request.expiresAt) <= this.now().getTime()) {
+      await refuse("unauthorized"); return;
+    }
+    const source = { path: record.path, hash: args.hash, byteLength: record.byteLength };
+    try { this.transfers.reserve(request.requestId, source, args.offset); }
+    catch (error) {
+      await refuse(error instanceof ArtifactTransferError && error.code === "transfer_limit" ? "rate_limited" : "invalid_request");
+      return;
+    }
+    audit("allowed", "transfer_started");
+    const announced = await respond(jobResponse(request, view.job), {
+      transferId: request.requestId, hash: args.hash, mediaType: record.mediaType, byteLength: record.byteLength,
+      offset: args.offset, chunkBytes: this.limits.chunkBytes, window: this.limits.window,
+    }, () => {
+      try { return !this.resultWithheld(identity, view.job); } catch { return false; }
+    });
+    if (!announced) { this.transfers.abort(request.requestId); return; }
+    void this.transfers.run(request.requestId, source, args.offset, () => {
+      try {
+        if (this.resultWithheld(identity, view.job)) return "result_withheld_by_policy";
+        this.authorizedJobView(identity, request, args.jobId);
+        if (view.job.resultExpiresAt && Date.parse(view.job.resultExpiresAt) <= this.now().getTime()) return "artifact_unavailable";
+        return this.isReady() && !this.options.deviceStore.isRevoked() &&
+          (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld()) &&
+          this.options.deviceStore.load()?.epoch === request.deviceEpoch && Date.parse(request.expiresAt) > this.now().getTime() ?
+          undefined : "artifact_unavailable";
+      } catch { return "artifact_unavailable"; }
+    });
+  }
+
+  private jobTool(identity: VerifiedRemoteIdentity, request: RemoteRequest): { response: RemoteResponseMessage; data: unknown } {
+    const args = jobArguments(request);
+    const admission = this.options.admission;
+    const view = this.authorizedJobView(identity, request, args.jobId);
+    let data: unknown;
+    if (request.toolId === "jobs_status") {
+      if (this.resultWithheld(identity, view.job)) {
+        const job = { ...view.job };
+        delete job.outputRef;
+        data = { ...view, job };
+      } else data = view;
+    } else if (request.toolId === "jobs_events") {
+      data = admission.events(identity, args.jobId, args.cursor, args.limit);
+    } else if (request.toolId === "jobs_result") {
+      this.requireResultAccess(identity, view.job);
+      const result = admission.result(identity, args.jobId);
+      const offset = resultOffset(args.cursor, args.jobId);
+      const bytes = result.inline;
+      if (offset > (bytes?.byteLength ?? 0)) throw new Error("Invalid result cursor.");
+      const makePage = (end: number) => ({
+        state: result.state,
+        ...(result.outputRef ? { outputRef: result.outputRef } : {}),
+        ...(bytes ? { inline: Buffer.from(bytes.subarray(offset, end)).toString("base64"), encoding: "base64" } : {}),
+        ...(bytes && end < bytes.byteLength ? { nextCursor: resultCursor(args.jobId, end) } : {}),
+      });
+      let low = 0;
+      let high = Math.min((bytes?.byteLength ?? 0) - offset, args.maxBytes ?? 64 * 1024, 64 * 1024);
+      while (low < high) {
+        const length = Math.ceil((low + high) / 2);
+        const frame = { type: "response", response: jobResponse(request, view.job), data: makePage(offset + length) };
+        if (frameByteLength(frame) <= this.limits.maxFrameBytes) low = length; else high = length - 1;
+      }
+      if (bytes && offset < bytes.byteLength && low === 0) throw new RemoteAdmissionError("invalid_request", "Result page cannot fit in a frame.");
+      data = makePage(offset + low);
+    } else {
+      // Persist the request before aborting or signalling any work.
+      data = admission.requestCancel(identity, args.jobId, request.idempotencyKey, request.traceId);
+      const entry = [...this.inFlight].find((item) => item.jobId === args.jobId);
+      if (view.job.toolId === "process_start" && view.job.state === "completed") {
+        const processId = admission.startedProcess(identity, args.jobId);
+        if (processId && admission.view(identity, args.jobId).job.cancellation?.stop !== "stopped") {
+          this.startProcessStop(identity, args.jobId, processId);
+        }
+      } else if (entry) this.cancelEntry(entry);
+    }
+    return { response: jobResponse(request, admission.view(identity, args.jobId).job), data };
+  }
+
+  /** Only the authenticated launcher control channel calls these methods. */
+  pendingCommandApproval(): CommandApprovalRequest | undefined {
+    for (const entry of [...this.queue]) {
+      if (entry.approval && entry.approvalDeadline !== undefined && this.now().getTime() >= entry.approvalDeadline) {
+        this.expireApproval(entry);
+      }
+    }
+    this.pump();
+    return this.queue.find((entry) => !entry.settled && entry.approval)?.approval;
+  }
+
+  answerCommandApproval(jobId: string, nonce: string, approved: boolean): boolean {
+    const entry = [...this.inFlight].find((item) => item.jobId === jobId);
+    const record = (decision: "approved" | "denied" | "fenced") =>
+      this.options.auditApproval?.(entry?.identity, jobId, decision);
+    if (!entry || entry.settled || !entry.approval || typeof approved !== "boolean" ||
+      entry.approval.nonce !== nonce || entry.approvalDeadline === undefined) {
+      record("fenced");
+      return false;
+    }
+    if (this.now().getTime() >= entry.approvalDeadline) {
+      this.expireApproval(entry);
+      record("fenced");
+      this.pump();
+      return false;
+    }
+    const job = this.options.admission.getJob(entry.identity, jobId);
+    if (!job || job.state !== "awaiting_approval" || job.payloadDigest !== entry.request.payloadDigest) {
+      record("fenced");
+      return false;
+    }
+    record(approved ? "approved" : "denied");
+    entry.approval = undefined;
+    if (approved) {
+      this.options.admission.approve(entry.identity, jobId);
+      entry.approvalGranted = true;
+    } else {
+      if (entry.approvalTimer) clearTimeout(entry.approvalTimer);
+      entry.approvalTimer = undefined;
+      this.removeWaiting(entry);
+      this.finish(entry, this.options.admission.denyApproval(entry.identity, jobId, "approval_denied"));
+      this.inFlight.delete(entry);
+    }
+    this.pump();
+    return true;
+  }
+
+  private prepareApproval(entry: InFlight): void {
+    try {
+      if (!this.options.runtime.summarizeCommandApproval) throw new Error("Approval summary unavailable.");
+      const code = randomBytes(3).toString("hex").toUpperCase();
+      const summary = this.options.runtime.summarizeCommandApproval(entry.identity, entry.jobId, code, entry.runnerName, entry.request.payload);
+      const job = this.options.admission.markAwaitingApproval(entry.identity, entry.jobId);
+      const deadline = Math.min(Date.parse(entry.request.expiresAt), Date.parse(job.createdAt) + 120_000);
+      entry.approvalDeadline = deadline;
+      entry.approval = Object.freeze({ summary, nonce: randomBytes(32).toString("hex") });
+      this.options.auditApproval?.(entry.identity, entry.jobId, "requested");
+      if (this.now().getTime() >= deadline) { this.expireApproval(entry); return; }
+      entry.approvalTimer = setTimeout(() => {
+        this.expireApproval(entry);
+        this.pump();
+      }, Math.max(1, deadline - this.now().getTime()));
+      entry.approvalTimer.unref();
+    } catch {
+      const job = this.options.admission.getJob(entry.identity, entry.jobId);
+      if (!job || entry.settled) return;
+      this.removeWaiting(entry);
+      const blocked = job.state === "awaiting_approval"
+        ? this.options.admission.denyApproval(entry.identity, entry.jobId, "approval_denied")
+        : job.state === "queued" ? this.options.admission.blockPolicy(entry.identity, entry.jobId, "invalid_arguments") : job;
+      this.finish(entry, blocked);
+      this.inFlight.delete(entry);
+    }
+  }
+
+  private expireApproval(entry: InFlight): void {
+    if (entry.settled) return;
+    const job = this.options.admission.getJob(entry.identity, entry.jobId);
+    if (!job || (job.state !== "awaiting_approval" && !(job.state === "queued" && entry.approvalGranted))) return;
+    if (entry.approvalTimer) clearTimeout(entry.approvalTimer);
+    entry.approvalTimer = undefined;
+    entry.approval = undefined;
+    this.removeWaiting(entry);
+    const blocked = job.state === "awaiting_approval"
+      ? this.options.admission.denyApproval(entry.identity, entry.jobId, "approval_expired")
+      : this.options.admission.blockPolicy(entry.identity, entry.jobId, "approval_expired");
+    try { this.options.auditApproval?.(entry.identity, entry.jobId, "expired"); }
+    finally {
+      this.finish(entry, blocked);
+      this.inFlight.delete(entry);
+    }
+  }
+
+  private removeWaiting(entry: InFlight): void {
+    const index = this.queue.indexOf(entry);
+    if (index >= 0) this.queue.splice(index, 1);
+  }
+
+  private concurrentLimit(): number { return this.options.maxConcurrentJobsPerDevice ?? 8; }
+  private queueLimit(): number { return this.options.maxQueuedJobsPerDevice ?? 64; }
+  private runningCount(): number { return [...this.inFlight].filter((entry) => entry.started).length; }
+
+  private pump(): void {
+    if (this.closing || this.closed || this.current.state === "revoked" || this.current.state === "suspended") return;
+    for (const entry of [...this.queue]) {
+      if (!entry.settled && !entry.approval && !entry.approvalGranted &&
+        !entry.isPlugin && this.options.runtime.requiresCommandApproval?.(entry.identity, entry.runnerName)) this.prepareApproval(entry);
+      if (entry.approvalGranted && entry.approvalDeadline !== undefined && this.now().getTime() >= entry.approvalDeadline) {
+        this.expireApproval(entry);
+      }
+    }
+    while (this.queue.length && this.runningCount() < this.concurrentLimit()) {
+      const ready = this.queue.filter((entry) => !entry.approval && !entry.settled);
+      if (!ready.length) return;
+      const clients = [...new Set(ready.map((entry) => entry.identity.clientId))];
+      const last = this.lastClientId === undefined ? -1 : clients.indexOf(this.lastClientId);
+      const selected = clients[(last + 1) % clients.length];
+      const index = this.queue.findIndex((entry) => !entry.approval && !entry.settled && entry.identity.clientId === selected);
+      const entry = this.queue.splice(index, 1)[0]!;
+      entry.started = true;
+      this.lastClientId = selected;
+      entry.physicalDone = this.dispatch(entry).finally(() => {
+        this.inFlight.delete(entry);
+        this.pump();
+      });
+      void entry.physicalDone.catch(() => undefined);
+    }
+  }
+
+  private async dispatch(entry: InFlight): Promise<void> {
+    const { identity, jobId } = entry;
+    const admission = this.options.admission;
+    try {
+      if (entry.isPlugin) {
+        const tools = await this.options.pluginTools!.list();
+        if (!tools.some((tool) => tool.relayToolId === entry.request.toolId)) {
+          if (!entry.settled) this.finish(entry, admission.blockPolicy(identity, jobId, "tool_unavailable"));
+          return;
+        }
+      }
+      if (entry.settled) return;
+      const request = entry.request;
+      // Recheck the original relay grant, local policy, deadline and current epoch
+      // after every asynchronous preparation and immediately before the marker.
+      try {
+        this.options.authenticator.verifyAuthorization(request, entry.authorization, this.session);
+        if (this.options.deviceStore.isRevoked() ||
+          (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) ||
+          this.options.deviceStore.load()?.epoch !== request.deviceEpoch ||
+          this.options.runtime.authorizeJob?.(identity, entry.runnerName, request.payload)) {
+          throw new Error("authorization_changed");
+        }
+        if (this.now().getTime() >= entry.deadline) throw new Error("expired_before_dispatch");
+      } catch (error) {
+        const reason = error instanceof Error && error.message === "expired_before_dispatch" ? error.message : "authorization_changed";
+        this.finish(entry, admission.blockPolicy(identity, jobId, reason));
+        return;
+      }
+      admission.markDispatching(identity, jobId, request.deviceEpoch);
+      if (entry.approvalTimer) clearTimeout(entry.approvalTimer);
+      entry.approvalTimer = undefined;
+      let result: ToolResult;
+      let brokerInvoked = true;
+      let stopEvidence: RemoteInvocationResult["stopEvidence"];
+      try {
+        if (entry.isPlugin) {
+          const provider = this.options.pluginTools!;
+          if (provider.invokeAdmitted) {
+            const outcome = await provider.invokeAdmitted(identity, request.toolId, request.payload, entry.controller.signal, () => this.canDispatch(entry));
+            result = outcome.result;
+            brokerInvoked = outcome.brokerInvoked;
+            stopEvidence = outcome.stopEvidence;
+          } else {
+            result = await provider.invoke(identity, request.toolId, request.payload, entry.controller.signal, () => this.canDispatch(entry));
+          }
+        } else if (this.options.runtime.invokeAdmitted) {
+          const outcome = await this.options.runtime.invokeAdmitted(identity, entry.runnerName, request.payload,
+            entry.controller.signal, entry.rawRequest, jobId, () => this.canDispatch(entry), entry.approvalGranted === true);
+          result = outcome.result;
+          brokerInvoked = outcome.brokerInvoked;
+          stopEvidence = outcome.stopEvidence;
+        } else {
+          result = await this.options.runtime.invoke(identity, entry.runnerName, request.payload, entry.controller.signal, entry.rawRequest, jobId);
+        }
+      } catch (error) {
+        if (entry.settled) return;
+        const notSent = isRecord(error) && error.outcome === "not_sent";
+        if (entry.controller.signal.aborted && notSent) {
+          admission.recordStop(identity, jobId, "verified");
+          this.finish(entry, admission.settleCancelled(identity, jobId, "no_effect"));
+        } else {
+          if (entry.controller.signal.aborted) admission.recordStop(identity, jobId, "unverified");
+          this.finish(entry, admission.settle(identity, jobId, notSent ? "failed" : "outcome_unknown"));
+        }
+        return;
+      }
+      if (entry.isPlugin) await this.refreshPluginState();
+      if (entry.settled) {
+        if (entry.controller.signal.aborted && entry.runnerName === "process.start" && !result.isError) {
+          const processId = resultProcessId(result);
+          if (processId) {
+            admission.bindStartedProcess(identity, jobId, processId);
+            await this.stopProcess(identity, jobId, processId);
+          }
+        }
+        return;
+      }
+      if (entry.runnerName === "process.start" && !result.isError) {
+        const processId = resultProcessId(result);
+        if (!processId) throw new Error("Managed process identity is unavailable.");
+        admission.bindStartedProcess(identity, jobId, processId);
+      }
+      const unknown = isUnknownResult(result) || (entry.isPlugin && result.isError &&
+        (entry.controller.signal.aborted || (this.pluginDegradedReason !== undefined &&
+          /crash|closed|unavailable|restart/i.test(result.error?.message ?? ""))));
+      if (entry.controller.signal.aborted && entry.runnerName === "process.start" && !result.isError) {
+        const processId = resultProcessId(result);
+        if (processId) await this.stopProcess(identity, jobId, processId);
+        else admission.recordStop(identity, jobId, "unverified");
+        if (!entry.settled) this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown"));
+      } else if (entry.controller.signal.aborted && (!brokerInvoked || stopEvidence)) {
+        admission.recordStop(identity, jobId, "verified");
+        this.finish(entry, admission.settleCancelled(identity, jobId,
+          stopEvidence?.effect ?? "no_effect"));
+      } else if (!brokerInvoked && result.isError) {
+        this.finish(entry, admission.settle(identity, jobId, "failed",
+          { inline: Buffer.from(JSON.stringify({ reason: result.error?.code ?? "dispatch_refused" }), "utf8") }));
+      } else if (entry.controller.signal.aborted && unknown) {
+        admission.recordStop(identity, jobId, "unverified");
+        this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown"));
+      } else {
+        if (entry.controller.signal.aborted) admission.recordStop(identity, jobId, "unverified");
+        const state = unknown ? "outcome_unknown" : result.isError ? "failed" : "completed";
+        this.finish(entry, admission.settle(identity, jobId, state, unknown ? undefined : await this.storedResult(result)));
+      }
+    } catch {
+      if (!entry.settled) {
+        try {
+          const current = admission.getJob(identity, jobId);
+          if (current?.state === "queued") this.finish(entry, admission.blockPolicy(identity, jobId, "dispatch_refused"));
+          else if (current?.state === "running") this.finish(entry, admission.settle(identity, jobId, "outcome_unknown"));
+          else if (current) this.finish(entry, current);
+        } catch { entry.settled = true; entry.resolve(rejected(entry.request, "internal_error")); }
+      }
+    }
+  }
+
+  /**
+   * A result over the inline cap is stored whole as an artifact and returned by
+   * outputRef with a small stub naming its artifacts — never silently truncated.
+   */
+  private async storedResult(result: ToolResult): Promise<{ inline: Uint8Array; outputRef?: string }> {
+    const bytes = Buffer.from(JSON.stringify(result), "utf8");
+    if (bytes.byteLength <= INLINE_RESULT_MAX_BYTES) return { inline: bytes };
+    const allHashes = [...artifactHashes(result)];
+    if (allHashes.length > MAX_INDEX_ARTIFACTS) throw new Error("Remote result artifact index exceeds its limit.");
+    const hashes = allHashes.slice(0, MAX_STUB_ARTIFACTS);
+    if (!this.options.artifacts) {
+      if (allHashes.length > MAX_STUB_ARTIFACTS) throw new Error("Remote result artifact index is unavailable.");
+      return { inline: Buffer.from(JSON.stringify({ resultTooLarge: true, byteLength: bytes.byteLength, artifacts: hashes }), "utf8") };
+    }
+    const stored = await this.options.artifacts.put(bytes, "application/json", "remote-result");
+    const index = allHashes.length > MAX_STUB_ARTIFACTS ?
+      await this.options.artifacts.put(Buffer.from(JSON.stringify(allHashes), "utf8"), "application/json", "remote-artifact-index") : undefined;
+    return {
+      outputRef: stored.hash,
+      inline: Buffer.from(JSON.stringify({ outputRef: stored.hash, mediaType: "application/json", byteLength: bytes.byteLength, artifacts: hashes,
+        ...(index ? { artifactIndex: index.hash } : {}) }), "utf8"),
+    };
+  }
+
+  private startProcessStop(identity: VerifiedRemoteIdentity, jobId: string, processId: string): void {
+    if (this.processStops.has(jobId)) return;
+    const promise = this.stopProcess(identity, jobId, processId).finally(() => { this.processStops.delete(jobId); });
+    this.processStops.set(jobId, { identity, promise });
+    void promise.catch(() => undefined);
+  }
+
+  private async stopProcess(identity: VerifiedRemoteIdentity, jobId: string, processId: string): Promise<void> {
+    let stopped = false;
+    try { stopped = !!await this.options.runtime.stopStartedProcess?.(identity, processId); }
+    catch { /* An unverified stop remains visible and retryable. */ }
+    this.options.admission.recordStop(identity, jobId, stopped ? "verified" : "unverified");
+  }
+  private canDispatch(entry: InFlight): boolean {
+    try {
+      this.options.authenticator.verifyAuthorization(entry.request, entry.authorization, this.session);
+      return !this.closing && !entry.settled && !entry.controller.signal.aborted &&
+        !this.options.deviceStore.isRevoked() &&
+        (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld()) &&
+        this.options.deviceStore.load()?.epoch === entry.request.deviceEpoch &&
+        this.now().getTime() < entry.deadline &&
+        (!this.options.runtime.requiresCommandApproval?.(entry.identity, entry.runnerName) ||
+          (entry.approvalGranted === true && entry.approvalDeadline !== undefined && this.now().getTime() < entry.approvalDeadline)) &&
+        !this.options.runtime.authorizeJob?.(entry.identity, entry.runnerName, entry.request.payload);
+    } catch { return false; }
+  }
+  private finish(entry: InFlight, job: RemoteJob): void {
+    if (entry.settled) return;
+    entry.settled = true;
+    entry.resolve(jobResponse(entry.request, job));
+  }
+
+  private cancelForRevocation(): void {
+    if (this.options.isOwnerLockHeld && !this.options.isOwnerLockHeld()) return;
+    for (const entry of [...this.inFlight]) {
+      if (entry.settled) continue;
+      try {
+        this.options.admission.requestCancel(entry.identity, entry.jobId, "revoke-" + randomUUID(), entry.request.traceId);
+        this.cancelEntry(entry);
+      } catch { /* An unrecorded request cannot authorize a cancellation signal. */ }
+    }
+  }
+  private cancelEntry(entry: InFlight): void {
+    if (entry.approvalTimer) clearTimeout(entry.approvalTimer);
+    entry.controller.abort();
+    if (!entry.started) {
+      const index = this.queue.indexOf(entry);
+      if (index >= 0) this.queue.splice(index, 1);
+      this.finish(entry, this.options.admission.view(entry.identity, entry.jobId).job);
+      this.inFlight.delete(entry);
+      this.pump();
+      return;
+    }
+    void this.sleep(this.options.cancellationGraceMs ?? 5_000).then(() => {
+      if (entry.settled) return;
+      try {
+        const job = this.options.admission.getJob(entry.identity, entry.jobId);
+        if (job?.state === "running") {
+          this.options.admission.recordStop(entry.identity, entry.jobId, "unverified");
+          this.finish(entry, this.options.admission.settleCancelled(entry.identity, entry.jobId, "effect_outcome_unknown"));
+        } else if (job) this.finish(entry, job);
+      } catch { /* The durable marker remains for startup reconciliation. */ }
+    });
+  }
+
+  private transition(state: RemoteConnectionStateName, reasonCode: RemoteConnectionReason): void {
+    const identity = this.options.deviceStore.load();
+    const needsEpoch = state === "connected-degraded" || state === "tool-ready";
+    this.current = Object.freeze({
+      protocolVersion: PROTOCOL_VERSION,
+      deviceId: identity?.deviceId ?? this.current.deviceId,
+      state, reasonCode,
+      changedAt: this.now().toISOString(),
+      ...(needsEpoch && identity ? { deviceEpoch: identity.epoch } : {}),
+    });
+    this.options.onStateChange?.(this.current);
+    if (needsEpoch) this.reportStatus(state as "tool-ready" | "connected-degraded", reasonCode);
+  }
+
+  private reportStatus(state: "tool-ready" | "connected-degraded", reasonCode: RemoteConnectionReason): void {
+    const transport = this.transport;
+    if (!transport || this.pendingEpoch !== undefined) return;
+    let report: RemoteStatusReport | undefined;
+    try { report = this.options.statusReport?.(); } catch { return; }
+    if (!report) return;
+    try {
+      void Promise.resolve(transport.send({ type: "status", state, reasonCode, runnerVersion: report.runnerVersion,
+        platform: report.platform, policy: { ...report.policy } })).catch(() => { /* readiness is advisory; socket loss is handled elsewhere */ });
+    } catch { /* same */ }
+  }
+}
+
+interface JobArguments { jobId: string; cursor?: string; limit?: number; maxBytes?: number }
+
+function jobArguments(request: RemoteRequest): JobArguments {
+  if (!isRecord(request.payload)) throw new Error("Invalid job arguments.");
+  const payload = request.payload;
+  const allowed = request.toolId === "jobs_events" ? ["jobId", "cursor", "limit"] :
+    request.toolId === "jobs_result" ? ["jobId", "cursor", "maxBytes"] : ["jobId"];
+  if (Object.keys(payload).some((key) => !allowed.includes(key)) ||
+    typeof payload.jobId !== "string" || !payload.jobId || payload.jobId.length > 256 ||
+    (payload.cursor !== undefined && (typeof payload.cursor !== "string" || !payload.cursor || payload.cursor.length > 512)) ||
+    (payload.limit !== undefined && (!Number.isInteger(payload.limit) || Number(payload.limit) < 1 || Number(payload.limit) > 256)) ||
+    (payload.maxBytes !== undefined && (!Number.isSafeInteger(payload.maxBytes) || Number(payload.maxBytes) < 1))) {
+    throw new Error("Invalid job arguments.");
+  }
+  return {
+    jobId: payload.jobId,
+    ...(typeof payload.cursor === "string" ? { cursor: payload.cursor } : {}),
+    ...(typeof payload.limit === "number" ? { limit: payload.limit } : {}),
+    ...(typeof payload.maxBytes === "number" ? { maxBytes: payload.maxBytes } : {}),
+  };
+}
+
+interface ArtifactArguments { jobId: string; hash: string; offset: number }
+
+function artifactArguments(request: RemoteRequest): ArtifactArguments {
+  if (!isRecord(request.payload)) throw new Error("Invalid artifact arguments.");
+  const payload = request.payload;
+  if (Object.keys(payload).some((key) => !["jobId", "hash", "offset"].includes(key)) ||
+    typeof payload.jobId !== "string" || !payload.jobId || payload.jobId.length > 256 ||
+    typeof payload.hash !== "string" || !/^[0-9a-f]{64}$/.test(payload.hash) ||
+    (payload.offset !== undefined && (!Number.isSafeInteger(payload.offset) || Number(payload.offset) < 0))) {
+    throw new Error("Invalid artifact arguments.");
+  }
+  return { jobId: payload.jobId, hash: payload.hash, offset: typeof payload.offset === "number" ? payload.offset : 0 };
+}
+
+function artifactHashes(result: ToolResult): Set<string> {
+  const hashes = new Set<string>();
+  for (const block of result.content) if (block.type === "artifact" && /^[0-9a-f]{64}$/.test(block.hash)) hashes.add(block.hash);
+  return hashes;
+}
+
+/** Hashes a job result makes readable: its outputRef plus artifacts named in the stored inline result or stub. */
+async function reachableArtifacts(result: { outputRef?: string; inline?: Uint8Array }, artifacts: RemoteArtifactSource): Promise<Set<string>> {
+  const reachable = new Set<string>();
+  if (result.outputRef) reachable.add(result.outputRef);
+  if (!result.inline) return reachable;
+  let parsed: unknown;
+  try { parsed = JSON.parse(Buffer.from(result.inline).toString("utf8")); } catch { return reachable; }
+  if (!isRecord(parsed)) return reachable;
+  for (const block of Array.isArray(parsed.content) ? parsed.content : []) {
+    if (isRecord(block) && block.type === "artifact" && typeof block.hash === "string" && /^[0-9a-f]{64}$/.test(block.hash)) reachable.add(block.hash);
+  }
+  for (const hash of Array.isArray(parsed.artifacts) ? parsed.artifacts : []) {
+    if (typeof hash === "string" && /^[0-9a-f]{64}$/.test(hash)) reachable.add(hash);
+  }
+  if (typeof parsed.artifactIndex === "string" && /^[0-9a-f]{64}$/.test(parsed.artifactIndex)) {
+    const indexHash = parsed.artifactIndex;
+    try {
+      const record = await artifacts.stat(indexHash);
+      if (!Number.isSafeInteger(record.byteLength) || record.byteLength < 2 || record.byteLength > MAX_INDEX_BYTES) return reachable;
+      const handle = await open(record.path, "r");
+      try {
+        if ((await handle.stat()).size !== record.byteLength) return reachable;
+        const bytes = Buffer.alloc(record.byteLength);
+        let position = 0;
+        while (position < bytes.length) {
+          const { bytesRead } = await handle.read(bytes, position, bytes.length - position, position);
+          if (!bytesRead) return reachable;
+          position += bytesRead;
+        }
+        if (createHash("sha256").update(bytes).digest("hex") !== indexHash) return reachable;
+        const entries: unknown = JSON.parse(bytes.toString("utf8"));
+        if (!Array.isArray(entries) || entries.length > MAX_INDEX_ARTIFACTS ||
+          entries.some((hash) => typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash))) return reachable;
+        reachable.add(indexHash);
+        for (const hash of entries) reachable.add(hash as string);
+      } finally { await handle.close(); }
+    } catch { /* A missing or invalid index grants no additional artifacts. */ }
+  }
+  return reachable;
+}
+
+function resultCursor(jobId: string, offset: number): string {
+  return Buffer.from(JSON.stringify([jobId, offset]), "utf8").toString("base64url");
+}
+
+function resultOffset(cursor: string | undefined, jobId: string): number {
+  if (cursor === undefined) return 0;
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (Array.isArray(parsed) && parsed.length === 2 && parsed[0] === jobId &&
+      Number.isSafeInteger(parsed[1]) && parsed[1] >= 0 && resultCursor(jobId, parsed[1]) === cursor) return parsed[1] as number;
+  } catch { /* Invalid cursors never grant access. */ }
+  throw new Error("Invalid result cursor.");
+}
+
+function jobResponse(request: RemoteRequest, job: RemoteJob): RemoteResponseMessage {
+  return {
+    requestId: request.requestId, traceId: request.traceId, admitted: true, jobId: job.jobId, status: job.state,
+    ...(job.state === "outcome_unknown" ? { errorCode: "outcome_unknown", uncertainty: "effect_outcome_unknown" } : {}),
+  };
+}
+
+function resultProcessId(result: ToolResult): string | undefined {
+  for (const block of result.content) {
+    if (block.type === "json" && isRecord(block.value) && typeof block.value.processId === "string") return block.value.processId;
+  }
+  return undefined;
+}
+
+function isEffect(request: RemoteRequest): boolean {
+  return EFFECT_TOOL_IDS.has(request.toolId) ||
+    (request.toolId === "files_search" && isRecord(request.payload) && request.payload.cancel === true);
+}
+
+function isUnknownResult(result: ToolResult): boolean {
+  return ["tool_timeout", "tool_cancelled", "process_timeout", "process_cancelled",
+    "reconciliation_required", "process_input_outcome_unknown", "process_input_interrupted",
+    "mcp_request_timeout", "mcp_request_cancelled", "mcp_write_outcome_unknown",
+    "mcp_session_unavailable", "mcp_restart_exhausted"].includes(result.error?.code ?? "") ||
+    result.content.some((block) => (block.type === "json" && isRecord(block.value) && block.value.status === "outcome_unknown") ||
+      (result.isError && block.type === "text" && /OUTCOME UNKNOWN \(not retried\)/i.test(block.text)));
+}
+
+/** Echo only well-formed correlation ids from a request that failed the strict codec. */
+function malformed(raw: unknown): RemoteResponseMessage {
+  const record = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const id = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : "invalid";
+  return { requestId: id(record.requestId), traceId: id(record.traceId), admitted: false, status: "rejected", errorCode: "invalid_request" };
+}
+
+function rejected(request: RemoteRequest, errorCode: string): RemoteResponseMessage {
+  const blocked = errorCode === "device_revoked" || errorCode === "unauthorized" || errorCode === "device_epoch_mismatch";
+  return {
+    requestId: request.requestId, traceId: request.traceId, admitted: false,
+    status: errorCode === "blocked_quota" ? "blocked_quota" : blocked ? "blocked_policy" : "rejected", errorCode,
+  };
+}
+
+function admissionCode(error: unknown): string {
+  if (isRecord(error) && typeof error.code === "string") {
+    if (error.code === "storage_exhausted" || error.code === "schema_migration_failed") return "internal_error";
+    return error.code;
+  }
+  return "invalid_request";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}

@@ -5,13 +5,15 @@ import type { AgentToolRuntime } from "./tool-registry.js";
 
 export interface ManagedBuildToolSource {
   generation(): Promise<number>;
+  /** Scoped to the bound generation: unrelated extensions must not trigger a rebuild. */
+  policyRevision?(generation: number): Promise<number | string>;
   tools(generation: number): Promise<{ tools: NativeTool<unknown>[]; close(): Promise<void> }>;
 }
 
 /** One agent's managed tools. Refresh occurs only at a model-turn boundary;
  * in-flight calls never move between generations or get replayed. */
 export class ManagedBuildToolRuntime implements AgentToolRuntime {
-  private current?: { generation: number; broker: ToolBroker; names: Set<string>; close(): Promise<void> };
+  private current?: { generation: number; revision: number | string | undefined; broker: ToolBroker; names: Set<string>; close(): Promise<void> };
   private inFlight = 0;
 
   constructor(private readonly base: AgentToolRuntime, private readonly source: ManagedBuildToolSource,
@@ -20,7 +22,12 @@ export class ManagedBuildToolRuntime implements AgentToolRuntime {
   async prepare(): Promise<void> {
     if (this.inFlight) throw new Error("Cannot change managed capabilities while a call is in flight.");
     const generation = await this.source.generation();
-    if (generation === this.current?.generation) return;
+    const revision = await this.source.policyRevision?.(generation);
+    if (this.current && generation === this.current.generation && revision === this.current.revision) return;
+    if (this.current && generation === this.current.generation) {
+      await this.current.close();
+      this.current = undefined;
+    }
     const resource = await this.source.tools(generation);
     const broker = new ToolBroker(this.brokerOptions);
     const names = new Set<string>();
@@ -38,7 +45,7 @@ export class ManagedBuildToolRuntime implements AgentToolRuntime {
       try { await resource.close(); } catch (cleanup) { throw new AggregateError([error, cleanup], "Managed capability transition cleanup failed."); }
       throw error;
     }
-    this.current = { generation, broker, names, close: () => resource.close() };
+    this.current = { generation, revision, broker, names, close: () => resource.close() };
   }
 
   definitions() { return [...this.base.definitions(), ...(this.current?.broker.definitions() ?? [])]; }

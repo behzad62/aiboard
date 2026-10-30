@@ -1,0 +1,37 @@
+{
+  "jobId": "job-1",
+  "events": [
+    {
+      "protocolVersion": "1.0.0",
+      "jobId": "job-1",
+      "sequence": "3",
+      "occurredAt": "2026-10-27T12:00:01Z",
+      "kind": "effect_outcome_unknown",
+      "state": "outcome_unknown",
+      "traceId": "trace-write-1",
+      "cancellation": {
+        "requestedAt": "2026-10-27T12:00:00Z",
+        "stop": "stopped",
+        "effect": "effect_outcome_unknown"
+      }
+    },
+    {
+      "protocolVersion": "1.0.0",
+      "jobId": "job-1",
+      "sequence": "2",
+      "occurredAt": "2026-10-27T12:00:00Z",
+      "kind": "cancel_requested",
+      "state": "running",
+      "traceId": "trace-write-1",
+      "cancellation": {
+        "requestedAt": "2026-10-27T12:00:00Z",
+        "stop": "pending",
+        "effect": "pending"
+      }
+    }
+  ],
+  "nextCursor": "cursor-job-1-after-3",
+  "gap": {
+    "earliestSequence": "2"
+  }
+}

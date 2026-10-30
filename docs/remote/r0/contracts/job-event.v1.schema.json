@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcp.aiboard.me/schemas/v1/job-event.v1.schema.json",
+  "title": "RemoteJobEvent or RemoteEventPage",
+  "description": "One event or one cursor-based page. Sequence ordering and cursor binding require contextual validation.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/event"
+    },
+    {
+      "$ref": "#/$defs/page"
+    }
+  ],
+  "$defs": {
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "jobId",
+        "sequence",
+        "occurredAt",
+        "kind",
+        "state",
+        "traceId"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/protocolVersion"
+        },
+        "jobId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "sequence": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/positiveDecimal"
+        },
+        "occurredAt": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/utcTimestamp"
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 64,
+          "enum": [
+            "state_changed",
+            "cancel_requested",
+            "stopped",
+            "effect_outcome_unknown",
+            "result_expired",
+            "reconciled"
+          ]
+        },
+        "state": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/jobState"
+        },
+        "cancellation": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/cancellation"
+        },
+        "traceId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "events",
+        "nextCursor"
+      ],
+      "properties": {
+        "jobId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/event"
+          }
+        },
+        "nextCursor": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/opaque"
+        },
+        "gap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "earliestSequence"
+          ],
+          "properties": {
+            "earliestSequence": {
+              "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/positiveDecimal"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -16,6 +16,10 @@ import {
   type BuildCrewMember,
 } from "@/lib/client/build-crew";
 import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
+import {
+  discussionNeedsLauncherReconnect,
+  resolveRunnerConnection,
+} from "@/lib/client/local-runner-handoff";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -242,14 +246,16 @@ export function DiscussionSessionSettings({
       (model): model is ModelInfo & { fullId: string } =>
         Boolean(model?.contextProfile)
     );
-  const runnerSelection =
-    discussion.runnerUrl && discussion.runnerToken
-      ? {
-          url: discussion.runnerUrl,
-          token: discussion.runnerToken,
-          access: discussion.runnerAccess ?? "ask",
-        }
-      : null;
+  const resolvedRunner = resolveRunnerConnection(discussion);
+  const runnerSelection = resolvedRunner
+    ? {
+        url: resolvedRunner.url,
+        token: resolvedRunner.token,
+        access: discussion.runnerAccess ?? "ask",
+        source: resolvedRunner.source,
+      }
+    : null;
+  const runnerReconnectNeeded = discussionNeedsLauncherReconnect(discussion);
   // A single-model chat talks to exactly the model chosen in "Model".
   const singleChat = discussion.mode === "chat";
   const hasEnoughModels = singleChat
@@ -501,6 +507,11 @@ export function DiscussionSessionSettings({
             </div>
           )}
 
+          {runnerReconnectNeeded && (
+            <p role="alert" className="text-sm text-destructive">
+              Reconnect: run `aiboard` again in this project, then open the link it prints. This tab no longer has the session credential for its Runner.
+            </p>
+          )}
           {discussion.mode === "build" && (
             <RunnerSetup
               initialSelection={runnerSelection}

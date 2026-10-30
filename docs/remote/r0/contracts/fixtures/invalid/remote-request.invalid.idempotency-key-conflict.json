@@ -1,0 +1,21 @@
+{
+  "protocolVersion": "1.0.0",
+  "requestId": "req-conflict",
+  "accountId": "account-1",
+  "clientId": "client-1",
+  "deviceId": "device-1",
+  "deviceEpoch": "5",
+  "toolId": "files_write",
+  "operationClass": "write",
+  "scopeRef": "scope-project",
+  "issuedAt": "2026-10-27T11:59:00Z",
+  "expiresAt": "2026-10-27T12:05:00Z",
+  "nonce": "nonce-conflict",
+  "idempotencyKey": "key-write-1",
+  "payloadDigest": "b65fb52c045c72ff76786c5faaf5dc4cb619a84ca87baf48585c0597dc1603aa",
+  "traceId": "trace-conflict",
+  "payload": {
+    "path": "notes.txt",
+    "content": "Goodbye\n"
+  }
+}

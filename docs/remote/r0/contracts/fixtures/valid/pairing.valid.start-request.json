@@ -1,0 +1,11 @@
+{
+  "protocolVersion": "1.0.0",
+  "deviceId": "device-12345678-1234-4234-8234-123456789abc",
+  "publicKey": "MCowBQYDK2VwAyEAyl-FvnW6eQ1dGOUMI7DXHDw1bdjUHyTzZ2pLyN6zbJw",
+  "name": "Desktop",
+  "platform": "win32",
+  "runnerVersion": "0.1.0",
+  "issuedAt": "2026-10-27T12:00:00.000Z",
+  "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "signature": "s_hsk18D6jkxOIy6y5AtvyfyiUdWT4802j4JRVMX4VkfExUZUGBRd_rTmjXzIQFFkISle0bpAGvio0P3nXnfDw"
+}

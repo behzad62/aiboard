@@ -1,0 +1,7 @@
+{
+  "requestId": "req-write-1",
+  "traceId": "trace-write-1",
+  "admitted": false,
+  "status": "awaiting_device",
+  "uncertainty": "admission_unknown"
+}

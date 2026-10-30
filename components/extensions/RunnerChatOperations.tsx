@@ -6,6 +6,7 @@ import { OperationCard } from "@/components/extensions/OperationCard";
 import type { NativeRunnerConnection } from "@/lib/client/runner-v2";
 import { getRunnerChatSession, type ExtensionOperationDto } from "@/lib/client/runner-extensions";
 import { runnerChatSessionId } from "@/lib/client/runner-chat";
+import { resolveRunnerConnection } from "@/lib/client/local-runner-handoff";
 
 const POLL_MS = 2_000;
 
@@ -15,12 +16,20 @@ const POLL_MS = 2_000;
  */
 export function RunnerChatOperations({ discussionId, runnerUrl, runnerToken, replying }: { discussionId: string; runnerUrl: string; runnerToken: string; replying: boolean }) {
   // Primitive deps keep polling stable across parent re-renders.
-  const connection = useMemo<NativeRunnerConnection>(() => ({ url: runnerUrl, token: runnerToken }), [runnerUrl, runnerToken]);
+  const resolved = useMemo(
+    () => resolveRunnerConnection({ runnerUrl, runnerToken }),
+    [runnerUrl, runnerToken]
+  );
+  const connection = useMemo<NativeRunnerConnection>(
+    () => resolved ?? { url: runnerUrl, token: runnerToken },
+    [resolved, runnerUrl, runnerToken]
+  );
   const [operations, setOperations] = useState<ExtensionOperationDto[]>([]);
   const [loadedAt, setLoadedAt] = useState(0);
   const [unreachable, setUnreachable] = useState(false);
 
   const load = useCallback(async () => {
+    if (!resolved) return;
     try {
       const snapshot = await getRunnerChatSession(connection, runnerChatSessionId(discussionId));
       setOperations(snapshot.operations);
@@ -30,7 +39,7 @@ export function RunnerChatOperations({ discussionId, runnerUrl, runnerToken, rep
       // A chat that has not replied yet has no Runner session; only a network failure is worth showing.
       setUnreachable(error instanceof TypeError);
     }
-  }, [connection, discussionId]);
+  }, [connection, discussionId, resolved]);
 
   useEffect(() => { void load(); }, [load, replying]);
   const active = replying || operations.some((operation) => operation.outcome === "running" || operation.outcome === "awaiting_user");
@@ -43,6 +52,13 @@ export function RunnerChatOperations({ discussionId, runnerUrl, runnerToken, rep
   const visible = operations
     .filter((operation) => operation.outcome === "awaiting_user" || operation.outcome === "running" || loadedAt - Date.parse(operation.updatedAt) < 10 * 60_000)
     .slice(0, 4);
+  if (!resolved) {
+    return (
+      <p className="mb-4 rounded-md bg-muted p-3 text-sm">
+        Reconnect: run `aiboard` again to reconnect this chat to its Runner. This tab no longer has the session credential.
+      </p>
+    );
+  }
   if (unreachable) {
     return (
       <p className="mb-4 rounded-md bg-muted p-3 text-sm">

@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcp.aiboard.me/schemas/v1/local-pair-exchange.v1.schema.json",
+  "title": "LocalPairExchange",
+  "description": "ADR-F version 1 request or response body; origin, host, one-time use and secret issuance are verified outside JSON Schema.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "code"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "peer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instanceId",
+        "kind",
+        "port",
+        "code"
+      ],
+      "properties": {
+        "instanceId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 64,
+          "enum": [
+            "runner",
+            "accounts",
+            "legacy",
+            "bench"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "instanceId",
+        "kind",
+        "port",
+        "sessionToken",
+        "peers"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "instanceId": {
+          "$ref": "https://mcp.aiboard.me/schemas/v1/job.v1.schema.json#/$defs/id"
+        },
+        "kind": {
+          "type": "string",
+          "maxLength": 64,
+          "enum": [
+            "runner",
+            "accounts",
+            "legacy",
+            "bench"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "sessionToken": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "peers": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/peer"
+          }
+        }
+      }
+    }
+  }
+}

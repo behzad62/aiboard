@@ -64,6 +64,16 @@ export interface CreateChildEnvironmentFactoryOptions {
   readonly credentialResolver: RunnerOwnedChildEnvironmentCredentialResolver;
   readonly now?: () => Date;
   readonly runnerInstallRoot?: string;
+  /** Trusted next depth for a bound local MCP session. */
+  readonly mcpChildDepth?: number;
+}
+
+export const LOCAL_MCP_DEPTH_LIMIT = 2;
+
+export function parseMcpDepth(value: string | undefined): number {
+  if (value === undefined) return 0;
+  if (!/^(0|[1-9][0-9]{0,5})$/.test(value)) throw new Error("Invalid AIBOARD_MCP_DEPTH.");
+  return Number(value);
 }
 
 interface EnvironmentEntry { readonly name: string; readonly value: string }
@@ -86,6 +96,8 @@ export function createChildEnvironmentFactory(
   const environments = new WeakMap<object, Readonly<Record<string, string>>>();
   const redeemedGrantIds = new Set<string>();
   const now = options.now ?? (() => new Date());
+  const mcpChildDepth = options.mcpChildDepth ?? parseMcpDepth(process.env.AIBOARD_MCP_DEPTH) + 1;
+  if (!Number.isSafeInteger(mcpChildDepth) || mcpChildDepth < 1 || mcpChildDepth > 1_000_000) throw new Error("Invalid child MCP depth.");
   const installRoot = canonicalPath(options.runnerInstallRoot ?? defaultRunnerInstallRoot());
   const installRoots = [installRoot, canonicalPath(resolve(installRoot, "node_modules"))];
 
@@ -138,6 +150,8 @@ export function createChildEnvironmentFactory(
         }
       }
 
+      // This is Runner authority, never a caller-controlled environment override.
+      setEnvironment(environment, "AIBOARD_MCP_DEPTH", String(mcpChildDepth));
       const path = environment.get("PATH");
       if (path) {
         const entries = path.value.split(delimiter);
@@ -241,12 +255,12 @@ function freezeAudit(
 }
 
 function isCredentialGrantName(name: string): boolean {
-  return isEnvironmentName(name) && isSensitiveKey(name) && !isRunnerName(name) && !canonicalName(name).startsWith("NPM_") && canonicalName(name) !== "INIT_CWD" && !isNodeTestRunnerInternalName(name);
+  return isEnvironmentName(name) && isSensitiveKey(name) && !isRunnerName(name) && canonicalName(name) !== "AIBOARD_MCP_DEPTH" && !canonicalName(name).startsWith("NPM_") && canonicalName(name) !== "INIT_CWD" && !isNodeTestRunnerInternalName(name);
 }
 
 function isForbiddenChildEnvironmentName(name: string): boolean {
   const canonical = canonicalName(name);
-  return isSensitiveKey(name) || isRunnerName(name) || canonical.startsWith("NPM_") || canonical === "INIT_CWD" || isNodeTestRunnerInternalName(name);
+  return isSensitiveKey(name) || isRunnerName(name) || canonical === "AIBOARD_MCP_DEPTH" || canonical.startsWith("NPM_") || canonical === "INIT_CWD" || isNodeTestRunnerInternalName(name);
 }
 
 /**

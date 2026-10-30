@@ -1,0 +1,7 @@
+{
+  "protocolVersion": "1.0.0",
+  "code": "blocked_quota",
+  "message": "The account quota was reached.",
+  "requestId": "req-1",
+  "traceId": "trace-1"
+}

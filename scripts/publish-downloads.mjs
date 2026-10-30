@@ -11,6 +11,7 @@ import {
   PINNED_RJS_RUNNER_COMMIT,
   verifyPinnedRjsRunnerSource,
 } from "./pinned-rjs-runner-source.mjs";
+import { publishedSequence, writeInstallers } from "./release/render-installers.mjs";
 
 const scripts = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scripts, "..");
@@ -39,6 +40,7 @@ const accountRunnerSource = path.join(root, "lib", "account-provider-runner.mjs"
 const accountSdkSource = path.join(root, "lib", "account-provider-copilot-sdk.mjs");
 const downloads = [
   [accountRunnerSource, path.join(publicDirectory, "account-provider-runner.mjs")],
+  [path.join(scripts, "local-pair-runner.mjs"), path.join(publicDirectory, "local-pair-runner.mjs")],
   [path.join(scripts, "bench-runner.mjs"), path.join(publicDirectory, "bench-runner.mjs")],
   [path.join(scripts, "bench-native-tool-evidence.mjs"), path.join(publicDirectory, "bench-native-tool-evidence.mjs")],
   [path.join(scripts, "workbench-rjs-support.mjs"), path.join(publicDirectory, "workbench-rjs-support.mjs")],
@@ -202,7 +204,7 @@ async function publishNativeRunner() {
 
 async function publishWorkBenchRunner() {
   const zip = new JSZip();
-  for (const name of ["bench-runner.mjs", "bench-native-tool-evidence.mjs", "workbench-rjs-support.mjs", "workbench-rjs-verifier-adapter.mjs"]) {
+  for (const name of ["bench-runner.mjs", "local-pair-runner.mjs", "bench-native-tool-evidence.mjs", "workbench-rjs-support.mjs", "workbench-rjs-verifier-adapter.mjs"]) {
     zip.file(name, archiveFileContent(path.join(scripts, name)), {
       date: new Date(0),
       createFolders: false,
@@ -275,6 +277,7 @@ async function publishRjsWorkBenchRunner() {
   }
   const trustedScripts = [
     "scripts/bench-runner.mjs",
+    "scripts/local-pair-runner.mjs",
     "scripts/bench-native-tool-evidence.mjs",
     "scripts/workbench-rjs-support.mjs",
     "scripts/workbench-rjs-verifier-adapter.mjs",
@@ -431,4 +434,8 @@ if (only === "account-runner") {
   await publishNativeRunner();
   await publishWorkBenchRunner();
   await publishRjsWorkBenchRunner();
+  // One-line installers (L2): until a release key is pinned they render as "not released yet" and refuse to install.
+  const channel = JSON.parse(fs.readFileSync(path.join(root, "release", "channel.json"), "utf8"));
+  const installers = writeInstallers(publicDirectory, channel, { minSequence: publishedSequence(channel.channel, publicDirectory) });
+  console.log(`Published ${path.relative(root, path.join(publicDirectory, "install.ps1"))} and install.sh (release keys: ${installers.keyIds.join(", ") || "none"}).`);
 }

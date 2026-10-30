@@ -52,6 +52,10 @@ import {
 import { DiscussionAttachments } from "@/components/DiscussionAttachments";
 import { ChatThread, type ChatThreadMessage } from "@/components/chat/ChatThread";
 import { RunnerChatOperations } from "@/components/extensions/RunnerChatOperations";
+import {
+  discussionNeedsLauncherReconnect,
+  withResolvedRunnerToken,
+} from "@/lib/client/local-runner-handoff";
 import type { ExtractedFile } from "@/lib/artifacts/extract";
 import { getBuildCheckpoint, getBuildFiles, insertMessage, updateDiscussion } from "@/lib/client/store";
 import {
@@ -285,7 +289,14 @@ function mergeAttachmentSummaries(
 function DiscussionPageInner() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
-  const [discussion, setDiscussion] = useState<Discussion | null>(null);
+  const [storedDiscussion, setDiscussion] = useState<Discussion | null>(null);
+  // The persisted record never holds a launcher session token; fill it in
+  // from tab-scoped session storage for this tab's Runner calls only.
+  const discussion = useMemo(
+    () => withResolvedRunnerToken(storedDiscussion) ?? null,
+    [storedDiscussion]
+  );
+  const runnerReconnectNeeded = discussionNeedsLauncherReconnect(discussion);
   const [attachments, setAttachments] = useState<AttachmentSummary[]>([]);
   const [enabledModels, setEnabledModels] = useState<
     ReturnType<typeof loadDashboard>["enabledModels"]
@@ -2293,6 +2304,12 @@ function DiscussionPageInner() {
     </>
   );
 
+  const runnerReconnectBanner = runnerReconnectNeeded ? (
+    <div role="alert" className="mb-4 rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
+      Reconnect: run `aiboard` again in this project and open the link it prints. This tab no longer has the session credential for its Runner, so it cannot reach the existing Build or chat session.
+    </div>
+  ) : null;
+
   const errorBanner = error ? (
     <div role="alert" className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
       {error}
@@ -2660,6 +2677,7 @@ function DiscussionPageInner() {
 
     const banner = (
       <>
+        {runnerReconnectBanner}
         {errorBanner}
         {folderGrant === "needed" && status !== "completed" && status !== "failed" && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning-soft p-4 text-sm">
@@ -3169,6 +3187,7 @@ function DiscussionPageInner() {
             </Button>
           </div>
         </header>
+        {runnerReconnectBanner}
         {errorBanner}
         {settingsOpen && (
           <div id="chat-settings" className="mb-6">
@@ -3279,6 +3298,7 @@ function DiscussionPageInner() {
           )}
         </header>
 
+        {runnerReconnectBanner}
         {errorBanner}
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-5">

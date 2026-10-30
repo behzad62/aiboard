@@ -82,6 +82,10 @@ export async function routeExtensions(request: IncomingMessage, response: Server
   if (first === "browse" && segments.length === 3 && request.method === "GET") return send(response, 200, await browse(url.searchParams.get("path")));
   if (first && segments.length === 4 && second === "test" && request.method === "POST") return send(response, 200, await service.test(first));
   if (first && segments.length === 4 && second === "sign-in" && request.method === "POST") return send(response, 200, await service.beginSignIn(first, UI));
+  if (first && segments.length === 4 && second === "tool-filter-policy") {
+    if (request.method === "GET") return send(response, 200, await service.extensionToolPolicy(first));
+    if (request.method === "PUT") return send(response, 200, await service.setExtensionToolPolicy(first, (await body<{ policy: unknown }>(request)).policy, UI));
+  }
   if (first && segments.length === 4 && second === "tool-policy") {
     if (request.method === "GET") return send(response, 200, { policy: await service.toolPolicy(first) });
     if (request.method === "PUT") return send(response, 200, { policy: await service.setToolPolicy(first, (await body<{ policy: string }>(request)).policy, UI) });

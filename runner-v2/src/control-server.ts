@@ -49,9 +49,12 @@ import type {
 } from "./provider-config-store.js";
 import type { RunSupervisor } from "./run-supervisor.js";
 import type { McpManager } from "./mcp-tools.js";
+import type { LocalMcpSessions } from "./local-stdio-mcp.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./process-recovery.js";
 import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
+import type { LocalPairing } from "./local-pairing.js";
+import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
@@ -60,6 +63,7 @@ const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
 ]);
 
 export interface ControlServerOptions {
+  localAgentsUnavailableNestedState?: boolean;
   toolBench?: ToolBenchSessions;
   extensions?: ExtensionManagementService;
   chatSessions?: ChatAgentSessions;
@@ -80,6 +84,11 @@ export interface ControlServerOptions {
   permissions?: SqlitePermissionStore;
   processRecovery?: ProcessRecoveryControlPlane;
   allowedOrigins?: string[];
+  localPairing?: LocalPairing;
+  localMcp?: LocalMcpSessions;
+  allowLocalPairDevOrigin?: boolean;
+  /** Status only; control routes are never forwarded to or from the relay. */
+  remoteStatus?: () => unknown;
 }
 
 export interface RunBootstrapInput {
@@ -229,6 +238,7 @@ class HttpError extends Error {
 }
 
 export class ControlServer {
+  private readonly localAgentsUnavailableNestedState: boolean;
   private readonly supervisor: RunSupervisor;
   private readonly token: string;
   private readonly gitPreflight: () => Promise<GitPreflightResult>;
@@ -246,12 +256,17 @@ export class ControlServer {
   private readonly permissions?: SqlitePermissionStore;
   private readonly processRecovery?: ProcessRecoveryControlPlane;
   private readonly allowedOrigins: ReadonlySet<string>;
+  private readonly localPairing?: LocalPairing;
+  private readonly localMcp?: LocalMcpSessions;
+  private readonly allowLocalPairDevOrigin: boolean;
+  private readonly remoteStatus?: ControlServerOptions["remoteStatus"];
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
 
   constructor(options: ControlServerOptions) {
     if (!options.token) throw new Error("Control server token is required.");
+    this.localAgentsUnavailableNestedState = options.localAgentsUnavailableNestedState === true;
     this.supervisor = options.supervisor;
     this.token = options.token;
     this.gitPreflight = options.checkGit ?? (async () => ({
@@ -272,6 +287,10 @@ export class ControlServer {
     this.permissions = options.permissions;
     this.processRecovery = options.processRecovery;
     this.allowedOrigins = buildAllowedOriginSet(options.allowedOrigins);
+    this.localPairing = options.localPairing;
+    this.localMcp = options.localMcp;
+    this.allowLocalPairDevOrigin = options.allowLocalPairDevOrigin === true;
+    this.remoteStatus = options.remoteStatus;
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -308,6 +327,8 @@ export class ControlServer {
   }
 
   async close(): Promise<void> {
+    this.localPairing?.close();
+    await this.localMcp?.close();
     await this.toolBench?.close();
     await this.chatSessions?.close();
     const server = this.server;
@@ -326,13 +347,26 @@ export class ControlServer {
     response: ServerResponse
   ): Promise<void> {
     try {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (url.pathname === "/v1/local-mcp") {
+        await this.handleLocalMcp(request, response, url);
+        return;
+      }
+      if (url.pathname === "/v1/local-pair/exchange" || url.pathname === "/v1/local-pair/session") {
+        await this.handleLocalPair(request, response, url);
+        return;
+      }
       setCommonHeaders(request, response, this.allowedOrigins);
       if (request.method === "OPTIONS") {
+        if (url.pathname.startsWith("/v2") && this.isLocalPairOrigin(request) &&
+            validPreflight(request, ["GET", "POST", "PUT"], ["authorization", "content-type"]) &&
+            request.headers["access-control-request-private-network"] === "true") {
+          response.setHeader("Access-Control-Allow-Private-Network", "true");
+        }
         response.statusCode = 204;
         response.end();
         return;
       }
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (!url.pathname.startsWith("/v2")) {
         throw new HttpError(404, "not_found", "Route not found.");
       }
@@ -342,7 +376,10 @@ export class ControlServer {
         await handleOAuthCallback(response, url, this.extensions);
         return;
       }
-      if (!hasBearerToken(request.headers.authorization, this.token)) {
+      const sessionToken = bearerToken(request.headers.authorization);
+      const isSession = sessionToken !== undefined && singleHeader(request, "authorization") &&
+        this.localPairing?.hasSession(sessionToken) === true;
+      if (!hasBearerToken(request.headers.authorization, this.token) && !isSession) {
         response.setHeader("WWW-Authenticate", "Bearer");
         throw new HttpError(401, "unauthorized", "A valid runner token is required.");
       }
@@ -365,12 +402,107 @@ export class ControlServer {
     }
   }
 
+  private async handleLocalMcp(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    const address = this.server?.address();
+    const originPresent = request.rawHeaders.some((header, index) => index % 2 === 0 && header.toLowerCase() === "origin");
+    const token = bearerToken(request.headers.authorization);
+    if (!this.localMcp || !address || typeof address === "string" || request.url !== url.pathname || originPresent ||
+        !singleHeader(request, "host") || request.headers.host !== `127.0.0.1:${address.port}` || request.method !== "POST" ||
+        !singleHeader(request, "authorization") || !token || !singleHeader(request, "content-type") ||
+        !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers["content-type"] ?? "")) {
+      sendJson(response, 403, { code: "local_mcp_refused", error: "Local MCP request refused." });
+      return;
+    }
+    try {
+      const body = await readJson<unknown>(request, 1_048_576);
+      const result = await this.localMcp.perform(token, body);
+      sendJson(response, 200, result);
+    } catch {
+      sendJson(response, 403, { code: "local_mcp_refused", error: "Local MCP request refused." });
+    }
+  }
+
+  private isLocalPairOrigin(request: IncomingMessage): boolean {
+    const address = this.server?.address();
+    if (!address || typeof address === "string") return false;
+    const origin = request.headers.origin;
+    return singleHeader(request, "origin") && singleHeader(request, "host") &&
+      request.headers.host === `127.0.0.1:${address.port}` &&
+      (origin === "https://aiboard.me" || (this.allowLocalPairDevOrigin && origin === "http://localhost:3000"));
+  }
+
+  private async handleLocalPair(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    const refuse = async (): Promise<void> => {
+      // Drain any unread body so the generic refusal is delivered, not a reset.
+      try { for await (const chunk of request) { void chunk; } } catch { /* already refused */ }
+      if (!response.writableEnded) sendJson(response, 400, { error: "Local pairing request refused.", code: "local_pair_refused" });
+    };
+    const exchange = url.pathname === "/v1/local-pair/exchange";
+    if (!this.localPairing || request.url !== url.pathname || !this.isLocalPairOrigin(request)) {
+      await refuse(); return;
+    }
+    const origin = request.headers.origin!;
+    if (request.method === "OPTIONS") {
+      const methods = exchange ? ["POST"] : ["DELETE"];
+      const headers = exchange ? ["content-type", "x-aiboard-pair-version"] : ["authorization"];
+      if (!validPreflight(request, methods, headers)) { await refuse(); return; }
+      response.setHeader("Access-Control-Allow-Origin", origin);
+      response.setHeader("Vary", "Origin");
+      response.setHeader("Access-Control-Allow-Methods", exchange ? "POST, OPTIONS" : "DELETE, OPTIONS");
+      response.setHeader("Access-Control-Allow-Headers", exchange ? "Content-Type, X-AIBoard-Pair-Version" : "Authorization");
+      if (request.headers["access-control-request-private-network"] === "true") {
+        response.setHeader("Access-Control-Allow-Private-Network", "true");
+      }
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Vary", "Origin");
+    if (!exchange) {
+      const token = bearerToken(request.headers.authorization);
+      if (request.method !== "DELETE" || !singleHeader(request, "authorization") || !token || !this.localPairing.revoke(token)) {
+        await refuse(); return;
+      }
+      sendJson(response, 200, { version: 1 });
+      return;
+    }
+    if (!this.localPairing.allowAttempt() || request.method !== "POST" ||
+        !singleHeader(request, "content-type") ||
+        !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers["content-type"] ?? "") ||
+        !singleHeader(request, "x-aiboard-pair-version") || request.headers["x-aiboard-pair-version"] !== "1") {
+      await refuse(); return;
+    }
+    let body: unknown;
+    try { body = await readJson<unknown>(request, 2_048); } catch { await refuse(); return; }
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+        Object.keys(body).length !== 2 || !("version" in body) || body.version !== 1 ||
+        !("code" in body) || typeof body.code !== "string" || body.code.length < 1 || body.code.length > 512) {
+      await refuse(); return;
+    }
+    const sessionToken = this.localPairing.consume(body.code);
+    if (!sessionToken) { await refuse(); return; }
+    const address = this.server?.address();
+    if (!address || typeof address === "string") { this.localPairing.revoke(sessionToken); await refuse(); return; }
+    sendJson(response, 200, { version: 1, instanceId: this.localPairing.instanceId, kind: "runner", port: address.port, sessionToken, peers: this.localPairing.exchangePeers() });
+  }
+
   private async route(
     request: IncomingMessage,
     response: ServerResponse,
     url: URL
   ): Promise<void> {
     const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    if (this.localAgentsUnavailableNestedState && request.method === "POST" &&
+        (segments[1] === "runs" || segments[1] === "builds" ||
+         (segments[1] === "toolbench-sessions" && segments.length === 2) ||
+         (segments[1] === "chat-sessions" && (segments.length === 2 || segments[3] === "messages")))) {
+      throw new LocalAgentsUnavailableError();
+    }
     if (segments[1] === "extensions" || segments[1] === "chat-sessions") {
       await routeExtensions(request, response, url, segments, { ...(this.extensions ? { extensions: this.extensions } : {}), ...(this.chatSessions ? { chatSessions: this.chatSessions } : {}) });
       return;
@@ -390,6 +522,11 @@ export class ControlServer {
       }
       throw new HttpError(404, "not_found", "Unknown ToolBench session endpoint.");
     }
+    if (segments.length === 3 && segments[1] === "remote" && segments[2] === "status" && request.method === "GET") {
+      if (!this.remoteStatus) throw new HttpError(503, "remote_unavailable", "Remote service is unavailable.");
+      sendJson(response, 200, this.remoteStatus());
+      return;
+    }
     if (segments.length === 2 && segments[1] === "health" && request.method === "GET") {
       if (!this.runnerInfo) {
         throw new HttpError(503, "runner_info_unavailable", "Runner information is unavailable.");
@@ -398,6 +535,7 @@ export class ControlServer {
         ok: true,
         protocolVersion: 2,
         capabilities: { soloToolBench: Boolean(this.toolBench), extensions: Boolean(this.extensions), chatSessions: Boolean(this.chatSessions) },
+        ...(this.localAgentsUnavailableNestedState ? { localAgents: "unavailable_nested_state" } : {}),
         projectPath: this.runnerInfo.projectPath,
         nodeVersion: this.runnerInfo.nodeVersion,
         mcpServers: this.mcp?.status().length ?? 0,
@@ -530,7 +668,7 @@ export class ControlServer {
             ...(body.build.handoffFiles !== undefined ? { handoffFiles: body.build.handoffFiles } : {}),
             // T7a opt-in only: the kernel stamps planningPolicy solely from
             // this explicit field; a missing field keeps the current default.
-            // The manifest itself is kernel-derived — never caller-chosen.
+            // The manifest itself is kernel-derived â€” never caller-chosen.
             ...(body.build.planningPolicy !== undefined
               ? { planningPolicy: { version: 1 as const } }
               : {}),
@@ -1558,6 +1696,28 @@ function mergeProviderConfigs(
   );
 }
 
+function bearerToken(header: string | undefined): string | undefined {
+  return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
+}
+
+function singleHeader(request: IncomingMessage, name: string): boolean {
+  let count = 0;
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    if (request.rawHeaders[index]?.toLowerCase() === name) count += 1;
+  }
+  return count === 1;
+}
+
+function validPreflight(request: IncomingMessage, methods: string[], headers: string[]): boolean {
+  const method = request.headers["access-control-request-method"];
+  const requested = request.headers["access-control-request-headers"];
+  const privateNetwork = request.headers["access-control-request-private-network"];
+  return singleHeader(request, "access-control-request-method") && typeof method === "string" && methods.includes(method) &&
+    (requested === undefined || (typeof requested === "string" && singleHeader(request, "access-control-request-headers") &&
+      requested.split(",").every((header) => headers.includes(header.trim().toLowerCase())))) &&
+    (privateNetwork === undefined || (singleHeader(request, "access-control-request-private-network") && privateNetwork === "true"));
+}
+
 function hasBearerToken(header: string | undefined, expected: string): boolean {
   if (!header?.startsWith("Bearer ")) return false;
   const actual = Buffer.from(header.slice("Bearer ".length));
@@ -1735,7 +1895,7 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     ) invalidBody();
   }
   if (body.approvedSource !== undefined) {
-    // T7a: an approved source without the explicit opt-in is inconsistent —
+    // T7a: an approved source without the explicit opt-in is inconsistent â€”
     // refuse it rather than silently changing the run default.
     if (body.planningPolicy?.version !== 1) invalidBody();
     try {
@@ -1818,6 +1978,7 @@ function describeInternalError(error: unknown, depth = 0): string {
 
 function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
+  if (error instanceof LocalAgentsUnavailableError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ExtensionManagementError || error instanceof ChatSessionError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ProcessRecoveryError) {
     if (error.code === "invalid_recovery_proposal") return new HttpError(400, error.code, error.message);

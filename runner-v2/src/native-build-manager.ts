@@ -48,6 +48,7 @@ import type {
 } from "./integration-manager.js";
 import type { FinalVerificationCleanupController } from "./final-verification-cleanup.js";
 import type { ProcessRecoveryCoordinator, RecoveryAuditRecord } from "./process-recovery.js";
+import { assertLocalAgentsAvailable } from "./local-agents-availability.js";
 
 export interface NativeBuildRuntimeHandle {
   runtime: BuildRuntime;
@@ -98,6 +99,7 @@ export interface NativeBuildRecoveryReport {
 
 export interface NativeBuildManagerOptions {
   specs: BuildSpecStore;
+  localAgentsUnavailableNestedState?: boolean;
   createRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
   /** Stamps runner-owned durable identity before a new Build spec is persisted. */
   prepareSpec?(
@@ -175,6 +177,7 @@ export class NativeBuildManager implements BuildControlPlane {
   constructor(private readonly options: NativeBuildManagerOptions) {}
 
   async recover(): Promise<NativeBuildRecoveryReport> {
+    assertLocalAgentsAvailable(this.options.localAgentsUnavailableNestedState);
     const active: string[] = [];
     const settled: Array<[string, NativeBuildRuntimeHandle]> = [];
     const quiesceFailed = new Set<string>();
@@ -318,6 +321,7 @@ export class NativeBuildManager implements BuildControlPlane {
     spec: NativeBuildSpec,
     options?: ProvisioningPrepareOptions,
   ): Promise<SchedulerProjection> {
+    assertLocalAgentsAvailable(this.options.localAgentsUnavailableNestedState);
     return await this.serialized(async () => {
       validateBuildSpec(spec);
       const existing = readExistingBuildSpec(this.options.specs, spec.runId);
@@ -433,6 +437,7 @@ export class NativeBuildManager implements BuildControlPlane {
   private readonly activatedRuns = new Set<string>();
 
   activate(runId: string): void {
+    assertLocalAgentsAvailable(this.options.localAgentsUnavailableNestedState);
     this.assertOpen();
     this.activatedRuns.add(runId);
     const handle = this.requireMutable(runId);
@@ -1372,6 +1377,7 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   private require(runId: string): NativeBuildRuntimeHandle {
+    assertLocalAgentsAvailable(this.options.localAgentsUnavailableNestedState);
     this.assertOpen();
     const handle = this.handles.get(runId);
     if (!handle) throw new Error(`Unknown build runtime ${runId}.`);
@@ -1391,6 +1397,7 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   private requireMutableWithinActivity(runId: string): NativeBuildRuntimeHandle {
+    assertLocalAgentsAvailable(this.options.localAgentsUnavailableNestedState);
     const handle = this.handles.get(runId);
     if (!handle) throw new Error(`Unknown build runtime ${runId}.`);
     if (handle.historical) throw historicalReadOnlyError(runId);

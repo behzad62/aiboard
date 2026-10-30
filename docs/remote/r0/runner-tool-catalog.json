@@ -1,0 +1,1997 @@
+{
+  "catalogVersion": "0.1.0",
+  "generatedFrom": "d7ed04d2",
+  "tools": [
+    {
+      "id": "acknowledge_user_guidance",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2876,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "guidanceId, expectedVersion, resolution",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "answer_guidance",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2331,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "requestId, expectedVersion, answer",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "archive_project_memory",
+      "sourceFile": "runner-v2/src/memory-tools.ts",
+      "sourceLine": 127,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "memoryId, reason",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build project-memory authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "artifact.read",
+      "sourceFile": "runner-v2/src/artifact-tools.ts",
+      "sourceLine": 36,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "plan-critic",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "hash; offset, maxBytes",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Require remote artifact reachability before serving"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "ask_architect",
+      "sourceFile": "runner-v2/src/worker-lifecycle-tools.ts",
+      "sourceLine": 302,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "requestId, question; blocking, evidenceSequence",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build worker lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "ask_user",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2966,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "questionId, version, decisionKind, question",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.click",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 424,
+      "readOnly": false,
+      "effect": "external",
+      "permissionClass": "browser.click",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "selector",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.close",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 515,
+      "readOnly": false,
+      "effect": "external",
+      "permissionClass": "browser.close",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.drag",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 436,
+      "readOnly": false,
+      "effect": "external",
+      "permissionClass": "browser.drag",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "selector, deltaX, deltaY; button, steps",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.events",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 485,
+      "readOnly": true,
+      "effect": "external",
+      "permissionClass": "browser.events",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.fill",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 428,
+      "readOnly": false,
+      "effect": "external",
+      "permissionClass": "browser.fill",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "selector, value",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.navigate",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 388,
+      "readOnly": true,
+      "effect": "external",
+      "permissionClass": "browser.navigate",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "url",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.open",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 386,
+      "readOnly": true,
+      "effect": "external",
+      "permissionClass": "browser.open",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "url; width, height",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.screenshot",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 440,
+      "readOnly": true,
+      "effect": "external",
+      "permissionClass": "browser.screenshot",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.snapshot",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 390,
+      "readOnly": true,
+      "effect": "external",
+      "permissionClass": "browser.snapshot",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "browser.wheel",
+      "sourceFile": "runner-v2/src/browser-tools.ts",
+      "sourceLine": 432,
+      "readOnly": false,
+      "effect": "external",
+      "permissionClass": "browser.wheel",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "selector, deltaY; deltaX",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Managed browser only; consent and network policy required"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "challenge_guidance",
+      "sourceFile": "runner-v2/src/worker-lifecycle-tools.ts",
+      "sourceLine": 444,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "requestId, expectedVersion, evidenceSequence, reason",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build worker lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "code.definition",
+      "sourceFile": "runner-v2/src/code-intelligence-tools.ts",
+      "sourceLine": 70,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "path, line, column; limit",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Useful but outside P2's small surface"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "code.diagnostics",
+      "sourceFile": "runner-v2/src/code-intelligence-tools.ts",
+      "sourceLine": 73,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "path; limit",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Useful but outside P2's small surface"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "code.references",
+      "sourceFile": "runner-v2/src/code-intelligence-tools.ts",
+      "sourceLine": 71,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "path, line, column; limit",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Useful but outside P2's small surface"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "code.workspace_symbols",
+      "sourceFile": "runner-v2/src/code-intelligence-tools.ts",
+      "sourceLine": 54,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "path, query; kind, limit",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Useful but outside P2's small surface"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "complete_run",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2696,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "summary; findingDispositions",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "convert_to_build",
+      "sourceFile": "runner-v2/src/request-triage.ts",
+      "sourceLine": 291,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "reason",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "draft_planning_plan",
+      "sourceFile": "runner-v2/src/planning-tools.ts",
+      "sourceLine": 488,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "revision",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "extensions.apply_change",
+      "sourceFile": "runner-v2/src/extension-management-tools.ts",
+      "sourceLine": 129,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "extensions.manage",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "planId, planDigest; operationKey",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Remote agent must not manage installation or self-authorize"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "extensions.inspect_source",
+      "sourceFile": "runner-v2/src/extension-management-tools.ts",
+      "sourceLine": 64,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "extensions.inspect",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "source",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Source inspection belongs to extension management"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "extensions.list",
+      "sourceFile": "runner-v2/src/extension-management-tools.ts",
+      "sourceLine": 42,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Inventory outside P2"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "extensions.operation_status",
+      "sourceFile": "runner-v2/src/extension-management-tools.ts",
+      "sourceLine": 150,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "operationId",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Management status outside P2"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "extensions.plan_change",
+      "sourceFile": "runner-v2/src/extension-management-tools.ts",
+      "sourceLine": 98,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "extensions.manage",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "action; inspectionId, extensionId, scope, applyIfAuthorized",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Remote agent must not manage installation or self-authorize"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "finish_toolbench",
+      "sourceFile": "runner-v2/src/toolbench-session.ts",
+      "sourceLine": 193,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Benchmark lifecycle; not remote Build"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "fs.delete",
+      "sourceFile": "runner-v2/src/filesystem-tools.ts",
+      "sourceLine": 584,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "filesystem.delete",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "path; recursive",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Deletion requires user consent"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "fs.list",
+      "sourceFile": "runner-v2/src/filesystem-tools.ts",
+      "sourceLine": 300,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "plan-critic",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "path; maxDepth",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "List with Runner filters and grants"
+      },
+      "desktopCommanderEquivalent": "list_directory"
+    },
+    {
+      "id": "fs.move",
+      "sourceFile": "runner-v2/src/filesystem-tools.ts",
+      "sourceLine": 551,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "filesystem.move",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "source, destination; createDirectories",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Move requires user consent"
+      },
+      "desktopCommanderEquivalent": "move_file"
+    },
+    {
+      "id": "fs.patch",
+      "sourceFile": "runner-v2/src/filesystem-tools.ts",
+      "sourceLine": 490,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "filesystem.write",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "path, expectedSha256; search/replace or edits[]",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Revision-checked mutation requires user consent"
+      },
+      "desktopCommanderEquivalent": "edit_block"
+    },
+    {
+      "id": "fs.read",
+      "sourceFile": "runner-v2/src/filesystem-tools.ts",
+      "sourceLine": 123,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "plan-critic",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "path; startLine/endLine",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Scoped file reads under remote grants"
+      },
+      "desktopCommanderEquivalent": "read_file"
+    },
+    {
+      "id": "fs.search",
+      "sourceFile": "runner-v2/src/filesystem-tools.ts",
+      "sourceLine": 335,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "plan-critic",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "path, pattern; regex, globs, cursor, cancel",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Bounded content search and continuation"
+      },
+      "desktopCommanderEquivalent": "start_search"
+    },
+    {
+      "id": "fs.stat",
+      "sourceFile": "runner-v2/src/filesystem-tools.ts",
+      "sourceLine": 255,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "plan-critic",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "path",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Metadata can be added after P2"
+      },
+      "desktopCommanderEquivalent": "get_file_info"
+    },
+    {
+      "id": "fs.write",
+      "sourceFile": "runner-v2/src/filesystem-tools.ts",
+      "sourceLine": 468,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "filesystem.write",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "path, content; expectedSha256, createDirectories",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "File mutation requires user consent"
+      },
+      "desktopCommanderEquivalent": "write_file"
+    },
+    {
+      "id": "git.commit",
+      "sourceFile": "runner-v2/src/git-tools.ts",
+      "sourceLine": 171,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "git.commit",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "message",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose_with_approval",
+        "reason": "Only the existing task-branch commit with consent"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "git.diff",
+      "sourceFile": "runner-v2/src/git-tools.ts",
+      "sourceLine": 44,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "git.diff",
+      "rolesAllowed": [
+        "architect",
+        "plan-critic",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "staged, base",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Read Git diff"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "git.log",
+      "sourceFile": "runner-v2/src/git-tools.ts",
+      "sourceLine": 60,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "git.log",
+      "rolesAllowed": [
+        "architect",
+        "plan-critic",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "limit",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Read bounded Git history"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "git.push",
+      "sourceFile": "runner-v2/src/git-tools.ts",
+      "sourceLine": 145,
+      "readOnly": false,
+      "effect": "external",
+      "permissionClass": "git.push",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "destination; remote, source, forceWithLease, setUpstream",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "External push requires separate remote policy and consent"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "git.remotes",
+      "sourceFile": "runner-v2/src/git-tools.ts",
+      "sourceLine": 125,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "git.remotes",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Not in P2's small Git surface"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "git.show",
+      "sourceFile": "runner-v2/src/git-tools.ts",
+      "sourceLine": 90,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "git.show",
+      "rolesAllowed": [
+        "architect",
+        "plan-critic",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "revision, path",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Not in P2's small Git surface"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "git.status",
+      "sourceFile": "runner-v2/src/git-tools.ts",
+      "sourceLine": 22,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "git.status",
+      "rolesAllowed": [
+        "architect",
+        "plan-critic",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Read Git status"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "image.inspect",
+      "sourceFile": "runner-v2/src/image-tools.ts",
+      "sourceLine": 21,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "image.inspect",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "path OR artifactHash; crop, maxDimension",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Image inspection with path or artifact authorization"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "inspect_evidence",
+      "sourceFile": "runner-v2/src/evidence-tools.ts",
+      "sourceLine": 291,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "taskId, evidenceId",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build evidence plumbing"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "list_memory_proposals",
+      "sourceFile": "runner-v2/src/memory-tools.ts",
+      "sourceLine": 143,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "limit",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build project-memory authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "list_skills",
+      "sourceFile": "runner-v2/src/skill-tools.ts",
+      "sourceLine": 11,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Skill discovery outside P2"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "openrouter.apply_patch",
+      "sourceFile": "runner-v2/src/openrouter-apply-patch-tool.ts",
+      "sourceLine": 48,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "workspace",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "operation; status",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Hidden provider adapter; use governed fs.patch"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "patch_planning_plan",
+      "sourceFile": "runner-v2/src/planning-tools.ts",
+      "sourceLine": 780,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "revisionId; upserts, removals",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "persist_planning_ledger",
+      "sourceFile": "runner-v2/src/planning-tools.ts",
+      "sourceLine": 395,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "id, requirements, phases; nonNormativeSections",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "plan_final_verification",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 1941,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "plan; runtimeSmoke",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "plan_tasks",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2206,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "revision, tasks, riskDeclaration",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "plan_verification_repairs",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 737,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "finalVerificationTaskId, generationId, targetRevision, source, tasks",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "plan_verifier_repairs",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 1265,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "reviewId, targetRevision, tasks",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "process.list",
+      "sourceFile": "runner-v2/src/managed-process-tools.ts",
+      "sourceLine": 113,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Exposed by default, subject to device policy and exact process ownership"
+      },
+      "desktopCommanderEquivalent": "list_sessions"
+    },
+    {
+      "id": "process.poll",
+      "sourceFile": "runner-v2/src/managed-process-tools.ts",
+      "sourceLine": 50,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "processId",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Exposed by default, subject to device policy and exact process ownership"
+      },
+      "desktopCommanderEquivalent": "read_process_output"
+    },
+    {
+      "id": "process.read_output",
+      "sourceFile": "runner-v2/src/managed-process-tools.ts",
+      "sourceLine": 89,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "processId; cursor, stream, maxBytes, waitMs, tailBytes, range",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Exposed by default, subject to device policy and exact process ownership"
+      },
+      "desktopCommanderEquivalent": "read_process_output"
+    },
+    {
+      "id": "process.run",
+      "sourceFile": "runner-v2/src/process-tools.ts",
+      "sourceLine": 41,
+      "readOnly": false,
+      "effect": "external",
+      "permissionClass": "process.execute | process.shell",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "command/args OR shell/script; cwd, env, timeoutMs",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Exposed by default; device policy may block launch or require per-command approval; file-tool denylist does not confine commands"
+      },
+      "desktopCommanderEquivalent": "start_process"
+    },
+    {
+      "id": "process.signal",
+      "sourceFile": "runner-v2/src/managed-process-tools.ts",
+      "sourceLine": 122,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "process.signal",
+      "rolesAllowed": [
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "processId, signal",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Exposed by default, subject to device policy and exact process ownership"
+      },
+      "desktopCommanderEquivalent": "force_terminate"
+    },
+    {
+      "id": "process.start",
+      "sourceFile": "runner-v2/src/managed-process-tools.ts",
+      "sourceLine": 23,
+      "readOnly": false,
+      "effect": "external",
+      "permissionClass": "process.start",
+      "rolesAllowed": [
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "command; args, cwd, env, interactive",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Exposed by default; device policy may block launch or require per-command approval; file-tool denylist does not confine commands"
+      },
+      "desktopCommanderEquivalent": "start_process"
+    },
+    {
+      "id": "process.write_stdin",
+      "sourceFile": "runner-v2/src/managed-process-tools.ts",
+      "sourceLine": 62,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "process.write_stdin",
+      "rolesAllowed": [
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "processId, writeId; data, appendNewline, closeInput",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Exposed by default; device policy may block input or require per-command approval; exact process ownership applies"
+      },
+      "desktopCommanderEquivalent": "interact_with_process"
+    },
+    {
+      "id": "promote_project_memory",
+      "sourceFile": "runner-v2/src/memory-tools.ts",
+      "sourceLine": 111,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "memoryId",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build project-memory authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "propose_project_memory",
+      "sourceFile": "runner-v2/src/memory-tools.ts",
+      "sourceLine": 59,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "content, concepts; evidenceIds, confidence",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build project-memory authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "read_current_plan_revision",
+      "sourceFile": "runner-v2/src/planning-tools.ts",
+      "sourceLine": 152,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "{}",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "read_planning_source_section",
+      "sourceFile": "runner-v2/src/planning-tools.ts",
+      "sourceLine": 204,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "manifestId; sectionId",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "read_skill",
+      "sourceFile": "runner-v2/src/skill-tools.ts",
+      "sourceLine": 28,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "id; resource",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Skill instructions outside P2"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "recall_project_memory",
+      "sourceFile": "runner-v2/src/memory-tools.ts",
+      "sourceLine": 35,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "query; concepts, limit",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build project-memory authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "reconcile_plan",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2174,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "plan reconciliation",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_answer",
+      "sourceFile": "runner-v2/src/request-triage.ts",
+      "sourceLine": 222,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "answerText, addressedParts; evidenceIds",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_answer_review_findings",
+      "sourceFile": "runner-v2/src/request-triage.ts",
+      "sourceLine": 658,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "findings",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_coverage_correction_view",
+      "sourceFile": "runner-v2/src/planning-review.ts",
+      "sourceLine": 786,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "coverage.correction_view.record",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "correctionView",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_coverage_obligations",
+      "sourceFile": "runner-v2/src/planning-review.ts",
+      "sourceLine": 585,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "coverage.obligations.record",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "obligations, sectionCoverage",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_deliverable_findings",
+      "sourceFile": "runner-v2/src/native-deliverable-review.ts",
+      "sourceLine": 2012,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "findings",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_deliverable_obligations",
+      "sourceFile": "runner-v2/src/native-deliverable-review.ts",
+      "sourceLine": 1963,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "obligations",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_external_blocker",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 1208,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "issueId, acceptanceCondition, evidence, attemptedResolutions, requiredOwnerAction",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_repair_approach_decision",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 1094,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "issueId, approachId, repeat, hypothesis, diagnosticSet, evidenceIds",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_test_integrity_reason",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 1422,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "id, taskId, reason, allowedChanges, minimumExecuted",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_triage",
+      "sourceFile": "runner-v2/src/request-triage.ts",
+      "sourceLine": 141,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "decision, rationale",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "record_verification_expectations",
+      "sourceFile": "runner-v2/src/verifier-tools.ts",
+      "sourceLine": 189,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "verifier.expectations.record",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "expectations",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "repo.manifest",
+      "sourceFile": "runner-v2/src/code-intelligence-tools.ts",
+      "sourceLine": 25,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "path; cursor, pageSize, includeIgnored",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Useful but outside P2's small surface"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "repo.map",
+      "sourceFile": "runner-v2/src/code-intelligence-tools.ts",
+      "sourceLine": 40,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "filesystem.read",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "path; includeIgnored",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Useful but outside P2's small surface"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "request_coverage_review",
+      "sourceFile": "runner-v2/src/planning-review.ts",
+      "sourceLine": 1312,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "reviewId",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "request_integration",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2648,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "taskId",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "request_replan",
+      "sourceFile": "runner-v2/src/worker-lifecycle-tools.ts",
+      "sourceLine": 357,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "requestId, reason, summary",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build worker lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "research.fetch",
+      "sourceFile": "runner-v2/src/research-tools.ts",
+      "sourceLine": 33,
+      "readOnly": true,
+      "effect": "external",
+      "permissionClass": "research.fetch",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "url; maxBytes, timeoutMs",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "later",
+        "reason": "Requires remote SSRF policy and is outside P2"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "resolve_context_recording",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 379,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "resolution, rationale",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "resolve_delivery_boundary_failure",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 1465,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "taskId, boundaryId, resolution, rationale; tasks",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "resolve_plan_critique",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 291,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "critiqueId, planRevision, resolutions",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "return_to_parent",
+      "sourceFile": "runner-v2/src/subagent-tools.ts",
+      "sourceLine": 326,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "summary; artifactHashes",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build subagent lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "review_final_verification",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 1686,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "taskId, generationId, targetRevision, submissionId, decision, summary",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "review_task",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2373,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect"
+      ],
+      "inputSummary": "taskId, decision, summary; criterionVerdicts",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "revise_planning_plan",
+      "sourceFile": "runner-v2/src/planning-tools.ts",
+      "sourceLine": 586,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "revision; expectedRevisionId, expectedDigest",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "revise_task",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2277,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "taskId, revision; objective, dependencies, acceptanceCriteria",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "run_evidence_command",
+      "sourceFile": "runner-v2/src/evidence-tools.ts",
+      "sourceLine": 132,
+      "readOnly": false,
+      "effect": "external",
+      "permissionClass": "evidence.command",
+      "rolesAllowed": [
+        "architect",
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "label, command, args; cwd, timeoutMs",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build verification evidence plumbing"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "search_session_history",
+      "sourceFile": "runner-v2/src/session-tools.ts",
+      "sourceLine": 14,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "architect",
+        "worker"
+      ],
+      "inputSummary": "query; limit",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build/session history plumbing"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "spawn_readonly_subagent",
+      "sourceFile": "runner-v2/src/subagent-tools.ts",
+      "sourceLine": 106,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "coordination.subagent.read",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "assignment; maxTurns",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build worker delegation"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "spawn_subagent",
+      "sourceFile": "runner-v2/src/subagent-tools.ts",
+      "sourceLine": 106,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "coordination.subagent",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "assignment; maxTurns",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build worker delegation"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "submit_answer_review_verdict",
+      "sourceFile": "runner-v2/src/request-triage.ts",
+      "sourceLine": 755,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "summary, answerAccurate; priorFindingChecks",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "submit_coverage_verdict",
+      "sourceFile": "runner-v2/src/planning-review.ts",
+      "sourceLine": 906,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "coverage.verdict.submit",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "obligationVerdicts, findings; priorFindingChecks",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "submit_deliverable_verdict",
+      "sourceFile": "runner-v2/src/native-deliverable-review.ts",
+      "sourceLine": 2123,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "summary, satisfied; prior finding checks",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "submit_plan_critique",
+      "sourceFile": "runner-v2/src/plan-critique-tools.ts",
+      "sourceLine": 38,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "plan_critique.submit",
+      "rolesAllowed": [
+        "plan-critic"
+      ],
+      "inputSummary": "findings",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "submit_task",
+      "sourceFile": "runner-v2/src/worker-lifecycle-tools.ts",
+      "sourceLine": 88,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "task.submit",
+      "rolesAllowed": [
+        "worker"
+      ],
+      "inputSummary": "summary, readiness; criterionEvidenceLinks, validationScope, unresolvedConcerns",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build worker lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "submit_verifier_verdict",
+      "sourceFile": "runner-v2/src/verifier-tools.ts",
+      "sourceLine": 35,
+      "readOnly": true,
+      "effect": "none",
+      "permissionClass": "verifier.verdict.submit",
+      "rolesAllowed": [
+        "verifier"
+      ],
+      "inputSummary": "criterionVerdicts",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Build review lifecycle"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "upgrade_acceptance_contract",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 2126,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "revision, criteriaByTask",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    },
+    {
+      "id": "write_project_doc",
+      "sourceFile": "runner-v2/src/architect-tools.ts",
+      "sourceLine": 439,
+      "readOnly": false,
+      "effect": "none",
+      "permissionClass": "none",
+      "rolesAllowed": [
+        "unknown"
+      ],
+      "inputSummary": "path, content, summary",
+      "ownedOnly": false,
+      "remote": {
+        "proposal": "deny",
+        "reason": "Architect/planning lifecycle authority"
+      },
+      "desktopCommanderEquivalent": null
+    }
+  ]
+}
+

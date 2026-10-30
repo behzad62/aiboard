@@ -18,6 +18,8 @@ import type { BuildRunPolicy } from "../db/schema.js";
 export const DEFAULT_RUNNER_V2_URL = "http://127.0.0.1:8787";
 
 export interface NativeRunnerConnection {
+  /** "launcher" tokens are tab-scoped session credentials and must never be persisted. */
+  source?: "manual" | "launcher";
   url: string;
   token: string;
 }

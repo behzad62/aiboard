@@ -35,6 +35,7 @@ import { effectiveModelMetadata } from "@/lib/providers/model-metadata";
 import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/constants";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
 import { customCompatibleTransports } from "@/lib/providers/custom-capabilities";
+import { getPeerConnection } from "./local-runner-handoff";
 import type { CustomModel } from "@/lib/db/schema";
 import type {
   CapabilityEvidence,
@@ -98,10 +99,14 @@ export async function getRunnerCapabilityPlanningContext(
     !connectionOverride?.runnerToken ||
     (providerId === "nvidia" && !connectionOverride?.apiKey);
   const row = needsStoredConnection ? getProviderKey(providerId) : undefined;
-  const baseURL = connectionOverride?.baseURL ?? row?.baseURL ?? undefined;
+  const launcherAccount = !connectionOverride?.baseURL && !connectionOverride?.runnerToken
+    ? getPeerConnection("accounts")
+    : null;
+  const baseURL = connectionOverride?.baseURL ?? launcherAccount?.url ?? row?.baseURL ?? undefined;
   const providerApiKey = connectionOverride?.apiKey ?? row?.apiKey ?? undefined;
   const runnerToken =
     connectionOverride?.runnerToken ??
+    launcherAccount?.token ??
     (providerId === "nvidia" ? row?.runnerToken ?? undefined : providerApiKey);
   if (!baseURL?.trim() || !runnerToken?.trim()) return {};
 

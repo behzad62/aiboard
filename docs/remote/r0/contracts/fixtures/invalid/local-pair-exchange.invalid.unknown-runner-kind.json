@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "instanceId": "inst-runner",
+  "kind": "shell",
+  "port": 8787,
+  "sessionToken": "session_6S18vy2vXRaH_2NPMEdA1Sg5IqXfhzUUgNC7NeNt60A",
+  "peers": [
+    {
+      "instanceId": "inst-accounts",
+      "kind": "accounts",
+      "port": 8790,
+      "code": "v1.inst-accounts.RvBCHosD3WPiHb7kX99LUiD8aK0V_vRoR_6Jv0B8utg"
+    }
+  ]
+}
