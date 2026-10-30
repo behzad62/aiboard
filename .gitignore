@@ -81,3 +81,7 @@ next-env.d.ts
 
 # Test temp roots (certified fixtures keep them on failure for diagnosis)
 runner-v2/test/.*/
+/public/install.ps1
+/public/install.sh
+/.release-cache/
+/dist/release/

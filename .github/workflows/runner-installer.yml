@@ -1,0 +1,110 @@
+name: Runner installer (L2)
+
+# Acceptance T11 against a LOCALLY SIGNED TEST release (ephemeral test key, http://127.0.0.1 origin):
+# install as a standard user, signature + checksum verified, PATH in a new shell, doctor + smoke start,
+# update / rollback / uninstall, and fail-closed tampered-manifest / tampered-bundle / wrong-key / replay cases.
+# Never touches aiboard.me, GitHub Releases or the production signing key.
+on:
+  pull_request:
+    paths:
+      - "scripts/install/**"
+      - "scripts/release/**"
+      - "release/**"
+      - "runner-v2/src/release-*.ts"
+      - "runner-v2/src/self-update.ts"
+      - "runner-v2/src/launcher*.ts"
+      - "runner-v2/test/release-*.test.ts"
+      - "runner-v2/test/self-update.test.ts"
+      - "runner-v2/test/launcher-lock.test.ts"
+      - ".github/workflows/runner-installer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    name: Installer e2e (${{ matrix.os }}${{ matrix.shell && format(', {0}', matrix.shell) || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      AIB_L2: ${{ startsWith(matrix.os, 'windows') && 'D:/aib-l2' || '/tmp/aib-l2' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+          - os: windows-latest
+            shell: powershell
+          - os: windows-latest
+            shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node (release builder pin)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Acquire pinned Recoverable Job Service Runner source
+        shell: bash
+        run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
+      - name: Install dependencies
+        run: npm ci
+      - name: Unit tests (manifest, archive, updater, launcher lock)
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/release-manifest.test.ts
+          runner-v2/test/release-archive.test.ts
+          runner-v2/test/self-update.test.ts
+          runner-v2/test/launcher-lock.test.ts
+      - name: Rendered installers (shims, keys, syntax)
+        run: node node_modules/tsx/dist/cli.mjs scripts/release/test-installers.mts
+
+      - name: Prepare test release (key, host bundles, bundled driver)
+        shell: bash
+        run: |
+          set -eu
+          T="$AIB_L2"
+          rm -rf "$T" && mkdir -p "$T/templates"
+          node node_modules/tsx/dist/cli.mjs scripts/release/release-keys.mts generate-test --out "$T/key" --origin http://127.0.0.1:8765
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) target=linux-x64 ;; Linux-ARM64) target=linux-arm64 ;;
+            macOS-X64) target=darwin-x64 ;; macOS-ARM64) target=darwin-arm64 ;;
+            Windows-X64) target=win-x64 ;; Windows-ARM64) target=win-arm64 ;;
+          esac
+          for version in 0.9.1 0.9.2; do
+            node node_modules/tsx/dist/cli.mjs scripts/release/build-bundle.mts --version "$version" --target "$target" --out "$T/bundles" --channel-config "$T/key/channel.json"
+          done
+          cp scripts/install/install.ps1 scripts/install/install.sh "$T/templates/"
+          node -e "require('esbuild').buildSync({entryPoints:['scripts/release/installer-e2e.mts'],bundle:true,platform:'node',format:'esm',target:'node24',outfile:process.argv[1],external:['node:*']})" "$T/e2e.mjs"
+          chmod -R a+rX "$T"
+
+      - name: E2E as a standard Linux user
+        if: runner.os == 'Linux'
+        run: |
+          sudo useradd -m aibtest
+          sudo -u aibtest -H env PATH=/usr/bin:/bin "$(command -v node)" "$AIB_L2/e2e.mjs" \
+            --work /home/aibtest/w --bundles "$AIB_L2/bundles" --key-dir "$AIB_L2/key" --templates "$AIB_L2/templates"
+      - name: E2E as a standard macOS user
+        if: runner.os == 'macOS'
+        run: |
+          sudo sysadminctl -addUser aibtest -password "Aa1-$(uuidgen)" -home /Users/aibtest
+          sudo createhomedir -c -u aibtest >/dev/null
+          sudo -u aibtest -H env PATH=/usr/bin:/bin:/usr/sbin:/sbin "$(command -v node)" "$AIB_L2/e2e.mjs" \
+            --work /Users/aibtest/w --bundles "$AIB_L2/bundles" --key-dir "$AIB_L2/key" --templates "$AIB_L2/templates"
+      - name: E2E on Windows (${{ matrix.shell }})
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node "$env:AIB_L2/e2e.mjs" --work D:/aibe2e --shell ${{ matrix.shell }} --bundles "$env:AIB_L2/bundles" --key-dir "$env:AIB_L2/key" --templates "$env:AIB_L2/templates"
+      - name: One-liner as a standard (non-admin) Windows user
+        if: runner.os == 'Windows' && matrix.shell == 'powershell'
+        shell: powershell
+        run: |
+          $server = Start-Process -FilePath node -PassThru -NoNewWindow -ArgumentList "$env:AIB_L2/e2e.mjs", '--work', 'D:/aibsrv', '--serve-only', '600', '--bundles', "$env:AIB_L2/bundles", '--key-dir', "$env:AIB_L2/key", '--templates', "$env:AIB_L2/templates"
+          try {
+            $deadline = (Get-Date).AddSeconds(120)
+            while ((Get-Date) -lt $deadline) { try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/install.ps1 | Out-Null; break } catch { Start-Sleep -Seconds 2 } }
+            & .\scripts\release\ci-windows-standard-user.ps1 -Origin http://127.0.0.1:8765
+          } finally { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }

@@ -131,6 +131,9 @@ export function resolveProtectedLocations(input: ProtectedLocationsInput = {}): 
     : (homeDir ? paths.join(homeDir, ".aiboard", "bin") : undefined);
   if (plannedBin) add(plannedBin, "installer_bin");
   else if (platform === "win32") failures.push("installer bin could not be determined (LOCALAPPDATA)");
+  // L2 installs program files, shims and the version pointers under ~/.aiboard on macOS/Linux
+  // (on Windows they live inside the already protected data root).
+  if (platform !== "win32" && homeDir) add(paths.join(homeDir, ".aiboard"), "installer_bin");
   for (const dir of input.installerBinDirectories ?? []) {
     if (paths.isAbsolute(dir)) add(dir, "installer_bin");
     else failures.push("installer bin directory is not an absolute path");

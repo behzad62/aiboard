@@ -1,6 +1,7 @@
 // RUNNER_RAW_PROCESS_BOUNDARY: The launcher starts the fixed Runner V2 entrypoint and the OS URL opener.
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
@@ -26,6 +27,7 @@ import { createRemoteStateNotices, REMOTE_REPAIR_NOTICE, REMOTE_STATE_MESSAGE, s
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 import { promptCommandApproval } from "./remote-approval.js";
 import { pairingRelayConfiguration } from "./remote-pairing.js";
+import { runDoctorCommand, runUninstallCommand, runUpdateCommand } from "./self-update.js";
 
 export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
 const RUNNER_KINDS: readonly RunnerKind[] = ["runner", "accounts", "legacy", "bench"];
@@ -183,13 +185,19 @@ interface LauncherRuntime {
 }
 
 export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}): Promise<void> {
+  // Managed-install lifecycle (L2) never starts a Runner and has its own options.
+  if (raw[0] === "update") return runUpdateCommand(raw.slice(1));
+  if (raw[0] === "uninstall") return runUninstallCommand(raw.slice(1));
+  if (raw[0] === "doctor") {
+    if (raw.length > 1) throw new Error("invalid_arguments: aiboard doctor takes no options.");
+    return runDoctorCommand(await readRunnerVersion());
+  }
   const args = parseLauncherArguments(raw);
   const startLike = args.command === "start" || args.command === "mcp" || (args.command === "remote" && !args.logout && !args.policy && !args.audit);
   const write = runtime.write ?? ((message: string) => (args.command === "mcp" ? process.stderr : process.stdout).write(message));
   const depth = args.command === "mcp" ? parseMcpDepth((runtime.environment ?? process.env).AIBOARD_MCP_DEPTH) : 0;
   if (args.command === "mcp" && depth >= LOCAL_MCP_DEPTH_LIMIT) throw new Error("local_mcp_recursion_limit: MCP nesting limit is 2.");
-  const metadata: unknown = JSON.parse(await readFile(packagePath, "utf8"));
-  const version = typeof metadata === "object" && metadata !== null && "version" in metadata && typeof metadata.version === "string" ? metadata.version : "unknown";
+  const version = await readRunnerVersion();
   if (args.command === "version") { write(`AIBoard Runner V2 ${version}\n`); return; }
   if (args.command === "help") { write(help()); return; }
 
@@ -645,6 +653,11 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   if (rePairRequested) await runLauncher(raw.includes("--no-open") ? raw : [...raw, "--no-open"], runtime);
 }
 
+async function readRunnerVersion(): Promise<string> {
+  const metadata: unknown = JSON.parse(await readFile(packagePath, "utf8"));
+  return typeof metadata === "object" && metadata !== null && "version" in metadata && typeof metadata.version === "string" ? metadata.version : "unknown";
+}
+
 async function runTerminalApprovals(instance: LauncherInstance, key: Buffer, write: (message: string) => void,
   signal: AbortSignal, interrupt: () => void): Promise<void> {
   const pause = () => new Promise<void>((resolve) => {
@@ -726,6 +739,9 @@ function spawnPeerRunner(kind: Exclude<RunnerKind, "runner">, input: {
   instanceId: string; ticket: { digest: string }; controlKey: string; version: string;
   peers: LocalPairPeer[]; captureDiagnostics: (chunk: Buffer) => void;
 }): { child: ChildProcess; ready: Promise<PeerInstance>; closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> } {
+  if (!input.runtime.spawnPeer && !existsSync(peerEntries[kind])) {
+    throw new Error(`runner_not_installed: The ${kind} runner is not part of this AIBoard install; download it from https://aiboard.me/runner-guide.`);
+  }
   const spawnPeer = input.runtime.spawnPeer ?? ((_kind, command, args, options) => spawn(command, args, options));
   const child = spawnPeer(kind, process.execPath, peerSpawnArguments(kind, input.identity, input.stateDirectory, input.port), {
     stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true,
@@ -948,7 +964,9 @@ function redact(value: string, secrets: (string | undefined)[]): string {
 }
 function help(): string {
   return [
-    "AIBoard Runner", "", "Usage: aiboard [runner|accounts|legacy|bench|all ...] [options]", "       aiboard [status|stop|version] [options]", "",
+    "AIBoard Runner", "", "Usage: aiboard [runner|accounts|legacy|bench|all ...] [options]", "       aiboard [status|stop|version|doctor] [options]",
+    "       aiboard update [--check | --rollback]  Install the newest signed release, or return to the previous one.",
+    "       aiboard uninstall [--yes] [--keep-state | --remove-state]", "",
     "Runs the selected runners for the current directory in the foreground, or reuses healthy ones.",
     "With no selection only Runner V2 runs; `all` runs every runner. Runner V2 is",
     "the pairing anchor whenever it is selected, otherwise the first listed runner is.",

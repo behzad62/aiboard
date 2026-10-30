@@ -1,0 +1,194 @@
+name: Runner release (L2, manual)
+
+# Cuts a signed AI Board Runner release (plan D18, ADR-E). Manual dispatch only, from main.
+# 1. build:   all six bundles on Linux AND Windows from the dispatched commit; both builds must be byte-identical.
+# 2. smoke:   each bundle runs `aiboard version` and `aiboard doctor` on its own OS/arch where GitHub hosts one.
+# 3. sign:    in the protected `release` environment (owner approval, main only) the manifest is signed with
+#             AIBOARD_RELEASE_SIGNING_KEY and a DRAFT GitHub release v<version> is created with the bundles,
+#             manifest.json and manifest.json.sig. Nothing is published and aiboard.me is not touched:
+#             the owner publishes the draft and commits manifest.json(.sig) to public/release/stable/ by hand.
+# Owner setup and the release checklist: docs/remote/l2-release-owner-setup.md
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.2.0); becomes tag v<version>"
+        required: true
+      sequence:
+        description: "Manifest sequence: auto (published manifest + 1) or an explicit integer"
+        required: false
+        default: auto
+      expires_days:
+        description: "Manifest lifetime in days (7-400)"
+        required: false
+        default: "180"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build bundles (${{ matrix.os }})
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Validate inputs
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          SEQUENCE: ${{ inputs.sequence }}
+          EXPIRES_DAYS: ${{ inputs.expires_days }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must look like 0.2.0"; exit 1; }
+          [[ "$SEQUENCE" == auto || "$SEQUENCE" =~ ^[1-9][0-9]{0,8}$ ]] || { echo "::error::sequence must be auto or an integer"; exit 1; }
+          [[ "$EXPIRES_DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "::error::expires_days must be an integer"; exit 1; }
+      - name: No line-ending conversion (bundles must be byte-identical across OSes)
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Acquire pinned Recoverable Job Service Runner source
+        shell: bash
+        run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
+      - run: npm ci
+      - name: Build all six bundles (Node downloads checked against release/node-runtime.json)
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: node node_modules/tsx/dist/cli.mjs scripts/release/build-bundle.mts --version "$VERSION" --target all --out dist/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ matrix.os }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 14
+
+  reproducible:
+    name: Builds are byte-identical
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: built
+      - name: Compare Linux and Windows builds
+        run: |
+          set -eu
+          (cd built/bundles-ubuntu-latest && sha256sum aiboard-* | grep -v '\.build\.json$' | sort -k2) > linux.txt
+          (cd built/bundles-windows-latest && sha256sum aiboard-* | grep -v '\.build\.json$' | sort -k2) > windows.txt
+          cat linux.txt
+          test "$(wc -l < linux.txt)" -eq 6
+          diff -u linux.txt windows.txt
+
+  smoke:
+    name: Smoke ${{ matrix.target }}
+    needs: reproducible
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64, os: ubuntu-latest }
+          - { target: linux-arm64, os: ubuntu-24.04-arm }
+          - { target: darwin-arm64, os: macos-latest }
+          - { target: darwin-x64, os: macos-15-intel }
+          - { target: win-x64, os: windows-latest }
+          - { target: win-arm64, os: windows-11-arm }
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundles-ubuntu-latest
+          path: bundles
+      - name: Run the bundled Runner (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -eu
+          mkdir app && tar -xzf "bundles/aiboard-$VERSION-$TARGET.tar.gz" -C app
+          out=$(app/node/node app/app/runner-v2/bin/aiboard.mjs version)
+          echo "$out"
+          test "$out" = "AIBoard Runner V2 $VERSION"
+          app/node/node app/app/runner-v2/bin/aiboard.mjs doctor
+      - name: Run the bundled Runner (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          Expand-Archive -LiteralPath "bundles/aiboard-$env:VERSION-$env:TARGET.zip" -DestinationPath app
+          $out = (& app/node/node.exe app/app/runner-v2/bin/aiboard.mjs version | Out-String).Trim()
+          Write-Host $out
+          if ($out -ne "AIBoard Runner V2 $env:VERSION") { throw "unexpected version output" }
+          & app/node/node.exe app/app/runner-v2/bin/aiboard.mjs doctor
+          if ($LASTEXITCODE -ne 0) { throw "doctor failed" }
+
+  sign:
+    name: Sign manifest and draft the GitHub release
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install dependencies (no lifecycle scripts in the signing job)
+        run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundles-ubuntu-latest
+          path: dist/release
+      - name: Sign (key from the release environment; never printed)
+        env:
+          AIBOARD_RELEASE_SIGNING_KEY: ${{ secrets.AIBOARD_RELEASE_SIGNING_KEY }}
+          VERSION: ${{ inputs.version }}
+          SEQUENCE: ${{ inputs.sequence }}
+          EXPIRES_DAYS: ${{ inputs.expires_days }}
+        run: >-
+          node node_modules/tsx/dist/cli.mjs scripts/release/sign-manifest.mts
+          --version "$VERSION" --bundles dist/release --out dist/release
+          --sequence "$SEQUENCE" --expires-days "$EXPIRES_DAYS" --require-commit "$GITHUB_SHA"
+      - name: Verify with openssl exactly as install.sh does
+        run: |
+          set -eu
+          node -e "const c=require('./release/channel.json');for(const k of c.keys){const p=require('node:crypto').createPublicKey({key:{kty:'RSA',n:k.n,e:k.e},format:'jwk'});require('fs').writeFileSync('pub-'+k.keyId+'.pem',p.export({type:'spki',format:'pem'}))}"
+          base64 -d dist/release/manifest.json.sig > manifest.sig
+          ok=0; for key in pub-*.pem; do openssl dgst -sha256 -verify "$key" -signature manifest.sig dist/release/manifest.json && ok=1; done
+          test "$ok" = 1
+      - name: Create DRAFT release (owner publishes it)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "AI Board Runner $VERSION" \
+            --notes "Signed AI Board Runner $VERSION. Install: irm https://aiboard.me/install.ps1 | iex (Windows) or curl -fsSL https://aiboard.me/install.sh | sh (macOS/Linux). Bundle checksums are in manifest.json, signed with the key pinned in release/channel.json." \
+            dist/release/aiboard-"$VERSION"-*.zip dist/release/aiboard-"$VERSION"-*.tar.gz dist/release/manifest.json dist/release/manifest.json.sig
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-manifest-${{ inputs.version }}
+          path: |
+            dist/release/manifest.json
+            dist/release/manifest.json.sig
+          retention-days: 90

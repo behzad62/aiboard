@@ -11,6 +11,7 @@ import {
   PINNED_RJS_RUNNER_COMMIT,
   verifyPinnedRjsRunnerSource,
 } from "./pinned-rjs-runner-source.mjs";
+import { publishedSequence, writeInstallers } from "./release/render-installers.mjs";
 
 const scripts = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(scripts, "..");
@@ -433,4 +434,8 @@ if (only === "account-runner") {
   await publishNativeRunner();
   await publishWorkBenchRunner();
   await publishRjsWorkBenchRunner();
+  // One-line installers (L2): until a release key is pinned they render as "not released yet" and refuse to install.
+  const channel = JSON.parse(fs.readFileSync(path.join(root, "release", "channel.json"), "utf8"));
+  const installers = writeInstallers(publicDirectory, channel, { minSequence: publishedSequence(channel.channel, publicDirectory) });
+  console.log(`Published ${path.relative(root, path.join(publicDirectory, "install.ps1"))} and install.sh (release keys: ${installers.keyIds.join(", ") || "none"}).`);
 }

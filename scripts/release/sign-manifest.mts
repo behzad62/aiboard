@@ -1,0 +1,103 @@
+// Creates and signs the release manifest for six built bundles (plan D18, ADR-E).
+// Runs in the manual-dispatch release workflow inside the protected `release` environment:
+//   AIBOARD_RELEASE_SIGNING_KEY=<PKCS#8 PEM> npx tsx scripts/release/sign-manifest.mts \
+//     --bundles dist/release --version 0.2.0 --out dist/release
+// The private key is read from the environment (or --key-file for offline/test use), never printed,
+// and must match a public key already pinned in the channel config. The result is self-verified
+// with the same verifier the updater uses before anything is written.
+import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  INSTALLER_PROTOCOL, isReleaseVersion, parseReleaseChannelConfig, RELEASE_PRODUCT, RELEASE_SCHEMA_VERSION, RELEASE_TARGETS,
+  serializeManifest, signManifestBytes, trustedKeyFromPublicKey, verifyReleaseManifest, type ReleaseManifest,
+} from "../../runner-v2/src/release-manifest.js";
+import type { BuildReport } from "./build-bundle.mjs";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+function option(name: string): string | undefined {
+  const index = process.argv.indexOf(`--${name}`);
+  if (index < 0) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`--${name} needs a value.`);
+  return value;
+}
+
+function isoSeconds(date: Date): string {
+  return `${date.toISOString().slice(0, 19)}Z`;
+}
+
+const version = option("version");
+if (!isReleaseVersion(version)) throw new Error("--version must be a release version such as 0.2.0.");
+const bundles = resolve(option("bundles") ?? join(root, "dist", "release"));
+const out = resolve(option("out") ?? bundles);
+const configPath = resolve(option("channel-config") ?? join(root, "release", "channel.json"));
+const config = parseReleaseChannelConfig(JSON.parse(readFileSync(configPath, "utf8")));
+const urlPrefix = option("url-prefix") ?? `${config.artifactPrefix}v${version}/`;
+if (!urlPrefix.startsWith(config.artifactPrefix) || !urlPrefix.endsWith("/")) throw new Error("--url-prefix must extend the channel's artifactPrefix and end with /.");
+const expiresDays = Number(option("expires-days") ?? "180");
+if (!Number.isInteger(expiresDays) || expiresDays < 7 || expiresDays > 400) throw new Error("--expires-days must be 7-400.");
+
+let sequence: number;
+const sequenceOption = option("sequence") ?? "auto";
+if (sequenceOption === "auto") {
+  // The site serves the current manifest from public/release/<channel>/; the next one must be strictly newer.
+  const published = join(root, "public", "release", config.channel, "manifest.json");
+  if (existsSync(published)) {
+    const signature = readFileSync(`${published}.sig`, "utf8");
+    let current: ReleaseManifest;
+    try { current = verifyReleaseManifest(readFileSync(published), signature, config, { now: new Date() }); }
+    catch (error) { throw new Error(`Cannot derive the next sequence from ${published} (${error instanceof Error ? error.message : String(error)}); pass --sequence explicitly.`); }
+    sequence = current.sequence + 1;
+  } else sequence = config.minSequence;
+} else {
+  sequence = Number(sequenceOption);
+  if (!Number.isSafeInteger(sequence) || sequence < config.minSequence) throw new Error(`--sequence must be an integer >= ${config.minSequence}.`);
+}
+
+const keyPem = option("key-file") ? readFileSync(resolve(option("key-file")!), "utf8") : process.env.AIBOARD_RELEASE_SIGNING_KEY;
+if (!keyPem) throw new Error("No signing key: set AIBOARD_RELEASE_SIGNING_KEY (release environment secret) or pass --key-file.");
+const privateKey = createPrivateKey(keyPem);
+const publicJwk = trustedKeyFromPublicKey("derived-key", createPublicKey(keyPem));
+const pinned = config.keys.find((key) => key.n === publicJwk.n && key.e === publicJwk.e);
+if (!pinned) throw new Error(`The signing key's public half is not pinned in ${configPath}; refusing to sign a manifest no installer would trust.`);
+
+const requireCommit = option("require-commit");
+const reports = readdirSync(bundles).filter((name) => name.startsWith(`aiboard-${version}-`) && name.endsWith(".build.json"))
+  .map((name) => JSON.parse(readFileSync(join(bundles, name), "utf8")) as BuildReport);
+const nodeVersions = new Set(reports.map((report) => report.nodeVersion));
+if (reports.length !== RELEASE_TARGETS.length || nodeVersions.size !== 1) throw new Error(`Expected ${RELEASE_TARGETS.length} bundle reports for ${version} with one Node version; found ${reports.length}.`);
+for (const report of reports) {
+  const archive = readFileSync(join(bundles, report.file));
+  if (archive.length !== report.bytes || createHash("sha256").update(archive).digest("hex") !== report.sha256) throw new Error(`${report.file} does not match its build report.`);
+  if (report.dirty) process.stderr.write(`warning: ${report.file} was built from a dirty working tree\n`);
+  // The release workflow passes the dispatched commit: every bundle must come from exactly that clean tree.
+  if (requireCommit && (report.dirty || report.commit !== requireCommit)) throw new Error(`${report.file} was not built from a clean checkout of ${requireCommit}.`);
+}
+
+const now = new Date();
+const manifest: ReleaseManifest = {
+  schemaVersion: RELEASE_SCHEMA_VERSION,
+  product: RELEASE_PRODUCT,
+  channel: config.channel,
+  version,
+  sequence,
+  createdAt: isoSeconds(now),
+  expiresAt: isoSeconds(new Date(now.getTime() + expiresDays * 24 * 60 * 60 * 1000)),
+  minInstallerVersion: INSTALLER_PROTOCOL,
+  keyId: pinned.keyId,
+  nodeVersion: [...nodeVersions][0]!,
+  artifacts: reports.map((report) => ({
+    target: report.target, format: report.format, preview: report.preview, bytes: report.bytes, sha256: report.sha256,
+    url: `${urlPrefix}${report.file}`,
+  })),
+};
+const bytes = Buffer.from(serializeManifest(manifest), "utf8");
+const signature = signManifestBytes(bytes, privateKey);
+verifyReleaseManifest(bytes, signature, config, { now });
+writeFileSync(join(out, "manifest.json"), bytes);
+writeFileSync(join(out, "manifest.json.sig"), `${signature}\n`);
+process.stdout.write(`Signed manifest ${version} sequence ${sequence} with ${pinned.keyId}, expires ${manifest.expiresAt}.\n`);
