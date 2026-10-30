@@ -19,6 +19,8 @@ export interface LauncherInstance extends LauncherIdentity {
   controlPort: number;
   instanceId: string;
   version: string;
+  /** Digest binds the fixed control-key leaf to this instance record. */
+  controlKeyHash?: string;
 }
 
 export interface StateLocationOptions {
@@ -347,7 +349,8 @@ export async function readInstance(stateDirectory: string): Promise<LauncherInst
       !Number.isSafeInteger(value.startedAt) || Number(value.startedAt) < 1 ||
       !validPort(value.port) || !validPort(value.controlPort) ||
       typeof value.instanceId !== "string" || !/^[0-9a-f]{32}$/.test(value.instanceId) ||
-      typeof value.version !== "string" || !value.version) {
+      typeof value.version !== "string" || !value.version ||
+      (value.controlKeyHash !== undefined && (typeof value.controlKeyHash !== "string" || !/^[0-9a-f]{64}$/.test(value.controlKeyHash)))) {
     throw new Error("instance_invalid: The launcher instance record is invalid; no process was stopped.");
   }
   return value as unknown as LauncherInstance;
@@ -381,15 +384,36 @@ export async function readControlKey(stateDirectory: string): Promise<Buffer> {
   return key;
 }
 
-/** Only called under the discovery lock after the lifetime lock is acquired. */
+/**
+ * Only called under the discovery lock after the lifetime lock is acquired, so no Runner owns this state: whatever
+ * instance record and control key remain are stale, including a key orphaned by a crash before its record was
+ * published, a pre-hash record from an older launcher, or a key and record from two interrupted launches.
+ */
 export async function clearStaleInstance(stateDirectory: string, identity: LauncherIdentity): Promise<void> {
   const instance = await readInstance(stateDirectory);
   if (instance) assertInstanceIdentity(instance, identity);
-  for (const name of ["launcher-instance.json", "launcher-control.key"]) {
-    const file = join(stateDirectory, name);
-    try { const contents = await readPrivateFile(file); contents.fill(0); await unlink(file); }
-    catch (error) { if (!isMissing(error)) throw error; }
-  }
+  await removeOwnedControlKey(join(stateDirectory, "launcher-control.key"), instance?.controlKeyHash, { stale: true });
+  if (instance) await unlink(join(stateDirectory, "launcher-instance.json")).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
+}
+
+export function controlKeyHash(key: Buffer): string {
+  return createHash("sha256").update(key).digest("hex");
+}
+
+/**
+ * Removes a fixed-name control key. A record that carries a key hash must match the key, unless the caller holds the
+ * locks proving the state is unowned (`stale`). A record from before key hashes existed (no hash) keeps the old behaviour.
+ */
+export async function removeOwnedControlKey(file: string, expectedHash: string | undefined, options: { stale?: boolean } = {}): Promise<void> {
+  let key: Buffer;
+  try { key = await readPrivateFile(file); }
+  catch (error) { if (isMissing(error)) return; throw error; }
+  try {
+    if (expectedHash && controlKeyHash(key) !== expectedHash && !options.stale) {
+      throw new Error("instance_unverified: The control key does not belong to the recorded instance.");
+    }
+  } finally { key.fill(0); }
+  await unlink(file).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
 }
 
 async function readPrivateFile(file: string, encoding: "utf8"): Promise<string>;

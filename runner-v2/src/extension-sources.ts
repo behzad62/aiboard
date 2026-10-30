@@ -209,7 +209,8 @@ export interface GitSourceOptions {
 export async function resolveGit(request: Extract<SourceRequest, { type: "git" }>, options: GitSourceOptions): Promise<ResolvedTree> {
   const url = validateGitUrl(request.url, options.allowLocal);
   const scratch = join(options.scratchDirectory, `git-${randomUUID()}`);
-  await mkdir(scratch, { recursive: true });
+  await mkdir(options.scratchDirectory, { recursive: true });
+  await mkdir(scratch);
   try {
     const git = options.executorFor(scratch);
     const run = async (args: string[], label: string) => {

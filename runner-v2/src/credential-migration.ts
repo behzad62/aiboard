@@ -10,6 +10,7 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -139,9 +140,11 @@ export function prepareCredentialStores(options: {
       onStep?.("pointer-committed");
       // Re-read committed metadata and envelopes before retiring the journal.
       const committed = readPointer(pointerPath);
-      verifyCommitted(stateDirectory, committed, readJournal(journalPath), { provider: providerKey, extension: extensionKey });
+      const verifiedJournal = readJournal(journalPath);
+      const journalInfo = lstatSync(journalPath);
+      verifyCommitted(stateDirectory, committed, verifiedJournal, { provider: providerKey, extension: extensionKey });
       onStep?.("commit-verified");
-      rmSync(journalPath);
+      removeVerifiedJournal(journalPath, verifiedJournal, journalInfo);
       syncDirectory(stateDirectory);
       onStep?.("journal-removed");
       return preparedStores(stateDirectory, committed, paths, providerKey, extensionKey);
@@ -172,10 +175,11 @@ function finishCommitted(
   try {
     providerKey = deriveCredentialStoreKey(storageKey, "provider");
     extensionKey = deriveCredentialStoreKey(storageKey, "extension");
+    const journalInfo = journal ? lstatSync(journalPath) : undefined;
     const paths = verifyCommitted(stateDirectory, pointer, journal, { provider: providerKey, extension: extensionKey });
     if (journal) {
       onStep?.("commit-verified");
-      rmSync(journalPath);
+      removeVerifiedJournal(journalPath, journal, journalInfo!);
       syncDirectory(stateDirectory);
       onStep?.("journal-removed");
     }
@@ -317,6 +321,15 @@ function generationPaths(stateDirectory: string, generation: string, create: boo
     if (!lstatSync(path).isDirectory()) throw new Error("Credential generation must be a regular directory.");
   }
   return { provider: join(directory, "provider-configs.enc"), extension: join(directory, "extension-credentials.enc") };
+}
+
+function removeVerifiedJournal(path: string, journal: Journal, verified: Stats): void {
+  const current = lstatSync(path);
+  if (!verified.isFile() || !current.isFile() || current.dev !== verified.dev || current.ino !== verified.ino ||
+      JSON.stringify(readJournal(path)) !== JSON.stringify(journal)) {
+    throw new Error("Credential migration journal changed; refusing removal.");
+  }
+  rmSync(path);
 }
 
 function readPointer(path: string): Pointer {

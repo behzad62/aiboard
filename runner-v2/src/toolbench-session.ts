@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative, resolve, isAbsolute } from "node:path";
 import type { AgentModel, NativeTool, ToolCallBlock, ToolExecutionContext } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
@@ -126,8 +127,7 @@ export class ToolBenchSessions {
       saved.usage = { ...budget, models: projectNativeModelUsage({ budget, runtimes: [{ ...manifest.runtime, roles: ["worker"], selectable: false }], providerHealth: [] }), attributedModelReservationCount: Object.values(budget.reservations).filter(r => r.kind === "model").length };
     } finally { ledger.close(); }
     saved.status = "failed"; saved.reason = "runner_restarted"; saved.updatedAt = new Date().toISOString();
-    await writeFile(join(directory, "snapshot.tmp"), JSON.stringify(saved));
-    await rename(join(directory, "snapshot.tmp"), join(directory, "snapshot.json"));
+    await writeSnapshot(directory, JSON.stringify(saved));
     this.sessions.set(sessionId, { controller: new AbortController(), promise: Promise.resolve(), snapshot: saved });
     return saved;
   }
@@ -157,7 +157,7 @@ export class ToolBenchSessions {
     let refresh = () => {};
     const save = () => {
       const json = JSON.stringify(entry.snapshot);
-      saveTail = saveTail.then(async () => { await writeFile(join(directory, "snapshot.tmp"), json); await rename(join(directory, "snapshot.tmp"), join(directory, "snapshot.json")); });
+      saveTail = saveTail.then(() => writeSnapshot(directory, json));
       return saveTail;
     };
     try {
@@ -274,4 +274,11 @@ function fenceTool(tool: NativeTool<unknown>, request: ToolBenchSessionRequest, 
     }
     return tool.execute(input, context);
   } };
+}
+
+async function writeSnapshot(directory: string, contents: string): Promise<void> {
+  const path = join(directory, "snapshot.json");
+  const temporary = `${path}.${randomBytes(16).toString("hex")}.tmp`;
+  await writeFile(temporary, contents, { flag: "wx" });
+  try { await rename(temporary, path); } catch (error) { await rm(temporary, { force: true }).catch(() => undefined); throw error; }
 }

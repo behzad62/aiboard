@@ -1,6 +1,6 @@
 // RUNNER_RAW_PROCESS_BOUNDARY: generated stdio MCP env launcher; it runs as an owned MCP transport command and its one child stays in that owned tree.
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
@@ -11,7 +11,8 @@ import { join } from "node:path";
  * those variables and starts the real server with inherited stdio. Its argv names only the directory.
  */
 const LAUNCHER_SOURCE = `import { spawn } from "node:child_process";
-import { readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { linkSync, lstatSync, readdirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 const [directory, separator, executable, ...args] = process.argv.slice(2);
@@ -20,9 +21,17 @@ if (!directory || separator !== "--" || !executable) {
   process.exit(64);
 }
 let values;
-for (const name of readdirSync(directory).filter((entry) => entry.endsWith(".secret")).sort()) {
-  const claimed = join(directory, name + ".claimed-" + process.pid);
-  try { renameSync(join(directory, name), claimed); } catch { continue; }
+for (const name of readdirSync(directory).filter((entry) => /^[0-9]{15}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[.]secret$/.test(entry)).sort()) {
+  const source = join(directory, name);
+  const claimed = join(directory, name + ".claimed-" + process.pid + "-" + randomUUID());
+  try {
+    if (!lstatSync(source).isFile()) continue;
+    linkSync(source, claimed); // Exclusive: never replace an existing claim.
+    const original = lstatSync(source);
+    const copy = lstatSync(claimed);
+    if (!original.isFile() || original.dev !== copy.dev || original.ino !== copy.ino) { rmSync(claimed); continue; }
+    unlinkSync(source);
+  } catch { continue; }
   try {
     const parsed = JSON.parse(readFileSync(claimed, "utf8"));
     if (parsed && parsed.expiresAt > Date.now() && parsed.values && typeof parsed.values === "object") values = parsed.values;
@@ -46,22 +55,25 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 export const MCP_LAUNCHER_DIGEST = createHash("sha256").update(LAUNCHER_SOURCE).digest("hex");
 const SECRET_TTL_MS = 60_000;
 
-/** Writes (or repairs) the launcher in AI Board-owned storage and returns its verified path. */
+/** Creates the launcher or verifies the existing owned bytes. */
 export async function ensureMcpLauncher(directory: string): Promise<string> {
   const path = join(directory, `mcp-env-launcher-${MCP_LAUNCHER_DIGEST.slice(0, 16)}.mjs`);
-  const current = await readFile(path, "utf8").catch(() => undefined);
-  if (current !== undefined && createHash("sha256").update(current).digest("hex") === MCP_LAUNCHER_DIGEST) return path;
+  const info = await lstat(path).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
+  if (info) {
+    if (!info.isFile() || createHash("sha256").update(await readFile(path, "utf8")).digest("hex") !== MCP_LAUNCHER_DIGEST) {
+      throw new Error("The MCP credential launcher is not the expected file.");
+    }
+    return path;
+  }
   await mkdir(directory, { recursive: true });
-  const staging = `${path}.${randomUUID()}.tmp`;
-  await writeFile(staging, LAUNCHER_SOURCE, { mode: 0o600 });
-  await rename(staging, path);
+  await writeFile(path, LAUNCHER_SOURCE, { mode: 0o600, flag: "wx" });
   return path;
 }
 
 /** Re-verifies launcher bytes right before a launch that depends on it. */
 export async function verifyMcpLauncher(path: string): Promise<void> {
   const bytes = await readFile(path, "utf8");
-  if (createHash("sha256").update(bytes).digest("hex") !== MCP_LAUNCHER_DIGEST) throw new Error("The MCP credential launcher changed on disk; it is rewritten on the next start.");
+  if (createHash("sha256").update(bytes).digest("hex") !== MCP_LAUNCHER_DIGEST) throw new Error("The MCP credential launcher changed on disk.");
 }
 
 /** One single-use secret file for one upcoming launch. Stale files are swept first. */
@@ -70,17 +82,20 @@ export async function provisionMcpSecrets(directory: string, values: Readonly<Re
   await sweepMcpSecrets(directory, now);
   const name = `${now.toString().padStart(15, "0")}-${randomUUID()}.secret`;
   const staging = join(directory, `${name}.tmp`);
-  await writeFile(staging, JSON.stringify({ expiresAt: now + SECRET_TTL_MS, values }), { mode: 0o600 });
-  await chmod(staging, 0o600).catch(() => undefined);
-  await rename(staging, join(directory, name));
+  await writeFile(staging, JSON.stringify({ expiresAt: now + SECRET_TTL_MS, values }), { mode: 0o600, flag: "wx" });
+  try {
+    await chmod(staging, 0o600).catch(() => undefined);
+    await link(staging, join(directory, name));
+  } finally { await rm(staging, { force: true }); }
 }
 
 /** Removes expired or abandoned secret files (a launch that failed before the launcher ran). */
 export async function sweepMcpSecrets(directory: string, now = Date.now()): Promise<void> {
   for (const name of await readdir(directory).catch(() => [] as string[])) {
+    if (!/^[0-9]{15}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.secret(?:\.tmp|\.claimed-[0-9]+(?:-[0-9a-f-]{36})?)?$/.test(name)) continue;
     const path = join(directory, name);
-    const info = await stat(path).catch(() => undefined);
-    if (!info) continue;
+    const info = await lstat(path).catch(() => undefined);
+    if (!info?.isFile()) continue;
     // Concurrent provisioning may be mid-write, so only aged entries are removed.
     if (now - info.mtimeMs > SECRET_TTL_MS) await rm(path, { force: true });
   }

@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { AgentMessage, AgentModel, NativeTool, ToolCallBlock, ToolDefinition, ToolExecutionContext, ToolResult } from "./agent-contracts.js";
@@ -331,8 +332,10 @@ export class ChatAgentSessions {
     this.cache.set(sessionId, session);
     const directory = this.directory(sessionId);
     await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, "session.tmp"), JSON.stringify(session));
-    await rename(join(directory, "session.tmp"), join(directory, "session.json"));
+    const path = join(directory, "session.json");
+    const temporary = `${path}.${randomBytes(16).toString("hex")}.tmp`;
+    await writeFile(temporary, JSON.stringify(session), { flag: "wx" });
+    try { await rename(temporary, path); } catch (error) { await rm(temporary, { force: true }).catch(() => undefined); throw error; }
   }
 }
 

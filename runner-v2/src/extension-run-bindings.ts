@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { ExtensionManagementService, ExtensionServiceEvent, ManagedSkillSource } from "./extension-management-service.js";
@@ -101,8 +102,9 @@ export class ExtensionRunBindings {
     this.bindings.set(binding.runId, binding);
     const path = this.path(binding.runId);
     await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(`${path}.tmp`, JSON.stringify(binding));
-    await rename(`${path}.tmp`, path);
+    const temporary = `${path}.${randomBytes(16).toString("hex")}.tmp`;
+    await writeFile(temporary, JSON.stringify(binding), { flag: "wx" });
+    try { await rename(temporary, path); } catch (error) { await rm(temporary, { force: true }).catch(() => undefined); throw error; }
   }
 
   private path(runId: string): string {

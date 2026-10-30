@@ -45,7 +45,10 @@ export class ExtensionPackageStore {
       if (existing.digest !== tree.digest) throw new ExtensionManagementError("package_store_corrupt", `Stored package ${tree.digest} does not match its digest.`, 500);
       return target;
     }
-    const staging = join(this.root, "staging", `${tree.digest.slice(0, 16)}-${randomUUID()}`);
+    const stagingParent = join(this.root, "staging");
+    const staging = join(stagingParent, `${tree.digest.slice(0, 16)}-${randomUUID()}`);
+    await mkdir(stagingParent, { recursive: true });
+    await mkdir(staging);
     try {
       for (const file of tree.files) {
         const path = join(staging, ...file.path.split("/"));

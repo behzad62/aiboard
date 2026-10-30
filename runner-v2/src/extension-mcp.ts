@@ -317,7 +317,8 @@ export class ManagedMcpRuntime {
       return { components: [component] };
     }
     const root = join(this.options.home, "mcp-runtimes", safeSegment(context.extensionId), `${safeSegment(plan.version ?? "0")}-${randomBytes(4).toString("hex")}`);
-    await mkdir(root, { recursive: true });
+    await mkdir(dirname(root), { recursive: true });
+    await mkdir(root);
     try {
       if (plan.source.type === "npm") return { components: [await this.installNpm(plan.source, component, root, context)] };
       if (plan.source.type === "pypi") return { components: [await this.installPypi(plan.source, component, root, context)] };
@@ -400,10 +401,15 @@ export class ManagedMcpRuntime {
     if (component.route !== "runner") return { state: "unsupported", checkedAt: now, detail: "Provider-hosted tools cannot be filtered by the Runner." };
     if (component.transport === "streamable_http") return await this.checkRemote(extension.id, version.versionId, component);
     const runId = `ext-check-${randomBytes(8).toString("hex")}`;
+    const runRoot = join(this.options.stateDirectory, "builds", runnerRunStateSegment(runId));
+    let createdRunRoot = false;
     try {
       const plan = await this.launchPlan({ extensionId: extension.id, versionId: version.versionId, generation: -1, component });
       const attestation = await this.options.internal.attestMcpServers([plan.spec]);
       if (plan.secrets) await provisionMcpSecrets(plan.secrets.directory, plan.secrets.values);
+      await mkdir(dirname(runRoot), { recursive: true });
+      await mkdir(runRoot);
+      createdRunRoot = true;
       const executor = this.options.internal.createMcpDiscoveryExecutor({ runId, servers: [plan.spec], attestation, requestTimeoutMs: 30_000 });
       let result;
       try {
@@ -422,7 +428,7 @@ export class ManagedMcpRuntime {
     } catch (error) {
       return { state: "failed", checkedAt: now, lastError: { code: "mcp_start_failed", message: describe(error), at: now } };
     } finally {
-      await rm(join(this.options.stateDirectory, "builds", runnerRunStateSegment(runId)), { recursive: true, force: true }).catch(() => undefined);
+      if (createdRunRoot) await rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 
@@ -519,8 +525,7 @@ export class ManagedMcpRuntime {
     const current = await this.readOAuthClients();
     current[extensionId] = client;
     await mkdir(this.options.home, { recursive: true });
-    await writeFile(`${path}.tmp`, JSON.stringify(current));
-    await rename(`${path}.tmp`, path);
+    await writeAtomic(path, JSON.stringify(current));
   }
 
   // ---- Generation binding -----------------------------------------------------------------------------
@@ -831,8 +836,7 @@ export class ManagedMcpRuntime {
       });
       current[extensionId] = policy;
       await mkdir(this.options.home, { recursive: true });
-      await writeFile(path + ".tmp", JSON.stringify(current));
-      await rename(path + ".tmp", path);
+      await writeAtomic(path, JSON.stringify(current));
       state.setToolApproval(extensionId, policy);
       const extension = state.extension(extensionId)!;
       state.putExtension({ ...extension, desiredGeneration: state.registry.currentGeneration + 1, updatedAt: new Date().toISOString() });
@@ -1130,4 +1134,10 @@ export async function fetchPackageMetadata(url: string): Promise<unknown> {
 /** Directory listing helper for tests and diagnostics. */
 export async function listMcpRuntimeRoots(home: string): Promise<string[]> {
   return await readdir(join(home, "mcp-runtimes")).catch(() => []);
+}
+
+async function writeAtomic(path: string, contents: string): Promise<void> {
+  const temporary = `${path}.${randomBytes(16).toString("hex")}.tmp`;
+  await writeFile(temporary, contents, { flag: "wx" });
+  try { await rename(temporary, path); } catch (error) { await rm(temporary, { force: true }).catch(() => undefined); throw error; }
 }

@@ -115,32 +115,45 @@ export class RemoteDeviceStore {
    */
   ensure(accountId?: string): RemoteDeviceIdentity {
     const existing = this.load();
-    if (existing) {
-      if (accountId === undefined || existing.accountId === accountId) return existing;
-      if (existing.accountId !== null) {
-        throw new Error("This device is linked to another AIBoard account; revoke it before pairing again (remote --logout alone retains the identity).");
-      }
-      return this.save({ ...existing, accountId });
-    }
-    const pair = generateKeyPairSync("ed25519");
-    const privateDer = pair.privateKey.export({ type: "pkcs8", format: "der" });
-    const publicKey = pair.publicKey.export({ type: "spki", format: "der" }).toString("base64url");
-    writePrivateExclusive(this.keyPath, Buffer.from(privateDer.toString("base64url"), "utf8"));
-    const identity: RemoteDeviceIdentity = {
-      deviceId: `device-${randomUUID()}`,
-      accountId: accountId ?? null,
-      epoch: "1",
-      revoked: false,
-      publicKey,
-      createdAt: new Date().toISOString(),
-    };
+    if (existing && (accountId === undefined || existing.accountId === accountId)) return existing;
+    const release = this.ownerDatabase ? undefined : this.acquireOwnerLock();
+    if (!this.ownerDatabase) throw new Error("remote_active: Stop the remote Runner before initializing its identity.");
     try {
-      writePrivateAtomic(this.identityPath, JSON.stringify(identity));
-    } catch (error) {
-      try { unlinkSync(this.keyPath); } catch { /* keep the original error */ }
-      throw error;
-    }
-    return Object.freeze(identity);
+      // A different Runner may have initialized or claimed the device before we acquired the fence.
+      const current = this.load();
+      if (current) {
+        if (accountId === undefined || current.accountId === accountId) return current;
+        if (current.accountId !== null) {
+          throw new Error("This device is linked to another AIBoard account; revoke it before pairing again (remote --logout alone retains the identity).");
+        }
+        return this.save({ ...current, accountId });
+      }
+      let created = false;
+      let publicKey: string;
+      try {
+        publicKey = publicKeyForPrivateFile(this.keyPath);
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+        const pair = generateKeyPairSync("ed25519");
+        const privateDer = pair.privateKey.export({ type: "pkcs8", format: "der" });
+        created = writePrivateExclusive(this.keyPath, Buffer.from(privateDer.toString("base64url"), "utf8"));
+        // A key left by a previous crash, or an existing leaf, is adopted rather than replaced.
+        publicKey = publicKeyForPrivateFile(this.keyPath);
+      }
+      const identity: RemoteDeviceIdentity = {
+        deviceId: `device-${randomUUID()}`, accountId: accountId ?? null, epoch: "1", revoked: false,
+        publicKey, createdAt: new Date().toISOString(),
+      };
+      try {
+        writePrivateAtomic(this.identityPath, JSON.stringify(identity));
+      } catch (error) {
+        if (created) {
+          try { if (publicKeyForPrivateFile(this.keyPath) === publicKey) unlinkSync(this.keyPath); } catch { /* keep the original error */ }
+        }
+        throw error;
+      }
+      return Object.freeze(identity);
+    } finally { release?.(); }
   }
 
   sign(data: Buffer): Buffer {
@@ -195,14 +208,28 @@ export class RemoteDeviceStore {
         publicKey: pair.publicKey.export({ type: "spki", format: "der" }).toString("base64url"),
         createdAt: new Date().toISOString(),
       };
-      // Clear the old session before publishing a new identity. A crash cannot
-      // associate the old account's session with a newly generated key.
-      try { unlinkSync(this.sessionPath); } catch (error) { if (!isMissing(error)) throw error; }
-      writePrivateExclusive(keyPath, Buffer.from(privateDer.toString("base64url"), "utf8"));
-      try { this.save(identity); }
-      catch (error) { try { unlinkSync(keyPath); } catch { /* preserve the original failure */ } throw error; }
-      try { unlinkSync(old.keyFile ? join(this.stateDirectory, old.keyFile) : this.keyPath); }
+      // A session must belong to the old identity before it can be cleared.
+      let sessionText: string | undefined;
+      try { sessionText = readPrivateText(this.sessionPath); }
       catch (error) { if (!isMissing(error)) throw error; }
+      if (sessionText !== undefined) {
+        const session = checkedSessionShape(JSON.parse(sessionText));
+        if (!session || old.accountId === null || session.accountId !== old.accountId) {
+          throw new Error("Remote device session does not belong to the identity being rotated.");
+        }
+        if (readPrivateText(this.sessionPath) !== sessionText) throw new Error("Remote device session changed during rotation.");
+        unlinkSync(this.sessionPath);
+      }
+      const created = writePrivateExclusive(keyPath, Buffer.from(privateDer.toString("base64url"), "utf8"));
+      if (!created) throw new Error("Remote device rotation key already exists.");
+      try { this.save(identity); }
+      catch (error) {
+        try { if (publicKeyForPrivateFile(keyPath) === identity.publicKey) unlinkSync(keyPath); } catch { /* preserve the original failure */ }
+        throw error;
+      }
+      const oldKeyPath = old.keyFile ? join(this.stateDirectory, old.keyFile) : this.keyPath;
+      try { if (publicKeyForPrivateFile(oldKeyPath) === old.publicKey) unlinkSync(oldKeyPath); }
+      catch { /* A missing or unverified old key is retained. */ }
       return Object.freeze(identity);
     } finally { release?.(); }
   }
@@ -255,15 +282,27 @@ export class RemoteDeviceStore {
       throw error;
     }
     this.ownerDatabase = database;
-    if (projectPath !== undefined) {
-      writePrivateAtomic(this.ownerRecordPath, JSON.stringify({ projectPath, pid: process.pid }));
+    const ownerToken = randomUUID();
+    try {
+      if (projectPath !== undefined) {
+        writePrivateAtomic(this.ownerRecordPath, JSON.stringify({ projectPath, pid: process.pid, ownerToken }));
+      }
+    } catch (error) {
+      this.ownerDatabase = undefined;
+      try { database.exec("ROLLBACK"); } finally { database.close(); }
+      throw error;
     }
     let released = false;
     return () => {
       if (released) return;
       released = true;
       if (this.ownerDatabase === database) this.ownerDatabase = undefined;
-      try { if (projectPath !== undefined) unlinkSync(this.ownerRecordPath); } catch (error) { if (!isMissing(error)) throw error; }
+      try {
+        if (projectPath !== undefined) {
+          const record: unknown = JSON.parse(readPrivateText(this.ownerRecordPath));
+          if (isRecord(record) && record.ownerToken === ownerToken) unlinkSync(this.ownerRecordPath);
+        }
+      } catch (error) { if (!isMissing(error) && !(error instanceof SyntaxError)) throw error; }
       finally {
         try { database.exec("ROLLBACK"); } finally { database.close(); }
       }
@@ -332,7 +371,7 @@ export class RemoteDeviceStore {
   }
 }
 
-function writePrivateExclusive(path: string, contents: Buffer): void {
+function writePrivateExclusive(path: string, contents: Buffer): boolean {
   const temporary = `${path}.tmp-${randomBytes(16).toString("hex")}`;
   let fd: number | undefined;
   let created = false;
@@ -343,8 +382,8 @@ function writePrivateExclusive(path: string, contents: Buffer): void {
     fsyncSync(fd);
     closeSync(fd);
     fd = undefined;
-    try { linkSync(temporary, path); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    try { linkSync(temporary, path); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return false; throw error; }
   } finally {
     if (fd !== undefined) closeSync(fd);
     if (created) {
@@ -362,6 +401,12 @@ function writePrivateAtomic(path: string, contents: string): void {
     try { unlinkSync(temporary); } catch { /* keep the original error */ }
     throw error;
   }
+}
+
+function publicKeyForPrivateFile(path: string): string {
+  const key = createPrivateKey({ key: Buffer.from(readPrivateText(path).trim(), "base64url"), type: "pkcs8", format: "der" });
+  if (key.asymmetricKeyType !== "ed25519") throw new Error("Remote device key must be Ed25519.");
+  return createPublicKey(key.export({ type: "pkcs8", format: "pem" })).export({ type: "spki", format: "der" }).toString("base64url");
 }
 
 function readPrivateText(path: string): string {

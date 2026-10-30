@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { lstatSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { PermissionProfile } from "./contracts.js";
@@ -285,7 +285,10 @@ export class RemoteService {
 
   private writeStatusFile(status: RemoteServiceStatus): void {
     try {
-      writeFileSync(join(this.options.stateDirectory, "remote-status.json"), JSON.stringify(status), { mode: 0o600 });
+      const path = join(this.options.stateDirectory, "remote-status.json");
+      try { if (lstatSync(path).isSymbolicLink()) return; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      writeFileSync(path, JSON.stringify(status), { mode: 0o600 });
     } catch { /* status reporting never blocks admission control */ }
   }
 }

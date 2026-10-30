@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   acquireDiscoveryLock, assertExternalState, assertInstanceIdentity, assertProjectBinding, assertWindowsStatePath,
-  canonicalFuturePath, clearStaleInstance, createControlKey, prepareStateDirectory, prepareUserDirectory,
-  projectDataDirectory, projectIdentity, readControlKey, readInstance, remoteDeviceDirectory, tryAcquireLock, writeInstance,
+  canonicalFuturePath, clearStaleInstance, controlKeyHash, createControlKey, prepareStateDirectory, prepareUserDirectory,
+  projectDataDirectory, projectIdentity, readControlKey, readInstance, remoteDeviceDirectory, removeOwnedControlKey, tryAcquireLock, writeInstance,
   type LauncherIdentity, type LauncherInstance,
 } from "./launcher-instance.js";
 import { openLauncherMcpSession, requestLauncherApproval, requestLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
@@ -364,8 +364,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       for (const peer of peerRecords) {
         await requestLauncherControl(peer, peerKeys.get(peer.kind)!, "stop").catch(() => undefined);
         await waitForControlDown(peer);
+        await removePeerInstance(stateDirectory, peer, identity);
       }
-      if (peerRecords.length > 0) await clearPeerInstances(stateDirectory);
       write("Runner stopped.\n");
       return;
     }
@@ -404,7 +404,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           continue;
         }
         if (pidAlive(existing.pid)) throw new Error("instance_unverified: A recorded Runner cannot be verified; no process was stopped.");
-        await removePeerInstance(stateDirectory, kind, identity);
+        await removePeerInstance(stateDirectory, existing, identity, { stale: true });
       }
       const port = await freePort();
       const instanceId = randomBytes(16).toString("hex");
@@ -428,7 +428,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       if (instance.instanceId !== instanceId || instance.pid !== spawned.child.pid || instance.port !== port) {
         throw new Error("instance_unverified: Runner startup identity does not match its child handle.");
       }
-      instances.set(kind, instance);
+      instances.set(kind, { ...instance, controlKeyHash: controlKeyHash(key) });
     }
 
     let v2Child: ChildProcess | undefined;
@@ -529,8 +529,9 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         const unexpectedlyFree = tryAcquireLock(stateDirectory, "lifetime");
         if (unexpectedlyFree) { unexpectedlyFree(); throw new Error("instance_unverified: Runner did not retain its lifetime lock."); }
         if (!(await requestLauncherControl(instance, key, "status")).healthy) throw new Error("runner_start_failed: Runner did not pass its health check.");
-        await writeInstance(stateDirectory, instance);
-        instances.set("runner", instance);
+        const ownedInstance = { ...instance, controlKeyHash: controlKeyHash(key) };
+        await writeInstance(stateDirectory, ownedInstance);
+        instances.set("runner", ownedInstance);
       }
     }
 
@@ -634,11 +635,12 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           } finally { free(); }
         }
       }
-      const currentPeers = await readPeerInstances(stateDirectory, identity).catch(() => [] as PeerInstance[]);
-      const kept = currentPeers.filter((peer) => !(freshKinds.has(peer.kind) && instances.get(peer.kind)?.instanceId === peer.instanceId));
-      if (kept.length > 0) await writePeerInstances(stateDirectory, kept);
-      else if (currentPeers.length > 0) await clearPeerInstances(stateDirectory);
-      for (const kind of freshKinds) if (kind !== "runner") await removePeerControlKey(stateDirectory, kind);
+      const currentPeers = await readPeerInstances(stateDirectory, identity);
+      for (const peer of currentPeers) {
+        if (freshKinds.has(peer.kind) && instances.get(peer.kind)?.instanceId === peer.instanceId) {
+          await removePeerInstance(stateDirectory, peer, identity);
+        }
+      }
     } finally { release(); }
   } catch (error) {
     for (const fresh of freshChildren) if (fresh.connected) fresh.disconnect();
@@ -781,7 +783,10 @@ async function readPeerInstances(stateDirectory: string, identity: LauncherIdent
   }
   const peers = value.peers as PeerInstance[];
   for (const peer of peers) {
-    if (!RUNNER_KINDS.includes(peer.kind) || peer.kind === "runner") throw new Error("instance_invalid: The launcher peer record is invalid; no process was stopped.");
+    if (!RUNNER_KINDS.includes(peer.kind) || peer.kind === "runner" ||
+        (peer.controlKeyHash !== undefined && (typeof peer.controlKeyHash !== "string" || !/^[0-9a-f]{64}$/.test(peer.controlKeyHash)))) {
+      throw new Error("instance_invalid: The launcher peer record is invalid; no process was stopped.");
+    }
     assertInstanceIdentity(peer, identity);
   }
   return peers;
@@ -799,12 +804,17 @@ async function clearPeerInstances(stateDirectory: string): Promise<void> {
   await unlink(join(stateDirectory, "launcher-peers.json")).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
 }
 
-async function removePeerInstance(stateDirectory: string, kind: RunnerKind, identity: LauncherIdentity): Promise<void> {
+export async function removePeerInstance(stateDirectory: string, expected: PeerInstance, identity: LauncherIdentity, options: { stale?: boolean } = {}): Promise<void> {
   const peers = await readPeerInstances(stateDirectory, identity);
-  const kept = peers.filter((peer) => peer.kind !== kind);
+  const current = peers.find((peer) => peer.kind === expected.kind);
+  if (!current || current.instanceId !== expected.instanceId || current.controlKeyHash !== expected.controlKeyHash) return;
+  if (peers.filter((peer) => peer.kind === expected.kind).length !== 1) {
+    throw new Error("instance_invalid: Duplicate launcher peer records.");
+  }
+  await removeOwnedControlKey(peerControlKeyPath(stateDirectory, current.kind), current.controlKeyHash, options);
+  const kept = peers.filter((peer) => peer !== current);
   if (kept.length > 0) await writePeerInstances(stateDirectory, kept);
   else await clearPeerInstances(stateDirectory);
-  await removePeerControlKey(stateDirectory, kind);
 }
 
 function peerControlKeyPath(stateDirectory: string, kind: RunnerKind): string {
@@ -813,6 +823,8 @@ function peerControlKeyPath(stateDirectory: string, kind: RunnerKind): string {
 
 async function createPeerControlKey(stateDirectory: string, kind: RunnerKind): Promise<Buffer> {
   const key = randomBytes(32);
+  // Reached only under the discovery lock when no record names this kind: any existing key is orphaned (a crash
+  // between key creation and record publication) and would otherwise block every later start.
   await unlink(peerControlKeyPath(stateDirectory, kind)).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
   try { await writeFile(peerControlKeyPath(stateDirectory, kind), key, { flag: "wx", mode: 0o600 }); }
   catch (error) { key.fill(0); throw error; }
@@ -823,10 +835,6 @@ async function readPeerControlKey(stateDirectory: string, kind: RunnerKind): Pro
   const key = await readFile(peerControlKeyPath(stateDirectory, kind));
   if (key.length !== 32) { key.fill(0); throw new Error("instance_invalid: The launcher control key is invalid."); }
   return key;
-}
-
-async function removePeerControlKey(stateDirectory: string, kind: RunnerKind): Promise<void> {
-  await unlink(peerControlKeyPath(stateDirectory, kind)).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
 }
 
 async function waitForControlDown(instance: LauncherInstance): Promise<void> {

@@ -28,16 +28,16 @@ const privateOwners = new Set([
   // home are refused at startup when they resolve into the project, lexically or through a link
   // (runner-start isInsideProject); remote-only nested state is deliberate and its owned roots are
   // protected from Remote tools. Ownership-hardening follow-ups are tracked in that review.
-  "build-user-media.ts", // user-input media manifests/objects under state/user-input-media; expired-run cleanup there.
-  "chat-agent-session.ts", // chat session records under state/chat-sessions.
+  "build-user-media.ts", // user-input media manifests/objects under state/user-input-media; verified-file and empty-folder retention cleanup there.
+  "chat-agent-session.ts", // chat session records and exclusive temporary cleanup under state/chat-sessions.
   "credential-migration.ts", // credential journal, pointer and generations under state.
   "delivery-execution.ts", // removes only its own .aiboard-report-* residue in the run-owned verification workspace, canonically confined.
   "extension-management-service.ts", // upload staging under extension-home/uploads.
-  "extension-mcp-launcher.ts", // MCP runtime launcher and per-server secret files under extension home.
+  "extension-mcp-launcher.ts", // MCP runtime launcher and exclusive per-server secret publication/sweep under extension home.
   "extension-mcp.ts", // MCP runtimes, OAuth/policy JSON under extension home; discovery run under state/builds.
   "extension-package-store.ts", // digest-addressed packages, staging and GC under extension home.
   "extension-registry.ts", // extension registry, generations and lock under extension home.
-  "extension-run-bindings.ts", // per-run extension bindings under state/extension-bindings.
+  "extension-run-bindings.ts", // per-run extension bindings and exclusive temporary cleanup under state/extension-bindings.
   "extension-sources.ts", // random Git scratch directory under extension-home/scratch.
   "launcher-instance.ts", // launcher identity, instance and control-key files under launcher state.
   "launcher.ts", // peer records and peer control keys under launcher state.
@@ -50,7 +50,7 @@ const privateOwners = new Set([
   "runner-start.ts", // creates the configured state directory and state/artifacts after the overlap check.
   "self-update.ts", // managed install (versions, bin, staging, lock); on uninstall removes only its own marked profile block and fish file.
   "storage-key.ts", // state/storage-key via exclusive temp plus hard link.
-  "toolbench-session.ts", // ToolBench session snapshots/manifests/transcripts under state/toolbench.
+  "toolbench-session.ts", // ToolBench session snapshots/manifests/transcripts and exclusive temporary cleanup under state/toolbench.
 ]);
 // Read-handle-only owners: exact reviewed mutation-capable import per module.
 // Async open owners keep ["open"]; the sync report reader keeps ["openSync"].

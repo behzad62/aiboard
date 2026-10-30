@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ArtifactStore } from "./artifact-store.js";
 import type { AgentMediaAttachment } from "./agent-contracts.js";
@@ -124,7 +124,7 @@ export class BuildUserMediaStore {
     const previous = await cached();
     if (previous !== null) return previous;
     const evidence = await generate();
-    const file = JSON.stringify({ fingerprint, evidence });
+    const file = JSON.stringify({ runId, fingerprint, evidence });
     try { await writeFile(target, file, { flag: "wx" }); }
     catch (error) {
       if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error;
@@ -167,19 +167,27 @@ export class BuildUserMediaStore {
     });
     const retainedHashes = new Set<string>();
     let expiredRuns = 0;
+    let canSweepArtifacts = true;
     for (const folder of folders) {
       if (!folder.isDirectory() || !/^[a-f0-9]{64}$/.test(folder.name)) continue;
       const location = join(manifestRoot, folder.name);
-      const names = (await readdir(location)).filter((file) => /^[a-f0-9]{64}\.json$/.test(file));
+      const entries = await readdir(location, { withFileTypes: true });
+      const unknown = entries.some((entry) => !entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name));
+      let allVerified = !unknown;
+      if (unknown) canSweepArtifacts = false;
+      const names = entries.filter((entry) => entry.isFile() && /^[a-f0-9]{64}\.json$/.test(entry.name)).map((entry) => entry.name);
       let runId: string | undefined;
       let modified = 0;
       const storedFiles: StoredMediaReference[] = [];
       for (const name of names) {
         const manifestPath = join(location, name);
-        const [body, info] = await Promise.all([readFile(manifestPath, "utf8"), stat(manifestPath)]);
-        const manifest = JSON.parse(body) as { runId: string; files: StoredMediaReference[] };
+        const info = await lstat(manifestPath);
+        if (!info.isFile()) { allVerified = false; canSweepArtifacts = false; continue; }
+        const body = await readFile(manifestPath, "utf8");
+        const manifest = JSON.parse(body) as { runId: string; messageId: string; files: StoredMediaReference[] };
         if (!runId) runId = manifest.runId;
-        if (manifest.runId !== runId || hashText(runId) !== folder.name || !Array.isArray(manifest.files)) {
+        if (typeof runId !== "string" || typeof manifest.messageId !== "string" || hashText(manifest.messageId) + ".json" !== name ||
+            manifest.runId !== runId || hashText(runId) !== folder.name || !Array.isArray(manifest.files)) {
           throw new Error("User media manifest ownership is inconsistent; refusing cleanup.");
         }
         storedFiles.push(...manifest.files);
@@ -187,9 +195,22 @@ export class BuildUserMediaStore {
       }
       if (!runId) continue;
       // Unknown or live runs are always retained, irrespective of age.
-      if (modified < cutoff && isTerminal(runId)) {
-        await rm(location, { recursive: true, force: true });
-        await rm(join(this.directory, "prepared", folder.name + ".json"), { force: true });
+      if (allVerified && names.length === entries.length && modified < cutoff && isTerminal(runId)) {
+        for (const name of names) await rm(join(location, name));
+        try { await rmdir(location); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY" && (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          for (const file of storedFiles) retainedHashes.add(file.hash);
+          canSweepArtifacts = false;
+          continue;
+        }
+        const prepared = join(this.directory, "prepared", folder.name + ".json");
+        try {
+          if ((await lstat(prepared)).isFile()) {
+            const record: unknown = JSON.parse(await readFile(prepared, "utf8"));
+            if (record && typeof record === "object" && "runId" in record && record.runId === runId) await rm(prepared);
+          }
+        } catch { /* Keep absent or unverified prepared files. */ }
         expiredRuns++;
       } else {
         for (const file of storedFiles) retainedHashes.add(file.hash);
@@ -197,6 +218,7 @@ export class BuildUserMediaStore {
     }
     // Sweeping content-addressed objects only after all manifest references
     // are counted avoids deleting a shared file referenced by another run.
+    if (!canSweepArtifacts) return { expiredRuns, orphanArtifacts: 0 };
     const objectsRoot = join(this.directory, "objects");
     const shards = await readdir(objectsRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];

@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, lstatSync, readFileSync } from "node:fs";
 
 /**
  * Snapshot links already audited for a run, kept across runner restarts. A link key names
@@ -51,6 +51,9 @@ class PersistedLinkSet extends Set<string> {
     if (this.has(link)) return this;
     // A failed write only loses the shortcut: the link is re-audited after the next restart.
     try {
+      try {
+        if (lstatSync(this.path).isSymbolicLink()) throw new Error("Snapshot link log is a symbolic link.");
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       appendFileSync(this.path, `${JSON.stringify({ link, mac: linkMac(this.key, link) })}\n`, { mode: 0o600 });
     } catch {
       // Keep the in-memory proof for this process.

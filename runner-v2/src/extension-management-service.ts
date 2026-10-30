@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { ExtensionAuthorizer } from "./extension-authorization.js";
@@ -286,11 +286,11 @@ export class ExtensionManagementService {
   async storeUpload(filename: string, bytes: Buffer): Promise<{ uploadId: string; byteLength: number; digest: string }> {
     if (!/^[^\\/\0]{1,200}$/.test(filename)) throw new ExtensionManagementError("invalid_upload", "Upload filename is invalid.");
     if (bytes.byteLength > EXTENSION_LIMITS.maxArchiveBytes) throw new ExtensionManagementError("archive_too_large", "Upload is too large.", 413);
-    this.pruneUploads();
+    await this.pruneUploads();
     const id = `upl_${randomBytes(16).toString("hex")}`;
     const path = join(this.options.home, "uploads", id);
     await mkdir(join(this.options.home, "uploads"), { recursive: true });
-    await writeFile(path, bytes, { mode: 0o600 });
+    await writeFile(path, bytes, { mode: 0o600, flag: "wx" });
     const record: UploadRecord = { id, filename, path, byteLength: bytes.byteLength, digest: sha256(bytes), createdAt: Date.now() };
     this.uploads.set(id, record);
     return { uploadId: id, byteLength: record.byteLength, digest: record.digest };
@@ -1301,10 +1301,18 @@ export class ExtensionManagementService {
     if (!named) throw new ExtensionManagementError("source_not_permitted", "That folder is outside the project and you were not asked to use it; ask the user to name it or add it in Settings.", 403);
   }
 
-  private pruneUploads(): void {
+  private async pruneUploads(): Promise<void> {
     const cutoff = Date.now() - UPLOAD_TTL_MS;
     for (const [id, upload] of this.uploads) {
-      if (upload.createdAt < cutoff || this.uploads.size > MAX_UPLOADS) { this.uploads.delete(id); void rm(upload.path, { force: true }); }
+      if (upload.createdAt >= cutoff && this.uploads.size <= MAX_UPLOADS) continue;
+      this.uploads.delete(id);
+      if (!/^upl_[a-f0-9]{32}$/.test(id) || upload.id !== id || upload.path !== join(this.options.home, "uploads", id)) continue;
+      try {
+        const info = await lstat(upload.path);
+        if (info.isFile() && info.size === upload.byteLength && sha256(await readFile(upload.path)) === upload.digest) {
+          await rm(upload.path, { force: true });
+        }
+      } catch { /* Retain an unverified or inaccessible file. */ }
     }
   }
 
