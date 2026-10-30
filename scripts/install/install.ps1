@@ -72,6 +72,7 @@ __AIBOARD_TRUSTED_KEYS_PS__
   $Work = Join-Path ([IO.Path]::GetTempPath()) ("aiboard-install-" + [Guid]::NewGuid().ToString('N').Substring(0, 12))
   New-Item -ItemType Directory -Force -Path $Work | Out-Null
   $Lock = $null
+  $LockOwner = $null
   $staging = $null
   try {
     # 1. Signed manifest: the signature is checked before the bytes are parsed or any URL/hash is used.
@@ -113,16 +114,13 @@ __AIBOARD_TRUSTED_KEYS_PS__
     New-Item -ItemType Directory -Force -Path $Versions | Out-Null
     $lockPath = Join-Path $Root 'install.lock'
     try { New-Item -ItemType Directory -Path $lockPath -ErrorAction Stop | Out-Null }
-    catch {
-      $owner = Read-Pointer (Join-Path $lockPath 'pid')
-      if ($owner -and (Get-Process -Id $owner -ErrorAction SilentlyContinue)) { Fail "another AIBoard install or update is running (process $owner)." }
-      Remove-Item -LiteralPath $lockPath -Recurse -Force
-      New-Item -ItemType Directory -Path $lockPath | Out-Null
-    }
+    catch { if (Test-Path -LiteralPath $lockPath) { Fail "the install lock exists. After confirming no install, update, or uninstall is running, delete $lockPath and retry." }; throw }
+    $pendingOwner = Join-Path $lockPath ('owner-' + [Guid]::NewGuid().ToString('N'))
+    [IO.File]::WriteAllText($pendingOwner, [string]$PID)
     $Lock = $lockPath
+    $LockOwner = $pendingOwner
     # A cleanup left by an earlier uninstall must never run against this new install.
     Remove-Item -LiteralPath (Join-Path $Root 'uninstall-pending.cmd') -Force -ErrorAction SilentlyContinue
-    [IO.File]::WriteAllText((Join-Path $lockPath 'pid'), [string]$PID)
 
     $recorded = Read-Pointer (Join-Path $Root 'sequence')
     if ($recorded -and $Sequence -lt [long]$recorded) { Fail 'this machine already accepted a newer AIBoard release; refusing an older manifest.' }
@@ -131,7 +129,23 @@ __AIBOARD_TRUSTED_KEYS_PS__
     $node = Join-Path $destination 'node\node.exe'
     $entry = Join-Path $destination 'app\runner-v2\bin\aiboard.mjs'
 
+    $inventoryScript = @'
+const { resolve } = require('node:path');
+const { pathToFileURL } = require('node:url');
+const [dir, version, target] = process.argv.slice(2);
+import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
+  .then(m => m.verifyVersionDirectory(dir, { version, target }))
+  .catch(e => { console.error(e.message); process.exitCode = 1; });
+'@
+    $inventoryPath = Join-Path $Work 'verify-inventory.cjs'
+    [IO.File]::WriteAllText($inventoryPath, $inventoryScript, (New-Object Text.UTF8Encoding($false)))
+
     if ($current -eq $Version -and (Test-Path -LiteralPath $node)) {
+      $ErrorActionPreference = 'Continue'
+      $inventoryOutput = & $node $inventoryPath $destination $Version $Target 2>&1 | Out-String
+      $inventoryExit = $LASTEXITCODE
+      $ErrorActionPreference = 'Stop'
+      if ($inventoryExit -ne 0) { Fail "the existing version failed its inventory check. After stopping all AIBoard processes, remove $destination and run the installer again. $($inventoryOutput.Trim())" }
       Say "AI Board Runner $Version is already installed; repairing the command and PATH."
     } else {
       # 3. Bundle: size and SHA-256 must match the signed manifest before extraction.
@@ -173,16 +187,6 @@ __AIBOARD_TRUSTED_KEYS_PS__
       if ($release.version -ne $Version -or $release.target -ne $Target) { Fail 'the bundle does not describe the release it was published as.' }
 
       # The archive's signed checksum authenticates the bundled Node and verifier before they run.
-      $inventoryScript = @'
-const { resolve } = require('node:path');
-const { pathToFileURL } = require('node:url');
-const [dir, version, target] = process.argv.slice(2);
-import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
-  .then(m => m.verifyVersionDirectory(dir, { version, target }))
-  .catch(e => { console.error(e.message); process.exitCode = 1; });
-'@
-      $inventoryPath = Join-Path $Work 'verify-inventory.cjs'
-      [IO.File]::WriteAllText($inventoryPath, $inventoryScript, (New-Object Text.UTF8Encoding($false)))
       $ErrorActionPreference = 'Continue'
       $inventoryOutput = & (Join-Path $staging 'node\node.exe') $inventoryPath $staging $Version $Target 2>&1 | Out-String
       $inventoryExit = $LASTEXITCODE
@@ -262,7 +266,13 @@ import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
     Say 'Open a new terminal if the aiboard command is not found yet. Update: aiboard update. Remove: aiboard uninstall.'
   } finally {
     if ($staging -and (Test-Path -LiteralPath $staging)) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
-    if ($Lock) { Remove-Item -LiteralPath $Lock -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($Lock) {
+      try {
+        if (-not (Test-Path -LiteralPath $LockOwner) -or [IO.File]::ReadAllText($LockOwner) -ne [string]$PID) { throw 'owner marker is missing or changed' }
+        [IO.File]::Delete($LockOwner)
+        [IO.Directory]::Delete($Lock)
+      } catch { Write-Warning "Could not release install lock $Lock. Confirm no install, update, or uninstall is running before removing it." }
+    }
     Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
   }
 }

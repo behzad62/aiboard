@@ -101,6 +101,10 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
 - The site keeps serving the newest manifest, so an expired manifest means no new installs until the next release.
 - If the committed manifest has already expired, `sequence: auto` cannot verify it and stops. Dispatch with an explicit sequence instead: the expired manifest's sequence + 1.
 
+## Interrupted install or update
+- Install, update and uninstall share an `install.lock` directory. An existing lock is never deleted automatically: an empty, old, or malformed lock does not prove that its owner has stopped.
+- If an operation reports that the lock exists, first confirm that no AIBoard installation, update, or uninstall is running for that user. Only then remove `install.lock` and retry. It is under `%LOCALAPPDATA%\AIBoard` on Windows and `~/.aiboard` on macOS/Linux.
+
 ## Key rotation (planned)
 1. Generate a new key, back it up and pin it next to the old one (step 3). `release/channel.json` then lists both keys.
 2. Cut a release still signed with the **old** key. Its bundles carry both keys, so updated installs trust the new key.

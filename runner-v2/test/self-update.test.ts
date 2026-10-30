@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -143,6 +143,29 @@ test("rollback refuses a tampered retained version; the install lock refuses a l
     await release1();
     await assert.rejects(runUpdateCommand(["--check", "--rollback"], { layout }), /invalid_arguments/);
     await assert.rejects(runUpdateCommand([]), /not_managed_install/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("install lock never reclaims ownerless, stale, or replaced locks", async () => {
+  const { dir, layout } = await installedLayout();
+  const lock = join(layout.root, "install.lock");
+  try {
+    for (const owner of [undefined, "not-a-pid", "99999999"]) {
+      await mkdir(lock);
+      if (owner !== undefined) await writeFile(join(lock, "pid"), owner);
+      const old = new Date(Date.now() - 120_000);
+      await utimes(lock, old, old);
+      await assert.rejects(acquireInstallLock(layout.root), /install_busy/);
+      assert.equal(existsSync(lock), true);
+      if (owner !== undefined) assert.equal(await readFile(join(lock, "pid"), "utf8"), owner);
+      await rm(lock, { recursive: true });
+    }
+    const release = await acquireInstallLock(layout.root);
+    await rm(lock, { recursive: true });
+    await mkdir(lock);
+    await writeFile(join(lock, "replacement-owner"), "replacement");
+    await assert.rejects(release(), /install_lock_unverified/);
+    assert.equal(await readFile(join(lock, "replacement-owner"), "utf8"), "replacement");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

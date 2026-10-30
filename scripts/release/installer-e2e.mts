@@ -20,6 +20,7 @@ import {
   trustedKeyFromPublicKey, type ReleaseManifest, type ReleaseTarget,
 } from "../../runner-v2/src/release-manifest.js";
 import { readArchive, writeTarGz, writeZip } from "../../runner-v2/src/release-archive.js";
+import { acquireInstallLock } from "../../runner-v2/src/self-update.js";
 import { renderInstallers } from "./render-installers.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -200,6 +201,19 @@ const nothingInstalled = () => !existsSync(join(root, "current")) && !existsSync
 
 const originalUserPath = windows ? userPathSnapshot() : "";
 try {
+  // A just-created ownerless lock, and a stale-looking lock, must never be
+  // reclaimed by another installer: neither state proves the owner is gone.
+  for (const owner of [undefined, "not-a-pid", "99999999"]) {
+    resetHome();
+    const existingLock = join(root, "install.lock");
+    mkdirSync(existingLock, { recursive: true });
+    if (owner !== undefined) writeFileSync(join(existingLock, "pid"), owner);
+    publish(manifestFor("0.9.1", 1));
+    const blocked = await runInstaller();
+    check(`installer refuses ${owner ?? "ownerless"} lock`, blocked.code !== 0 && /install lock/i.test(blocked.stdout + blocked.stderr), blocked.stdout + blocked.stderr);
+    check(`installer preserves ${owner ?? "ownerless"} lock`, existsSync(existingLock) && (!owner || readFileSync(join(existingLock, "pid"), "utf8") === owner));
+    check(`installer does not activate under ${owner ?? "ownerless"} lock`, !existsSync(join(root, "current")));
+  }
   // ---- negatives: nothing may be installed
   const negatives: { name: string; prepare: () => void; expect: RegExp }[] = [
     { name: "tampered manifest", prepare: () => publish(manifestFor("0.9.1", 1), undefined, (bytes) => Buffer.from(bytes.toString("utf8").replace('"sequence":1,', '"sequence":9,'))), expect: /signature does not verify/ },
@@ -238,6 +252,26 @@ try {
   check("re-running the installer is idempotent", rerun.code === 0 && /already installed/.test(rerun.stdout), rerun.stdout + rerun.stderr);
   if (windows) check("re-run does not duplicate the PATH entry", userPathSnapshot().toLowerCase().split(";").filter((entry) => entry.replace(/\\$/, "") === join(root, "bin").toLowerCase()).length === 1);
   else check("re-run does not duplicate the profile block", readFileSync(join(home, ".profile"), "utf8").split("# >>> aiboard installer >>>").length === 2);
+
+  const installedLicense = join(root, "versions", "0.9.1", "LICENSE");
+  const originalLicense = readFileSync(installedLicense);
+  try {
+    writeFileSync(installedLicense, Buffer.from("corrupted installed file"));
+    const corruptedUpdate = await aiboard("update --check");
+    check("updater refuses a corrupted active version", corruptedUpdate.code !== 0 && /active version failed its integrity check/i.test(corruptedUpdate.stdout + corruptedUpdate.stderr), corruptedUpdate.stdout + corruptedUpdate.stderr);
+    const corruptedReinstall = await runInstaller();
+    check("same-version installer refuses a corrupted version with repair guidance", corruptedReinstall.code !== 0 && /existing version failed its inventory check/i.test(corruptedReinstall.stdout + corruptedReinstall.stderr), corruptedReinstall.stdout + corruptedReinstall.stderr);
+    check("corrupt reinstall leaves the active version unchanged", pointer("current") === "0.9.1" && readFileSync(installedLicense, "utf8") === "corrupted installed file");
+  } finally { writeFileSync(installedLicense, originalLicense); }
+
+  const releaseHeldLock = await acquireInstallLock(root);
+  try {
+    const blockedInstaller = await runInstaller();
+    check("installer respects updater-owned lock", blockedInstaller.code !== 0 && /install lock/i.test(blockedInstaller.stdout + blockedInstaller.stderr), blockedInstaller.stdout + blockedInstaller.stderr);
+    const blockedUpdate = await aiboard("update --check");
+    check("updater respects held install lock", blockedUpdate.code !== 0 && /install_busy/.test(blockedUpdate.stdout + blockedUpdate.stderr), blockedUpdate.stdout + blockedUpdate.stderr);
+    check("lock contention leaves active version unchanged", pointer("current") === "0.9.1");
+  } finally { await releaseHeldLock(); }
 
   const doctor = await aiboard("doctor");
   check("aiboard doctor reports the managed install", doctor.code === 0 && doctor.stdout.includes(`Install: ${root}`) && /active 0\.9\.1/.test(doctor.stdout), doctor.stdout + doctor.stderr);

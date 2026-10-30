@@ -9,7 +9,7 @@
 //   <root>/versions/<version>  verified, extracted bundles
 //   <root>/bin/aiboard(.cmd)   PATH shims
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -160,29 +160,29 @@ async function writeAtomic(path: string, content: string): Promise<void> {
   catch (error) { await unlink(temporary).catch(() => undefined); throw error; }
 }
 
-function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-}
-
-/** Per-user lock shared with the installers: a directory holding the owner's pid. */
+/** A lock with unknown ownership is never reclaimed automatically. */
 export async function acquireInstallLock(root: string): Promise<() => Promise<void>> {
   const lock = join(root, "install.lock");
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await mkdir(lock);
-      await writeFile(join(lock, "pid"), String(process.pid));
-      return async () => { await rm(lock, { recursive: true, force: true }); };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = Number(await readPointer(join(lock, "pid")).catch(() => undefined));
-      const age = Date.now() - (await stat(lock).catch(() => ({ mtimeMs: 0 }))).mtimeMs;
-      if ((Number.isSafeInteger(owner) && owner > 0 && pidAlive(owner)) || (!owner && age < 60_000)) {
-        throw new Error(`install_busy: Another AIBoard install or update is running. If none is, delete ${lock} and retry.`);
-      }
-      await rm(lock, { recursive: true, force: true });
-    }
+  try { await mkdir(lock); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    throw new Error(`install_busy: The AIBoard install lock exists. After confirming no install, update, or uninstall is running, delete ${lock} and retry.`);
   }
-  throw new Error(`install_busy: Could not take the install lock ${lock}.`);
+  const marker = join(lock, `owner-${randomUUID()}`);
+  // If recording ownership fails, retain the lock: an incomplete lock is busy.
+  await writeFile(marker, String(process.pid), { flag: "wx" });
+  let released = false;
+  return async () => {
+    if (released) return;
+    try {
+      if (await readFile(marker, "utf8") !== String(process.pid)) throw new Error("owner marker changed");
+      await unlink(marker);
+      await rmdir(lock); // Only removes an empty directory; never removes another owner's files.
+      released = true;
+    } catch (error) {
+      throw new Error(`install_lock_unverified: Could not release ${lock}; confirm no install, update, or uninstall is running before removing it (${error instanceof Error ? error.message : String(error)}).`);
+    }
+  };
 }
 
 async function fetchLimited(fetchImpl: typeof fetch, url: string, limit: number): Promise<Buffer> {

@@ -87,8 +87,9 @@ main() {
   root="$HOME/.aiboard"
   work=$(mktemp -d "${TMPDIR:-/tmp}/aiboard-install.XXXXXX")
   lock=""
+  lock_owner=""
   staging=""
-  trap 'rm -rf "$work"; if [ -n "$staging" ]; then rm -rf "$staging"; fi; if [ -n "$lock" ]; then rm -rf "$lock"; fi' EXIT
+  trap 'rm -rf "$work"; if [ -n "$staging" ]; then rm -rf "$staging"; fi; if [ -n "$lock" ]; then if [ -f "$lock_owner" ] && [ "$(cat "$lock_owner" 2>/dev/null)" = "$$" ]; then rm -f "$lock_owner" && rmdir "$lock" 2>/dev/null || printf "Could not release install lock %s; confirm no install, update, or uninstall is running before removing it.\n" "$lock" >&2; else printf "Install lock ownership could not be verified: %s\n" "$lock" >&2; fi; fi' EXIT
   trap 'exit 1' INT TERM
 
   # 1. Signed manifest: the signature is checked before the bytes are parsed or any URL/hash is used.
@@ -138,13 +139,12 @@ main() {
   # 2. Per-user lock shared with `aiboard update` / `aiboard uninstall`.
   mkdir -p "$root/versions"
   if ! mkdir "$root/install.lock" 2>/dev/null; then
-    owner=$(cat "$root/install.lock/pid" 2>/dev/null || true)
-    if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then fail "another AIBoard install or update is running (process $owner)."; fi
-    rm -rf "$root/install.lock"
-    mkdir "$root/install.lock" || fail "could not take the install lock."
+    fail "the install lock exists. After confirming no install, update, or uninstall is running, delete $root/install.lock and retry."
   fi
+  pending_owner="$root/install.lock/owner-${work##*/}-$$"
+  (umask 077; printf '%s' "$$" > "$pending_owner") || fail "could not record install lock ownership; the lock was retained."
   lock="$root/install.lock"
-  printf '%s' "$$" > "$lock/pid"
+  lock_owner="$pending_owner"
 
   recorded=$(cat "$root/sequence" 2>/dev/null || true)
   case "$recorded" in *[!0-9]*) fail "$root/sequence is corrupt; remove $root and reinstall." ;; esac
@@ -152,7 +152,16 @@ main() {
   current=$(cat "$root/current" 2>/dev/null || true)
   destination="$root/versions/$version"
 
+  cat > "$work/verify-inventory.cjs" <<'NODE'
+const { resolve } = require('node:path');
+const { pathToFileURL } = require('node:url');
+const [dir, version, target] = process.argv.slice(2);
+import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
+  .then(m => m.verifyVersionDirectory(dir, { version, target }))
+  .catch(e => { console.error(e.message); process.exitCode = 1; });
+NODE
   if [ "$current" = "$version" ] && [ -x "$destination/node/node" ]; then
+    "$destination/node/node" "$work/verify-inventory.cjs" "$destination" "$version" "$target" || fail "the existing version failed its inventory check. After stopping all AIBoard processes, remove $destination and run the installer again."
     say "AI Board Runner $version is already installed; repairing the command and PATH."
   else
     # 3. Bundle: size and SHA-256 must match the signed manifest before extraction.
@@ -177,14 +186,6 @@ main() {
       || fail "the bundle does not describe the release it was published as."
 
     # The archive's signed checksum authenticates the bundled Node and verifier before they run.
-    cat > "$work/verify-inventory.cjs" <<'NODE'
-const { resolve } = require('node:path');
-const { pathToFileURL } = require('node:url');
-const [dir, version, target] = process.argv.slice(2);
-import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
-  .then(m => m.verifyVersionDirectory(dir, { version, target }))
-  .catch(e => { console.error(e.message); process.exitCode = 1; });
-NODE
     "$staging/node/node" "$work/verify-inventory.cjs" "$staging" "$version" "$target" || fail "bundle inventory verification failed. Nothing was installed."
 
     # 5. Bounded smoke check with the bundle's own Node before switching.
