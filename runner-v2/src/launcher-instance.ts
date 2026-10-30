@@ -250,7 +250,7 @@ export function tryAcquireLock(stateDirectory: string, kind: "discovery" | "life
   const database = new DatabaseSync(file, { timeout: 0 });
   try {
     database.exec("BEGIN IMMEDIATE");
-    assertLockFileIdentity(file);
+    assertLockFileIdentity(file, { held: true });
     let held = true;
     return () => {
       if (!held) return;
@@ -277,8 +277,18 @@ export async function acquireDiscoveryLock(stateDirectory: string): Promise<() =
 }
 
 /** Keep lock files in place: replacing one must never make a held lock appear free. */
-function assertLockFileIdentity(file: string): void {
+function assertLockFileIdentity(file: string, options: { held?: boolean } = {}): void {
   const identityFile = `${file}.identity`;
+  if (options.held && process.platform !== "win32") {
+    // POSIX record locks belong to the process and are released when ANY descriptor of the file
+    // closes: once SQLite holds the lock, re-check the path with lstat and never open the file here.
+    const pathInfo = lstatSync(file);
+    if (!pathInfo.isFile() || pathInfo.nlink !== 1 || pathInfo.ino === 0 || pathInfo.uid !== process.getuid?.() || (pathInfo.mode & 0o077) !== 0) {
+      throw new Error("launcher_lock_unverified: The launcher lock is not a private, stable file.");
+    }
+    assertIdentityRecord(identityFile, `${pathInfo.dev}:${pathInfo.ino}`, false);
+    return;
+  }
   let descriptor: number | undefined;
   let created = false;
   try {
@@ -303,24 +313,28 @@ function assertLockFileIdentity(file: string): void {
       try { linkSync(temporary, identityFile); }
       finally { unlinkSync(temporary); }
     }
-    let identityDescriptor: number | undefined;
-    try {
-      identityDescriptor = openSync(identityFile, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
-      const identityInfo = fstatSync(identityDescriptor);
-      const identityPathInfo = lstatSync(identityFile);
-      if (!identityInfo.isFile() || !identityPathInfo.isFile() || identityInfo.nlink !== 1 ||
-          identityInfo.dev !== identityPathInfo.dev || identityInfo.ino !== identityPathInfo.ino ||
-          (process.platform !== "win32" && (identityInfo.uid !== process.getuid?.() || (identityInfo.mode & 0o077) !== 0)) ||
-          readFileSync(identityDescriptor, "utf8") !== expected) {
-        throw new Error("launcher_lock_unverified: The launcher lock identity changed.");
-      }
-    } catch (error) {
-      if (!created && (error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw Object.assign(new Error("launcher_lock_unverified: The launcher lock identity is not yet available."), { code: "LAUNCHER_LOCK_NOT_READY" });
-      }
-      throw error;
-    } finally { if (identityDescriptor !== undefined) closeSync(identityDescriptor); }
+    assertIdentityRecord(identityFile, expected, created);
   } finally { if (descriptor !== undefined) closeSync(descriptor); }
+}
+
+function assertIdentityRecord(identityFile: string, expected: string, created: boolean): void {
+  let identityDescriptor: number | undefined;
+  try {
+    identityDescriptor = openSync(identityFile, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
+    const identityInfo = fstatSync(identityDescriptor);
+    const identityPathInfo = lstatSync(identityFile);
+    if (!identityInfo.isFile() || !identityPathInfo.isFile() || identityInfo.nlink !== 1 ||
+        identityInfo.dev !== identityPathInfo.dev || identityInfo.ino !== identityPathInfo.ino ||
+        (process.platform !== "win32" && (identityInfo.uid !== process.getuid?.() || (identityInfo.mode & 0o077) !== 0)) ||
+        readFileSync(identityDescriptor, "utf8") !== expected) {
+      throw new Error("launcher_lock_unverified: The launcher lock identity changed.");
+    }
+  } catch (error) {
+    if (!created && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw Object.assign(new Error("launcher_lock_unverified: The launcher lock identity is not yet available."), { code: "LAUNCHER_LOCK_NOT_READY" });
+    }
+    throw error;
+  } finally { if (identityDescriptor !== undefined) closeSync(identityDescriptor); }
 }
 
 export async function readInstance(stateDirectory: string): Promise<LauncherInstance | undefined> {
