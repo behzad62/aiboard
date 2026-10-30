@@ -105,7 +105,7 @@ function selectedModel(name: string): SelectedModel {
 }
 
 
-const nativeTransport = installNativeBenchmarkTestTransport();
+const nativeTransport = installNativeBenchmarkTestTransport(true, { browser: true });
 const nativeBuildForTests = nativeTransport.runBuild;
 
 const toolReliabilityLeg = BENCHMARK_PRESETS.find(preset => preset.id === "model-iq")!.legs.find(

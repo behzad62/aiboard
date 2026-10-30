@@ -2,7 +2,7 @@
 import { openaiProvider } from "../lib/providers/openai";
 import type { runNativeWorkBenchBuild } from "../lib/benchmark/workbench/native-runner-adapter";
 
-export function installNativeBenchmarkTestTransport(verifierPassed = true) {
+export function installNativeBenchmarkTestTransport(verifierPassed = true, options: { browser?: boolean } = {}) {
   const originalFetch = globalThis.fetch;
   const unmockedStream = openaiProvider.streamChat;
   globalThis.fetch = async (input, init) => {
@@ -11,7 +11,7 @@ export function installNativeBenchmarkTestTransport(verifierPassed = true) {
     if (init?.signal?.aborted) throw init.signal.reason;
     const route = new URL(url).pathname;
     const body = init?.body ? JSON.parse(String(init.body)) : {};
-    const payload = route === "/bench/health" ? { ok: true, platform: "win32", nodeVersion: "24.18.0", nativeCapabilities: { browser: false, soloToolBench: true }, runnerV2: { ready: true, sourceDigest: "a".repeat(64) } }
+    const payload = route === "/bench/health" ? { ok: true, platform: "win32", nodeVersion: "24.18.0", nativeCapabilities: { browser: options.browser ?? false, soloToolBench: true }, runnerV2: { ready: true, sourceDigest: "a".repeat(64) } }
       : route === "/bench/prepare" ? { attemptId: body.attemptId, caseId: body.caseId }
       : route === "/bench/run-verifier" ? { passed: verifierPassed, score: verifierPassed ? 1 : 0, durationMs: 1, exitCode: verifierPassed ? 0 : 1, stdoutPreview: "", stderrPreview: "", resultJson: JSON.stringify({passed:verifierPassed,score:verifierPassed?1:0,summary:"fixture",assertions:[{id:"behavior",label:"fixture",passed:verifierPassed,weight:1}]}), artifactIds: [] }
       : route === "/bench/diff" ? { diff: "" } : { cleaned: true };
