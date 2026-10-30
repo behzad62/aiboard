@@ -1,8 +1,8 @@
 import type { RunActivityTracker } from "./run-activity.js";
 import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import { randomUUID, createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { computeAffectedTests, isRunnableTestFile } from "./affected-tests.js";
 import type { ArtifactStore } from "./artifact-store.js";
@@ -839,16 +839,32 @@ async function readRunReport(
 /**
  * The report is stored as an artifact once read; the file itself is runner residue. Left in the
  * checkout it was read by the reviewer as if it were project content (tunnel run).
+ *
+ * Confinement is canonical, not lexical: a workspace folder that is a symlink or junction can point
+ * outside the checkout, so the report's parent must resolve inside the checkout's real path. Anything
+ * that fails a check is left in place; residue is harmless, deleting a foreign file is not.
  */
-function removeRunnerReports(plan: TestReportPlan, checkoutPath: string): void {
+export function removeRunnerReports(plan: TestReportPlan, checkoutPath: string): void {
   const paths = plan.reportSet?.kind === "node-workspace-reports" ? plan.reportSet.reportPaths : plan.reportPath ? [plan.reportPath] : [];
   const root = resolve(checkoutPath);
+  let rootCanonical: string;
+  try { rootCanonical = realpathSync(root); } catch { return; }
   for (const path of paths) {
     const target = resolve(root, path);
-    const inside = relative(root, target);
-    if (!/^\.aiboard-report-[A-Za-z0-9]+\.(?:xml|trx)$/.test(basename(target)) || inside.startsWith("..") || isAbsolute(inside)) continue;
-    try { rmSync(target, { force: true }); } catch { /* best effort: the tree identity already ignores it */ }
+    if (!/^\.aiboard-report-[A-Za-z0-9]+\.(?:xml|trx)$/.test(basename(target)) || !isWithin(root, target)) continue;
+    try {
+      const parentCanonical = realpathSync(dirname(target));
+      const canonicalTarget = join(parentCanonical, basename(target));
+      if (!isWithin(rootCanonical, canonicalTarget) || !lstatSync(canonicalTarget).isFile()) continue;
+      rmSync(canonicalTarget, { force: true });
+    } catch { /* best effort: the tree identity already ignores it */ }
   }
+}
+
+/** True when `candidate` is strictly beneath `root` (both already resolved the same way). */
+function isWithin(root: string, candidate: string): boolean {
+  const back = relative(root, candidate);
+  return back !== "" && back !== ".." && !back.startsWith(`..${sep}`) && !isAbsolute(back);
 }
 
 async function readRunReportOnce(
