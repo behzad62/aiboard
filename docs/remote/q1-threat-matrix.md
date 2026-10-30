@@ -22,7 +22,7 @@
 | 9 | **Model-generated "approve" text** | Approvals are answered only in the local terminal (dashboard approvals are not built yet). They are bound to a per-job nonce, and text in a tool result can never answer them. | runner `remote-approvals` 9/9, with red/green on the nonce binding | Covered (terminal only); re-qualify when dashboard approvals land (P4b) |
 | 10 | **Webhook forgery and fake payment redirect** | Planned: Paddle signature verification, price-ID allow-list, idempotent processing; the redirect grants nothing. | none | Blocked (P3) |
 | 11 | **Relay compromise blast radius** | The relay is not an execution authority, but it signs per-request authorizations and holds the root key that signs pairing sessions. A compromised relay can therefore drive every connected device of every account, within each device's local policy. Devices keep data local; audit is local; local revoke and Ctrl+C always work. | design (§3); `device-route` forged-signature tests show that only relay keys are trusted | Accept? Needs an owner decision. Mitigations to consider: an offline root key (sign the relay key set offline), per-account tool-call alerting, and making the S2 sandbox the default later |
-| 12 | **Relay signing-key leak** | R4e rotation: a root-signed key set in every challenge, with monotonic `issuedAt` on the Runner. | R4e tests (in progress) | Partial until R4e lands |
+| 12 | **Relay signing-key leak** | R4e rotation: a root-signed key set in every challenge, with monotonic `issuedAt` on the Runner. | runner `remote-connector` rotation suite (every refusal case, replay, downgrade); cross-repo interop 5/5 (rotate A→B without re-pairing, downgrade refused); mutants red (no downgrade guard, no monotonic check) | Covered |
 | 13 | **Root key leak** | Pins are compiled into the Runner. Recovery means a new Runner release with new pins, after which devices re-pair. | none | Gap: write and drill the root-rotation runbook (release path L2) |
 | 14 | **Token or secret leakage** in logs, URLs, Referer or argv | Structured redacted logs; `no-referrer` on `/auth` and `/api`; pairing uses a fragment code with ≤120 s TTL; no tokens in URLs; `__Host-` cookies (HttpOnly session, Secure, SameSite=Lax). | relay `accounts-logs`, `device-route-ops` (T18 log-leak check, red/green), `oauth-flow` (no secrets in logs), `pairing-v2`; runner `remote-pairing` | Covered |
 | 15 | **CSRF, Origin and clickjacking** on browser routes | Double-submit CSRF token bound to the session, plus an exact Origin check on every non-GET. `frame-ancestors 'none'` and `X-Frame-Options: DENY` on every HTML page. | P1a mutants (CSRF, Origin); `oauth-flow` (consent CSRF/Origin); `dashboard` (headers) | Covered |
@@ -36,7 +36,7 @@
 
 ## Next actions
 1. ~~Add the forged-audience test (row 3).~~ Done.
-2. Land R4e (row 12).
+2. ~~Land R4e (row 12).~~ Done 2026-10-30.
 3. Get owner decisions on rows 6, 8 and 11.
 4. Write the root-rotation runbook (row 13).
 5. Run the license inventory (row 21).
