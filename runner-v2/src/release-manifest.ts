@@ -129,6 +129,15 @@ export interface VerifyManifestOptions {
 
 /** Verifies the detached signature first, then parses and validates the exact signed bytes. */
 export function verifyReleaseManifest(bytes: Uint8Array, signatureText: string, config: ReleaseChannelConfig, options: VerifyManifestOptions): ReleaseManifest {
+  return verifyManifest(bytes, signatureText, config, options, false);
+}
+
+/** Signing-time history only: authenticate an expired prior manifest to enforce a higher sequence. Never use for install/update. */
+export function verifyHistoricalReleaseManifest(bytes: Uint8Array, signatureText: string, config: ReleaseChannelConfig, now: Date): ReleaseManifest {
+  return verifyManifest(bytes, signatureText, config, { now }, true);
+}
+
+function verifyManifest(bytes: Uint8Array, signatureText: string, config: ReleaseChannelConfig, options: VerifyManifestOptions, allowExpired: boolean): ReleaseManifest {
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_MANIFEST_BYTES) throw new ReleaseVerificationError("manifest size is out of range");
   if (config.keys.length === 0) throw new ReleaseVerificationError("no trusted release key is configured; this build cannot install or update");
   const trimmed = signatureText.trim();
@@ -154,7 +163,7 @@ export function verifyReleaseManifest(bytes: Uint8Array, signatureText: string, 
   if (manifest.channel !== config.channel) throw new ReleaseVerificationError(`manifest is for channel ${manifest.channel}, expected ${config.channel}`);
   if (manifest.minInstallerVersion > INSTALLER_PROTOCOL) throw new ReleaseVerificationError("this release needs a newer installer; reinstall with the one-line installer");
   const now = options.now.getTime();
-  if (Date.parse(manifest.expiresAt) <= now) throw new ReleaseVerificationError("manifest has expired");
+  if (!allowExpired && Date.parse(manifest.expiresAt) <= now) throw new ReleaseVerificationError("manifest has expired");
   if (Date.parse(manifest.createdAt) > now + CREATED_SKEW_MS) throw new ReleaseVerificationError("manifest creation time is in the future");
   if (Date.parse(manifest.createdAt) >= Date.parse(manifest.expiresAt)) throw new ReleaseVerificationError("manifest expires before it was created");
   if (manifest.sequence < config.minSequence) throw new ReleaseVerificationError("manifest sequence is older than this installer's minimum");

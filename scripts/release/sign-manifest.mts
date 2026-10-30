@@ -15,6 +15,7 @@ import {
   serializeManifest, signManifestBytes, trustedKeyFromPublicKey, verifyReleaseManifest, type ReleaseManifest,
 } from "../../runner-v2/src/release-manifest.js";
 import type { BuildReport } from "./build-bundle.mjs";
+import { selectReleaseSequence } from "./signing-sequence.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -41,22 +42,16 @@ if (!urlPrefix.startsWith(config.artifactPrefix) || !urlPrefix.endsWith("/")) th
 const expiresDays = Number(option("expires-days") ?? "180");
 if (!Number.isInteger(expiresDays) || expiresDays < 7 || expiresDays > 400) throw new Error("--expires-days must be 7-400.");
 
-let sequence: number;
 const sequenceOption = option("sequence") ?? "auto";
-if (sequenceOption === "auto") {
-  // The site serves the current manifest from public/release/<channel>/; the next one must be strictly newer.
-  const published = join(root, "public", "release", config.channel, "manifest.json");
-  if (existsSync(published)) {
-    const signature = readFileSync(`${published}.sig`, "utf8");
-    let current: ReleaseManifest;
-    try { current = verifyReleaseManifest(readFileSync(published), signature, config, { now: new Date() }); }
-    catch (error) { throw new Error(`Cannot derive the next sequence from ${published} (${error instanceof Error ? error.message : String(error)}); pass --sequence explicitly.`); }
-    sequence = current.sequence + 1;
-  } else sequence = config.minSequence;
-} else {
-  sequence = Number(sequenceOption);
-  if (!Number.isSafeInteger(sequence) || sequence < config.minSequence) throw new Error(`--sequence must be an integer >= ${config.minSequence}.`);
-}
+// The prior manifest must be authenticated even if an explicit sequence is used.
+const published = join(root, "public", "release", config.channel, "manifest.json");
+const hasManifest = existsSync(published);
+const hasSignature = existsSync(`${published}.sig`);
+if (hasManifest !== hasSignature) throw new Error(`The previous manifest or signature is missing at ${published}; refusing to sign.`);
+const previous = hasManifest ? { bytes: readFileSync(published), signature: readFileSync(`${published}.sig`, "utf8") } : undefined;
+let sequence: number;
+try { sequence = selectReleaseSequence(sequenceOption, config, previous, new Date()); }
+catch (error) { throw new Error(`Cannot select a release sequence (${error instanceof Error ? error.message : String(error)}). An expired prior manifest requires an explicit higher --sequence.`); }
 
 const keyPem = option("key-file") ? readFileSync(resolve(option("key-file")!), "utf8") : process.env.AIBOARD_RELEASE_SIGNING_KEY;
 if (!keyPem) throw new Error("No signing key: set AIBOARD_RELEASE_SIGNING_KEY (release environment secret) or pass --key-file.");

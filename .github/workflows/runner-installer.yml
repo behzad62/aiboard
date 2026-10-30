@@ -62,6 +62,8 @@ jobs:
           runner-v2/test/static-adapter-policy.test.ts
       - name: Rendered installers (shims, keys, syntax)
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-installers.mts
+      - name: Signing sequence monotonicity
+        run: node node_modules/tsx/dist/cli.mjs scripts/release/test-signing-sequence.mts
 
       - name: Prepare test release (key, host bundles, bundled driver)
         shell: bash
