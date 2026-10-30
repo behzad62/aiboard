@@ -172,6 +172,23 @@ __AIBOARD_TRUSTED_KEYS_PS__
       $release = [IO.File]::ReadAllText((Join-Path $staging 'release.json')) | ConvertFrom-Json
       if ($release.version -ne $Version -or $release.target -ne $Target) { Fail 'the bundle does not describe the release it was published as.' }
 
+      # The archive's signed checksum authenticates the bundled Node and verifier before they run.
+      $inventoryScript = @'
+const { resolve } = require('node:path');
+const { pathToFileURL } = require('node:url');
+const [dir, version, target] = process.argv.slice(2);
+import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
+  .then(m => m.verifyVersionDirectory(dir, { version, target }))
+  .catch(e => { console.error(e.message); process.exitCode = 1; });
+'@
+      $inventoryPath = Join-Path $Work 'verify-inventory.cjs'
+      [IO.File]::WriteAllText($inventoryPath, $inventoryScript, (New-Object Text.UTF8Encoding($false)))
+      $ErrorActionPreference = 'Continue'
+      $inventoryOutput = & (Join-Path $staging 'node\node.exe') $inventoryPath $staging $Version $Target 2>&1 | Out-String
+      $inventoryExit = $LASTEXITCODE
+      $ErrorActionPreference = 'Stop'
+      if ($inventoryExit -ne 0) { Fail "bundle inventory verification failed. Nothing was installed. $($inventoryOutput.Trim())" }
+
       # 5. Bounded smoke check with the bundle's own Node before switching.
       $ErrorActionPreference = 'Continue'
       $smoke = & (Join-Path $staging 'node\node.exe') (Join-Path $staging 'app\runner-v2\bin\aiboard.mjs') version 2>&1 | Out-String

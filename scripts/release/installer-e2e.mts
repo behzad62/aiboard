@@ -19,6 +19,7 @@ import {
   INSTALLER_PROTOCOL, RELEASE_PRODUCT, RELEASE_TARGETS, PREVIEW_TARGETS, serializeManifest, signManifestBytes, targetFormat,
   trustedKeyFromPublicKey, type ReleaseManifest, type ReleaseTarget,
 } from "../../runner-v2/src/release-manifest.js";
+import { readArchive, writeTarGz, writeZip } from "../../runner-v2/src/release-archive.js";
 import { renderInstallers } from "./render-installers.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -92,17 +93,29 @@ const bundleFile = (version: string) => `aiboard-${version}-${target}.${targetFo
 const tampered = Buffer.from(readFileSync(join(site, "downloads", bundleFile("0.9.2"))));
 tampered[Math.floor(tampered.length / 2)]! ^= 0xff;
 writeFileSync(join(site, "downloads", `tampered-${bundleFile("0.9.2")}`), tampered);
+// The archive and manifest are correctly signed, but one inventory digest is wrong.
+const badInventoryFiles = readArchive(readFileSync(join(site, "downloads", bundleFile("0.9.1"))), targetFormat(target));
+const inventoryEntry = badInventoryFiles.find((entry) => entry.path === "release.json");
+if (!inventoryEntry) throw new Error("Test bundle has no release inventory.");
+const badInventory = JSON.parse(inventoryEntry.data.toString("utf8")) as { files: Record<string, string> };
+const firstInventoryFile = Object.keys(badInventory.files)[0];
+if (!firstInventoryFile) throw new Error("Test bundle has an empty release inventory.");
+badInventory.files[firstInventoryFile] = "0".repeat(64);
+inventoryEntry.data = Buffer.from(`${JSON.stringify(badInventory, null, 1)}\n`);
+const badInventoryArchive = targetFormat(target) === "zip" ? writeZip(badInventoryFiles) : writeTarGz(badInventoryFiles);
+const badInventoryName = `bad-inventory-${bundleFile("0.9.1")}`;
+writeFileSync(join(site, "downloads", badInventoryName), badInventoryArchive);
 
 function iso(offsetDays: number): string {
   return `${new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 19)}Z`;
 }
-function manifestFor(version: string, sequence: number, overrides: { url?: string; sha256?: string; expiresAt?: string } = {}): ReleaseManifest {
+function manifestFor(version: string, sequence: number, overrides: { url?: string; sha256?: string; bytes?: number; expiresAt?: string } = {}): ReleaseManifest {
   const real = readFileSync(join(site, "downloads", bundleFile(version)));
   return {
     schemaVersion: 1, product: RELEASE_PRODUCT, channel: "stable", version, sequence,
     createdAt: iso(-1), expiresAt: overrides.expiresAt ?? iso(30), minInstallerVersion: INSTALLER_PROTOCOL, keyId: trusted.keyId, nodeVersion: "24.18.0",
     artifacts: RELEASE_TARGETS.map((entry) => entry === target
-      ? { target: entry, format: targetFormat(entry), preview: PREVIEW_TARGETS.has(entry), bytes: real.length,
+      ? { target: entry, format: targetFormat(entry), preview: PREVIEW_TARGETS.has(entry), bytes: overrides.bytes ?? real.length,
         sha256: overrides.sha256 ?? createHash("sha256").update(real).digest("hex"), url: overrides.url ?? `${origin}/downloads/${bundleFile(version)}` }
       : { target: entry, format: targetFormat(entry), preview: PREVIEW_TARGETS.has(entry), bytes: 1, sha256: "0".repeat(64), url: `${origin}/downloads/unused-${entry}` }),
   };
@@ -191,6 +204,7 @@ try {
   const negatives: { name: string; prepare: () => void; expect: RegExp }[] = [
     { name: "tampered manifest", prepare: () => publish(manifestFor("0.9.1", 1), undefined, (bytes) => Buffer.from(bytes.toString("utf8").replace('"sequence":1,', '"sequence":9,'))), expect: /signature does not verify/ },
     { name: "tampered bundle", prepare: () => publish(manifestFor("0.9.2", 1, { url: `${origin}/downloads/tampered-${bundleFile("0.9.2")}` })), expect: /does not match the signed checksum/ },
+    { name: "incorrect inventory", prepare: () => publish(manifestFor("0.9.1", 1, { url: `${origin}/downloads/${badInventoryName}`, bytes: badInventoryArchive.length, sha256: createHash("sha256").update(badInventoryArchive).digest("hex") })), expect: /bundle inventory verification failed/ },
     { name: "wrong signing key", prepare: () => publish(manifestFor("0.9.1", 1), wrongPair.privateKey), expect: /signature does not verify/ },
     { name: "expired manifest", prepare: () => publish(manifestFor("0.9.1", 1, { expiresAt: iso(-0.5) })), expect: /expired/ },
   ];

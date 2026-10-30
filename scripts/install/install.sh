@@ -176,6 +176,17 @@ main() {
     grep -q "^ \"version\": \"$version\",\$" "$staging/release.json" && grep -q "^ \"target\": \"$target\",\$" "$staging/release.json" \
       || fail "the bundle does not describe the release it was published as."
 
+    # The archive's signed checksum authenticates the bundled Node and verifier before they run.
+    cat > "$work/verify-inventory.cjs" <<'NODE'
+const { resolve } = require('node:path');
+const { pathToFileURL } = require('node:url');
+const [dir, version, target] = process.argv.slice(2);
+import(pathToFileURL(resolve(dir, 'app/runner-v2/src/self-update.js')).href)
+  .then(m => m.verifyVersionDirectory(dir, { version, target }))
+  .catch(e => { console.error(e.message); process.exitCode = 1; });
+NODE
+    "$staging/node/node" "$work/verify-inventory.cjs" "$staging" "$version" "$target" || fail "bundle inventory verification failed. Nothing was installed."
+
     # 5. Bounded smoke check with the bundle's own Node before switching.
     smoke=$("$staging/node/node" "$staging/app/runner-v2/bin/aiboard.mjs" version 2>&1) || fail "the new version did not start: $smoke"
     [ "$smoke" = "AIBoard Runner V2 $version" ] || fail "the new version did not start: $smoke"
