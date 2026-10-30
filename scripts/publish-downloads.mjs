@@ -111,6 +111,7 @@ function nativeRunnerPackageJson() {
     },
     ...(runnerPackage.optionalDependencies ? { optionalDependencies: runnerPackage.optionalDependencies } : {}),
     dependencies: {
+      "@modelcontextprotocol/sdk": pinnedVersion(rootPackage.dependencies?.["@modelcontextprotocol/sdk"], "@modelcontextprotocol/sdk"),
       playwright: playwrightVersion,
       tsx: tsxVersion,
       typescript: typescriptVersion,
