@@ -7,13 +7,17 @@
 //       ephemeral TEST key pair + channel for local/CI installer tests (never for releases)
 //   npx tsx scripts/release/release-keys.mts verify --manifest manifest.json [--sig manifest.json.sig] [--bundles dir]
 //       checks a signed manifest exactly as the updater does (and, with --bundles, every archive's size + SHA-256)
-//       before it is committed to public/release/<channel>/
+//       before it is committed to public/release/<channel>/, and refuses one whose sequence is not higher than
+//       the manifest already committed there (publication order)
 import { createHash, createPublicKey, generateKeyPairSync } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseReleaseChannelConfig, trustedKeyFromPublicKey, verifyReleaseManifest } from "../../runner-v2/src/release-manifest.js";
+import {
+  parseReleaseChannelConfig, trustedKeyFromPublicKey, verifyHistoricalReleaseManifest, verifyReleaseManifest, type ReleaseManifest,
+} from "../../runner-v2/src/release-manifest.js";
+import { assertPublicationOrder } from "./signing-sequence.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const [command] = process.argv.slice(2);
@@ -63,8 +67,25 @@ if (command === "pin" || command === "show") {
 } else if (command === "verify") {
   const manifestPath = resolve(option("manifest") ?? "");
   const config = parseReleaseChannelConfig(JSON.parse(readFileSync(resolve(option("config") ?? join(root, "release", "channel.json")), "utf8")));
-  const manifest = verifyReleaseManifest(readFileSync(manifestPath), readFileSync(option("sig") ?? `${manifestPath}.sig`, "utf8"), config, { now: new Date() });
+  const bytes = readFileSync(manifestPath);
+  const manifest = verifyReleaseManifest(bytes, readFileSync(option("sig") ?? `${manifestPath}.sig`, "utf8"), config, { now: new Date() });
   process.stdout.write(`OK ${manifest.version} sequence ${manifest.sequence}, signed by ${manifest.keyId}, expires ${manifest.expiresAt}\n`);
+  // Publication order: the committed manifest (authenticated, even if expired, under the current or the
+  // reviewed previous trust configuration) must have a lower sequence than the one about to replace it.
+  const committedPath = resolve(option("committed") ?? join(root, "public", "release", manifest.channel, "manifest.json"));
+  if (existsSync(committedPath) && !readFileSync(committedPath).equals(bytes)) {
+    const committedBytes = readFileSync(committedPath);
+    const committedSignature = readFileSync(`${committedPath}.sig`, "utf8");
+    const historicalPath = join(root, "release", "previous-channel.json");
+    let committed: ReleaseManifest;
+    try { committed = verifyHistoricalReleaseManifest(committedBytes, committedSignature, config, new Date()); }
+    catch (error) {
+      if (!existsSync(historicalPath)) throw error;
+      committed = verifyHistoricalReleaseManifest(committedBytes, committedSignature, parseReleaseChannelConfig(JSON.parse(readFileSync(historicalPath, "utf8"))), new Date());
+    }
+    assertPublicationOrder(manifest, committed);
+    process.stdout.write(`  replaces committed sequence ${committed.sequence}\n`);
+  }
   const bundles = option("bundles");
   for (const artifact of manifest.artifacts) {
     let note = "";

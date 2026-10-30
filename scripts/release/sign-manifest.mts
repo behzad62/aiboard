@@ -5,6 +5,9 @@
 // The private key is read from the environment (or --key-file for offline/test use), never printed,
 // and must match a public key already pinned in the channel config. The result is self-verified
 // with the same verifier the updater uses before anything is written.
+// With --reserve-remote <remote> (the release workflow passes origin) the sequence is reserved durably
+// on that remote before signing (sequence-reservation.mts) and --require-commit must be the tip of
+// --reserve-branch (default main).
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -15,6 +18,7 @@ import {
   serializeManifest, signManifestBytes, trustedKeyFromPublicKey, verifyReleaseManifest, type ReleaseManifest,
 } from "../../runner-v2/src/release-manifest.js";
 import type { BuildReport } from "./build-bundle.mjs";
+import { gitRunner, reserveReleaseSequence } from "./sequence-reservation.mjs";
 import { selectReleaseSequence } from "./signing-sequence.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -53,9 +57,12 @@ const previous = hasManifest ? { bytes: readFileSync(published), signature: read
 // it is never included in installers or the new release's bundled trust anchors.
 const historicalPath = join(root, "release", "previous-channel.json");
 const historicalConfig = existsSync(historicalPath) ? parseReleaseChannelConfig(JSON.parse(readFileSync(historicalPath, "utf8"))) : undefined;
-let sequence: number;
-try { sequence = selectReleaseSequence(sequenceOption, config, previous, new Date(), historicalConfig); }
-catch (error) { throw new Error(`Cannot select a release sequence (${error instanceof Error ? error.message : String(error)}). An expired prior manifest requires an explicit higher --sequence.`); }
+const selectSequence = (reservedFloor: number) => {
+  try { return selectReleaseSequence(sequenceOption, config, previous, new Date(), historicalConfig, reservedFloor); }
+  catch (error) { throw new Error(`Cannot select a release sequence (${error instanceof Error ? error.message : String(error)}). An expired prior manifest requires an explicit higher --sequence.`); }
+};
+// Dry selection first so bad input fails before anything is reserved; the reserved run repeats it against the reservations.
+selectSequence(0);
 
 const keyPem = option("key-file") ? readFileSync(resolve(option("key-file")!), "utf8") : process.env.AIBOARD_RELEASE_SIGNING_KEY;
 if (!keyPem) throw new Error("No signing key: set AIBOARD_RELEASE_SIGNING_KEY (release environment secret) or pass --key-file.");
@@ -76,6 +83,18 @@ for (const report of reports) {
   // The release workflow passes the dispatched commit: every bundle must come from exactly that clean tree.
   if (requireCommit && (report.dirty || report.commit !== requireCommit)) throw new Error(`${report.file} was not built from a clean checkout of ${requireCommit}.`);
 }
+
+const reserveRemote = option("reserve-remote");
+let sequence: number;
+if (reserveRemote) {
+  if (!requireCommit) throw new Error("--reserve-remote needs --require-commit (the dispatched commit).");
+  sequence = reserveReleaseSequence({
+    git: gitRunner(root), remote: reserveRemote, branch: option("reserve-branch") ?? "main", channel: config.channel, commit: requireCommit,
+    choose: selectSequence, runLabel: process.env.GITHUB_RUN_ID ? `run ${process.env.GITHUB_RUN_ID}.${process.env.GITHUB_RUN_ATTEMPT ?? "1"}` : undefined,
+  });
+  process.stdout.write(`Reserved ${config.channel} release sequence ${sequence} on ${reserveRemote}.
+`);
+} else sequence = selectSequence(0);
 
 const now = new Date();
 const manifest: ReleaseManifest = {

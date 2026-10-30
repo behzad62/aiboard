@@ -3,7 +3,9 @@ name: Runner release (L2, manual)
 # Cuts a signed AI Board Runner release (plan D18, ADR-E). Manual dispatch only, from main.
 # 1. build:   all six bundles on Linux AND Windows from the dispatched commit; both builds must be byte-identical.
 # 2. smoke:   each bundle runs `aiboard version` and `aiboard doctor` on its own OS/arch where GitHub hosts one.
-# 3. sign:    in the protected `release` environment (owner approval, main only) the manifest is signed with
+# 3. sign:    in the protected `release` environment (owner approval, main only) the run first reserves a fresh
+#             sequence as tag release-sequence/<channel>/<n> (refused unless the dispatched commit is still main's
+#             tip), then the manifest is signed with
 #             AIBOARD_RELEASE_SIGNING_KEY and a DRAFT GitHub release v<version> is created with the bundles,
 #             manifest.json and manifest.json.sig. Nothing is published and aiboard.me is not touched:
 #             the owner publishes the draft and commits manifest.json(.sig) to public/release/stable/ by hand.
@@ -15,7 +17,7 @@ on:
         description: "Release version (e.g. 0.2.0); becomes tag v<version>"
         required: true
       sequence:
-        description: "Manifest sequence: auto (published manifest + 1) or an explicit integer"
+        description: "Manifest sequence: auto (above the published manifest and every reserved sequence) or an explicit higher integer"
         required: false
         default: auto
       expires_days:
@@ -173,6 +175,7 @@ jobs:
           node node_modules/tsx/dist/cli.mjs scripts/release/sign-manifest.mts
           --version "$VERSION" --bundles dist/release --out dist/release
           --sequence "$SEQUENCE" --expires-days "$EXPIRES_DAYS" --require-commit "$GITHUB_SHA"
+          --reserve-remote origin --reserve-branch main
       - name: Verify with openssl exactly as install.sh does
         run: |
           set -eu

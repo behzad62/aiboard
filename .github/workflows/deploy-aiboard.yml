@@ -26,6 +26,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Published release manifests only move forward
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then git fetch --no-tags --depth=1 origin "$BEFORE"; fi
+          npx tsx scripts/release/check-publication-order.mts --base "$BEFORE"
+
       - name: Publish supported download artifacts
         run: npm run publish-downloads
 
