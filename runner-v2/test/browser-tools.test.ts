@@ -65,6 +65,32 @@ class FakeBrowserBackend implements BrowserBackend {
   async closeAll() {}
 }
 
+test("missing browser session returns a durable error without settling uncertain browser side effects", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-browser-missing-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const ledger = new SqliteToolLedger(join(root, "tools.sqlite"));
+  const backend = new PlaywrightBrowserBackend();
+  const context = { runId: "run_missing", sessionId: "worker", actor: { role: "worker" as const, id: "worker" }, workspacePath: root };
+  try {
+    const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root, ledger, artifacts });
+    for (const browserTool of createBrowserTools({ backend, artifacts, taskId: "task" })) broker.register(browserTool);
+    const result = await broker.invoke(call("missing", "browser.navigate", { url: "http://localhost:3000" }), context);
+    assert.equal(result.error?.code, "browser_session_not_open");
+    const completed = ledger.listRun(context.runId).filter(event => event.callId === "missing" && event.type === "tool.completed");
+    assert.equal(completed.length, 1);
+    assert.equal(completed[0].result?.error?.code, "browser_session_not_open");
+    const replay = new ToolBroker({ permissionProfile: "full", workspacePath: root, ledger, artifacts });
+    for (const browserTool of createBrowserTools({ backend, artifacts, taskId: "task" })) replay.register(browserTool);
+    assert.equal((await replay.invoke(call("missing", "browser.navigate", { url: "http://localhost:3000" }), context)).error?.code, "browser_session_not_open");
+    const uncertain = new FakeBrowserBackend();
+    uncertain.navigate = async () => { throw new Error("uncertain after navigation"); };
+    const uncertainBroker = new ToolBroker({ permissionProfile: "full", workspacePath: root, ledger, artifacts });
+    for (const browserTool of createBrowserTools({ backend: uncertain, artifacts, taskId: "task" })) uncertainBroker.register(browserTool);
+    assert.equal((await uncertainBroker.invoke(call("uncertain", "browser.navigate", { url: "http://localhost:3000" }), context)).error?.code, "tool_execution_failed");
+    assert.equal(ledger.listRun(context.runId).filter(event => event.callId === "uncertain" && event.type === "tool.completed").length, 0);
+  } finally { await backend.closeAll(); ledger.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("browser tools keep one task session and persist DOM and screenshot artifacts", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-browser-tools-"));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
@@ -379,6 +405,37 @@ test("Playwright events captures uncaught page exceptions", async () => {
     assert.match(pageError.occurredAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   } finally {
     await backend.closeAll();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("missing fill target is settled before mutation; uncertain fill errors remain unsettled", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-browser-fill-"));
+  const server = createServer((_request, response) => response.end("<html><body><input id='present'></body></html>"));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const backend = new PlaywrightBrowserBackend();
+  const ledger = new SqliteToolLedger(join(root, "tools.sqlite"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const context = { runId: "run_fill", sessionId: "worker", actor: { role: "worker" as const, id: "worker" }, workspacePath: root };
+  try {
+    const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root, ledger, artifacts });
+    for (const browserTool of createBrowserTools({ backend, artifacts, taskId: "task" })) broker.register(browserTool);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    assert.equal((await broker.invoke(call("open-fill", "browser.open", { url: `http://127.0.0.1:${address.port}/` }), context)).isError, false);
+    assert.equal((await broker.invoke(call("missing-fill", "browser.fill", { selector: "#missing", value: "test" }), context)).error?.code, "browser_target_not_found");
+    assert.equal(ledger.listRun(context.runId).filter(event => event.callId === "missing-fill" && event.type === "tool.completed").length, 1);
+    assert.equal((await broker.invoke(call("valid-fill", "browser.fill", { selector: "#present", value: "test" }), context)).isError, false);
+    const uncertain = new FakeBrowserBackend();
+    uncertain.fill = async () => { throw new Error("uncertain after fill"); };
+    const uncertainBroker = new ToolBroker({ permissionProfile: "full", workspacePath: root, ledger, artifacts });
+    for (const browserTool of createBrowserTools({ backend: uncertain, artifacts, taskId: "task" })) uncertainBroker.register(browserTool);
+    assert.equal((await uncertainBroker.invoke(call("uncertain-fill", "browser.fill", { selector: "#present", value: "test" }), context)).error?.code, "tool_execution_failed");
+    assert.equal(ledger.listRun(context.runId).filter(event => event.callId === "uncertain-fill" && event.type === "tool.completed").length, 0);
+  } finally {
+    await backend.closeAll();
+    ledger.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }

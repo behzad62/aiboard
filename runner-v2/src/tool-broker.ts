@@ -494,6 +494,13 @@ export class ToolBroker implements AgentToolRuntime {
         this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, refusal);
         return refusal;
       }
+      if (tool.definition.readOnly === true && tool.definition.effect === "none") {
+        // A failed read has a known error result. Keep it durable just like the result the
+        // registry would return; side-effecting exceptions still require reconciliation.
+        const output = outputFailure("tool_execution_failed", error instanceof Error ? error.message : "Tool execution failed.");
+        this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
+        return output;
+      }
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);

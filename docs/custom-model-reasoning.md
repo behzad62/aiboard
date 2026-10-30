@@ -27,3 +27,26 @@ Run `npx tsx scripts/test-custom-reasoning.mts`, `npx tsx scripts/test-benchmark
 In **Settings → Custom models**, select `Off` for the current MiMo quantization, click **Test connection**, then choose the model in ToolBench. For an explicit reasoning comparison, choose `Low` on Mellum or evaluate MiMo using another checkpoint/runtime after validating actual visible reasoning output. Ensure **Function calling** is declared for ToolBench and verify the actual benchmark result, not just a connection check.
 
 The existing unrelated `package-lock.json` modification is intentionally not changed by this work.
+
+## Native Runner correction (2026-10-30)
+
+The browser custom-model adapter already applied the saved reasoning setting, but the custom
+branch of `createNativeProviderConfig` omitted it. ToolBench and native Builds therefore let
+Ollama choose its default even when the UI showed Off. Native configuration now preserves an
+explicit role/benchmark effort, or inherits the saved custom-model setting for Default.
+
+Custom-model context profiles also supply their per-response output limit to the native
+OpenAI-compatible transport: `max_tokens` for Chat Completions and `max_output_tokens` for
+Responses. This limit is distinct from the benchmark's cumulative emergency token budget.
+ToolBench reserves the configured output allowance before each call. The context window is
+still shared by input and output; increasing generation capacity does not enlarge it.
+
+Live Ollama checks with `mule-lfm3-64k-q8` used the real native model factory with Off and
+32,768 output tokens. Both streaming and non-streaming requests carried
+`reasoning_effort: "none"` and `max_tokens: 32768`, returned visible text, and contained no
+reasoning blocks. This verifies configuration delivery, not benchmark qualification.
+
+Regression coverage: `scripts/test-custom-reasoning.mts` checks browser-to-native saved and
+explicit effort precedence plus the context/output configuration; the custom-config test in
+`runner-v2/test/provider-transport.test.ts` checks both protocol bodies and rejects invalid
+output limits. Hosted provider limits are unchanged by this custom-model configuration path.

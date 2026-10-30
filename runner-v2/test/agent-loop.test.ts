@@ -582,7 +582,7 @@ test("a resumed checkpoint receives a fresh per-invocation turn allowance", asyn
   assert.equal(model.requests.length, 1);
 });
 
-test("sustained read-only turns warn once and suspend without a further model call", async () => {
+test("solo read-only turns warn without an Architect and suspend without a further model call", async () => {
   const registry = new ToolRegistry();
   registry.register(textTool("read_file", "content"));
   const model = new ScriptedModel(Array.from({ length: 5 }, (_, index) => ({
@@ -600,10 +600,14 @@ test("sustained read-only turns warn once and suspend without a further model ca
     context: context(),
     initialMessages,
     readOnlyStall: { warnTurns: 3, suspendTurns: 5 },
+    coordination: "solo",
   });
   assert.equal(result.status, "suspended");
   assert.equal(result.reason, "read_only_stall");
   assert.equal(model.requests.length, 5);
+  const soloReminder = String(model.requests[3].messages.find(message => message.id.startsWith("progress-reminder:"))?.content);
+  assert.match(soloReminder, /only model/);
+  assert.doesNotMatch(soloReminder, /Architect/);
   assert.match(
     String(model.requests[3].messages.find((message) =>
       message.id.startsWith("progress-reminder:")
@@ -805,7 +809,8 @@ test("a failed mutation does not reset the mechanical no-progress streak", async
   assert.equal(model.requests.length, 5);
 });
 
-test("repeated equivalent evidence failures advise a worker to seek Architect guidance", async () => {
+for (const coordination of ["architect", "solo"] as const) {
+test(`repeated evidence failures give ${coordination} coordination guidance`, async () => {
   const registry = new ToolRegistry();
   registry.register(failingEvidenceTool());
   registry.register(submitTool());
@@ -839,13 +844,15 @@ test("repeated equivalent evidence failures advise a worker to seek Architect gu
     registry,
     context: context(),
     initialMessages,
+    coordination,
   });
   assert.equal(result.status, "submitted");
   const reminder = model.requests[3].messages.find((message) =>
     message.id.startsWith("evidence-failure-reminder:")
   );
   assert.match(String(reminder?.content ?? ""), /failed 3 times/i);
-  assert.match(String(reminder?.content ?? ""), /ask the Architect/i);
+  if (coordination === "solo") assert.doesNotMatch(String(reminder?.content ?? ""), /Architect/i);
+  else assert.match(String(reminder?.content ?? ""), /ask the Architect/i);
   assert.match(String(reminder?.content ?? ""), /does not decide/i);
   const refreshedReminder = model.requests[4].messages.find((message) =>
     message.id.startsWith("evidence-failure-reminder:")
@@ -853,7 +860,7 @@ test("repeated equivalent evidence failures advise a worker to seek Architect gu
   assert.match(String(refreshedReminder?.content ?? ""), /failed 4 times/i);
 });
 
-test("eight equivalent evidence failures suspend the worker for Architect resolution", async () => {
+test(`eight equivalent evidence failures suspend ${coordination} without extra model calls`, async () => {
   const registry = new ToolRegistry();
   registry.register(failingEvidenceTool());
   const model = new ScriptedModel(Array.from({ length: 8 }, (_, index) => ({
@@ -875,12 +882,15 @@ test("eight equivalent evidence failures suspend the worker for Architect resolu
     registry,
     context: context(),
     initialMessages,
+    coordination,
   });
   assert.equal(result.status, "suspended");
   assert.equal(result.reason, "repeated_evidence_failure");
   assert.match(result.error ?? "", /failed 8 times/i);
+  if (coordination === "solo") assert.doesNotMatch(result.error ?? "", /Architect/i);
   assert.equal(model.requests.length, 8);
 });
+}
 
 test("restart still escalates when the eighth-failure reminder is already durable", async () => {
   const signature = createHash("sha256").update(JSON.stringify({

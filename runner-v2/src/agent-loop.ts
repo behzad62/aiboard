@@ -135,6 +135,8 @@ export interface RunAgentLoopOptions {
   /** Governed capability refresh, after the preceding tool batch fully settles. */
   beforeModelTurn?: () => Promise<void>;
   workingSet?: AgentWorkingSetLimits;
+  /** Solo tool tasks have no Architect to consult; mechanical guard thresholds stay the same. */
+  coordination?: "architect" | "solo";
   hostedTools?: AgentModelRequest["hostedTools"];
   readOnlyStall?: {
     warnTurns: number;
@@ -902,7 +904,7 @@ async function enforceRepeatedEvidenceFailure(
       "repeated_evidence_failure",
       turns,
       messages,
-      `The same command shape (${repeated.command}) failed ${repeated.count} times without a successful equivalent run; Architect resolution is required.`
+      `The same command shape (${repeated.command}) failed ${repeated.count} times without a successful equivalent run; ${options.coordination === "solo" ? "the solo task cannot progress" : "Architect resolution is required"}.`
     );
   }
   messages.push({
@@ -912,7 +914,9 @@ async function enforceRepeatedEvidenceFailure(
       "MECHANICAL_EVIDENCE_FAILURE_REMINDER",
       `The same command shape (${repeated.command}) has failed ${repeated.count} times without a successful equivalent run.`,
       "Do not keep changing expectations or retrying the same failure without a new mechanical basis.",
-      "Inspect the execution path, make a materially different scoped change, or ask the Architect for guidance if the intended resolution is unclear.",
+      options.coordination === "solo"
+        ? "Inspect the returned error and correct the command arguments or execution path. You are the only model in this task."
+        : "Inspect the execution path, make a materially different scoped change, or ask the Architect for guidance if the intended resolution is unclear.",
       "This reminder reports repeated command evidence only; it does not decide task meaning or whether the task is complete.",
     ].join("\n"),
   });
@@ -1036,7 +1040,9 @@ async function enforceReadOnlyStall(
         "MECHANICAL_PROGRESS_REMINDER",
         `The last ${streak} model turns made no successful progress-producing tool call.`,
         "Avoid repeating inspection that is already represented in durable history.",
-        "Make a scoped change, run task-relevant verification, submit if ready, or ask the Architect if the intended resolution is unclear.",
+        options.coordination === "solo"
+          ? "Use the available tools to complete the requested task, correct failed calls using their returned errors, or submit if ready. You are the only model in this task."
+          : "Make a scoped change, run task-relevant verification, submit if ready, or ask the Architect if the intended resolution is unclear.",
         "This reminder does not decide whether the task is complete.",
       ].join("\n"),
     });

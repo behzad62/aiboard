@@ -104,6 +104,8 @@ export interface NativeProviderConfig {
   cacheWriteInputCostMicrosPerMillion?: number;
   /** The model's context window; the runner sizes each agent's working set from it. */
   contextWindowTokens?: number;
+  /** Per-response generation limit, independent of the run's cumulative budget. */
+  maxOutputTokens?: number;
 }
 
 export interface NativePermissionRequest {

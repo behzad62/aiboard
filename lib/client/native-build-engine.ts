@@ -611,6 +611,9 @@ export function createNativeProviderConfig(
   if (providerId === "custom") {
     const custom = getCustomModelById(model);
     if (!custom) throw new Error(`Custom model ${model} is not configured.`);
+    const effort = reasoningEffort && reasoningEffort !== "default"
+      ? reasoningEffort : custom.reasoningEffort;
+    const profile = resolveClientModelContextProfile(modelRef);
     return {
       runtimeId,
       providerId,
@@ -625,6 +628,8 @@ export function createNativeProviderConfig(
       transport: "openai-compatible",
       baseUrl: custom.baseURL,
       secret: custom.apiKey || "aiboard-local-endpoint",
+      ...(effort && effort !== "default" ? { reasoningEffort: effort } : {}),
+      maxOutputTokens: profile.maxOutputTokens,
       capabilities: ["*"],
       inputCapabilities: nativeInputCapabilities(custom.capabilities),
       priority,
