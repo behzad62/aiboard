@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   INSTALLER_PROTOCOL, PREVIEW_TARGETS, RELEASE_PRODUCT, RELEASE_TARGETS, serializeManifest,
   signManifestBytes, targetFormat, trustedKeyFromPublicKey, verifyReleaseManifest, type ReleaseManifest,
@@ -54,4 +57,14 @@ assert.equal(selectReleaseSequence("auto", replacementConfig, previous, now, con
 assert.throws(() => selectReleaseSequence("7", replacementConfig, previous, now, config), /--sequence/);
 assert.throws(() => selectReleaseSequence("10", replacementConfig, signed({}, wrong.privateKey), now, config), /signature does not verify/);
 assert.throws(() => selectReleaseSequence("10", replacementConfig, previous, now, { ...config, channel: "beta" }), /historical channel/);
+const validateInputs = fileURLToPath(new URL("./validate-workflow-inputs.mjs", import.meta.url));
+const validate = (sequence: string) => spawnSync(process.execPath, [validateInputs], {
+  env: { ...process.env, AIBOARD_RELEASE_VERSION: "0.2.0", AIBOARD_RELEASE_SEQUENCE: sequence, AIBOARD_RELEASE_EXPIRY_DAYS: "180" },
+  encoding: "utf8",
+});
+for (const sequence of ["auto", "1", "999999999", "1000000000", "1099511627776"]) assert.equal(validate(sequence).status, 0, sequence);
+for (const sequence of ["0", "01", "1099511627777", "1e2"]) assert.notEqual(validate(sequence).status, 0, sequence);
+assert.throws(() => selectReleaseSequence("auto", config, signed({ sequence: 2 ** 40 }), now), /No higher release sequence/);
+const workflow = readFileSync(new URL("../../.github/workflows/runner-release.yml", import.meta.url), "utf8");
+assert.match(workflow, /run: node scripts\/release\/validate-workflow-inputs\.mjs/);
 console.log("PASS signed release sequences strictly increase, including after expiry");

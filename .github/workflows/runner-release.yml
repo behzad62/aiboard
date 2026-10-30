@@ -41,16 +41,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - name: Validate inputs
-        shell: bash
-        env:
-          VERSION: ${{ inputs.version }}
-          SEQUENCE: ${{ inputs.sequence }}
-          EXPIRES_DAYS: ${{ inputs.expires_days }}
-        run: |
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must look like 0.2.0"; exit 1; }
-          [[ "$SEQUENCE" == auto || "$SEQUENCE" =~ ^[1-9][0-9]{0,8}$ ]] || { echo "::error::sequence must be auto or an integer"; exit 1; }
-          [[ "$EXPIRES_DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "::error::expires_days must be an integer"; exit 1; }
       - name: No line-ending conversion (bundles must be byte-identical across OSes)
         shell: bash
         run: git config --global core.autocrlf false
@@ -59,6 +49,12 @@ jobs:
         with:
           node-version: 24.18.0
           cache: npm
+      - name: Validate inputs
+        env:
+          AIBOARD_RELEASE_VERSION: ${{ inputs.version }}
+          AIBOARD_RELEASE_SEQUENCE: ${{ inputs.sequence }}
+          AIBOARD_RELEASE_EXPIRY_DAYS: ${{ inputs.expires_days }}
+        run: node scripts/release/validate-workflow-inputs.mjs
       - name: Acquire pinned Recoverable Job Service Runner source
         shell: bash
         run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
