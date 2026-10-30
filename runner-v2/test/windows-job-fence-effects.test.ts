@@ -543,6 +543,59 @@ test("px2b: supervisor-startup wait never misses landed status", { timeout: 15_0
   assert.ok(Date.now() - start < 2_000, "landed status must not wait out the deadline");
 });
 
+// T8 slow-machine reproduction (profile B, iteration 6): a short workload finished between the
+// startup wait reading "running" and its GET /status landing. The supervisor persisted its terminal
+// status and closed its server, so the queued connection was reset: the launch failed with a raw
+// `read ECONNRESET` although the durable status already proved the outcome.
+async function withResettingSupervisor(
+  t: TestContext,
+  onConnection: (statusPath: string) => void,
+  work: (statusPath: string, port: number) => Promise<void>,
+): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), "aiboard-t8-supreset-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const statusPath = join(dir, "supervisor.jsonl");
+  const server = createServer(() => undefined);
+  server.on("connection", (socket) => { onConnection(statusPath); socket.resetAndDestroy(); });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  await work(statusPath, address.port);
+}
+
+test("t8: supervisor-startup wait reads the durable terminal status when the supervisor resets the status request", { timeout: 15_000 }, async (t) => {
+  if (!needsWindows(t)) return;
+  await withResettingSupervisor(t,
+    (statusPath) => appendFileSync(statusPath, supervisorLine({ port: 9, status: "stopped", exitCode: 0, ownershipReleased: true })),
+    async (statusPath, port) => {
+      appendFileSync(statusPath, supervisorLine({ port, status: "running", childPid: 4343 }));
+      const status = await waitForSupervisor(
+        { protocol: SUPERVISOR_PROTOCOL, token: "t".repeat(32), statusPath, supervisorPid: 4242, port: 0 },
+        "px2b-wait",
+        10_000,
+      );
+      assert.equal(status.status, "stopped", "the durable terminal status proves the outcome the reset request could not return");
+      assert.equal(status.ownershipReleased, true);
+    });
+});
+
+test("t8: supervisor-startup wait still fails closed when a reset status request leaves no durable terminal status", { timeout: 15_000 }, async (t) => {
+  if (!needsWindows(t)) return;
+  await withResettingSupervisor(t, () => undefined, async (statusPath, port) => {
+    appendFileSync(statusPath, supervisorLine({ port, status: "running", childPid: 4343 }));
+    await assert.rejects(
+      waitForSupervisor(
+        { protocol: SUPERVISOR_PROTOCOL, token: "t".repeat(32), statusPath, supervisorPid: 4242, port: 0 },
+        "px2b-wait",
+        10_000,
+      ),
+      (error: NodeJS.ErrnoException) => error.code === "ECONNRESET",
+      "a live supervisor that cannot be read is never treated as stopped",
+    );
+  });
+});
+
 // D3 — the authenticated long-poll helper against a stub supervisor.
 async function withStatusStub(
   t: TestContext,
