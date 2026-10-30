@@ -186,11 +186,32 @@ export async function acquireInstallLock(root: string): Promise<() => Promise<vo
 }
 
 async function fetchLimited(fetchImpl: typeof fetch, url: string, limit: number): Promise<Buffer> {
-  let response: Response;
-  try { response = await fetchImpl(url, { redirect: "follow", signal: AbortSignal.timeout(10 * 60_000) }); }
-  catch (error) {
-    throw new Error(`update_offline: Could not reach ${new URL(url).origin} (${error instanceof Error ? error.message : String(error)}). Check your connection and retry; nothing was changed.`);
+  const initial = new URL(url);
+  const loopbackOrigin = initial.protocol === "http:" && initial.hostname === "127.0.0.1" ? initial.origin : undefined;
+  const allowed = (candidate: URL): boolean => !candidate.username && !candidate.password &&
+    (candidate.protocol === "https:" || (loopbackOrigin !== undefined && candidate.protocol === "http:" && candidate.origin === loopbackOrigin));
+  if (!allowed(initial)) throw new Error("update_redirect_rejected: The download URL does not use an approved secure transport.");
+  const signal = AbortSignal.timeout(10 * 60_000);
+  let current = initial;
+  let response: Response | undefined;
+  for (let redirects = 0; redirects <= 5; redirects += 1) {
+    try { response = await fetchImpl(current.href, { redirect: "manual", signal }); }
+    catch (error) {
+      throw new Error(`update_offline: Could not reach ${current.origin} (${error instanceof Error ? error.message : String(error)}). Check your connection and retry; nothing was changed.`);
+    }
+    if (![301, 302, 303, 307, 308].includes(response.status)) break;
+    const location = response.headers.get("location");
+    await response.body?.cancel().catch(() => undefined);
+    let next: URL;
+    try { if (!location) throw new Error("missing location"); next = new URL(location, current); }
+    catch { throw new Error("update_redirect_rejected: The download returned an invalid redirect."); }
+    if (!allowed(next) || (current.protocol === "https:" && next.protocol !== "https:")) {
+      throw new Error("update_redirect_rejected: The download redirected to an unapproved transport.");
+    }
+    if (redirects === 5) throw new Error("update_redirect_rejected: The download redirected too many times.");
+    current = next;
   }
+  if (!response) throw new Error("update_download_failed: No response was received; nothing was changed.");
   if (!response.ok || !response.body) throw new Error(`update_download_failed: ${url} answered HTTP ${response.status}; nothing was changed.`);
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (declared > limit) throw new Error(`update_download_failed: ${url} is larger than expected; nothing was changed.`);

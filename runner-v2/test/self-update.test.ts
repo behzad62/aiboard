@@ -104,6 +104,124 @@ test("update verifies, smoke-checks and atomically switches; rollback returns wi
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test("update follows only bounded secure redirects without contacting a downgrade", async () => {
+  const { dir, layout } = await installedLayout();
+  const production: ReleaseChannelConfig = { ...config, manifestUrl: "https://aiboard.me/release/stable/manifest.json",
+    artifactPrefix: "https://github.com/behzad62/aiboard/releases/download/" };
+  const fixture = release("0.2.0", 2);
+  const manifest = JSON.parse(fixture.manifest.toString("utf8"));
+  for (const artifact of manifest.artifacts) artifact.url = `${production.artifactPrefix}v0.2.0/aiboard-${artifact.target}`;
+  const bytes = Buffer.from(serializeManifest(manifest));
+  const signature = signManifestBytes(bytes, key.privateKey);
+  try {
+    const calls: string[] = [];
+    const fetchSecure = (async (input: string | URL | Request, options?: RequestInit) => {
+      const current = String(input);
+      calls.push(current);
+      assert.equal(options?.redirect, "manual");
+      if (current === production.manifestUrl) return new Response(null, { status: 302, headers: { location: "https://cdn.example.test/manifest?token=abc" } });
+      if (current === "https://cdn.example.test/manifest?token=abc") return new Response(new Uint8Array(bytes));
+      if (current === `${production.manifestUrl}.sig`) return new Response(null, { status: 307, headers: { location: "/signature" } });
+      if (current === "https://aiboard.me/signature") return new Response(signature);
+      throw new Error(`Unexpected request: ${current}`);
+    }) as typeof fetch;
+    await runUpdateCommand(["--check"], { layout, config: production, fetch: fetchSecure, write: () => undefined });
+    assert.equal(calls.length, 4, "HTTPS cross-host and relative redirects are followed");
+
+    for (const location of ["http://example.test/file", "http://127.0.0.1:1/file", "https://user:pass@example.test/file", "file:///tmp/file"]) {
+      const visited: string[] = [];
+      const downgrade = (async (input: string | URL | Request, options?: RequestInit) => {
+        visited.push(String(input));
+        assert.equal(options?.redirect, "manual");
+        return new Response(null, { status: 302, headers: { location } });
+      }) as typeof fetch;
+      await assert.rejects(runUpdateCommand(["--check"], { layout, config: production, fetch: downgrade, write: () => undefined }), /update_redirect_rejected/);
+      assert.deepEqual(visited, [production.manifestUrl], "the rejected redirect target was not contacted");
+      assert.equal(await pointer(layout, "current"), "0.1.0");
+    }
+    const artifactCalls: string[] = [];
+    const badArtifact = (async (input: string | URL | Request) => {
+      const current = String(input);
+      artifactCalls.push(current);
+      if (current === production.manifestUrl) return new Response(new Uint8Array(bytes));
+      if (current === `${production.manifestUrl}.sig`) return new Response(signature);
+      return new Response(null, { status: 302, headers: { location: "http://example.test/payload" } });
+    }) as typeof fetch;
+    await assert.rejects(runUpdateCommand([], { layout, config: production, fetch: badArtifact, write: () => undefined, smoke: async () => undefined }), /update_redirect_rejected/);
+    assert.equal(artifactCalls.length, 3, "the insecure artifact target was not contacted");
+    assert.equal(await pointer(layout, "current"), "0.1.0");
+
+    const loopbackCalls: string[] = [];
+    const fromLoopback = (async (input: string | URL | Request) => {
+      const current = String(input);
+      loopbackCalls.push(current);
+      const location = current === config.manifestUrl ? "https://cdn.example.test/step" : `${origin}/back`;
+      return new Response(null, { status: 302, headers: { location } });
+    }) as typeof fetch;
+    await assert.rejects(runUpdateCommand(["--check"], { layout, config, fetch: fromLoopback, write: () => undefined }), /update_redirect_rejected/);
+    assert.deepEqual(loopbackCalls, [config.manifestUrl, "https://cdn.example.test/step"], "even a test chain cannot downgrade after an HTTPS hop");
+
+    const localCalls: string[] = [];
+    const localRedirect = (async (input: string | URL | Request) => {
+      const current = String(input);
+      localCalls.push(current);
+      if (current === config.manifestUrl) return new Response(null, { status: 302, headers: { location: "/mirror" } });
+      if (current === `${origin}/mirror`) return new Response(new Uint8Array(fixture.manifest));
+      if (current === `${config.manifestUrl}.sig`) return new Response(fixture.signature);
+      throw new Error(`Unexpected request: ${current}`);
+    }) as typeof fetch;
+    await runUpdateCommand(["--check"], { layout, config, fetch: localRedirect, write: () => undefined });
+    assert.deepEqual(localCalls, [config.manifestUrl, `${origin}/mirror`, `${config.manifestUrl}.sig`]);
+
+    const wrongPortCalls: string[] = [];
+    const wrongPort = (async (input: string | URL | Request) => {
+      wrongPortCalls.push(String(input));
+      return new Response(null, { status: 302, headers: { location: "http://127.0.0.1:2/file" } });
+    }) as typeof fetch;
+    await assert.rejects(runUpdateCommand(["--check"], { layout, config, fetch: wrongPort, write: () => undefined }), /update_redirect_rejected/);
+    assert.deepEqual(wrongPortCalls, [config.manifestUrl]);
+
+    for (const location of [undefined, "https://[invalid"]) {
+      const invalid = (async () => new Response(null, { status: 302, headers: location ? { location } : {} })) as typeof fetch;
+      await assert.rejects(runUpdateCommand(["--check"], { layout, config: production, fetch: invalid, write: () => undefined }), /invalid redirect/);
+    }
+    const boundaryCalls: string[] = [];
+    const fiveRedirects = (async (input: string | URL | Request) => {
+      const current = String(input);
+      boundaryCalls.push(current);
+      if (current === `${production.manifestUrl}.sig`) return new Response(signature);
+      if (current === "https://aiboard.me/chain/5") return new Response(new Uint8Array(bytes));
+      return new Response(null, { status: 302, headers: { location: `/chain/${boundaryCalls.length}` } });
+    }) as typeof fetch;
+    await runUpdateCommand(["--check"], { layout, config: production, fetch: fiveRedirects, write: () => undefined });
+    assert.equal(boundaryCalls.length, 7, "five redirects, the manifest, and the signature are fetched");
+    const visited: string[] = [];
+    const looping = (async (input: string | URL | Request) => {
+      visited.push(String(input));
+      return new Response(null, { status: 302, headers: { location: `/loop?hop=${visited.length}` } });
+    }) as typeof fetch;
+    await assert.rejects(runUpdateCommand(["--check"], { layout, config: production, fetch: looping, write: () => undefined }), /too many times/);
+    assert.equal(visited.length, 6);
+
+    const signedCdn = "https://release-assets.example.test/bundle?token=abc&expires=123";
+    const downloadCalls: string[] = [];
+    const archive = [...fixture.archives.values()][0]!;
+    const goodArtifact = (async (input: string | URL | Request, options?: RequestInit) => {
+      const current = String(input);
+      downloadCalls.push(current);
+      assert.equal(options?.redirect, "manual");
+      if (current === production.manifestUrl) return new Response(new Uint8Array(bytes));
+      if (current === `${production.manifestUrl}.sig`) return new Response(signature);
+      if (current.startsWith(production.artifactPrefix)) return new Response(null, { status: 302, headers: { location: signedCdn } });
+      if (current === signedCdn) return new Response(new Uint8Array(archive));
+      throw new Error(`Unexpected request: ${current}`);
+    }) as typeof fetch;
+    await runUpdateCommand([], { layout, config: production, fetch: goodArtifact, write: () => undefined, smoke: async () => undefined });
+    assert.equal(await pointer(layout, "current"), "0.2.0");
+    assert.equal(downloadCalls.at(-1), signedCdn, "a signed HTTPS CDN URL works for a bundle");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test("update fails closed and leaves the active version untouched", async () => {
   const { dir, layout } = await installedLayout();
   try {
