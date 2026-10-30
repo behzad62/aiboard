@@ -10,7 +10,7 @@
 // edited for real and restored from a snapshot if the uninstall leaves it different.
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -272,6 +272,17 @@ try {
     check("same-version installer does not trust an installed replacement verifier", replacedVerifier.code !== 0 && /existing version failed its inventory check/i.test(replacedVerifier.stdout + replacedVerifier.stderr), replacedVerifier.stdout + replacedVerifier.stderr);
     check("replacement verifier leaves active version unchanged", pointer("current") === "0.9.1");
   } finally { writeFileSync(installedVerifier, originalVerifier); }
+
+  if (!windows) {
+    const installedNode = join(root, "versions", "0.9.1", "node", "node");
+    const originalMode = statSync(installedNode).mode & 0o777;
+    try {
+      chmodSync(installedNode, originalMode & ~0o111);
+      const nonExecutable = await runInstaller();
+      check("same-version installer refuses a non-executable Node runtime", nonExecutable.code !== 0 && /Node runtime is not executable/i.test(nonExecutable.stdout + nonExecutable.stderr), nonExecutable.stdout + nonExecutable.stderr);
+      check("non-executable reinstall leaves the active version unchanged", pointer("current") === "0.9.1");
+    } finally { chmodSync(installedNode, originalMode); }
+  }
 
   const releaseHeldLock = await acquireInstallLock(root);
   try {

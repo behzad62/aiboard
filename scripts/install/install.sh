@@ -191,6 +191,7 @@ NODE
     [ "$smoke" = "AIBoard Runner V2 $version" ] || fail "the new version did not start: $smoke"
     if [ "$current" = "$version" ] && [ -d "$destination" ]; then
       "$staging/node/node" "$work/verify-inventory.cjs" "$staging" "$destination" "$version" "$target" || fail "the existing version failed its inventory check. After stopping all AIBoard processes, remove $destination and run the installer again."
+      [ -x "$destination/node/node" ] || fail "the existing version's Node runtime is not executable. After stopping all AIBoard processes, remove $destination and run the installer again."
       say "AI Board Runner $version is already installed; repairing the command and PATH."
     else
       rm -rf "$destination"
