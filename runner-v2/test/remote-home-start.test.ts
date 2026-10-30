@@ -72,6 +72,36 @@ test("nested state without --remote retains the original startup refusal", async
   }
 });
 
+test("state or extension store linked into the project is refused without --remote", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiboard-linked-refusal-"));
+  const oldExitCode = process.exitCode;
+  try {
+    const project = join(root, "project");
+    const external = join(root, "external");
+    await mkdir(join(project, "inside"), { recursive: true }); await mkdir(external);
+    // Looks external by name; really a junction (Windows) or directory link into the project.
+    const alias = join(external, "alias");
+    await symlink(join(project, "inside"), alias, process.platform === "win32" ? "junction" : "dir");
+    const cases: Array<{ args: string[]; message: string; mustNotExist: string }> = [
+      { args: ["--state-dir", join(alias, "state")], message: "invalid_state_directory: Runner state must be outside the project directory.", mustNotExist: join(project, "inside", "state") },
+      { args: ["--state-dir", join(external, "state"), "--extensions-home", join(alias, "extensions")], message: "invalid_extensions_home: The extension store must be outside the project directory.", mustNotExist: join(project, "inside", "extensions") },
+    ];
+    for (const { args, message, mustNotExist } of cases) {
+      let failure: unknown;
+      const result = await startRunner(["--project", project, ...args], {
+        controlListener: "none", onStartupError: (error) => { failure = error; },
+      });
+      assert.equal(result.started, false);
+      assert.ok(failure instanceof Error);
+      assert.equal(failure.message, message);
+      assert.equal(existsSync(mustNotExist), false);
+    }
+  } finally {
+    process.exitCode = oldExitCode;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("authenticated remote-only home start protects owned paths and uses cwd", { timeout: 120_000 }, async (t) => {
   const home = await mkdtemp(join(tmpdir(), "aiboard-remote-home-"));
   const oldExitCode = process.exitCode;

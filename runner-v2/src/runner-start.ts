@@ -63,7 +63,7 @@ import {
 } from "./runner-resource-cleanup.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
-import { assertExternalState, projectIdentity, remoteDeviceDirectory, tryAcquireLock, type StateLocationOptions } from "./launcher-instance.js";
+import { assertExternalState, canonicalFuturePath, projectIdentity, remoteDeviceDirectory, tryAcquireLock, type StateLocationOptions } from "./launcher-instance.js";
 import { receiveLauncherHandshake, startLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
 import { LocalMcpSessions } from "./local-stdio-mcp.js";
 import { LocalPairing } from "./local-pairing.js";
@@ -190,7 +190,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       options.legacyTokenProvided = launcher.legacyToken !== undefined;
       options.legacyToken = launcher.legacyToken;
     }
-    if (!remoteOnly && isInside(options.projectPath, options.stateDirectory)) {
+    if (!remoteOnly && await isInsideProject(options.projectPath, options.stateDirectory)) {
       throw new Error(
         "invalid_state_directory: Runner state must be outside the project directory."
       );
@@ -212,7 +212,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     await mkdir(options.stateDirectory, { recursive: true });
     await assertDirectory(options.stateDirectory, "state");
 
-    if (!remoteOnly && isInside(options.projectPath, options.extensionsHome)) {
+    if (!remoteOnly && await isInsideProject(options.projectPath, options.extensionsHome)) {
       throw new Error("invalid_extensions_home: The extension store must be outside the project directory.");
     }
     const credentialStorage = prepareCredentialStores({
@@ -1059,6 +1059,18 @@ function optionalAbsolutePath(
 function isInside(parent: string, candidate: string): boolean {
   const traversal = relative(parent, candidate);
   return traversal === "" || (!traversal.startsWith("..") && !isAbsolute(traversal));
+}
+
+/**
+ * Lexical or canonical overlap with the project. A state or extension path that is, or sits under, a
+ * symlink or junction into the project passes a lexical check, so both sides are also compared by real
+ * path (resolved through the nearest existing ancestor for a path that does not exist yet).
+ */
+async function isInsideProject(projectPath: string, candidate: string): Promise<boolean> {
+  if (isInside(projectPath, candidate)) return true;
+  const project = await realpath(projectPath);
+  const target = await canonicalFuturePath(candidate);
+  return process.platform === "win32" ? isInside(project.toLowerCase(), target.toLowerCase()) : isInside(project, target);
 }
 
 async function assertDirectory(path: string, label: string): Promise<void> {
