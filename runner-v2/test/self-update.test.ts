@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { extractFiles, writeTarGz, type ArchiveFile } from "../src/release-archive.js";
@@ -26,6 +26,8 @@ const config: ReleaseChannelConfig = {
   keys: [trustedKeyFromPublicKey("test-key", key.publicKey)], minSequence: 1,
 };
 const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
+const profileBlock = '# >>> aiboard installer >>>\ncase ":${PATH}:" in *":$HOME/.aiboard/bin:"*) ;; *) export PATH="$HOME/.aiboard/bin:$PATH" ;; esac\n# <<< aiboard installer <<<\n';
+const fishConfig = "contains -- $HOME/.aiboard/bin $PATH; or set -gx PATH $HOME/.aiboard/bin $PATH\n";
 
 function bundle(version: string, extra: ArchiveFile[] = []): Buffer {
   const files: ArchiveFile[] = [
@@ -37,12 +39,12 @@ function bundle(version: string, extra: ArchiveFile[] = []): Buffer {
 }
 
 interface Release { manifest: Buffer; signature: string; archives: Map<string, Buffer> }
-function release(version: string, sequence: number, options: { archive?: Buffer; signWith?: typeof key.privateKey; checksumOf?: Buffer; epoch?: number; keyId?: string; signingKeys?: ReleaseChannelConfig["keys"] } = {}): Release {
+function release(version: string, sequence: number, options: { archive?: Buffer; signWith?: typeof key.privateKey; checksumOf?: Buffer; epoch?: number; keyId?: string; signingKeys?: ReleaseChannelConfig["keys"]; createdAt?: string; expiresAt?: string } = {}): Release {
   const archive = options.archive ?? bundle(version);
   const hashed = options.checksumOf ?? archive;
   const manifest = Buffer.from(serializeManifest({
     schemaVersion: options.epoch === undefined ? 1 : 2, product: RELEASE_PRODUCT, channel: "stable", version, sequence,
-    ...(options.epoch === undefined ? {} : { epoch: options.epoch, signingKeys: options.signingKeys ?? [] }), createdAt: "2026-10-29T00:00:00Z", expiresAt: "2027-10-29T00:00:00Z",
+    ...(options.epoch === undefined ? {} : { epoch: options.epoch, signingKeys: options.signingKeys ?? [] }), createdAt: options.createdAt ?? "2026-10-29T00:00:00Z", expiresAt: options.expiresAt ?? "2027-10-29T00:00:00Z",
     minInstallerVersion: INSTALLER_PROTOCOL, keyId: options.keyId ?? "test-key", nodeVersion: "24.18.0",
     artifacts: RELEASE_TARGETS.map((target) => ({
       target, format: targetFormat(target), preview: PREVIEW_TARGETS.has(target),
@@ -53,12 +55,17 @@ function release(version: string, sequence: number, options: { archive?: Buffer;
   return { manifest, signature: signManifestBytes(manifest, options.signWith ?? key.privateKey), archives: new Map([[`${origin}/downloads/aiboard-${version}-linux-x64.tar.gz`, archive]]) };
 }
 
-function fetchFrom(state: { release: Release; calls: string[] }): typeof fetch {
+function fetchFrom(state: { release: Release; calls: string[]; openings?: Map<number, Release> }): typeof fetch {
   return (async (input: string | URL | Request) => {
     const url = String(input);
     state.calls.push(url);
     if (url === config.manifestUrl) return new Response(new Uint8Array(state.release.manifest));
     if (url === `${config.manifestUrl}.sig`) return new Response(state.release.signature);
+    for (const [epoch, opening] of state.openings ?? []) {
+      const history = new URL(`epoch-${epoch}.json`, config.manifestUrl).href;
+      if (url === history) return new Response(new Uint8Array(opening.manifest));
+      if (url === `${history}.sig`) return new Response(opening.signature);
+    }
     const archive = state.release.archives.get(url);
     return archive ? new Response(new Uint8Array(archive)) : new Response("missing", { status: 404 });
   }) as typeof fetch;
@@ -260,7 +267,7 @@ test("a recovery-signed epoch replaces compromised keys and preserves the new hi
   const runtime = { layout, config: initial, fetch: fetchFrom(state), write: () => undefined, smoke: async () => undefined };
   try {
     await writeFile(join(layout.root, "sequence"), "1099511627776"); // Legacy bare integer is epoch 0.
-    await assert.rejects(runUpdateCommand([], runtime), /recovery signature/);
+    await assert.rejects(runUpdateCommand([], runtime), /recovery history.*reinstall/);
     state.release = release("0.2.0", 1, { epoch: 1, signingKeys: [replacement], keyId: recovery.keyId, signWith: recoveryKey.privateKey });
     await runUpdateCommand([], runtime);
     assert.equal(await pointer(layout, "sequence"), "1:1");
@@ -279,6 +286,174 @@ test("a recovery-signed epoch replaces compromised keys and preserves the new hi
     state.release = release("0.4.0", 999, { epoch: 0, keyId: replacement.keyId, signWith: replacementKey.privateKey });
     await assert.rejects(runUpdateCommand([], runtime), /older.*epoch/);
     assert.equal(await pointer(layout, "current"), "0.3.0");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("an offline client follows an expired opening to an ordinary release without changing state on --check", async () => {
+  const { dir, layout } = await installedLayout();
+  const recovery = trustedKeyFromPublicKey("recovery-key", recoveryKey.publicKey);
+  const replacement = trustedKeyFromPublicKey("replacement-key", replacementKey.publicKey);
+  const initial = { ...config, epoch: 0, recoveryKeys: [recovery] };
+  const opening = release("0.2.0", 1, { epoch: 1, signingKeys: [replacement], keyId: recovery.keyId, signWith: recoveryKey.privateKey });
+  const latest = release("0.3.0", 2, { epoch: 1, keyId: replacement.keyId, signWith: replacementKey.privateKey,
+    createdAt: "2028-01-01T00:00:00Z", expiresAt: "2029-01-01T00:00:00Z" });
+  const state = { release: latest, calls: [] as string[], openings: new Map([[1, opening]]) };
+  const runtime = { layout, config: initial, fetch: fetchFrom(state), now: () => new Date("2028-02-01T00:00:00Z"), write: () => undefined, smoke: async () => undefined };
+  try {
+    state.release = release("0.3.0", 2, { epoch: 1, keyId: replacement.keyId, signWith: replacementKey.privateKey });
+    await assert.rejects(runUpdateCommand([], runtime), /expired.*reinstall/);
+    assert.equal(await pointer(layout, "trusted-channel.json"), undefined, "an expired current release cannot persist history");
+    state.release = latest;
+    await runUpdateCommand(["--check"], runtime);
+    assert.equal(await pointer(layout, "sequence"), "1");
+    assert.equal(await pointer(layout, "trusted-channel.json"), undefined);
+    await runUpdateCommand([], runtime);
+    assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "sequence")], ["0.3.0", "1:2"]);
+    assert.equal(JSON.parse((await pointer(layout, "trusted-channel.json"))!).keys[0].keyId, replacement.keyId);
+    assert.ok(state.calls.includes(`${origin}/release/stable/epoch-1.json`));
+    assert.ok(state.calls.includes(`${origin}/release/stable/epoch-1.json.sig`));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("recovery history verifies successive epochs in order", async () => {
+  const { dir, layout } = await installedLayout();
+  const recovery = trustedKeyFromPublicKey("recovery-key", recoveryKey.publicKey);
+  const replacement = trustedKeyFromPublicKey("replacement-key", replacementKey.publicKey);
+  const later = trustedKeyFromPublicKey("later-key", otherKey.publicKey);
+  const initial = { ...config, epoch: 0, recoveryKeys: [recovery] };
+  const first = release("0.2.0", 1, { epoch: 1, signingKeys: [replacement], keyId: recovery.keyId, signWith: recoveryKey.privateKey });
+  const second = release("0.3.0", 1, { epoch: 2, signingKeys: [later], keyId: recovery.keyId, signWith: recoveryKey.privateKey });
+  const state = { release: release("0.4.0", 2, { epoch: 2, keyId: later.keyId, signWith: otherKey.privateKey }), calls: [] as string[], openings: new Map([[1, first], [2, second]]) };
+  try {
+    await runUpdateCommand([], { layout, config: initial, fetch: fetchFrom(state), now: () => new Date("2026-11-01T00:00:00Z"), write: () => undefined, smoke: async () => undefined });
+    assert.deepEqual(state.calls.slice(2, 6), [1, 2].flatMap((epoch) => [`${origin}/release/stable/epoch-${epoch}.json`, `${origin}/release/stable/epoch-${epoch}.json.sig`]));
+    assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "sequence")], ["0.4.0", "2:2"]);
+    assert.equal(JSON.parse((await pointer(layout, "trusted-channel.json"))!).keys[0].keyId, later.keyId);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("recovery history permits the 16-epoch boundary", async () => {
+  const { dir, layout } = await installedLayout();
+  const recovery = trustedKeyFromPublicKey("recovery-key", recoveryKey.publicKey);
+  const replacement = trustedKeyFromPublicKey("replacement-key", replacementKey.publicKey);
+  const later = trustedKeyFromPublicKey("later-key", otherKey.publicKey);
+  const initial = { ...config, epoch: 0, recoveryKeys: [recovery] };
+  const openings = new Map<number, Release>();
+  for (let epoch = 1; epoch <= 16; epoch += 1) {
+    openings.set(epoch, release(`0.${epoch}.0`, 1, { epoch, signingKeys: [epoch % 2 ? replacement : later], keyId: recovery.keyId, signWith: recoveryKey.privateKey }));
+  }
+  const state = { release: release("0.17.0", 2, { epoch: 16, keyId: later.keyId, signWith: otherKey.privateKey }), calls: [] as string[], openings };
+  try {
+    await runUpdateCommand(["--check"], { layout, config: initial, fetch: fetchFrom(state), now: () => new Date("2026-11-01T00:00:00Z"), write: () => undefined });
+    assert.equal(state.calls.length, 34);
+    assert.equal(await pointer(layout, "trusted-channel.json"), undefined);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("recovery history uses the manifest transport and size limits", async () => {
+  const { dir, layout } = await installedLayout();
+  const recovery = trustedKeyFromPublicKey("recovery-key", recoveryKey.publicKey);
+  const replacement = trustedKeyFromPublicKey("replacement-key", replacementKey.publicKey);
+  const initial = { ...config, epoch: 0, recoveryKeys: [recovery] };
+  const opening = release("0.2.0", 1, { epoch: 1, signingKeys: [replacement], keyId: recovery.keyId, signWith: recoveryKey.privateKey });
+  const state = { release: release("0.3.0", 2, { epoch: 1, keyId: replacement.keyId, signWith: replacementKey.privateKey }), calls: [] as string[], openings: new Map([[1, opening]]) };
+  const baseFetch = fetchFrom(state);
+  const history = `${origin}/release/stable/epoch-1.json`;
+  try {
+    for (const [url, size] of [[history, 64 * 1024 + 1], [`${history}.sig`, 4 * 1024 + 1]] as const) {
+      const oversized = (async (input: string | URL | Request, options?: RequestInit) => String(input) === url
+        ? new Response(new Uint8Array(size)) : baseFetch(input, options)) as typeof fetch;
+      await assert.rejects(runUpdateCommand(["--check"], { layout, config: initial, fetch: oversized, now: () => new Date("2026-11-01T00:00:00Z"), write: () => undefined }), /larger than expected.*reinstall/);
+    }
+    const visited: string[] = [];
+    const redirected = (async (input: string | URL | Request, options?: RequestInit) => {
+      const url = String(input);
+      visited.push(url);
+      return url === history ? new Response(null, { status: 302, headers: { location: "http://127.0.0.1:2/epoch-1.json" } }) : baseFetch(input, options);
+    }) as typeof fetch;
+    await assert.rejects(runUpdateCommand(["--check"], { layout, config: initial, fetch: redirected, now: () => new Date("2026-11-01T00:00:00Z"), write: () => undefined }), /unapproved transport.*reinstall/);
+    assert.ok(!visited.includes("http://127.0.0.1:2/epoch-1.json"));
+    assert.equal(await pointer(layout, "trusted-channel.json"), undefined);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("recovery history refuses forged, ordinary-signed and wrong-epoch openings", async () => {
+  const { dir, layout } = await installedLayout();
+  const recovery = trustedKeyFromPublicKey("recovery-key", recoveryKey.publicKey);
+  const replacement = trustedKeyFromPublicKey("replacement-key", replacementKey.publicKey);
+  const initial = { ...config, epoch: 0, recoveryKeys: [recovery] };
+  const latest = release("0.3.0", 2, { epoch: 1, keyId: replacement.keyId, signWith: replacementKey.privateKey });
+  const candidates = [
+    release("0.2.0", 1, { epoch: 1, signingKeys: [replacement], keyId: recovery.keyId, signWith: otherKey.privateKey }),
+    release("0.2.0", 1, { epoch: 1, signingKeys: [replacement] }),
+    release("0.2.0", 1, { epoch: 2, signingKeys: [replacement], keyId: recovery.keyId, signWith: recoveryKey.privateKey }),
+  ];
+  try {
+    for (const opening of candidates) {
+      const state = { release: latest, calls: [] as string[], openings: new Map([[1, opening]]) };
+      await assert.rejects(runUpdateCommand([], { layout, config: initial, fetch: fetchFrom(state), now: () => new Date("2026-11-01T00:00:00Z"), write: () => undefined }), /recovery history.*reinstall/);
+      assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "sequence"), await pointer(layout, "trusted-channel.json")], ["0.1.0", "1", undefined]);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a missing epoch or an excessive epoch gap fails closed without persisting partial trust", async () => {
+  const { dir, layout } = await installedLayout();
+  const recovery = trustedKeyFromPublicKey("recovery-key", recoveryKey.publicKey);
+  const replacement = trustedKeyFromPublicKey("replacement-key", replacementKey.publicKey);
+  const later = trustedKeyFromPublicKey("later-key", otherKey.publicKey);
+  const initial = { ...config, epoch: 0, recoveryKeys: [recovery] };
+  const opening = release("0.2.0", 1, { epoch: 1, signingKeys: [replacement], keyId: recovery.keyId, signWith: recoveryKey.privateKey });
+  const latest = release("0.3.0", 2, { epoch: 2, keyId: later.keyId, signWith: otherKey.privateKey });
+  const state = { release: latest, calls: [] as string[], openings: new Map([[1, opening]]) };
+  const runtime = { layout, config: initial, fetch: fetchFrom(state), now: () => new Date("2026-11-01T00:00:00Z"), write: () => undefined };
+  try {
+    await assert.rejects(runUpdateCommand([], runtime), /recovery history.*reinstall/);
+    assert.ok(state.calls.includes(`${origin}/release/stable/epoch-2.json`));
+    assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "sequence"), await pointer(layout, "trusted-channel.json")], ["0.1.0", "1", undefined]);
+    state.calls.length = 0;
+    state.release = release("0.3.0", 2, { epoch: 17, keyId: later.keyId, signWith: otherKey.privateKey });
+    await assert.rejects(runUpdateCommand([], runtime), /too many epochs.*reinstall/);
+    assert.equal(state.calls.length, 2, "the bounded gap is rejected before fetching history");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a pre-existing staging directory is never removed after exclusive creation fails", async () => {
+  const { dir, layout } = await installedLayout();
+  const originalNow = Date.now;
+  Date.now = () => 123456789;
+  try {
+    const staging = join(layout.versionsDirectory, `.staging-0.2.0-${process.pid}-123456789`);
+    await mkdir(staging);
+    await writeFile(join(staging, "user-file"), "keep");
+    const state = { release: release("0.2.0", 2), calls: [] as string[] };
+    await assert.rejects(runUpdateCommand([], { layout, config, fetch: fetchFrom(state), now: () => new Date("2026-11-01T00:00:00Z"), write: () => undefined, smoke: async () => undefined }), /EEXIST/);
+    assert.equal(await readFile(join(staging, "user-file"), "utf8"), "keep");
+    assert.equal(await pointer(layout, "current"), "0.1.0");
+    await utimes(staging, new Date(0), new Date(0));
+    state.release = release("0.3.0", 3);
+    await runUpdateCommand([], { layout, config, fetch: fetchFrom(state), now: () => new Date("2026-11-01T00:00:00Z"), write: () => undefined, smoke: async () => undefined });
+    assert.equal(await readFile(join(staging, "user-file"), "utf8"), "keep", "old staging names are not swept after another update");
+  } finally { Date.now = originalNow; await rm(dir, { recursive: true, force: true }); }
+});
+
+test("failed update leaves a staging path that was replaced after creation untouched", async () => {
+  const { dir, layout } = await installedLayout();
+  let replaced = "";
+  try {
+    const state = { release: release("0.2.0", 2), calls: [] as string[] };
+    await assert.rejects(runUpdateCommand([], {
+      layout, config, fetch: fetchFrom(state), now: () => new Date("2026-11-01T00:00:00Z"), write: () => undefined,
+      smoke: async (extracted) => {
+        replaced = dirname(extracted);
+        await rename(replaced, `${replaced}-moved`);
+        await mkdir(replaced);
+        await writeFile(join(replaced, "user-file"), "keep");
+        throw new Error("staging was replaced");
+      },
+    }), /staging was replaced/);
+    assert.equal(await readFile(join(replaced, "user-file"), "utf8"), "keep");
+    assert.equal(await pointer(layout, "current"), "0.1.0");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -327,8 +502,7 @@ test("uninstall removes program files and the profile PATH block, and keeps stat
     try {
       const home = join(dir, "home");
       await mkdir(join(home, ".local", "share", "aiboard", "projects"), { recursive: true });
-      const block = "# >>> aiboard installer >>>\nexport PATH=\"$HOME/.aiboard/bin:$PATH\"\n# <<< aiboard installer <<<\n";
-      await writeFile(join(home, ".profile"), `alias ll='ls -l'\n${block}export EDITOR=vi\n`);
+      await writeFile(join(home, ".profile"), `alias ll='ls -l'\n${profileBlock}export EDITOR=vi\n`);
       const runtime = { layout, platform: "linux" as const, home, environment: {}, write: () => undefined, interactive: false };
       await assert.rejects(runUninstallCommand([], runtime), /uninstall_confirmation_required/);
       await runUninstallCommand(["--yes", ...(removeState ? ["--remove-state"] : [])], runtime);
@@ -337,6 +511,82 @@ test("uninstall removes program files and the profile PATH block, and keeps stat
       assert.equal(existsSync(join(home, ".local", "share", "aiboard")), !removeState);
     } finally { await rm(dir, { recursive: true, force: true }); }
   }
+});
+
+test("uninstall leaves a symlinked profile and its target untouched", { skip: process.platform === "win32" }, async () => {
+  const { dir, layout } = await installedLayout();
+  try {
+    const home = join(dir, "home");
+    const target = join(dir, "outside-profile");
+    await mkdir(home);
+    await writeFile(target, profileBlock);
+    await symlink(target, join(home, ".profile"));
+    await runUninstallCommand(["--yes"], { layout, platform: "linux", home, environment: {}, write: () => undefined, interactive: false });
+    assert.ok((await lstat(join(home, ".profile"))).isSymbolicLink());
+    assert.equal(await readFile(target, "utf8"), profileBlock);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("uninstall leaves profiles without the exact installer block untouched", async () => {
+  const { dir, layout } = await installedLayout();
+  try {
+    const home = join(dir, "home");
+    await mkdir(home);
+    const path = join(home, ".profile");
+    const content = "export EDITOR=vi\n";
+    const modified = "# >>> aiboard installer >>>\nuser customizations\n# <<< aiboard installer <<<\n";
+    const invalidUtf8 = Buffer.concat([Buffer.from([0xff, 0x0a]), Buffer.from(profileBlock)]);
+    const bomPrefix = Buffer.from([0xef, 0xbb, 0xbf]);
+    await writeFile(path, content);
+    await writeFile(join(home, ".bashrc"), modified);
+    await writeFile(join(home, ".zshrc"), invalidUtf8);
+    await writeFile(join(home, ".bash_profile"), Buffer.concat([bomPrefix, Buffer.from(`user config\n${profileBlock}`)]));
+    const before = await lstat(path);
+    await runUninstallCommand(["--yes"], { layout, platform: "linux", home, environment: {}, write: () => undefined, interactive: false });
+    const after = await lstat(path);
+    assert.equal(await readFile(path, "utf8"), content);
+    assert.equal(await readFile(join(home, ".bashrc"), "utf8"), modified);
+    assert.deepEqual(await readFile(join(home, ".zshrc")), invalidUtf8);
+    assert.deepEqual(await readFile(join(home, ".bash_profile")), Buffer.concat([bomPrefix, Buffer.from("user config\n")]));
+    assert.equal(after.ino, before.ino);
+    assert.equal(after.mtimeMs, before.mtimeMs);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("uninstall keeps a modified fish file and reports it, but removes the exact installer template", async () => {
+  for (const modified of [true, false]) {
+    const { dir, layout } = await installedLayout();
+    try {
+      const home = join(dir, "home");
+      const parent = join(home, ".config", "fish", "conf.d");
+      const fish = join(parent, "aiboard.fish");
+      await mkdir(parent, { recursive: true });
+      const content = modified ? `${fishConfig}# user customization\n` : fishConfig;
+      await writeFile(fish, content);
+      const messages: string[] = [];
+      await runUninstallCommand(["--yes"], { layout, platform: "linux", home, environment: {}, write: (message) => { messages.push(message); }, interactive: false });
+      if (modified) {
+        assert.equal(await readFile(fish, "utf8"), content);
+        assert.match(messages.join(""), /Kept .*aiboard\.fish/);
+      } else assert.equal(existsSync(fish), false);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("uninstall does not remove a fish file through a parent link outside the home", { skip: process.platform === "win32" }, async () => {
+  const { dir, layout } = await installedLayout();
+  try {
+    const home = join(dir, "home");
+    const outside = join(dir, "outside-fish");
+    await mkdir(join(home, ".config"), { recursive: true });
+    await mkdir(join(outside, "conf.d"), { recursive: true });
+    await writeFile(join(outside, "conf.d", "aiboard.fish"), fishConfig);
+    await symlink(outside, join(home, ".config", "fish"));
+    const messages: string[] = [];
+    await runUninstallCommand(["--yes"], { layout, platform: "linux", home, environment: {}, write: (message) => { messages.push(message); }, interactive: false });
+    assert.equal(await readFile(join(outside, "conf.d", "aiboard.fish"), "utf8"), fishConfig);
+    assert.match(messages.join(""), /Kept .*aiboard\.fish/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 async function windowsUninstall(removeState: boolean, rootName = "AIBoard") {
@@ -416,7 +666,8 @@ test("Windows deferred cleanup never touches a newer install that replaced its l
 });
 
 test("profile and Windows PATH edits only touch the installer's own entries", () => {
-  assert.equal(stripProfileBlock("a\n# >>> aiboard installer >>>\nx\n# <<< aiboard installer <<<\nb\n"), "a\nb\n");
+  assert.equal(stripProfileBlock(`a\n${profileBlock}b\n`), "a\nb\n");
+  assert.equal(stripProfileBlock("a\n# >>> aiboard installer >>>\nx\n# <<< aiboard installer <<<\nb\n"), "a\n# >>> aiboard installer >>>\nx\n# <<< aiboard installer <<<\nb\n");
   assert.equal(stripProfileBlock("a\n# >>> aiboard installer >>>\nunterminated\n"), "a\n# >>> aiboard installer >>>\nunterminated\n");
   const script = windowsRemovePathScript("C:\\Users\\o'brien\\AppData\\Local\\AIBoard\\bin");
   assert.match(script, /\$bin = 'C:\\Users\\o''brien\\AppData\\Local\\AIBoard\\bin'/);

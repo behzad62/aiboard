@@ -27,7 +27,6 @@ jobs:
         run: npm ci
 
       - name: Published release manifests only move forward
-        if: github.event_name == 'push'
         env:
           BEFORE: ${{ github.event.before }}
         run: |
@@ -66,7 +65,15 @@ jobs:
           script: |
             set -e
             echo "${{ secrets.SSH_PASS }}" | sudo -S mkdir -p /var/www/aiboard.me
-            echo "${{ secrets.SSH_PASS }}" | sudo -S rsync -a --delete "$HOME/aiboard-deploy/out/" /var/www/aiboard.me/
+            for file in /var/www/aiboard.me/release/*/epoch-*.json /var/www/aiboard.me/release/*/epoch-*.json.sig; do
+              [ -f "$file" ] || continue
+              relative=${file#/var/www/aiboard.me/}
+              if ! cmp -s "$file" "$HOME/aiboard-deploy/out/$relative"; then
+                echo "Permanent recovery history is missing or changed: $file" >&2
+                exit 1
+              fi
+            done
+            echo "${{ secrets.SSH_PASS }}" | sudo -S rsync -a --delete --filter='P /release/*/epoch-*.json' --filter='P /release/*/epoch-*.json.sig' "$HOME/aiboard-deploy/out/" /var/www/aiboard.me/
             echo "${{ secrets.SSH_PASS }}" | sudo -S chown -R www-data:www-data /var/www/aiboard.me
             echo "${{ secrets.SSH_PASS }}" | sudo -S find /var/www/aiboard.me -type d -exec chmod 755 {} \;
             echo "${{ secrets.SSH_PASS }}" | sudo -S find /var/www/aiboard.me -type f -exec chmod 644 {} \;

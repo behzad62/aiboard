@@ -147,6 +147,13 @@ export function verifyHistoricalReleaseManifest(bytes: Uint8Array, signatureText
   return verifyManifest(bytes, signatureText, config, { now }, true);
 }
 
+/** Authenticate a permanent, possibly expired opening solely as trust history, never as an installable release. */
+export function verifyReleaseEpochOpening(bytes: Uint8Array, signatureText: string, config: ReleaseChannelConfig, now: Date): ReleaseManifest {
+  const manifest = verifyManifest(bytes, signatureText, config, { now }, true);
+  if ((manifest.epoch ?? 0) !== (config.epoch ?? 0) + 1) throw new ReleaseVerificationError("recovery history must advance exactly one epoch");
+  return manifest;
+}
+
 function verifyManifest(bytes: Uint8Array, signatureText: string, config: ReleaseChannelConfig, options: VerifyManifestOptions, allowExpired: boolean): ReleaseManifest {
   const configuredEpoch = config.epoch ?? 0;
   if (!Number.isSafeInteger(configuredEpoch) || configuredEpoch < 0 || configuredEpoch > 2 ** 20 ||

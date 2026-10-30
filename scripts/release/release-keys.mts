@@ -10,7 +10,7 @@
 //       before it is committed to public/release/<channel>/, and refuses one whose sequence is not higher than
 //       the manifest already committed there (publication order)
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,8 +52,8 @@ if (command === "pin" || command === "pin-recovery" || command === "show") {
   // The template supplies the known-good bundle descriptions. No private key is read from the environment.
   const config = parseReleaseChannelConfig(JSON.parse(readFileSync(resolve(option("config") ?? join(root, "release", "previous-channel.json")), "utf8")));
   const next = parseReleaseChannelConfig(JSON.parse(readFileSync(resolve(option("new-config") ?? join(root, "release", "channel.json")), "utf8")));
-  if (next.channel !== config.channel || next.artifactPrefix !== config.artifactPrefix || (next.epoch ?? 0) !== (config.epoch ?? 0) + 1 ||
-      JSON.stringify(next.recoveryKeys ?? []) !== JSON.stringify(config.recoveryKeys ?? []) || !next.keys.length) throw new Error("The new configuration must advance exactly one epoch, retain the channel, artifact origin and recovery keys, and contain new signing keys.");
+  if (next.channel !== config.channel || next.manifestUrl !== config.manifestUrl || next.artifactPrefix !== config.artifactPrefix || (next.epoch ?? 0) !== (config.epoch ?? 0) + 1 ||
+      JSON.stringify(next.recoveryKeys ?? []) !== JSON.stringify(config.recoveryKeys ?? []) || !next.keys.length) throw new Error("The new configuration must advance exactly one epoch, retain the channel, manifest URL, artifact origin and recovery keys, and contain new signing keys.");
   if (next.keys.some((key) => config.keys.some((old) => old.n === key.n && old.e === key.e))) throw new Error("The new epoch must not retain a previous ordinary signing key.");
   const keyFile = option("key-file");
   if (!keyFile) throw new Error("sign-epoch requires the offline recovery --key-file.");
@@ -68,9 +68,13 @@ if (command === "pin" || command === "pin-recovery" || command === "show") {
   const signature = signManifestBytes(bytes, privateKey);
   verifyReleaseManifest(bytes, signature, config, { now: new Date() });
   const out = resolve(option("out") ?? ".");
+  const history = join(out, `epoch-${next.epoch}.json`);
+  writeFileSync(history, bytes, { flag: "wx" });
+  try { writeFileSync(`${history}.sig`, `${signature}\n`, { flag: "wx" }); }
+  catch (error) { unlinkSync(history); throw error; }
   writeFileSync(join(out, "manifest.json"), bytes);
   writeFileSync(join(out, "manifest.json.sig"), `${signature}\n`);
-  process.stdout.write(`Signed recovery manifest for epoch ${next.epoch}, sequence 1, with ${signer.keyId}.\n`);
+  process.stdout.write(`Signed recovery manifest for epoch ${next.epoch}, sequence 1, with ${signer.keyId}. Publish manifest.json(.sig) and keep epoch-${next.epoch}.json(.sig) permanently.\n`);
 } else if (command === "generate-test") {
   const out = resolve(option("out") ?? "");
   const origin = option("origin") ?? "http://127.0.0.1:8765";

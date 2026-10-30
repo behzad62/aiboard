@@ -104,6 +104,10 @@ assert.throws(() => selectReleaseSequence("auto", config, signed({ sequence: 2 *
     assert.equal(signedEpoch.status, 0, signedEpoch.stderr);
     const bytes = readFileSync(join(out, "manifest.json"));
     const signature = readFileSync(join(out, "manifest.json.sig"), "utf8");
+    assert.deepEqual(readFileSync(join(out, "epoch-1.json")), bytes);
+    assert.equal(readFileSync(join(out, "epoch-1.json.sig"), "utf8"), signature);
+    assert.notEqual(run("sign-epoch", "--config", configPath, "--new-config", nextPath, "--manifest", template, "--key-file", recoveryPrivate, "--out", out).status, 0);
+    assert.deepEqual(readFileSync(join(out, "epoch-1.json")), bytes, "the permanent opening cannot be overwritten");
     const opening = verifyReleaseManifest(bytes, signature, priorConfig, { now: new Date() });
     assert.equal(opening.epoch, 1);
     assert.equal(opening.sequence, 1);
