@@ -51,6 +51,15 @@ Runner V2 provider configuration and transports live under `runner-v2/src/`. Acc
 
 `runner-v2/src/cli.ts` starts the authenticated localhost control plane. Runner state must be outside the project. It captures a safe Git baseline, creates isolated task worktrees, persists every lifecycle transition, and recovers after browser or runner restarts.
 
+#### Filesystem write ownership (keep the audit list current)
+
+`runner-v2/test/filesystem-mutation-routing.test.ts` is a closed audit list of every `runner-v2/src/` module allowed to import a mutation-capable `node:fs` / `node:fs/promises` API (`writeFile`, `rename`, `rm`, `unlink`, `mkdir`, `open`, `link`, `chmod`, …). It is a review tripwire, not a sandbox, and it fails on every OS when a module is missing.
+
+- When you add or change a Runner V2 module so that it imports one of those APIs, update the list **in the same change**. Use `privateOwners` for Runner-private targets (state dir, SQLite, artifacts, install/extension home, run-owned worktrees) and `readHandleOwners` for read-only `open`/`openSync` imports. Give every entry a trailing comment saying what it writes and where.
+- Never add a module whose targets can be model-chosen or inside the user's project. Native model-selected writes go through `filesystem-mutation-fence.ts`. Runner code that must touch project paths (such as cleanup of its own residue) confines them canonically: `realpath` the parent and check it is inside the real checkout, because a symlink or junction makes a lexical `relative()` check pass for an outside file.
+- Never bulk-allowlist to turn the test green. Read each call site, and record the review (module, APIs, targets, evidence) in `docs/runner-v2/filesystem-owner-review-*.md`.
+- Known, deliberate exceptions to project confinement, which this list does not govern: provider-native tools run by the provider bypass the fence, and Remote agents connected through the relay may act outside the project unless the user limits them to a folder. Do not widen either one implicitly.
+
 `scripts/runner.mjs` and `lib/client/runner.ts` are legacy benchmark-era code. They are not packaged or used by product Build mode and must not be reintroduced into that path.
 
 ### App layer
