@@ -7,6 +7,8 @@ export const SITE_NAME = "AI Board";
 export const SITE_AUTHOR = "Behzad Shams";
 export const SITE_CONTACT_EMAIL = "mail@aiboard.me";
 export const SITE_GITHUB_URL = "https://github.com/behzad62/aiboard";
+/** AI Board Remote dashboard (relay at mcp.aiboard.me): devices, usage and connected AI apps. */
+export const SITE_REMOTE_URL = "https://mcp.aiboard.me/";
 export const SITE_TAGLINE = "A local-first AI harness to chat and build with any model";
 // Kept under 160 characters so search results never truncate mid-sentence —
 // the local-first angle has to survive the cut.
