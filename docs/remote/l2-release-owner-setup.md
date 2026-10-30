@@ -56,7 +56,13 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
      gh secret set AIBOARD_RELEASE_SIGNING_KEY --env release --repo behzad62/aiboard < aiboard-release-2026a.pem
      ```
    - Then delete the unencrypted `aiboard-release-2026a.pem` from the machine. The encrypted backups remain.
-5. **Merge to main.** Merge the L2 branch and the key pin to `main`. Pushing `main` redeploys aiboard.me.
+5. **Protect the sequence reservations.** In GitHub, Settings → Rules → Rulesets → New tag ruleset:
+   - target `release-sequence/**`;
+   - restrict updates and deletions (bypass: nobody);
+   - leave creation allowed, because the release workflow creates one tag per signing run.
+
+   This keeps the reservation history durable. Without it, a deleted reservation tag could let a later run reuse that sequence.
+6. **Merge to main.** Merge the L2 branch and the key pin to `main`. Pushing `main` redeploys aiboard.me.
    - The deployed installers now carry the key.
    - Until the first manifest is published, they fail closed: the manifest download fails, and nothing is installed.
    - To avoid that window, push the pin together with step 4 of the release checklist.
@@ -68,7 +74,7 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
    - Check **rollback compatibility:** `aiboard update --rollback` runs the previous version against the state the new version wrote. A release must not change persisted state in a way the previous release cannot read, or its notes must say rollback is unsupported.
 2. **Run the release workflow.** Actions → "Runner release (L2, manual)" → Run workflow on `main`.
    - **version:** `0.2.0`, for example. Tag `v0.2.0` must not exist yet.
-   - **sequence:** `auto` uses the sequence of the committed `public/release/stable/manifest.json` + 1, or 1 for the first release.
+   - **sequence:** `auto` picks one more than the highest of the committed `public/release/stable/manifest.json` and every reserved sequence (below), or 1 for the first release. An explicit sequence must be higher than both.
    - **expires_days:** 180.
 
    The workflow then:
@@ -77,18 +83,21 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
    - waits for **your approval** of the `release` environment.
 3. **Approve the signing job.** The signing job:
    - signs with `--require-commit`, which refuses bundles that were not built from a clean checkout of the dispatched commit;
+   - refuses to sign if `main` has moved since the dispatch, so a queued run cannot sign with an older key policy; re-dispatch from the current `main`;
+   - reserves its sequence before signing by creating the tag `release-sequence/stable/<n>` on the repository. Every run gets a different sequence, even if a draft is later deleted, so no two signed manifests share one. A run whose reservation fails stops before signing; sequences may have gaps;
    - checks the signature again with `openssl`, exactly as `install.sh` does;
    - creates a **draft** release `v<version>` with the six bundles, `manifest.json` and `manifest.json.sig`.
 
    It never publishes the release and never touches aiboard.me.
 4. **Publish.**
    - Review the draft, then publish it. This makes the bundle URLs in the manifest live.
-   - Download the workflow artifact `signed-manifest-<version>` (or take `manifest.json` and `manifest.json.sig` from the release) and verify it:
+   - Publish drafts in sequence order only. If a newer draft already exists, delete the older draft instead of publishing it.
+   - Download the workflow artifact `signed-manifest-<version>` (or take `manifest.json` and `manifest.json.sig` from the release) and verify it. `verify` also refuses a manifest whose sequence is not higher than the committed one:
      ```bash
      npx tsx scripts/release/release-keys.mts verify --manifest manifest.json --bundles <folder with the six downloaded archives>
      ```
    - Copy both files to `public/release/stable/` and commit them.
-   - Push `main`. This needs your approval because it redeploys aiboard.me. `publish-downloads` raises the installers' replay floor to this manifest's sequence.
+   - Push `main`. This needs your approval because it redeploys aiboard.me. `publish-downloads` raises the installers' replay floor to this manifest's sequence. The deploy workflow first runs `check-publication-order.mts` and stops if a committed manifest went backwards or was removed since the previous deploy.
 5. **Check.** On a clean machine or user account:
    - Windows: `irm https://aiboard.me/install.ps1 | iex`.
    - macOS/Linux: `curl -fsSL https://aiboard.me/install.sh | sh`.
@@ -104,6 +113,8 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
 ## Interrupted install or update
 - Install, update and uninstall share an `install.lock` directory. An existing lock is never deleted automatically: an empty, old, or malformed lock does not prove that its owner has stopped.
 - If an operation reports that the lock exists, first confirm that no AIBoard installation, update, or uninstall is running for that user. Only then remove `install.lock` and retry. It is under `%LOCALAPPDATA%\AIBoard` on Windows and `~/.aiboard` on macOS/Linux.
+- On Windows, `aiboard uninstall` hands its lock to `uninstall-pending.cmd`, which the command shim runs after Node exits. The lock is released only after that cleanup. If uninstall was started without the shim, it prints the script's path: run that script to finish. Until then, installs report the lock.
+- An installer that cannot stop a hung staged process (the inventory check or the version smoke) keeps the lock, the staging folder and its work folder, and names the process. End that process before removing them.
 
 ## Key rotation (planned)
 1. Generate a new key, back it up and pin it next to the old one (step 3). `release/channel.json` then lists both keys.
@@ -114,7 +125,7 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
 ## Key compromise
 1. Copy the channel configuration that authenticated the committed manifest to `release/previous-channel.json`, then remove the compromised key from `release/channel.json`. The previous configuration is used only to authenticate the repository's committed history for the sequence check; it is not shipped as a client trust anchor.
 2. Pin a new key and replace the secret.
-3. Do not assume a higher sequence is always available. A compromised signer could have issued the protocol maximum (`2 ** 40`), or an unobserved sequence higher than the one in the repository. Reinstall with the new trust anchor and follow a separately reviewed recovery procedure for preserving user state; do not simply reset an existing installation's sequence or claim an update can recover it. A durable release-sequence reservation and an exhaustion/reset procedure are not implemented yet, so signing remains blocked until those are resolved.
+3. Do not assume a higher sequence is always available. A compromised signer could have issued the protocol maximum (`2 ** 40`), or an unobserved sequence higher than the one in the repository. Reinstall with the new trust anchor and follow a separately reviewed recovery procedure for preserving user state; do not simply reset an existing installation's sequence or claim an update can recover it. Durable sequence reservation is implemented (`release-sequence/<channel>/<n>` tags). An exhaustion/reset (epoch) procedure is not, so a compromise that consumed the sequence space still needs that separately reviewed procedure.
 
 Installed Runners that only trust the compromised key cannot be fixed by update. They must reinstall with the one-line installer. Announce this. Installers served after the fix trust only the new key.
 
