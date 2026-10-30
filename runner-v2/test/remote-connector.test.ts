@@ -35,6 +35,7 @@ import {
   RemoteConnector,
   type RemoteConnectionState,
   type RemoteRequestRuntime,
+  type RemoteStatusReport,
   type RemoteTransport,
   type RemoteTransportMessage,
 } from "../src/remote-connector.js";
@@ -201,6 +202,7 @@ async function stubHarness(t: test.TestContext, options: {
   drainTimeoutMs?: number;
   runtime?: RemoteRequestRuntime;
   onStateChange?: (state: RemoteConnectionState) => void;
+  statusReport?: () => RemoteStatusReport | undefined;
 } = {}): Promise<Harness> {
   const root = await temporary();
   const state = join(root, "state");
@@ -225,6 +227,7 @@ async function stubHarness(t: test.TestContext, options: {
     ...(options.onShutdownStep ? { onShutdownStep: options.onShutdownStep } : {}),
     ...(options.drainTimeoutMs !== undefined ? { drainTimeoutMs: options.drainTimeoutMs } : {}),
     ...(options.onStateChange ? { onStateChange: options.onStateChange } : {}),
+    ...(options.statusReport ? { statusReport: options.statusReport } : {}),
   });
   t.after(async () => {
     await connector.close().catch(() => undefined);
@@ -467,6 +470,27 @@ test("relay revocation is persisted for the next start", async (t) => {
   await harness.transport.emit({ type: "revoked" });
   assert.equal(harness.connector.state().state, "revoked");
   assert.equal(new RemoteDeviceStore(harness.state).load()!.revoked, true);
+});
+
+test("the relay hears readiness only after the handshake, never before the proof", async (t) => {
+  const report: RemoteStatusReport = { runnerVersion: "1.2.3", platform: "win32",
+    policy: { shell: false, approvals: true, readOnly: false, onlyHere: true, audit: true } };
+  let calls = 0;
+  const harness = await stubHarness(t, { statusReport: () => { calls += 1; return report; } });
+  await handshake(harness);
+  const types = harness.transport.sent.map((message) => message.type);
+  assert.ok(types.indexOf("proof") < types.indexOf("status"), "no status before the proof");
+  const statuses = harness.transport.sent.filter((message) => message.type === "status");
+  assert.deepEqual(statuses, [
+    { type: "status", state: "connected-degraded", reasonCode: "reconciliation_pending", ...report },
+    { type: "status", state: "tool-ready", reasonCode: "ready", ...report },
+  ]);
+  assert.equal(calls, 2);
+
+  const quiet = await stubHarness(t, { statusReport: () => { throw new Error("policy unreadable"); } });
+  await handshake(quiet);
+  assert.equal(quiet.connector.state().state, "tool-ready", "a failing report never changes readiness");
+  assert.equal(quiet.transport.sent.some((message) => message.type === "status"), false);
 });
 
 test("the terminal hears about a revoke, a dropped socket and a first connection that fails", async (t) => {

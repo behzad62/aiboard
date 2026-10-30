@@ -41,6 +41,13 @@ export interface RemoteConnectionState {
   readonly deviceEpoch?: string;
 }
 
+/** What the dashboard shows about this device; never paths, names of files or anything from a request. */
+export interface RemoteStatusReport {
+  readonly runnerVersion: string;
+  readonly platform: "win32" | "darwin" | "linux";
+  readonly policy: { readonly shell: boolean; readonly approvals: boolean; readonly readOnly: boolean; readonly onlyHere: boolean; readonly audit: boolean };
+}
+
 export interface RemoteResponseMessage {
   readonly requestId: string;
   readonly traceId: string;
@@ -60,6 +67,7 @@ export type RemoteTransportMessage =
   | { readonly type: "request"; readonly request: RemoteRequest; readonly authorization?: RemoteAuthorization }
   | { readonly type: "response"; readonly response: RemoteResponseMessage; readonly data?: unknown }
   | { readonly type: "heartbeat"; readonly at: string }
+  | ({ readonly type: "status"; readonly state: "tool-ready" | "connected-degraded"; readonly reasonCode: RemoteConnectionReason } & RemoteStatusReport)
   | { readonly type: "revoked" }
   | ArtifactTransferFrame
   | { readonly type: "chunk_ack"; readonly transferId: string; readonly seq: number }
@@ -174,6 +182,8 @@ export interface RemoteConnectorOptions {
   readonly reconnect?: { readonly baseDelayMs: number; readonly maxDelayMs: number; readonly maxAttempts: number };
   readonly isOwnerLockHeld?: () => boolean;
   readonly onStateChange?: (state: RemoteConnectionState) => void;
+  /** Reported to the relay on every authenticated readiness change, so the dashboard never shows an open socket as ready. */
+  readonly statusReport?: () => RemoteStatusReport | undefined;
   readonly onShutdownStep?: (step: string) => void;
   /** Admitted extension tools for the current generation/policy (R1c), when composed. */
   readonly pluginTools?: RemotePluginToolProvider;
@@ -1227,6 +1237,19 @@ export class RemoteConnector {
       ...(needsEpoch && identity ? { deviceEpoch: identity.epoch } : {}),
     });
     this.options.onStateChange?.(this.current);
+    if (needsEpoch) this.reportStatus(state as "tool-ready" | "connected-degraded", reasonCode);
+  }
+
+  private reportStatus(state: "tool-ready" | "connected-degraded", reasonCode: RemoteConnectionReason): void {
+    const transport = this.transport;
+    if (!transport || this.pendingEpoch !== undefined) return;
+    let report: RemoteStatusReport | undefined;
+    try { report = this.options.statusReport?.(); } catch { return; }
+    if (!report) return;
+    try {
+      void Promise.resolve(transport.send({ type: "status", state, reasonCode, runnerVersion: report.runnerVersion,
+        platform: report.platform, policy: { ...report.policy } })).catch(() => { /* readiness is advisory; socket loss is handled elsewhere */ });
+    } catch { /* same */ }
   }
 }
 

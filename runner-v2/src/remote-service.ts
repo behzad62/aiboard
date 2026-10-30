@@ -14,6 +14,7 @@ import {
 } from "./remote-connector.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import type { RemoteDevicePolicy } from "./remote-principal.js";
+import { readRunnerVersion } from "./remote-pairing.js";
 import type { ProtectedLocations } from "./protected-locations.js";
 import {
   closeRemoteComposition,
@@ -180,6 +181,8 @@ export class RemoteService {
     this.composition.principals.getOrCreate(verified);
     if (Object.keys(this.options.policyPatch ?? {}).length > 0) this.composition.principals.updatePolicy(verified, this.options.policyPatch!, "local");
     const admission = this.composition.admission;
+    const runnerVersion = (() => { try { return readRunnerVersion(); } catch { return ""; } })();
+    const platform = process.platform;
     const connector = new RemoteConnector({
       deviceStore,
       authenticator: this.composition.authenticator,
@@ -215,6 +218,11 @@ export class RemoteService {
       onStateChange: (state) => {
         this.writeStatusFile(state);
         try { this.options.onStateChange?.(state); } catch { /* a notice can never alter the connection */ }
+      },
+      statusReport: () => {
+        if (!runnerVersion || (platform !== "win32" && platform !== "darwin" && platform !== "linux")) return undefined;
+        const { shell, approvals, readOnly, onlyHere, audit } = this.composition.principals.policy(verified);
+        return { runnerVersion, platform, policy: { shell, approvals, readOnly, onlyHere, audit } };
       },
       ...(this.options.onShutdownStep ? { onShutdownStep: this.options.onShutdownStep } : {}),
     });

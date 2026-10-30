@@ -84,8 +84,7 @@ export class RelayPairingIssuer implements RemoteSessionIssuer {
     this.deviceName = (options.deviceName ?? hostname()).replace(/[^\x20-\x7e]/g, " ").trim().slice(0, 64) || "AIBoard device";
     this.platform = options.platform ?? process.platform;
     if (!["win32", "darwin", "linux"].includes(this.platform)) throw new Error("Pairing is unavailable on this platform.");
-    const metadata: unknown = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-    this.runnerVersion = options.runnerVersion ?? (isRecord(metadata) && typeof metadata.version === "string" ? metadata.version : "");
+    this.runnerVersion = options.runnerVersion ?? readRunnerVersion();
     if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(this.runnerVersion)) throw new Error("Runner version is invalid.");
   }
 
@@ -267,6 +266,12 @@ export class RelayPairingIssuer implements RemoteSessionIssuer {
       return { status: response.status, body: JSON.parse(raw) as unknown };
     } catch { throw new RemotePairingError("pairing_invalid_response", "The relay returned invalid pairing JSON."); }
   }
+}
+
+/** The installed Runner's package version ("" when unreadable; callers validate it). */
+export function readRunnerVersion(): string {
+  const metadata: unknown = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  return isRecord(metadata) && typeof metadata.version === "string" ? metadata.version : "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
