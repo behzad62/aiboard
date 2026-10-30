@@ -283,6 +283,8 @@ export class FakeRelay {
   private tls?: TLSSocket;
   private socket?: WebSocket;
   private readonly messages: RemoteTransportMessage[] = [];
+  /** Readiness reports, kept apart from the request/response stream like the real relay does. */
+  readonly statuses: RemoteTransportMessage[] = [];
   private readonly waiters: Array<{ resolve: (message: RemoteTransportMessage) => void; reject: (error: Error) => void }> = [];
   private readonly connected: Promise<void>;
   private connectedResolve!: () => void;
@@ -305,6 +307,7 @@ export class FakeRelay {
           if (binary) { websocket.terminate(); return; }
           try {
             const message = JSON.parse(rawText(data)) as RemoteTransportMessage;
+            if (message.type === "status") { this.statuses.push(message); return; }
             const waiter = this.waiters.shift();
             if (waiter) waiter.resolve(message); else this.messages.push(message);
           } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); websocket.terminate(); }
