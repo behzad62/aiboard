@@ -70,6 +70,8 @@ jobs:
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-sequence-reservation.mts
       - name: Copilot platform package verification
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-copilot-bundle.mts
+      - name: Bundle import closure (every shipped import is shipped)
+        run: node node_modules/tsx/dist/cli.mjs scripts/release/test-bundle-closure.mts
       - name: Copilot unresponsive-runtime handling
         run: node scripts/release/test-copilot-smoke.mjs
 

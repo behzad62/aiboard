@@ -15,22 +15,10 @@ import { readArchive, writeTarGz, writeZip, type ArchiveFile } from "../../runne
 import {
   isReleaseVersion, parseReleaseChannelConfig, PREVIEW_TARGETS, RELEASE_PRODUCT, RELEASE_TARGETS, targetFormat, type ReleaseTarget,
 } from "../../runner-v2/src/release-manifest.js";
+import { importClosureGaps, LEGAL_FILES, PEER_FILES, RUNTIME_PACKAGES } from "./bundle-contents.mjs";
 import { pinnedCopilotFiles, type CopilotLock } from "./copilot-bundle.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-/** Runtime npm dependencies of Runner V2 (bare imports in runner-v2/src); everything else is resolved from the lockfile. */
-const RUNTIME_PACKAGES = ["@github/copilot-sdk", "@modelcontextprotocol/sdk", "playwright", "typescript"];
-/** Peer runners started by `aiboard accounts` / `aiboard legacy` (launcher.ts peerEntries). The bench runner needs its own pinned runtime and stays a separate download. */
-const PEER_FILES = [
-  "lib/account-provider-runner.mjs",
-  "lib/account-provider-copilot-sdk.mjs",
-  "scripts/local-pair-runner.mjs",
-  "scripts/runner.mjs",
-  "scripts/runner-lib.mjs",
-  "scripts/runner-panel.html",
-  "scripts/runner-help.html",
-];
-const LEGAL_FILES = ["LICENSE", "NOTICE", "TRADEMARKS.md"];
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -225,6 +213,8 @@ async function main(): Promise<void> {
   const targetOption = option("target") ?? "all";
   const targets = targetOption === "all" ? [...RELEASE_TARGETS] : targetOption.split(",");
   for (const target of targets) if (!(RELEASE_TARGETS as readonly string[]).includes(target)) throw new Error(`Unknown target ${target}.`);
+  const gaps = importClosureGaps(root);
+  if (gaps.length > 0) throw new Error(`The bundle would miss modules its own files import:\n  ${gaps.join("\n  ")}`);
   const out = resolve(option("out") ?? join(root, "dist", "release"));
   const configPath = resolve(option("channel-config") ?? join(root, "release", "channel.json"));
   const rawConfig: unknown = JSON.parse(readFileSync(configPath, "utf8"));
