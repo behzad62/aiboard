@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import {
@@ -383,8 +383,10 @@ async function writeBackup(path: string, bytes: Buffer): Promise<void> {
 async function writeDurable(path: string, bytes: Buffer): Promise<void> {
   await mkdir(join(path, ".."), { recursive: true });
   const temporary = path + "." + process.pid + "-" + randomUUID() + ".tmp";
+  let created = false;
   try {
     const file = await open(temporary, "wx", 0o600);
+    created = true;
     try { await file.writeFile(bytes); await file.sync(); } finally { await file.close(); }
     await rename(temporary, path);
     // Windows does not permit opening directories for fsync.
@@ -392,7 +394,7 @@ async function writeDurable(path: string, bytes: Buffer): Promise<void> {
       const directory = await open(join(path, ".."), "r");
       try { await directory.sync(); } finally { await directory.close(); }
     }
-  } finally { await rm(temporary, { force: true }); }
+  } finally { if (created) await rm(temporary, { force: true }); }
 }
 
 function validateRegistry(raw: unknown): ExtensionRegistryDocument {
@@ -569,7 +571,7 @@ async function writeAtomic(path: string, value: unknown, immutable = false): Pro
   await mkdir(join(path, ".."), { recursive: true });
   if (immutable && (await stat(path).catch(() => undefined))) throw new ExtensionManagementError("generation_exists", `${path} already exists and is immutable.`, 500);
   const temporary = `${path}.${process.pid}-${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 1)}\n`, { mode: 0o600 });
+  await writeFile(temporary, `${JSON.stringify(value, null, 1)}\n`, { mode: 0o600, flag: "wx" });
   try {
     await rename(temporary, path);
   } finally {
@@ -577,30 +579,101 @@ async function writeAtomic(path: string, value: unknown, immutable = false): Pro
   }
 }
 
-async function acquireLock(path: string): Promise<() => Promise<void>> {
+/** Test seams for the registry lock; production uses the defaults. */
+export interface RegistryLockOptions {
+  waitMs?: number;
+  staleMs?: number;
+  /** Runs after a stale lock was chosen for reclamation and before it is reclaimed. */
+  beforeReclaim?: () => void | Promise<void>;
+}
+
+/**
+ * Cross-process registry lock: a directory holding exactly one unique `owner-<uuid>` marker (pid inside).
+ * Ownership is the marker, not the directory. Reclaiming a stale lock removes only that stale owner's
+ * marker and then the directory only if it is empty, so a reclaimer that lost a race can never remove a
+ * successor's lock, and release never touches a lock that is no longer this owner's.
+ */
+export async function acquireRegistryLock(path: string, options: RegistryLockOptions = {}): Promise<() => Promise<void>> {
   await mkdir(join(path, ".."), { recursive: true });
-  const deadline = Date.now() + LOCK_WAIT_MS;
+  const deadline = Date.now() + (options.waitMs ?? LOCK_WAIT_MS);
+  const marker = `owner-${randomUUID()}`;
   for (let attempt = 0; ; attempt += 1) {
-    try {
-      await mkdir(path);
-      await writeFile(join(path, "owner"), `${process.pid}\n`);
-      return async () => { await rm(path, { recursive: true, force: true }); };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const details = await stat(path).catch(() => undefined);
-      // Age alone is not authority to steal an active writer's lock.
-      if (details && Date.now() - details.mtimeMs > LOCK_STALE_MS && await lockOwnerGone(path)) {
-        await rm(path, { recursive: true, force: true });
-        continue;
-      }
-      if (Date.now() > deadline) throw new ExtensionManagementError("registry_busy", "The extension registry is locked by another Runner; retry shortly.", 503);
-      await new Promise((resolveWait) => setTimeout(resolveWait, Math.min(250, 10 * 2 ** Math.min(attempt, 5))));
+    if (await tryCreateLock(path, marker)) return () => releaseLock(path, marker);
+    const stale = await staleLockEntry(path, options.staleMs ?? LOCK_STALE_MS);
+    if (stale !== undefined) {
+      await options.beforeReclaim?.();
+      await reclaimLock(path, stale);
+      continue;
     }
+    if (Date.now() > deadline) throw new ExtensionManagementError("registry_busy", "The extension registry is locked by another Runner; retry shortly.", 503);
+    await new Promise((resolveWait) => setTimeout(resolveWait, Math.min(250, 10 * 2 ** Math.min(attempt, 5))));
   }
 }
 
-async function lockOwnerGone(path: string): Promise<boolean> {
-  const owner = await readFile(join(path, "owner"), "utf8").catch(() => undefined);
+const acquireLock = acquireRegistryLock;
+
+async function tryCreateLock(path: string, marker: string): Promise<boolean> {
+  try { await mkdir(path); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
+  try {
+    await writeFile(join(path, marker), `${process.pid}\n`, { flag: "wx" });
+  } catch (error) {
+    // A reclaimer removed the still-empty directory before the marker landed: lost the race, retry.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    await removeEmptyLock(path);
+    throw error;
+  }
+  // Two contenders can write markers into one directory (one recreated it after the other's reclaim).
+  // Only a sole marker owns the lock; otherwise back off and retry.
+  const entries = await readdir(path).catch(() => [] as string[]);
+  if (entries.length === 1 && entries[0] === marker) return true;
+  await unlink(join(path, marker)).catch(() => undefined);
+  await removeEmptyLock(path);
+  return false;
+}
+
+async function releaseLock(path: string, marker: string): Promise<void> {
+  try { await unlink(join(path, marker)); } catch (error) {
+    // The marker is gone: this lock was reclaimed, so whatever is there now is not ours to remove.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  await removeEmptyLock(path);
+}
+
+/**
+ * The entry to reclaim from a stale lock: an owner marker whose process is gone, `null` for a directory
+ * left empty by a crash between creation and marker, or undefined when it is not provably stale. Age alone
+ * is not authority to steal an active writer's lock, and unknown contents are never reclaimed.
+ */
+async function staleLockEntry(path: string, staleMs: number): Promise<string | null | undefined> {
+  const details = await stat(path).catch(() => undefined);
+  if (!details || Date.now() - details.mtimeMs <= staleMs) return undefined;
+  const entries = await readdir(path).catch(() => undefined);
+  if (!entries) return undefined;
+  if (entries.length === 0) return null;
+  // `owner` is the pre-marker lock format; new locks never use that name.
+  const [entry] = entries;
+  if (entries.length !== 1 || !entry || !/^owner(?:-[0-9a-f-]{36})?$/.test(entry)) return undefined;
+  return await lockOwnerGone(join(path, entry)) ? entry : undefined;
+}
+
+async function reclaimLock(path: string, entry: string | null): Promise<void> {
+  if (entry) await unlink(join(path, entry)).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
+  await removeEmptyLock(path);
+}
+
+/** Removes the lock directory only when it is empty; a successor's marker keeps it. */
+async function removeEmptyLock(path: string): Promise<void> {
+  await rmdir(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error;
+  });
+}
+
+async function lockOwnerGone(markerPath: string): Promise<boolean> {
+  const owner = await readFile(markerPath, "utf8").catch(() => undefined);
   if (!owner || !/^\d+\s*$/.test(owner)) return false;
   const pid = Number(owner.trim());
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
