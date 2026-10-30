@@ -21,6 +21,7 @@ const allowedRawProcessBoundaries = new Set([
   "src/portable-process-posix-control.mjs",
   "src/portable-process-supervisor.mjs",
   "src/extension-mcp-launcher.ts",
+  "src/self-update.ts",
 ]);
 const allowedNativeScriptProcessBoundaries = new Set([
   "src/managed-process-job-host.ps1",
