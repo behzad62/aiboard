@@ -9,11 +9,11 @@ test("failure chains name operations, system fields, aggregate members and cause
   const root = Object.assign(new Error("TerminateJobObject failed"), { code: "EACCES", errno: 5, syscall: "TerminateJobObject", pid: 4242 });
   const signal = new Error("signal transport failed", { cause: root });
   annotateFailure(signal, { operation: "backend_signal", context: "action=terminate" });
-  annotateFailure(signal, { operation: "ignored-second-operation" });
+  annotateFailure(signal, { operation: "ignored-second-operation", context: "phase=escalate" });
   const aggregate = new AggregateError([signal, "plain string", { detail: "object" }], "cleanup failed");
   const chain = describeFailureChain(new Error("top", { cause: aggregate }));
   assert.equal(chain,
-    "Error: top <- caused by AggregateError: cleanup failed [[backend_signal] Error: signal transport failed {action=terminate} " +
+    "Error: top <- caused by AggregateError: cleanup failed [[backend_signal] Error: signal transport failed {action=terminate; phase=escalate} " +
     "<- caused by Error(code=EACCES errno=5 syscall=TerminateJobObject pid=4242): TerminateJobObject failed; plain string; non-Error: {\"detail\":\"object\"}]");
 
   const cyclic = new Error("cycle") as Error & { cause?: unknown };

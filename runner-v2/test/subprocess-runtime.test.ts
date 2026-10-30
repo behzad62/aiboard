@@ -3379,6 +3379,6 @@ test("a lease heartbeat failure during observation is named as such, not as an o
   // Existing control flow: the heartbeat failure dropped the fence, so recording backend_unavailable
   // fails and that recording error escapes. The diagnostic now names the failure it could not record.
   assert.ok(thrown instanceof Error && thrown.message === "Process owner fencing authority is unavailable.", String(thrown));
-  assert.match(describeFailureChain(thrown), /\{while recording backend_unavailable: \[backend_observe\.lease_heartbeat\] Error: lease renewal stalled \{effect settled before the heartbeat stopped\}/);
+  assert.match(describeFailureChain(thrown), /\{while recording backend_unavailable: \[backend_observe\.lease_heartbeat\] Error: lease renewal stalled \{effect settled before the heartbeat stopped; phase=observe state=\w+ backend=fake rootPid=42 /);
   assert.notEqual(composed.readOnlyStore.readByInvocation("invoke-1")!.state, "backend_unavailable");
 });

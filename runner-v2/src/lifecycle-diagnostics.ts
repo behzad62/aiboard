@@ -25,15 +25,14 @@ function clean(text: string, limit: number): string {
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }
 
-/** Records which operation produced `error` (first annotation wins) and optional context. */
+/** Records which operation produced `error` (the first operation wins) and appends context. */
 export function annotateFailure(error: unknown, annotation: FailureAnnotation): void {
   if (error === null || typeof error !== "object") return;
   try {
     const existing = annotations.get(error);
-    annotations.set(error, {
-      ...(existing?.operation ?? annotation.operation ? { operation: existing?.operation ?? annotation.operation } : {}),
-      ...(existing?.context ?? annotation.context ? { context: existing?.context ?? annotation.context } : {}),
-    });
+    const operation = existing?.operation ?? annotation.operation;
+    const context = [existing?.context, annotation.context].filter((part) => part).join("; ");
+    annotations.set(error, { ...(operation ? { operation } : {}), ...(context ? { context } : {}) });
   } catch {
     // Diagnostics never change the annotated failure's path.
   }
