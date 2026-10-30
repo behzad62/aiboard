@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,7 +13,7 @@ import {
   trustedKeyFromPublicKey, type ReleaseChannelConfig,
 } from "../src/release-manifest.js";
 import {
-  acquireInstallLock, runUninstallCommand, runUpdateCommand, stripProfileBlock, windowsRemovePathScript, type InstallLayout,
+  acquireInstallLock, runUninstallCommand, runUpdateCommand, stripProfileBlock, windowsCleanupScript, windowsRemovePathScript, type InstallLayout,
 } from "../src/self-update.js";
 
 const key = generateKeyPairSync("rsa", { modulusLength: 3072 });
@@ -301,6 +301,82 @@ test("uninstall removes program files and the profile PATH block, and keeps stat
       for (const name of ["bin", "versions", "current", "sequence", "install.json"]) assert.ok(!existsSync(join(layout.root, name)), name);
       assert.equal(await readFile(join(home, ".profile"), "utf8"), "alias ll='ls -l'\nexport EDITOR=vi\n");
       assert.equal(existsSync(join(home, ".local", "share", "aiboard")), !removeState);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }
+});
+
+async function windowsUninstall(removeState: boolean, rootName = "AIBoard") {
+  const { dir, layout: base } = await installedLayout();
+  const root = join(dir, rootName);
+  if (root !== base.root) await rename(base.root, root);
+  const layout = { ...base, root, binDirectory: join(root, "bin"), versionsDirectory: join(root, "versions") };
+  const home = join(dir, "home");
+  await mkdir(join(home, ".aiboard", "runner-extensions"), { recursive: true });
+  await mkdir(join(root, "projects"), { recursive: true });
+  const messages: string[] = [];
+  await runUninstallCommand(["--yes", removeState ? "--remove-state" : "--keep-state"], {
+    layout, platform: "win32", home, environment: {}, write: (message) => { messages.push(message); }, interactive: false,
+    editUserPath: async () => undefined, shimRoot: root,
+  });
+  return { dir, layout, home, messages, script: await readFile(join(root, "uninstall-pending.cmd"), "utf8") };
+}
+
+test("Windows uninstall hands its install lock to the deferred cleanup instead of releasing it early", async () => {
+  for (const removeState of [false, true]) {
+    const { dir, layout, home, script } = await windowsUninstall(removeState);
+    try {
+      // Until the shim has run the cleanup, a new install, update, or uninstall must find the lock held.
+      await assert.rejects(acquireInstallLock(layout.root), /install_busy/);
+      const owners = (await readdir(join(layout.root, "install.lock"))).filter((name) => name.startsWith("owner-"));
+      assert.equal(owners.length, 1);
+      // ASCII-only and relative to the script's own folder: no absolute path is serialized through a code page.
+      assert.match(script, /^[\x20-\x7e\r\n]*$/);
+      assert.ok(!script.includes(layout.root) && !script.includes(dir), script);
+      const destructive = script.split("\r\n").filter((line) => /\b(rd|del)\b/.test(line));
+      assert.ok(destructive.length >= 3);
+      for (const line of destructive) assert.ok(line.includes(`if exist "%~dp0install.lock\\${owners[0]}"`), line);
+      assert.equal(existsSync(join(home, ".aiboard", "runner-extensions")), !removeState, "remove-state includes the default extensions directory");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }
+  assert.throws(() => windowsCleanupScript({ ownerName: "owner-x", relativePaths: ["..\\outside"], removeRoot: false }), /uninstall_cleanup_invalid/);
+  assert.throws(() => windowsCleanupScript({ ownerName: "owner-x", relativePaths: ["C:\\abs"], removeRoot: false }), /uninstall_cleanup_invalid/);
+  assert.throws(() => windowsCleanupScript({ ownerName: "owner-x", relativePaths: ["vers\u00efons"], removeRoot: false }), /uninstall_cleanup_invalid/);
+});
+
+const runCleanup = (path: string) => spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `""${path}""`], { windowsVerbatimArguments: true, encoding: "utf8" });
+
+test("Windows deferred cleanup removes its own files, releases the lock, and handles a Unicode root", { skip: process.platform !== "win32" }, async () => {
+  for (const removeState of [false, true]) {
+    const { dir, layout } = await windowsUninstall(removeState, "AI B\u00f6ard & ^ ! \u2713");
+    try {
+      assert.equal(runCleanup(join(layout.root, "uninstall-pending.cmd")).status, 0);
+      if (removeState) assert.equal(existsSync(layout.root), false);
+      else {
+        for (const name of ["bin", "versions", "install.lock", "uninstall-pending.cmd"]) assert.equal(existsSync(join(layout.root, name)), false, name);
+        assert.equal(existsSync(join(layout.root, "projects")), true);
+      }
+      // The lock is free again for the next install.
+      if (!removeState) await (await acquireInstallLock(layout.root))();
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("Windows deferred cleanup never touches a newer install that replaced its lock", { skip: process.platform !== "win32" }, async () => {
+  for (const removeState of [false, true]) {
+    const { dir, layout } = await windowsUninstall(removeState);
+    try {
+      // The owner confirmed nothing is running and removed the lock; a newer install then took it and wrote its files.
+      await rm(join(layout.root, "install.lock"), { recursive: true });
+      const newer = await acquireInstallLock(layout.root);
+      await mkdir(join(layout.root, "versions", "0.1.0", "node"), { recursive: true });
+      await writeFile(join(layout.root, "versions", "0.1.0", "node", "node.exe"), "newer install");
+      await writeFile(join(layout.root, "bin", "aiboard.cmd"), "newer shim");
+      await writeFile(join(layout.root, "current"), "0.1.0");
+      assert.equal(runCleanup(join(layout.root, "uninstall-pending.cmd")).status, 0);
+      assert.equal(await readFile(join(layout.root, "versions", "0.1.0", "node", "node.exe"), "utf8"), "newer install");
+      assert.equal(await readFile(join(layout.root, "bin", "aiboard.cmd"), "utf8"), "newer shim");
+      assert.equal(await pointer(layout, "current"), "0.1.0");
+      await newer();
     } finally { await rm(dir, { recursive: true, force: true }); }
   }
 });

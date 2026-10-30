@@ -13,7 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
@@ -160,19 +160,23 @@ async function writeAtomic(path: string, content: string): Promise<void> {
   catch (error) { await unlink(temporary).catch(() => undefined); throw error; }
 }
 
+/** Releases the lock; `ownerName` is this owner's marker inside install.lock, so a deferred cleanup can prove it still owns the lock. */
+export type InstallLockRelease = (() => Promise<void>) & { readonly ownerName: string };
+
 /** A lock with unknown ownership is never reclaimed automatically. */
-export async function acquireInstallLock(root: string): Promise<() => Promise<void>> {
+export async function acquireInstallLock(root: string): Promise<InstallLockRelease> {
   const lock = join(root, "install.lock");
   try { await mkdir(lock); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     throw new Error(`install_busy: The AIBoard install lock exists. After confirming no install, update, or uninstall is running, delete ${lock} and retry.`);
   }
-  const marker = join(lock, `owner-${randomUUID()}`);
+  const ownerName = `owner-${randomUUID()}`;
+  const marker = join(lock, ownerName);
   // If recording ownership fails, retain the lock: an incomplete lock is busy.
   await writeFile(marker, String(process.pid), { flag: "wx" });
   let released = false;
-  return async () => {
+  return Object.assign(async () => {
     if (released) return;
     try {
       if (await readFile(marker, "utf8") !== String(process.pid)) throw new Error("owner marker changed");
@@ -182,7 +186,7 @@ export async function acquireInstallLock(root: string): Promise<() => Promise<vo
     } catch (error) {
       throw new Error(`install_lock_unverified: Could not release ${lock}; confirm no install, update, or uninstall is running before removing it (${error instanceof Error ? error.message : String(error)}).`);
     }
-  };
+  }, { ownerName });
 }
 
 async function fetchLimited(fetchImpl: typeof fetch, url: string, limit: number): Promise<Buffer> {
@@ -429,7 +433,7 @@ function parseUninstallArguments(raw: string[]): UninstallArguments {
 
 /** AIBoard data that `--remove-state` deletes, never touched otherwise. Project folders are never included. */
 export function userStatePaths(options: { platform: NodeJS.Platform; environment: NodeJS.ProcessEnv; home: string; root: string }): string[] {
-  if (options.platform === "win32") return [join(options.root, "projects"), join(options.root, "remote")];
+  if (options.platform === "win32") return [join(options.root, "projects"), join(options.root, "remote"), join(options.home, ".aiboard", "runner-extensions")];
   const xdg = options.environment.XDG_DATA_HOME;
   const data = options.platform === "darwin"
     ? join(options.home, "Library", "Application Support", "AIBoard")
@@ -492,13 +496,29 @@ function runPowerShell(script: string): Promise<void> {
   });
 }
 
-/** Batch file the shim runs after Node exits; its last line leaves the batch context before deleting itself (or the whole root). */
-export function windowsCleanupScript(paths: readonly string[], removeRoot?: string): string {
-  const quote = (path: string) => `"${path.replace(/%/g, "%%")}"`;
+/**
+ * Batch file the shim runs after Node exits. The uninstall hands its install lock to this script, so an
+ * install cannot start until the cleanup has finished; every destructive line first checks that the
+ * uninstall's owner marker is still in install.lock, so a replaced lock (a newer install) is never touched.
+ * Paths are relative to the script's own folder (`%~dp0`, the install root) and the file is ASCII-only:
+ * cmd expands `%~dp0` itself, so a Unicode or special-character root never passes through a code page or
+ * the batch parser. Its last line leaves the batch context, then deletes itself and releases the lock (or
+ * removes the whole root, lock included).
+ */
+export function windowsCleanupScript(options: { ownerName: string; relativePaths: readonly string[]; removeRoot: boolean }): string {
+  const safe = /^[A-Za-z0-9._-]+(\\[A-Za-z0-9._-]+)*$/;
+  for (const name of [options.ownerName, ...options.relativePaths]) {
+    if (!safe.test(name) || name.split("\\").some((part) => part === "." || part === "..")) throw new Error(`uninstall_cleanup_invalid: ${JSON.stringify(name)} is not a plain relative path.`);
+  }
+  const at = (path: string) => `"%~dp0${path}"`;
+  const owned = `if exist ${at(`install.lock\\${options.ownerName}`)}`;
   return [
     "@echo off",
-    ...paths.map((path) => `if exist ${quote(`${path}\\*`)} (rd /s /q ${quote(path)} 2>nul) else (if exist ${quote(path)} del /f /q ${quote(path)} 2>nul)`),
-    removeRoot ? `(goto) 2>nul & rd /s /q ${quote(removeRoot)} 2>nul` : '(goto) 2>nul & del /f /q "%~f0"',
+    "setlocal DisableDelayedExpansion",
+    ...options.relativePaths.map((path) => `${owned} (if exist ${at(`${path}\\*`)} (rd /s /q ${at(path)} 2>nul) else (if exist ${at(path)} del /f /q ${at(path)} 2>nul))`),
+    options.removeRoot
+      ? `(goto) 2>nul & ${owned} rd /s /q "%~dp0." 2>nul`
+      : `(goto) 2>nul & ${owned} (del /f /q "%~f0" & del /f /q ${at(`install.lock\\${options.ownerName}`)} & rd ${at("install.lock")})`,
     "",
   ].join("\r\n");
 }
@@ -533,6 +553,7 @@ export async function runUninstallCommand(raw: string[], runtime: SelfUpdateRunt
   }
   const release = await acquireInstallLock(layout.root);
   const leftovers: string[] = [];
+  let lockHandedOff = false;
   try {
     if (platform === "win32") await (runtime.editUserPath ?? ((bin: string) => runPowerShell(windowsRemovePathScript(bin, existsSync(join(layout.root, "path-was-absent"))))))(layout.binDirectory);
     else await (runtime.editUserPath ?? (() => removePosixPath(home)))(layout.binDirectory);
@@ -547,22 +568,29 @@ export async function runUninstallCommand(raw: string[], runtime: SelfUpdateRunt
       try { await rm(path, { recursive: true, force: true, maxRetries: 2 }); }
       catch { leftovers.push(path); }
     }
-    leftovers.push(...deferred);
+    if (platform === "win32") {
+      // This process and the cmd shim that started it still hold the running version and bin\; the shim
+      // runs this cleanup right after Node exits. The lock passes to the cleanup, which releases it last,
+      // so an install cannot start (and have its files deleted) before the cleanup is done.
+      const inRoot = (path: string) => relative(layout.root, path);
+      const retry = [...leftovers, ...deferred].filter((path) => { const name = inRoot(path); return name !== "" && !name.startsWith("..") && !isAbsolute(name); });
+      const script = windowsCleanupScript({ ownerName: release.ownerName, relativePaths: retry.map((path) => inRoot(path).split(/[\\/]/).join("\\")), removeRoot: removeState });
+      await writeAtomic(join(layout.root, UNINSTALL_PENDING_SCRIPT), script);
+      lockHandedOff = true;
+      leftovers.splice(0, leftovers.length, ...leftovers.filter((path) => !retry.includes(path)));
+    }
   } finally {
-    await release();
+    if (!lockHandedOff) await release();
   }
   if (platform === "win32") {
-    // This process and the cmd shim that started it still hold the running version and bin\;
-    // the shim runs this cleanup right after Node exits.
-    await writeFile(join(layout.root, UNINSTALL_PENDING_SCRIPT), windowsCleanupScript(leftovers, removeState ? layout.root : undefined), "latin1");
     const shimRoot = runtime.shimRoot ?? (environment.AIBOARD_ROOT ? resolve(environment.AIBOARD_ROOT) : undefined);
     if (!shimRoot || shimRoot.toLowerCase() !== resolve(layout.root).toLowerCase()) {
-      write(`Finish by running ${join(layout.root, UNINSTALL_PENDING_SCRIPT)} after this command exits.\n`);
+      write(`Finish by running ${join(layout.root, UNINSTALL_PENDING_SCRIPT)} after this command exits; the install lock stays held until it has run.\n`);
     }
   } else {
     try { await rmdir(layout.root); } catch { /* keeps state or other files */ }
-    if (leftovers.length > 0) write(`Could not remove: ${leftovers.join(", ")}\n`);
   }
+  if (leftovers.length > 0) write(`Could not remove: ${leftovers.join(", ")}\n`);
   write(`AIBoard Runner was uninstalled.${removeState ? " AIBoard data was deleted." : " AIBoard data was kept; run the installer again to continue where you left off."}\n` +
     "Open a new terminal so the PATH change takes effect.\n");
 }

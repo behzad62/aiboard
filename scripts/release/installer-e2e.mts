@@ -372,10 +372,11 @@ try {
   mkdirSync(statePath, { recursive: true });
   const uninstall = await aiboard("uninstall --yes");
   check("aiboard uninstall --yes succeeds", uninstall.code === 0 && /uninstalled/.test(uninstall.stdout), uninstall.stdout + uninstall.stderr);
-  const gone = () => !existsSync(join(root, "bin")) && !existsSync(join(root, "versions")) && !existsSync(join(root, "current"));
+  // On Windows the deferred cleanup owns the install lock and releases it only after removing the program files.
+  const gone = () => !existsSync(join(root, "bin")) && !existsSync(join(root, "versions")) && !existsSync(join(root, "current")) && !existsSync(join(root, "install.lock"));
   const removalDeadline = Date.now() + 60_000;
   while (!gone() && Date.now() < removalDeadline) await new Promise((wait) => setTimeout(wait, 500));
-  check("uninstall removes program files, shims and pointers", gone(), { bin: existsSync(join(root, "bin")), versions: existsSync(join(root, "versions")), current: existsSync(join(root, "current")) });
+  check("uninstall removes program files, shims and pointers, then releases the lock", gone(), { bin: existsSync(join(root, "bin")), versions: existsSync(join(root, "versions")), current: existsSync(join(root, "current")), lock: existsSync(join(root, "install.lock")) });
   check("uninstall keeps AIBoard state by default", existsSync(statePath));
   if (windows) {
     check("uninstall removes the bin directory from the user PATH", !userPathSnapshot().toLowerCase().includes(join(root, "bin").toLowerCase()));
