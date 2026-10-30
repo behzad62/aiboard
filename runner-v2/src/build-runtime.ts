@@ -173,7 +173,7 @@ import {
   type PlanRiskLevel,
   type PlanRiskReason,
 } from "./plan-critique-contracts.js";
-import { describeFailureWithCauses } from "./lifecycle-diagnostics.js";
+import { describeFailureChain, describeFailureWithCauses, lifecycleTrace } from "./lifecycle-diagnostics.js";
 export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
@@ -4524,7 +4524,10 @@ export class BuildRuntime {
       });
     } catch (error) {
       await this.recordCleanupSearch("verification");
-      return this.pauseForDeliveryGate(task.id, "delivery_review_failed", describeFailureWithCauses(error));
+      // The review-failed detail may reach the Architect's stop notes, so it keeps the plain message;
+      // the cause chain goes only to the opt-in lifecycle trace (and the subprocess record's reason).
+      lifecycleTrace("delivery.review_failed", { taskId: task.id, diagnostic: describeFailureChain(error) });
+      return this.pauseForDeliveryGate(task.id, "delivery_review_failed", error instanceof Error ? error.message : String(error));
     }
     // T6b repair (R2-B6): the OA-17 cleanup search also runs after this
     // checkout-backed step (no-op for legacy runs).

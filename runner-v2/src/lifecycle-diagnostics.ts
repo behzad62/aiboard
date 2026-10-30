@@ -93,7 +93,7 @@ export function lifecycleTrace(event: string, fields: Readonly<Record<string, un
   try {
     const rendered = Object.entries(fields)
       .filter(([, value]) => value !== undefined)
-      .map(([key, value]) => `${key}=${clean(typeof value === "string" ? value : JSON.stringify(value) ?? String(value), 300)}`)
+      .map(([key, value]) => `${key}=${clean(typeof value === "string" ? value : JSON.stringify(value) ?? String(value), MAX_TOTAL)}`)
       .join(" ");
     process.stderr.write(`[aiboard-lifecycle] ${new Date().toISOString()} pid=${process.pid} ${event}${rendered ? ` ${rendered}` : ""}\n`);
   } catch {
