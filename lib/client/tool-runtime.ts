@@ -94,10 +94,10 @@ export function applyToolRuntimeToRequest(
 export function toolRuntimeSetupTarget(
   prerequisiteId: string,
 ): string | undefined {
+  if (prerequisiteId === "remote_mcp_server") return "/settings?tab=extensions";
   return [
     "local_shell_executor",
     "local_editor_executor",
-    "remote_mcp_server",
     "openai_vector_store",
   ].includes(prerequisiteId)
     ? "/settings?tab=tools"

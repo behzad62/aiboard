@@ -378,6 +378,29 @@ test("evidence commands declare arbitrary process execution as an external effec
   }
 });
 
+test("evidence command accepts the absolute workspace root without widening subfolder access", async (t) => {
+  const fixture = evidenceFixture();
+  const store = new SqliteEvidenceStore(fixture.database);
+  const artifacts = new ArtifactStore(fixture.artifacts);
+  try {
+    mkdirSync(join(fixture.workspace, "child"));
+    const evidenceTools = createEvidenceTools({ store, artifacts, taskId: "task_a", execution: createTestOneShotCommandExecutor(t, { artifacts }) });
+    const evidenceCommand = evidenceTools.find(tool => tool.definition.name === "run_evidence_command")!;
+    const context = workerContext(fixture.workspace);
+    const broker = new ToolBroker({ permissionProfile: "full", workspacePath: fixture.workspace });
+    for (const tool of evidenceTools) broker.register(tool);
+    for (const [index, cwd] of [".", fixture.workspace, join(fixture.workspace, ".")].entries()) {
+      const result = await broker.invoke({ type: "tool_call", callId: `root-${index}`, name: "run_evidence_command", arguments: { label: "root", command: process.execPath, args: ["-e", "process.stdout.write('ok')"], cwd } }, context);
+      assert.equal(result.isError, false, JSON.stringify(result.error));
+      assert.equal((jsonValue(result) as { fact: { exitCode: number } }).fact.exitCode, 0);
+    }
+    const args = { label: "child", command: "node", args: [], cwd: "child", timeoutMs: 1000 };
+    assert.deepEqual(evidenceCommand.assessAccess!(args, context).paths, [{ path: "child", access: "write" }, { path: ".", access: "read" }]);
+    const outside = await broker.invoke({ type: "tool_call", callId: "outside", name: "run_evidence_command", arguments: { label: "outside", command: process.execPath, args: ["--version"], cwd: ".." } }, context);
+    assert.equal(outside.isError, true);
+  } finally { store.close(); fixture.cleanup(); }
+});
+
 test("benchmark evidence policy rejects commands outside the exact allowlist", async (t) => {
   const fixture = evidenceFixture();
   const store = new SqliteEvidenceStore(fixture.database);

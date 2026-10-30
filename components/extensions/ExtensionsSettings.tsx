@@ -1,7 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ProviderHostedMcpSettings } from "@/components/extensions/ProviderHostedMcpSettings";
+import type { ToolRuntimeSettings } from "@/lib/db/schema";
 import { AccessSummary, OperationCard } from "@/components/extensions/OperationCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,7 +60,7 @@ const POLL_MS = 1_500;
  * Settings → Extensions. The Runner is authoritative for installed state; this view only renders it
  * and sends the user's own actions. Readiness, not a saved form, drives every success label.
  */
-export function ExtensionsSettings() {
+export function ExtensionsSettings({ settings, onChanged, onOpenTools }: { settings?: ToolRuntimeSettings; onChanged?: () => void; onOpenTools: () => void }) {
   const [connection, setConnection] = useState<NativeRunnerConnection | null>(() => runnerConnection());
   const [inventory, setInventory] = useState<ExtensionInventoryDto | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +83,7 @@ export function ExtensionsSettings() {
     if (!connection) return;
     setLoading(true);
     try {
-      // The single provider-hosted server from Settings → Tools is listed here too (idempotent). Its
+      // The single provider-hosted server from browser settings is listed here too (idempotent). Its
       // token stays in this browser; only name, URL and enabled state are recorded.
       const remote = getToolRuntimeSettings().remoteMcpServer;
       if (remote?.url) {
@@ -109,16 +110,19 @@ export function ExtensionsSettings() {
 
   if (!connection) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Extensions</CardTitle>
-          <CardDescription>Skills, MCP servers and plugins are installed and run by your local Runner.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <p>Connect a Runner first; nothing is installed from the browser.</p>
-          <Button asChild variant="outline" size="sm"><Link href="/settings?tab=tools">Set up the Runner</Link></Button>
-        </CardContent>
-      </Card>
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Runner-hosted extensions</CardTitle>
+            <CardDescription>Skills, MCP servers and plugins are installed and run by your local Runner.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p>Connect a Runner to manage these extensions.</p>
+            <Button variant="outline" size="sm" onClick={onOpenTools}>Set up the Runner</Button>
+          </CardContent>
+        </Card>
+        <ProviderHostedMcpSettings settings={settings?.remoteMcpServer} onChanged={onChanged} />
+      </div>
     );
   }
 
@@ -126,7 +130,7 @@ export function ExtensionsSettings() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Extensions</CardTitle>
+          <CardTitle>Runner-hosted extensions</CardTitle>
           <CardDescription>
             Add skills, MCP servers and plugins from a folder, an archive or a link. Your Runner installs them into its own store; your source files are never changed.
           </CardDescription>
@@ -136,7 +140,7 @@ export function ExtensionsSettings() {
             <div className="flex flex-wrap items-center gap-3 rounded-md bg-destructive/10 p-3 text-sm" role="alert">
               <span>{error.includes("Failed to fetch") ? "The Runner is not reachable." : error}</span>
               <Button size="sm" variant="outline" onClick={() => void load()}>Retry</Button>
-              <Button asChild size="sm" variant="ghost"><Link href="/settings?tab=tools">Runner connection</Link></Button>
+              <Button size="sm" variant="ghost" onClick={onOpenTools}>Runner connection</Button>
             </div>
           )}
           {inventory?.pendingOperations.map((operation) => (
@@ -186,6 +190,8 @@ export function ExtensionsSettings() {
           </TabsContent>
         ))}
       </Tabs>
+
+      <ProviderHostedMcpSettings settings={settings?.remoteMcpServer} onChanged={onChanged} />
 
       {inventory && <PolicyCard connection={connection} policy={inventory.policy} onSaved={() => void load()} />}
     </div>
@@ -611,13 +617,13 @@ function InstalledItem({ connection, item, onChanged, onMoveToRunner }: { connec
       </summary>
       <div className="mt-4 space-y-4">
         {readiness.lastError && <p className="text-destructive">{readiness.lastError.message}</p>}
-        {readiness.detail && <p className="text-muted-foreground">{readiness.detail}</p>}
+        {readiness.detail && !migrated && <p className="text-muted-foreground">{readiness.detail}</p>}
         {migrated && server?.kind === "mcp_server" && (
           <div className="space-y-2 rounded-md bg-muted/60 p-3 text-xs">
             <p>Provider-hosted tools are unsupported because the Runner cannot enforce their filter. Add this as a Runner-hosted server and enter the token again in the secure field. Nothing moves automatically.</p>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={() => onMoveToRunner({ type: "remote_http", url: server.url ?? "", serverName: server.serverName, auth: server.auth === "bearer" ? "bearer" : "none" })}>Add as Runner-hosted…</Button>
-              <Button asChild size="sm" variant="ghost"><Link href="/settings?tab=tools">Edit provider-hosted setting</Link></Button>
+              <Button asChild size="sm" variant="ghost"><a href="#provider-hosted-mcp">Edit provider-hosted setting</a></Button>
             </div>
           </div>
         )}

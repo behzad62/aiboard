@@ -19,6 +19,36 @@ import type {
 import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 import { ToolBroker } from "../src/tool-broker.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
+import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
+
+test("failed read-only calls settle durably while uncertain side effects remain in doubt", async () => {
+  const workspace = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-read-error-")));
+  const ledger = new SqliteToolLedger(join(workspace, "tools.sqlite"));
+  let reads = 0;
+  const register = (broker: ToolBroker) => {
+    for (const readOnly of [true, false]) broker.register({
+      definition: { name: readOnly ? "fixture.read_error" : "fixture.write_error", description: "Throws", inputSchema: { type: "object" }, readOnly, effect: readOnly ? "none" : "workspace" },
+      validate: () => ({ ok: true, value: {} }),
+      execute: async () => { if (readOnly) reads++; throw new Error("fixture I/O error"); },
+    });
+  };
+  try {
+    const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, ledger });
+    register(broker);
+    const read = { type: "tool_call" as const, callId: "read-error", name: "fixture.read_error", arguments: {} };
+    const write = { ...read, callId: "write-error", name: "fixture.write_error" };
+    assert.equal((await broker.invoke(read, context())).error?.code, "tool_execution_failed");
+    assert.equal((await broker.invoke(write, context())).error?.code, "tool_execution_failed");
+    const restarted = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, ledger });
+    register(restarted);
+    assert.equal((await restarted.invoke(read, context())).error?.code, "tool_execution_failed");
+    assert.equal(reads, 1, "durable error is replayed without retrying the read");
+    assert.equal((await restarted.invoke(write, context())).error?.code, "reconciliation_required");
+    const events = ledger.listRun(context().runId);
+    assert.equal(events.filter(e => e.callId === read.callId && e.type === "tool.completed").length, 1);
+    assert.equal(events.filter(e => e.callId === write.callId && e.type === "tool.completed").length, 0);
+  } finally { ledger.close(); rmSync(workspace, { recursive: true, force: true }); }
+});
 
 test("project profile allows contained writes but blocks traversal and symlink escape", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-broker-paths-")));

@@ -151,9 +151,11 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
     timeoutMs: (input) => input.timeoutMs + 5 * 60_000,
     // The working-tree identity is the whole workspace's, so a command in a subfolder also reads the
     // workspace root; writes stay granted to its cwd only.
-    assessAccess: (input) => ({
+    assessAccess: (input, context) => ({
       capability: "evidence.command",
-      paths: [{ path: input.cwd, access: "write" }, ...(input.cwd === "." ? [] : [{ path: ".", access: "read" as const }])],
+      paths: [{ path: input.cwd, access: "write" }, ...(
+        input.cwd === "." || (context.workspacePath && relative(resolve(context.workspacePath), resolve(context.workspacePath, input.cwd)) === "")
+          ? [] : [{ path: ".", access: "read" as const }])],
       external: true,
     }),
     execute: async (input, context) => {

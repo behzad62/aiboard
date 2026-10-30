@@ -39,6 +39,8 @@ export interface RunnerProviderConfig {
   cacheWriteInputCostMicrosPerMillion?: number;
   /** The model's context window in tokens, from the owner's model settings. */
   contextWindowTokens?: number;
+  /** Optional per-response generation limit for OpenAI-compatible endpoints. */
+  maxOutputTokens?: number;
 }
 
 export interface ProviderConfigStore {
@@ -156,6 +158,12 @@ export function validateProviderConfigs(
     }
     if (config.contextWindowTokens !== undefined && (!Number.isSafeInteger(config.contextWindowTokens) || config.contextWindowTokens < 1)) {
       throw new Error(`Provider runtime ${config.runtimeId} has an invalid context window.`);
+    }
+    if (config.maxOutputTokens !== undefined && (
+      !Number.isSafeInteger(config.maxOutputTokens) || config.maxOutputTokens < 1 ||
+      (config.contextWindowTokens !== undefined && config.maxOutputTokens >= config.contextWindowTokens)
+    )) {
+      throw new Error(`Provider runtime ${config.runtimeId} has an invalid output token limit.`);
     }
     ids.add(config.runtimeId);
   }

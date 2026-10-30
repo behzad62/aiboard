@@ -32,6 +32,7 @@ export interface OpenAICompatibleModelOptions {
   modelId: string;
   providerId?: string;
   reasoningEffort?: string;
+  maxOutputTokens?: number;
   protocol?: "chat-completions" | "responses";
   promptCaching?: boolean;
   supportsTools?: boolean;
@@ -128,6 +129,7 @@ export class OpenAICompatibleModel implements AgentModel {
     ]);
     const body = JSON.stringify({
       model: this.options.modelId,
+      ...(this.options.maxOutputTokens !== undefined ? { max_tokens: this.options.maxOutputTokens } : {}),
       ...(this.options.providerId === "openrouter"
         ? {
             session_id: request.sessionId,
@@ -252,7 +254,8 @@ export class OpenAICompatibleModel implements AgentModel {
             prompt_cache_retention: "24h",
           }
         : {}),
-      ...(profile?.maxOutputTokens ? { max_output_tokens: profile.maxOutputTokens } : {}),
+      ...((this.options.maxOutputTokens ?? profile?.maxOutputTokens)
+        ? { max_output_tokens: this.options.maxOutputTokens ?? profile?.maxOutputTokens } : {}),
       input: withVisualMedia(withToolVisualMessages(responsesInput(request.messages, toolNames, {
         reasoningItems: profile?.responses?.reasoningItems === true,
       }), request.toolVisuals, "openai-responses"), request.attachments, "openai-responses"),

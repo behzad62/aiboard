@@ -4,6 +4,8 @@ import {streamOpenAICompatibleChat} from "../lib/providers/openai-compat";
 import {streamOpenAIResponses} from "../lib/providers/openai";
 import {supportedBenchmarkReasoningEfforts} from "../lib/benchmark/model-effort";
 import type {ChatParams} from "../lib/providers/base";
+import { addCustomModel, updateUserSettings, __clearClientStoreForTests, __resetClientStoreForTests } from "../lib/client/store";
+import { createNativeProviderConfig } from "../lib/client/native-build-engine";
 
 function params(effort:ChatParams["reasoningEffort"]):ChatParams {
  return {apiKey:"none",model:"mule-mimo-q4",messages:[{role:"user",content:"Hello"}],reasoningEffort:effort};
@@ -36,4 +38,16 @@ for(const effort of ["default","none","low","medium","high"] as const){
 }
 const available=supportedBenchmarkReasoningEfforts({providerId:"custom",modelId:"custom:sample"});
 assert.deepEqual(available,["default","none","low","medium","high"]);
+__resetClientStoreForTests();
+addCustomModel({ id: "local-reasoning", label: "Local", model: "local-model", baseURL: "http://localhost:11434/v1", apiKey: "", hasKey: false,
+ reasoningEffort: "none", capabilities: { image: false, document: false, audio: false, video: false } });
+updateUserSettings({ modelContextOverrides: { "custom:local-reasoning": { contextWindowTokens: 65_536, maxOutputTokens: 32_768 } } });
+const nativeDefault = createNativeProviderConfig("custom:local-reasoning", 0);
+assert.equal(nativeDefault.reasoningEffort, "none", "saved Off reaches the native adapter");
+assert.equal(nativeDefault.maxOutputTokens, 32_768);
+assert.equal(nativeDefault.contextWindowTokens, 65_536);
+assert.equal(createNativeProviderConfig("custom:local-reasoning", 0, "high").reasoningEffort, "high");
+assert.equal(createNativeProviderConfig("custom:local-reasoning", 0, "none").reasoningEffort, "none");
+assert.equal(createNativeProviderConfig("custom:local-reasoning", 0, "default").reasoningEffort, "none");
+__clearClientStoreForTests();
 console.log("PASS custom providers preserve explicit reasoning effort for Chat Completions and Responses, while default omits it; ToolBench exposes selectable effort.");

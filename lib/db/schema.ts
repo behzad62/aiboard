@@ -362,6 +362,8 @@ export interface UserSettings {
   providerToolCapabilityEvidence?: CapabilityEvidence[];
   /** User-facing OpenAI connection choice; internal provider ids remain openai/chatgpt. */
   openAIConnectionMode?: "api" | "subscription";
+  /** Benchmark runner credentials are stored in the same local settings envelope as provider keys. */
+  benchmarkRunner?: { url: string; token: string };
   /** Shared local/provider tool runtime configuration used by readiness and execution preflight. */
   toolRuntime?: ToolRuntimeSettings;
 }

@@ -220,11 +220,12 @@ export class ToolBenchSessions {
       const transport = (this.options.modelFactory ?? createProviderModel)(config, artifacts);
       const model = new BudgetedAgentModel({ model: { complete: request => transport.complete(request), contextWindowTokens: config.contextWindowTokens ?? transport.contextWindowTokens }, ledger: budget, scopeId: request.sessionId,
         attribution: { runtimeId: config.runtimeId, providerId: config.providerId, modelId: config.modelId, sessionId: request.sessionId, role: "worker" },
-        outputTokenReserve: 16_384, estimateCostMicros: providerCostEstimator(config), costBasis: providerModelCostBasis(config) });
+        outputTokenReserve: config.maxOutputTokens ?? 16_384, estimateCostMicros: providerCostEstimator(config), costBasis: providerModelCostBasis(config) });
       refresh(); await save();
       entry.snapshot.startedAt = new Date().toISOString();
       const loop = await runAgentLoop({ model, registry: runtime, context: { runId: request.sessionId, sessionId: request.sessionId, actor: { role: "worker", id: request.runtimeId }, workspacePath: this.options.projectRoot, signal }, signal,
         maxTurns: request.budget.maxModelCalls ?? 300,
+        coordination: "solo",
         initialMessages: [{ id: "system", role: "system", content: "Complete the user's tool task directly using the available native tools. You are the only model. No planning, review, documentation, or project handoff is required. Use finish_toolbench as the only call in your final turn. Tool errors are ordinary tool feedback; hidden benchmark scores are never supplied. Token use, elapsed time and actions are measured; budgets are emergency guards." }, { id: "task", role: "user", content: request.prompt }],
         providerRetry: { runtimeId: config.runtimeId, providerId: config.providerId, modelId: config.modelId, classify: classifyProviderFailure },
         onCheckpoint: async checkpoint => { refresh(); await writeFile(join(directory, "transcript.json"), JSON.stringify(checkpoint)); await save(); },

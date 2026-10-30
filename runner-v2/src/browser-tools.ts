@@ -75,6 +75,14 @@ interface PersistedBrowserSession {
   height: number;
 }
 
+/** Raised only before an operation starts when no owned session can be recovered. */
+class BrowserSessionNotOpenError extends Error {
+  constructor() { super("Browser session is not open; call browser.open first."); }
+}
+
+/** The selector wait failed before any fill action was attempted. */
+class BrowserTargetNotFoundError extends Error {}
+
 export class PlaywrightBrowserBackend implements BrowserBackend {
   private browser: Browser | undefined;
   private readonly sessions = new Map<string, BrowserSession>();
@@ -135,7 +143,15 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
 
   async fill(sessionId: string, selector: string, value: string): Promise<void> {
     const session = await this.require(sessionId);
-    await session.page.locator(selector).fill(value);
+    const locator = session.page.locator(selector);
+    try {
+      await locator.waitFor({ state: "attached", timeout: 10_000 });
+    } catch (error) {
+      const { errors } = await import("playwright");
+      if (error instanceof errors.TimeoutError) throw new BrowserTargetNotFoundError(`Browser target ${selector} was not found before the timeout.`);
+      throw error;
+    }
+    await locator.fill(value);
     await this.persist(sessionId, session);
   }
 
@@ -257,7 +273,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     const session = this.sessions.get(sessionId);
     if (session) return session;
     const recovered = await this.recover(sessionId);
-    if (!recovered) throw new Error("Browser session is not open; call browser.open first.");
+    if (!recovered) throw new BrowserSessionNotOpenError();
     return recovered;
   }
 
@@ -532,7 +548,14 @@ function tool<T>(
     definition: { name, description, inputSchema, readOnly, effect: "external" },
     validate,
     assessAccess,
-    execute,
+    execute: async (input, context) => {
+      try { return await execute(input, context); }
+      catch (error) {
+        if (error instanceof BrowserTargetNotFoundError) return { isError: true, content: [{ type: "text", text: error.message }], error: { code: "browser_target_not_found", message: error.message } };
+        if (!(error instanceof BrowserSessionNotOpenError)) throw error;
+        return { isError: true, content: [{ type: "text", text: error.message }], error: { code: "browser_session_not_open", message: error.message } };
+      }
+    },
   };
 }
 

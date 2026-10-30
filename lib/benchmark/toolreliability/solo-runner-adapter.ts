@@ -80,7 +80,7 @@ export async function runSoloToolBench(input: NativeWorkBenchBuildInput, depende
       failure = { status: /budget_exhausted|turn_limit|wall_clock/.test(reason) ? "failed_budget" : /provider_error/.test(reason) ? "provider_unavailable" : /protocol_error/.test(reason) ? "failed_tool_use" : /model_ended|max_tokens|read_only_stall/.test(reason) ? "failed_model" : "invalid_harness", code: reason || "solo_session_failed", message: `Solo ToolBench stopped: ${reason || snapshot.status}.` };
     } else {
       const qualification = qualifyNativeToolBench(input.case, { observability: { tools: snapshot.tools, evidence: snapshot.evidence } }, snapshot.toolEvidence);
-      if (!qualification.passed) failure = { status: "failed_tool_use", code: "native_tool_qualification_failed", message: `Tool qualification failed: ${qualification.checks.filter(c => !c.passed).map(c => c.id).join(", ")}` };
+      if (!qualification.passed) failure = classifySoloQualificationFailure(qualification.checks);
     }
   } catch (error) {
     failure = { status: controller.signal.aborted && !input.signal?.aborted ? "failed_budget" : "invalid_harness", code: controller.signal.aborted ? "wall_clock_limit" : "solo_session_error", message: error instanceof Error ? error.message : String(error) };
@@ -107,4 +107,11 @@ export async function runSoloToolBench(input: NativeWorkBenchBuildInput, depende
   if (input.signal?.aborted) throw input.signal.reason;
   if (failure || !result) throw new NativeWorkBenchExecutionError(failure?.message ?? "Solo ToolBench produced no usage evidence.", managed?.projectPath ?? "", managed?.statePath ?? "", { certifiedStatus: failure?.status ?? "invalid_harness", certifiedCode: failure?.code ?? "solo_evidence_missing", buildResult: result });
   return result;
+}
+
+export function classifySoloQualificationFailure(checks: readonly { id: string; passed: boolean }[]) {
+  const unsettled = checks.some(c => c.id === "all-tool-results-settled" && !c.passed);
+  return unsettled
+    ? { status: "invalid_harness" as const, code: "native_tool_evidence_unsettled", message: "Tool invocation evidence is unsettled; the benchmark cannot reliably score this case." }
+    : { status: "failed_tool_use" as const, code: "native_tool_qualification_failed", message: `Tool qualification failed: ${checks.filter(c => !c.passed).map(c => c.id).join(", ")}` };
 }

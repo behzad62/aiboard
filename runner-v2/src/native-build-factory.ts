@@ -4130,6 +4130,7 @@ function createTransportModel(
           : {}),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     ...(config.providerId === "openai" ? { promptCaching: true } : {}),
+    ...(config.maxOutputTokens !== undefined ? { maxOutputTokens: config.maxOutputTokens } : {}),
   });
 }
 

@@ -24,6 +24,31 @@ import {
 } from "../src/provider-config-store.js";
 import { serializedInputUsage } from "../src/provider-model-utils.js";
 
+test("custom native configuration sends reasoning Off and the output limit on both protocols", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const protocol of ["chat-completions", "responses"] as const) {
+      let body: Record<string, unknown> = {};
+      globalThis.fetch = async (_input, init) => {
+        body = JSON.parse(String(init?.body));
+        return Response.json(protocol === "responses"
+          ? { output: [], usage: { input_tokens: 1, output_tokens: 1 } }
+          : { choices: [{ message: { content: "ready" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+      };
+      const config = { runtimeId: "custom:local", providerId: "custom", modelId: "local", transport: "openai-compatible" as const,
+        baseUrl: "http://localhost:11434/v1", secret: "local", capabilities: ["*"], priority: 0,
+        reasoningEffort: "none", protocol, contextWindowTokens: 65_536, maxOutputTokens: 32_768 };
+      validateProviderConfigs([config]);
+      await createProviderModel(config).complete({ sessionId: "local-cap", messages: [], tools: [] });
+      assert.equal(body[protocol === "responses" ? "max_output_tokens" : "max_tokens"], 32_768);
+      assert.equal(protocol === "responses" ? (body.reasoning as { effort: string }).effort : body.reasoning_effort, "none");
+      for (const maxOutputTokens of [0, -1, 1.5, 65_536]) {
+        assert.throws(() => validateProviderConfigs([{ ...config, maxOutputTokens }]), /invalid output token limit/);
+      }
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("provider configuration is encrypted at rest and rejects the wrong storage key", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-provider-config-"));
   const path = join(root, "providers.enc");

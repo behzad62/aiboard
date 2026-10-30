@@ -364,6 +364,7 @@ assert.deepEqual(
     modelIntelligence: [{ modelId, displayName: "Model", attempts: 1, tracks: [] }],
   })[0],
   {
+    resultSetId: null,
     modelId,
     variantKey: "openai:model\u0000default",
     reasoningEffort: "default",
@@ -376,6 +377,16 @@ assert.deepEqual(
     preliminary: false,
     tracks: [],
   }
+);
+assert.deepEqual(
+  readModelIntelligence({
+    modelIntelligence: [
+      { resultSetId: "run-1", modelId },
+      { resultSetId: "run-2", modelId },
+    ],
+  }).map((row) => row.resultSetId),
+  ["run-1", "run-2"],
+  "repeated model variants retain their distinct result-set identities"
 );
 assert.deepEqual(
   readWorkBenchRoleRows([{ id: "worker:openai:model", modelId, displayName: "Model", attempts: 1 }])[0],

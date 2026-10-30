@@ -283,7 +283,7 @@ function OverallScoresTable({ rows }: { rows: ModelIntelligenceRow[] }) {
                 row.tracks.map((entry) => [entry.track, entry])
               );
               return (
-                <tr key={row.variantKey} className="border-b last:border-0">
+                <tr key={JSON.stringify([row.resultSetId ?? index, row.variantKey])} className="border-b last:border-0">
                   <td className="py-2 pr-3 tabular-nums text-muted-foreground">
                     {index + 1}
                   </td>
