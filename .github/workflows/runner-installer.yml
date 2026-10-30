@@ -52,13 +52,14 @@ jobs:
         run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
       - name: Install dependencies
         run: npm ci
-      - name: Unit tests (manifest, archive, updater, launcher lock)
+      - name: Unit tests (manifest, archive, updater, launcher lock, process boundaries)
         run: >-
           node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/release-manifest.test.ts
           runner-v2/test/release-archive.test.ts
           runner-v2/test/self-update.test.ts
           runner-v2/test/launcher-lock.test.ts
+          runner-v2/test/static-adapter-policy.test.ts
       - name: Rendered installers (shims, keys, syntax)
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-installers.mts
 
