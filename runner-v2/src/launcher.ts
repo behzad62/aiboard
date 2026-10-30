@@ -14,7 +14,8 @@ import {
   projectDataDirectory, projectIdentity, readControlKey, readInstance, remoteDeviceDirectory, removeOwnedControlKey, tryAcquireLock, writeInstance,
   type LauncherIdentity, type LauncherInstance,
 } from "./launcher-instance.js";
-import { openLauncherMcpSession, requestLauncherApproval, requestLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
+import { openLauncherMcpSession, requestLauncherApproval, requestLauncherControl, requestLauncherRemote, type LauncherHandshake } from "./launcher-ipc.js";
+import { REMOTE_IN_PLACE_LEASE_MS, type RemoteEnableSettings } from "./remote-in-place.js";
 import { LOCAL_MCP_DEPTH_LIMIT, parseMcpDepth } from "./child-environment.js";
 import { serveLocalStdioMcp } from "./local-stdio-mcp.js";
 import { createLocalPairTicket, type LocalPairPeer } from "./local-pairing.js";
@@ -182,6 +183,8 @@ interface LauncherRuntime {
   spawnRunner?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   spawnPeer?: (kind: RunnerKind, command: string, args: string[], options: SpawnOptions) => ChildProcess;
   openUrl?: (url: string) => void;
+  /** Tests: aborting acts as Ctrl+C for a Remote session enabled in a reused Runner. */
+  interrupt?: AbortSignal;
 }
 
 export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}): Promise<void> {
@@ -434,6 +437,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     let v2Child: ChildProcess | undefined;
     let v2Closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
     let v2Token = "";
+    /** Set when `aiboard remote` reuses a healthy Runner whose Remote is off: turn it on in that Runner. */
+    let inPlaceRemote: RemoteEnableSettings | undefined;
     if (selected.includes("runner")) {
       let reuseV2 = false;
       const freeLifetime = tryAcquireLock(stateDirectory, "lifetime");
@@ -446,9 +451,25 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
             throw new Error("instance_unverified: The recorded Runner cannot be verified; no process was stopped.");
           });
           if (status.healthy) {
-            if (args.command === "remote" && args.policyFlags) throw new Error("remote_policy_requires_restart: Stop this Runner before applying policy flags.");
-            if (args.command === "remote" && roots?.nested && !status.remoteOnly) throw new Error("remote_restart_required: Stop this Runner before starting remote-only mode.");
+            const restart = () => `Run \`${launcherCommand(["stop", ...locationArguments(args)])}\`, then run \`${launcherCommand(raw)}\` again.`;
+            if (args.command === "remote" && args.policyFlags) {
+              throw new Error(`remote_policy_requires_restart: A Runner is already running for this project and policy flags apply only when it starts. ${restart()}`);
+            }
+            if (args.command === "remote" && roots?.nested && !status.remoteOnly) {
+              throw new Error(`remote_restart_required: This folder needs a remote-only Runner, and the running Runner is not one. ${restart()}`);
+            }
+            if (args.command === "remote" && status.remoteActive === undefined) {
+              throw new Error(`remote_restart_required: The running Runner cannot turn Remote on in place. ${restart()}`);
+            }
             if (args.command === "remote") remoteOnlyActive = status.remoteOnly === true;
+            if (args.command === "remote" && status.remoteActive === false) {
+              // Exactly the relay settings a spawned Runner would receive in its --remote flags.
+              inPlaceRemote = {
+                deviceDirectory: flagValue("--remote-device-dir")!,
+                ...(flagValue("--relay-url") !== undefined ? { relayUrl: flagValue("--relay-url")! } : {}),
+                relayRootKeys: args.runnerFlags.flatMap((flag, index) => flag === "--relay-root-key" ? [args.runnerFlags[index + 1]!] : []),
+              };
+            }
             reuseV2 = true;
             instances.set("runner", recorded);
             if (args.command !== "mcp") tickets.set("runner", createLocalPairTicket(recorded.instanceId));
@@ -503,17 +524,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
             if (line) write(stampRemoteNotice(line));
           });
         }
-        const ready = childReady(v2Child, handshake, (message) => {
-          if (message.type === "aiboard-remote-pairing" && typeof message.verificationUri === "string" && typeof message.userCode === "string" &&
-            typeof message.expiresAt === "string" && /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(message.userCode)) {
-            const minutes = Math.max(1, Math.ceil((Date.parse(message.expiresAt) - Date.now()) / 60_000));
-            write(`Pair this computer: open ${message.verificationUri} and enter code ${message.userCode} (expires in ${minutes} min)\n`);
-          } else if (message.type === "aiboard-remote-open" && typeof message.url === "string" && !args.noOpen) {
-            try { (runtime.openUrl ?? ((target: string) => openPairUrl(target, runtime.platform ?? process.platform)))(message.url); } catch { /* terminal instructions are the fallback */ }
-          } else if (message.type === "aiboard-remote-session" && typeof message.deviceName === "string" && typeof message.accountId === "string") {
-            write(`Remote device: ${message.deviceName}; account: ${message.accountId}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);
-          }
-        });
+        const ready = childReady(v2Child, handshake, (message) => showRemoteMessage(message, write, args.noOpen ? undefined : remoteUrlOpener(runtime)));
         const instance = await Promise.race([
           ready,
           v2Closed.then(() => {
@@ -549,6 +560,12 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         await requestLauncherControl(instance, key, "pair", tickets.get(kind)!.digest, kind === anchorKind ? anchorPeers : undefined);
       } finally { key.fill(0); }
     }
+    if (inPlaceRemote) {
+      // Still under the discovery lock: a refusal leaves the Runner running exactly as it was, without Remote.
+      const key = await readControlKey(stateDirectory);
+      ownedKeys.push(key);
+      await requestLauncherRemote(instances.get("runner")!, key, { action: "remote_enable", settings: inPlaceRemote });
+    }
     const remainingPeers = [
       ...peerRecords.filter((peer) => !selected.includes(peer.kind)),
       ...selected.filter((kind) => kind !== "runner").map((kind) => ({ ...(instances.get(kind)!), kind })),
@@ -583,6 +600,11 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       if (args.noOpen !== true) {
         try { (runtime.openUrl ?? ((target: string) => openPairUrl(target, runtime.platform ?? process.platform)))(STUB_REMOTE_PAIRING_URL); } catch { /* printed URL is the fallback */ }
       }
+    }
+    if (inPlaceRemote) {
+      write("Remote: on in this Runner. Ctrl+C turns Remote off and leaves the Runner running.\n");
+      await runInPlaceRemote({ instance: instances.get("runner")!, stateDirectory, settings: inPlaceRemote, noOpen: args.noOpen === true, write, runtime });
+      return;
     }
     if (freshChildren.length === 0) return;
 
@@ -705,6 +727,113 @@ async function runTerminalApprovals(instance: LauncherInstance, key: Buffer, wri
       if (!signal.aborted) await pause();
     }
   }
+}
+
+/** Pairing, browser-open and session lines from a Runner's Remote messages (spawn IPC or in-place events alike). */
+function showRemoteMessage(message: Record<string, unknown>, write: (message: string) => void, open: ((url: string) => void) | undefined): void {
+  if (message.type === "aiboard-remote-pairing" && typeof message.verificationUri === "string" && typeof message.userCode === "string" &&
+    typeof message.expiresAt === "string" && /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(message.userCode)) {
+    const minutes = Math.max(1, Math.ceil((Date.parse(message.expiresAt) - Date.now()) / 60_000));
+    write(`Pair this computer: open ${message.verificationUri} and enter code ${message.userCode} (expires in ${minutes} min)\n`);
+  } else if (message.type === "aiboard-remote-open" && typeof message.url === "string" && open) {
+    try { open(message.url); } catch { /* terminal instructions are the fallback */ }
+  } else if (message.type === "aiboard-remote-session" && typeof message.deviceName === "string" && typeof message.accountId === "string") {
+    write(`Remote device: ${message.deviceName}; account: ${message.accountId}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);
+  }
+}
+
+function remoteUrlOpener(runtime: LauncherRuntime): (url: string) => void {
+  return (url) => (runtime.openUrl ?? ((target: string) => openPairUrl(target, runtime.platform ?? process.platform)))(url);
+}
+
+const REMOTE_EVENTS_POLL_MS = 500;
+
+/**
+ * The foreground half of a Remote enabled in a reused Runner: prints what a spawned remote session prints,
+ * renews the Runner's lease by polling, and on Ctrl+C/SIGTERM turns Remote off while the Runner keeps running.
+ */
+async function runInPlaceRemote(input: { instance: LauncherInstance; stateDirectory: string; settings: RemoteEnableSettings;
+  noOpen: boolean; write: (message: string) => void; runtime: LauncherRuntime }): Promise<void> {
+  const { instance, settings, write, runtime } = input;
+  const key = await readControlKey(input.stateDirectory);
+  const stop = new AbortController();
+  let interrupted = false;
+  const onInterrupt = () => { interrupted = true; stop.abort(); };
+  const onTerminate = () => stop.abort();
+  process.once("SIGINT", onInterrupt);
+  process.once("SIGTERM", onTerminate);
+  runtime.interrupt?.addEventListener("abort", onInterrupt, { once: true });
+  if (runtime.interrupt?.aborted) onInterrupt();
+  const approvals = process.stdin.isTTY ? runTerminalApprovals(instance, key, write, stop.signal, onInterrupt) : undefined;
+  let notices = createRemoteStateNotices();
+  let open = input.noOpen ? undefined : remoteUrlOpener(runtime);
+  let cursor = 0;
+  let failures = 0;
+  try {
+    while (!stop.signal.aborted) {
+      let page: Awaited<ReturnType<typeof requestLauncherRemote>>;
+      try {
+        page = await requestLauncherRemote(instance, key, { action: "remote_events", cursor });
+        failures = 0;
+      } catch {
+        if (++failures >= 5) throw new Error("remote_unavailable: The Runner stopped answering, so Remote is off. Run `aiboard remote` again.");
+        await pauseFor(REMOTE_EVENTS_POLL_MS, stop.signal);
+        continue;
+      }
+      cursor = page.cursor ?? cursor;
+      let repaired = false;
+      for (const event of page.events ?? []) {
+        if (event.type === "aiboard-remote-pairing-error") throw new Error(`${String(event.code)}: ${String(event.message)}`);
+        if (event.type !== REMOTE_STATE_MESSAGE) { showRemoteMessage(event, write, open); continue; }
+        if (event.state === "revoked" && event.persisted === true) {
+          // The in-place equivalent of the spawn path's restart: a fresh enable rotates the key and pairs, without opening the browser.
+          if (repaired) continue;
+          repaired = true;
+          write(stampRemoteNotice(REMOTE_REPAIR_NOTICE));
+          await requestLauncherRemote(instance, key, { action: "remote_disable" });
+          await requestLauncherRemote(instance, key, { action: "remote_enable", settings });
+          open = undefined;
+          notices = createRemoteStateNotices();
+          continue;
+        }
+        const line = notices(event.state, event.reasonCode);
+        if (line) write(stampRemoteNotice(line));
+      }
+      if (!page.remoteActive && !repaired) throw new Error("remote_inactive: Remote turned off in the Runner. Run `aiboard remote` again.");
+      await pauseFor(REMOTE_EVENTS_POLL_MS, stop.signal);
+    }
+    if (interrupted) process.exitCode = 130;
+  } finally {
+    stop.abort();
+    await approvals;
+    process.off("SIGINT", onInterrupt);
+    process.off("SIGTERM", onTerminate);
+    runtime.interrupt?.removeEventListener("abort", onInterrupt);
+    try {
+      await requestLauncherRemote(instance, key, { action: "remote_disable" });
+      write("Remote is off; the Runner keeps running.\n");
+    } catch {
+      write(`Remote could not be confirmed off; the Runner turns it off within ${REMOTE_IN_PLACE_LEASE_MS / 1_000} s.\n`);
+    } finally { key.fill(0); }
+  }
+}
+
+function pauseFor(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); }
+    signal.addEventListener("abort", done, { once: true });
+    if (signal.aborted) done();
+  });
+}
+
+function locationArguments(args: LauncherArguments): string[] {
+  return [...(args.project ? ["--project", args.project] : []), ...(args.stateDirectory ? ["--state-dir", args.stateDirectory] : [])];
+}
+
+/** A copyable command line for refusal messages. */
+function launcherCommand(argv: readonly string[]): string {
+  return ["aiboard", ...argv].map((part) => /^[A-Za-z0-9_./:=@+,-]+$/.test(part) ? part : `"${part.replace(/"/g, '\\"')}"`).join(" ");
 }
 
 function diagnosticsSafe(_error: unknown): string { return ""; }

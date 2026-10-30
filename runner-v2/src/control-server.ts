@@ -87,7 +87,7 @@ export interface ControlServerOptions {
   localPairing?: LocalPairing;
   localMcp?: LocalMcpSessions;
   allowLocalPairDevOrigin?: boolean;
-  /** Status only; control routes are never forwarded to or from the relay. */
+  /** Status only; control routes are never forwarded to or from the relay. `undefined`: Remote is off. */
   remoteStatus?: () => unknown;
 }
 
@@ -523,8 +523,9 @@ export class ControlServer {
       throw new HttpError(404, "not_found", "Unknown ToolBench session endpoint.");
     }
     if (segments.length === 3 && segments[1] === "remote" && segments[2] === "status" && request.method === "GET") {
-      if (!this.remoteStatus) throw new HttpError(503, "remote_unavailable", "Remote service is unavailable.");
-      sendJson(response, 200, this.remoteStatus());
+      const status = this.remoteStatus?.();
+      if (status === undefined) throw new HttpError(503, "remote_unavailable", "Remote service is unavailable.");
+      sendJson(response, 200, status);
       return;
     }
     if (segments.length === 2 && segments[1] === "health" && request.method === "GET") {

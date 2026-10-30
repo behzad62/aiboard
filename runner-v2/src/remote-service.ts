@@ -86,6 +86,7 @@ export class RemoteService {
   private releaseOwnerLock: (() => void) | undefined;
   private started = false;
   private closed = false;
+  private closeRequested = false;
   private closeError: unknown;
 
   constructor(private readonly options: RemoteServiceOptions) {
@@ -176,6 +177,8 @@ export class RemoteService {
         return;
       }
     }
+    // Closed while pairing (an in-place Remote turned off): never connect after the owner lock was released.
+    if (this.closeRequested) throw new Error("remote_unavailable: Remote was turned off before pairing finished.");
     identity = deviceStore.ensure(session.accountId);
     if (identity.revoked) throw new Error("Remote device is revoked.");
     deviceStore.saveSession(session);
@@ -234,6 +237,9 @@ export class RemoteService {
     await connector.start();
   }
 
+  /** True once start() holds the per-user device owner lock (taken before its first await). */
+  holdsOwnerLock(): boolean { return this.releaseOwnerLock !== undefined; }
+
   pendingCommandApproval() { return this.connector?.pendingCommandApproval(); }
 
   answerCommandApproval(jobId: string, nonce: string, approved: boolean): boolean {
@@ -251,6 +257,7 @@ export class RemoteService {
   /** Ordered close. A failed step stays pending and the next call retries it. */
   async close(): Promise<void> {
     if (this.closed) return;
+    this.closeRequested = true;
     try {
       if (this.connector) await this.connector.close();
       await closeRemoteComposition(this.composition);

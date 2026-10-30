@@ -21,7 +21,7 @@ import { ArtifactStore } from "./artifact-store.js";
 import { BuildUserMediaStore } from "./build-user-media.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
 import { prepareCredentialStores } from "./credential-migration.js";
-import { createExecutionHost } from "./execution-host.js";
+import { createExecutionHost, type ExecutionHost } from "./execution-host.js";
 import { createRunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
 import { captureRunGitBaseline } from "./git-bootstrap.js";
 import {
@@ -75,8 +75,9 @@ import type { RemoteConnectionState, RemoteTransport, RemoteTransportContext } f
 import { createRemoteStateNotices, REMOTE_STATE_MESSAGE, stampRemoteNotice } from "./remote-state-notice.js";
 import { validateRelayUrl, WebSocketRemoteTransport } from "./remote-websocket-transport.js";
 import type { RemoteDevicePolicy } from "./remote-principal.js";
-import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
-import { resolveProtectedLocations } from "./protected-locations.js";
+import { resolveRunnerOwnedRoots, type RunnerOwnedRoots } from "./runner-owned-roots.js";
+import { resolveProtectedLocations, type ProtectedLocations } from "./protected-locations.js";
+import { RemoteController, type RemoteEnableSettings, type RemoteEvent } from "./remote-in-place.js";
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
 import { openPairUrl } from "./launcher.js";
 
@@ -118,6 +119,8 @@ export interface RunnerStartSeams {
   readonly onLocalAgentsReady?: (agents: { builds: NativeBuildManager; toolBench: ToolBenchSessions; chatSessions: ChatAgentSessions }) => void;
   readonly onShutdownComplete?: (error?: unknown) => void;
   readonly onStartupError?: (error: unknown) => void;
+  /** Tests: how long an in-place Remote outlives its last remote_events poll (REMOTE_IN_PLACE_LEASE_MS). */
+  readonly remoteLeaseMs?: number;
 }
 
 export interface StartedRunner {
@@ -125,6 +128,8 @@ export interface StartedRunner {
   readonly remoteOnly?: boolean;
   readonly address?: { readonly url: string; readonly port: number };
   readonly remoteService?: RemoteService;
+  /** The startup Remote service, or one enabled in place (remote_enable). */
+  readonly remote?: RemoteController;
   shutdown(signal?: NodeJS.Signals): Promise<void>;
 }
 
@@ -166,14 +171,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     }) : undefined;
     const remoteOnly = options.remote && ownedRoots?.nested === true;
     const buildRecoveryUnverified = remoteOnly && hasStoredBuildSpecs(options.stateDirectory);
-    const protectedLocations = resolveProtectedLocations({
-      platform: location.platform, env: location.environment, home: location.home,
-      stateDirectory: options.stateDirectory, ...(deviceDirectory ? { deviceDirectory } : {}),
-      extensionDirectories: [options.extensionsHome],
-      ...(ownedRoots ? { configuredDirectories: ownedRoots.directories } : {}),
-      configuredFiles: [...(ownedRoots?.files ?? []), ...(options.capabilitiesConfigPath ? [options.capabilitiesConfigPath] : [])],
-      requireStateDirectory: true,
-    });
+    const protectedLocations = runnerProtectedLocations(location, options, deviceDirectory, ownedRoots);
     if (launcher) {
       const identity = await projectIdentity(options.projectPath);
       const canonicalState = await realpath(options.stateDirectory);
@@ -428,76 +426,66 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       if (launcher.pairDigest) localPairing.register(launcher.pairDigest);
       if (launcher.peers?.length) localPairing.setPeers(launcher.peers);
     }
+    const remoteParts = { options, seams, host: executionHost, capabilitiesConfig, managedMcp, extensions, artifacts };
     let remoteService: RemoteService | undefined;
     if (options.remote) {
-      const relayUrl = options.remoteRelayUrl;
-      const configuredTransport = relayUrl
-        ? (context: RemoteTransportContext): RemoteTransport => new WebSocketRemoteTransport({ url: relayUrl, deviceId: context.deviceId })
-        : undefined;
-      const unavailableTransport = (): RemoteTransport => ({
-        connect: async () => { throw new Error("No relay URL is configured for this Runner."); },
-        close: async () => undefined,
-        send: () => undefined,
-        onMessage: () => undefined,
-        onClose: () => undefined,
-      });
-      const pairing = !seams.issuer && relayUrl ? new RelayPairingIssuer({
-        relayUrl, rootKeys: options.remoteRelayRootKeys, deviceStore: new RemoteDeviceStore(options.remoteDeviceDirectory!),
-        signal: pairingAbort.signal,
-        present: seams.presentPairing ?? ((presentation) => {
-          if (launcher && process.connected) process.send?.({ type: "aiboard-remote-pairing", ...presentation });
-          else {
-            const minutes = Math.max(1, Math.ceil((Date.parse(presentation.expiresAt) - Date.now()) / 60_000));
-            process.stdout.write(`Pair this computer: open ${presentation.verificationUri} and enter code ${presentation.userCode} (expires in ${minutes} min)\n`);
-          }
-        }),
-        openUrl: seams.openPairingUrl ?? ((url) => {
-          if (launcher && process.connected) process.send?.({ type: "aiboard-remote-open", url });
-          else openPairUrl(url, process.platform);
-        }),
-      }) : undefined;
-      remoteService = new RemoteService({
-        stateDirectory: options.stateDirectory,
-        deviceDirectory: options.remoteDeviceDirectory!,
-        workspacePath: options.projectPath,
-        host: executionHost,
-        permissionProfile: "full",
-        capabilitiesConfig,
-        extensionsHome: options.extensionsHome,
-        protectedLocations,
-        ...(relayUrl ? { relayUrl, relayRootKeys: options.remoteRelayRootKeys } : {}),
-        ...(buildRecoveryUnverified ? { reconcileStartup: async () => { throw new Error("Build ownership recovery remains unverified."); } } : {}),
-        createTransport: seams.createTransport ?? configuredTransport ?? unavailableTransport,
-        issuer: seams.issuer ?? pairing ?? new StubRemoteSessionIssuer(),
-        ...(pairing ? { onSession: (session: RemoteDeviceSession) => {
-          if (launcher && process.connected) process.send?.({ type: "aiboard-remote-session", deviceName: pairing.deviceName, accountId: session.accountId });
-          else process.stdout.write(`Remote device: ${pairing.deviceName}; account: ${session.accountId}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);
-        } } : {}),
-        ...(pairing ? { onStateChange: (() => {
-          const notices = createRemoteStateNotices();
-          return (state: RemoteConnectionState) => {
-            // persisted: the revoke is on disk, so the next start rotates the key and pairs; the launcher restarts for that.
-            const persisted = state.state === "revoked" && remoteService?.composition.deviceStore.isRevoked() === true;
-            if (launcher && process.connected) process.send?.({ type: REMOTE_STATE_MESSAGE, state: state.state, reasonCode: state.reasonCode, persisted });
-            else { const line = notices(state.state, state.reasonCode); if (line) process.stdout.write(stampRemoteNotice(line)); }
-          };
-        })() } : {}),
-        policyPatch: options.remotePolicyPatch,
-        pluginTools: createRemotePluginToolProvider(managedMcp, {
-          generation: async () => (await extensions.generation()).generation,
-          artifacts, workspacePath: options.projectPath,
-        }),
+      remoteService = createRunnerRemoteService({
+        ...remoteParts,
+        settings: { deviceDirectory: options.remoteDeviceDirectory!, ...(options.remoteRelayUrl ? { relayUrl: options.remoteRelayUrl } : {}),
+          relayRootKeys: options.remoteRelayRootKeys, policyPatch: options.remotePolicyPatch },
+        protectedLocations, buildRecoveryUnverified, signal: pairingAbort.signal,
+        deliver: (message) => {
+          if (!launcher || !process.connected) return false;
+          process.send?.(message);
+          return true;
+        },
       });
       resources.remote = remoteService;
       await remoteService.start();
     }
+    // `aiboard remote` reusing this Runner enables Remote in place; the startup service (if any) has no lease.
+    const remote = new RemoteController({
+      ...(remoteService ? { initial: { service: remoteService, settings: {
+        deviceDirectory: options.remoteDeviceDirectory!, ...(options.remoteRelayUrl ? { relayUrl: options.remoteRelayUrl } : {}),
+        relayRootKeys: options.remoteRelayRootKeys } } } : {}),
+      ...(seams.remoteLeaseMs !== undefined ? { leaseMs: seams.remoteLeaseMs } : {}),
+      create: async (requested, emit, signal) => {
+        if (shuttingDown) throw new Error("remote_unavailable: The Runner is stopping.");
+        // The same parsing and validation a spawned `--remote` Runner applies to these flags.
+        const parsed = parseArguments(["--project", options.projectPath, "--state-dir", options.stateDirectory,
+          "--remote", "--remote-device-dir", requested.deviceDirectory,
+          ...(requested.relayUrl !== undefined ? ["--relay-url", requested.relayUrl] : []),
+          ...requested.relayRootKeys.flatMap((key) => ["--relay-root-key", key])]);
+        const remoteDevice = parsed.remoteDeviceDirectory!;
+        const roots = await resolveRunnerOwnedRoots({
+          projectPath: options.projectPath, stateDirectory: options.stateDirectory,
+          deviceDirectory: remoteDevice, extensionsHome: options.extensionsHome,
+          ...(options.capabilitiesConfigPath ? { capabilitiesConfigPath: options.capabilitiesConfigPath } : {}),
+          location,
+        });
+        if (roots.nested) {
+          throw new Error("remote_restart_required: Remote-only mode needs a fresh Runner. Run `aiboard stop`, then run `aiboard remote` again.");
+        }
+        // Everything a `--remote` start protects, plus everything this Runner already protects; never fewer.
+        const remoteProtected = runnerProtectedLocations(location, options, remoteDevice, roots, deviceDirectory ? [deviceDirectory] : []);
+        assertProtectsAll(protectedLocations, remoteProtected);
+        return createRunnerRemoteService({
+          ...remoteParts,
+          settings: { deviceDirectory: remoteDevice, ...(parsed.remoteRelayUrl ? { relayUrl: parsed.remoteRelayUrl } : {}),
+            relayRootKeys: parsed.remoteRelayRootKeys, policyPatch: {} },
+          protectedLocations: remoteProtected, buildRecoveryUnverified: false, signal,
+          deliver: (message) => { emit(message); return true; },
+        });
+      },
+    });
+    resources.remote = remote;
     const localMcp = launcher ? new LocalMcpSessions({ host: executionHost, workspacePath: options.projectPath, statePath: join(options.stateDirectory, "local-mcp-owners.sqlite"),
       permissionProfile: "full", capabilitiesConfig, stateDirectory: options.stateDirectory,
       deviceDirectory,
       extensionDirectories: [options.extensionsHome], protectedLocations }) : undefined;
     const server = new ControlServer({
       localAgentsUnavailableNestedState: remoteOnly,
-      ...(remoteService ? { remoteStatus: () => remoteService.status() } : {}),
+      remoteStatus: () => remote.current()?.status(),
       localPairing,
       localMcp,
       allowLocalPairDevOrigin: process.env.AIBOARD_LOCAL_PAIR_DEV_ORIGIN === "1",
@@ -594,6 +582,11 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     process.once("SIGTERM", signalShutdown);
     requestLauncherShutdown = () => signalShutdown("SIGTERM");
 
+    const activeRemote = () => {
+      const service = remote.current();
+      if (!service) throw new Error("Approvals are unavailable without Remote.");
+      return service;
+    };
     if (launcher) {
       launcherControl = await startLauncherControl({
         identity: launcher.identity,
@@ -614,10 +607,15 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
           if (buildRecoveryUnverified) throw new Error("Build ownership recovery remains unverified.");
           return localMcp.mint(depth);
         },
-        ...(remoteService ? {
-          nextApproval: () => remoteService.pendingCommandApproval(),
-          answerApproval: (jobId: string, nonce: string, approved: boolean) => remoteService.answerCommandApproval(jobId, nonce, approved),
-        } : {}),
+        // Resolved per request, so approvals work for a Remote enabled in place; without Remote they stay refused.
+        nextApproval: () => activeRemote().pendingCommandApproval(),
+        answerApproval: (jobId: string, nonce: string, approved: boolean) => activeRemote().answerCommandApproval(jobId, nonce, approved),
+        remote: {
+          active: () => remote.active(),
+          enable: (settings) => remote.enable(settings),
+          events: (cursor) => remote.events(cursor),
+          disable: () => remote.disable(),
+        },
         shutdown: requestLauncherShutdown,
       });
       if (process.connected) process.send?.({ type: "aiboard-launcher-ready", instance: launcherControl.instance });
@@ -633,6 +631,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       ...(remoteOnly ? { remoteOnly: true } : {}),
       ...(address ? { address: { url: address.url, port: address.port } } : {}),
       ...(remoteService ? { remoteService } : {}),
+      remote,
       shutdown: async (signal: NodeJS.Signals = "SIGTERM") => { signalShutdown(signal); },
     };
   } catch (error) {
@@ -655,6 +654,110 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       if (launcher && process.connected) process.disconnect?.();
     }
     return { started: false, shutdown: async () => undefined };
+  }
+}
+
+interface RunnerRemoteInput {
+  readonly options: CliOptions;
+  readonly seams: RunnerStartSeams;
+  readonly host: ExecutionHost;
+  readonly capabilitiesConfig: RunnerCapabilitiesConfig;
+  readonly managedMcp: ManagedMcpRuntime;
+  readonly extensions: ExtensionManagementService;
+  readonly artifacts: ArtifactStore;
+  readonly settings: RemoteEnableSettings & { readonly policyPatch: Partial<RemoteDevicePolicy> };
+  readonly protectedLocations: ProtectedLocations;
+  readonly buildRecoveryUnverified: boolean;
+  readonly signal: AbortSignal;
+  /** Hands a launcher message on; false prints it on this process's own terminal instead. */
+  readonly deliver: (message: RemoteEvent) => boolean;
+}
+
+/** The one Remote composition, for a `--remote` start and for an in-place enable alike. Not started. */
+function createRunnerRemoteService(input: RunnerRemoteInput): RemoteService {
+  const { options, seams, settings, deliver } = input;
+  const relayUrl = settings.relayUrl;
+  const configuredTransport = relayUrl
+    ? (context: RemoteTransportContext): RemoteTransport => new WebSocketRemoteTransport({ url: relayUrl, deviceId: context.deviceId })
+    : undefined;
+  const unavailableTransport = (): RemoteTransport => ({
+    connect: async () => { throw new Error("No relay URL is configured for this Runner."); },
+    close: async () => undefined,
+    send: () => undefined,
+    onMessage: () => undefined,
+    onClose: () => undefined,
+  });
+  const pairing = !seams.issuer && relayUrl ? new RelayPairingIssuer({
+    relayUrl, rootKeys: [...settings.relayRootKeys], deviceStore: new RemoteDeviceStore(settings.deviceDirectory),
+    signal: input.signal,
+    present: seams.presentPairing ?? ((presentation) => {
+      if (!deliver({ type: "aiboard-remote-pairing", ...presentation })) {
+        const minutes = Math.max(1, Math.ceil((Date.parse(presentation.expiresAt) - Date.now()) / 60_000));
+        process.stdout.write(`Pair this computer: open ${presentation.verificationUri} and enter code ${presentation.userCode} (expires in ${minutes} min)\n`);
+      }
+    }),
+    openUrl: seams.openPairingUrl ?? ((url) => {
+      if (!deliver({ type: "aiboard-remote-open", url })) openPairUrl(url, process.platform);
+    }),
+  }) : undefined;
+  const service: RemoteService = new RemoteService({
+    stateDirectory: options.stateDirectory,
+    deviceDirectory: settings.deviceDirectory,
+    workspacePath: options.projectPath,
+    host: input.host,
+    permissionProfile: "full",
+    capabilitiesConfig: input.capabilitiesConfig,
+    extensionsHome: options.extensionsHome,
+    protectedLocations: input.protectedLocations,
+    ...(relayUrl ? { relayUrl, relayRootKeys: settings.relayRootKeys } : {}),
+    ...(input.buildRecoveryUnverified ? { reconcileStartup: async () => { throw new Error("Build ownership recovery remains unverified."); } } : {}),
+    createTransport: seams.createTransport ?? configuredTransport ?? unavailableTransport,
+    issuer: seams.issuer ?? pairing ?? new StubRemoteSessionIssuer(),
+    ...(pairing ? { onSession: (session: RemoteDeviceSession) => {
+      if (!deliver({ type: "aiboard-remote-session", deviceName: pairing.deviceName, accountId: session.accountId })) {
+        process.stdout.write(`Remote device: ${pairing.deviceName}; account: ${session.accountId}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);
+      }
+    } } : {}),
+    ...(pairing ? { onStateChange: (() => {
+      const notices = createRemoteStateNotices();
+      return (state: RemoteConnectionState) => {
+        // persisted: the revoke is on disk, so the next start rotates the key and pairs; the launcher restarts for that.
+        const persisted = state.state === "revoked" && service.composition.deviceStore.isRevoked() === true;
+        if (!deliver({ type: REMOTE_STATE_MESSAGE, state: state.state, reasonCode: state.reasonCode, persisted })) {
+          const line = notices(state.state, state.reasonCode);
+          if (line) process.stdout.write(stampRemoteNotice(line));
+        }
+      };
+    })() } : {}),
+    policyPatch: settings.policyPatch,
+    pluginTools: createRemotePluginToolProvider(input.managedMcp, {
+      generation: async () => (await input.extensions.generation()).generation,
+      artifacts: input.artifacts, workspacePath: options.projectPath,
+    }),
+  });
+  return service;
+}
+
+function runnerProtectedLocations(location: StateLocationOptions, options: CliOptions, deviceDirectory: string | undefined,
+  ownedRoots: RunnerOwnedRoots | undefined, extraDirectories: readonly string[] = []): ProtectedLocations {
+  const configuredDirectories = [...(ownedRoots?.directories ?? []), ...extraDirectories];
+  return resolveProtectedLocations({
+    platform: location.platform, env: location.environment, home: location.home,
+    stateDirectory: options.stateDirectory, ...(deviceDirectory ? { deviceDirectory } : {}),
+    extensionDirectories: [options.extensionsHome],
+    ...(ownedRoots || configuredDirectories.length ? { configuredDirectories } : {}),
+    configuredFiles: [...(ownedRoots?.files ?? []), ...(options.capabilitiesConfigPath ? [options.capabilitiesConfigPath] : [])],
+    requireStateDirectory: true,
+  });
+}
+
+/** Fail closed: an in-place Remote may only ever protect more than the running Runner already does. */
+function assertProtectsAll(base: ProtectedLocations, extended: ProtectedLocations): void {
+  const key = (location: ProtectedLocations["locations"][number]) => `${location.kind}:${
+    base.platform === "win32" || base.platform === "darwin" ? location.path.toLowerCase() : location.path}`;
+  const covered = new Set(extended.locations.map(key));
+  if ((base.failClosed && !extended.failClosed) || base.locations.some((location) => !covered.has(key(location)))) {
+    throw new Error("remote_unavailable: Remote would protect fewer locations than this Runner; run `aiboard stop`, then `aiboard remote`.");
   }
 }
 

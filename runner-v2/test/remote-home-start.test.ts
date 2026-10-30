@@ -264,3 +264,99 @@ test("authenticated remote-only home start protects owned paths and uses cwd", {
   assert.equal(existsSync(marker), true);
   assert.equal((await realpath(await readFile(marker, "utf8"))).toLowerCase(), (await realpath(home)).toLowerCase());
 });
+
+test("remote_enable turns Remote on in a running Runner with the --remote protections, idempotently, until its lease lapses", { timeout: 180_000 }, async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "aiboard-remote-in-place-"));
+  const oldExitCode = process.exitCode;
+  const project = join(home, "project");
+  const state = join(home, "runner-state");
+  const extensions = join(home, "extension-store");
+  const testLocation = location(home);
+  const device = remoteDeviceDirectory(testLocation);
+  await mkdir(project);
+  await mkdir(device, { recursive: true, mode: 0o700 });
+  const leaseMs = 400;
+  // Unpaired: start() records a logged-out Remote and returns without a relay connection.
+  const issuer = { pairingUrl: "https://mcp.aiboard.me/pair", restoreSession: async () => undefined,
+    requestSession: async (): Promise<never> => { throw new Error("Not paired in this test."); } };
+  const running: { stop: () => Promise<void> }[] = [];
+  t.after(async () => {
+    for (const runner of running) await runner.stop();
+    process.exitCode = oldExitCode;
+    await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+  const start = async (extra: string[]) => {
+    let done!: (error?: unknown) => void;
+    const shutdownComplete = new Promise<unknown>((resolve) => { done = resolve; });
+    const runner = await startRunner(["--project", project, "--state-dir", state, "--extensions-home", extensions, ...extra], {
+      location: testLocation, controlListener: "none", issuer, remoteLeaseMs: leaseMs, onShutdownComplete: done,
+      createTransport: () => { throw new Error("No relay in this test."); },
+    });
+    assert.equal(runner.started, true);
+    let stopped = false;
+    const entry = { stop: async () => {
+      if (stopped) return;
+      stopped = true;
+      await runner.shutdown();
+      const error = await shutdownComplete;
+      if (error) throw error;
+    } };
+    running.push(entry);
+    return { runner, stop: entry.stop };
+  };
+  const keyOf = (path: string) => process.platform === "win32" || process.platform === "darwin" ? path.toLowerCase() : path;
+  const protectedBy = (service: NonNullable<StartedRunner["remoteService"]>) =>
+    service.composition.runtime.pathGuard.locations.locations.map((entry) => `${entry.kind}:${entry.category}:${keyOf(entry.path)}`).sort();
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const deviceFree = () => {
+    const release = new RemoteDeviceStore(device).acquireOwnerLock();
+    release?.();
+    return release !== null;
+  };
+
+  // Reference: what a `--remote` start protects. That Remote has no lease.
+  const remoteStart = await start(["--remote", "--remote-device-dir", device]);
+  const expected = protectedBy(remoteStart.runner.remoteService!);
+  assert.equal(remoteStart.runner.remote!.active(), true);
+  await sleep(leaseMs * 2);
+  assert.equal(remoteStart.runner.remote!.active(), true, "a --remote start is not leased");
+  await assert.rejects(remoteStart.runner.remote!.disable(), /^Error: remote_disable_refused: /);
+  await remoteStart.stop();
+
+  const plain = await start([]);
+  const remote = plain.runner.remote!;
+  assert.equal(remote.active(), false);
+  assert.equal(plain.runner.remoteService, undefined);
+  const settings = { deviceDirectory: device, relayRootKeys: [] };
+  await remote.enable(settings);
+  assert.equal(remote.active(), true);
+  const service = remote.current()!;
+  assert.deepEqual(protectedBy(service), expected, "in place protects exactly what a --remote start protects");
+  assert.equal(deviceFree(), false, "the in-place Remote holds the device owner lock");
+  // Idempotent for the same settings, refused (and unchanged) for a different relay.
+  await remote.enable(settings);
+  assert.equal(remote.current(), service);
+  await assert.rejects(remote.enable({ ...settings, relayUrl: "wss://mcp.aiboard.me/connect" }), /^Error: remote_settings_mismatch: /);
+  assert.equal(remote.current(), service);
+  // Polling keeps the lease alive well past its length.
+  for (let poll = 0; poll < 6; poll += 1) {
+    assert.equal(remote.events(0).active, true);
+    await sleep(leaseMs / 3);
+  }
+  assert.equal(remote.current(), service);
+  // Unpolled, the lease lapses: Remote turns off and releases the device; the Runner keeps running.
+  const deadline = Date.now() + 10_000;
+  while (remote.active() && Date.now() < deadline) await sleep(25);
+  assert.equal(remote.active(), false);
+  assert.equal(deviceFree(), true);
+  assert.equal(remote.events(0).active, false);
+  // Concurrent enables serialize into one service; remote_disable turns it off.
+  await Promise.all([remote.enable(settings), remote.enable(settings)]);
+  const again = remote.current();
+  assert.ok(again && again !== service);
+  await remote.disable();
+  assert.equal(remote.active(), false);
+  assert.equal(deviceFree(), true);
+  await remote.disable();
+  await plain.stop();
+});

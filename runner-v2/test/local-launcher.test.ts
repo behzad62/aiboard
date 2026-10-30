@@ -12,9 +12,11 @@ import { fileURLToPath } from "node:url";
 import { parseLauncherArguments, runLauncher } from "../src/launcher.js";
 import {
   assertExternalState, canonicalFuturePath, projectDataDirectory, projectIdentity,
-  readControlKey, readInstance, tryAcquireLock,
+  readControlKey, readInstance, remoteDeviceDirectory, tryAcquireLock,
 } from "../src/launcher-instance.js";
-import { requestLauncherControl, startLauncherControl, type LauncherHandshake } from "../src/launcher-ipc.js";
+import { requestLauncherControl, startLauncherControl, type LauncherHandshake, type LauncherRemoteControl } from "../src/launcher-ipc.js";
+import type { RemoteEnableSettings, RemoteEvent } from "../src/remote-in-place.js";
+import { RemoteDeviceStore } from "../src/remote-device-store.js";
 
 const bin = fileURLToPath(new URL("../bin/aiboard.mjs", import.meta.url));
 const legacyBin = fileURLToPath(new URL("../bin/aiboard-runner-v2.mjs", import.meta.url));
@@ -59,8 +61,42 @@ async function waitUntil(check: () => boolean | Promise<boolean>, timeout = 5_00
   }
 }
 
+/** The Runner side of an in-place Remote: enabling queues what a pairing Runner would report. */
+class FakeRemote {
+  on = false;
+  readonly enables: RemoteEnableSettings[] = [];
+  disables = 0;
+  polls = 0;
+  private readonly queued: { sequence: number; event: RemoteEvent }[] = [];
+  private sequence = 0;
+
+  push(event: RemoteEvent): void { this.queued.push({ sequence: ++this.sequence, event }); }
+
+  control(): LauncherRemoteControl {
+    return {
+      active: () => this.on,
+      enable: async (settings) => {
+        this.enables.push(settings);
+        if (this.on) return;
+        this.on = true;
+        this.push({ type: "aiboard-remote-pairing", userCode: "BCDF-GHJK", verificationUri: "https://mcp.aiboard.me/pair",
+          expiresAt: new Date(Date.now() + 600_000).toISOString(), deviceName: "Desktop" });
+        this.push({ type: "aiboard-remote-open", url: "https://mcp.aiboard.me/pair" });
+        this.push({ type: "aiboard-remote-session", deviceName: "Desktop", accountId: "account-1" });
+        this.push({ type: "aiboard-remote-state", state: "tool-ready", reasonCode: "ready", persisted: false });
+      },
+      events: (cursor) => {
+        this.polls += 1;
+        return { events: this.queued.filter((entry) => entry.sequence > cursor).map((entry) => entry.event), cursor: this.sequence, active: this.on };
+      },
+      disable: async () => { this.disables += 1; this.on = false; },
+    };
+  }
+}
+
 class FakeRunner extends EventEmitter {
   readonly pid = process.pid;
+  readonly remote = new FakeRemote();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   connected = true;
@@ -106,7 +142,7 @@ class FakeRunner extends EventEmitter {
       identity: handshake.identity, instanceId: handshake.instanceId, version: handshake.version,
       startedAt: 1_700_000_000_000, port: address.port, token: handshake.token,
       controlKey: Buffer.from(handshake.controlKey, "hex"), shutdown: () => { void this.stop(); },
-      registerPair: () => undefined,
+      registerPair: () => undefined, remote: this.remote.control(),
     });
     this.beforeReady?.();
     this.emit("message", { type: "aiboard-launcher-ready", instance: this.control.instance });
@@ -440,6 +476,121 @@ test("a persisted revoke stops the Runner and starts it again to pair a new key,
       await Promise.all(children.map((child) => child.stop()));
       await Promise.race([Promise.allSettled([first]), new Promise<void>((resolve) => setTimeout(resolve, 1_000))]);
     }
+    await f.cleanup();
+  }
+});
+
+test("aiboard remote turns Remote on inside a reused Runner, and Ctrl+C turns it off while the Runner keeps running", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [], opened: string[] = [];
+  const environment = process.platform === "win32" ? { LOCALAPPDATA: join(f.root, "data") } : { XDG_DATA_HOME: join(f.root, "data") };
+  const runtime = { cwd: f.project, home: f.root, environment, spawnRunner: fakeSpawner(children, calls), write: (line: string) => output.push(line), openUrl: (url: string) => opened.push(url) };
+  const oldExitCode = process.exitCode;
+  const plain = runLauncher(["--state-dir", f.state, "--no-open"], runtime);
+  void plain.catch(() => undefined);
+  const interrupt = new AbortController();
+  let remote: Promise<void> | undefined;
+  try {
+    await waitUntil(() => output.some((line) => line.includes("Runner running")));
+    const record = (await readInstance(f.state))!;
+    const status = async () => {
+      const key = await readControlKey(f.state);
+      try { return await requestLauncherControl(record, key, "status"); } finally { key.fill(0); }
+    };
+    assert.equal((await status()).remoteActive, false);
+    remote = runLauncher(["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--relay-url", "wss://mcp.aiboard.me/connect"],
+      { ...runtime, interrupt: interrupt.signal });
+    void remote.catch(() => undefined);
+    await waitUntil(() => output.some((line) => line.includes("open https://mcp.aiboard.me/pair and enter code BCDF-GHJK")));
+    assert.equal(children.length, 1, "the running Runner is reused; no second Runner is spawned");
+    assert.ok(output.some((line) => line.includes("Runner already running")));
+    const fake = children[0]!.remote;
+    assert.equal(fake.enables.length, 1);
+    assert.deepEqual(fake.enables[0], {
+      deviceDirectory: await realpath(remoteDeviceDirectory({ platform: process.platform, environment, home: f.root })),
+      relayUrl: "wss://mcp.aiboard.me/connect", relayRootKeys: [],
+    });
+    assert.equal((await status()).remoteActive, true);
+    await waitUntil(() => output.some((line) => line.includes("Desktop; account: account-1") && line.includes("Ctrl+C to disconnect")));
+    assert.ok(opened.includes("https://mcp.aiboard.me/pair"));
+    // The launcher keeps polling, which is what keeps an in-place Remote's lease alive.
+    const polled = fake.polls;
+    await waitUntil(() => fake.polls >= polled + 2);
+    interrupt.abort();
+    await remote;
+    assert.equal(fake.disables, 1);
+    assert.equal(fake.on, false);
+    assert.equal(children[0]!.stops, 0, "Ctrl+C turns Remote off without stopping the Runner");
+    assert.ok(output.some((line) => line.includes("Remote is off; the Runner keeps running")));
+    const after = await status();
+    assert.equal(after.healthy, true);
+    assert.equal(after.remoteActive, false);
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await plain;
+  } finally {
+    interrupt.abort();
+    await Promise.all(children.map((child) => child.stop()));
+    await Promise.allSettled([plain, ...(remote ? [remote] : [])]);
+    process.exitCode = oldExitCode;
+    await f.cleanup();
+  }
+});
+
+test("aiboard remote still refuses policy flags and remote-only mode for a reused Runner, saying what to run", async () => {
+  const f = await fixture(); const g = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  const dataIn = (root: string) => process.platform === "win32" ? { LOCALAPPDATA: join(root, "data") } : { XDG_DATA_HOME: join(root, "data") };
+  const spawnRunner = fakeSpawner(children, calls);
+  const runtime = { cwd: f.project, home: f.root, environment: dataIn(f.root), spawnRunner, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  // The per-user AIBoard data (device custody) inside the project, as when starting from the home folder: remote-only.
+  const homeRuntime = { ...runtime, cwd: g.project, home: g.root, environment: dataIn(g.project) };
+  const runs: Promise<void>[] = [];
+  try {
+    runs.push(runLauncher(["--state-dir", f.state, "--no-open"], runtime));
+    await waitUntil(() => output.some((line) => line.includes("Runner running")));
+    await assert.rejects(runLauncher(["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--read-only", "--no-open"], runtime),
+      /^Error: remote_policy_requires_restart: .*Run `aiboard stop --state-dir .+`, then run `aiboard remote --state-dir .+ --read-only --no-open` again\.$/);
+    assert.equal(children[0]!.remote.enables.length, 0);
+    // A Runner that is not remote-only cannot serve a folder that needs remote-only mode.
+    runs.push(runLauncher(["--state-dir", g.state, "--no-open"], homeRuntime));
+    await waitUntil(() => children.length === 2 && output.filter((line) => line.includes("Runner running")).length === 2);
+    await assert.rejects(runLauncher(["remote", "--state-dir", g.state, "--acknowledge-remote-access", "--no-open"], homeRuntime),
+      /^Error: remote_restart_required: .*Run `aiboard stop --state-dir .+`, then run `aiboard remote --state-dir .+` again\.$/);
+    assert.equal(children[1]!.remote.enables.length, 0);
+    assert.equal(children.length, 2);
+    assert.ok(children.every((child) => child.stops === 0));
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await runLauncher(["stop", "--state-dir", g.state], homeRuntime);
+    await Promise.all(runs);
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await Promise.allSettled(runs);
+    await f.cleanup(); await g.cleanup();
+  }
+});
+
+test("aiboard remote refuses while another project's Runner holds this device's Remote", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const environment = process.platform === "win32" ? { LOCALAPPDATA: join(f.root, "data") } : { XDG_DATA_HOME: join(f.root, "data") };
+  const runtime = { cwd: f.project, home: f.root, environment, spawnRunner: fakeSpawner(children, calls), write: () => undefined, openUrl: neverOpenBrowser };
+  const device = remoteDeviceDirectory({ platform: process.platform, environment, home: f.root });
+  await mkdir(device, { recursive: true, mode: 0o700 });
+  const other = join(f.root, "other-project");
+  const release = new RemoteDeviceStore(device).acquireOwnerLock(other);
+  assert.ok(release);
+  try {
+    await assert.rejects(runLauncher(["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--no-open"], runtime),
+      (error: unknown) => error instanceof Error && error.message.startsWith("remote_already_active: ") && error.message.includes(other));
+    assert.equal(children.length, 0);
+  } finally {
+    release();
+    await Promise.all(children.map((child) => child.stop()));
     await f.cleanup();
   }
 });
