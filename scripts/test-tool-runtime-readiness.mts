@@ -39,25 +39,21 @@ assert.match(offline.prerequisites.local_shell_executor?.reason ?? "", /unreacha
 assert.match(offline.prerequisites.remote_mcp_server?.reason ?? "", /No approved remote MCP server/i);
 console.log("PASS missing runtime resources carry actionable readiness reasons");
 
-const mcpIntent = configuredRemoteMcpIntent({
+// Provider-hosted MCP bypasses the Runner's per-tool filter (R1c), so even an enabled, valid server
+// yields no intent, and a stray remote_mcp intent is stripped before the provider request.
+assert.equal(configuredRemoteMcpIntent({
   enabled: true,
   name: "docs",
   url: "https://mcp.example.test/sse",
   authorizationToken: "secret",
-});
-assert.deepEqual(mcpIntent, {
-  id: "remote_mcp",
-  requirement: "optional",
-  parameters: {
-    serverName: "docs",
-    serverLabel: "docs",
-    serverUrl: "https://mcp.example.test/sse",
-    authorizationToken: "secret",
-    authorization: "secret",
-  },
-});
-assert.equal(configuredRemoteMcpIntent({ enabled: false, name: "docs", url: "https://mcp.example.test/sse" }), undefined);
-console.log("PASS approved MCP setup maps to the provider runtime intent without exposing disabled servers");
+}), undefined);
+const strippedMcp = applyToolRuntimeToRequest(
+  { toolIntents: [{ id: "remote_mcp", requirement: "optional", parameters: { serverUrl: "https://mcp.example.test/sse" } }], toolInventory: [] },
+  { remoteMcpServer: { enabled: true, name: "docs", url: "https://mcp.example.test/sse" } },
+  "openai",
+);
+assert.equal(strippedMcp.toolIntents.some((intent) => intent.id === "remote_mcp"), false);
+console.log("PASS provider-hosted MCP is never offered to providers while the Runner cannot filter its tools");
 const fileSearchIntent = configuredOpenAIFileSearchIntent({
   enabled: true,
   vectorStoreIds: [" vs_docs ", "vs_docs", "vs_code"],
@@ -110,8 +106,8 @@ const mergedRequest = applyToolRuntimeToRequest(
   { toolIntents: [{ id: "web_search", requirement: "optional" }], toolInventory: [] },
   { remoteMcpServer: { enabled: true, name: "docs", url: "https://mcp.example.test/sse" } },
 );
-assert.deepEqual(mergedRequest.toolIntents.map((intent) => intent.id), ["web_search", "remote_mcp"]);
-console.log("PASS configured MCP is merged into real provider tool requests without replacing existing intents");
+assert.deepEqual(mergedRequest.toolIntents.map((intent) => intent.id), ["web_search"]);
+console.log("PASS existing provider tool intents survive while configured provider-hosted MCP stays off");
 
 const anthropicRows = capabilityStatusRows(resolveProviderCapabilityProfile({
   providerId: "anthropic",
