@@ -264,6 +264,22 @@ try {
     check("corrupt reinstall leaves the active version unchanged", pointer("current") === "0.9.1" && readFileSync(installedLicense, "utf8") === "corrupted installed file");
   } finally { writeFileSync(installedLicense, originalLicense); }
 
+  const installedInventory = join(root, "versions", "0.9.1", "release.json");
+  const originalInventory = readFileSync(installedInventory);
+  try {
+    const changed = Buffer.from("corrupted installed file with rewritten inventory");
+    const inventory = JSON.parse(originalInventory.toString("utf8")) as { files: Record<string, string> };
+    inventory.files.LICENSE = createHash("sha256").update(changed).digest("hex");
+    writeFileSync(installedLicense, changed);
+    writeFileSync(installedInventory, `${JSON.stringify(inventory, null, 1)}\n`);
+    const changedInventory = await runInstaller();
+    check("same-version installer rejects an installed file and inventory changed together", changedInventory.code !== 0 && /existing version failed its inventory check/i.test(changedInventory.stdout + changedInventory.stderr), changedInventory.stdout + changedInventory.stderr);
+    check("changed inventory reinstall leaves the active version unchanged", pointer("current") === "0.9.1");
+  } finally {
+    writeFileSync(installedInventory, originalInventory);
+    writeFileSync(installedLicense, originalLicense);
+  }
+
   const installedVerifier = join(root, "versions", "0.9.1", "app", "runner-v2", "src", "self-update.js");
   const originalVerifier = readFileSync(installedVerifier);
   try {
