@@ -7,9 +7,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough, Readable } from "node:stream";
 import test from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createChildEnvironmentFactory } from "../src/child-environment.js";

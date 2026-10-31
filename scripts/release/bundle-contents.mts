@@ -8,7 +8,7 @@ import { builtinModules } from "node:module";
 import { posix } from "node:path";
 
 /** Runtime npm dependencies of Runner V2 and the peer runners; everything else is resolved from the lockfile. */
-export const RUNTIME_PACKAGES = ["@github/copilot-sdk", "@modelcontextprotocol/sdk", "playwright", "typescript"];
+export const RUNTIME_PACKAGES = ["@github/copilot-sdk", "@modelcontextprotocol/server", "playwright", "typescript"];
 /** Peer runners started by `aiboard accounts` / `aiboard legacy` (launcher.ts peerEntries). The bench runner needs its own pinned runtime and stays a separate download. */
 export const PEER_FILES = [
   "lib/account-provider-runner.mjs",

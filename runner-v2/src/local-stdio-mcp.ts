@@ -3,10 +3,8 @@ import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Readable, Writable } from "node:stream";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { Server, type Tool, type Transport } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
 import { LOCAL_MCP_DEPTH_LIMIT } from "./child-environment.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -216,11 +214,11 @@ function parseOwner(row: Record<string, unknown>): LocalMcpOwner {
 /** The proxy implements protocol framing only; all tool operations go to Runner. */
 export function createLocalMcpProxy(dispatch: (body: unknown) => Promise<unknown>): Server {
   const server = new Server({ name: "aiboard", version: "1.0.0" }, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
+  server.setRequestHandler("tools/list", async () => {
     const result = await dispatch({ operation: "list" });
     return result as { tools: Tool[] };
   });
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler("tools/call", async (request) => {
     const value = await dispatch({ operation: "call", name: request.params.name, arguments: request.params.arguments ?? {} });
     if (!value || typeof value !== "object" || !("content" in value) || !Array.isArray(value.content)) throw new Error("Invalid Runner tool response.");
     const result = value as { content: Array<Record<string, unknown>>; isError?: boolean; error?: { code?: string; message?: string } };
