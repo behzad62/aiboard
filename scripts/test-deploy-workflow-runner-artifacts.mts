@@ -12,7 +12,7 @@ const workflowPath = ".github/workflows/deploy-aiboard.yml";
 const workflow = readFileSync(workflowPath, "utf8");
 
 const publishDownloadsIndex = workflow.indexOf("npm run publish-downloads");
-const setupNodeIndex = workflow.indexOf("actions/setup-node@v4");
+const setupNodeIndex = workflow.indexOf("actions/setup-node@v7");
 const installIndex = workflow.indexOf("npm ci");
 const acquireCommand = 'node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"';
 const acquireIndex = workflow.indexOf(acquireCommand);
