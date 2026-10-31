@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, rm, stat, lstat, open, writeFile, readdir, cp } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -28,7 +28,11 @@ const options = parseArgs(process.argv.slice(2));
 const host = optionValue(options.host) ?? "127.0.0.1";
 const port = Number(optionValue(options.port) ?? 8797);
 const token = optionValue(options.token) ?? process.env.AIBOARD_BENCH_TOKEN ?? randomBytes(18).toString("hex");
-const root = resolve(optionValue(options.root) ?? join(process.cwd(), ".aiboard-bench", "runs"));
+const requestedRoot = resolve(optionValue(options.root) ?? join(process.cwd(), ".aiboard-bench", "runs"));
+await mkdir(requestedRoot, { recursive: true });
+// Every attempt and Runner V2 state path derives from root; Runner V2 reports
+// and checks canonical paths, so start canonical (no Windows 8.3 aliases).
+const root = realpathSync.native(requestedRoot);
 const fixtureRootOption = optionValue(options["fixture-root"]);
 const fixtureRoot = fixtureRootOption ? resolve(fixtureRootOption) : null;
 const runnerV2DirectoryOption = optionValue(options["runner-v2-dir"]);
@@ -1363,7 +1367,10 @@ function discoverRunnerV2(explicitDirectory) {
   return null;
 }
 
-function runnerV2Candidate(candidate, cli) {
+function runnerV2Candidate(found, cli) {
+  // Run Runner V2 from its canonical path (.native expands Windows 8.3 aliases
+  // such as RUNNER~1), so the paths it derives from its own location are canonical.
+  const candidate = { ...found, directory: realpathSync.native(found.directory) };
   const tsxCli = join(candidate.directory, "node_modules", "tsx", "dist", "cli.mjs");
   if (existsSync(tsxCli)) {
     return { ...candidate, cli, ready: true };
@@ -1415,6 +1422,9 @@ async function runnerV2Invocation(launcher, projectPath, statePath, runnerToken)
   // (the L1b launcher handshake); it never appears in the child argv.
   const { realpath } = await import("node:fs/promises");
   const canonicalProject = await realpath(projectPath);
+  // Runner V2 refuses a launcher whose state path is not already canonical; a
+  // Windows 8.3 alias in TEMP (C:\Users\RUNNER~1) would otherwise mismatch.
+  const canonicalState = await realpath(statePath);
   const instanceId = randomBytes(16).toString("hex");
   const pairCode = `v1.${instanceId}.${randomBytes(32).toString("base64url")}`;
   const user = userInfo();
@@ -1429,7 +1439,7 @@ async function runnerV2Invocation(launcher, projectPath, statePath, runnerToken)
       projectKey: process.platform === "win32" ? canonicalProject.toLowerCase() : canonicalProject,
       owner: process.platform === "win32" ? `windows:${user.username.toLowerCase()}:${homedir().toLowerCase()}` : `uid:${user.uid}`,
     },
-    stateDirectory: statePath,
+    stateDirectory: canonicalState,
     version: "bench-managed",
   };
   return {
@@ -1441,7 +1451,7 @@ async function runnerV2Invocation(launcher, projectPath, statePath, runnerToken)
       "--project",
       canonicalProject,
       "--state-dir",
-      statePath,
+      canonicalState,
       "--port",
       "0",
       "--launcher-ipc",
