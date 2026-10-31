@@ -1,10 +1,12 @@
 import Link from "next/link";
-import { pageMetadata } from "@/lib/site";
+import { RunnerInstallCommands } from "@/components/runner/RunnerInstallCommands";
+import { GIT_FOR_WINDOWS_URL, RUNNER_REMOTE_COMMAND, RUNNER_START_COMMAND, RUNNER_UPDATE_COMMAND } from "@/lib/runner-install";
+import { pageMetadata, SITE_REMOTE_ENABLED } from "@/lib/site";
 
 export const metadata = pageMetadata({
   title: "Runner V2 guide",
   description:
-    "Install, start, and connect the native Runner V2 agent kernel that AI Board Build mode uses for real file, Git, and shell access.",
+    "Install the AI Board Runner with one command, start it in a project folder, and connect Build mode and account providers to real files, Git, and shell access on your computer.",
   path: "/runner-guide",
 });
 
@@ -14,39 +16,56 @@ export default function RunnerGuidePage() {
       <header>
         <h1 className="font-display text-3xl font-semibold tracking-tight">Runner V2 guide</h1>
         <p className="mt-2 text-muted-foreground">
-          Build mode requires the native Runner V2 process. There is no browser execution fallback.
+          Build mode, and account providers such as ChatGPT and GitHub Copilot, run through the AI Board Runner on
+          your own computer. There is no browser execution fallback.
         </p>
       </header>
       <section className="space-y-3">
-        <h2 className="font-display text-xl font-semibold">Prerequisites</h2>
-        <ul className="list-disc space-y-2 pl-6">
-          <li>Node.js 24.x.</li>
-          <li>Git installed and available on PATH.</li>
-          <li>A state directory outside the project directory.</li>
-        </ul>
-      </section>
-      <section className="space-y-3">
-        <h2 className="font-display text-xl font-semibold">Download and install</h2>
-        <a
-          href="/aiboard-runner-v2.zip"
-          download
-          className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        >
-          Download Runner V2 ZIP
-        </a>
-        <p>Extract the ZIP, open a terminal in the extracted directory, and run:</p>
-        <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">
-          {"npm install\nnpm run setup:browser"}
-        </pre>
-      </section>
-      <section className="space-y-3">
-        <h2 className="font-display text-xl font-semibold">Start the runner</h2>
-        <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">
-          {"npm start -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}
-        </pre>
-        <p>The runner prints a localhost URL and control token. Paste them into Build setup and test the connection.</p>
+        <h2 className="font-display text-xl font-semibold">Install</h2>
+        <p>
+          Open a terminal and run the line for your system. It installs for your user only (no admin rights), checks
+          the signed release before anything runs, and adds <code>{RUNNER_START_COMMAND}</code> to your PATH. Node.js
+          is included. Then open a new terminal.
+        </p>
+        <RunnerInstallCommands />
         <p className="text-sm text-muted-foreground">
-          Repository contributors can alternatively run <code>npm run runner:v2 -- --project ...</code> from the AI Board checkout.
+          Build mode also needs Git. Without it the Runner still starts, with Chat and account providers only: install{" "}
+          <a className="underline hover:text-foreground" href={GIT_FOR_WINDOWS_URL}>Git for Windows</a>, run{" "}
+          <code>xcode-select --install</code> on macOS, or use your Linux package manager.
+        </p>
+      </section>
+      <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Start it in a project folder</h2>
+        <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">
+          {`cd path/to/your-project\n${RUNNER_START_COMMAND}`}
+        </pre>
+        <p>
+          It opens AI Board in your browser and connects this computer, with nothing to paste. The same command
+          starts the account runner for ChatGPT, GitHub Copilot, and NVIDIA. Keep the terminal open; Ctrl+C stops
+          the Runner. Start it in a project folder, not your home folder.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          <code>aiboard status</code> and <code>aiboard stop</code> manage a running Runner,{" "}
+          <code>aiboard runner</code> starts it without the account runner, and <code>aiboard --help</code> lists
+          every option.
+        </p>
+      </section>
+      {SITE_REMOTE_ENABLED && <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Let ChatGPT or Claude use this computer</h2>
+        <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">{RUNNER_REMOTE_COMMAND}</pre>
+        <p>
+          Connects this computer to AI Board Remote so cloud agents can use it. Read the notice it prints first:
+          remote agents act as your user account. Ctrl+C disconnects.
+        </p>
+      </section>}
+      <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Update and remove</h2>
+        <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">
+          {`${RUNNER_UPDATE_COMMAND}\naiboard update --rollback\naiboard uninstall`}
+        </pre>
+        <p className="text-sm text-muted-foreground">
+          Updates are signed and checked like the first install. <code>aiboard doctor</code> shows the installed
+          version, Node.js, and Git.
         </p>
       </section>
       <section className="space-y-3">
@@ -61,8 +80,12 @@ export default function RunnerGuidePage() {
       <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">Recovery</h2>
         <p>
-          Reuse the same project, state directory, port, and token when restarting. Durable sessions, task state,
-          evidence, and Git integration state recover before work continues.
+          Run <code>{RUNNER_START_COMMAND}</code> again in the same project folder. Its state lives in your user data
+          folder, and durable sessions, task state, evidence, and Git integration state recover before work continues.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Repository contributors can run <code>npm run runner:v2 -- --project ...</code> from an AI Board checkout
+          instead.
         </p>
       </section>
       <p><Link href="/" className="underline hover:text-foreground">Back to the workspace</Link></p>

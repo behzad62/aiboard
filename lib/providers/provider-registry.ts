@@ -28,15 +28,21 @@ export interface AccountRunnerProviderSetup {
   tokenLabel: string;
   tokenPlaceholder: string;
   tokenHint: string;
+  /** What to run: `aiboard` starts the account runner with Runner V2 and pairs this tab. */
   command: string;
   downloadHref: string;
   setupHint: string;
+  /** The standalone account-runner ZIP: how to start it, for users who run it on its own. */
+  standaloneCommand: string;
+  standaloneHint: string;
 }
 
 export interface ProviderRunnerDownload {
   command: string;
   downloadHref: string;
   hint: string;
+  standaloneCommand: string;
+  standaloneHint: string;
 }
 
 export interface ModelRuntimeBehavior {
@@ -72,8 +78,11 @@ export interface ProviderDefinition {
 
 export const ACCOUNT_RUNNER_VERSION = 29;
 const ACCOUNT_RUNNER_DOWNLOAD_HREF = "/aiboard-account-provider-runner.zip";
-const ACCOUNT_RUNNER_COMMAND = "npm install\nnpm start";
-const ACCOUNT_RUNNER_SETUP_HINT = "Download the account runner ZIP and extract every file into its own folder, separate from Runner V2. In that folder, run npm install, then npm start. One running instance serves ChatGPT, GitHub Copilot, and NVIDIA: reuse its printed URL and session token in each provider's settings and save.";
+const ACCOUNT_RUNNER_COMMAND = "aiboard";
+const ACCOUNT_RUNNER_SETUP_HINT = "Run aiboard in a project folder (install it first with the one-line installer from the Runner guide). It starts the account runner together with Runner V2 and connects this tab, so there is no URL or token to paste. One account runner serves ChatGPT, GitHub Copilot, and NVIDIA.";
+const ACCOUNT_RUNNER_STANDALONE_COMMAND = "npm install\nnpm start";
+const ACCOUNT_RUNNER_STANDALONE_HINT = "Prefer to run it on its own? Download the standalone account runner ZIP, extract every file into its own folder, run npm install, then npm start, and paste the URL and session token it prints into each provider's settings.";
+const ACCOUNT_RUNNER_URL_HINT = "Filled in for you when aiboard connects this tab. With the standalone account runner, paste the URL it prints (port 1455, or 1457 if busy); one runner serves ChatGPT, GitHub Copilot, and NVIDIA.";
 
 function normalizedModelId(modelId = ""): string {
   return modelId.trim().toLowerCase();
@@ -286,7 +295,7 @@ export const PROVIDER_DEFINITIONS = {
       label: "Account runner URL",
       placeholder: "http://127.0.0.1:1455",
       suggestedValue: "http://127.0.0.1:1455",
-      hint: "Start the shared account runner package with npm start and paste its printed URL here. If it is already running for Copilot or NVIDIA, reuse that URL and token. The default port is 1455, or 1457 if busy.",
+      hint: ACCOUNT_RUNNER_URL_HINT,
     },
     baseURLRequiredMessage: "This provider needs the account runner URL",
     accountRunner: {
@@ -295,11 +304,13 @@ export const PROVIDER_DEFINITIONS = {
       tokenLabel: "Runner session token",
       tokenPlaceholder: "Paste the current token printed by the account runner",
       tokenHint:
-        "This is the local runner session token printed in the terminal. Restarting the runner prints a new token, but your saved ChatGPT login stays in the auth file.",
+        "Only for the standalone account runner: the session token it prints in the terminal (aiboard connects without one). Restarting the runner prints a new token, but your saved ChatGPT login stays in the auth file.",
       command: ACCOUNT_RUNNER_COMMAND,
       downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
       setupHint:
         `${ACCOUNT_RUNNER_SETUP_HINT} Continue with ChatGPT to authorize plan usage. No OpenAI API key is needed.`,
+      standaloneCommand: ACCOUNT_RUNNER_STANDALONE_COMMAND,
+      standaloneHint: ACCOUNT_RUNNER_STANDALONE_HINT,
     },
     reasoningEffort: true,
     maxTokens: false,
@@ -334,7 +345,7 @@ export const PROVIDER_DEFINITIONS = {
       label: "Account runner URL",
       placeholder: "http://127.0.0.1:1455",
       suggestedValue: "http://127.0.0.1:1455",
-      hint: "Start the shared account runner package with npm start and paste its printed URL here. If it is already running for ChatGPT or NVIDIA, reuse that URL and token.",
+      hint: ACCOUNT_RUNNER_URL_HINT,
     },
     baseURLRequiredMessage: "This provider needs the account runner URL",
     accountRunner: {
@@ -343,11 +354,13 @@ export const PROVIDER_DEFINITIONS = {
       tokenLabel: "Runner session token",
       tokenPlaceholder: "Paste the current token printed by the account runner",
       tokenHint:
-        "This is the local runner session token printed in the terminal. Restarting the runner prints a new token, but your saved GitHub login stays in the auth file.",
+        "Only for the standalone account runner: the session token it prints in the terminal (aiboard connects without one). Restarting the runner prints a new token, but your saved GitHub login stays in the auth file.",
       command: ACCOUNT_RUNNER_COMMAND,
       downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
       setupHint:
-        `${ACCOUNT_RUNNER_SETUP_HINT} Log in with GitHub if it is not already connected.`,
+        `${ACCOUNT_RUNNER_SETUP_HINT} Log in with GitHub if it is not already connected; the Copilot runtime downloads once on first use.`,
+      standaloneCommand: ACCOUNT_RUNNER_STANDALONE_COMMAND,
+      standaloneHint: ACCOUNT_RUNNER_STANDALONE_HINT,
     },
     reasoningEffort: (modelId: string) =>
       normalizedModelId(modelId) === "auto" ||
@@ -379,7 +392,7 @@ export const PROVIDER_DEFINITIONS = {
       label: "Local provider runner URL",
       placeholder: "http://127.0.0.1:1455",
       suggestedValue: "http://127.0.0.1:1455",
-      hint: "Start the shared account runner package with npm start, then paste its printed URL here. Reuse the same URL and token if it is already running for ChatGPT or Copilot. NVIDIA requests are proxied through the runner because browsers cannot call its API directly.",
+      hint: `${ACCOUNT_RUNNER_URL_HINT} NVIDIA requests are proxied through the runner because browsers cannot call its API directly.`,
     },
     baseURLRequiredMessage: "This provider needs the local provider runner URL",
     runnerDownload: {
@@ -387,6 +400,8 @@ export const PROVIDER_DEFINITIONS = {
       downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
       hint:
         ACCOUNT_RUNNER_SETUP_HINT,
+      standaloneCommand: ACCOUNT_RUNNER_STANDALONE_COMMAND,
+      standaloneHint: ACCOUNT_RUNNER_STANDALONE_HINT,
     },
     runnerTokenField: {
       label: "Local runner token",

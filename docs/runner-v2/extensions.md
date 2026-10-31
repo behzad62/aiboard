@@ -4,11 +4,14 @@ Runner V2 can load trusted, local extensions and configured language servers. Th
 
 ## Enable trusted capabilities
 
-Create a JSON file outside the project directory, then start Runner V2 with its absolute path:
+Create a JSON file outside the project directory, then start the Runner in the project folder with its absolute path:
 
 ```powershell
-npm run runner:v2 -- --project C:\work\my-project --state-dir C:\runner-state --capabilities-config C:\runner-config\capabilities.json
+cd C:\work\my-project
+aiboard --capabilities-config C:\runner-config\capabilities.json
 ```
+
+From a repository checkout, `npm run runner:v2 -- --project C:\work\my-project --state-dir C:\runner-state --capabilities-config C:\runner-config\capabilities.json` does the same.
 
 The configuration is deliberately strict. It must be a regular, non-symbolic JSON file; extension paths must be absolute; unknown fields are rejected; and the Runner never reads this configuration from environment variables. Before it opens its control listener, Runner validates extension manifests and registrations and runs each extension's startup/cleanup preflight atomically. Keep secrets out of this file. Provider credentials continue to use Runner's encrypted provider configuration.
 

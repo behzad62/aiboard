@@ -36,9 +36,9 @@ Runner V2 runs on your machine, binds to `127.0.0.1`, and requires a control tok
 
 ## Requirements
 
-- Node.js 24.x.
-- Git on `PATH` for Build mode. Runner V2 stops before any model call if Git is unavailable.
+- Git on `PATH` for Build mode. Without Git the Runner still starts, with Chat and account providers only.
 - Provider credentials only for the models you choose.
+- Node.js 24.x only for local development; the installed Runner includes its own Node.js.
 
 ## Local development
 
@@ -51,21 +51,21 @@ Open [http://localhost:3000](http://localhost:3000), then configure providers in
 
 ## Runner V2
 
-Build mode has no browser execution fallback. Start the native kernel with its state directory outside the project:
+Build mode has no browser execution fallback. Install the Runner once (per user, no admin rights; the release is signed and verified before anything runs):
 
-```bash
-npm run runner:v2 -- --project C:\path\to\project --state-dir C:\path\to\aiboard-state --port 8787
+```powershell
+irm https://aiboard.me/install.ps1 | iex          # Windows (PowerShell)
 ```
 
-Use `--allow-origin` to permit remote runner calls from your UI host (repeatable, comma-separated list supported), for example:
-
 ```bash
-npm run runner:v2 -- --project C:\path\to\project --state-dir C:\path\to\aiboard-state --port 8787 --allow-origin https://aiboard.me
+curl -fsSL https://aiboard.me/install.sh | sh     # macOS / Linux
 ```
 
-Run `npm run runner:v2 -- --help` to see the full argument list.
+Then open a new terminal in your project folder and run `aiboard`. It opens AI Board in the browser already connected, and also starts the account runner for ChatGPT, GitHub Copilot and NVIDIA. `aiboard remote` lets ChatGPT or Claude use this computer, `aiboard update` installs the newest signed release, and `aiboard --help` lists every option.
 
-Runner V2 prints a local URL and a new control token. Paste both into Build setup. The runner owns the Git baseline, isolated task workspaces, task-level commits, durable agent sessions, native tools, evidence, integration, and recovery.
+From a repository checkout, contributors can run the source copy instead: `npm run runner:v2 -- --project C:\path\to\project --state-dir C:\path\to\aiboard-state --port 8787` prints a local URL and a new control token to paste into Build setup (`--allow-origin https://aiboard.me` permits a hosted UI; `npm run runner:v2 -- --help` lists the arguments).
+
+The Runner owns the Git baseline, isolated task workspaces, task-level commits, durable agent sessions, native tools, evidence, integration, and recovery.
 
 Execution safety, capability selection, cleanup, OCI configuration, and platform limitations are documented in the [Runner V2 execution safety guide](docs/runner-v2/guide.md), with separate [architecture](docs/runner-v2/architecture.md) and [security](docs/runner-v2/security.md) notes.
 

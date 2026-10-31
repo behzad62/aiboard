@@ -156,7 +156,7 @@ export async function resolveProviderCapabilityStatus(input: {
     allowedTransports: customContext?.allowedTransports ?? runner.allowedTransports,
   });
 }
-/** Tab-scoped account Runner connection issued by `aiboard accounts`, if any. Never persisted. */
+/** Tab-scoped account Runner connection issued by `aiboard` (or `aiboard accounts`), if any. Never persisted. */
 export function getLauncherAccountRunnerConnection(): { baseURL: string; runnerToken: string } | null {
   const connection = getPeerConnection("accounts");
   return connection ? { baseURL: connection.url, runnerToken: connection.token } : null;
