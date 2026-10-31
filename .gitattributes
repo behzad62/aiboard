@@ -12,3 +12,6 @@ runner-v2/src/windows-birth/native/** binary
 
 # One-line installers are served to sh and PowerShell as rendered; keep the templates LF everywhere.
 scripts/install/* text eol=lf
+
+# Signed release manifests are verified byte for byte; never convert their line endings.
+public/release/** -text
