@@ -48,13 +48,31 @@ assert.match(
   checklistMarkup,
   /<select[^>]*aria-label="Reasoning effort for GPT-5\.6"[^>]*>[\s\S]*?<option value="xhigh" selected="">Extra high<\/option>/
 );
+// Custom models declare their own reasoning support (docs/custom-model-reasoning.md):
+// the choice stays open up to High, never the provider-specific xhigh/max.
+const plainChatSelect =
+  checklistMarkup.match(/<select[^>]*aria-label="Reasoning effort for Plain Chat"[\s\S]*?<\/select>/)?.[0] ?? "";
+assert.match(plainChatSelect, /<option value="high" selected="">High<\/option>/);
+assert.doesNotMatch(plainChatSelect, /disabled=""/);
+assert.doesNotMatch(plainChatSelect, /<option value="(xhigh|max)"/);
+
+// A model with no effort setting gets one locked Default choice.
+const noEffortMarkup = renderToStaticMarkup(
+  <ModelChecklist
+    models={[{ modelId: "xai:grok-4-fast-non-reasoning", providerId: "xai", displayName: "Grok Fast" }]}
+    selectedModelIds={["xai:grok-4-fast-non-reasoning"]}
+    effortByModelId={{ "xai:grok-4-fast-non-reasoning": "high" }}
+    onChange={() => undefined}
+    onEffortChange={() => undefined}
+  />
+);
 assert.match(
-  checklistMarkup,
-  /<select[^>]*aria-label="Reasoning effort for Plain Chat"[^>]*disabled=""[^>]*>[\s\S]*?<option value="default" selected="">Default<\/option>/
+  noEffortMarkup,
+  /<select[^>]*aria-label="Reasoning effort for Grok Fast"[^>]*disabled=""[^>]*>[\s\S]*?<option value="default" selected="">Default<\/option>/
 );
 assert.doesNotMatch(
-  checklistMarkup,
-  /aria-label="Reasoning effort for Plain Chat"[\s\S]*?<option value="(low|medium|high|xhigh|max)"/
+  noEffortMarkup,
+  /aria-label="Reasoning effort for Grok Fast"[\s\S]*?<option value="(none|low|medium|high|xhigh|max)"/
 );
 
 const harnessMarkup = renderToStaticMarkup(

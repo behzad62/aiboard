@@ -136,9 +136,9 @@ check(
 );
 const chatGptDefinition = getProviderDefinition("chatgpt");
 check(
-  "ChatGPT downloads the standalone account runner script",
-  chatGptDefinition?.accountRunner?.downloadHref === "/account-provider-runner.mjs" &&
-    chatGptDefinition.accountRunner.command === "node account-provider-runner.mjs",
+  "ChatGPT downloads the shared account runner package",
+  chatGptDefinition?.accountRunner?.downloadHref === "/aiboard-account-provider-runner.zip" &&
+    chatGptDefinition.accountRunner.command === "npm install\nnpm start",
   chatGptDefinition?.accountRunner
 );
 check(
@@ -148,16 +148,16 @@ check(
 );
 const copilotDefinition = getProviderDefinition("github-copilot");
 check(
-  "GitHub Copilot downloads the SDK runner package",
+  "GitHub Copilot downloads the shared account runner package",
   copilotDefinition?.accountRunner?.downloadHref === "/aiboard-account-provider-runner.zip" &&
-    copilotDefinition.accountRunner.command === "npm install; npm start",
+    copilotDefinition.accountRunner.command === "npm install\nnpm start",
   copilotDefinition?.accountRunner
 );
 const nvidiaDefinition = getProviderDefinition("nvidia");
 check(
-  "NVIDIA exposes a standalone account runner download",
-  nvidiaDefinition?.runnerDownload?.downloadHref === "/account-provider-runner.mjs" &&
-    nvidiaDefinition.runnerDownload.command === "node account-provider-runner.mjs",
+  "NVIDIA downloads the shared account runner package",
+  nvidiaDefinition?.runnerDownload?.downloadHref === "/aiboard-account-provider-runner.zip" &&
+    nvidiaDefinition.runnerDownload.command === "npm install\nnpm start",
   nvidiaDefinition?.runnerDownload
 );
 check(

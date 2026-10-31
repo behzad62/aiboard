@@ -122,7 +122,9 @@ async function main(): Promise<void> {
     console.log(`FAIL ${failures} check(s) failed`);
   }
 
-  process.exit(failures === 0 ? 0 : 1);
+  // exitCode, not process.exit(): exiting while the stub's keep-alive socket is
+  // still closing trips a libuv assertion on Windows (UV_HANDLE_CLOSING, exit 127).
+  process.exitCode = failures === 0 ? 0 : 1;
 }
 
 main().catch((err) => {

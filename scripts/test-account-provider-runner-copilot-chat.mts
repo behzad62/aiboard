@@ -219,6 +219,9 @@ async function checkRunnerSdkCancellation(): Promise<void> {
     fakeSdk,
     [
       'import fs from "node:fs";',
+      // The runner refuses a helper missing any current export; only the chat one is exercised here.
+      "export async function listCopilotSdkModels() { return []; }",
+      "export function buildCopilotSdkRunnerCapabilities() { return {}; }",
       "export async function runCopilotSdkChat(body, token, baseDirectory, onToken, { signal } = {}) {",
       `  fs.writeFileSync(${JSON.stringify(admittedMarker)}, "admitted");`,
       "  return new Promise((resolve, reject) => {",

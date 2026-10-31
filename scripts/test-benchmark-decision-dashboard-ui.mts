@@ -660,10 +660,10 @@ const emptyTeamVerdictMarkup = renderToStaticMarkup(
 );
 check(
   "empty WorkBench and team-lift cards request comparable team evidence",
-    emptyTeamVerdictMarkup.includes("Run HarnessBench with a team and matched solo baselines.") &&
+    emptyTeamVerdictMarkup.includes("Run HarnessBench with different models assigned to its Build roles.") &&
     emptyTeamVerdictMarkup.includes("Not comparable") &&
     emptyTeamVerdictMarkup.includes(
-      "Run the same HarnessBench profile solo and as a team to measure added value."
+      "Team lift requires matched HarnessBench baselines with each member filling all Build roles."
     ),
   emptyTeamVerdictMarkup
 );
@@ -1347,9 +1347,11 @@ check(
   overallMarkup
 );
 check(
-  "overall ranking keys rows by canonical variant identity",
+  // One variant can appear once per result set (effort variants), so the key
+  // pairs the result set with the canonical variant identity.
+  "overall ranking keys rows by result set and canonical variant identity",
   source("components/benchmark/certified/CertifiedBenchmarkOverview.tsx").includes(
-    "key={row.variantKey}"
+    "key={JSON.stringify([row.resultSetId ?? index, row.variantKey])}"
   ),
   source("components/benchmark/certified/CertifiedBenchmarkOverview.tsx")
 );
