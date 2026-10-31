@@ -138,6 +138,19 @@ check("SDK adapter forwards streaming deltas", emitted.join("") === "SDK result"
 check("SDK adapter forwards observable built-in tool lifecycle", toolEvents.map((event) => `${event.tool}:${event.phase}`).join(",") === "web_search:started,web_search:completed", toolEvents);
 check("SDK adapter passes the account token to the client", capturedClientOptions?.gitHubToken === "test-token", capturedClientOptions);
 check("SDK adapter creates a web-search session", Boolean(capturedSessionConfig?.availableTools), capturedSessionConfig);
+check("SDK adapter leaves runtime resolution to the SDK without an on-demand runtime", capturedClientOptions?.connection === undefined, capturedClientOptions);
+{
+  const seen: Record<string, unknown>[] = [];
+  const factory = (options: Record<string, unknown>) => {
+    seen.push(options);
+    return { async start() {}, async listModels() { return []; }, async createSession() { return fakeSession; }, async stop() {} };
+  };
+  const cliPath = "C:\\AIBoard\\runtimes\\copilot\\copilot-win32-x64-1.0.71-0011223344556677\\index.js";
+  await sdk.listCopilotSdkModels("test-token", "C:\\aiboard-sdk-test", { clientFactory: factory, cliPath });
+  await sdk.runCopilotSdkChat({ model: "gpt-5.4", messages: [{ role: "user", content: "Hi" }] }, "test-token", "C:\\aiboard-sdk-test", undefined, { clientFactory: factory, cliPath });
+  check("an on-demand runtime is started explicitly for model listing and chat",
+    seen.length === 2 && seen.every((options) => JSON.stringify(options.connection) === JSON.stringify({ kind: "stdio", path: cliPath })), seen);
+}
 assert.deepEqual(capturedUsage, {inputTokens:300, outputTokens:60, cachedInputTokens:80, cacheWriteInputTokens:30, reasoningTokens:15, totalTokens:360}, "SDK tool-loop API calls are summed once and premium multipliers never become USD costs");
 
 function deferred<T>() {

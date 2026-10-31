@@ -104,6 +104,23 @@ export function assertExternalState(projectPath: string, stateDirectory: string,
   }
 }
 
+/**
+ * The default state lives in the user's data folder, so a start from a folder that contains it (normally the
+ * home folder) means no project folder was opened. Same safety check as assertExternalState, clearer advice.
+ */
+export function assertDefaultStateOutsideProject(projectPath: string, defaultState: string, home: string, platform: NodeJS.Platform = process.platform): void {
+  try { assertExternalState(projectPath, defaultState); return; }
+  catch { /* explained below */ }
+  const paths = platform === "win32" ? win32 : posix;
+  const same = (left: string, right: string) => platform === "win32" || platform === "darwin"
+    ? paths.resolve(left).toLowerCase() === paths.resolve(right).toLowerCase() : paths.resolve(left) === paths.resolve(right);
+  const where = same(projectPath, home)
+    ? "aiboard was started in your home folder, which holds AI Board's own data."
+    : `aiboard was started in ${projectPath}, a folder that contains AI Board's own data.`;
+  const example = paths.join(home, platform === "win32" ? "Documents" : "projects", "my-project");
+  throw new Error(`project_folder_required: ${where} Open a project folder first, for example:\n  cd "${example}"\n  aiboard`);
+}
+
 export interface WindowsDefaultStateLocation {
   home: string;
   localAppData: string;

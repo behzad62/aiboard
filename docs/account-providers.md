@@ -8,9 +8,21 @@ show API-equivalent comparison rates, not charges against your subscription.
 
 ## Hosted app users
 
-Open the ChatGPT subscription, GitHub Copilot, or NVIDIA NIM provider settings and
-click **Download account runner v28 (ZIP)**. Every button downloads the same
-package. Extract it, open a terminal in that directory, install once, then start:
+The account runner comes with the AI Board Runner. Install it once with
+`irm https://aiboard.me/install.ps1 | iex` (Windows) or
+`curl -fsSL https://aiboard.me/install.sh | sh` (macOS / Linux), then run
+`aiboard` in a project folder. It starts the account runner beside Runner V2
+and connects the browser tab, so there is no URL or token to paste. Sign in to
+ChatGPT or GitHub from the provider settings as usual. With an installed Runner
+the GitHub Copilot runtime is downloaded once, the first time Copilot is used,
+and verified against its pinned checksum.
+
+### Standalone account runner
+
+To run the account runner on its own, open the ChatGPT subscription, GitHub
+Copilot, or NVIDIA NIM provider settings and click **Download standalone account
+runner (ZIP)**. Every button downloads the same package. Extract it, open a
+terminal in that directory, install once, then start:
 
 ```powershell
 npm install
@@ -49,8 +61,8 @@ ChatGPT subscription mode uses OpenAI's public `https://api.openai.com/v1/models
 and `/responses` endpoints with an OAuth token authorized for ChatGPT plan usage.
 It does not need an OpenAI API key or borrow a credential from API key mode.
 
-1. Download and extract the updated account runner package, stop the previous runner, then run npm install and npm start in the package folder.
-2. Save its URL and new local session token in AI Board.
+1. Run `aiboard` in a project folder (or, with the standalone package: download and extract the updated package, stop the previous runner, run npm install and npm start in the package folder, and save its URL and new local session token in AI Board).
+2. Open the ChatGPT subscription provider settings in the connected tab.
 3. Select **Continue with ChatGPT** and approve AI Board's ChatGPT plan usage permission.
 4. Return to Settings, refresh the catalog, select a model, and test the connection.
 

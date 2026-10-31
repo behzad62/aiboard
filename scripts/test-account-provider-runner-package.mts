@@ -16,7 +16,8 @@ for (const id of ["chatgpt", "github-copilot", "nvidia"] as const) {
   const provider = getProviderDefinition(id)!;
   const setup = provider.accountRunner ?? provider.runnerDownload;
   assert.equal(setup?.downloadHref, "/aiboard-account-provider-runner.zip", `${id} must use the shared package`);
-  assert.equal(setup?.command, "npm install\nnpm start", `${id} must use the same startup instructions`);
+  assert.equal(setup?.command, "aiboard", `${id} must say to run aiboard`);
+  assert.equal(setup?.standaloneCommand, "npm install\nnpm start", `${id} must use the same standalone startup instructions`);
 }
 
 assert.equal(publicRunner, sourceRunner, "published account runner must exactly match current source");

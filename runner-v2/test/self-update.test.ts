@@ -503,10 +503,11 @@ test("uninstall removes program files and the profile PATH block, and keeps stat
       const home = join(dir, "home");
       await mkdir(join(home, ".local", "share", "aiboard", "projects"), { recursive: true });
       await writeFile(join(home, ".profile"), `alias ll='ls -l'\n${profileBlock}export EDITOR=vi\n`);
+      await mkdir(join(layout.root, "runtimes", "copilot", "copilot-linux-x64-1.0.71-0011223344556677"), { recursive: true });
       const runtime = { layout, platform: "linux" as const, home, environment: {}, write: () => undefined, interactive: false };
       await assert.rejects(runUninstallCommand([], runtime), /uninstall_confirmation_required/);
       await runUninstallCommand(["--yes", ...(removeState ? ["--remove-state"] : [])], runtime);
-      for (const name of ["bin", "versions", "current", "sequence", "install.json"]) assert.ok(!existsSync(join(layout.root, name)), name);
+      for (const name of ["bin", "versions", "current", "sequence", "install.json", "runtimes"]) assert.ok(!existsSync(join(layout.root, name)), name);
       assert.equal(await readFile(join(home, ".profile"), "utf8"), "alias ll='ls -l'\nexport EDITOR=vi\n");
       assert.equal(existsSync(join(home, ".local", "share", "aiboard")), !removeState);
     } finally { await rm(dir, { recursive: true, force: true }); }

@@ -294,5 +294,44 @@ check("installers run every staged-bundle command through the bound",
   } finally { server.close(); rmSync(home, { recursive: true, force: true }); }
 }
 
+// Installers end with a Git note when Git is missing, and color only on a terminal (NO_COLOR / FORCE_COLOR).
+{
+  const extract = (pattern: RegExp, name: string) => { const found = pattern.exec(rendered.sh)?.[0]; check(`install.sh defines ${name}`, Boolean(found)); return found ?? ""; };
+  const colorBlock = extract(/\n# Color only on a terminal[\s\S]*?\nfi\n/, "its color switch");
+  const paint = extract(/\npaint\(\) \{[^\n]*\n/, "paint");
+  const gitHint = extract(/\ngit_hint\(\) \{\n[\s\S]*?\n\}\n/, "git_hint");
+  check("install.sh ends with the Git note", /hint=\$\(git_hint\)[\s\S]*Git was not found\. Chat and account providers work without it; Build mode needs Git\./.test(rendered.sh));
+  const bins = mkdtempSync(join(tmpdir(), "aiboard-git-hint-"));
+  try {
+    const withGit = join(bins, "with-git");
+    const withoutGit = join(bins, "without-git");
+    for (const dir of [withGit, withoutGit]) {
+      execFileSync(process.execPath, ["-e", `require("fs").mkdirSync(${JSON.stringify(dir)})`]);
+      writeFileSync(join(dir, "uname"), "#!/bin/sh\necho Linux\n", { mode: 0o755 });
+    }
+    writeFileSync(join(withGit, "git"), "#!/bin/sh\necho git version 2.45.0\n", { mode: 0o755 });
+    // POSIX hosts only: Git Bash on Windows cannot take these Windows paths as its PATH.
+    if (process.platform !== "win32") {
+      const hint = (path: string) => spawnSync("sh", ["-c", `${gitHint}\nPATH="$1"; printf '[%s]' "$(git_hint)"`, "sh", path], { encoding: "utf8" }).stdout;
+      check("install.sh suggests installing Git when it is missing", hint(withoutGit) === "[Install it with your package manager, for example: sudo apt install git]", hint(withoutGit));
+      check("install.sh says nothing about Git when it is present", hint(withGit) === "[]", hint(withGit));
+    }
+    const painted = (env: Record<string, string>) => spawnSync("sh", ["-c", `set -eu\n${colorBlock}${paint}paint 32 ok`], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", ...env } }).stdout;
+    check("install.sh output is plain when not a terminal", painted({}) === "ok", painted({}));
+    check("install.sh FORCE_COLOR turns color on", painted({ FORCE_COLOR: "1" }) === "\u001b[32mok\u001b[0m", painted({ FORCE_COLOR: "1" }));
+    check("install.sh FORCE_COLOR=0 keeps it off", painted({ FORCE_COLOR: "0" }) === "ok", painted({ FORCE_COLOR: "0" }));
+  } finally { rmSync(bins, { recursive: true, force: true }); }
+
+  const getGitHint = /\n {2}function Get-GitHint \{\n[\s\S]*?\n {2}\}\n/.exec(rendered.ps1)?.[0];
+  check("install.ps1 defines Get-GitHint", Boolean(getGitHint));
+  check("install.ps1 ends with the Git note", /\$gitHint = Get-GitHint[\s\S]*Git was not found\. Chat and account providers work without it; Build mode needs Git\./.test(rendered.ps1));
+  check("install.ps1 honors NO_COLOR, FORCE_COLOR and redirected output", rendered.ps1.includes("$UseColor = if ($env:FORCE_COLOR) { @('0', 'false') -notcontains $env:FORCE_COLOR } else { -not $env:NO_COLOR -and -not [Console]::IsOutputRedirected }"));
+  if (process.platform === "win32" && getGitHint) {
+    const script = `${getGitHint}\n$env:Path = '${tmpdir()}'\n[Console]::Out.WriteLine('[' + (Get-GitHint) + ']')`;
+    const output = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" }).trim();
+    check("install.ps1 points to Git for Windows when Git is missing", output === "[Install Git for Windows from https://git-scm.com/download/win, then open a new terminal]", output);
+  }
+}
+
 if (failures > 0) { console.error(`${failures} installer check(s) failed.`); process.exit(1); }
 console.log("All installer checks passed.");

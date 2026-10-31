@@ -806,13 +806,20 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           <p className="mt-2 whitespace-pre-line rounded bg-background/70 px-2 py-1 font-mono text-xs">
             {accountRunner.command}
           </p>
+          <p className="mt-1 text-xs">
+            New to aiboard? See the <a className="text-primary underline" href="/runner-guide">Runner guide</a> for the one-line install.
+          </p>
+          <p className="mt-3 text-xs">{accountRunner.standaloneHint}</p>
+          <p className="mt-1 whitespace-pre-line rounded bg-background/70 px-2 py-1 font-mono text-xs">
+            {accountRunner.standaloneCommand}
+          </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <a
               href={accountRunner.downloadHref}
               download
               className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
             >
-              Download account runner v{ACCOUNT_RUNNER_VERSION} (ZIP)
+              Download standalone account runner v{ACCOUNT_RUNNER_VERSION} (ZIP)
             </a>
             <Button
               type="button"
@@ -848,13 +855,20 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           <p className="mt-2 whitespace-pre-line rounded bg-background/70 px-2 py-1 font-mono text-xs">
             {runnerDownload.command}
           </p>
+          <p className="mt-1 text-xs">
+            New to aiboard? See the <a className="text-primary underline" href="/runner-guide">Runner guide</a> for the one-line install.
+          </p>
+          <p className="mt-3 text-xs">{runnerDownload.standaloneHint}</p>
+          <p className="mt-1 whitespace-pre-line rounded bg-background/70 px-2 py-1 font-mono text-xs">
+            {runnerDownload.standaloneCommand}
+          </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <a
               href={runnerDownload.downloadHref}
               download
               className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
             >
-              Download account runner v{ACCOUNT_RUNNER_VERSION} (ZIP)
+              Download standalone account runner v{ACCOUNT_RUNNER_VERSION} (ZIP)
             </a>
           </div>
         </div>

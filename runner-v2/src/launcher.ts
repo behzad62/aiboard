@@ -2,14 +2,14 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  acquireDiscoveryLock, assertExternalState, assertInstanceIdentity, assertProjectBinding, assertWindowsStatePath,
+  acquireDiscoveryLock, assertDefaultStateOutsideProject, assertExternalState, assertInstanceIdentity, assertProjectBinding, assertWindowsStatePath,
   canonicalFuturePath, clearStaleInstance, controlKeyHash, createControlKey, prepareStateDirectory, prepareUserDirectory,
   projectDataDirectory, projectIdentity, readControlKey, readInstance, remoteDeviceDirectory, removeOwnedControlKey, tryAcquireLock, writeInstance,
   type LauncherIdentity, type LauncherInstance,
@@ -29,6 +29,8 @@ import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 import { promptCommandApproval } from "./remote-approval.js";
 import { pairingRelayConfiguration } from "./remote-pairing.js";
 import { runDoctorCommand, runUninstallCommand, runUpdateCommand } from "./self-update.js";
+import { gitUnavailableNotice } from "./git-preflight.js";
+import { formatCliError, PLAIN_STYLE, styleFor, terminalStyle, type TerminalStyle } from "./terminal-style.js";
 
 export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
 const RUNNER_KINDS: readonly RunnerKind[] = ["runner", "accounts", "legacy", "bench"];
@@ -43,6 +45,8 @@ type Command = "start" | "status" | "stop" | "version" | "help" | "remote" | "mc
 export interface LauncherArguments {
   command: Command;
   runners: RunnerKind[];
+  /** No runner was named: a plain start also serves the account providers (ChatGPT, Copilot, NVIDIA). */
+  defaultSelection?: boolean;
   project?: string;
   stateDirectory?: string;
   runnerFlags: string[];
@@ -103,7 +107,7 @@ export function parseLauncherArguments(raw: string[]): LauncherArguments {
   }
   const seen = new Set<string>();
   const policyFields = new Set<string>();
-  const result: LauncherArguments = { command, runners: selected.length > 0 ? selected : ["runner"], runnerFlags: [] };
+  const result: LauncherArguments = { command, runners: selected.length > 0 ? selected : ["runner"], runnerFlags: [], ...(selected.length === 0 ? { defaultSelection: true } : {}) };
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index]!;
     if (flag === "--help" || flag === "-h") { result.command = "help"; continue; }
@@ -179,6 +183,8 @@ interface LauncherRuntime {
   home?: string;
   platform?: NodeJS.Platform;
   write?: (message: string) => void;
+  /** Color for an injected `write` (tests); the default stdout writer decides from the terminal. */
+  color?: boolean;
   confirmNotice?: () => Promise<boolean>;
   spawnRunner?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   spawnPeer?: (kind: RunnerKind, command: string, args: string[], options: SpawnOptions) => ChildProcess;
@@ -198,6 +204,9 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   const args = parseLauncherArguments(raw);
   const startLike = args.command === "start" || args.command === "mcp" || (args.command === "remote" && !args.logout && !args.policy && !args.audit);
   const write = runtime.write ?? ((message: string) => (args.command === "mcp" ? process.stderr : process.stdout).write(message));
+  const style = runtime.write
+    ? (runtime.color ? terminalStyle(true) : PLAIN_STYLE)
+    : styleFor(args.command === "mcp" ? process.stderr : process.stdout, runtime.environment ?? process.env);
   const depth = args.command === "mcp" ? parseMcpDepth((runtime.environment ?? process.env).AIBOARD_MCP_DEPTH) : 0;
   if (args.command === "mcp" && depth >= LOCAL_MCP_DEPTH_LIMIT) throw new Error("local_mcp_recursion_limit: MCP nesting limit is 2.");
   const version = await readRunnerVersion();
@@ -246,6 +255,9 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   }
   await assertWindowsStatePath(requestedState, windowsDefault);
   const prospective = await canonicalFuturePath(requestedState);
+  if (!args.stateDirectory && !nestedState.allowNestedRunnerState) {
+    assertDefaultStateOutsideProject(identity.projectPath, prospective, await realpath(home).catch(() => home), runtime.platform ?? process.platform);
+  }
   assertExternalState(identity.projectPath, prospective, nestedState);
   if (args.command === "remote" && (args.policy || args.audit)) {
     try {
@@ -273,6 +285,10 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   let remoteOnlyActive = roots?.nested === true;
   const freshChildren: ChildProcess[] = [];
   const freshKinds = new Set<RunnerKind>();
+  /** The account runner a plain `aiboard` adds on its own (not one the user named). */
+  let implicitAccounts: ChildProcess | undefined;
+  /** Each fresh child's close, observed from spawn on: a close listener added later would miss an early exit. */
+  const closedByChild = new Map<ChildProcess, Promise<{ code: number | null; signal: NodeJS.Signals | null }>>();
   const ownedKeys: Buffer[] = [];
   /** Set when the Runner reports a revoke it persisted; after a clean stop, the launcher runs again to pair a new key. */
   let rePairRequested = false;
@@ -289,7 +305,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         }
       }
       if (!deviceStore.noticeAcknowledged()) {
-        write(REMOTE_FIRST_RUN_NOTICE + "\n");
+        write(style.yellow(REMOTE_FIRST_RUN_NOTICE) + "\n");
         const accepted = args.acknowledgeRemote === true || (runtime.confirmNotice ? await runtime.confirmNotice() : false);
         if (!accepted) throw new Error("remote_notice_required: Review the notice above, then rerun with --acknowledge-remote-access to accept whole-machine remote access.");
         deviceStore.acknowledgeNotice();
@@ -321,7 +337,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           const status = await requestLauncherControl(recorded, key, "status").catch(() => {
             throw new Error("instance_unverified: The recorded Runner cannot be verified; no process was stopped.");
           });
-          lines.push(describe(recorded, status.healthy ? "running" : "unhealthy"));
+          lines.push(describe(recorded, status.healthy ? "running" : "unhealthy", "runner", style));
         }
         for (const peer of peerRecords) {
           const key = await readPeerControlKey(stateDirectory, peer.kind);
@@ -329,7 +345,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           const status = await requestLauncherControl(peer, key, "status").catch(() => {
             throw new Error("instance_unverified: A recorded Runner cannot be verified; no process was stopped.");
           });
-          lines.push(describe(peer, status.healthy ? "running" : "unhealthy"));
+          lines.push(describe(peer, status.healthy ? "running" : "unhealthy", peer.kind, style));
         }
         const remoteLine = await remoteStatusLine(stateDirectory);
         if (remoteLine) lines.push(remoteLine);
@@ -373,7 +389,11 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       return;
     }
 
-    const selected = args.runners;
+    // A plain `aiboard` also runs the account runner beside Runner V2: one command, one pairing, one Ctrl+C.
+    // (A caller that injects only the Runner spawner, such as a test, keeps the Runner alone.)
+    const withAccounts = args.defaultSelection === true && args.command === "start" &&
+      (runtime.spawnPeer !== undefined || (runtime.spawnRunner === undefined && existsSync(peerEntries.accounts)));
+    const selected: RunnerKind[] = withAccounts ? [...args.runners, "accounts"] : args.runners;
     const anchorKind: RunnerKind = selected.includes("runner") ? "runner" : selected[0]!;
     const instances = new Map<RunnerKind, LauncherInstance>();
     const tickets = new Map<RunnerKind, { code: string; digest: string }>();
@@ -421,13 +441,32 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         peers: kind === anchorKind ? peerListFor(anchorKind, selected, instances, tickets) : [],
         captureDiagnostics,
       });
-      child ??= spawned.child;
+      closedByChild.set(spawned.child, spawned.closed);
+      const optional = withAccounts && kind === "accounts";
+      if (!optional) child ??= spawned.child;
+      else implicitAccounts = spawned.child;
       freshChildren.push(spawned.child);
       freshKinds.add(kind);
-      const instance = await Promise.race([
+      // A failed handshake of the optional account runner is an early exit too, never an aborted start.
+      const instance = await Promise.race(optional ? [
+        spawned.ready.catch(() => undefined),
+        spawned.closed.then(() => undefined, () => undefined),
+      ] : [
         spawned.ready,
-        spawned.closed.then(() => { throw new Error("runner_start_failed: A selected Runner exited before it became ready."); }),
+        spawned.closed.then(() => undefined),
       ]);
+      if (!instance && optional) {
+        // The implicit account runner is a convenience: its early exit leaves Runner V2 starting alone.
+        if (spawned.child.exitCode === null && spawned.child.signalCode === null) spawned.child.kill();
+        freshChildren.splice(freshChildren.indexOf(spawned.child), 1);
+        freshKinds.delete(kind);
+        tickets.delete(kind);
+        selected.splice(selected.indexOf(kind), 1);
+        await removeOwnedControlKey(peerControlKeyPath(stateDirectory, kind), controlKeyHash(key));
+        write(`${style.yellow("Warning:")} The account runner did not start, so ChatGPT, GitHub Copilot and NVIDIA accounts are unavailable. Run \`aiboard accounts\` to see why.\n`);
+        continue;
+      }
+      if (!instance) throw new Error("runner_start_failed: A selected Runner exited before it became ready.");
       if (instance.instanceId !== instanceId || instance.pid !== spawned.child.pid || instance.port !== port) {
         throw new Error("instance_unverified: Runner startup identity does not match its child handle.");
       }
@@ -439,6 +478,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     let v2Token = "";
     /** Set when `aiboard remote` reuses a healthy Runner whose Remote is off: turn it on in that Runner. */
     let inPlaceRemote: RemoteEnableSettings | undefined;
+    /** Reported by a freshly started Runner V2 that found no usable Git (Build and ToolBench are off). */
+    let gitUnavailable: "git_missing" | "git_too_old" | undefined;
     if (selected.includes("runner")) {
       let reuseV2 = false;
       const freeLifetime = tryAcquireLock(stateDirectory, "lifetime");
@@ -504,6 +545,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         v2Child.stderr?.on("data", captureDiagnostics);
         v2Child.stdout?.resume();
         v2Closed = childClose(v2Child);
+        closedByChild.set(v2Child, v2Closed);
         if (args.command === "remote") {
           // Lives for the whole session (childReady detaches at ready): lost / reconnected / revoked reach the terminal.
           const notices = createRemoteStateNotices();
@@ -524,7 +566,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
             if (line) write(stampRemoteNotice(line));
           });
         }
-        const ready = childReady(v2Child, handshake, (message) => showRemoteMessage(message, write, args.noOpen ? undefined : remoteUrlOpener(runtime)));
+        const ready = childReady(v2Child, handshake, (message) => showRemoteMessage(message, write, args.noOpen ? undefined : remoteUrlOpener(runtime)),
+          (code) => { gitUnavailable = code; });
         const instance = await Promise.race([
           ready,
           v2Closed.then(() => {
@@ -590,10 +633,11 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         for (const fresh of freshChildren) if (fresh.connected) fresh.send({ type: "aiboard-launcher-stop" });
       }
     } else {
-      for (const kind of selected) write(describe(instances.get(kind)!, freshKinds.has(kind) ? "running" : "already running"));
+      for (const kind of selected) write(describe(instances.get(kind)!, freshKinds.has(kind) ? "running" : "already running", kind, style));
+      if (gitUnavailable) write(`${style.yellow("Warning:")} ${gitUnavailableNotice(gitUnavailable, runtime.platform ?? process.platform)}\n`);
       if (args.command === "remote" && remoteOnlyActive) write("Remote-only: Build and Chat are unavailable when started from a folder that contains AIBoard state.\n");
       const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
-      showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime);
+      showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime, style);
     }
     if (args.command === "remote" && !args.runnerFlags.includes("--relay-url") && !new RemoteDeviceStore(deviceDirectory!).loadSession()) {
       write("Remote pairing: " + STUB_REMOTE_PAIRING_URL + "\n");
@@ -622,11 +666,29 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       approvalWork = runTerminalApprovals(instances.get("runner")!, key, write, approvals.signal, onInterrupt)
         .finally(() => key.fill(0));
     }
-    const closedPromises = freshChildren.map((fresh) => childClose(fresh).catch(() => ({ code: null, signal: null })));
+    const closedPromises = freshChildren.map((fresh) => (closedByChild.get(fresh) ?? childClose(fresh)).catch(() => ({ code: null, signal: null })));
     let firstSettled = false;
-    for (const closedPromise of closedPromises) {
-      void closedPromise.then(() => { if (!firstSettled) { firstSettled = true; requestStop(); } });
-    }
+    freshChildren.forEach((fresh, index) => {
+      void closedPromises[index]!.then(() => {
+        if (firstSettled) return;
+        // The implicit account runner going away leaves Runner V2 running; any other exit ends the session.
+        if (fresh === implicitAccounts) {
+          write(`${style.yellow("Warning:")} The account runner stopped; ChatGPT, GitHub Copilot and NVIDIA accounts are unavailable until aiboard restarts.\n`);
+          // Its record would otherwise make `aiboard status` / `aiboard stop` refuse an unverifiable peer.
+          const mine = instances.get("accounts");
+          void (async () => {
+            const release = await acquireDiscoveryLock(stateDirectory);
+            try {
+              for (const record of await readPeerInstances(stateDirectory, identity)) {
+                if (record.kind === "accounts" && record.instanceId === mine?.instanceId) await removePeerInstance(stateDirectory, record, identity);
+              }
+            } finally { release(); }
+          })().catch(() => undefined);
+          return;
+        }
+        firstSettled = true; requestStop();
+      });
+    });
     try {
       const results = await Promise.all(closedPromises);
       const v2Result = v2Child ? results[freshChildren.indexOf(v2Child)] : undefined;
@@ -974,7 +1036,8 @@ async function waitForControlDown(instance: LauncherInstance): Promise<void> {
   }
 }
 
-function childReady(child: ChildProcess, handshake: LauncherHandshake, onRemoteMessage?: (message: Record<string, unknown>) => void): Promise<LauncherInstance> {
+function childReady(child: ChildProcess, handshake: LauncherHandshake, onRemoteMessage?: (message: Record<string, unknown>) => void,
+  onGitUnavailable?: (code: "git_missing" | "git_too_old") => void): Promise<LauncherInstance> {
   return new Promise((resolve, reject) => {
     let initialized = false;
     const onMessage = (message: unknown) => {
@@ -995,6 +1058,7 @@ function childReady(child: ChildProcess, handshake: LauncherHandshake, onRemoteM
       }
       if (message.type !== "aiboard-launcher-ready" || !initialized || !("instance" in message)) return;
       child.off("message", onMessage); child.off("error", reject);
+      if ("git" in message && (message.git === "git_missing" || message.git === "git_too_old")) onGitUnavailable?.(message.git);
       resolve(message.instance as LauncherInstance);
     };
     child.on("message", onMessage); child.once("error", reject);
@@ -1018,9 +1082,11 @@ async function waitForLifetimeRelease(stateDirectory: string): Promise<() => voi
   throw new Error("runner_shutdown_pending: Runner cleanup is still in progress; retry status later.");
 }
 
-function showPairing(code: string, ports: readonly number[], noOpen: boolean, write: (message: string) => void, runtime: LauncherRuntime): void {
+function showPairing(code: string, ports: readonly number[], noOpen: boolean, write: (message: string) => void, runtime: LauncherRuntime,
+  style: TerminalStyle = PLAIN_STYLE): void {
   const url = `https://aiboard.me/connect#pair=${code}&runners=${ports.join(",")}`;
-  write(`Pairing code: ${code}\nConnect: ${url}\n`);
+  write(`${style.bold("Pairing code:")} ${code}\n${style.bold("Connect:")} ${style.cyan(url)}\n`);
+  if (style.enabled) write(style.dim(noOpen ? "Open the link above in your browser to connect AI Board.\n" : "Opening AI Board in your browser; keep this terminal open. Ctrl+C stops the Runner.\n"));
   if (noOpen) return;
   try { (runtime.openUrl ?? ((target) => openPairUrl(target, runtime.platform ?? process.platform)))(url); }
   catch { /* The printed code and URL are the manual fallback. */ }
@@ -1093,8 +1159,17 @@ async function showRemoteLocalState(stateDirectory: string, deviceDirectory: str
   } finally { audit.close(); }
 }
 
-function describe(instance: LauncherInstance, state: string): string {
-  return `Runner ${state}\nProject: ${instance.projectPath}\nURL: http://127.0.0.1:${instance.port}\nPID: ${instance.pid}\n`;
+const RUNNER_TITLES: Readonly<Record<RunnerKind, string>> = { runner: "Runner", accounts: "Account runner", legacy: "Legacy runner", bench: "Bench runner" };
+
+function describe(instance: LauncherInstance, state: string, kind: RunnerKind = "runner", style: TerminalStyle = PLAIN_STYLE): string {
+  return `${style.green(style.bold(`${RUNNER_TITLES[kind]} ${state}`))}\n${style.dim("Project:")} ${instance.projectPath}\n` +
+    `${style.dim("URL:")} http://127.0.0.1:${instance.port}\n${style.dim("PID:")} ${instance.pid}\n`;
+}
+
+/** The bin entry points' error output: plain text unless the terminal takes color. */
+export function reportLauncherError(error: unknown, stream: NodeJS.WriteStream = process.stderr): void {
+  const message = error instanceof Error ? error.message : String(error);
+  stream.write(`${formatCliError(message, styleFor(stream))}\n`);
 }
 function redact(value: string, secrets: (string | undefined)[]): string {
   return secrets.reduce<string>((result, secret) => secret ? result.replaceAll(secret, "[redacted]") : result, value).trim();
@@ -1105,8 +1180,9 @@ function help(): string {
     "       aiboard update [--check | --rollback]  Install the newest signed release, or return to the previous one.",
     "       aiboard uninstall [--yes] [--keep-state | --remove-state]", "",
     "Runs the selected runners for the current directory in the foreground, or reuses healthy ones.",
-    "With no selection only Runner V2 runs; `all` runs every runner. Runner V2 is",
-    "the pairing anchor whenever it is selected, otherwise the first listed runner is.",
+    "With no selection Runner V2 runs with the account runner (ChatGPT, GitHub Copilot,",
+    "NVIDIA); `aiboard runner` runs Runner V2 alone and `all` runs every runner. Runner V2",
+    "is the pairing anchor whenever it is selected, otherwise the first listed runner is.",
     "  --no-open                 Do not open a browser (print the pairing code and URL).",
     "  --project <absolute-path> Override the current project directory.",
     "  --state-dir <path>        Use an absolute state directory outside the project.",

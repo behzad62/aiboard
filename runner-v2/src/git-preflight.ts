@@ -225,6 +225,33 @@ export async function checkGit(
   return { available: true, version, code: "git_ready", reason: null };
 }
 
+/** How to get Git on this platform; shown when the Runner starts without it. */
+export function gitInstallHint(platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") return "Install Git for Windows from https://git-scm.com/download/win, then open a new terminal and run aiboard again.";
+  if (platform === "darwin") return "Install Git with `xcode-select --install` (or from https://git-scm.com/download/mac), then run aiboard again.";
+  return "Install Git with your package manager (for example `sudo apt install git`), then run aiboard again.";
+}
+
+/** One-paragraph startup notice for a Runner without usable Git: Chat works, Build and ToolBench stay off. */
+export function gitUnavailableNotice(code: "git_missing" | "git_too_old", platform: NodeJS.Platform = process.platform): string {
+  const problem = code === "git_too_old"
+    ? `Git is older than ${DEFAULT_MINIMUM_VERSION}, so Build and ToolBench are off.`
+    : "Git was not found, so Build and ToolBench are off.";
+  return `${problem} Chat and account providers still work. ${gitInstallHint(platform)}`;
+}
+
+/**
+ * Git is optional at startup, except for unfinished runs: their recovery resumes Build work through Git,
+ * so starting without it would leave them unrecoverable. Fail closed with the way out instead.
+ */
+export function assertGitForUnfinishedRuns(git: GitPreflightResult, unfinishedRunIds: readonly string[], platform: NodeJS.Platform = process.platform): void {
+  if (git.available || unfinishedRunIds.length === 0) return;
+  throw new Error(
+    `${git.code}: ${git.reason} It is needed to resume ${unfinishedRunIds.length} unfinished Build run(s). ${gitInstallHint(platform)} ` +
+    `Or start with ${unfinishedRunIds.map((runId) => `--set-aside-run ${runId}`).join(" ")} to leave them untouched.`,
+  );
+}
+
 function missingGit(): GitPreflightResult {
   return {
     available: false,
