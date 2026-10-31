@@ -239,7 +239,8 @@ try {
   check("installer exits 0", installed.code === 0, installed.stdout + installed.stderr);
   check("installer output carries no secret-looking material", !/BEGIN [A-Z ]*PRIVATE KEY|token=|Authorization/i.test(installed.stdout + installed.stderr));
   check("current points to 0.9.1", pointer("current") === "0.9.1", pointer("current"));
-  check("sequence high-water mark is 1", pointer("sequence") === "1", pointer("sequence"));
+  // The high-water mark is "<epoch>:<sequence>" since release epochs (docs/remote/release-sequence-recovery.md).
+  check("sequence high-water mark is 1", pointer("sequence") === "0:1", pointer("sequence"));
   check("install.json marker exists", existsSync(join(root, "install.json")));
   const version1 = await aiboard("version");
   check("aiboard is on PATH in a new shell and reports 0.9.1", version1.stdout.trim() === "AIBoard Runner V2 0.9.1", version1);
@@ -336,10 +337,10 @@ try {
   publish(manifestFor("0.9.2", 2));
   const checkUpdate = await aiboard("update --check");
   check("aiboard update --check reports 0.9.2", /Update available: 0\.9\.2/.test(checkUpdate.stdout), checkUpdate.stdout + checkUpdate.stderr);
-  check("update --check changes nothing", pointer("current") === "0.9.1" && pointer("sequence") === "1");
+  check("update --check changes nothing", pointer("current") === "0.9.1" && pointer("sequence") === "0:1");
   const update = await aiboard("update");
   check("aiboard update installs 0.9.2", update.code === 0 && pointer("current") === "0.9.2" && pointer("previous") === "0.9.1", update.stdout + update.stderr);
-  check("update raises the sequence high-water mark to 2", pointer("sequence") === "2", pointer("sequence"));
+  check("update raises the sequence high-water mark to 2", pointer("sequence") === "0:2", pointer("sequence"));
   const version2 = await aiboard("version");
   check("PATH command now runs 0.9.2", version2.stdout.trim() === "AIBoard Runner V2 0.9.2", version2);
 
@@ -353,13 +354,13 @@ try {
     negative.prepare();
     const result = await aiboard("update");
     check(`aiboard update refuses a ${negative.name}`, result.code !== 0 && negative.expect.test(result.stdout + result.stderr), (result.stdout + result.stderr).slice(-600));
-    check(`active version unchanged after a ${negative.name}`, pointer("current") === "0.9.2" && pointer("sequence") === "2");
+    check(`active version unchanged after a ${negative.name}`, pointer("current") === "0.9.2" && pointer("sequence") === "0:2");
   }
   check("no staging left behind by refused updates", !existsSync(join(root, "versions", "0.9.3")));
 
   const rollback = await aiboard("update --rollback");
   check("aiboard update --rollback returns to 0.9.1", rollback.code === 0 && pointer("current") === "0.9.1" && pointer("previous") === "0.9.2", rollback.stdout + rollback.stderr);
-  check("rollback never lowers the accepted sequence", pointer("sequence") === "2");
+  check("rollback never lowers the accepted sequence", pointer("sequence") === "0:2");
   const version3 = await aiboard("version");
   check("PATH command runs 0.9.1 after rollback", version3.stdout.trim() === "AIBoard Runner V2 0.9.1", version3);
 
