@@ -18,7 +18,7 @@ check("benchmark CI validates the pinned Windows runner and Linux evaluator",
   /os: \[ubuntu-latest, windows-latest\]/.test(workflow));
 check("cross-platform pinned source acquisition uses the declared Bash syntax",
   /name: Acquire pinned Recoverable Job Service Runner source\s+shell: bash\s+run:/.test(workflow));
-const setupNodeIndex = workflow.indexOf("actions/setup-node@v4");
+const setupNodeIndex = workflow.indexOf("actions/setup-node@v7");
 const acquireIndex = workflow.indexOf(acquireCommand);
 const installIndex = workflow.indexOf("npm ci");
 const publishIndex = workflow.indexOf("npm run publish-downloads");
