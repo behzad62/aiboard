@@ -182,7 +182,7 @@ test("host-sensitive lifecycle and Docker coverage uses focused qualification en
 
   assert.match(source, /RUNNER_V2_REQUIRE_DOCKER:\s*["']?1["']?/);
   assert.match(source, /docker\s+info/i);
-  assert.match(source, /actions\/upload-artifact@v4/,
+  assert.match(source, /actions\/upload-artifact@v7/,
     "Qualification must upload failure diagnostics artifacts.");
   assert.match(source, /if:\s*always\(\)/,
     "Artifact upload must use always() so killed/hung jobs still surface pre-created evidence roots.");
@@ -228,11 +228,11 @@ test("package parity remains cross-host and reproducible on Node 24", () => {
   const source = readFileSync(workflowPath, "utf8");
   const packages = jobBlock(source, "package-gate");
   const crossHost = jobBlock(source, "package-cross-host");
-  assert.match(packages, /actions\/upload-artifact@v4/);
+  assert.match(packages, /actions\/upload-artifact@v7/);
   assert.match(packages, /runner-v2-package-hashes\.mjs\s+write/);
   assert.match(crossHost, /needs:\s*package-gate/);
   assert.match(crossHost, /node-version:\s*\[24\.x\]/);
-  assert.match(crossHost, /actions\/download-artifact@v4/);
+  assert.match(crossHost, /actions\/download-artifact@v8/);
   assert.match(crossHost, /runner-v2-package-hashes\.mjs\s+compare/);
 });
 

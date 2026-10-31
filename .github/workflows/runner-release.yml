@@ -46,8 +46,8 @@ jobs:
       - name: No line-ending conversion (bundles must be byte-identical across OSes)
         shell: bash
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24.18.0
           cache: npm
@@ -66,7 +66,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: node node_modules/tsx/dist/cli.mjs scripts/release/build-bundle.mts --version "$VERSION" --target all --out dist/release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bundles-${{ matrix.os }}
           path: dist/release/
@@ -78,7 +78,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: built
       - name: Compare Linux and Windows builds
@@ -106,8 +106,8 @@ jobs:
           - { target: win-x64, os: windows-latest }
           - { target: win-arm64, os: windows-11-arm }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: bundles-ubuntu-latest
           path: bundles
@@ -157,14 +157,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24.18.0
           cache: npm
       - name: Install dependencies (no lifecycle scripts in the signing job)
         run: npm ci --ignore-scripts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: bundles-ubuntu-latest
           path: dist/release
@@ -197,7 +197,7 @@ jobs:
           gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "AI Board Runner $VERSION" \
             --notes "Signed AI Board Runner $VERSION. Install: irm https://aiboard.me/install.ps1 | iex (Windows) or curl -fsSL https://aiboard.me/install.sh | sh (macOS/Linux). Bundle checksums are in manifest.json, signed with the key pinned in release/channel.json." \
             dist/release/aiboard-"$VERSION"-*.zip dist/release/aiboard-"$VERSION"-*.tar.gz dist/release/manifest.json dist/release/manifest.json.sig
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: signed-manifest-${{ inputs.version }}
           path: |

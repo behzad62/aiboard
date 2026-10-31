@@ -35,9 +35,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -52,7 +52,7 @@ jobs:
           runner-v2/test/qualification/native-lifecycle.test.ts
       - name: Upload native lifecycle diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qualification-native-lifecycle-${{ matrix.os }}-node${{ matrix.node-version }}
           path: qualification-evidence
@@ -71,9 +71,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -88,7 +88,7 @@ jobs:
           runner-v2/test/qualification/cli-readiness.test.ts
       - name: Upload CLI readiness diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qualification-cli-readiness-${{ matrix.os }}-node${{ matrix.node-version }}
           path: qualification-evidence
@@ -107,9 +107,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -124,7 +124,7 @@ jobs:
           runner-v2/test/qualification/recovery.test.ts
       - name: Upload recovery diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qualification-recovery-${{ matrix.os }}-node${{ matrix.node-version }}
           path: qualification-evidence
@@ -142,9 +142,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -159,7 +159,7 @@ jobs:
           runner-v2/test/qualification/windows-portable-channel.test.ts
       - name: Upload Windows portable diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qualification-windows-portable-node${{ matrix.node-version }}
           path: qualification-evidence
@@ -177,9 +177,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -202,7 +202,7 @@ jobs:
           runner-v2/test/qualification/docker-oci.test.ts
       - name: Upload Docker OCI diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qualification-docker-oci-node${{ matrix.node-version }}
           path: qualification-evidence

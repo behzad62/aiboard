@@ -33,9 +33,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup maintained Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -106,9 +106,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup maintained Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -132,9 +132,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup maintained Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -159,7 +159,7 @@ jobs:
           --output runner-v2-package-hashes-${{ matrix.os }}.json
           --label ${{ matrix.os }}
       - name: Upload cross-host package hashes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: runner-v2-package-hashes-${{ matrix.node-version }}-${{ matrix.os }}
           path: runner-v2-package-hashes-${{ matrix.os }}.json
@@ -177,13 +177,13 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup maintained Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
       - name: Download package hash reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: runner-v2-package-hashes-${{ matrix.node-version }}-*
           path: runner-v2-cross-host-hashes
@@ -206,9 +206,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup maintained Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -248,9 +248,9 @@ jobs:
         node-version: [24.x]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup maintained Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -266,7 +266,7 @@ jobs:
         run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/openrouter-apply-patch-factory.test.ts
       - name: Upload Windows factory diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-factory-diagnostic-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/t8-factory-diagnostic-evidence
@@ -280,9 +280,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup maintained Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24.x
           cache: npm
@@ -294,7 +294,7 @@ jobs:
         run: node node_modules/tsx/dist/cli.mjs scripts/diagnose-windows-active-job.mts
       - name: Upload bounded probe experiment evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-active-job-experiment-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/t8-active-job-experiment-evidence

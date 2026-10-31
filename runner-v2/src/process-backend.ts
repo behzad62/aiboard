@@ -14,6 +14,7 @@ import {
   type ProcessEscalationAction,
   type ProcessOutputStream,
 } from "./execution-safety-contracts.js";
+import { annotateFailure } from "./lifecycle-diagnostics.js";
 
 export const PROCESS_BACKEND_ATTESTATION_VERSION = 2 as const;
 export interface LegacyProcessBackendProbe {
@@ -368,6 +369,9 @@ export async function selectProcessBackend(
     required.some((name) => !EXECUTION_SAFETY_CAPABILITY_NAMES.includes(name))
   )
     throw unavailable();
+  // Diagnostic only: each backend's probe failure or unmet attestation is kept as the cause of the
+  // unavailable error, so a CI log can say why no backend qualified. Selection is unchanged.
+  const failures: unknown[] = [];
   for (const entry of entries) {
     try {
       const attestation = parseProcessBackendProbe(
@@ -386,9 +390,15 @@ export async function selectProcessBackend(
           attestation,
           attestationDigest: digestAttestation(attestation),
         });
-    } catch {}
+      failures.push(new Error(`Process backend ${entry.backendId} attestation does not satisfy the request.`));
+    } catch (error) {
+      annotateFailure(error, { operation: "backend_probe", context: `backendId=${entry.backendId}` });
+      failures.push(error);
+    }
   }
-  throw unavailable();
+  throw unavailable(
+    failures.length ? new AggregateError(failures, "Process backend probes failed.") : undefined,
+  );
 }
 export async function reattestProcessBackend(
   registry: ProcessBackendRegistry,
@@ -545,9 +555,10 @@ function optionalText<K extends string>(
 function bad(): never {
   throw new Error("Backend response is invalid.");
 }
-function unavailable(): Error {
+function unavailable(cause?: unknown): Error {
   return new Error(
     "A verified process backend with required semantic capabilities is unavailable.",
+    cause === undefined ? undefined : { cause },
   );
 }
 function freeze<T>(value: T): T {
