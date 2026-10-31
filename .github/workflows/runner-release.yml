@@ -119,13 +119,15 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -eu
-          mkdir app && tar -xzf "bundles/aiboard-$VERSION-$TARGET.tar.gz" -C app
-          out=$(app/node/node app/app/runner-v2/bin/aiboard.mjs version)
+          # Not "app": the checkout already has the Next.js app/ directory.
+          mkdir release-bundle
+          tar -xzf "bundles/aiboard-$VERSION-$TARGET.tar.gz" -C release-bundle
+          out=$(release-bundle/node/node release-bundle/app/runner-v2/bin/aiboard.mjs version)
           echo "$out"
           test "$out" = "AIBoard Runner V2 $VERSION"
-          app/node/node app/app/runner-v2/bin/aiboard.mjs doctor
-          app/node/node scripts/release/copilot-smoke.mjs app
-          app/node/node "app/app/node_modules/@github/copilot-$TARGET/index.js" --version
+          release-bundle/node/node release-bundle/app/runner-v2/bin/aiboard.mjs doctor
+          release-bundle/node/node scripts/release/copilot-smoke.mjs release-bundle
+          release-bundle/node/node "release-bundle/app/node_modules/@github/copilot-$TARGET/index.js" --version
       - name: Run the bundled Runner (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -133,16 +135,17 @@ jobs:
           VERSION: ${{ inputs.version }}
           TARGET: ${{ matrix.target }}
         run: |
-          Expand-Archive -LiteralPath "bundles/aiboard-$env:VERSION-$env:TARGET.zip" -DestinationPath app
-          $out = (& app/node/node.exe app/app/runner-v2/bin/aiboard.mjs version | Out-String).Trim()
+          # Not "app": the checkout already has the Next.js app/ directory, and Expand-Archive would merge into it.
+          Expand-Archive -LiteralPath "bundles/aiboard-$env:VERSION-$env:TARGET.zip" -DestinationPath release-bundle
+          $out = (& release-bundle/node/node.exe release-bundle/app/runner-v2/bin/aiboard.mjs version | Out-String).Trim()
           Write-Host $out
           if ($out -ne "AIBoard Runner V2 $env:VERSION") { throw "unexpected version output" }
-          & app/node/node.exe app/app/runner-v2/bin/aiboard.mjs doctor
+          & release-bundle/node/node.exe release-bundle/app/runner-v2/bin/aiboard.mjs doctor
           if ($LASTEXITCODE -ne 0) { throw "doctor failed" }
-          & app/node/node.exe scripts/release/copilot-smoke.mjs app
+          & release-bundle/node/node.exe scripts/release/copilot-smoke.mjs release-bundle
           if ($LASTEXITCODE -ne 0) { throw "Copilot SDK resolution failed" }
           $copilotTarget = $env:TARGET -replace '^win-', 'win32-'
-          & app/node/node.exe "app/app/node_modules/@github/copilot-$copilotTarget/index.js" --version
+          & release-bundle/node/node.exe "release-bundle/app/node_modules/@github/copilot-$copilotTarget/index.js" --version
           if ($LASTEXITCODE -ne 0) { throw "Copilot runtime failed" }
 
   sign:
