@@ -387,7 +387,7 @@ test("launcher pairs legacy+bench in one tab, reports status and stops every run
     assert.equal(records.includes(anchorBody.peers[0]!.code), false);
     const status: string[] = [];
     await runLauncher(["status", "--state-dir", state], { cwd: project, write: (line) => status.push(line) });
-    assert.match(status.join(""), /Runner running/);
+    assert.match(status.join(""), /Legacy runner running[\s\S]*Bench runner running/);
     await runLauncher(["stop", "--state-dir", state], { cwd: project, write: () => undefined });
     await running;
     const afterStop = await raw(ports[0]!, { method: "GET", path: "/health" }).catch(() => null);

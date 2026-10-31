@@ -9,9 +9,9 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { parseLauncherArguments, runLauncher } from "../src/launcher.js";
+import { parseLauncherArguments, runLauncher, type RunnerKind } from "../src/launcher.js";
 import {
-  assertExternalState, canonicalFuturePath, projectDataDirectory, projectIdentity,
+  assertDefaultStateOutsideProject, assertExternalState, canonicalFuturePath, projectDataDirectory, projectIdentity,
   readControlKey, readInstance, remoteDeviceDirectory, tryAcquireLock,
 } from "../src/launcher-instance.js";
 import { requestLauncherControl, startLauncherControl, type LauncherHandshake, type LauncherRemoteControl } from "../src/launcher-ipc.js";
@@ -107,6 +107,8 @@ class FakeRunner extends EventEmitter {
   release?: () => void;
   healthy = true;
   beforeReady?: () => void;
+  /** What the Runner reports about Git in its ready message (absent: Git is usable). */
+  git?: "git_missing" | "git_too_old";
 
   send(message: unknown, callback?: (error: Error | null) => void): boolean {
     callback?.(null);
@@ -145,7 +147,7 @@ class FakeRunner extends EventEmitter {
       registerPair: () => undefined, remote: this.remote.control(),
     });
     this.beforeReady?.();
-    this.emit("message", { type: "aiboard-launcher-ready", instance: this.control.instance });
+    this.emit("message", { type: "aiboard-launcher-ready", instance: this.control.instance, ...(this.git ? { git: this.git } : {}) });
   }
 
   async stop(): Promise<void> {
@@ -690,7 +692,7 @@ test("the legacy Runner command retains its flags", async () => {
 test("real launcher reaches Runner health and stops through owned cleanup", async () => {
   const f = await fixture();
   const extensions = join(f.root, "extensions");
-  const child = spawn(process.execPath, [bin, "--no-open", "--port", "0", "--state-dir", f.state, "--extensions-home", extensions], {
+  const child = spawn(process.execPath, [bin, "runner", "--no-open", "--port", "0", "--state-dir", f.state, "--extensions-home", extensions], {
     cwd: f.project, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
   });
   let stdout = ""; let stderr = "";
@@ -769,4 +771,155 @@ test("a Runner that exits before it is ready surfaces its own error, with launch
     assert.match(failure.message, /^runner_start_failed: Runner exited before it became ready\.\n.*ExecutionHost state must remain outside the project root/su);
     assert.match(failure.message, /token=\[redacted\]/u);
   } finally { await f.cleanup(); }
+});
+
+test("a plain start runs no selection; `aiboard runner` names Runner V2 alone", () => {
+  assert.equal(parseLauncherArguments([]).defaultSelection, true);
+  assert.equal(parseLauncherArguments(["--no-open"]).defaultSelection, true);
+  assert.equal(parseLauncherArguments(["runner"]).defaultSelection, undefined);
+  assert.equal(parseLauncherArguments(["accounts"]).defaultSelection, undefined);
+});
+
+/** Starts the real account runner as the launcher's peer, with its credentials file inside the fixture. */
+function realAccountsPeer(authFile: string, spawned: RunnerKind[]) {
+  return (kind: RunnerKind, command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    spawned.push(kind);
+    return spawn(command, [...args, "--auth-file", authFile], options);
+  };
+}
+
+test("a plain start also runs the account runner, announced by Runner V2 and stopped with it", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const peers: RunnerKind[] = [];
+  const output: string[] = [];
+  const runtime = { cwd: f.project, spawnRunner: fakeSpawner(children, calls), spawnPeer: realAccountsPeer(join(f.root, "accounts.json"), peers),
+    write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["--state-dir", f.state, "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.join("").includes("Pairing code:"), 30_000);
+    const text = output.join("");
+    assert.deepEqual(peers, ["accounts"]);
+    assert.match(text, /^Runner running\n/m);
+    assert.match(text, /^Account runner running\n/m);
+    const ports = /runners=([0-9,]+)/.exec(text)![1]!.split(",").map(Number);
+    assert.equal(ports.length, 2);
+    assert.deepEqual(children[0]!.handshake!.peers!.map((peer) => [peer.kind, peer.port]), [["accounts", ports[1]]]);
+    const status: string[] = [];
+    await runLauncher(["status", "--state-dir", f.state], { cwd: f.project, write: (line) => status.push(line) });
+    assert.match(status.join(""), /Runner running[\s\S]*Account runner running/);
+    await runLauncher(["stop", "--state-dir", f.state], { cwd: f.project, write: () => undefined });
+    await running;
+  } finally {
+    await runLauncher(["stop", "--state-dir", f.state], { cwd: f.project, write: () => undefined }).catch(() => undefined);
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
+});
+
+test("an implicit account runner that exits early leaves Runner V2 running with a warning", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  const spawnPeer = (): ChildProcess => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(), stderr: new PassThrough(), connected: false, pid: 1, send: () => false, disconnect: () => undefined,
+    });
+    setImmediate(() => { child.stdout.end(); child.stderr.end(); child.emit("close", 1, null); });
+    return child as unknown as ChildProcess;
+  };
+  const runtime = { cwd: f.project, spawnRunner: fakeSpawner(children, calls), spawnPeer, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["--state-dir", f.state, "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.join("").includes("Pairing code:"));
+    const text = output.join("");
+    assert.match(text, /Warning: The account runner did not start, so ChatGPT, GitHub Copilot and NVIDIA accounts are unavailable\./);
+    assert.match(text, /^Runner running\n/m);
+    assert.doesNotMatch(text, /Account runner running/);
+    assert.match(text, /runners=\d+\n/);
+    assert.deepEqual(children[0]!.handshake!.peers, []);
+    await assert.rejects(readFile(join(f.state, "launcher-peers.json")), { code: "ENOENT" });
+    assert.deepEqual((await readdir(f.state)).filter((name) => name.includes("accounts")), []);
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await running;
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
+});
+
+test("a Runner without Git starts, and the launcher says how to install Git", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  const spawnRunner = (command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    const child = fakeSpawner(children, calls)(command, args, options);
+    children.at(-1)!.git = "git_missing";
+    return child;
+  };
+  const runtime = { cwd: f.project, spawnRunner, platform: "win32" as const, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["runner", "--state-dir", f.state, "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.join("").includes("Pairing code:"));
+    assert.match(output.join(""), /Runner running[\s\S]*Warning: Git was not found, so Build and ToolBench are off\. Chat and account providers still work\. Install Git for Windows from https:\/\/git-scm\.com\/download\/win/);
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await running;
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
+});
+
+test("a start from the home folder asks for a project folder instead of a state directory", async () => {
+  const f = await fixture();
+  try {
+    const home = await realpath(f.root);
+    const environment = process.platform === "win32" ? { LOCALAPPDATA: join(home, "AppData", "Local") } : { XDG_DATA_HOME: join(home, ".local", "share") };
+    const failure = await runLauncher(["--no-open"], { cwd: home, home, environment, write: () => undefined }).then(() => undefined, (error: unknown) => error as Error);
+    assert.ok(failure);
+    assert.match(failure.message, /^project_folder_required: aiboard was started in your home folder, which holds AI Board's own data\. Open a project folder first, for example:\n {2}cd "/);
+    assert.doesNotMatch(failure.message, /--state-dir/);
+    assert.deepEqual(await readdir(home), ["project"], "nothing was created");
+    // A folder above the data root (not the home folder) gets the same advice, naming the folder.
+    assert.throws(() => assertDefaultStateOutsideProject(f.root, join(f.root, "data", "AIBoard", "projects", "x"), join(f.root, "elsewhere"), process.platform),
+      /^Error: project_folder_required: aiboard was started in .+, a folder that contains AI Board's own data\./);
+    assert.doesNotThrow(() => assertDefaultStateOutsideProject(f.project, join(f.root, "data", "AIBoard", "projects", "x"), f.root, process.platform));
+    // An explicit --state-dir inside the project keeps the original refusal.
+    await assert.rejects(runLauncher(["--state-dir", join(f.project, "state")], { cwd: f.project, write: () => undefined }), /^Error: invalid_state_directory: .*--state-dir/);
+  } finally { await f.cleanup(); }
+});
+
+test("launcher output is colored only when asked, and plain text is unchanged", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  const runtime = { cwd: f.project, spawnRunner: fakeSpawner(children, calls), color: true, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["runner", "--state-dir", f.state, "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.join("").includes("Pairing code:"));
+    const text = output.join("");
+    assert.match(text, /\u001b\[32m\u001b\[1mRunner running\u001b\[22m\u001b\[39m/);
+    assert.match(text, /\u001b\[36mhttps:\/\/aiboard\.me\/connect#pair=/);
+    const plain: string[] = [];
+    await runLauncher(["status", "--state-dir", f.state], { cwd: f.project, write: (line) => plain.push(line) });
+    assert.match(plain.join(""), /^Runner running\nProject: /);
+    assert.doesNotMatch(plain.join(""), /\u001b\[/);
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await running;
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
 });
