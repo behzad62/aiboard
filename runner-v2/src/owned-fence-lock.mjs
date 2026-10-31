@@ -59,6 +59,10 @@ const CANONICAL_AUTOINDEX_TABLES = new Map([
 ]);
 const waiter = new Int32Array(new SharedArrayBuffer(4));
 const asynchronousTails = new Map();
+// Holders this process kept after an ambiguous finalization (the effect ran, the release did not
+// commit), by resolved path. Diagnostic only: they are never released or stolen from here, but an
+// acquisition they block names them and the failure that kept them.
+const retainedHolders = new Map();
 let cachedCurrentBirth;
 
 export class OwnedFenceLockUnavailableError extends Error {
@@ -114,8 +118,10 @@ export function withOwnedFenceLockSync(path, effect, options = {}) {
   const context = acquire(path, options);
   let effectError;
   let retired = false;
+  let effectStarted = false;
   try {
     beginEffect(context);
+    effectStarted = true;
     let result;
     try { result = effect(); }
     catch (error) { effectError = error; }
@@ -124,6 +130,7 @@ export function withOwnedFenceLockSync(path, effect, options = {}) {
     return result;
   } catch (error) {
     rollbackQuietly(context.database);
+    if (!effectStarted) throw releaseUnstartedAcquisition(context, error);
     if (effectError !== undefined && error !== effectError) {
       throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
     }
@@ -146,8 +153,10 @@ export async function withOwnedFenceLock(path, effect, options = {}) {
     const context = acquire(path, options);
     let effectError;
     let retired = false;
+    let effectStarted = false;
     try {
       beginEffect(context);
+      effectStarted = true;
       let result;
       try {
         result = effect();
@@ -159,6 +168,7 @@ export async function withOwnedFenceLock(path, effect, options = {}) {
       return result;
     } catch (error) {
       rollbackQuietly(context.database);
+      if (!effectStarted) throw releaseUnstartedAcquisition(context, error);
       if (effectError !== undefined && error !== effectError) {
         throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
       }
@@ -240,6 +250,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
       throw normalizeUnavailable(error);
     } finally { database?.close(); }
     if (!committed) throw new OwnedFenceLockUnavailableError("Owned fence revocation commit is unavailable.");
+    retainedHolders.delete(path);
     const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
     options.assertRevoked();
     revalidateProtocolRemovalAuthority(path, removalAuthority);
@@ -347,13 +358,17 @@ function acquire(path, options) {
   if (Date.now() >= deadline)
     throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
   const authorityId = coordinationAuthorityId(path);
-  const { database, pathIdentity } = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority);
+  let opened;
+  try { opened = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority); }
+  catch (error) { throw withRetainedHolderContext(error, path); }
+  const { database, pathIdentity } = opened;
   const context = {
     path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs,
     inspectHolder: options.inspectHolder ?? defaultInspectHolder,
     afterClaim: options.afterClaim,
   };
   let proposalInserted = false;
+  let claimed = false;
   try {
     while (!proposalInserted) {
       try {
@@ -370,7 +385,12 @@ function acquire(path, options) {
       }
     }
     for (;;) {
-      if (tryClaim(context)) { context.afterClaim?.(); return context; }
+      if (tryClaim(context)) {
+        claimed = true;
+        retainedHolders.delete(path);
+        context.afterClaim?.();
+        return context;
+      }
       if (Date.now() >= deadline)
         throw new OwnedFenceContentionError("Owned fence lock remains held by an exact live holder.");
       Atomics.wait(waiter, 0, 0, retryDelayMs);
@@ -378,7 +398,12 @@ function acquire(path, options) {
   } catch (error) {
     if (!proposalInserted) {
       database.close();
-      throw normalizeUnavailable(error);
+      throw withRetainedHolderContext(normalizeUnavailable(error), path);
+    }
+    if (claimed) {
+      const released = releaseUnstartedAcquisition(context, error);
+      database.close();
+      throw released === error ? error : released;
     }
     try {
       assertCoordinationPathIdentity(path, pathIdentity);
@@ -389,7 +414,7 @@ function acquire(path, options) {
       throw new AggregateError([error, cleanupError], "Owned fence acquisition and proposal cleanup both failed.", { cause: error });
     }
     database.close();
-    throw normalizeUnavailable(error);
+    throw withRetainedHolderContext(normalizeUnavailable(error), path);
   }
 }
 
@@ -687,10 +712,69 @@ function finalizeEffect(context, primaryError, retireAfterEffect) {
   } catch (error) {
     rollbackQuietly(database);
     const cleanupError = normalizeUnavailable(error);
-    if (primaryError !== undefined)
-      throw new AggregateError([primaryError, cleanupError], "Owned fence effect and finalization both failed.", { cause: primaryError });
-    throw cleanupError;
+    const failure = primaryError !== undefined
+      ? new AggregateError([primaryError, cleanupError], "Owned fence effect and finalization both failed.", { cause: primaryError })
+      : cleanupError;
+    // The effect ran but its release did not commit, so the exact holder stays (never stolen).
+    retainedHolders.set(path, { acquisitionId, failure });
+    throw failure;
   }
+}
+
+// The holder row is committed but the effect never started, so releasing that exact row is
+// unambiguous. Left in place it would hold this path against this process's own live PID, and every
+// later acquisition here would wait out its whole deadline ("Owned fence acquisition deadline is
+// exhausted.", the Windows T8 factory wedge). The release re-checks the coordination path identity
+// and is bounded; if it cannot commit, the holder is kept, recorded, and both failures are reported.
+function releaseUnstartedAcquisition(context, error) {
+  const { path, pathIdentity, database, acquisitionId, retryDelayMs } = context;
+  const deadline = Date.now() + DEFAULT_DEADLINE_MS;
+  try {
+    for (;;) {
+      try { database.exec("BEGIN IMMEDIATE"); break; }
+      catch (busy) {
+        if (!isBusy(busy) || Date.now() >= deadline) throw busy;
+        Atomics.wait(waiter, 0, 0, retryDelayMs);
+      }
+    }
+    try {
+      assertCoordinationPathIdentity(path, pathIdentity);
+      database.prepare("DELETE FROM owned_fence_holder WHERE lock_key = 'owned' AND acquisition_id = ?").run(acquisitionId);
+      database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId);
+      assertCoordinationPathIdentity(path, pathIdentity);
+      database.exec("COMMIT");
+    } catch (releaseError) {
+      rollbackQuietly(database);
+      throw releaseError;
+    }
+    return error;
+  } catch (releaseError) {
+    retainedHolders.set(path, { acquisitionId, failure: error });
+    const message = error instanceof Error ? error.message : String(error);
+    return new AggregateError([error, normalizeUnavailable(releaseError)],
+      `${message} Its claimed holder could not be released.`, { cause: error });
+  }
+}
+
+function withRetainedHolderContext(error, path) {
+  const retained = retainedHolders.get(path);
+  if (!retained || !(error instanceof OwnedFenceLockUnavailableError)) return error;
+  const Kind = error.constructor;
+  return new Kind(`${error.message} The holder is retained by this process (PID ${process.pid}), acquisition ` +
+    `${retained.acquisitionId}, after: ${describeFailure(retained.failure)}`, { cause: error });
+}
+
+function describeFailure(error) {
+  const parts = [];
+  const seen = new Set();
+  for (let node = error; node instanceof Error && !seen.has(node) && parts.length < 6; node = node.cause) {
+    seen.add(node);
+    parts.push(node instanceof AggregateError
+      ? `${node.message} [${node.errors.map((entry) => entry instanceof Error ? entry.message : String(entry)).join("; ")}]`
+      : node.message);
+  }
+  const text = parts.join(" <- ");
+  return text.length > 600 ? `${text.slice(0, 599)}…` : text;
 }
 
 function assertActiveProtocol(database, authorityId) {

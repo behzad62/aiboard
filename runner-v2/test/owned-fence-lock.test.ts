@@ -407,6 +407,117 @@ test("a persistent finalization failure never reports an effect as successfully 
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
+function holderRows(path: string): unknown[] {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try { return database.prepare("SELECT acquisition_id FROM owned_fence_holder").all(); }
+  finally { database.close(); }
+}
+// A second process takes the coordination file's write lock right after the claim and holds it for
+// holdMs, so the claimed acquisition's effect boundary (BEGIN IMMEDIATE) stays busy past its short
+// deadline and fails after the holder row was already committed. Left behind, that row wedged every
+// later Windows Job observe/cleanup in the T8 factory run: "Owned fence acquisition deadline is
+// exhausted." against this process's own live PID.
+function boundaryBlocker(lockPath: string, holdMs = 600) {
+  const ready = `${lockPath}.blocker-ready`;
+  let child: ChildProcess | undefined;
+  return {
+    afterClaim: () => {
+      child = spawn(process.execPath, ["-e", `
+        const { DatabaseSync } = require("node:sqlite"); const { writeFileSync } = require("node:fs");
+        const database = new DatabaseSync(process.argv[1]); database.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE");
+        writeFileSync(process.argv[2], "ready");
+        setTimeout(() => { database.exec("ROLLBACK"); database.close(); }, Number(process.argv[3]));
+      `, lockPath, ready, String(holdMs)], { stdio: "ignore" });
+      const waiter = new Int32Array(new SharedArrayBuffer(4));
+      for (const until = Date.now() + 20_000; !existsSync(ready); ) {
+        if (Date.now() >= until) throw new Error("boundary blocker did not take the write lock");
+        Atomics.wait(waiter, 0, 0, 5);
+      }
+    },
+    exited: async () => { if (child && child.exitCode === null) await new Promise((resolvePromise) => child!.once("exit", resolvePromise)); },
+  };
+}
+
+test("t8: an async acquisition whose effect never started releases its own holder, so the next one is not wedged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-boundary-async-"));
+  const lockPath = join(root, "effect.sqlite");
+  let effects = 0;
+  try {
+    await withOwnedFenceLock(lockPath, () => undefined);
+    const blocker = boundaryBlocker(lockPath);
+    try {
+      await assert.rejects(withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+        deadlineMs: 150, afterClaim: blocker.afterClaim,
+      } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void }), /temporarily contended/i);
+    } finally { await blocker.exited(); }
+    assert.equal(effects, 0, "the failed acquisition must not run its effect");
+    assert.deepEqual(holderRows(lockPath), [], "the failed acquisition must not leave its holder row behind");
+    await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
+    assert.equal(effects, 1, "the next ordinary acquisition must succeed");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: a sync acquisition whose effect never started releases its own holder, so the next one is not wedged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-boundary-sync-"));
+  const lockPath = join(root, "effect.sqlite");
+  let effects = 0;
+  try {
+    withOwnedFenceLockSync(lockPath, () => undefined);
+    const blocker = boundaryBlocker(lockPath);
+    try {
+      assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+        deadlineMs: 150, afterClaim: blocker.afterClaim,
+      } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /temporarily contended/i);
+    } finally { await blocker.exited(); }
+    assert.equal(effects, 0);
+    assert.deepEqual(holderRows(lockPath), []);
+    withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
+    assert.equal(effects, 1);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: a failure right after the claim releases the claimed holder before it is reported", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-after-claim-"));
+  const lockPath = join(root, "effect.sqlite");
+  let effects = 0;
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+      afterClaim: () => { throw new Error("post-claim fault"); },
+    } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void }), /post-claim fault/);
+    assert.equal(effects, 0);
+    assert.deepEqual(holderRows(lockPath), []);
+    await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
+    assert.equal(effects, 1);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: a holder this process retained after ambiguous finalization is named, with its original failure, when it blocks a later acquisition", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-retained-diagnostic-"));
+  const lockPath = join(root, "effect.sqlite");
+  try {
+    withOwnedFenceLockSync(lockPath, () => undefined);
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => undefined, {
+      afterClaim: () => {
+        const database = new DatabaseSync(lockPath);
+        try { database.exec("CREATE TRIGGER refuse_holder_delete BEFORE DELETE ON owned_fence_holder BEGIN SELECT RAISE(ABORT, 'persistent finalization fault'); END;"); }
+        finally { database.close(); }
+      },
+    } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /finalization|unavailable|persistent/i);
+    const retained = readDurableHolder(lockPath);
+    let effects = 0;
+    let blocked: unknown;
+    try { withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 75 }); } catch (error) { blocked = error; }
+    assert.ok(blocked instanceof OwnedFenceLockUnavailableError, "the retained holder still blocks: it is never stolen");
+    assert.equal(effects, 0);
+    assert.equal(readDurableHolder(lockPath).acquisitionId, retained.acquisitionId);
+    const chain: string[] = [];
+    for (let node: unknown = blocked; node instanceof Error; node = node.cause) chain.push(node.message);
+    const text = chain.join(" <- ");
+    assert.match(text, new RegExp(`retained by this process \\(PID ${process.pid}\\), acquisition ${retained.acquisitionId}`));
+    assert.match(text, /persistent finalization fault/, "the original failure that retained the holder is preserved");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
 test("a replacement between claim and effect is rejected by the final acquisition identity check", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-replacement-"));
   const lockPath = join(root, "effect.sqlite");
