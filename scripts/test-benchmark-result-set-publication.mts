@@ -672,7 +672,8 @@ assert.ok(
       event.leg.track === "toolreliability" &&
       event.status === "failed" &&
       /duplicate attempts|Unpublished infrastructure failure/.test(event.detail ?? "")
-  )
+  ),
+  `no failed model row for the duplicate; progress: ${JSON.stringify(modelIqProgress.filter((event) => event.type === "model"))}`
 );
 
 // Results/Data refresh owns stale reconciliation too, but must not interrupt a

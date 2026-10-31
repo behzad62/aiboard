@@ -9,7 +9,7 @@ import {
   expandCertifiedPhysicalUsages,
 } from "../lib/benchmark/certified/model-call";
 import { CertifiedBudgetExceededError } from "../lib/benchmark/certified/budget";
-import { classifyProviderFailure } from "../lib/benchmark/certified/classify-provider-failure";
+import { classifyProviderFailure, isProviderFailureMessage } from "../lib/benchmark/certified/classify-provider-failure";
 import { createCertifiedTabRunCoordinator } from "../lib/benchmark/certified/run-session";
 import type { SelectedModel, StreamChunk } from "../lib/providers/base";
 import type { PersistentCertifiedRunContext } from "../lib/benchmark/certified/run-context";
@@ -83,6 +83,17 @@ __resetBenchmarkStoreForTests();
 check(
   "503 classifies transient",
   classifyProviderFailure("ChatGPT request failed: 503") === "transient"
+);
+for (const message of ["HTTP 503 Service Unavailable", "Error code: 429 - {\"error\":\"rate\"}", "upstream returned (502)", "status=500"]) {
+  check(`standalone status code classifies transient: ${message}`, classifyProviderFailure(message) === "transient");
+}
+// A harness error is not a provider error just because an id or timestamp in it
+// happens to contain 429/5xx digits (this made the publication test flaky).
+const harnessDuplicateError =
+  "Benchmark result set result-execution-model-iq-1793425500123-c503e374-toolreliability has duplicate attempts for ui-toolreliability-011aa40e-0482-4ba1-9211-5030f524545b/toolreliability";
+check(
+  "status-code digits inside ids do not classify transient",
+  classifyProviderFailure(harnessDuplicateError) === "other" && !isProviderFailureMessage(harnessDuplicateError)
 );
 check(
   "timeout classifies transient",
