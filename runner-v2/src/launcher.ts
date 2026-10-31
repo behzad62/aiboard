@@ -287,6 +287,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   const freshKinds = new Set<RunnerKind>();
   /** The account runner a plain `aiboard` adds on its own (not one the user named). */
   let implicitAccounts: ChildProcess | undefined;
+  /** Each fresh child's close, observed from spawn on: a close listener added later would miss an early exit. */
+  const closedByChild = new Map<ChildProcess, Promise<{ code: number | null; signal: NodeJS.Signals | null }>>();
   const ownedKeys: Buffer[] = [];
   /** Set when the Runner reports a revoke it persisted; after a clean stop, the launcher runs again to pair a new key. */
   let rePairRequested = false;
@@ -439,17 +441,23 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         peers: kind === anchorKind ? peerListFor(anchorKind, selected, instances, tickets) : [],
         captureDiagnostics,
       });
+      closedByChild.set(spawned.child, spawned.closed);
       const optional = withAccounts && kind === "accounts";
       if (!optional) child ??= spawned.child;
       else implicitAccounts = spawned.child;
       freshChildren.push(spawned.child);
       freshKinds.add(kind);
-      const instance = await Promise.race([
+      // A failed handshake of the optional account runner is an early exit too, never an aborted start.
+      const instance = await Promise.race(optional ? [
+        spawned.ready.catch(() => undefined),
+        spawned.closed.then(() => undefined, () => undefined),
+      ] : [
         spawned.ready,
         spawned.closed.then(() => undefined),
       ]);
       if (!instance && optional) {
         // The implicit account runner is a convenience: its early exit leaves Runner V2 starting alone.
+        if (spawned.child.exitCode === null && spawned.child.signalCode === null) spawned.child.kill();
         freshChildren.splice(freshChildren.indexOf(spawned.child), 1);
         freshKinds.delete(kind);
         tickets.delete(kind);
@@ -537,6 +545,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         v2Child.stderr?.on("data", captureDiagnostics);
         v2Child.stdout?.resume();
         v2Closed = childClose(v2Child);
+        closedByChild.set(v2Child, v2Closed);
         if (args.command === "remote") {
           // Lives for the whole session (childReady detaches at ready): lost / reconnected / revoked reach the terminal.
           const notices = createRemoteStateNotices();
@@ -657,7 +666,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       approvalWork = runTerminalApprovals(instances.get("runner")!, key, write, approvals.signal, onInterrupt)
         .finally(() => key.fill(0));
     }
-    const closedPromises = freshChildren.map((fresh) => childClose(fresh).catch(() => ({ code: null, signal: null })));
+    const closedPromises = freshChildren.map((fresh) => (closedByChild.get(fresh) ?? childClose(fresh)).catch(() => ({ code: null, signal: null })));
     let firstSettled = false;
     freshChildren.forEach((fresh, index) => {
       void closedPromises[index]!.then(() => {
