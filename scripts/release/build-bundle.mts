@@ -2,7 +2,8 @@
 //   npx tsx scripts/release/build-bundle.mts --version 0.2.0 --target all --out dist/release
 // Each bundle holds the pinned official Node.js runtime, Runner V2 transpiled ahead of time (the same
 // per-file esbuild transform tsx applies at runtime, so no tsx/npm at install time), the legacy and
-// account peer runners, the lockfile-resolved runtime dependency tree and a release.json inventory.
+// account peer runners, the lockfile-resolved runtime dependency tree, the Copilot runtime pin (the
+// package itself is downloaded on first use) and a release.json inventory.
 // Identical inputs give byte-identical archives on any build host (fixed order, modes and timestamps).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -16,7 +17,7 @@ import {
   isReleaseVersion, parseReleaseChannelConfig, PREVIEW_TARGETS, RELEASE_PRODUCT, RELEASE_TARGETS, targetFormat, type ReleaseTarget,
 } from "../../runner-v2/src/release-manifest.js";
 import { importClosureGaps, LEGAL_FILES, PEER_FILES, RUNTIME_PACKAGES } from "./bundle-contents.mjs";
-import { pinnedCopilotFiles, type CopilotLock } from "./copilot-bundle.mjs";
+import { copilotPinFile, type CopilotLock } from "./copilot-bundle.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -224,7 +225,6 @@ async function main(): Promise<void> {
   void _comment;
   const pins = JSON.parse(readFileSync(join(root, "release", "node-runtime.json"), "utf8")) as NodeRuntimePins;
   const cache = resolve(option("node-cache") ?? join(root, ".release-cache", "node"));
-  const npmCache = resolve(option("npm-cache") ?? join(root, ".release-cache", "npm"));
   const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8")) as CopilotLock;
   const commit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const dirty = execFileSync("git", ["-C", root, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim().length > 0;
@@ -234,7 +234,7 @@ async function main(): Promise<void> {
   process.stderr.write(`Runtime packages: ${dependencies.packages.length}; optional dependencies left out: ${dependencies.skippedOptional.join(", ") || "none"}\n`);
   mkdirSync(out, { recursive: true });
   for (const target of targets as ReleaseTarget[]) {
-    const files = [...shared, ...dependencies.files, ...await pinnedCopilotFiles(lock, target, npmCache), ...await nodeRuntimeFiles(target, pins, cache)];
+    const files = [...shared, ...dependencies.files, copilotPinFile(lock, target), ...await nodeRuntimeFiles(target, pins, cache)];
     const inventory = Object.fromEntries([...files].sort((left, right) => (left.path < right.path ? -1 : 1)).map((file) => [file.path, sha256(file.data)]));
     const info = { schemaVersion: 1, product: RELEASE_PRODUCT, version, target, nodeVersion: pins.version, files: inventory };
     files.push({ path: "release.json", data: Buffer.from(`${JSON.stringify(info, null, 1)}\n`), mode: 0o644 });

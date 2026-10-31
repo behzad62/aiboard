@@ -68,8 +68,10 @@ jobs:
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-signing-sequence.mts
       - name: Durable sequence reservation and publication order
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-sequence-reservation.mts
-      - name: Copilot platform package verification
+      - name: Copilot runtime pin (bundles carry the pin, not the package)
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-copilot-bundle.mts
+      - name: On-demand Copilot runtime download and verification
+        run: node node_modules/tsx/dist/cli.mjs --test runner-v2/test/copilot-runtime.test.ts
       - name: Bundle import closure (every shipped import is shipped)
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-bundle-closure.mts
       - name: Copilot unresponsive-runtime handling
