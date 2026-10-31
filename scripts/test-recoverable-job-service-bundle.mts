@@ -149,8 +149,8 @@ try {
   const packageJson = JSON.parse(await zip.file("package.json")!.async("string"));
   assert.deepEqual(packageJson.engines, { node: "24.18.0" });
   assert.deepEqual(packageJson.dependencies, {
-    // The pinned Runner V2 imports the MCP SDK (runner-v2/src MCP bridge).
-    "@modelcontextprotocol/sdk": "1.32.1",
+    // The pinned Runner V2 imports the v2 MCP server SDK (runner-v2/src/local-stdio-mcp.ts).
+    "@modelcontextprotocol/server": "2.4.0",
     playwright: "1.61.1",
     "quickjs-emscripten": "0.32.0",
     tsx: "4.22.5",
