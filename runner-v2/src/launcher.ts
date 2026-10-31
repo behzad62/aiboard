@@ -285,6 +285,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   let remoteOnlyActive = roots?.nested === true;
   const freshChildren: ChildProcess[] = [];
   const freshKinds = new Set<RunnerKind>();
+  /** The account runner a plain `aiboard` adds on its own (not one the user named). */
+  let implicitAccounts: ChildProcess | undefined;
   const ownedKeys: Buffer[] = [];
   /** Set when the Runner reports a revoke it persisted; after a clean stop, the launcher runs again to pair a new key. */
   let rePairRequested = false;
@@ -439,6 +441,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       });
       const optional = withAccounts && kind === "accounts";
       if (!optional) child ??= spawned.child;
+      else implicitAccounts = spawned.child;
       freshChildren.push(spawned.child);
       freshKinds.add(kind);
       const instance = await Promise.race([
@@ -656,9 +659,27 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     }
     const closedPromises = freshChildren.map((fresh) => childClose(fresh).catch(() => ({ code: null, signal: null })));
     let firstSettled = false;
-    for (const closedPromise of closedPromises) {
-      void closedPromise.then(() => { if (!firstSettled) { firstSettled = true; requestStop(); } });
-    }
+    freshChildren.forEach((fresh, index) => {
+      void closedPromises[index]!.then(() => {
+        if (firstSettled) return;
+        // The implicit account runner going away leaves Runner V2 running; any other exit ends the session.
+        if (fresh === implicitAccounts) {
+          write(`${style.yellow("Warning:")} The account runner stopped; ChatGPT, GitHub Copilot and NVIDIA accounts are unavailable until aiboard restarts.\n`);
+          // Its record would otherwise make `aiboard status` / `aiboard stop` refuse an unverifiable peer.
+          const mine = instances.get("accounts");
+          void (async () => {
+            const release = await acquireDiscoveryLock(stateDirectory);
+            try {
+              for (const record of await readPeerInstances(stateDirectory, identity)) {
+                if (record.kind === "accounts" && record.instanceId === mine?.instanceId) await removePeerInstance(stateDirectory, record, identity);
+              }
+            } finally { release(); }
+          })().catch(() => undefined);
+          return;
+        }
+        firstSettled = true; requestStop();
+      });
+    });
     try {
       const results = await Promise.all(closedPromises);
       const v2Result = v2Child ? results[freshChildren.indexOf(v2Child)] : undefined;

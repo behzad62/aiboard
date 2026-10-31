@@ -820,6 +820,40 @@ test("a plain start also runs the account runner, announced by Runner V2 and sto
   }
 });
 
+test("an implicit account runner that stops later leaves Runner V2 running with a warning", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  let peer: ChildProcess | undefined;
+  const spawnPeer = (kind: RunnerKind, command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    peer = realAccountsPeer(join(f.root, "accounts.json"), [])(kind, command, args, options);
+    return peer;
+  };
+  const runtime = { cwd: f.project, spawnRunner: fakeSpawner(children, calls), spawnPeer, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["--state-dir", f.state, "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.join("").includes("Pairing code:"), 30_000);
+    peer!.kill();
+    await waitUntil(() => output.join("").includes("The account runner stopped"), 10_000);
+    assert.equal(children[0]!.stops, 0, "Runner V2 keeps running");
+    // The dead peer's record is gone, so status and stop still verify everything they report.
+    await waitUntil(async () => !(await readFile(join(f.state, "launcher-peers.json"), "utf8").catch(() => "")).includes("accounts"));
+    const status: string[] = [];
+    await runLauncher(["status", "--state-dir", f.state], { cwd: f.project, write: (line) => status.push(line) });
+    assert.match(status.join(""), /^Runner running\n/);
+    assert.doesNotMatch(status.join(""), /Account runner/);
+    await runLauncher(["stop", "--state-dir", f.state], { cwd: f.project, write: () => undefined });
+    await running;
+    assert.equal(children[0]!.stops, 1);
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
+});
+
 test("an implicit account runner that exits early leaves Runner V2 running with a warning", async () => {
   const f = await fixture();
   const children: FakeRunner[] = [];
