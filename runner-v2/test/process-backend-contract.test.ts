@@ -17,6 +17,7 @@ import {
   type ProcessBackend,
   type ProcessBackendRegistration,
 } from "../src/process-backend.js";
+import { describeFailureChain } from "../src/lifecycle-diagnostics.js";
 import { createWindowsProcessBackend, WindowsJobObjectProcessBackend, type WindowsJobProcessService } from "../src/windows-process-backend.js";
 
 const capabilities = {
@@ -411,3 +412,24 @@ function jobService(available: boolean): WindowsJobProcessService {
     readOwnedOutput: () => { throw new Error("fixture operation is unavailable"); },
   };
 }
+
+test("backend selection keeps each probe failure as the cause of the unavailable error", async () => {
+  const failing = backend("failing");
+  const probeError = Object.assign(new Error("fence self-probe timed out"), { code: "ETIMEDOUT" });
+  failing.probe = async () => { throw probeError; };
+  const trusted = createProcessBackendRegistry([
+    createProcessBackendRegistration({ stableAdapterId: "failing-adapter", backendId: "failing", codeDigest: "1".repeat(64), configDigest: "2".repeat(64), backend: failing }),
+    createProcessBackendRegistration({ stableAdapterId: "weak-adapter", backendId: "weak", codeDigest: "3".repeat(64), configDigest: "4".repeat(64), backend: backend("weak", { attestationVersion: 2, backendId: "weak", verified: true, platformLabel: "fixture", lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" }, capabilities: { ...capabilities, crash_cleanup: "unavailable" } }) }),
+  ]);
+  const error = await selectProcessBackend(trusted, ["crash_cleanup"], "contained_workload").then(
+    () => assert.fail("selection must fail closed"),
+    (failure: unknown) => failure as Error,
+  );
+  assert.match(error.message, /^A verified process backend with required semantic capabilities is unavailable\.$/);
+  assert.ok(error.cause instanceof AggregateError);
+  assert.equal(error.cause.errors.length, 2);
+  assert.equal(error.cause.errors[0], probeError);
+  assert.match(error.cause.errors[1].message, /backend weak attestation does not satisfy/);
+  assert.match(describeFailureChain(error), /\[backend_probe\] Error\(code=ETIMEDOUT\): fence self-probe timed out \{backendId=failing\}/);
+  await assert.rejects(selectProcessBackend(trusted, ["not_a_capability" as never], "contained_workload"), (failure: Error) => failure.cause === undefined);
+});
