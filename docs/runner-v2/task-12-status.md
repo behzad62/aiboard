@@ -1,5 +1,127 @@
 # Runner V2 Task 12 — Durable Gate Status
 
+## 2026-10-31 — Windows T8 timeout: diagnostic logging added, slow-machine reproduction
+
+The owner approved diagnostic logging for the Windows T8 timeout in run 41086963232. Local commit `d26677b7` on `codex/runner-release-clean` is diagnostic only. It changes no control flow, timeouts, cleanup or fail-closed semantics. Nothing is pushed.
+
+The commit adds:
+- **Durable detail for `backend_unavailable`.** It now keeps the full cause chain:
+  - the effect that failed: `backend_observe` / `backend_signal` / `backend_reconcile`, or `<family>.lease_heartbeat` / `<family>.fence_check` when the effect was interrupted;
+  - code, errno, syscall and pid from each error in the chain;
+  - phase, state, backend, rootPid, escalation outcomes and pending effects.
+
+  Opaque identities and fencing tokens are never included. The thrown message is unchanged.
+- **Teardown and pause messages.** The cleanup-unverified message appends the record's last transition reason. The `delivery_boundary_unavailable` pause detail appends the chain when the chain says more than the plain message.
+- **Factory test teardown logging.** When teardown fails, the factory test logs each closer's chain, `process.getActiveResourcesInfo()` and the live descendant PIDs. It logs them immediately, then again at +60 s and +300 s through unref'd timers.
+- **Opt-in lifecycle trace.** `AIBOARD_LIFECYCLE_TRACE=1` traces `effect.begin` / `effect.end` and `process.launched` / `observed` / `signal` / `backend_unavailable` to stderr. It is off by default.
+
+Tests:
+- `lifecycle-diagnostics.test.ts`: 4 tests.
+- Two new `subprocess-runtime` cases. Both fail against the previous sources.
+- The affected suites pass 120 tests, with 1 existing skip and 0 failures. `tsc -p runner-v2` is clean.
+
+Finding from testing: a lease heartbeat failure or fence failure during observation cannot leave a `backend_unavailable` record. `journaledEffect` drops the fence first, so `applyFailure` throws "Process owner fencing authority is unavailable.". The CI record was `backend_unavailable`, so the CI failure came from one of these:
+- the backend effect itself rejecting: observe, signal or reconcile;
+- an observation that would not parse.
+
+It was not a heartbeat stall.
+
+Proposed but not implemented: a fail-fast factory teardown. After the closers settle with any error, the test would:
+1. log the diagnostics above;
+2. force-terminate only the descendant PIDs it launched itself, as identified by the record's backend binding;
+3. fail at once instead of holding the event loop until the job is cancelled.
+
+That would change cleanup semantics, so it needs its own bounded-gate review.
+
+Independent review of `d26677b7` confirmed no behaviour change: no new awaits, the same exceptions and ordering, and the durable store accepts the longer detail. Its one substantive finding was that annotations kept only their first context, so heartbeat and fence failures lost phase and rootPid. That is fixed in `1a0a8fa9`. Affected suites: 81 pass, 1 existing skip.
+
+### Slow-machine reproduction on this PC (Windows 10, 16 logical CPUs)
+
+Logs are under `D:\tmp\t8-repro\`. The driver is `run-repro.ps1`. It pins itself, and so every test child and grandchild, to CPUs 0-1 (affinity 0x3) at BelowNormal priority. It starts node CPU burners and two disk I/O writers (64 MiB write/fsync/read loops on C: and D:) on the same cores, and sets `AIBOARD_LIFECYCLE_TRACE=1`. It stops only the processes it started.
+
+**Profile A: two same-priority burners.** The native patch factory test failed 10 of 10 iterations, in 152-273 s each, all with the same cause. None hung. Every iteration ended during construction with 40 × "Current owned fence holder birth identity is unavailable.". This is a reproduced slow-machine defect, but not the CI failure, which reached `integration_integrated` and paused with `delivery_boundary_unavailable`.
+
+Root cause:
+- On Windows, `owned-fence-lock.mjs` `inspectProcessBirth` reads the holder's own birth by spawning `powershell.exe Get-Process`, synchronously, once, with a hard `min(2000, remaining)` ms timeout.
+- If the probe does not answer in time, the result is `unknown`. `acquire` then throws, even though the caller, `withProjectionLock`, granted `deadlineMs: 10_000`.
+- That fails the integration workspace's enforcement-state update, and with it construction, and the cleanup that needs the same lock.
+
+`powershell.exe` cold start measured on this PC:
+
+| Profile (CPUs 0-1, BelowNormal) | Cold start |
+|---|---|
+| Idle machine, free CPUs | 155-218 ms |
+| Two burners at Idle priority | 0.2-0.3 s |
+| One same-priority burner | 0.2-0.6 s |
+| Two same-priority burners | 5.3-7.4 s |
+
+By contrast, `native-process-backend.ts` `waitForBirth` already retries with a doubling per-attempt deadline inside its window.
+
+**Fix 1, applied with the coordinator's relayed owner approval: the fence-lock self-probe.** `currentProcessBirthFingerprint` now escalates its per-attempt bound inside the caller's own deadline, like `waitForBirth`:
+- attempts start at 2 s and double, up to 4 attempts, with a 25 ms pause between them;
+- a timed-out attempt is killed and gives the next no head start, so when the time left could not also hold the next doubled attempt, the current attempt takes all of it. A 10 s caller gets 2 s, then about 8 s; a default 2 s caller still gets exactly one 2 s attempt;
+- every attempt is bounded by the remaining deadline;
+- a result still unknown when the deadline is spent fails closed;
+- an unknown result is never cached.
+
+No caller deadline changes. Other holders' inspections keep their 2 s bound. The measured cold starts above are the justification: this aligns an inner probe with its caller's budget, and is not a timeout raise.
+
+Commits:
+- `420b45fe` first escalated 2 s, 4 s, then about 4 s. Independent review showed no single attempt could reach a 5.3-7.4 s cold start under a 10 s deadline.
+- `d21494ec` corrects the schedule as above. Its tests charge every attempt to a fake clock.
+
+Tests in `owned-fence-lock.test.ts`:
+- The new test "current holder birth is obtained within the caller's deadline when the Windows probe cold start exceeds 2 s" uses a 6 s cold start. It fails on the original source and on `420b45fe`, and passes with `d21494ec`.
+- Two new tests pin the properties that must not change: escalation stays bounded and fails closed, and an unknown result is never cached. Both pass on the previous and fixed sources.
+- The old "transient self-inspection" test pinned the deliberately removed single-attempt behaviour, where the first call throws. It is replaced by the never-cached / fail-closed test.
+
+Longer term, Windows birth inspection could go through the hash-pinned `windows-birth` helper instead of a PowerShell cold start per probe. That needs a holder-fingerprint compatibility review.
+
+**Fix 2, applied: the Job host supervisor startup wait.** Profile B iteration 6 failed in 61 s with "Process launch was not proven.". The new launch diagnostics recorded `[launch] Error(code=ECONNRESET errno=-4077 syscall=read): read ECONNRESET {backend=runner-windows-job-v1}`.
+
+The race:
+1. `waitForSupervisor` reads "running" from the status file.
+2. A short workload finishes. The supervisor persists `stopped` and calls `server.close(() => process.exit(0))`.
+3. Its pending `GET /status` connection is reset.
+
+`authenticatedStatus` already falls back to the durable status for this case; `waitForSupervisor` did not. It now accepts the durable status only when it has the same identity and is terminal, using the same predicate as its own pre-request branch. Anything else rethrows the request error, so it still fails closed.
+
+Tests in `windows-job-fence-effects.test.ts`:
+- "t8: … reads the durable terminal status when the supervisor resets the status request" fails on the previous source with `write ECONNRESET` and passes with the fix.
+- Its control "t8: … still fails closed when a reset status request leaves no durable terminal status" passes on both.
+
+**Not changed, per the approval scope.** Neither profile's logs show these failing:
+- `osProcessBirthAsync` (2 s);
+- the Job host `/status` deadline (5.25 s);
+- the portable channel's Windows `reattestObservation`, which treats one `unknown` as fatal.
+
+Locally every invocation used `runner-windows-job-v1`, never the portable channel.
+
+**Profile A after the fixes (`d21494ec`), 3 iterations: 0 pass.** The fence-lock failure is gone: 0 "birth identity is unavailable", against 40 per iteration before. The runs now stop at later fail-closed layers. Each is a top-level budget, not an inner probe out of step with its caller:
+- Iterations 1-2 (270 s, 235 s): "No verified backend satisfies invocation. ← A verified process backend with required semantic capabilities is unavailable." The Windows semantic probes share a 15 s budget across several PowerShell-heavy steps; the active-Job probe has 5 s.
+- Iteration 3 (351 s): the semantic probes passed, then launches failed with `[launch] WindowsJobHostError(code=process_start_failed): Windows Job supervisor did not become ready before the deadline.` That is `DEFAULT_START_DEADLINE_MS` = 5 s, for a node supervisor plus a PowerShell Job host start.
+- No iteration hung.
+
+**Profile B (CPUs 0-1, BelowNormal, one same-priority burner plus disk I/O), native patch factory:**
+- Before the fixes: 5 of 7 passed. The two failures:
+  - iteration 2 (462 s): `delivery_review_failed`, "Process launch was not proven." It ran before the launch diagnostics existed, so its cause is unrecorded;
+  - iteration 6 (61 s): the same message, recorded as `read ECONNRESET`, which is Fix 2's race.
+- After `d21494ec`: 10 of 10 passed, in 501-520 s each. No `backend_unavailable`, no launch failure, no hang.
+
+**The exact 9-file Windows T8 step, under profile B after `d21494ec`, 3 runs:**
+- 127 of 128 each, in 542 s, 543 s and 562 s. No hangs.
+- The only failure is the pre-existing filesystem owner audit. It still flags the same 26 modules as `origin/main` `e1f9c10a`, and none of them is a file these commits touch.
+
+**The CI failure itself (run 41086963232) was not reproduced.** That was `delivery_boundary_unavailable` after `integration_integrated`, followed by a teardown hang. Neither profile ever produced `backend_unavailable` or a hang. The next hosted Windows T8 run with `d26677b7`..`37443201` will record the failing effect, the error chain, and the residue dump at teardown.
+
+Logs:
+- `D:\tmp\t8-repro\factory-*`: profile A before the fixes;
+- `factory-1burner-*`: profile B before the fixes;
+- `factory-A-postfix-*`, `factory-B-postfix-*`, `t8-B-postfix-*`: after the fixes;
+- `ABORTED-*`: a profile A run stopped while it ran the flawed `420b45fe` schedule.
+
+Raising the profile A deadlines would be timeout inflation, so they are left alone. Whether a host where powershell.exe cold-starts in 5-7 s is inside the supported envelope is the owner's call. Hosted Windows CI is not that slow: run 41086963232 reached delivery.
+
 ## 2026-10-30 — Post-acceptance release CI regression investigation
 
 The historical T8/Gate G acceptance below remains scoped to its recorded evidence. A later release PR at `ef529ff62a91d15f6b8125d4ade63ff6ba04b5af` triggered [portable CI run 41086963232](https://github.com/behzad62/aiboard/actions/runs/41086963232), which did not pass. All three T8 hosts flagged an unreviewed filesystem mutation owner. Linux also exposed a stale missing-path assertion; a focused test fix passed locally on Windows and Linux, but has not completed the hosted matrix. On Windows, a native patch factory journey reported unverified subprocess cleanup and the job exceeded its 30-minute limit. The [same-tree isolated diagnostic](https://github.com/behzad62/aiboard/actions/runs/41104377370) passed in 533 seconds and had no failure artifact; it does not establish the cause or release of the earlier failed run. Do not increase the timeout, suppress the failure, or blanket-allowlist mutation owners. The current investigation and release blockers are recorded in [the L2 release review](../remote/l2-release-review-2026-10-30.md); no new gate acceptance is claimed.
