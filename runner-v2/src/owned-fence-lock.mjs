@@ -59,9 +59,11 @@ const CANONICAL_AUTOINDEX_TABLES = new Map([
 ]);
 const waiter = new Int32Array(new SharedArrayBuffer(4));
 const asynchronousTails = new Map();
-// Holders this process kept after an ambiguous finalization (the effect ran, the release did not
-// commit), by resolved path. Diagnostic only: they are never released or stolen from here, but an
-// acquisition they block names them and the failure that kept them.
+// Holder rows this module instance claimed but could not release, by resolved path. An entry whose
+// effect ran (ambiguous finalization) is diagnostic only: that holder is never stolen, but an
+// acquisition it blocks names it and the failure that kept it. An entry whose effect never started
+// may be replaced by a later acquisition here, by its exact acquisition id; that id is a random UUID
+// this instance generated, so no other thread or process can own it.
 const retainedHolders = new Map();
 let cachedCurrentBirth;
 
@@ -358,10 +360,7 @@ function acquire(path, options) {
   if (Date.now() >= deadline)
     throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
   const authorityId = coordinationAuthorityId(path);
-  let opened;
-  try { opened = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority); }
-  catch (error) { throw withRetainedHolderContext(error, path); }
-  const { database, pathIdentity } = opened;
+  const { database, pathIdentity } = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority);
   const context = {
     path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs,
     inspectHolder: options.inspectHolder ?? defaultInspectHolder,
@@ -397,13 +396,14 @@ function acquire(path, options) {
     }
   } catch (error) {
     if (!proposalInserted) {
+      const thrown = withRetainedHolderContext(normalizeUnavailable(error), path, database);
       database.close();
-      throw withRetainedHolderContext(normalizeUnavailable(error), path);
+      throw thrown;
     }
     if (claimed) {
       const released = releaseUnstartedAcquisition(context, error);
       database.close();
-      throw released === error ? error : released;
+      throw released;
     }
     try {
       assertCoordinationPathIdentity(path, pathIdentity);
@@ -413,8 +413,9 @@ function acquire(path, options) {
       database.close();
       throw new AggregateError([error, cleanupError], "Owned fence acquisition and proposal cleanup both failed.", { cause: error });
     }
+    const thrown = withRetainedHolderContext(normalizeUnavailable(error), path, database);
     database.close();
-    throw withRetainedHolderContext(normalizeUnavailable(error), path);
+    throw thrown;
   }
 }
 
@@ -613,16 +614,23 @@ function tryClaim(context) {
     if (!validHolderRow(observed))
       throw new OwnedFenceLockUnavailableError("Owned fence holder metadata is corrupt or incomplete.");
     if (observed.acquisitionId !== acquisitionId) {
-      // Inspector failures are identity uncertainty, never SQLite coordination retries.
-      const remaining = acquisitionTimeRemaining(context);
-      try { inspection = inspectHolder(Number(observed.holderPid), String(observed.holderBirth), remaining); }
-      catch (cause) {
-        throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection failed.", { cause });
+      const retained = retainedHolders.get(path);
+      if (retained?.unstarted === true && retained.acquisitionId === observed.acquisitionId &&
+          Number(observed.holderPid) === retained.holderPid && observed.holderBirth === retained.holderBirth) {
+        // This instance claimed that exact row and never started its effect; nothing else will release it.
+        inspection = "unstarted_self";
+      } else {
+        // Inspector failures are identity uncertainty, never SQLite coordination retries.
+        const remaining = acquisitionTimeRemaining(context);
+        try { inspection = inspectHolder(Number(observed.holderPid), String(observed.holderBirth), remaining); }
+        catch (cause) {
+          throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection failed.", { cause });
+        }
+        acquisitionTimeRemaining(context);
+        if (inspection === "same") return false;
+        if (inspection !== "absent" && inspection !== "birth_mismatch")
+          throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection is unavailable or uncertain.");
       }
-      acquisitionTimeRemaining(context);
-      if (inspection === "same") return false;
-      if (inspection !== "absent" && inspection !== "birth_mismatch")
-        throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection is unavailable or uncertain.");
     }
   }
   acquisitionTimeRemaining(context);
@@ -650,7 +658,7 @@ function tryClaim(context) {
       return true;
     }
     if (!sameHolderProposal(observed, row)) { database.exec("ROLLBACK"); return false; }
-    if (inspection !== "absent" && inspection !== "birth_mismatch")
+    if (inspection !== "absent" && inspection !== "birth_mismatch" && inspection !== "unstarted_self")
       throw new OwnedFenceIdentityInspectionError("Owned fence stale-holder observation is unavailable.");
     acquisitionTimeRemaining(context);
     const update = database.prepare(`
@@ -716,7 +724,7 @@ function finalizeEffect(context, primaryError, retireAfterEffect) {
       ? new AggregateError([primaryError, cleanupError], "Owned fence effect and finalization both failed.", { cause: primaryError })
       : cleanupError;
     // The effect ran but its release did not commit, so the exact holder stays (never stolen).
-    retainedHolders.set(path, { acquisitionId, failure });
+    if (currentHolderId(database) === acquisitionId) retainedHolders.set(path, retainedEntry(context, failure, false));
     throw failure;
   }
 }
@@ -742,25 +750,41 @@ function releaseUnstartedAcquisition(context, error) {
       database.prepare("DELETE FROM owned_fence_holder WHERE lock_key = 'owned' AND acquisition_id = ?").run(acquisitionId);
       database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId);
       assertCoordinationPathIdentity(path, pathIdentity);
-      database.exec("COMMIT");
+      for (;;) {
+        try { database.exec("COMMIT"); break; }
+        catch (busy) {
+          if (!isBusy(busy) || Date.now() >= deadline) throw busy;
+          Atomics.wait(waiter, 0, 0, retryDelayMs);
+        }
+      }
     } catch (releaseError) {
       rollbackQuietly(database);
       throw releaseError;
     }
     return error;
   } catch (releaseError) {
-    retainedHolders.set(path, { acquisitionId, failure: error });
+    if (currentHolderId(database) === acquisitionId) retainedHolders.set(path, retainedEntry(context, error, true));
     const message = error instanceof Error ? error.message : String(error);
     return new AggregateError([error, normalizeUnavailable(releaseError)],
       `${message} Its claimed holder could not be released.`, { cause: error });
   }
 }
 
-function withRetainedHolderContext(error, path) {
+function retainedEntry(context, failure, unstarted) {
+  return { acquisitionId: context.acquisitionId, holderPid: context.holderPid, holderBirth: context.holderBirth, failure, unstarted };
+}
+
+function currentHolderId(database) {
+  try { return database.prepare("SELECT acquisition_id AS acquisitionId FROM owned_fence_holder WHERE lock_key = 'owned'").get()?.acquisitionId; }
+  catch { return undefined; }
+}
+
+function withRetainedHolderContext(error, path, database) {
   const retained = retainedHolders.get(path);
-  if (!retained || !(error instanceof OwnedFenceLockUnavailableError)) return error;
-  const Kind = error.constructor;
-  return new Kind(`${error.message} The holder is retained by this process (PID ${process.pid}), acquisition ` +
+  const Kind = error?.constructor;
+  if (!retained || ![OwnedFenceLockUnavailableError, OwnedFenceContentionError, OwnedFenceIdentityInspectionError].includes(Kind) ||
+      currentHolderId(database) !== retained.acquisitionId) return error;
+  return new Kind(`${error.message} The holder is retained by this process (PID ${retained.holderPid}), acquisition ` +
     `${retained.acquisitionId}, after: ${describeFailure(retained.failure)}`, { cause: error });
 }
 

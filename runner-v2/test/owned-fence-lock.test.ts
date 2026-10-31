@@ -476,6 +476,30 @@ test("t8: a sync acquisition whose effect never started releases its own holder,
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
+test("t8: an unstarted holder whose release could not commit is replaced by the next acquisition in this process", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-unstarted-retained-"));
+  const lockPath = join(root, "effect.sqlite");
+  let effects = 0;
+  try {
+    await withOwnedFenceLock(lockPath, () => undefined);
+    // Held past both the 150 ms acquisition deadline and the bounded 2 s release window.
+    const blocker = boundaryBlocker(lockPath, 3_000);
+    let failure: unknown;
+    try {
+      await withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+        deadlineMs: 150, afterClaim: blocker.afterClaim,
+      } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void }).catch((error: unknown) => { failure = error; });
+    } finally { await blocker.exited(); }
+    assert.ok(failure instanceof AggregateError, "both the boundary failure and the failed release are reported");
+    assert.equal(effects, 0);
+    const retained = readDurableHolder(lockPath);
+    assert.equal(retained.holderPid, process.pid, "the unreleased holder is this process's own acquisition");
+    await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
+    assert.equal(effects, 1, "the next acquisition here replaces the exact unstarted holder instead of waiting it out");
+    assert.deepEqual(holderRows(lockPath), []);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
 test("t8: a failure right after the claim releases the claimed holder before it is reported", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-after-claim-"));
   const lockPath = join(root, "effect.sqlite");
@@ -504,9 +528,13 @@ test("t8: a holder this process retained after ambiguous finalization is named, 
       },
     } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /finalization|unavailable|persistent/i);
     const retained = readDurableHolder(lockPath);
+    // Remove only the injected fault, so the next acquisition reaches the retained holder itself
+    // (self-contention, the T8 shape) rather than a schema refusal.
+    const cleanup = new DatabaseSync(lockPath);
+    try { cleanup.exec("DROP TRIGGER refuse_holder_delete"); } finally { cleanup.close(); }
     let effects = 0;
     let blocked: unknown;
-    try { withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 75 }); } catch (error) { blocked = error; }
+    try { withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 1_500 }); } catch (error) { blocked = error; }
     assert.ok(blocked instanceof OwnedFenceLockUnavailableError, "the retained holder still blocks: it is never stolen");
     assert.equal(effects, 0);
     assert.equal(readDurableHolder(lockPath).acquisitionId, retained.acquisitionId);
@@ -534,6 +562,8 @@ test("a replacement between claim and effect is rejected by the final acquisitio
       },
     } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /identity changed|acquisition/i);
     assert.equal(effects, 0);
+    assert.equal(readDurableHolder(lockPath).acquisitionId, "00000000-0000-4000-8000-000000000001",
+      "the failed caller releases only its own acquisition, never the replacement's holder");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
@@ -547,6 +577,7 @@ test("a hard link added after claim is rejected before the external effect", () 
       afterClaim: () => linkSync(lockPath, aliasPath),
     } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /alias|linked|coordination path/i);
     assert.equal(effects, 0);
+    assert.ok(readDurableHolder(lockPath), "no release is written through a coordination path that gained a link");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
