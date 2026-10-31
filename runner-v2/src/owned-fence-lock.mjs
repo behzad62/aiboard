@@ -749,8 +749,10 @@ function releaseUnstartedAcquisition(context, error) {
       assertCoordinationPathIdentity(path, pathIdentity);
       database.prepare("DELETE FROM owned_fence_holder WHERE lock_key = 'owned' AND acquisition_id = ?").run(acquisitionId);
       database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId);
-      assertCoordinationPathIdentity(path, pathIdentity);
       for (;;) {
+        // Re-check before every attempt: a busy COMMIT can be retried for the whole window, and nothing
+        // may be committed through a coordination path that was replaced or gained a link meanwhile.
+        assertCoordinationPathIdentity(path, pathIdentity);
         try { database.exec("COMMIT"); break; }
         catch (busy) {
           if (!isBusy(busy) || Date.now() >= deadline) throw busy;
@@ -763,6 +765,7 @@ function releaseUnstartedAcquisition(context, error) {
     }
     return error;
   } catch (releaseError) {
+    // If even this read fails, nothing is recorded and the holder stays until the process exits (fail closed).
     if (currentHolderId(database) === acquisitionId) retainedHolders.set(path, retainedEntry(context, error, true));
     const message = error instanceof Error ? error.message : String(error);
     return new AggregateError([error, normalizeUnavailable(releaseError)],

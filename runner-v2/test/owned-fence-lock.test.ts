@@ -494,9 +494,53 @@ test("t8: an unstarted holder whose release could not commit is replaced by the 
     assert.equal(effects, 0);
     const retained = readDurableHolder(lockPath);
     assert.equal(retained.holderPid, process.pid, "the unreleased holder is this process's own acquisition");
+    assert.match(String((failure as Error).message), /could not be released/);
     await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
     assert.equal(effects, 1, "the next acquisition here replaces the exact unstarted holder instead of waiting it out");
     assert.deepEqual(holderRows(lockPath), []);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: a release whose COMMIT is retried re-checks the coordination path before every attempt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-release-relink-"));
+  const lockPath = join(root, "effect.sqlite");
+  const aliasPath = join(root, "late-alias.sqlite");
+  const ready = `${lockPath}.blocker-ready`;
+  let child: ChildProcess | undefined;
+  let effects = 0;
+  try {
+    await withOwnedFenceLock(lockPath, () => undefined);
+    // A writer outlasts the 150 ms acquisition deadline, so the effect boundary fails; a reader then keeps
+    // the release's COMMIT busy while a hard link appears, and only afterwards lets the COMMIT through.
+    const afterClaim = () => {
+      child = spawn(process.execPath, ["-e", `
+        const { DatabaseSync } = require("node:sqlite"); const fs = require("node:fs");
+        const writer = new DatabaseSync(process.argv[1]); writer.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE");
+        const reader = new DatabaseSync(process.argv[1]); reader.exec("BEGIN"); reader.prepare("SELECT COUNT(*) FROM owned_fence_holder").get();
+        fs.writeFileSync(process.argv[2], "ready");
+        setTimeout(() => { writer.exec("ROLLBACK"); writer.close(); }, 300);
+        setTimeout(() => { fs.linkSync(process.argv[1], process.argv[3]); }, 800);
+        setTimeout(() => { reader.exec("COMMIT"); reader.close(); }, 1500);
+      `, lockPath, ready, aliasPath], { stdio: "ignore" });
+      const waiter = new Int32Array(new SharedArrayBuffer(4));
+      for (const until = Date.now() + 20_000; !existsSync(ready); ) {
+        if (Date.now() >= until) throw new Error("release blocker did not take its locks");
+        Atomics.wait(waiter, 0, 0, 5);
+      }
+    };
+    let failure: unknown;
+    try {
+      await withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+        deadlineMs: 150, afterClaim,
+      } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void }).catch((error: unknown) => { failure = error; });
+    } finally {
+      if (child && child.exitCode === null) await new Promise((resolvePromise) => child!.once("exit", resolvePromise));
+    }
+    assert.equal(effects, 0);
+    assert.ok(failure instanceof AggregateError);
+    assert.match(String((failure as Error).message), /could not be released/);
+    assert.ok(existsSync(aliasPath), "the link appeared while the release was retrying");
+    assert.ok(readDurableHolder(aliasPath), "nothing was committed through the linked coordination file");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
