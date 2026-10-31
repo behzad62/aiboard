@@ -1467,8 +1467,20 @@ export async function waitForSupervisor(supervisor: SupervisorRecord, processId:
       if (status && status.protocol === PROTOCOL && status.processId === processId && status.supervisorPid === supervisor.supervisorPid && status.port > 0) {
         supervisor.port = status.port;
         if (status.status === "stopped" || status.status === "exited_unknown") return status;
-        if (status.status === "running")
-          return await supervisorRequest(supervisor, "/status", "GET", undefined, Math.max(250, deadline - Date.now()));
+        if (status.status === "running") {
+          try {
+            return await supervisorRequest(supervisor, "/status", "GET", undefined, Math.max(250, deadline - Date.now()));
+          } catch (error) {
+            // A short workload can finish between this read and the request landing: the supervisor
+            // persists its terminal status, then closes its server and resets the queued connection
+            // (T8 slow-machine reproduction: `read ECONNRESET`). The same terminal predicate as above
+            // accepts that durable status; anything else still fails closed with the request error.
+            const durable = readSupervisorStatus(supervisor.statusPath);
+            if (durable && durable.protocol === PROTOCOL && durable.processId === processId && durable.supervisorPid === supervisor.supervisorPid && durable.port > 0 &&
+                (durable.status === "stopped" || durable.status === "exited_unknown")) return durable;
+            throw error;
+          }
+        }
       }
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;

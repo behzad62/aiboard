@@ -3338,7 +3338,7 @@ test("backend_unavailable keeps the failed backend operation, its system error f
   assert.equal(thrown.code, "backend_unavailable");
   assert.equal(thrown.message, "Process observation or termination failed.");
   const chain = describeFailureChain(thrown);
-  assert.match(chain, /\[backend_observe\] Error: observation transport closed \{phase=observe state=\w+ backend=fake rootPid=42/);
+  assert.match(chain, /\[backend_observe\] Error: observation transport closed \{phase=observe state=\w+ backend=fake rootPid=42\b/);
   assert.match(chain, /caused by Error\(code=EPERM errno=-4048 syscall=OpenProcess\): OpenProcess failed/);
   const record = f.store.readByInvocation("invoke-1")!;
   assert.equal(record.state, "backend_unavailable");
@@ -3379,6 +3379,35 @@ test("a lease heartbeat failure during observation is named as such, not as an o
   // Existing control flow: the heartbeat failure dropped the fence, so recording backend_unavailable
   // fails and that recording error escapes. The diagnostic now names the failure it could not record.
   assert.ok(thrown instanceof Error && thrown.message === "Process owner fencing authority is unavailable.", String(thrown));
-  assert.match(describeFailureChain(thrown), /\{while recording backend_unavailable: \[backend_observe\.lease_heartbeat\] Error: lease renewal stalled \{effect settled before the heartbeat stopped; phase=observe state=\w+ backend=fake rootPid=42 /);
+  assert.match(describeFailureChain(thrown), /\{while recording backend_unavailable: \[backend_observe\.lease_heartbeat\] Error: lease renewal stalled \{effect settled before the heartbeat stopped; phase=observe state=\w+ backend=fake rootPid=42(?![0-9])/);
   assert.notEqual(composed.readOnlyStore.readByInvocation("invoke-1")!.state, "backend_unavailable");
+});
+
+test("a failed launch keeps the backend error chain in its durable reason (diagnostic only)", async () => {
+  const f = fixture();
+  f.backend.launchError = new Error("Windows Job supervisor did not start.", {
+    cause: Object.assign(new Error("Supervisor request timed out."), { code: "ETIMEDOUT", syscall: "connect" }),
+  });
+  const thrown = await f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {} }).then(() => undefined, (error: unknown) => error);
+  assert.ok(thrown instanceof SubprocessRuntimeError);
+  assert.equal(thrown.code, "launch_not_proven");
+  assert.equal(thrown.message, "Process launch was not proven.");
+  const record = f.store.readByInvocation("invoke-1")!;
+  assert.equal(record.state, "launch_not_proven");
+  assert.equal(record.history.at(-1)?.reason,
+    "Launch failed before identity was proven. [launch] Error: Windows Job supervisor did not start. {backend=fake} " +
+    "<- caused by Error(code=ETIMEDOUT syscall=connect): Supervisor request timed out.");
+  assert.match(describeFailureWithCauses(thrown), /^Process launch was not proven\. \[diagnostic: SubprocessRuntimeError\(code=launch_not_proven\): .*\[launch\] .*code=ETIMEDOUT/);
+});
+
+test("a malformed launch result keeps its parse failure in the durable reason (diagnostic only)", async () => {
+  const f = fixture();
+  f.backend.launchValue = { rootPid: "not-a-pid" };
+  const thrown = await f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {} }).then(() => undefined, (error: unknown) => error);
+  assert.ok(thrown instanceof SubprocessRuntimeError);
+  assert.equal(thrown.code, "launch_not_proven");
+  assert.equal(thrown.message, "Process launch was not proven.");
+  const record = f.store.readByInvocation("invoke-1")!;
+  assert.equal(record.state, "launch_not_proven");
+  assert.match(record.history.at(-1)?.reason ?? "", /^Malformed launch result\. \[launch\] \w+.*\{backend=fake\}/);
 });

@@ -759,7 +759,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       await this.failBeforeLaunch(
         record,
         output,
-        "Launch failed before identity was proven.",
+        this.launchFailureDetail("Launch failed before identity was proven.", error, record, selected),
       );
       throw new SubprocessRuntimeError(
         "launch_not_proven",
@@ -802,7 +802,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         await this.failBeforeLaunch(
           record,
           output,
-          "Launch did not return identity.",
+          this.launchFailureDetail("Launch did not return identity.", error, record, selected),
         );
         throw new SubprocessRuntimeError(
           "launch_not_proven",
@@ -815,7 +815,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     try {
       launch = parseProcessLaunchResult(rawLaunch);
     } catch (error) {
-      await this.failBeforeLaunch(record, output, "Malformed launch result.");
+      await this.failBeforeLaunch(record, output, this.launchFailureDetail("Malformed launch result.", error, record, selected));
       throw new SubprocessRuntimeError(
         "launch_not_proven",
         "Process launch was not proven.",
@@ -1840,6 +1840,20 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       output.cleanup(fence),
     );
   }
+  /**
+   * Diagnostic only: the launch failure's reason plus the error chain. Never throws. The `launch`
+   * tag covers the whole launch step (authority callbacks and the backend); a lease or fence failure
+   * keeps the more specific tag fencedEffect gave it.
+   */
+  private launchFailureDetail(reason: string, error: unknown, record: DurableSubprocessRecord, selected: SelectedProcessBackend): string {
+    let diagnostic = "(diagnostic unavailable)";
+    try {
+      annotateFailure(error, { operation: "launch", context: `backend=${selected.attestation.backendId}` });
+      diagnostic = describeFailureChain(error);
+    } catch { /* Diagnostics never change the failure path. */ }
+    lifecycleTrace("process.launch_failed", { invocationId: record.invocationId, reason, diagnostic });
+    return `${reason} ${diagnostic}`;
+  }
   private async failBeforeLaunch(
     record: DurableSubprocessRecord,
     output: ProcessOutputSession,
@@ -1966,8 +1980,12 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       failure = error;
     }
     const heartbeatFailure = await heartbeat.stop();
-    this.assertFence(invocationId, fence);
-    if (heartbeatFailure) throw heartbeatFailure;
+    try { this.assertFence(invocationId, fence); }
+    catch (fenceFailure) { annotateFailure(fenceFailure, { operation: "fenced_effect.fence_check" }); throw fenceFailure; }
+    if (heartbeatFailure) {
+      annotateFailure(heartbeatFailure, { operation: "fenced_effect.lease_heartbeat" });
+      throw heartbeatFailure;
+    }
     if (failure) throw failure;
     return result as T;
   }

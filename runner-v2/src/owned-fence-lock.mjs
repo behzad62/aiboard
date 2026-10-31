@@ -8,6 +8,9 @@ import { DatabaseSync } from "node:sqlite";
 const PROTOCOL_VERSION = 1;
 const DEFAULT_DEADLINE_MS = 2_000;
 const DEFAULT_RETRY_DELAY_MS = 5;
+const SELF_BIRTH_FIRST_ATTEMPT_MS = 2_000;
+const SELF_BIRTH_MAX_ATTEMPTS = 4;
+const SELF_BIRTH_RETRY_DELAY_MS = 25;
 const PROTOCOL_COLUMNS = Object.freeze(["version", "retired", "authority_id"]);
 const LEGACY_PROTOCOL_COLUMNS = Object.freeze(["version", "retired"]);
 const AUTHORITY_UPDATE_TRIGGER = "owned_fence_authority_immutable";
@@ -251,11 +254,29 @@ export function currentProcessBirthFingerprint(remainingMs = DEFAULT_DEADLINE_MS
   if (!Number.isFinite(remainingMs) || remainingMs <= 0)
     throw new OwnedFenceLockUnavailableError("Current owned fence holder inspection deadline is exhausted.");
   if (cachedCurrentBirth?.state === "same") return cachedCurrentBirth.fingerprint;
-  const inspected = inspectProcessBirth(process.pid, remainingMs);
-  if (inspected.state !== "same")
-    throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
-  cachedCurrentBirth = inspected;
-  return inspected.fingerprint;
+  // On Windows the probe is a cold powershell.exe start: 155-218 ms idle, but 5.3-7.4 s measured on
+  // two contended CPUs, so one 2 s attempt failed every acquisition even with a 10 s caller deadline.
+  // Like the native backend's waitForBirth, escalate the per-attempt bound (2 s, 4 s, ...) inside the
+  // caller's own deadline. A timed-out attempt is killed and gives the next one no head start, so
+  // when the time left could not also hold the next, doubled attempt, this attempt takes all of it
+  // (a 10 s caller gets 2 s, then about 8 s). An inspection still unknown when that deadline is spent
+  // fails closed, and an unknown result is never cached.
+  const deadline = Date.now() + remainingMs;
+  let attemptMs = SELF_BIRTH_FIRST_ATTEMPT_MS;
+  for (let attempt = 1; attempt <= SELF_BIRTH_MAX_ATTEMPTS; attempt += 1) {
+    const left = deadline - Date.now();
+    if (left < 1) break;
+    const bound = attempt === SELF_BIRTH_MAX_ATTEMPTS || left - attemptMs < attemptMs * 2 ? left : attemptMs;
+    const inspected = inspectProcessBirth(process.pid, left, bound);
+    if (inspected.state === "same") {
+      cachedCurrentBirth = inspected;
+      return inspected.fingerprint;
+    }
+    if (inspected.state !== "unknown" || deadline - Date.now() <= SELF_BIRTH_RETRY_DELAY_MS) break;
+    attemptMs *= 2;
+    Atomics.wait(waiter, 0, 0, SELF_BIRTH_RETRY_DELAY_MS);
+  }
+  throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
 }
 
 export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {}) {
@@ -1111,7 +1132,7 @@ function defaultInspectHolder(pid, birth, remainingMs = DEFAULT_DEADLINE_MS) {
   return sameBirth(inspection.fingerprint, birth) ? "same" : "birth_mismatch";
 }
 
-function inspectProcessBirth(pid, remainingMs = DEFAULT_DEADLINE_MS) {
+function inspectProcessBirth(pid, remainingMs = DEFAULT_DEADLINE_MS, attemptBoundMs = 2_000) {
   if (!Number.isFinite(remainingMs) || remainingMs < 1) return { state: "unknown" };
   const deadline = Date.now() + remainingMs;
   const timely = result => Date.now() < deadline ? result : { state: "unknown" };
@@ -1120,7 +1141,7 @@ function inspectProcessBirth(pid, remainingMs = DEFAULT_DEADLINE_MS) {
       const output = execFileSync("powershell.exe", [
         "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
         `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`,
-      ], { encoding: "utf8", windowsHide: true, timeout: Math.floor(Math.min(2_000, remainingMs)) }).trim();
+      ], { encoding: "utf8", windowsHide: true, timeout: Math.floor(Math.min(attemptBoundMs, remainingMs)) }).trim();
       if (output === "ABSENT") return timely({ state: "absent" });
       if (output.startsWith("PRESENT:") && output.length > 8) return timely({ state: "same", fingerprint: normalizeBirth(output.slice(8)) });
       return { state: "unknown" };
