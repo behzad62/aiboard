@@ -1,5 +1,39 @@
 # Runner V2 Task 12 — Durable Gate Status
 
+## 2026-10-31 — Gate C: Windows T8 fence-lock failure (IN_PROGRESS, branch `claude/t8-fence-lock`, PR #112)
+
+The owner approved fixing the intermittent Windows T8 failure. **It is not fixed yet.** PR #112 fixes a real, reproduced lock defect, but hosted CI showed that defect is not what fails T8.
+
+- **The CI failure.** Run 41188101614, attempt 1:
+  `[backend_observe] WindowsJobHostError(process_control_unavailable): Windows Job writer fence effect lock is unavailable: OwnedFenceContentionError: Owned fence acquisition deadline is exhausted.`
+  It happens at phase=observe, state=running, on the Job host's `<processId>.fence.lock`. The delivery review pauses with "Process observation or termination failed", and teardown then waits until the job limit.
+- **The other recent Windows T8 failure is different.** On `ec6404b3` (run 41178145373), backend selection failed; #110 keeps those probe causes now.
+- **Ruled out:**
+  - Slow uncontended acquisition. A warmed acquisition takes p50 26 ms and max 362 ms (n=360) under profile A; the deadline is 2 s.
+  - Another process. No other process or worker thread loads `owned-fence-lock.mjs` or uses that lock file.
+  - Overlapping callers in this process. Every Job-host caller is async and queued per path before its deadline starts.
+- **Defect fixed in #112 (real, but not the CI cause).** A holder row committed by `acquire()` leaked when the effect never started: `beginEffect` busy, a path or identity check, or `afterClaim`. The next acquisition then failed after 2 s with the CI message.
+  - `89abec7d` releases that exact row.
+  - `5fe00526` lets this module replace its own unstarted row when that release could not commit.
+  - `9b7c14fe` re-checks the coordination path before every retried release COMMIT.
+  - An effect that ran and then failed to release still keeps its holder (fail closed), and is recorded and named in any later failure.
+  - No timeout, deadline or retry count changed. Independent review: ACCEPT WITH NOTES, after M1, L1–L4 and R1 were repaired.
+- **Why it is not the CI cause.** Factory diagnostic run 41198584516 on `89abec7d` failed with the identical signature, and the message had no "retained by this process" note. On `89abec7d` that note covered every row this module kept, so the blocking row was not one this module knew about.
+- **What the failure phase tells us.** A holder inside its effect keeps its SQLite write transaction, so a contender fails while *opening* ("temporarily contended"). The CI text comes only from the *claim* step. So either a holder row was left committed with no effect running, or opening and self-birth used up the 2 s before the claim.
+- **Diagnostics added (this commit).**
+  - Contention failures now append a trace: the phase, elapsed time, self-birth and open times, claim attempts, busy count, holder inspections and their time, and the holder. The holder is shown as this process or another, live here, retained here, or not held by this module.
+  - The qualification capture now keeps `*.fence.lock` and its `-journal`. Before, the decisive lock file was not captured.
+  - Messages only gain text; the error classes are unchanged.
+- **Tests.**
+  - `owned-fence-lock.test.ts`: 47/47. This adds 3 trace tests: a holder in its effect fails opening; an orphan row from another live process; an orphan row from this process.
+  - Also passing: Job fence-effects, status-fencing and harness 56/56; portable channel and protocol 112/112; `typecheck:runner-v2` clean.
+- **Hosted results.**
+  - Windows factory executions: 1 failure in about 15 (the one above, on `89abec7d`). PR matrices on `89abec7d`, `5fe00526` and `9b7c14fe` passed, as did 5× `t8-portable-coverage` and 6× `windows-factory-diagnostic` across those heads.
+  - Locally under profile B, 2/2 factory iterations passed on `9b7c14fe`.
+  - At that failure rate, these passes don't show a fix.
+- **Next.** Repeat `windows-factory-diagnostic` on this commit until a failure carries the trace and the lock file, then fix what it shows.
+- **Known later-gate issue, unchanged.** A failed factory teardown still waits until the job limit. Bounding it changes cleanup semantics and needs its own review.
+
 ## 2026-10-31 — Windows T8 timeout: diagnostic logging added, slow-machine reproduction
 
 The owner approved diagnostic logging for the Windows T8 timeout in run 41086963232. Local commit `d26677b7` on `codex/runner-release-clean` is diagnostic only. It changes no control flow, timeouts, cleanup or fail-closed semantics. Nothing is pushed.

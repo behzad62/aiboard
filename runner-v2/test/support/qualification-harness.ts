@@ -246,6 +246,8 @@ function walkCopySelected(
       && /^(stdout|stderr|input)-\d{12}\.json$/.test(base);
     const hostOutputEvidence = ["stdout.log", "stderr.log", "job-events.jsonl", "supervisor.jsonl"].includes(base);
     const keep = interesting.some((name) => base === name.toLowerCase())
+      // Owned fence coordination files (for example the Windows Job host's <processId>.fence.lock).
+      || /\.fence\.lock(?:-journal)?$/.test(base)
       || base.endsWith(".sqlite")
       || base.endsWith(".sqlite-wal")
       || base.endsWith(".sqlite-shm")
