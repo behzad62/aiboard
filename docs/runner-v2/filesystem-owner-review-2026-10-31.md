@@ -132,3 +132,14 @@ This follow-up is limited to the requested Runner-private paths. The tests liste
 | F12 | Deferred: `self-update.ts`, installers, release manifest and release scripts belong to another task and were not touched. | No test added here; outside this follow-up scope. |
 
 Mutation-owner audit update: `chat-agent-session.ts`, `extension-run-bindings.ts` and `toolbench-session.ts` now also import `rm` for cleanup of exclusive temporary siblings under their existing state-owned directories. `build-user-media.ts` now imports `rmdir` for an empty verified manifest folder under user-input media. `extension-mcp-launcher.ts` now imports `link` to publish an exclusively created per-server secret under extension home. The other changed mutation-capable imports remain in already reviewed private-owner modules; `filesystem-mutation-routing.test.ts` descriptions were updated for the changed targets.
+
+## Runner 0.3.0 addition (2026-10-31)
+
+`copilot-runtime.ts` (Copilot runtime downloaded on first use) imports `mkdir`, `rename` and `rm`, all under one root: `<install root>/runtimes/copilot`, else `~/.aiboard/runtimes/copilot`, or `AIBOARD_COPILOT_RUNTIME_DIR` when set.
+- It writes only after the archive matches the pinned SHA-512, package name and version.
+- It extracts into a fresh random `.staging-<uuid>` folder through `release-archive.ts` `extractFiles` with the bundle archive limits.
+- It renames that folder to the pin-named folder: package, version and integrity digest. A losing concurrent install keeps the winner's identical copy.
+- It removes only its own staging folder.
+
+`aiboard uninstall` removes the installed root through `self-update.ts`. The `filesystem-mutation-routing.test.ts` audit lists the module as a reviewed private owner.
+
