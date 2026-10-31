@@ -26,7 +26,13 @@ __AIBOARD_RECOVERY_KEYS_PS__
   $InstallerProtocol = 2
 
   function Fail([string]$Message) { throw "AIBoard install failed: $Message" }
-  function Say([string]$Message) { Write-Host $Message }
+  # Color only in an interactive console; NO_COLOR turns it off and FORCE_COLOR decides when set (0/false: off).
+  $UseColor = if ($env:FORCE_COLOR) { @('0', 'false') -notcontains $env:FORCE_COLOR } else { -not $env:NO_COLOR -and -not [Console]::IsOutputRedirected }
+  function Say([string]$Message, [string]$Color = '') { if ($Color -and $UseColor) { Write-Host $Message -ForegroundColor $Color } else { Write-Host $Message } }
+  function Get-GitHint {
+    if (Get-Command git -CommandType Application -ErrorAction SilentlyContinue) { return '' }
+    'Install Git for Windows from https://git-scm.com/download/win, then open a new terminal'
+  }
 
   if ((Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) -and -not $IsWindows) { Fail 'this installer is for Windows; on macOS or Linux run: curl -fsSL https://aiboard.me/install.sh | sh' }
   if ($PSVersionTable.PSVersion.Major -lt 5) { Fail 'PowerShell 5.1 or newer is required.' }
@@ -374,10 +380,15 @@ import(pathToFileURL(resolve(dir, 'app/runner-v2/src/release-manifest.js')).href
     }
 
     Say ''
-    Say "AI Board Runner $Version is installed in $Root."
+    Say "AI Board Runner $Version is installed in $Root." 'Green'
     Say 'Start it in a project folder:  aiboard'
     Say 'Let ChatGPT or Claude use this computer:  aiboard remote'
     Say 'Open a new terminal if the aiboard command is not found yet. Update: aiboard update. Remove: aiboard uninstall.'
+    $gitHint = Get-GitHint
+    if ($gitHint) {
+      Say ''
+      Say "Note: Git was not found. Chat and account providers work without it; Build mode needs Git. $gitHint." 'Yellow'
+    }
   } finally {
     if ($State.Unsettled) {
       # A staged process may still be running: keep everything it could be using, and the lock that guards it.
