@@ -19,19 +19,35 @@ The owner approved fixing the intermittent Windows T8 failure. **It is not fixed
   - An effect that ran and then failed to release still keeps its holder (fail closed), and is recorded and named in any later failure.
   - No timeout, deadline or retry count changed. Independent review: ACCEPT WITH NOTES, after M1, L1–L4 and R1 were repaired.
 - **Why it is not the CI cause.** Factory diagnostic run 41198584516 on `89abec7d` failed with the identical signature, and the message had no "retained by this process" note. On `89abec7d` that note covered every row this module kept, so the blocking row was not one this module knew about.
-- **What the failure phase tells us.** A holder inside its effect keeps its SQLite write transaction, so a contender fails while *opening* ("temporarily contended"). The CI text comes only from the *claim* step. So either a holder row was left committed with no effect running, or opening and self-birth used up the 2 s before the claim.
+- **What the failure phase tells us.** A holder inside its effect keeps its SQLite write transaction, so a contender fails while *opening* ("temporarily contended"). The CI text comes only from the *claim* step. If it came from the Job-host lock itself (see 41201974079 below for why that isn't certain), then either a holder row was left committed with no effect running, or opening and self-birth used up the 2 s before the claim.
 - **Diagnostics added (this commit).**
   - Contention failures now append a trace: the phase, elapsed time, self-birth and open times, claim attempts, busy count, holder inspections and their time, and the holder. The holder is shown as this process or another, live here, retained here, or not held by this module.
   - The qualification capture now keeps `*.fence.lock` and its `-journal`. Before, the decisive lock file was not captured.
   - Messages only gain text; the error classes are unchanged.
+- **Independent review of the diagnostics (`9693c163`): ACCEPT WITH NOTES, no must-fix.** These nits were applied in the follow-up commit:
+  - the two early "deadline is exhausted" throws are now traced as phase "starting";
+  - while opening, the trace says "holder not read";
+  - the traced marker is a WeakSet, not an enumerable property;
+  - the capture also keeps the isolation providers' `<state>.lock`;
+  - two test waits are hardened.
+  Captured lock copies may hold a hot journal, so always open them read-only.
 - **Tests.**
   - `owned-fence-lock.test.ts`: 47/47. This adds 3 trace tests: a holder in its effect fails opening; an orphan row from another live process; an orphan row from this process.
   - Also passing: Job fence-effects, status-fencing and harness 56/56; portable channel and protocol 112/112; `typecheck:runner-v2` clean.
-- **Hosted results.**
-  - Windows factory executions: 1 failure in about 15 (the one above, on `89abec7d`). PR matrices on `89abec7d`, `5fe00526` and `9b7c14fe` passed, as did 5× `t8-portable-coverage` and 6× `windows-factory-diagnostic` across those heads.
-  - Locally under profile B, 2/2 factory iterations passed on `9b7c14fe`.
-  - At that failure rate, these passes don't show a fix.
-- **Next.** Repeat `windows-factory-diagnostic` on this commit until a failure carries the trace and the lock file, then fix what it shows.
+- **Hosted results before the trace.**
+  - Windows factory executions: 1 failure in about 15 (run 41198584516 above, on `89abec7d`).
+  - PR matrices on `89abec7d`, `5fe00526` and `9b7c14fe` passed, as did 5× `t8-portable-coverage` and 6× `windows-factory-diagnostic` across those heads.
+  - Locally under profile B, 3/3 factory iterations passed on `9b7c14fe`.
+- **Hosted results on `9693c163`.** 6× `windows-factory-diagnostic`: 4 passed, 2 failed, both with other known shapes, not the lock deadline. The PR matrix and Benchmark passed.
+  - **41201970222, backend selection.** "No verified backend satisfies invocation". The #110 probe diagnostics now name it: only `runner-windows-supervisor-v1` was probed ("attestation does not satisfy the request"). The Job backend was absent because the active-Job probe (fixed 5 s, reason swallowed) failed. This is the same shape as `ec6404b3`.
+  - **41201974079, supervisor timeout.** "Windows Job writer fence effect lock is unavailable: Error: Supervisor request timed out." `withFenceEffect` labels *any* error as "lock is unavailable", including errors from inside the effect. Here, the effect's supervisor HTTP request timed out. Launch took 9.1 s on that runner (12:47:30.9 to 12:47:40.0), and observe failed 23.8 s later. The captured `.fence.lock` files hold no holder or proposal rows, so the lock was clean.
+  - The 41201974079 evidence shows the "lock is unavailable" prefix doesn't prove a lock problem. The original "deadline is exhausted" may also have come from inside an effect. The new trace names the lock file and phase whenever this module raises it, which will settle that.
+- **Where T8 stands.** Windows T8 has at least three slow-runner failure modes:
+  - an owned-fence "deadline is exhausted" during observe, whose source is not confirmed;
+  - supervisor request timeouts during observe;
+  - the active-Job probe failing at backend selection.
+  Each one then hangs until the job limit, because a failed factory teardown is not bounded. None is fixed yet.
+- **Next.** Keep repeating `windows-factory-diagnostic` until the lock-deadline shape recurs with the trace. Investigate the supervisor timeout and the active-Job probe with evidence; don't just raise their deadlines.
 - **Known later-gate issue, unchanged.** A failed factory teardown still waits until the job limit. Bounding it changes cleanup semantics and needs its own review.
 
 ## 2026-10-31 — Windows T8 timeout: diagnostic logging added, slow-machine reproduction

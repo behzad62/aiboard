@@ -62,6 +62,7 @@ const asynchronousTails = new Map();
 // The acquisition id this module instance currently holds, by resolved path (claim to release).
 // Diagnostic only: a contention failure says whether the blocking holder is this live acquisition.
 const liveAcquisitions = new Map();
+const tracedErrors = new WeakSet();
 // Holder rows this module instance claimed but could not release, by resolved path. An entry whose
 // effect ran (ambiguous finalization) is diagnostic only: that holder is never stolen, but an
 // acquisition it blocks names it and the failure that kept it. An entry whose effect never started
@@ -355,17 +356,18 @@ function acquire(path, options) {
   if (options.deadlineAt !== undefined && (!Number.isFinite(options.deadlineAt) || options.deadlineAt <= 0))
     throw new OwnedFenceLockUnavailableError("Owned fence absolute deadline is invalid.");
   const startedAt = Date.now();
+  const trace = { startedAt, birthMs: 0, openMs: 0, attempts: 0, busy: 0, inspections: 0, inspectionMs: 0, holder: undefined, holderRead: false };
   const deadline = Math.min(startedAt + deadlineMs, options.deadlineAt ?? Number.POSITIVE_INFINITY);
   if (Date.now() >= deadline)
-    throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
+    throw withAcquisitionTrace(new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted."), path, trace, "starting");
   const holderPid = options.holderPid ?? process.pid;
   const holderBirth = options.holderBirth ?? currentProcessBirthFingerprint(deadline - Date.now());
-  const trace = { startedAt, birthMs: Date.now() - startedAt, openMs: 0, attempts: 0, busy: 0, inspections: 0, inspectionMs: 0, holder: undefined };
+  trace.birthMs = Date.now() - startedAt;
   if (!Number.isSafeInteger(holderPid) || holderPid < 1 || typeof holderBirth !== "string" || holderBirth.length === 0)
     throw new OwnedFenceLockUnavailableError("Owned fence holder identity is invalid.");
   const acquisitionId = randomUUID();
   if (Date.now() >= deadline)
-    throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
+    throw withAcquisitionTrace(new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted."), path, trace, "starting");
   const authorityId = coordinationAuthorityId(path);
   let opened;
   try { opened = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority); }
@@ -626,6 +628,7 @@ function tryClaim(context) {
     if (isBusy(error)) { trace.busy += 1; return false; }
     throw error;
   }
+  trace.holderRead = true;
   trace.holder = observed && observed.acquisitionId !== acquisitionId
     ? { pid: Number(observed.holderPid), self: Number(observed.holderPid) === holderPid && observed.holderBirth === holderBirth, acquisitionId: String(observed.acquisitionId) }
     : undefined;
@@ -803,17 +806,17 @@ function forgetLiveAcquisition(context) {
 // tell a holder that is live here, a row this module does not know, another process, and a slow
 // phase with no holder at all apart. It only appends to the message; the error class is unchanged.
 function withAcquisitionTrace(error, path, trace, phase) {
-  if (!(error instanceof OwnedFenceContentionError) || error.traced === true) return error;
+  if (!(error instanceof OwnedFenceContentionError) || tracedErrors.has(error)) return error;
   const holder = trace.holder;
   const known = !holder ? "" : liveAcquisitions.get(path) === holder.acquisitionId ? ", live in this module"
     : retainedHolders.get(path)?.acquisitionId === holder.acquisitionId ? ", retained by this module" : ", not held by this module";
-  const holderText = !holder ? "no other holder seen"
+  const holderText = !trace.holderRead ? "holder not read" : !holder ? "no other holder seen"
     : `holder PID ${holder.pid} (${holder.self ? "this process" : "another process"}), acquisition ${holder.acquisitionId}${known}`;
   const Kind = error.constructor;
   const traced = new Kind(`${error.message} [${basename(path)} while ${phase}, after ${Date.now() - trace.startedAt} ms: ` +
     `self-birth ${trace.birthMs} ms, open ${trace.openMs} ms, ${trace.attempts} claim attempts, ${trace.busy} busy, ` +
     `${trace.inspections} holder inspections (${trace.inspectionMs} ms), ${holderText}]`, { cause: error });
-  traced.traced = true;
+  tracedErrors.add(traced);
   return traced;
 }
 

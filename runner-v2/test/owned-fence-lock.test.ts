@@ -11,7 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { inspectGenericPosixProcessBirth, isOwnedFenceLockContention, OwnedFenceContentionError, OwnedFenceLockUnavailableError, recoverRevokedOwnedFenceLock, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
+import { currentProcessBirthFingerprint, inspectGenericPosixProcessBirth, isOwnedFenceLockContention, OwnedFenceContentionError, OwnedFenceLockUnavailableError, recoverRevokedOwnedFenceLock, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
 
 const fixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url));
 const contendedInitializerFixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-contended-initializer.mjs", import.meta.url));
@@ -550,6 +550,7 @@ test("t8: a holder inside its effect in another process blocks opening, and the 
   const holder = startHolder(lockPath, undefined, 2_000, 60_000);
   try {
     assert.equal((await nextMessage(holder)).state, "acquired");
+    currentProcessBirthFingerprint(10_000); // a cold self-birth probe must not spend the short deadline below
     let effects = 0;
     let failure: unknown;
     try { withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 400 }); } catch (error) { failure = error; }
@@ -557,7 +558,7 @@ test("t8: a holder inside its effect in another process blocks opening, and the 
     assert.ok(failure instanceof OwnedFenceContentionError);
     assert.ok(isOwnedFenceLockContention(failure), "the trace keeps the contention classification");
     // A running effect keeps its write transaction, so a contender never reaches the claim step.
-    assert.match((failure as Error).message, /^Owned fence lock protocol is temporarily contended\. \[effect\.sqlite while opening, after \d+ ms: self-birth \d+ ms, open \d+ ms, 0 claim attempts/);
+    assert.match((failure as Error).message, /^Owned fence lock protocol is temporarily contended\. \[effect\.sqlite while opening, after \d+ ms: self-birth \d+ ms, open \d+ ms, 0 claim attempts, 0 busy, 0 holder inspections \(0 ms\), holder not read\]$/);
   } finally {
     await stop(holder);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
@@ -584,7 +585,7 @@ test("t8: a holder row another live process left outside any effect is named whe
       db.prepare("INSERT INTO owned_fence_holder(lock_key, acquisition_id, holder_pid, holder_birth) VALUES ('owned', ?, ?, ?)").run(id, process.pid, birth);
       db.exec("COMMIT"); db.close(); writeFileSync(ready, "ready"); setTimeout(() => undefined, 60_000);
     `, modulePath, lockPath, ready, orphan], { windowsHide: true, stdio: "ignore" });
-    await waitForPath(ready);
+    await waitForPath(ready, 15_000); // beyond the child's own 10 s self-birth bound
     let effects = 0;
     let failure: unknown;
     try { await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 1_500 }); } catch (error) { failure = error; }
@@ -1334,8 +1335,8 @@ async function stop(child: ChildProcess): Promise<void> {
   await exited(child);
 }
 
-async function waitForPath(path: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+async function waitForPath(path: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (existsSync(path)) return;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
