@@ -6,10 +6,10 @@ Register an executable and its literal arguments with the repeatable `--mcp name
 
 A legacy registration grants no additional filesystem paths, network access or credentials. Use a matching `--mcp-envelope name=JSON` declaration for a fixed access envelope. Declaration order does not matter; duplicate names, duplicate declarations, unknown servers and unsupported fields are rejected.
 
-For example, from PowerShell:
+For example, from PowerShell in the project folder:
 
 ```powershell
-npm run runner:v2 -- --project C:\project --state-dir C:\runner-state `
+aiboard `
   --mcp 'docs=node "C:\tools\docs-server.mjs"' `
   --mcp-envelope 'docs={"paths":[{"path":".","mode":"read"}],"network":false}'
 ```

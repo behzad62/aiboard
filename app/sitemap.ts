@@ -10,7 +10,7 @@ export const dynamic = "force-static";
 const pages: { path: string; lastModified: string; priority: number }[] = [
   { path: "/", lastModified: "2026-10-15", priority: 1 },
   { path: "/about", lastModified: "2026-10-15", priority: 0.8 },
-  { path: "/runner-guide", lastModified: "2026-07-13", priority: 0.6 },
+  { path: "/runner-guide", lastModified: "2026-10-31", priority: 0.6 },
 ];
 
 // /settings, /discussion, and /benchmark are deliberately absent: they render

@@ -30,6 +30,7 @@ const privateOwners = new Set([
   // protected from Remote tools. Ownership-hardening follow-ups are tracked in that review.
   "build-user-media.ts", // user-input media manifests/objects under state/user-input-media; verified-file and empty-folder retention cleanup there.
   "chat-agent-session.ts", // chat session records and exclusive temporary cleanup under state/chat-sessions.
+  "copilot-runtime.ts", // pinned Copilot runtime: mkdir of its runtimes/copilot root, a random .staging-* folder renamed into the pin-named folder, and removal of only that staging folder.
   "credential-migration.ts", // credential journal, pointer and generations under state.
   "delivery-execution.ts", // removes only its own .aiboard-report-* residue in the run-owned verification workspace, canonically confined.
   "extension-management-service.ts", // upload staging under extension-home/uploads.

@@ -20,8 +20,25 @@ INSTALLER_PROTOCOL=2
 TRUSTED_KEYS='__AIBOARD_TRUSTED_KEYS_SH__'
 RECOVERY_KEYS='__AIBOARD_RECOVERY_KEYS_SH__'
 
+# Color only on a terminal; NO_COLOR turns it off and FORCE_COLOR decides when set (0/false: off).
+if [ -n "${FORCE_COLOR:-}" ]; then
+  case "$FORCE_COLOR" in 0|false) AIB_COLOR= ;; *) AIB_COLOR=1 ;; esac
+elif [ -z "${NO_COLOR:-}" ] && [ -t 1 ] && [ "${TERM:-}" != dumb ]; then AIB_COLOR=1
+else AIB_COLOR=
+fi
+paint() { if [ -n "$AIB_COLOR" ]; then printf '\033[%sm%s\033[0m' "$1" "$2"; else printf '%s' "$2"; fi; }
 say() { printf '%s\n' "$*"; }
-fail() { printf 'AIBoard install failed: %s\n' "$*" >&2; exit 1; }
+fail() { printf '%s %s\n' "$(paint '1;31' 'AIBoard install failed:')" "$*" >&2; exit 1; }
+# Prints how to install Git when it is missing (macOS ships a /usr/bin/git stub until the developer tools exist).
+git_hint() {
+  if [ "$(uname -s)" = Darwin ]; then
+    if command -v git >/dev/null 2>&1 && { [ "$(command -v git)" != /usr/bin/git ] || xcode-select -p >/dev/null 2>&1; }; then return 0; fi
+    printf '%s' 'Install it with: xcode-select --install'
+  else
+    command -v git >/dev/null 2>&1 && return 0
+    printf '%s' 'Install it with your package manager, for example: sudo apt install git'
+  fi
+}
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required${2:+ ($2)}."; }
 
 allowed_url() {
@@ -355,10 +372,15 @@ case ":${PATH}:" in *":$HOME/.aiboard/bin:"*) ;; *) export PATH="$HOME/.aiboard/
   fi
 
   say ""
-  say "AI Board Runner $version is installed in $root."
-  say "Start it in a project folder:  aiboard"
-  say "Let ChatGPT or Claude use this computer:  aiboard remote"
+  say "$(paint '1;32' "AI Board Runner $version is installed in $root.")"
+  say "Start it in a project folder:  $(paint 1 'aiboard')"
+  say "Let ChatGPT or Claude use this computer:  $(paint 1 'aiboard remote')"
   say "Open a new terminal (or run: export PATH=\"\$HOME/.aiboard/bin:\$PATH\") if aiboard is not found. Update: aiboard update. Remove: aiboard uninstall."
+  hint=$(git_hint)
+  if [ -n "$hint" ]; then
+    say ""
+    say "$(paint '1;33' 'Note:') Git was not found. Chat and account providers work without it; Build mode needs Git. $hint, then run aiboard again."
+  fi
 }
 
 main "$@"

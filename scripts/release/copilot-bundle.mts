@@ -1,10 +1,9 @@
-// Include the exact lockfile-pinned Copilot platform package for each release target.
-// npm only installs the build host's optional platform package, so the archive is
-// obtained independently of the host and verified before any bytes are used.
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { readArchive, type ArchiveFile } from "../../runner-v2/src/release-archive.js";
+// Pin the exact lockfile-resolved Copilot platform package for each release target.
+// Bundles do not carry the package (~270 MB, and its license allows only unmodified redistribution); they carry
+// this pin as app/runner-v2/copilot-runtime.json, and the Runner downloads and verifies the package on first use
+// (runner-v2/src/copilot-runtime.ts). npm only installs the build host's platform package, so the pin is read
+// from package-lock.json, independently of the host.
+import { parseCopilotRuntimePin, type CopilotRuntimePin } from "../../runner-v2/src/copilot-runtime.js";
 import type { ReleaseTarget } from "../../runner-v2/src/release-manifest.js";
 
 interface LockEntry {
@@ -18,7 +17,10 @@ interface LockEntry {
 }
 export interface CopilotLock { packages: Record<string, LockEntry> }
 
-function pinnedPackage(lock: CopilotLock, target: ReleaseTarget) {
+/** Bundle path of the pin; the Runner reads it beside its src/ folder. */
+export const COPILOT_PIN_PATH = "app/runner-v2/copilot-runtime.json";
+
+export function copilotRuntimePin(lock: CopilotLock, target: ReleaseTarget): CopilotRuntimePin {
   const [platform, arch] = target.split("-");
   const os = platform === "win" ? "win32" : platform;
   const name = `@github/copilot-${os}-${arch}`;
@@ -35,65 +37,13 @@ function pinnedPackage(lock: CopilotLock, target: ReleaseTarget) {
   if (!entry.resolved || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(entry.integrity ?? "")) {
     throw new Error(`The lockfile does not pin a SHA-512 package archive for ${name}.`);
   }
-  const url = new URL(entry.resolved);
-  if (url.protocol !== "https:" || url.hostname !== "registry.npmjs.org" || url.port || url.username || url.password) {
+  try {
+    return parseCopilotRuntimePin({ schemaVersion: 1, name, version: entry.version, url: entry.resolved, integrity: entry.integrity });
+  } catch {
     throw new Error(`The Copilot package ${name} does not use the approved npm registry.`);
   }
-  return { name, version: entry.version!, url: url.href, integrity: entry.integrity! };
 }
 
-/** Verify archive identity, package metadata, and the SDK's actual CLI entry points. */
-export function copilotPackageFiles(lock: CopilotLock, target: ReleaseTarget, archive: Buffer): ArchiveFile[] {
-  const pin = pinnedPackage(lock, target);
-  if (`sha512-${createHash("sha512").update(archive).digest("base64")}` !== pin.integrity) {
-    throw new Error(`The downloaded ${pin.name} archive does not match package-lock.json.`);
-  }
-  const entries = readArchive(archive, "tar.gz");
-  if (entries.some((entry) => !entry.path.startsWith("package/"))) throw new Error(`${pin.name} has an unexpected archive root.`);
-  const manifest = entries.find((entry) => entry.path === "package/package.json");
-  if (!manifest || !["package/index.js", "package/app.js", "package/sdk/index.js"].every((path) => entries.some((entry) => entry.path === path))) {
-    throw new Error(`${pin.name} is missing a required SDK entry point.`);
-  }
-  const packageJson = JSON.parse(manifest.data.toString("utf8")) as { name?: string; version?: string };
-  if (packageJson.name !== pin.name || packageJson.version !== pin.version) throw new Error(`${pin.name} metadata does not match the lockfile.`);
-  return entries.map((entry) => ({ ...entry, path: `app/node_modules/${pin.name}/${entry.path.slice("package/".length)}` }));
-}
-
-async function download(url: string): Promise<Buffer> {
-  const limit = 512 * 1024 * 1024;
-  const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(10 * 60_000) });
-  if (!response.ok || !response.body) throw new Error(`Could not download the pinned Copilot archive (HTTP ${response.status}).`);
-  if (Number(response.headers.get("content-length") ?? 0) > limit) throw new Error("The Copilot archive is too large.");
-  const reader = response.body.getReader();
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > limit) { await reader.cancel(); throw new Error("The Copilot archive is too large."); }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks);
-}
-
-export async function pinnedCopilotFiles(lock: CopilotLock, target: ReleaseTarget, cache: string): Promise<ArchiveFile[]> {
-  const pin = pinnedPackage(lock, target);
-  const cacheFile = join(cache, `${Buffer.from(pin.integrity.slice("sha512-".length), "base64").toString("hex")}.tgz`);
-  if (existsSync(cacheFile)) {
-    if (statSync(cacheFile).size > 512 * 1024 * 1024) throw new Error(`The cached Copilot archive ${cacheFile} is too large.`);
-    return copilotPackageFiles(lock, target, readFileSync(cacheFile));
-  }
-  process.stderr.write(`Downloading pinned ${pin.name}@${pin.version}\n`);
-  const bytes = await download(pin.url);
-  const files = copilotPackageFiles(lock, target, bytes);
-  mkdirSync(cache, { recursive: true });
-  const temporary = `${cacheFile}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(temporary, bytes, { flag: "wx" });
-    renameSync(temporary, cacheFile);
-  } finally {
-    if (existsSync(temporary)) unlinkSync(temporary);
-  }
-  return files;
+export function copilotPinFile(lock: CopilotLock, target: ReleaseTarget): { path: string; data: Buffer; mode: number } {
+  return { path: COPILOT_PIN_PATH, data: Buffer.from(`${JSON.stringify(copilotRuntimePin(lock, target), null, 2)}\n`), mode: 0o644 };
 }

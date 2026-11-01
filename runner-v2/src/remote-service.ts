@@ -27,8 +27,9 @@ export const REMOTE_FIRST_RUN_NOTICE = [
   "AIBoard Remote: cloud agents will be able to run commands as you and read",
   "anything your account can read on this machine. There is no per-action",
   "approval by default; every call is audited locally. Restrict this device with",
-  "--read-only, --only-here or --no-shell; inspect aiboard remote --audit.",
-  "disconnect with Ctrl+C, or clear the saved session with:",
+  "--read-only, --only-here or --no-shell, and review activity with",
+  "aiboard remote --audit.",
+  "Disconnect with Ctrl+C. To clear the saved session, run:",
   "  aiboard remote --logout",
   "File-tool exclusions do not confine shell commands; they run as your OS user.",
 ].join("\n");

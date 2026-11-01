@@ -327,6 +327,7 @@ try {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline && !/Pairing code|runner_start_failed|rror/.test(startOutput)) await new Promise((wait) => setTimeout(wait, 500));
   check("installed Runner starts in a project folder", /Runner running/.test(startOutput), startOutput.replace(/Pairing code: \S+/, "Pairing code: [redacted]").replace(/pair=[^&]+/, "pair=[redacted]").slice(-800));
+  check("a plain aiboard also runs the account runner", /Account runner running/.test(startOutput), startOutput.replace(/Pairing code: \S+/, "Pairing code: [redacted]").replace(/pair=[^&]+/, "pair=[redacted]").slice(-800));
   const status = await aiboard("status", project);
   check("aiboard status sees the running Runner", /Runner running/.test(status.stdout), status.stdout + status.stderr);
   const stop = await aiboard("stop", project);

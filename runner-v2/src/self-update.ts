@@ -7,6 +7,7 @@
 //   <root>/previous            last known-good version kept for rollback
 //   <root>/sequence            highest signed channel sequence accepted on this machine
 //   <root>/versions/<version>  verified, extracted bundles
+//   <root>/runtimes/copilot    Copilot CLI runtime, downloaded on first use (copilot-runtime.ts)
 //   <root>/bin/aiboard(.cmd)   PATH shims
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -705,7 +706,7 @@ export async function runUninstallCommand(raw: string[], runtime: SelfUpdateRunt
     const versions = platform === "win32"
       ? (await readdir(layout.versionsDirectory).catch(() => [] as string[])).filter((name) => name !== layout.runningVersion).map((name) => join(layout.versionsDirectory, name))
       : [layout.versionsDirectory, layout.binDirectory];
-    const managed = [...versions, ...["current", "previous", "sequence", "sequence-anchor", "trusted-channel.json", "install.json", "path-was-absent"].map((name) => join(layout.root, name))];
+    const managed = [...versions, ...["current", "previous", "sequence", "sequence-anchor", "trusted-channel.json", "install.json", "path-was-absent", "runtimes"].map((name) => join(layout.root, name))];
     const state = removeState ? userStatePaths({ platform, environment, home, root: layout.root }) : [];
     for (const path of [...managed, ...state]) {
       try { await rm(path, { recursive: true, force: true, maxRetries: 2 }); }

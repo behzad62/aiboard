@@ -15,7 +15,7 @@ import { ExtensionRunBindings } from "./extension-run-bindings.js";
 import { createRemotePluginToolProvider, fetchPackageMetadata, ManagedMcpRuntime } from "./extension-mcp.js";
 import { activateStagedRunnerExtensions, createPluginHandler, type RunnerExtensionActivation } from "./extension-plugin.js";
 import { OAUTH_CALLBACK_PATH } from "./extension-control-routes.js";
-import { createBoundedGitCommandExecutor } from "./git-preflight.js";
+import { assertGitForUnfinishedRuns, createBoundedGitCommandExecutor, gitUnavailableNotice, type GitPreflightResult } from "./git-preflight.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildUserMediaStore } from "./build-user-media.js";
@@ -121,6 +121,8 @@ export interface RunnerStartSeams {
   readonly onStartupError?: (error: unknown) => void;
   /** Tests: how long an in-place Remote outlives its last remote_events poll (REMOTE_IN_PLACE_LEASE_MS). */
   readonly remoteLeaseMs?: number;
+  /** Tests: replaces the startup Git preflight. */
+  readonly gitPreflight?: () => Promise<GitPreflightResult>;
 }
 
 export interface StartedRunner {
@@ -250,10 +252,9 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     });
     resources.internalExecutionContext = internalExecutionContext;
 
-    const git = (await internalExecutionContext.gitPreflight()).result;
-    if (!git.available) {
-      throw new Error(`${git.code}: ${git.reason}`);
-    }
+    // Git is optional at startup: without it Chat still works, and the Build/ToolBench routes answer 412.
+    const gitPreflight = seams.gitPreflight ?? (async () => (await internalExecutionContext.gitPreflight()).result);
+    let git = await gitPreflight();
     const configuredCapabilitiesAttestation =
       await internalExecutionContext.attestConfiguredCapabilities({
         mcpServers: options.mcpServers,
@@ -275,6 +276,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     } catch (error) {
       console.warn(`[runner] user media retention cleanup unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (!remoteOnly) assertGitForUnfinishedRuns(git, supervisor.listRuns()
+      .filter((run) => !isTerminalRunState(run.state) && !options.setAsideRuns.has(run.runId)).map((run) => run.runId));
     if (!remoteOnly) await validateActiveRecoveryCapabilityContracts(
       supervisor,
       capabilitiesConfig,
@@ -506,7 +509,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       mcp: mcpStatus,
       permissions,
       token: options.token,
-      checkGit: async () => git,
+      // Re-checked until found, so Git installed on PATH while the Runner runs is picked up.
+      checkGit: async () => (git.available ? git : (git = await gitPreflight())),
       bootstrapRun: async (input) => {
         if (resolve(input.projectPath) !== options.projectPath) {
           throw new Error(
@@ -541,7 +545,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       projectPath: options.projectPath,
       stateDirectory: options.stateDirectory,
       ...(remoteOnly ? { localAgents: "unavailable_nested_state" } : {}),
-      gitVersion: git.version,
+      gitVersion: git.available ? git.version : `${git.version ?? "not found"} (Build and ToolBench are off)`,
+      ...(git.available ? {} : { gitUnavailable: git.code }),
       mcp: mcpStatus.status(),
       allowOrigins: options.allowOrigins,
     };
@@ -618,7 +623,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         },
         shutdown: requestLauncherShutdown,
       });
-      if (process.connected) process.send?.({ type: "aiboard-launcher-ready", instance: launcherControl.instance });
+      if (process.connected) process.send?.({ type: "aiboard-launcher-ready", instance: launcherControl.instance, ...(git.available ? {} : { git: git.code }) });
       if (launcherStopRequested || !process.connected) requestLauncherShutdown();
     } else if (address) {
       process.stdout.write(`${JSON.stringify(readiness)}\n`);
@@ -1106,6 +1111,7 @@ function writeReadableStartupSummary(
     projectPath: string;
     stateDirectory: string;
     gitVersion: string;
+    gitUnavailable?: "git_missing" | "git_too_old";
     mcp: unknown[];
     allowOrigins: string[];
   }
@@ -1133,6 +1139,7 @@ function writeReadableStartupSummary(
     lines.push("    - https://aiboard.me");
     lines.push("    - https://www.aiboard.me");
   }
+  if (readiness.gitUnavailable) lines.push("", `  ${gitUnavailableNotice(readiness.gitUnavailable)}`);
   lines.push("");
   lines.push("  Tip: Use --help to show all CLI flags and defaults.");
   process.stderr.write(`${lines.join("\n")}\n`);

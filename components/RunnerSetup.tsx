@@ -19,6 +19,8 @@ import {
   NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
   supportsNativeRunnerNodeVersion,
 } from "@/lib/client/native-build-policy";
+import { RunnerInstallCommands } from "@/components/runner/RunnerInstallCommands";
+import { RUNNER_START_COMMAND } from "@/lib/runner-install";
 
 export interface RunnerSelection {
   url: string;
@@ -156,24 +158,26 @@ export function RunnerSetup({
         <div className="mt-2 space-y-2 pb-1">
           <p className="text-muted-foreground">
             The native agent kernel owns Git worktrees, tools, checkpoints,
-            provider failover, and recovery. It needs Git and a maintained
-            Node.js LTS release ({NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}).
+            provider failover, and recovery. Builds need Git on your computer;
+            the installer includes Node.js.
           </p>
-          <Button asChild type="button" size="sm">
-            <a href="/aiboard-runner-v2.zip" download>
-              Download Runner V2
-            </a>
-          </Button>
           <p className="text-xs text-muted-foreground">
-            Extract the ZIP, open a terminal in that folder, then run:
+            Install it once, in a terminal:
+          </p>
+          <RunnerInstallCommands compact />
+          <p className="text-xs text-muted-foreground">
+            Then, in your project folder, run:
           </p>
           <pre className="overflow-x-auto rounded-md bg-background/70 p-2 text-xs">
-            {"npm install\nnpm run setup:browser\nnpm start -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\aiboard-state --port 8787"}
+            {RUNNER_START_COMMAND}
           </pre>
           <p className="text-xs text-muted-foreground">
-            Paste the URL and control token it prints below. Contributors can
-            run <code>npm run runner:v2 -- --project ...</code> from an AI
-            Board checkout instead.
+            It opens AI Board connected to this computer; nothing to paste. A
+            Runner started another way prints a URL and control token: paste
+            those below. See the <a className="underline" href="/runner-guide">Runner guide</a> for
+            updates and options. Contributors can run{" "}
+            <code>npm run runner:v2 -- --project ...</code> from an AI Board
+            checkout instead.
           </p>
         </div>
       </details>

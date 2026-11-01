@@ -126,8 +126,8 @@ jobs:
           echo "$out"
           test "$out" = "AIBoard Runner V2 $VERSION"
           release-bundle/node/node release-bundle/app/runner-v2/bin/aiboard.mjs doctor
+          # Downloads the pinned Copilot runtime as the Runner does on first use, verifies it, then pings it.
           release-bundle/node/node scripts/release/copilot-smoke.mjs release-bundle
-          release-bundle/node/node "release-bundle/app/node_modules/@github/copilot-$TARGET/index.js" --version
       - name: Run the bundled Runner (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -142,11 +142,9 @@ jobs:
           if ($out -ne "AIBoard Runner V2 $env:VERSION") { throw "unexpected version output" }
           & release-bundle/node/node.exe release-bundle/app/runner-v2/bin/aiboard.mjs doctor
           if ($LASTEXITCODE -ne 0) { throw "doctor failed" }
+          # Downloads the pinned Copilot runtime as the Runner does on first use, verifies it, then pings it.
           & release-bundle/node/node.exe scripts/release/copilot-smoke.mjs release-bundle
-          if ($LASTEXITCODE -ne 0) { throw "Copilot SDK resolution failed" }
-          $copilotTarget = $env:TARGET -replace '^win-', 'win32-'
-          & release-bundle/node/node.exe "release-bundle/app/node_modules/@github/copilot-$copilotTarget/index.js" --version
-          if ($LASTEXITCODE -ne 0) { throw "Copilot runtime failed" }
+          if ($LASTEXITCODE -ne 0) { throw "Copilot runtime download, verification or start failed" }
 
   sign:
     name: Sign manifest and draft the GitHub release

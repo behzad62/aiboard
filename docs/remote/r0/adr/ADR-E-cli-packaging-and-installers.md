@@ -55,3 +55,9 @@ Inspected AIBoard `d7ed04d2505869f5d52ac17bfd1dfe92259b112f`; Milestone A and le
 - `runner-v2/src/windows-birth-inspection.mjs:16`; `runner-v2/src/native-process-backend.ts:218`; `runner-v2/src/windows-job-process-host.ts:252`; `runner-v2/src/browser-tools.ts:250`.
 - `lib/account-provider-runner.mjs:767`; `scripts/bench-runner.mjs:9`; `scripts/bench-runner.mjs:465`; `scripts/build-runner.mjs:102`.
 - `scripts/runner-v2-package-hashes.mjs:22`; `.github/workflows/runner-v2-portable-execution.yml:154`; `.github/workflows/deploy-aiboard.yml:30`.
+
+## Amendment (2026-10-31, Runner 0.3.0)
+
+- A plain `aiboard` starts Runner V2 together with the account runner (same launcher pairing and peer model); `aiboard runner` starts Runner V2 alone.
+- Bundles no longer include the Copilot CLI platform package. They ship its package-lock pin (`app/runner-v2/copilot-runtime.json`); the Runner downloads that exact tarball on first Copilot use, checks its SHA-512 integrity and unpacks it unmodified under `<install root>/runtimes/copilot` (`runner-v2/src/copilot-runtime.ts`).
+- Git is optional at startup: Build and ToolBench stay off until Git is available.
