@@ -100,6 +100,8 @@ export interface RemoteSessionIssuer {
   readonly pairingUrl: string;
   /** The issuer must validate a persisted session before the service uses it. */
   readonly requiresSessionRestore?: boolean;
+  /** The relay this issuer pairs with; an identity paired with a different relay is replaced before pairing. */
+  readonly relayOrigin?: string;
   requestSession(identity: { deviceId: string; publicKey: string }): Promise<RemoteDeviceSession>;
   restoreSession(): Promise<RemoteDeviceSession | undefined>;
 }

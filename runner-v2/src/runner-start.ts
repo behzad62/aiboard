@@ -80,6 +80,7 @@ import { resolveProtectedLocations, type ProtectedLocations } from "./protected-
 import { RemoteController, type RemoteEnableSettings, type RemoteEvent } from "./remote-in-place.js";
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
 import { openPairUrl } from "./launcher.js";
+import { styleFor } from "./terminal-style.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -698,7 +699,8 @@ function createRunnerRemoteService(input: RunnerRemoteInput): RemoteService {
     present: seams.presentPairing ?? ((presentation) => {
       if (!deliver({ type: "aiboard-remote-pairing", ...presentation })) {
         const minutes = Math.max(1, Math.ceil((Date.parse(presentation.expiresAt) - Date.now()) / 60_000));
-        process.stdout.write(`Pair this computer: open ${presentation.verificationUri} and enter code ${presentation.userCode} (expires in ${minutes} min)\n`);
+        const style = styleFor(process.stdout);
+        process.stdout.write(`Pair this computer: open ${presentation.verificationUri} and enter code ${style.green(style.bold(presentation.userCode))} (expires in ${minutes} min)\n`);
       }
     }),
     openUrl: seams.openPairingUrl ?? ((url) => {
@@ -718,6 +720,12 @@ function createRunnerRemoteService(input: RunnerRemoteInput): RemoteService {
     ...(input.buildRecoveryUnverified ? { reconcileStartup: async () => { throw new Error("Build ownership recovery remains unverified."); } } : {}),
     createTransport: seams.createTransport ?? configuredTransport ?? unavailableTransport,
     issuer: seams.issuer ?? pairing ?? new StubRemoteSessionIssuer(),
+    ...(pairing ? { onNewDevice: (previous: string | undefined) => {
+      const message = previous
+        ? `This computer was paired with ${previous}, so it pairs with ${pairing.relayOrigin} as a new device. Remove the old device on that relay's Devices page.`
+        : "This computer was signed out of Remote, so it pairs as a new device. Remove the old device on your Devices page.";
+      if (!deliver({ type: "aiboard-remote-notice", message })) process.stdout.write(`Note: ${message}\n`);
+    } } : {}),
     ...(pairing ? { onSession: (session: RemoteDeviceSession) => {
       if (!deliver({ type: "aiboard-remote-session", deviceName: pairing.deviceName, accountId: session.accountId })) {
         process.stdout.write(`Remote device: ${pairing.deviceName}; account: ${session.accountId}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);

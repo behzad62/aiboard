@@ -568,7 +568,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
             if (line) write(stampRemoteNotice(line));
           });
         }
-        const ready = childReady(v2Child, handshake, (message) => showRemoteMessage(message, write, args.noOpen ? undefined : remoteUrlOpener(runtime)),
+        const ready = childReady(v2Child, handshake, (message) => showRemoteMessage(message, write, args.noOpen ? undefined : remoteUrlOpener(runtime), style),
           (code) => { gitUnavailable = code; });
         const instance = await Promise.race([
           ready,
@@ -639,11 +639,12 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       if (gitUnavailable) write(`${style.yellow("Warning:")} ${gitUnavailableNotice(gitUnavailable, runtime.platform ?? process.platform)}\n`);
       if (args.command === "remote" && remoteOnlyActive) write("Remote-only: Build and Chat are unavailable when started from a folder that contains AIBoard state.\n");
       const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
-      showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime, style);
+      // `aiboard remote` is for ChatGPT/Claude: the local web UI link is printed but not opened, so the browser shows only the relay page.
+      showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true || args.command === "remote", write, runtime, style);
     }
     if (inPlaceRemote) {
       write("Remote: on in this Runner. Ctrl+C turns Remote off and leaves the Runner running.\n");
-      await runInPlaceRemote({ instance: instances.get("runner")!, stateDirectory, settings: inPlaceRemote, noOpen: args.noOpen === true, write, runtime });
+      await runInPlaceRemote({ instance: instances.get("runner")!, stateDirectory, settings: inPlaceRemote, noOpen: args.noOpen === true, write, runtime, style });
       return;
     }
     if (freshChildren.length === 0) return;
@@ -788,11 +789,14 @@ async function runTerminalApprovals(instance: LauncherInstance, key: Buffer, wri
 }
 
 /** Pairing, browser-open and session lines from a Runner's Remote messages (spawn IPC or in-place events alike). */
-function showRemoteMessage(message: Record<string, unknown>, write: (message: string) => void, open: ((url: string) => void) | undefined): void {
+function showRemoteMessage(message: Record<string, unknown>, write: (message: string) => void, open: ((url: string) => void) | undefined,
+  style: TerminalStyle = PLAIN_STYLE): void {
   if (message.type === "aiboard-remote-pairing" && typeof message.verificationUri === "string" && typeof message.userCode === "string" &&
     typeof message.expiresAt === "string" && /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(message.userCode)) {
     const minutes = Math.max(1, Math.ceil((Date.parse(message.expiresAt) - Date.now()) / 60_000));
-    write(`Pair this computer: open ${message.verificationUri} and enter code ${message.userCode} (expires in ${minutes} min)\n`);
+    write(`Pair this computer: open ${message.verificationUri} and enter code ${style.green(style.bold(message.userCode))} (expires in ${minutes} min)\n`);
+  } else if (message.type === "aiboard-remote-notice" && typeof message.message === "string") {
+    write(`${style.yellow("Note:")} ${message.message.replace(/[^\x20-\x7e]/g, " ").slice(0, 500)}\n`);
   } else if (message.type === "aiboard-remote-open" && typeof message.url === "string" && open) {
     try { open(message.url); } catch { /* terminal instructions are the fallback */ }
   } else if (message.type === "aiboard-remote-session" && typeof message.deviceName === "string" && typeof message.accountId === "string") {
@@ -811,7 +815,7 @@ const REMOTE_EVENTS_POLL_MS = 500;
  * renews the Runner's lease by polling, and on Ctrl+C/SIGTERM turns Remote off while the Runner keeps running.
  */
 async function runInPlaceRemote(input: { instance: LauncherInstance; stateDirectory: string; settings: RemoteEnableSettings;
-  noOpen: boolean; write: (message: string) => void; runtime: LauncherRuntime }): Promise<void> {
+  noOpen: boolean; write: (message: string) => void; runtime: LauncherRuntime; style?: TerminalStyle }): Promise<void> {
   const { instance, settings, write, runtime } = input;
   const key = await readControlKey(input.stateDirectory);
   const stop = new AbortController();
@@ -842,7 +846,7 @@ async function runInPlaceRemote(input: { instance: LauncherInstance; stateDirect
       let repaired = false;
       for (const event of page.events ?? []) {
         if (event.type === "aiboard-remote-pairing-error") throw new Error(`${String(event.code)}: ${String(event.message)}`);
-        if (event.type !== REMOTE_STATE_MESSAGE) { showRemoteMessage(event, write, open); continue; }
+        if (event.type !== REMOTE_STATE_MESSAGE) { showRemoteMessage(event, write, open, input.style); continue; }
         if (event.state === "revoked" && event.persisted === true) {
           // The in-place equivalent of the spawn path's restart: a fresh enable rotates the key and pairs, without opening the browser.
           if (repaired) continue;
