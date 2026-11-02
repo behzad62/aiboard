@@ -14,7 +14,7 @@ import { canonicalJson } from "../src/remote-admission-store.js";
 import { REMOTE_CONNECT_SCOPE } from "../src/remote-auth.js";
 import type { RemoteTransport } from "../src/remote-connector.js";
 import { RemoteDeviceStore } from "../src/remote-device-store.js";
-import { machineHint, plausibleMachineId, readMachineId } from "../src/machine-hint.js";
+import { machineHint, parseIoregPlatformUuid, parseRegMachineGuid, plausibleMachineId, readMachineId } from "../src/machine-hint.js";
 import { RelayPairingIssuer, RemotePairingError, type PairingPresentation } from "../src/remote-pairing.js";
 import { REMOTE_RELAY_ROOTS } from "../src/remote-relay-roots.js";
 import { RemoteService } from "../src/remote-service.js";
@@ -421,6 +421,11 @@ test("a relay that predates machine hints gets one retry without the hint", asyn
   const plain = await fixture(t, { startStatus: 400, rawStart: JSON.stringify({ error: "invalid_request" }) });
   await assert.rejects(plain.makeIssuer(plain.store, undefined).requestSession(plain.identity), /invalid pairing response/);
   assert.equal(plain.starts.length, 1);
+  // On a current relay a hinted 400 has another cause: one plain retry, then the same failure.
+  const both = await fixture(t, { startStatus: 400, rawStart: JSON.stringify({ error: "invalid_request" }) });
+  await assert.rejects(both.makeIssuer(both.store, MACHINE_ID).requestSession(both.identity), /invalid pairing response/);
+  assert.equal(both.starts.length, 2);
+  assert.equal("machineHint" in both.starts[1]!, false);
 });
 
 test("machine ids are validated and the host reader never throws", async () => {
@@ -429,6 +434,12 @@ test("machine ids are validated and the host reader never throws", async () => {
   for (const value of [undefined, "", "   ", "00000000-0000-0000-0000-000000000000", "not-a-machine-id", "0123456789abcdef"]) {
     assert.equal(plausibleMachineId(value), undefined);
   }
+  const reg = "\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\r\n    MachineGuid    REG_SZ    " + MACHINE_ID + "\r\n";
+  assert.equal(parseRegMachineGuid(reg), MACHINE_ID.toLowerCase());
+  assert.equal(parseRegMachineGuid("ERROR: The system was unable to find the specified registry key or value."), undefined);
+  const ioreg = '+-o J314sAP  <class IOPlatformExpertDevice>\n  {\n    "IOPlatformSerialNumber" = "C02XXXXXXX"\n    "IOPlatformUUID" = "' + MACHINE_ID + '"\n  }\n';
+  assert.equal(parseIoregPlatformUuid(ioreg), MACHINE_ID.toLowerCase());
+  assert.equal(parseIoregPlatformUuid(undefined), undefined);
   const id = await readMachineId();
   assert.ok(id === undefined || plausibleMachineId(id) === id);
   assert.equal(await readMachineId("aix"), undefined);

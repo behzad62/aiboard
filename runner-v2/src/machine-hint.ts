@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /** Reads the OS machine id; resolves undefined when none is readable. */
@@ -32,15 +32,28 @@ function run(file: string, args: readonly string[]): Promise<string | undefined>
   });
 }
 
-/** Windows MachineGuid, Linux /etc/machine-id (or the dbus copy), macOS IOPlatformUUID. Never throws. */
+/** The MachineGuid value from `reg query` output. */
+export function parseRegMachineGuid(output: string | undefined): string | undefined {
+  return plausibleMachineId(/MachineGuid\s+REG_SZ\s+(\S+)/i.exec(output ?? "")?.[1]);
+}
+
+/** The IOPlatformUUID value from `ioreg -rd1 -c IOPlatformExpertDevice` output. */
+export function parseIoregPlatformUuid(output: string | undefined): string | undefined {
+  return plausibleMachineId(/"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(output ?? "")?.[1]);
+}
+
+/** Container images often ship a fixed machine id, which would pool unrelated users. */
+const CONTAINER_MARKERS = ["/.dockerenv", "/run/.containerenv"];
+
+/** Windows MachineGuid, Linux /etc/machine-id (or the dbus copy, not inside a container), macOS IOPlatformUUID. Never throws. */
 export async function readMachineId(platform: NodeJS.Platform = process.platform): Promise<string | undefined> {
   try {
     if (platform === "win32") {
       const reg = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "reg.exe");
-      const output = await run(reg, ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid", "/reg:64"]);
-      return plausibleMachineId(/MachineGuid\s+REG_SZ\s+(\S+)/i.exec(output ?? "")?.[1]);
+      return parseRegMachineGuid(await run(reg, ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid", "/reg:64"]));
     }
     if (platform === "linux") {
+      for (const marker of CONTAINER_MARKERS) if (await access(marker).then(() => true, () => false)) return undefined;
       for (const path of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
         const id = plausibleMachineId(await readFile(path, "utf8").catch(() => undefined));
         if (id) return id;
@@ -48,8 +61,7 @@ export async function readMachineId(platform: NodeJS.Platform = process.platform
       return undefined;
     }
     if (platform === "darwin") {
-      const output = await run("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"]);
-      return plausibleMachineId(/"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(output ?? "")?.[1]);
+      return parseIoregPlatformUuid(await run("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"]));
     }
   } catch { /* An unreadable id only means no hint is sent. */ }
   return undefined;

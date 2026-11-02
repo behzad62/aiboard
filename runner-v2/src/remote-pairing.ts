@@ -150,7 +150,8 @@ export class RelayPairingIssuer implements RemoteSessionIssuer {
       return this.post("/pair/v2/start", { ...request, signature });
     };
     let start = await startPairing(true);
-    // Relays without free-tier machine hints refuse unknown fields; pair without one.
+    // Relays without free-tier machine hints refuse unknown fields; pair without one. On a current relay a 400
+    // has another cause and the single plain retry fails the same way.
     if (hint && start.status === 400 && isRecord(start.body) && start.body.error === "invalid_request" && only(start.body, ["error"])) {
       start = await startPairing(false);
     }
