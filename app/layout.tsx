@@ -113,6 +113,9 @@ export default function RootLayout({
               <Link href="/runner-guide" className={footerLink}>
                 Runner guide
               </Link>
+              <Link href="/remote" className={footerLink}>
+                Remote (beta)
+              </Link>
               <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={footerLink}>
                 Contact
               </a>
@@ -125,14 +128,6 @@ export default function RootLayout({
               <Link href="/refunds" className={footerLink}>
                 Refunds
               </Link>
-              <a
-                href="https://paypal.me/behzadashams"
-                target="_blank"
-                rel="noopener noreferrer"
-                className={footerLink}
-              >
-                Support this project
-              </a>
               <a
                 href={`${SITE_GITHUB_URL}/blob/main/LICENSE`}
                 target="_blank"
