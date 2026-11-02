@@ -1,4 +1,4 @@
-// RUNNER_RAW_PROCESS_BOUNDARY: reads the OS machine id for the pairing machine hint; runs only %SystemRoot%\System32eg.exe (fixed MachineGuid query) or /usr/sbin/ioreg (fixed IOPlatformExpertDevice query), bounded by a 5 s timeout, with no secrets.
+// RUNNER_RAW_PROCESS_BOUNDARY: reads the OS machine id for the pairing machine hint; runs only %SystemRoot%\System32\reg.exe (fixed MachineGuid query) or /usr/sbin/ioreg (fixed IOPlatformExpertDevice query), bounded by a 5 s timeout, with no secrets.
 import { execFile } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
