@@ -1185,7 +1185,7 @@ function help(): string {
     "  --port <number>           Runner port (0 selects an available port).",
     "  --capabilities-config, --extensions-home, --mcp, --mcp-envelope,",
     "  --allow-origin, --set-aside-run  Pass existing Runner options through.",
-    "  aiboard remote            Start Runner V2 with the remote service; --logout clears the session.",
+    "  aiboard remote            Start Runner V2 connected to the AIBoard relay (mcp.aiboard.me); --logout clears the session.",
     "  remote --relay-url <wss-url> [--relay-root-key <base64url-spki> ...]",
     "  remote --only-here|--anywhere --read-only|--writable --no-shell|--shell",
     "  remote --approve-commands|--no-approve-commands  Set per-command approval.",

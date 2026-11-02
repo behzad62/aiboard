@@ -507,8 +507,7 @@ test("aiboard remote turns Remote on inside a reused Runner, and Ctrl+C turns it
       try { return await requestLauncherControl(record, key, "status"); } finally { key.fill(0); }
     };
     assert.equal((await status()).remoteActive, false);
-    remote = runLauncher(["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--relay-url", "wss://mcp.aiboard.me/connect"],
-      { ...runtime, interrupt: interrupt.signal });
+    remote = runLauncher(["remote", "--state-dir", f.state, "--acknowledge-remote-access"], { ...runtime, interrupt: interrupt.signal });
     void remote.catch(() => undefined);
     await waitUntil(() => output.some((line) => line.includes("open https://mcp.aiboard.me/pair and enter code BCDF-GHJK")));
     assert.equal(children.length, 1, "the running Runner is reused; no second Runner is spawned");
@@ -517,7 +516,7 @@ test("aiboard remote turns Remote on inside a reused Runner, and Ctrl+C turns it
     assert.equal(fake.enables.length, 1);
     assert.deepEqual(fake.enables[0], {
       deviceDirectory: await realpath(remoteDeviceDirectory({ platform: process.platform, environment, home: f.root })),
-      relayUrl: "wss://mcp.aiboard.me/connect", relayRootKeys: [],
+      relayUrl: DEFAULT_REMOTE_RELAY_URL, relayRootKeys: [],
     });
     assert.equal((await status()).remoteActive, true);
     await waitUntil(() => output.some((line) => line.includes("Desktop; account: account-1") && line.includes("Ctrl+C to disconnect")));

@@ -218,6 +218,41 @@ test("hosted relay pins are distinct Ed25519 SPKI keys with ids, and production 
     { keyId: "production-root-1", publicKey: "MCowBQYDK2VwAyEAb11m2u0oLpR9fiLcr09V02b027fbZKS_tB1BrBGg9Kc" }]);
 });
 
+// A root-signed key set the production relay sent in a /connect challenge on 2026-11-02 (public data only).
+const PRODUCTION_KEY_SET = {
+  statement: {
+    relayOrigin: "https://mcp.aiboard.me",
+    keys: [{ keyId: "production-signing-1", publicKey: "MCowBQYDK2VwAyEA2RBKWFrMEpjHRQDQVrJrxVQC7vEQQRjpaARF32RHctI" }],
+    issuedAt: "2026-11-02T06:55:19.059Z",
+    expiresAt: "2026-11-03T06:55:19.059Z",
+  },
+  rootKeyId: "production-root-1",
+  signature: "DutBRK1cuRkryrMCnIb0aT6yTNwmBR9KFt_cCt52NWRa1_LXV8o9NNPcPCU96abeFAGAaGNnvTJTWFEU8y9LBA",
+};
+
+test("a key set signed by the live production relay verifies only under the production pin, and not once altered", () => {
+  const verifies = (statement: object, rootKeyId: string, roots: readonly { keyId: string; publicKey: string }[]) =>
+    roots.some((root) => root.keyId === rootKeyId && verify(null, Buffer.from(canonicalJson(statement), "utf8"),
+      createPublicKey({ key: Buffer.from(root.publicKey, "base64url"), format: "der", type: "spki" }),
+      Buffer.from(PRODUCTION_KEY_SET.signature, "base64url")));
+  const production = REMOTE_RELAY_ROOTS["https://mcp.aiboard.me"]!;
+  const staging = REMOTE_RELAY_ROOTS["https://mcp-staging.aiboard.me"]!;
+  assert.equal(verifies(PRODUCTION_KEY_SET.statement, PRODUCTION_KEY_SET.rootKeyId, production), true);
+  assert.equal(verifies(PRODUCTION_KEY_SET.statement, "staging-root-1", staging), false);
+  assert.equal(verifies(PRODUCTION_KEY_SET.statement, "other-root", production), false);
+  assert.equal(verifies({ ...PRODUCTION_KEY_SET.statement, relayOrigin: "https://mcp-staging.aiboard.me" }, PRODUCTION_KEY_SET.rootKeyId, production), false);
+  assert.equal(verifies({ ...PRODUCTION_KEY_SET.statement, expiresAt: "2026-11-09T06:55:19.059Z" }, PRODUCTION_KEY_SET.rootKeyId, production), false);
+  const attacker = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+  assert.equal(verifies({ ...PRODUCTION_KEY_SET.statement, keys: [{ keyId: "production-signing-1", publicKey: attacker }] },
+    PRODUCTION_KEY_SET.rootKeyId, production), false);
+});
+
+test("a hosted relay's pins cannot be extended with --relay-root-key, even on the default relay", () => {
+  const key = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+  assert.throws(() => parseLauncherArguments(["remote", "--relay-root-key", key]), /require aiboard remote --relay-url/);
+  assert.throws(() => parseLauncherArguments(["remote", "--relay-url", "wss://mcp-staging.aiboard.me/connect", "--relay-root-key", key]), /cannot override/);
+});
+
 for (const [origin, roots] of Object.entries(REMOTE_RELAY_ROOTS)) {
   for (const envelopeKeyId of [roots[0]!.keyId, "other-root"]) {
     test(`${origin} refuses a session signed by an unpinned key under id ${envelopeKeyId}`, async (t) => {
