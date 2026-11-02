@@ -11,7 +11,7 @@ Plan packet L2, ADR-E, owner decision D18 (GitHub Releases + CI signing in a pro
   - **Installers.** `npm run publish-downloads` renders `public/install.ps1` and `public/install.sh` with the pinned keys baked in. This happens on every deploy of aiboard.me.
   - **Updater.** Every bundle carries `app/runner-v2/release-channel.json`, which `aiboard update` trusts. An installed Runner therefore trusts the keys that were pinned when *its* version was built.
 - **Where the files are served:**
-  - The signed manifest is served by aiboard.me from `public/release/stable/manifest.json` and `manifest.json.sig`. You commit these by hand. Every epoch-opening manifest and its signature also remain at sibling paths `epoch-<n>.json` and `epoch-<n>.json.sig` permanently.
+  - The signed manifest is served by aiboard.me from `public/release/stable/manifest.json` and `manifest.json.sig`. The release workflow commits these to `main` after signing (an epoch-opening manifest from the recovery procedure is still committed by hand). Every epoch-opening manifest and its signature also remain at sibling paths `epoch-<n>.json` and `epoch-<n>.json.sig` permanently.
   - The bundles are served from the GitHub release `v<version>` of `behzad62/aiboard`.
 - **What gets verified:**
   - Installers and the updater verify the signature *before* parsing.
@@ -94,16 +94,18 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
    - checks the signature again with `openssl`, exactly as `install.sh` does;
    - creates a **draft** release `v<version>` with the six bundles, `manifest.json` and `manifest.json.sig`.
 
-   It never publishes the release and never touches aiboard.me.
-4. **Publish.**
-   - Review the draft, then publish it. This makes the bundle URLs in the manifest live.
-   - Publish drafts in sequence order only. If a newer draft already exists, delete the older draft instead of publishing it.
-   - Download the workflow artifact `signed-manifest-<version>` (or take `manifest.json` and `manifest.json.sig` from the release) and verify it. `verify` also refuses a manifest whose sequence is not higher than the committed one:
-     ```bash
-     npx tsx scripts/release/release-keys.mts verify --manifest manifest.json --bundles <folder with the six downloaded archives>
-     ```
-   - Copy both files to `public/release/stable/` and commit them.
-   - Push `main`. This needs your approval because it redeploys aiboard.me. `publish-downloads` raises the installers' replay floor to this manifest's sequence. The deploy workflow first runs `check-publication-order.mts` and stops if a committed manifest went backwards or was removed since the previous deploy.
+   Approving this job is the only manual step of a release.
+4. **Publish (automatic).** A `publish` job then runs outside the `release` environment, without the signing key:
+   - verifies the signed manifest against the six bundles, and against the manifest committed on `main`, so it refuses one whose sequence is not higher (publication order);
+   - publishes the draft, which makes the bundle URLs in the manifest live, and marks it the latest release;
+   - commits `manifest.json` and `manifest.json.sig` to `public/release/stable/` on `main`, re-checking publication order against `main` as it is at that moment (up to three tries if `main` moves);
+   - starts the aiboard.me deploy (a push made by the workflow's token does not start it by itself) and waits for it. `publish-downloads` raises the installers' replay floor to this manifest's sequence;
+   - checks that aiboard.me serves exactly the signed bytes.
+
+   If a step fails, the release may already be published while the manifest is not live. Re-run the failed `publish` job; every step is safe to repeat. As a last resort, download the workflow artifact `signed-manifest-<version>`, verify it, and commit it by hand:
+   ```bash
+   npx tsx scripts/release/release-keys.mts verify --manifest manifest.json --bundles <folder with the six downloaded archives>
+   ```
 5. **Check.** On a clean machine or user account:
    - Windows: `irm https://aiboard.me/install.ps1 | iex`.
    - macOS/Linux: `curl -fsSL https://aiboard.me/install.sh | sh`.

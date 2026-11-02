@@ -7,8 +7,10 @@ name: Runner release (L2, manual)
 #             sequence as tag release-sequence/<channel>/<n> (refused unless the dispatched commit is still main's
 #             tip), then the manifest is signed with
 #             AIBOARD_RELEASE_SIGNING_KEY and a DRAFT GitHub release v<version> is created with the bundles,
-#             manifest.json and manifest.json.sig. Nothing is published and aiboard.me is not touched:
-#             the owner publishes the draft and commits manifest.json(.sig) to public/release/stable/ by hand.
+#             manifest.json and manifest.json.sig. The owner's approval of this job is the only manual step.
+# 4. publish: after signing, outside the release environment (no signing key): re-verify the manifest against the
+#             bundles and against the manifest committed on main (publication order), publish the draft, commit
+#             manifest.json(.sig) to public/release/stable/ on main, deploy aiboard.me, and check the live bytes.
 # Owner setup and the release checklist: docs/remote/l2-release-owner-setup.md
 on:
   workflow_dispatch:
@@ -186,7 +188,7 @@ jobs:
           base64 -d dist/release/manifest.json.sig > manifest.sig
           ok=0; for key in pub-*.pem; do openssl dgst -sha256 -verify "$key" -signature manifest.sig dist/release/manifest.json && ok=1; done
           test "$ok" = 1
-      - name: Create DRAFT release (owner publishes it)
+      - name: Create the release as a draft (the publish job publishes it)
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
@@ -202,3 +204,94 @@ jobs:
             dist/release/manifest.json
             dist/release/manifest.json.sig
           retention-days: 90
+
+  publish:
+    name: Publish the release and the signed manifest
+    needs: sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: No line-ending conversion (the manifest is verified byte for byte)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v8
+        with:
+          name: bundles-ubuntu-latest
+          path: dist/release
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-manifest-${{ inputs.version }}
+          path: dist/signed
+      - name: Verify against the bundles and main's committed manifest
+        run: >-
+          node node_modules/tsx/dist/cli.mjs scripts/release/release-keys.mts verify
+          --manifest dist/signed/manifest.json --bundles dist/release
+      - name: Publish the GitHub release (makes the manifest's bundle URLs live)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: gh release edit "v$VERSION" --draft=false --latest
+      - name: Commit the signed manifest to main
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          read -r EPOCH SEQUENCE <<< "$(node -e "const m=require('./dist/signed/manifest.json');console.log((m.epoch??0)+' '+m.sequence)")"
+          for attempt in 1 2 3; do
+            git fetch --no-tags origin main
+            git checkout -q -B publish origin/main
+            # Publication order against whatever main holds now, not only at checkout time.
+            node node_modules/tsx/dist/cli.mjs scripts/release/release-keys.mts verify --manifest dist/signed/manifest.json
+            cp dist/signed/manifest.json dist/signed/manifest.json.sig public/release/stable/
+            git add public/release/stable/manifest.json public/release/stable/manifest.json.sig
+            if git diff --cached --quiet; then echo "main already serves this manifest."; exit 0; fi
+            git commit -q -m "release: publish signed Runner $VERSION stable manifest (epoch $EPOCH, sequence $SEQUENCE)"
+            if git push origin HEAD:main; then exit 0; fi
+            echo "main moved while publishing; retrying ($attempt/3)"
+          done
+          echo "::error::Could not push the manifest to main. The release is published; commit dist/signed manifest.json(.sig) by hand." >&2
+          exit 1
+      - name: Deploy aiboard.me
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          # A push made with GITHUB_TOKEN does not start other workflows, so dispatch the site deploy explicitly.
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run deploy-aiboard.yml --ref main
+          for _ in $(seq 1 30); do
+            run=$(gh run list --workflow deploy-aiboard.yml --event workflow_dispatch --limit 5 --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$started\")][0].databaseId // empty")
+            if [ -n "$run" ]; then break; fi
+            sleep 5
+          done
+          test -n "$run"
+          gh run watch "$run" --exit-status --interval 15
+      - name: The live manifest matches the signed bytes
+        run: |
+          set -eu
+          for _ in $(seq 1 20); do
+            if curl -fsS -H 'Cache-Control: no-cache' "https://aiboard.me/release/stable/manifest.json?run=$GITHUB_RUN_ID" -o live.json &&
+               curl -fsS -H 'Cache-Control: no-cache' "https://aiboard.me/release/stable/manifest.json.sig?run=$GITHUB_RUN_ID" -o live.json.sig &&
+               cmp -s live.json dist/signed/manifest.json && cmp -s live.json.sig dist/signed/manifest.json.sig; then
+              echo "aiboard.me serves the signed manifest."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::aiboard.me does not serve the signed manifest after the deploy." >&2
+          exit 1
