@@ -19,8 +19,8 @@ import { REMOTE_IN_PLACE_LEASE_MS, type RemoteEnableSettings } from "./remote-in
 import { LOCAL_MCP_DEPTH_LIMIT, parseMcpDepth } from "./child-environment.js";
 import { serveLocalStdioMcp } from "./local-stdio-mcp.js";
 import { createLocalPairTicket, type LocalPairPeer } from "./local-pairing.js";
-import { STUB_REMOTE_PAIRING_URL } from "./remote-auth.js";
 import { RemoteDeviceStore } from "./remote-device-store.js";
+import { DEFAULT_REMOTE_RELAY_URL } from "./remote-relay-roots.js";
 import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-principal.js";
 import { RemoteAuditStore } from "./remote-audit-store.js";
 import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
@@ -311,6 +311,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         deviceStore.acknowledgeNotice();
       }
       if (!args.runnerFlags.includes("--remote")) args.runnerFlags.push("--remote", "--remote-device-dir", deviceDirectory!);
+      // Without --relay-url, Remote uses the hosted AIBoard relay (pinned in remote-relay-roots.ts).
+      if (!args.runnerFlags.includes("--relay-url")) args.runnerFlags.push("--relay-url", DEFAULT_REMOTE_RELAY_URL);
     }
     const recorded = await readInstance(stateDirectory);
     if (recorded) assertInstanceIdentity(recorded, identity);
@@ -638,12 +640,6 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       if (args.command === "remote" && remoteOnlyActive) write("Remote-only: Build and Chat are unavailable when started from a folder that contains AIBoard state.\n");
       const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
       showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime, style);
-    }
-    if (args.command === "remote" && !args.runnerFlags.includes("--relay-url") && !new RemoteDeviceStore(deviceDirectory!).loadSession()) {
-      write("Remote pairing: " + STUB_REMOTE_PAIRING_URL + "\n");
-      if (args.noOpen !== true) {
-        try { (runtime.openUrl ?? ((target: string) => openPairUrl(target, runtime.platform ?? process.platform)))(STUB_REMOTE_PAIRING_URL); } catch { /* printed URL is the fallback */ }
-      }
     }
     if (inPlaceRemote) {
       write("Remote: on in this Runner. Ctrl+C turns Remote off and leaves the Runner running.\n");

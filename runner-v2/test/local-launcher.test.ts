@@ -17,6 +17,7 @@ import {
 import { requestLauncherControl, startLauncherControl, type LauncherHandshake, type LauncherRemoteControl } from "../src/launcher-ipc.js";
 import type { RemoteEnableSettings, RemoteEvent } from "../src/remote-in-place.js";
 import { RemoteDeviceStore } from "../src/remote-device-store.js";
+import { DEFAULT_REMOTE_RELAY_URL } from "../src/remote-relay-roots.js";
 
 const bin = fileURLToPath(new URL("../bin/aiboard.mjs", import.meta.url));
 const legacyBin = fileURLToPath(new URL("../bin/aiboard-runner-v2.mjs", import.meta.url));
@@ -401,12 +402,16 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
   };
   const environment = process.platform === "win32" ? { LOCALAPPDATA: join(f.root, "data") } : { XDG_DATA_HOME: join(f.root, "data") };
   const runtime = { cwd: f.project, home: f.root, environment, spawnRunner, write: (line: string) => output.push(line), openUrl: (url: string) => opened.push(url) };
-  const args = ["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--relay-url", "wss://mcp.aiboard.me/connect"];
+  // No --relay-url: plain `aiboard remote` pairs with the hosted relay.
+  const args = ["remote", "--state-dir", f.state, "--acknowledge-remote-access"];
   const first = runLauncher(args, runtime);
   void first.catch(() => undefined);
   let second: Promise<void> | undefined;
   try {
     await waitUntil(() => output.some((line) => line.includes("Runner running")));
+    const relayFlags = calls[0]!.args.flatMap((arg, index) => arg === "--relay-url" ? [calls[0]!.args[index + 1]] : []);
+    assert.deepEqual(relayFlags, [DEFAULT_REMOTE_RELAY_URL]);
+    assert.equal(DEFAULT_REMOTE_RELAY_URL, "wss://mcp.aiboard.me/connect");
     assert.ok(output.some((line) => line.includes("open https://mcp.aiboard.me/pair and enter code BCDF-GHJK")));
     assert.ok(output.some((line) => line.includes("Desktop; account: account-1") && line.includes("Ctrl+C to disconnect")));
     assert.equal(opened[0], "https://mcp.aiboard.me/pair");
