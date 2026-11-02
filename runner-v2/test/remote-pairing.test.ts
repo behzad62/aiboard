@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
+import { createHmac, createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -14,7 +14,9 @@ import { canonicalJson } from "../src/remote-admission-store.js";
 import { REMOTE_CONNECT_SCOPE } from "../src/remote-auth.js";
 import type { RemoteTransport } from "../src/remote-connector.js";
 import { RemoteDeviceStore } from "../src/remote-device-store.js";
+import { machineHint, parseIoregPlatformUuid, parseRegMachineGuid, plausibleMachineId, readMachineId } from "../src/machine-hint.js";
 import { RelayPairingIssuer, RemotePairingError, type PairingPresentation } from "../src/remote-pairing.js";
+import { REMOTE_RELAY_ROOTS } from "../src/remote-relay-roots.js";
 import { RemoteService } from "../src/remote-service.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { parseArguments } from "../src/runner-start.js";
@@ -28,6 +30,9 @@ interface FakeOptions {
   expiryMs?: number;
   rawStart?: string;
   verificationUri?: string;
+  /** Answer starts carrying machineHint like a relay that predates it. */
+  rejectMachineHint?: boolean;
+  startStatus?: number;
 }
 
 async function fixture(t: test.TestContext, options: FakeOptions = {}) {
@@ -69,13 +74,20 @@ async function fixture(t: test.TestContext, options: FakeOptions = {}) {
     res.setHeader("cache-control", "no-store");
     if (req.url === "/pair/v2/start") {
       starts.push(body);
-      assert.deepEqual(Object.keys(body).sort(), ["deviceId", "issuedAt", "name", "nonce", "platform", "protocolVersion", "publicKey", "runnerVersion", "signature"].sort());
+      const fields = ["deviceId", "issuedAt", "name", "nonce", "platform", "protocolVersion", "publicKey", "runnerVersion", "signature"];
+      assert.deepEqual(Object.keys(body).sort(), ("machineHint" in body ? [...fields, "machineHint"] : fields).sort());
+      if ("machineHint" in body) assert.match(String(body.machineHint), /^[A-Za-z0-9_-]{43}$/);
       assert.equal(body.protocolVersion, "1.0.0");
       assert.match(String(body.deviceId), /^device-[0-9a-f-]{36}$/);
       const { signature, ...unsigned } = body;
       const key = createPublicKey({ key: Buffer.from(String(body.publicKey), "base64url"), format: "der", type: "spki" });
       assert.equal(verify(null, Buffer.from(canonicalJson(unsigned)), key, Buffer.from(String(signature), "base64url")), true);
-      res.statusCode = 201;
+      if (options.rejectMachineHint && "machineHint" in body) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: "invalid_request" }));
+        return;
+      }
+      res.statusCode = options.startStatus ?? 201;
       res.end(options.rawStart ?? JSON.stringify({ pairingId, pollSecret, userCode: "BCDF-GHJK", verificationUri: options.verificationUri ?? `${origin}/pair`,
         expiresAt: new Date(time + (options.expiryMs ?? 600_000)).toISOString(), intervalSeconds: 5 }));
       return;
@@ -103,8 +115,9 @@ async function fixture(t: test.TestContext, options: FakeOptions = {}) {
   if (!address || typeof address === "string") throw new Error("Fake relay did not bind.");
   origin = `http://127.0.0.1:${address.port}`;
   const relayUrl = `ws://127.0.0.1:${address.port}/connect`;
-  const makeIssuer = (target: RemoteDeviceStore = store) => new RelayPairingIssuer({
+  const makeIssuer = (target: RemoteDeviceStore = store, machineId?: string) => new RelayPairingIssuer({
     relayUrl, rootKeys: [rootKey], deviceStore: target, deviceName: "Test desktop", platform: "linux", runnerVersion: "0.1.0",
+    readMachineId: async () => machineId,
     present: (value) => presented.push(value), openUrl: (uri) => opened.push(uri),
     now: () => new Date(time), sleep: async (ms) => { sleeps.push(ms); time += ms; },
   });
@@ -195,28 +208,88 @@ test("custom relay pins are required and hosted pins cannot be overridden", asyn
   assert.deepEqual(parseLauncherArguments(["remote", "--relay-url", h.relayUrl, "--relay-root-key", h.rootKey]).runnerFlags, ["--relay-url", h.relayUrl, "--relay-root-key", h.rootKey]);
 });
 
-test("the placeholder hosted root cannot authorize a session", async (t) => {
-  const h = await fixture(t);
-  const root = generateKeyPairSync("ed25519");
-  const requestKey = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
-  const response = (status: number, body: unknown) => new Response(JSON.stringify(body), {
-    status, headers: { "content-type": "application/json", "cache-control": "no-store" },
-  });
-  const fakeFetch: typeof fetch = async (input) => {
-    const target = String(input);
-    if (target.endsWith("/start")) return response(201, { pairingId: h.pairingId, pollSecret: h.pollSecret,
-      userCode: "BCDF-GHJK", verificationUri: "https://mcp.aiboard.me/pair", expiresAt: "2026-10-27T12:10:00.000Z", intervalSeconds: 5 });
-    const envelope = { accountId: "account-test", clientId: "runner", scope: REMOTE_CONNECT_SCOPE, issuedAt: "2026-10-27T12:00:00.000Z",
-      relayKeys: [{ keyId: "request-key", publicKey: requestKey }], authorizedScopes: ["scope-default"],
-      relayOrigin: "https://mcp.aiboard.me", envelopeKeyId: "PLACEHOLDER-production" };
-    return response(200, { status: "approved", session: { ...envelope,
-      envelopeSignature: sign(null, Buffer.from(canonicalJson(envelope)), root.privateKey).toString("base64url") } });
-  };
-  const issuer = new RelayPairingIssuer({ relayUrl: "wss://mcp.aiboard.me/connect", deviceStore: h.store, fetch: fakeFetch,
-    present: () => undefined, openUrl: () => undefined, now: () => new Date("2026-10-27T12:00:00Z"), sleep: async () => undefined });
-  await assert.rejects(issuer.requestSession(h.identity), /signature did not verify/);
-  assert.equal(h.store.loadSession(), undefined);
+test("hosted relay pins are distinct Ed25519 SPKI keys with ids, and production is the deployed root", () => {
+  assert.deepEqual(Object.keys(REMOTE_RELAY_ROOTS).sort(), ["https://mcp-staging.aiboard.me", "https://mcp.aiboard.me"]);
+  const keys = new Set<string>();
+  for (const [origin, roots] of Object.entries(REMOTE_RELAY_ROOTS)) {
+    assert.equal(new URL(origin).origin, origin);
+    assert.equal(new URL(origin).protocol, "https:");
+    assert.ok(roots.length >= 1);
+    for (const root of roots) {
+      assert.match(root.keyId, /^[A-Za-z0-9._:-]{1,128}$/);
+      assert.doesNotMatch(`${root.keyId} ${root.publicKey}`, /placeholder/i);
+      const key = createPublicKey({ key: Buffer.from(root.publicKey, "base64url"), format: "der", type: "spki" });
+      assert.equal(key.asymmetricKeyType, "ed25519");
+      assert.equal(key.export({ type: "spki", format: "der" }).toString("base64url"), root.publicKey);
+      assert.ok(!keys.has(root.publicKey), "hosted relays never share a root key");
+      keys.add(root.publicKey);
+    }
+  }
+  // The public half of /etc/aiboard/keys/production/root-key.pem, as RELAY_ROOT_KEY_ID production-root-1 serves it.
+  assert.deepEqual(REMOTE_RELAY_ROOTS["https://mcp.aiboard.me"], [
+    { keyId: "production-root-1", publicKey: "MCowBQYDK2VwAyEAb11m2u0oLpR9fiLcr09V02b027fbZKS_tB1BrBGg9Kc" }]);
 });
+
+// A root-signed key set the production relay sent in a /connect challenge on 2026-11-02 (public data only).
+const PRODUCTION_KEY_SET = {
+  statement: {
+    relayOrigin: "https://mcp.aiboard.me",
+    keys: [{ keyId: "production-signing-1", publicKey: "MCowBQYDK2VwAyEA2RBKWFrMEpjHRQDQVrJrxVQC7vEQQRjpaARF32RHctI" }],
+    issuedAt: "2026-11-02T06:55:19.059Z",
+    expiresAt: "2026-11-03T06:55:19.059Z",
+  },
+  rootKeyId: "production-root-1",
+  signature: "DutBRK1cuRkryrMCnIb0aT6yTNwmBR9KFt_cCt52NWRa1_LXV8o9NNPcPCU96abeFAGAaGNnvTJTWFEU8y9LBA",
+};
+
+test("a key set signed by the live production relay verifies only under the production pin, and not once altered", () => {
+  const verifies = (statement: object, rootKeyId: string, roots: readonly { keyId: string; publicKey: string }[]) =>
+    roots.some((root) => root.keyId === rootKeyId && verify(null, Buffer.from(canonicalJson(statement), "utf8"),
+      createPublicKey({ key: Buffer.from(root.publicKey, "base64url"), format: "der", type: "spki" }),
+      Buffer.from(PRODUCTION_KEY_SET.signature, "base64url")));
+  const production = REMOTE_RELAY_ROOTS["https://mcp.aiboard.me"]!;
+  const staging = REMOTE_RELAY_ROOTS["https://mcp-staging.aiboard.me"]!;
+  assert.equal(verifies(PRODUCTION_KEY_SET.statement, PRODUCTION_KEY_SET.rootKeyId, production), true);
+  assert.equal(verifies(PRODUCTION_KEY_SET.statement, "staging-root-1", staging), false);
+  assert.equal(verifies(PRODUCTION_KEY_SET.statement, "other-root", production), false);
+  assert.equal(verifies({ ...PRODUCTION_KEY_SET.statement, relayOrigin: "https://mcp-staging.aiboard.me" }, PRODUCTION_KEY_SET.rootKeyId, production), false);
+  assert.equal(verifies({ ...PRODUCTION_KEY_SET.statement, expiresAt: "2026-11-09T06:55:19.059Z" }, PRODUCTION_KEY_SET.rootKeyId, production), false);
+  const attacker = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+  assert.equal(verifies({ ...PRODUCTION_KEY_SET.statement, keys: [{ keyId: "production-signing-1", publicKey: attacker }] },
+    PRODUCTION_KEY_SET.rootKeyId, production), false);
+});
+
+test("a hosted relay's pins cannot be extended with --relay-root-key, even on the default relay", () => {
+  const key = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+  assert.throws(() => parseLauncherArguments(["remote", "--relay-root-key", key]), /require aiboard remote --relay-url/);
+  assert.throws(() => parseLauncherArguments(["remote", "--relay-url", "wss://mcp-staging.aiboard.me/connect", "--relay-root-key", key]), /cannot override/);
+});
+
+for (const [origin, roots] of Object.entries(REMOTE_RELAY_ROOTS)) {
+  for (const envelopeKeyId of [roots[0]!.keyId, "other-root"]) {
+    test(`${origin} refuses a session signed by an unpinned key under id ${envelopeKeyId}`, async (t) => {
+      const h = await fixture(t);
+      const root = generateKeyPairSync("ed25519");
+      const requestKey = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+      const response = (status: number, body: unknown) => new Response(JSON.stringify(body), {
+        status, headers: { "content-type": "application/json", "cache-control": "no-store" },
+      });
+      const fakeFetch: typeof fetch = async (input) => {
+        const target = String(input);
+        if (target.endsWith("/start")) return response(201, { pairingId: h.pairingId, pollSecret: h.pollSecret,
+          userCode: "BCDF-GHJK", verificationUri: `${origin}/pair`, expiresAt: "2026-10-27T12:10:00.000Z", intervalSeconds: 5 });
+        const envelope = { accountId: "account-test", clientId: "runner", scope: REMOTE_CONNECT_SCOPE, issuedAt: "2026-10-27T12:00:00.000Z",
+          relayKeys: [{ keyId: "request-key", publicKey: requestKey }], authorizedScopes: ["scope-default"], relayOrigin: origin, envelopeKeyId };
+        return response(200, { status: "approved", session: { ...envelope,
+          envelopeSignature: sign(null, Buffer.from(canonicalJson(envelope)), root.privateKey).toString("base64url") } });
+      };
+      const issuer = new RelayPairingIssuer({ relayUrl: `${origin.replace("https:", "wss:")}/connect`, deviceStore: h.store, fetch: fakeFetch,
+        present: () => undefined, openUrl: () => undefined, now: () => new Date("2026-10-27T12:00:00Z"), sleep: async () => undefined });
+      await assert.rejects(issuer.requestSession(h.identity), /signature did not verify/);
+      assert.equal(h.store.loadSession(), undefined);
+    });
+  }
+}
 
 test("concurrent requests for one device share a single flow", async (t) => {
   const h = await fixture(t, { statuses: ["pending", "approved"] });
@@ -291,4 +364,83 @@ test("revoked identity rotates under its owner fence and the next service start 
     assert.equal(h.store.loadSession()!.accountId, "account-test");
     assert.notEqual(await readFile(join(h.device, rotated.keyFile!), "utf8"), oldKey);
   } finally { await service.close(); await host.close(); }
+});
+
+const MACHINE_ID = "4C4C4544-0042-3510-8048-B4C04F4E4B32";
+
+test("pairing sends a signed machine hint keyed by the relay origin and never the raw machine id", async (t) => {
+  const h = await fixture(t);
+  await h.makeIssuer(h.store, MACHINE_ID).requestSession(h.identity);
+  assert.equal(h.serverErrors.length, 0);
+  assert.equal(h.starts.length, 1);
+  const expected = createHmac("sha256", h.origin).update(MACHINE_ID.toLowerCase()).digest("base64url");
+  assert.equal(h.starts[0]!.machineHint, expected);
+  assert.equal(machineHint(h.origin, MACHINE_ID), expected);
+  assert.equal(JSON.stringify(h.starts).toLowerCase().includes(MACHINE_ID.toLowerCase()), false);
+  assert.notEqual(machineHint("https://mcp.aiboard.me", MACHINE_ID), machineHint("https://mcp-staging.aiboard.me", MACHINE_ID));
+  assert.equal(machineHint(h.origin, ` ${MACHINE_ID.toLowerCase()}\n`), expected);
+});
+
+test("pairing without a readable machine id omits the hint and still succeeds", async (t) => {
+  const h = await fixture(t);
+  const session = await h.makeIssuer(h.store, undefined).requestSession(h.identity);
+  assert.equal(session.accountId, "account-test");
+  assert.equal("machineHint" in h.starts[0]!, false);
+  const failing = await fixture(t);
+  const issuer = new RelayPairingIssuer({ relayUrl: failing.relayUrl, rootKeys: [failing.rootKey], deviceStore: failing.store,
+    platform: "linux", runnerVersion: "0.1.0", present: () => undefined, openUrl: () => undefined,
+    now: () => new Date("2026-10-27T12:00:00Z"), sleep: async () => undefined, readMachineId: async () => { throw new Error("unreadable"); } });
+  await issuer.requestSession(failing.identity);
+  assert.equal("machineHint" in failing.starts[0]!, false);
+});
+
+test("re-pairing after the Runner data is wiped sends the same machine hint with a new device identity", async (t) => {
+  const h = await fixture(t, { statuses: ["approved", "approved"] });
+  await h.makeIssuer(h.store, MACHINE_ID).requestSession(h.identity);
+  await rm(h.device, { recursive: true, force: true });
+  await mkdir(h.device);
+  const wiped = new RemoteDeviceStore(h.device);
+  const fresh = wiped.ensure();
+  assert.notEqual(fresh.deviceId, h.identity.deviceId);
+  await h.makeIssuer(wiped, MACHINE_ID).requestSession(fresh);
+  assert.equal(h.starts.length, 2);
+  assert.equal(h.starts[1]!.deviceId, fresh.deviceId);
+  assert.notEqual(h.starts[1]!.publicKey, h.starts[0]!.publicKey);
+  assert.equal(h.starts[1]!.machineHint, h.starts[0]!.machineHint);
+});
+
+test("a relay that predates machine hints gets one retry without the hint", async (t) => {
+  const h = await fixture(t, { rejectMachineHint: true });
+  const session = await h.makeIssuer(h.store, MACHINE_ID).requestSession(h.identity);
+  assert.equal(session.accountId, "account-test");
+  assert.equal(h.starts.length, 2);
+  assert.equal(typeof h.starts[0]!.machineHint, "string");
+  assert.equal("machineHint" in h.starts[1]!, false);
+  assert.notEqual(h.starts[1]!.nonce, h.starts[0]!.nonce);
+  // Without a hint there is nothing to drop: a 400 is not retried.
+  const plain = await fixture(t, { startStatus: 400, rawStart: JSON.stringify({ error: "invalid_request" }) });
+  await assert.rejects(plain.makeIssuer(plain.store, undefined).requestSession(plain.identity), /invalid pairing response/);
+  assert.equal(plain.starts.length, 1);
+  // On a current relay a hinted 400 has another cause: one plain retry, then the same failure.
+  const both = await fixture(t, { startStatus: 400, rawStart: JSON.stringify({ error: "invalid_request" }) });
+  await assert.rejects(both.makeIssuer(both.store, MACHINE_ID).requestSession(both.identity), /invalid pairing response/);
+  assert.equal(both.starts.length, 2);
+  assert.equal("machineHint" in both.starts[1]!, false);
+});
+
+test("machine ids are validated and the host reader never throws", async () => {
+  assert.equal(plausibleMachineId("0123456789abcdef0123456789ABCDEF\n"), "0123456789abcdef0123456789abcdef");
+  assert.equal(plausibleMachineId(MACHINE_ID), MACHINE_ID.toLowerCase());
+  for (const value of [undefined, "", "   ", "00000000-0000-0000-0000-000000000000", "not-a-machine-id", "0123456789abcdef"]) {
+    assert.equal(plausibleMachineId(value), undefined);
+  }
+  const reg = "\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\r\n    MachineGuid    REG_SZ    " + MACHINE_ID + "\r\n";
+  assert.equal(parseRegMachineGuid(reg), MACHINE_ID.toLowerCase());
+  assert.equal(parseRegMachineGuid("ERROR: The system was unable to find the specified registry key or value."), undefined);
+  const ioreg = '+-o J314sAP  <class IOPlatformExpertDevice>\n  {\n    "IOPlatformSerialNumber" = "C02XXXXXXX"\n    "IOPlatformUUID" = "' + MACHINE_ID + '"\n  }\n';
+  assert.equal(parseIoregPlatformUuid(ioreg), MACHINE_ID.toLowerCase());
+  assert.equal(parseIoregPlatformUuid(undefined), undefined);
+  const id = await readMachineId();
+  assert.ok(id === undefined || plausibleMachineId(id) === id);
+  assert.equal(await readMachineId("aix"), undefined);
 });

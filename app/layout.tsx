@@ -119,6 +119,15 @@ export default function RootLayout({
               <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={footerLink}>
                 Contact
               </a>
+              <Link href="/terms" className={footerLink}>
+                Terms
+              </Link>
+              <Link href="/privacy" className={footerLink}>
+                Privacy
+              </Link>
+              <Link href="/refunds" className={footerLink}>
+                Refunds
+              </Link>
               <a
                 href={`${SITE_GITHUB_URL}/blob/main/LICENSE`}
                 target="_blank"

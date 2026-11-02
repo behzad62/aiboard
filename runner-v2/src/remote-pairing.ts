@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { resolve } from "node:path";
 
+import { machineHint, readMachineId, type MachineIdReader } from "./machine-hint.js";
 import { canonicalJson, rejectDuplicateKeys } from "./remote-admission-store.js";
 import { REMOTE_CONNECT_SCOPE, type RemoteSessionIssuer } from "./remote-auth.js";
 import { checkedSessionShape, type RemoteDeviceSession, type RemoteDeviceStore } from "./remote-device-store.js";
@@ -40,6 +41,8 @@ export interface RelayPairingOptions {
   readonly deviceName?: string;
   readonly platform?: NodeJS.Platform;
   readonly runnerVersion?: string;
+  /** Source of the OS machine id behind the pairing machine hint (tests inject one). */
+  readonly readMachineId?: MachineIdReader;
 }
 
 export interface RelayRoot { readonly keyId?: string; readonly publicKey: string }
@@ -134,13 +137,24 @@ export class RelayPairingIssuer implements RemoteSessionIssuer {
     const current = this.options.deviceStore.load();
     if (!current || current.revoked || current.deviceId !== identity.deviceId || current.publicKey !== identity.publicKey ||
       !/^device-[0-9a-f-]{36}$/.test(identity.deviceId)) throw new RemotePairingError("pairing_unavailable", "Device identity is unavailable for pairing.");
-    const request = {
-      protocolVersion: "1.0.0", deviceId: identity.deviceId, publicKey: identity.publicKey,
-      name: this.deviceName, platform: this.platform, runnerVersion: this.runnerVersion,
-      issuedAt: this.now().toISOString(), nonce: randomBytes(24).toString("base64url"),
+    const machineId = await (this.options.readMachineId ?? readMachineId)().catch(() => undefined);
+    const hint = machineId ? machineHint(this.origin, machineId) : undefined;
+    const startPairing = (withHint: boolean) => {
+      const request = {
+        protocolVersion: "1.0.0", deviceId: identity.deviceId, publicKey: identity.publicKey,
+        name: this.deviceName, platform: this.platform, runnerVersion: this.runnerVersion,
+        issuedAt: this.now().toISOString(), nonce: randomBytes(24).toString("base64url"),
+        ...(withHint && hint ? { machineHint: hint } : {}),
+      };
+      const signature = this.options.deviceStore.sign(Buffer.from(canonicalJson(request), "utf8")).toString("base64url");
+      return this.post("/pair/v2/start", { ...request, signature });
     };
-    const signature = this.options.deviceStore.sign(Buffer.from(canonicalJson(request), "utf8")).toString("base64url");
-    const start = await this.post("/pair/v2/start", { ...request, signature });
+    let start = await startPairing(true);
+    // Relays without free-tier machine hints refuse unknown fields; pair without one. On a current relay a 400
+    // has another cause and the single plain retry fails the same way.
+    if (hint && start.status === 400 && isRecord(start.body) && start.body.error === "invalid_request" && only(start.body, ["error"])) {
+      start = await startPairing(false);
+    }
     if (start.status !== 201 || !isRecord(start.body) || !only(start.body, ["pairingId", "pollSecret", "userCode", "verificationUri", "expiresAt", "intervalSeconds"]) ||
       !encoded(start.body.pairingId, 16) || !encoded(start.body.pollSecret, 32) ||
       typeof start.body.userCode !== "string" || !/^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(start.body.userCode) ||

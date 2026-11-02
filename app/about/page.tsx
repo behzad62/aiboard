@@ -123,12 +123,22 @@ export default function AboutPage() {
           Local-first and private by design
         </h2>
         <p>
-          There is no backend. The app is a static site that calls the AI
+          The app has no backend. It is a static site that calls the AI
           providers directly with the keys you enter in Settings. Keys,
           sessions, and attachments stay in your browser (IndexedDB) or in a
           local folder you pick, optionally encrypted with a passphrase using
-          AES-256-GCM. Nothing is uploaded to a server of ours, because there
-          isn&apos;t one.
+          AES-256-GCM. None of it is uploaded to a server of ours.
+        </p>
+        <p>
+          The one exception is the optional AIBoard Remote service, which lets
+          ChatGPT, Claude and other AI apps reach your computer through your
+          Runner. It keeps your sign-in email, paired devices and usage counts
+          on our relay; tool-call content passes through it without being
+          stored. The{" "}
+          <Link href="/privacy" className="underline hover:text-foreground">
+            Privacy Policy
+          </Link>{" "}
+          has the details.
         </p>
       </section>
 

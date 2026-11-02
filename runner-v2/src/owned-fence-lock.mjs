@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 // RUNNER_RAW_PROCESS_BOUNDARY: platform process-identity probe for fencing; probes do not authorize workload launch.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, unlinkSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const PROTOCOL_VERSION = 1;
@@ -59,6 +59,16 @@ const CANONICAL_AUTOINDEX_TABLES = new Map([
 ]);
 const waiter = new Int32Array(new SharedArrayBuffer(4));
 const asynchronousTails = new Map();
+// The acquisition id this module instance currently holds, by resolved path (claim to release).
+// Diagnostic only: a contention failure says whether the blocking holder is this live acquisition.
+const liveAcquisitions = new Map();
+const tracedErrors = new WeakSet();
+// Holder rows this module instance claimed but could not release, by resolved path. An entry whose
+// effect ran (ambiguous finalization) is diagnostic only: that holder is never stolen, but an
+// acquisition it blocks names it and the failure that kept it. An entry whose effect never started
+// may be replaced by a later acquisition here, by its exact acquisition id; that id is a random UUID
+// this instance generated, so no other thread or process can own it.
+const retainedHolders = new Map();
 let cachedCurrentBirth;
 
 export class OwnedFenceLockUnavailableError extends Error {
@@ -114,8 +124,10 @@ export function withOwnedFenceLockSync(path, effect, options = {}) {
   const context = acquire(path, options);
   let effectError;
   let retired = false;
+  let effectStarted = false;
   try {
     beginEffect(context);
+    effectStarted = true;
     let result;
     try { result = effect(); }
     catch (error) { effectError = error; }
@@ -124,12 +136,14 @@ export function withOwnedFenceLockSync(path, effect, options = {}) {
     return result;
   } catch (error) {
     rollbackQuietly(context.database);
+    if (!effectStarted) throw releaseUnstartedAcquisition(context, error);
     if (effectError !== undefined && error !== effectError) {
       throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
     }
     throw error;
   } finally {
     context.database.close();
+    forgetLiveAcquisition(context);
     if (retired) retireProtocol(path, options, context.pathIdentity, context.authorityId);
   }
 }
@@ -146,8 +160,10 @@ export async function withOwnedFenceLock(path, effect, options = {}) {
     const context = acquire(path, options);
     let effectError;
     let retired = false;
+    let effectStarted = false;
     try {
       beginEffect(context);
+      effectStarted = true;
       let result;
       try {
         result = effect();
@@ -159,12 +175,14 @@ export async function withOwnedFenceLock(path, effect, options = {}) {
       return result;
     } catch (error) {
       rollbackQuietly(context.database);
+      if (!effectStarted) throw releaseUnstartedAcquisition(context, error);
       if (effectError !== undefined && error !== effectError) {
         throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
       }
       throw error;
     } finally {
       context.database.close();
+      forgetLiveAcquisition(context);
       if (retired) retireProtocol(path, options, context.pathIdentity, context.authorityId);
     }
   } finally {
@@ -240,6 +258,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
       throw normalizeUnavailable(error);
     } finally { database?.close(); }
     if (!committed) throw new OwnedFenceLockUnavailableError("Owned fence revocation commit is unavailable.");
+    retainedHolders.delete(path);
     const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
     options.assertRevoked();
     revalidateProtocolRemovalAuthority(path, removalAuthority);
@@ -336,24 +355,33 @@ function acquire(path, options) {
     throw new OwnedFenceLockUnavailableError("Owned fence lock bounds are invalid.");
   if (options.deadlineAt !== undefined && (!Number.isFinite(options.deadlineAt) || options.deadlineAt <= 0))
     throw new OwnedFenceLockUnavailableError("Owned fence absolute deadline is invalid.");
-  const deadline = Math.min(Date.now() + deadlineMs, options.deadlineAt ?? Number.POSITIVE_INFINITY);
+  const startedAt = Date.now();
+  const trace = { startedAt, birthMs: 0, openMs: 0, attempts: 0, busy: 0, inspections: 0, inspectionMs: 0, holder: undefined, holderRead: false };
+  const deadline = Math.min(startedAt + deadlineMs, options.deadlineAt ?? Number.POSITIVE_INFINITY);
   if (Date.now() >= deadline)
-    throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
+    throw withAcquisitionTrace(new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted."), path, trace, "starting");
   const holderPid = options.holderPid ?? process.pid;
   const holderBirth = options.holderBirth ?? currentProcessBirthFingerprint(deadline - Date.now());
+  trace.birthMs = Date.now() - startedAt;
   if (!Number.isSafeInteger(holderPid) || holderPid < 1 || typeof holderBirth !== "string" || holderBirth.length === 0)
     throw new OwnedFenceLockUnavailableError("Owned fence holder identity is invalid.");
   const acquisitionId = randomUUID();
   if (Date.now() >= deadline)
-    throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
+    throw withAcquisitionTrace(new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted."), path, trace, "starting");
   const authorityId = coordinationAuthorityId(path);
-  const { database, pathIdentity } = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority);
+  let opened;
+  try { opened = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority); }
+  catch (error) { trace.openMs = Date.now() - startedAt - trace.birthMs; throw withAcquisitionTrace(error, path, trace, "opening"); }
+  const { database, pathIdentity } = opened;
+  trace.openMs = Date.now() - startedAt - trace.birthMs;
   const context = {
     path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs,
     inspectHolder: options.inspectHolder ?? defaultInspectHolder,
     afterClaim: options.afterClaim,
+    trace,
   };
   let proposalInserted = false;
+  let claimed = false;
   try {
     while (!proposalInserted) {
       try {
@@ -362,6 +390,7 @@ function acquire(path, options) {
           .run(acquisitionId, holderPid, holderBirth);
         proposalInserted = true;
       } catch (error) {
+        if (isBusy(error)) trace.busy += 1;
         if (!isBusy(error) || Date.now() >= deadline)
           throw isBusy(error)
             ? new OwnedFenceContentionError(`Owned fence lock remains held by an exact live holder${describeHolder(database)}.`, { cause: error })
@@ -370,15 +399,28 @@ function acquire(path, options) {
       }
     }
     for (;;) {
-      if (tryClaim(context)) { context.afterClaim?.(); return context; }
+      if (tryClaim(context)) {
+        claimed = true;
+        retainedHolders.delete(path);
+        liveAcquisitions.set(path, acquisitionId);
+        context.afterClaim?.();
+        return context;
+      }
       if (Date.now() >= deadline)
         throw new OwnedFenceContentionError("Owned fence lock remains held by an exact live holder.");
       Atomics.wait(waiter, 0, 0, retryDelayMs);
     }
   } catch (error) {
     if (!proposalInserted) {
+      const thrown = withRetainedHolderContext(withAcquisitionTrace(normalizeUnavailable(error), path, trace, "proposing"), path, database);
       database.close();
-      throw normalizeUnavailable(error);
+      throw thrown;
+    }
+    if (claimed) {
+      const released = releaseUnstartedAcquisition(context, error);
+      database.close();
+      forgetLiveAcquisition(context);
+      throw released;
     }
     try {
       assertCoordinationPathIdentity(path, pathIdentity);
@@ -388,8 +430,9 @@ function acquire(path, options) {
       database.close();
       throw new AggregateError([error, cleanupError], "Owned fence acquisition and proposal cleanup both failed.", { cause: error });
     }
+    const thrown = withRetainedHolderContext(withAcquisitionTrace(normalizeUnavailable(error), path, trace, "claiming"), path, database);
     database.close();
-    throw normalizeUnavailable(error);
+    throw thrown;
   }
 }
 
@@ -573,36 +616,51 @@ function sameHolderProposal(left, right) {
     .every(key => left[key] === right[key]);
 }
 function tryClaim(context) {
-  const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, inspectHolder } = context;
+  const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, inspectHolder, trace } = context;
   let observed, inspection;
+  trace.attempts += 1;
   try {
     acquisitionTimeRemaining(context);
     assertCoordinationPathIdentity(path, pathIdentity);
     assertActiveProtocol(database, authorityId);
     observed = holderProposal(database);
   } catch (error) {
-    if (isBusy(error)) return false;
+    if (isBusy(error)) { trace.busy += 1; return false; }
     throw error;
   }
+  trace.holderRead = true;
+  trace.holder = observed && observed.acquisitionId !== acquisitionId
+    ? { pid: Number(observed.holderPid), self: Number(observed.holderPid) === holderPid && observed.holderBirth === holderBirth, acquisitionId: String(observed.acquisitionId) }
+    : undefined;
   if (observed) {
     if (!validHolderRow(observed))
       throw new OwnedFenceLockUnavailableError("Owned fence holder metadata is corrupt or incomplete.");
     if (observed.acquisitionId !== acquisitionId) {
-      // Inspector failures are identity uncertainty, never SQLite coordination retries.
-      const remaining = acquisitionTimeRemaining(context);
-      try { inspection = inspectHolder(Number(observed.holderPid), String(observed.holderBirth), remaining); }
-      catch (cause) {
-        throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection failed.", { cause });
+      const retained = retainedHolders.get(path);
+      if (retained?.unstarted === true && retained.acquisitionId === observed.acquisitionId &&
+          Number(observed.holderPid) === retained.holderPid && observed.holderBirth === retained.holderBirth) {
+        // This instance claimed that exact row and never started its effect; nothing else will release it.
+        inspection = "unstarted_self";
+      } else {
+        // Inspector failures are identity uncertainty, never SQLite coordination retries.
+        const remaining = acquisitionTimeRemaining(context);
+        const inspectedAt = Date.now();
+        trace.inspections += 1;
+        try { inspection = inspectHolder(Number(observed.holderPid), String(observed.holderBirth), remaining); }
+        catch (cause) {
+          throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection failed.", { cause });
+        }
+        finally { trace.inspectionMs += Date.now() - inspectedAt; }
+        acquisitionTimeRemaining(context);
+        if (inspection === "same") return false;
+        if (inspection !== "absent" && inspection !== "birth_mismatch")
+          throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection is unavailable or uncertain.");
       }
-      acquisitionTimeRemaining(context);
-      if (inspection === "same") return false;
-      if (inspection !== "absent" && inspection !== "birth_mismatch")
-        throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection is unavailable or uncertain.");
     }
   }
   acquisitionTimeRemaining(context);
   try { database.exec("BEGIN IMMEDIATE"); }
-  catch (error) { if (isBusy(error)) return false; throw error; }
+  catch (error) { if (isBusy(error)) { trace.busy += 1; return false; } throw error; }
   try {
     acquisitionTimeRemaining(context);
     assertCoordinationPathIdentity(path, pathIdentity);
@@ -625,7 +683,7 @@ function tryClaim(context) {
       return true;
     }
     if (!sameHolderProposal(observed, row)) { database.exec("ROLLBACK"); return false; }
-    if (inspection !== "absent" && inspection !== "birth_mismatch")
+    if (inspection !== "absent" && inspection !== "birth_mismatch" && inspection !== "unstarted_self")
       throw new OwnedFenceIdentityInspectionError("Owned fence stale-holder observation is unavailable.");
     acquisitionTimeRemaining(context);
     const update = database.prepare(`
@@ -687,10 +745,110 @@ function finalizeEffect(context, primaryError, retireAfterEffect) {
   } catch (error) {
     rollbackQuietly(database);
     const cleanupError = normalizeUnavailable(error);
-    if (primaryError !== undefined)
-      throw new AggregateError([primaryError, cleanupError], "Owned fence effect and finalization both failed.", { cause: primaryError });
-    throw cleanupError;
+    const failure = primaryError !== undefined
+      ? new AggregateError([primaryError, cleanupError], "Owned fence effect and finalization both failed.", { cause: primaryError })
+      : cleanupError;
+    // The effect ran but its release did not commit, so the exact holder stays (never stolen).
+    if (currentHolderId(database) === acquisitionId) retainedHolders.set(path, retainedEntry(context, failure, false));
+    throw failure;
   }
+}
+
+// The holder row is committed but the effect never started, so releasing that exact row is
+// unambiguous. Left in place it would hold this path against this process's own live PID, and every
+// later acquisition here would wait out its whole deadline ("Owned fence acquisition deadline is
+// exhausted.", the Windows T8 factory wedge). The release re-checks the coordination path identity
+// and is bounded; if it cannot commit, the holder is kept, recorded, and both failures are reported.
+function releaseUnstartedAcquisition(context, error) {
+  const { path, pathIdentity, database, acquisitionId, retryDelayMs } = context;
+  const deadline = Date.now() + DEFAULT_DEADLINE_MS;
+  try {
+    for (;;) {
+      try { database.exec("BEGIN IMMEDIATE"); break; }
+      catch (busy) {
+        if (!isBusy(busy) || Date.now() >= deadline) throw busy;
+        Atomics.wait(waiter, 0, 0, retryDelayMs);
+      }
+    }
+    try {
+      assertCoordinationPathIdentity(path, pathIdentity);
+      database.prepare("DELETE FROM owned_fence_holder WHERE lock_key = 'owned' AND acquisition_id = ?").run(acquisitionId);
+      database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId);
+      for (;;) {
+        // Re-check before every attempt: a busy COMMIT can be retried for the whole window, and nothing
+        // may be committed through a coordination path that was replaced or gained a link meanwhile.
+        assertCoordinationPathIdentity(path, pathIdentity);
+        try { database.exec("COMMIT"); break; }
+        catch (busy) {
+          if (!isBusy(busy) || Date.now() >= deadline) throw busy;
+          Atomics.wait(waiter, 0, 0, retryDelayMs);
+        }
+      }
+    } catch (releaseError) {
+      rollbackQuietly(database);
+      throw releaseError;
+    }
+    return error;
+  } catch (releaseError) {
+    // If even this read fails, nothing is recorded and the holder stays until the process exits (fail closed).
+    if (currentHolderId(database) === acquisitionId) retainedHolders.set(path, retainedEntry(context, error, true));
+    const message = error instanceof Error ? error.message : String(error);
+    return new AggregateError([error, normalizeUnavailable(releaseError)],
+      `${message} Its claimed holder could not be released.`, { cause: error });
+  }
+}
+
+function forgetLiveAcquisition(context) {
+  if (liveAcquisitions.get(context.path) === context.acquisitionId) liveAcquisitions.delete(context.path);
+}
+
+// A contention failure says where its deadline went and who held the lock, so a hosted failure can
+// tell a holder that is live here, a row this module does not know, another process, and a slow
+// phase with no holder at all apart. It only appends to the message; the error class is unchanged.
+function withAcquisitionTrace(error, path, trace, phase) {
+  if (!(error instanceof OwnedFenceContentionError) || tracedErrors.has(error)) return error;
+  const holder = trace.holder;
+  const known = !holder ? "" : liveAcquisitions.get(path) === holder.acquisitionId ? ", live in this module"
+    : retainedHolders.get(path)?.acquisitionId === holder.acquisitionId ? ", retained by this module" : ", not held by this module";
+  const holderText = !trace.holderRead ? "holder not read" : !holder ? "no other holder seen"
+    : `holder PID ${holder.pid} (${holder.self ? "this process" : "another process"}), acquisition ${holder.acquisitionId}${known}`;
+  const Kind = error.constructor;
+  const traced = new Kind(`${error.message} [${basename(path)} while ${phase}, after ${Date.now() - trace.startedAt} ms: ` +
+    `self-birth ${trace.birthMs} ms, open ${trace.openMs} ms, ${trace.attempts} claim attempts, ${trace.busy} busy, ` +
+    `${trace.inspections} holder inspections (${trace.inspectionMs} ms), ${holderText}]`, { cause: error });
+  tracedErrors.add(traced);
+  return traced;
+}
+
+function retainedEntry(context, failure, unstarted) {
+  return { acquisitionId: context.acquisitionId, holderPid: context.holderPid, holderBirth: context.holderBirth, failure, unstarted };
+}
+
+function currentHolderId(database) {
+  try { return database.prepare("SELECT acquisition_id AS acquisitionId FROM owned_fence_holder WHERE lock_key = 'owned'").get()?.acquisitionId; }
+  catch { return undefined; }
+}
+
+function withRetainedHolderContext(error, path, database) {
+  const retained = retainedHolders.get(path);
+  const Kind = error?.constructor;
+  if (!retained || ![OwnedFenceLockUnavailableError, OwnedFenceContentionError, OwnedFenceIdentityInspectionError].includes(Kind) ||
+      currentHolderId(database) !== retained.acquisitionId) return error;
+  return new Kind(`${error.message} The holder is retained by this process (PID ${retained.holderPid}), acquisition ` +
+    `${retained.acquisitionId}, after: ${describeFailure(retained.failure)}`, { cause: error });
+}
+
+function describeFailure(error) {
+  const parts = [];
+  const seen = new Set();
+  for (let node = error; node instanceof Error && !seen.has(node) && parts.length < 6; node = node.cause) {
+    seen.add(node);
+    parts.push(node instanceof AggregateError
+      ? `${node.message} [${node.errors.map((entry) => entry instanceof Error ? entry.message : String(entry)).join("; ")}]`
+      : node.message);
+  }
+  const text = parts.join(" <- ");
+  return text.length > 600 ? `${text.slice(0, 599)}…` : text;
 }
 
 function assertActiveProtocol(database, authorityId) {

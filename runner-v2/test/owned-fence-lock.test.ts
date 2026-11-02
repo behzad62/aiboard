@@ -11,7 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { inspectGenericPosixProcessBirth, isOwnedFenceLockContention, OwnedFenceContentionError, OwnedFenceLockUnavailableError, recoverRevokedOwnedFenceLock, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
+import { currentProcessBirthFingerprint, inspectGenericPosixProcessBirth, isOwnedFenceLockContention, OwnedFenceContentionError, OwnedFenceLockUnavailableError, recoverRevokedOwnedFenceLock, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
 
 const fixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url));
 const contendedInitializerFixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-contended-initializer.mjs", import.meta.url));
@@ -407,6 +407,271 @@ test("a persistent finalization failure never reports an effect as successfully 
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
+function holderRows(path: string): unknown[] {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try { return database.prepare("SELECT acquisition_id FROM owned_fence_holder").all(); }
+  finally { database.close(); }
+}
+// A second process takes the coordination file's write lock right after the claim and holds it for
+// holdMs, so the claimed acquisition's effect boundary (BEGIN IMMEDIATE) stays busy past its short
+// deadline and fails after the holder row was already committed. Left behind, that row wedged every
+// later Windows Job observe/cleanup in the T8 factory run: "Owned fence acquisition deadline is
+// exhausted." against this process's own live PID.
+function boundaryBlocker(lockPath: string, holdMs = 600) {
+  const ready = `${lockPath}.blocker-ready`;
+  let child: ChildProcess | undefined;
+  return {
+    afterClaim: () => {
+      child = spawn(process.execPath, ["-e", `
+        const { DatabaseSync } = require("node:sqlite"); const { writeFileSync } = require("node:fs");
+        const database = new DatabaseSync(process.argv[1]); database.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE");
+        writeFileSync(process.argv[2], "ready");
+        setTimeout(() => { database.exec("ROLLBACK"); database.close(); }, Number(process.argv[3]));
+      `, lockPath, ready, String(holdMs)], { stdio: "ignore" });
+      const waiter = new Int32Array(new SharedArrayBuffer(4));
+      for (const until = Date.now() + 20_000; !existsSync(ready); ) {
+        if (Date.now() >= until) throw new Error("boundary blocker did not take the write lock");
+        Atomics.wait(waiter, 0, 0, 5);
+      }
+    },
+    exited: async () => { if (child && child.exitCode === null) await new Promise((resolvePromise) => child!.once("exit", resolvePromise)); },
+  };
+}
+
+test("t8: an async acquisition whose effect never started releases its own holder, so the next one is not wedged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-boundary-async-"));
+  const lockPath = join(root, "effect.sqlite");
+  let effects = 0;
+  try {
+    await withOwnedFenceLock(lockPath, () => undefined);
+    const blocker = boundaryBlocker(lockPath);
+    try {
+      await assert.rejects(withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+        deadlineMs: 150, afterClaim: blocker.afterClaim,
+      } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void }), /temporarily contended/i);
+    } finally { await blocker.exited(); }
+    assert.equal(effects, 0, "the failed acquisition must not run its effect");
+    assert.deepEqual(holderRows(lockPath), [], "the failed acquisition must not leave its holder row behind");
+    await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
+    assert.equal(effects, 1, "the next ordinary acquisition must succeed");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: a sync acquisition whose effect never started releases its own holder, so the next one is not wedged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-boundary-sync-"));
+  const lockPath = join(root, "effect.sqlite");
+  let effects = 0;
+  try {
+    withOwnedFenceLockSync(lockPath, () => undefined);
+    const blocker = boundaryBlocker(lockPath);
+    try {
+      assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, {
+        deadlineMs: 150, afterClaim: blocker.afterClaim,
+      } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /temporarily contended/i);
+    } finally { await blocker.exited(); }
+    assert.equal(effects, 0);
+    assert.deepEqual(holderRows(lockPath), []);
+    withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
+    assert.equal(effects, 1);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: an unstarted holder whose release could not commit is replaced by the next acquisition in this process", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-unstarted-retained-"));
+  const lockPath = join(root, "effect.sqlite");
+  let effects = 0;
+  try {
+    await withOwnedFenceLock(lockPath, () => undefined);
+    // Held past both the 150 ms acquisition deadline and the bounded 2 s release window.
+    const blocker = boundaryBlocker(lockPath, 3_000);
+    let failure: unknown;
+    try {
+      await withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+        deadlineMs: 150, afterClaim: blocker.afterClaim,
+      } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void }).catch((error: unknown) => { failure = error; });
+    } finally { await blocker.exited(); }
+    assert.ok(failure instanceof AggregateError, "both the boundary failure and the failed release are reported");
+    assert.equal(effects, 0);
+    const retained = readDurableHolder(lockPath);
+    assert.equal(retained.holderPid, process.pid, "the unreleased holder is this process's own acquisition");
+    assert.match(String((failure as Error).message), /could not be released/);
+    await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
+    assert.equal(effects, 1, "the next acquisition here replaces the exact unstarted holder instead of waiting it out");
+    assert.deepEqual(holderRows(lockPath), []);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: a release whose COMMIT is retried re-checks the coordination path before every attempt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-release-relink-"));
+  const lockPath = join(root, "effect.sqlite");
+  const aliasPath = join(root, "late-alias.sqlite");
+  const ready = `${lockPath}.blocker-ready`;
+  let child: ChildProcess | undefined;
+  let effects = 0;
+  try {
+    await withOwnedFenceLock(lockPath, () => undefined);
+    // A writer outlasts the 150 ms acquisition deadline, so the effect boundary fails; a reader then keeps
+    // the release's COMMIT busy while a hard link appears, and only afterwards lets the COMMIT through.
+    const afterClaim = () => {
+      child = spawn(process.execPath, ["-e", `
+        const { DatabaseSync } = require("node:sqlite"); const fs = require("node:fs");
+        const writer = new DatabaseSync(process.argv[1]); writer.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE");
+        const reader = new DatabaseSync(process.argv[1]); reader.exec("BEGIN"); reader.prepare("SELECT COUNT(*) FROM owned_fence_holder").get();
+        fs.writeFileSync(process.argv[2], "ready");
+        setTimeout(() => { writer.exec("ROLLBACK"); writer.close(); }, 300);
+        setTimeout(() => { fs.linkSync(process.argv[1], process.argv[3]); }, 800);
+        setTimeout(() => { reader.exec("COMMIT"); reader.close(); }, 1500);
+      `, lockPath, ready, aliasPath], { stdio: "ignore" });
+      const waiter = new Int32Array(new SharedArrayBuffer(4));
+      for (const until = Date.now() + 20_000; !existsSync(ready); ) {
+        if (Date.now() >= until) throw new Error("release blocker did not take its locks");
+        Atomics.wait(waiter, 0, 0, 5);
+      }
+    };
+    let failure: unknown;
+    try {
+      await withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+        deadlineMs: 150, afterClaim,
+      } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void }).catch((error: unknown) => { failure = error; });
+    } finally {
+      if (child && child.exitCode === null) await new Promise((resolvePromise) => child!.once("exit", resolvePromise));
+    }
+    assert.equal(effects, 0);
+    assert.ok(failure instanceof AggregateError);
+    assert.match(String((failure as Error).message), /could not be released/);
+    assert.ok(existsSync(aliasPath), "the link appeared while the release was retrying");
+    assert.ok(readDurableHolder(aliasPath), "nothing was committed through the linked coordination file");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: a holder inside its effect in another process blocks opening, and the failure says so", { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-trace-open-"));
+  const lockPath = join(root, "effect.sqlite");
+  const holder = startHolder(lockPath, undefined, 2_000, 60_000);
+  try {
+    assert.equal((await nextMessage(holder)).state, "acquired");
+    currentProcessBirthFingerprint(10_000); // a cold self-birth probe must not spend the short deadline below
+    let effects = 0;
+    let failure: unknown;
+    try { withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 400 }); } catch (error) { failure = error; }
+    assert.equal(effects, 0);
+    assert.ok(failure instanceof OwnedFenceContentionError);
+    assert.ok(isOwnedFenceLockContention(failure), "the trace keeps the contention classification");
+    // A running effect keeps its write transaction, so a contender never reaches the claim step.
+    assert.match((failure as Error).message, /^Owned fence lock protocol is temporarily contended\. \[effect\.sqlite while opening, after \d+ ms: self-birth \d+ ms, open \d+ ms, 0 claim attempts, 0 busy, 0 holder inspections \(0 ms\), holder not read\]$/);
+  } finally {
+    await stop(holder);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("t8: a holder row another live process left outside any effect is named when the claim times out", { timeout: 20_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-trace-other-"));
+  const lockPath = join(root, "effect.sqlite");
+  const ready = join(root, "orphan.ready");
+  const orphan = "00000000-0000-4000-8000-0000000000bb";
+  const modulePath = fileURLToPath(new URL("../src/owned-fence-lock.mjs", import.meta.url));
+  let child: ChildProcess | undefined;
+  try {
+    await withOwnedFenceLock(lockPath, () => undefined);
+    // A live process commits a holder row with its exact identity and then holds no transaction.
+    child = spawn(process.execPath, ["--input-type=module", "-e", `
+      import { DatabaseSync } from "node:sqlite"; import { writeFileSync } from "node:fs"; import { pathToFileURL } from "node:url";
+      const [modulePath, lockPath, ready, id] = process.argv.slice(1);
+      const { currentProcessBirthFingerprint } = await import(pathToFileURL(modulePath).href);
+      const birth = currentProcessBirthFingerprint(10_000);
+      const db = new DatabaseSync(lockPath); db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
+      db.prepare("INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES (?, ?, ?)").run(id, process.pid, birth);
+      db.prepare("INSERT INTO owned_fence_holder(lock_key, acquisition_id, holder_pid, holder_birth) VALUES ('owned', ?, ?, ?)").run(id, process.pid, birth);
+      db.exec("COMMIT"); db.close(); writeFileSync(ready, "ready"); setTimeout(() => undefined, 60_000);
+    `, modulePath, lockPath, ready, orphan], { windowsHide: true, stdio: "ignore" });
+    await waitForPath(ready, 15_000); // beyond the child's own 10 s self-birth bound
+    let effects = 0;
+    let failure: unknown;
+    try { await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 1_500 }); } catch (error) { failure = error; }
+    assert.equal(effects, 0, "a live holder is never stolen");
+    assert.ok(failure instanceof OwnedFenceContentionError);
+    const message = (failure as Error).message;
+    assert.match(message, /^Owned fence /, "the original message comes first");
+    assert.match(message, /effect\.sqlite while claiming, after \d+ ms: self-birth \d+ ms, open \d+ ms, [1-9]\d* claim attempts, \d+ busy, [1-9]\d* holder inspections \(\d+ ms\)/, message);
+    assert.ok(message.includes(`holder PID ${String(child.pid)} (another process), acquisition ${orphan}, not held by this module`), message);
+  } finally {
+    if (child) await stop(child);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("t8: a contention failure behind a holder row of this process that this module does not hold names it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-trace-self-"));
+  const lockPath = join(root, "effect.sqlite");
+  try {
+    await withOwnedFenceLock(lockPath, () => undefined);
+    // The CI shape: a holder row with this process's own live identity that no acquisition here holds.
+    let birth = "";
+    await withOwnedFenceLock(lockPath, () => { birth = readDurableHolder(lockPath).holderBirth; });
+    const orphan = "00000000-0000-4000-8000-0000000000aa";
+    const database = new DatabaseSync(lockPath);
+    try {
+      database.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
+      database.prepare("INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES (?, ?, ?)").run(orphan, process.pid, birth);
+      database.prepare("INSERT INTO owned_fence_holder(lock_key, acquisition_id, holder_pid, holder_birth) VALUES ('owned', ?, ?, ?)").run(orphan, process.pid, birth);
+      database.exec("COMMIT");
+    } finally { database.close(); }
+    let effects = 0;
+    let failure: unknown;
+    try { await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 400 }); } catch (error) { failure = error; }
+    assert.equal(effects, 0);
+    assert.ok(failure instanceof OwnedFenceContentionError);
+    assert.ok((failure as Error).message.includes(`holder PID ${String(process.pid)} (this process), acquisition ${orphan}, not held by this module`), (failure as Error).message);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: a failure right after the claim releases the claimed holder before it is reported", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-after-claim-"));
+  const lockPath = join(root, "effect.sqlite");
+  let effects = 0;
+  try {
+    await assert.rejects(withOwnedFenceLock(lockPath, () => { effects += 1; }, {
+      afterClaim: () => { throw new Error("post-claim fault"); },
+    } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void }), /post-claim fault/);
+    assert.equal(effects, 0);
+    assert.deepEqual(holderRows(lockPath), []);
+    await withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
+    assert.equal(effects, 1);
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
+test("t8: a holder this process retained after ambiguous finalization is named, with its original failure, when it blocks a later acquisition", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-retained-diagnostic-"));
+  const lockPath = join(root, "effect.sqlite");
+  try {
+    withOwnedFenceLockSync(lockPath, () => undefined);
+    assert.throws(() => withOwnedFenceLockSync(lockPath, () => undefined, {
+      afterClaim: () => {
+        const database = new DatabaseSync(lockPath);
+        try { database.exec("CREATE TRIGGER refuse_holder_delete BEFORE DELETE ON owned_fence_holder BEGIN SELECT RAISE(ABORT, 'persistent finalization fault'); END;"); }
+        finally { database.close(); }
+      },
+    } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /finalization|unavailable|persistent/i);
+    const retained = readDurableHolder(lockPath);
+    // Remove only the injected fault, so the next acquisition reaches the retained holder itself
+    // (self-contention, the T8 shape) rather than a schema refusal.
+    const cleanup = new DatabaseSync(lockPath);
+    try { cleanup.exec("DROP TRIGGER refuse_holder_delete"); } finally { cleanup.close(); }
+    let effects = 0;
+    let blocked: unknown;
+    try { withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 1_500 }); } catch (error) { blocked = error; }
+    assert.ok(blocked instanceof OwnedFenceLockUnavailableError, "the retained holder still blocks: it is never stolen");
+    assert.equal(effects, 0);
+    assert.equal(readDurableHolder(lockPath).acquisitionId, retained.acquisitionId);
+    const chain: string[] = [];
+    for (let node: unknown = blocked; node instanceof Error; node = node.cause) chain.push(node.message);
+    const text = chain.join(" <- ");
+    assert.match(text, new RegExp(`retained by this process \\(PID ${process.pid}\\), acquisition ${retained.acquisitionId}`));
+    assert.match(text, /persistent finalization fault/, "the original failure that retained the holder is preserved");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
+});
+
 test("a replacement between claim and effect is rejected by the final acquisition identity check", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-replacement-"));
   const lockPath = join(root, "effect.sqlite");
@@ -423,6 +688,8 @@ test("a replacement between claim and effect is rejected by the final acquisitio
       },
     } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /identity changed|acquisition/i);
     assert.equal(effects, 0);
+    assert.equal(readDurableHolder(lockPath).acquisitionId, "00000000-0000-4000-8000-000000000001",
+      "the failed caller releases only its own acquisition, never the replacement's holder");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
@@ -436,6 +703,7 @@ test("a hard link added after claim is rejected before the external effect", () 
       afterClaim: () => linkSync(lockPath, aliasPath),
     } as Parameters<typeof withOwnedFenceLockSync>[2] & { afterClaim: () => void }), /alias|linked|coordination path/i);
     assert.equal(effects, 0);
+    assert.ok(readDurableHolder(lockPath), "no release is written through a coordination path that gained a link");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
@@ -1067,8 +1335,8 @@ async function stop(child: ChildProcess): Promise<void> {
   await exited(child);
 }
 
-async function waitForPath(path: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+async function waitForPath(path: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (existsSync(path)) return;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
