@@ -1070,6 +1070,7 @@ test("the pairing code is shown in bold green when color is on", async () => {
     const child = baseSpawner(command, args, options);
     const fake = children[children.length - 1]!;
     fake.beforeReady = () => {
+      fake.emit("message", { type: "aiboard-remote-notice", message: "This computer was paired with https://mcp-staging.aiboard.me, so it pairs as a new device.\u001b[2J" });
       fake.emit("message", { type: "aiboard-remote-pairing", userCode: "BCDF-GHJK", verificationUri: "https://mcp.aiboard.me/pair",
         expiresAt: new Date(Date.now() + 600_000).toISOString(), deviceName: "Desktop" });
       fake.emit("message", { type: "aiboard-remote-state", state: "tool-ready", reasonCode: "ready" });
@@ -1083,6 +1084,9 @@ test("the pairing code is shown in bold green when color is on", async () => {
   try {
     await waitUntil(() => output.some((line) => line.includes("enter code")));
     assert.ok(output.some((line) => line.includes("enter code \u001b[32m\u001b[1mBCDF-GHJK\u001b[22m\u001b[39m (expires in")));
+    const note = output.find((line) => line.includes("pairs as a new device"));
+    assert.ok(note?.startsWith("\u001b[33mNote:\u001b[39m This computer was paired with https://mcp-staging.aiboard.me"));
+    assert.equal(note!.includes("\u001b[2J"), false);
   } finally {
     await Promise.all(children.map((child) => child.stop()));
     await running.catch(() => undefined);

@@ -33,6 +33,8 @@ interface FakeOptions {
   /** Answer starts carrying machineHint like a relay that predates it. */
   rejectMachineHint?: boolean;
   startStatus?: number;
+  /** Account id of each approval in turn; account-test once they run out. */
+  accounts?: string[];
 }
 
 async function fixture(t: test.TestContext, options: FakeOptions = {}) {
@@ -49,6 +51,7 @@ async function fixture(t: test.TestContext, options: FakeOptions = {}) {
   const pairingId = randomBytes(16).toString("base64url");
   const pollSecret = randomBytes(32).toString("base64url");
   const statuses = [...(options.statuses ?? ["approved"])];
+  const accounts = [...(options.accounts ?? [])];
   const starts: Record<string, unknown>[] = [], polls: Record<string, unknown>[] = [];
   const serverErrors: unknown[] = [];
   const presented: PairingPresentation[] = [];
@@ -102,7 +105,7 @@ async function fixture(t: test.TestContext, options: FakeOptions = {}) {
       return;
     }
     const envelope = {
-      accountId: "account-test", clientId: "runner", scope: REMOTE_CONNECT_SCOPE, issuedAt: new Date(time).toISOString(),
+      accountId: accounts.shift() ?? "account-test", clientId: "runner", scope: REMOTE_CONNECT_SCOPE, issuedAt: new Date(time).toISOString(),
       relayKeys: [{ keyId: "request-key", publicKey: relayKey }], authorizedScopes: ["scope-default"],
       relayOrigin: options.mismatchOrigin ? "https://other.example" : origin, envelopeKeyId: "test-root",
       ...(options.unknownSessionMember ? { extra: true } : {}),
@@ -445,7 +448,7 @@ test("machine ids are validated and the host reader never throws", async () => {
   assert.equal(await readMachineId("aix"), undefined);
 });
 
-async function startService(h: Awaited<ReturnType<typeof fixture>>) {
+async function startService(h: Awaited<ReturnType<typeof fixture>>, notices: (string | undefined)[] = []) {
   const artifacts = new ArtifactStore(join(h.state, "artifacts"));
   const host = createExecutionHost({ projectRoot: h.project, stateDirectory: h.state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
   const transport: RemoteTransport = {
@@ -453,31 +456,65 @@ async function startService(h: Awaited<ReturnType<typeof fixture>>) {
     onMessage: () => undefined, onClose: () => undefined,
   };
   const service = new RemoteService({ stateDirectory: h.state, deviceDirectory: h.device, workspacePath: h.project, host,
-    permissionProfile: "full", capabilitiesConfig: emptyRunnerCapabilitiesConfig(), createTransport: () => transport, issuer: h.makeIssuer() });
+    permissionProfile: "full", capabilitiesConfig: emptyRunnerCapabilitiesConfig(), createTransport: () => transport, issuer: h.makeIssuer(),
+    onNewDevice: (previous) => notices.push(previous) });
   await service.start();
   return { close: async () => { await service.close(); await host.close(); } };
 }
 
 test("an identity paired with another relay starts over as a new device instead of failing after approval", async (t) => {
-  const h = await fixture(t, { statuses: ["approved", "approved"] });
+  const h = await fixture(t, { statuses: ["approved", "approved"], accounts: ["account-staging", "account-production"] });
   await h.makeIssuer().requestSession(h.identity);
   // As if this identity had been paired with staging: its account id and epoch belong to that relay.
   const sessionPath = join(h.device, "remote-device-session.json");
   const stored = JSON.parse(await readFile(sessionPath, "utf8")) as Record<string, unknown>;
   await writeFile(sessionPath, JSON.stringify({ ...stored, relayOrigin: "https://mcp-staging.aiboard.me" }));
   h.store.advanceEpochTo("5");
-  const service = await startService(h);
+  const notices: (string | undefined)[] = [];
+  const service = await startService(h, notices);
   try {
     const fresh = h.store.load()!;
     assert.notEqual(fresh.deviceId, h.identity.deviceId);
     assert.notEqual(fresh.publicKey, h.identity.publicKey);
     assert.equal(fresh.epoch, "1");
     assert.equal(fresh.revoked, false);
-    assert.equal(fresh.accountId, "account-test");
+    assert.equal(fresh.accountId, "account-production");
     assert.equal(h.starts.length, 2);
     assert.equal(h.starts[1]!.deviceId, fresh.deviceId);
     assert.equal(h.store.loadSession()!.relayOrigin, h.origin);
+    assert.equal(h.store.loadSession()!.accountId, "account-production");
+    assert.deepEqual(notices, ["https://mcp-staging.aiboard.me"]);
   } finally { await service.close(); }
+});
+
+test("after remote --logout, pairing with another account starts over as a new device", async (t) => {
+  const h = await fixture(t, { statuses: ["approved", "approved"], accounts: ["account-first", "account-second"] });
+  await h.makeIssuer().requestSession(h.identity);
+  h.store.setAccountId("account-first");
+  h.store.logout();
+  assert.equal(h.store.loadSession(), undefined);
+  const notices: (string | undefined)[] = [];
+  const service = await startService(h, notices);
+  try {
+    const fresh = h.store.load()!;
+    assert.notEqual(fresh.deviceId, h.identity.deviceId);
+    assert.equal(fresh.accountId, "account-second");
+    assert.equal(h.starts.length, 2);
+    assert.deepEqual(notices, [undefined]);
+  } finally { await service.close(); }
+});
+
+test("an unreadable saved session leaves the identity alone", async (t) => {
+  const h = await fixture(t);
+  await h.makeIssuer().requestSession(h.identity);
+  h.store.setAccountId("account-test");
+  await writeFile(join(h.device, "remote-device-session.json"), "{not json");
+  const notices: (string | undefined)[] = [];
+  const service = await startService(h, notices).catch(() => undefined);
+  try {
+    assert.equal(h.store.load()!.deviceId, h.identity.deviceId);
+    assert.deepEqual(notices, []);
+  } finally { await service?.close(); }
 });
 
 test("an identity paired with this relay keeps its device and restores without pairing", async (t) => {

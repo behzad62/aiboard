@@ -794,6 +794,8 @@ function showRemoteMessage(message: Record<string, unknown>, write: (message: st
     typeof message.expiresAt === "string" && /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(message.userCode)) {
     const minutes = Math.max(1, Math.ceil((Date.parse(message.expiresAt) - Date.now()) / 60_000));
     write(`Pair this computer: open ${message.verificationUri} and enter code ${style.green(style.bold(message.userCode))} (expires in ${minutes} min)\n`);
+  } else if (message.type === "aiboard-remote-notice" && typeof message.message === "string") {
+    write(`${style.yellow("Note:")} ${message.message.replace(/[^\x20-\x7e]/g, " ").slice(0, 500)}\n`);
   } else if (message.type === "aiboard-remote-open" && typeof message.url === "string" && open) {
     try { open(message.url); } catch { /* terminal instructions are the fallback */ }
   } else if (message.type === "aiboard-remote-session" && typeof message.deviceName === "string" && typeof message.accountId === "string") {

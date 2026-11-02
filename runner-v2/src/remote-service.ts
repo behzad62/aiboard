@@ -72,6 +72,8 @@ export interface RemoteServiceOptions {
   readonly pluginTools?: RemotePluginToolProvider;
   readonly policyPatch?: Partial<RemoteDevicePolicy>;
   readonly onSession?: (session: RemoteDeviceSession) => void;
+  /** The saved identity was replaced by a new device before pairing; the argument is the relay it was paired with, if known. */
+  readonly onNewDevice?: (previousRelayOrigin: string | undefined) => void;
   /** Every connector state change, after the status file is written (terminal notices). */
   readonly onStateChange?: (state: RemoteConnectionState) => void;
 }
@@ -165,12 +167,19 @@ export class RemoteService {
     }
     this.releaseOwnerLock = release;
     let identity = deviceStore.ensure();
-    // Account ids and device epochs are per relay, so an identity paired with another relay starts over here as a new device.
+    // Account ids and device epochs are per relay. An identity bound to an account with no session for this relay
+    // (paired with another relay, or signed out with `remote --logout`) could only fail after approval, so it starts
+    // over here as a new device. An unreadable session is left alone.
     const relayOrigin = this.options.issuer.relayOrigin;
     if (!identity.revoked && identity.accountId !== null && relayOrigin !== undefined) {
       let stored: RemoteDeviceSession | undefined;
-      try { stored = deviceStore.loadSession(); } catch { stored = undefined; }
-      if (stored && stored.accountId === identity.accountId && stored.relayOrigin !== relayOrigin) identity = deviceStore.revoke();
+      let readable = true;
+      try { stored = deviceStore.loadSession(); } catch { readable = false; }
+      if (readable && (stored === undefined || (stored.accountId === identity.accountId && stored.relayOrigin !== relayOrigin))) {
+        identity = deviceStore.revoke();
+        identity = deviceStore.rotateIdentity();
+        try { this.options.onNewDevice?.(stored?.relayOrigin); } catch { /* a notice failure never blocks pairing */ }
+      }
     }
     if (identity.revoked) identity = deviceStore.rotateIdentity();
     let session = this.options.issuer.requiresSessionRestore ? undefined : this.safeSession();
