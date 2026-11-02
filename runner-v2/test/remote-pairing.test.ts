@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
+import { createHmac, createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -14,6 +14,7 @@ import { canonicalJson } from "../src/remote-admission-store.js";
 import { REMOTE_CONNECT_SCOPE } from "../src/remote-auth.js";
 import type { RemoteTransport } from "../src/remote-connector.js";
 import { RemoteDeviceStore } from "../src/remote-device-store.js";
+import { machineHint, plausibleMachineId, readMachineId } from "../src/machine-hint.js";
 import { RelayPairingIssuer, RemotePairingError, type PairingPresentation } from "../src/remote-pairing.js";
 import { REMOTE_RELAY_ROOTS } from "../src/remote-relay-roots.js";
 import { RemoteService } from "../src/remote-service.js";
@@ -29,6 +30,9 @@ interface FakeOptions {
   expiryMs?: number;
   rawStart?: string;
   verificationUri?: string;
+  /** Answer starts carrying machineHint like a relay that predates it. */
+  rejectMachineHint?: boolean;
+  startStatus?: number;
 }
 
 async function fixture(t: test.TestContext, options: FakeOptions = {}) {
@@ -70,13 +74,20 @@ async function fixture(t: test.TestContext, options: FakeOptions = {}) {
     res.setHeader("cache-control", "no-store");
     if (req.url === "/pair/v2/start") {
       starts.push(body);
-      assert.deepEqual(Object.keys(body).sort(), ["deviceId", "issuedAt", "name", "nonce", "platform", "protocolVersion", "publicKey", "runnerVersion", "signature"].sort());
+      const fields = ["deviceId", "issuedAt", "name", "nonce", "platform", "protocolVersion", "publicKey", "runnerVersion", "signature"];
+      assert.deepEqual(Object.keys(body).sort(), ("machineHint" in body ? [...fields, "machineHint"] : fields).sort());
+      if ("machineHint" in body) assert.match(String(body.machineHint), /^[A-Za-z0-9_-]{43}$/);
       assert.equal(body.protocolVersion, "1.0.0");
       assert.match(String(body.deviceId), /^device-[0-9a-f-]{36}$/);
       const { signature, ...unsigned } = body;
       const key = createPublicKey({ key: Buffer.from(String(body.publicKey), "base64url"), format: "der", type: "spki" });
       assert.equal(verify(null, Buffer.from(canonicalJson(unsigned)), key, Buffer.from(String(signature), "base64url")), true);
-      res.statusCode = 201;
+      if (options.rejectMachineHint && "machineHint" in body) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: "invalid_request" }));
+        return;
+      }
+      res.statusCode = options.startStatus ?? 201;
       res.end(options.rawStart ?? JSON.stringify({ pairingId, pollSecret, userCode: "BCDF-GHJK", verificationUri: options.verificationUri ?? `${origin}/pair`,
         expiresAt: new Date(time + (options.expiryMs ?? 600_000)).toISOString(), intervalSeconds: 5 }));
       return;
@@ -104,8 +115,9 @@ async function fixture(t: test.TestContext, options: FakeOptions = {}) {
   if (!address || typeof address === "string") throw new Error("Fake relay did not bind.");
   origin = `http://127.0.0.1:${address.port}`;
   const relayUrl = `ws://127.0.0.1:${address.port}/connect`;
-  const makeIssuer = (target: RemoteDeviceStore = store) => new RelayPairingIssuer({
+  const makeIssuer = (target: RemoteDeviceStore = store, machineId?: string) => new RelayPairingIssuer({
     relayUrl, rootKeys: [rootKey], deviceStore: target, deviceName: "Test desktop", platform: "linux", runnerVersion: "0.1.0",
+    readMachineId: async () => machineId,
     present: (value) => presented.push(value), openUrl: (uri) => opened.push(uri),
     now: () => new Date(time), sleep: async (ms) => { sleeps.push(ms); time += ms; },
   });
@@ -352,4 +364,72 @@ test("revoked identity rotates under its owner fence and the next service start 
     assert.equal(h.store.loadSession()!.accountId, "account-test");
     assert.notEqual(await readFile(join(h.device, rotated.keyFile!), "utf8"), oldKey);
   } finally { await service.close(); await host.close(); }
+});
+
+const MACHINE_ID = "4C4C4544-0042-3510-8048-B4C04F4E4B32";
+
+test("pairing sends a signed machine hint keyed by the relay origin and never the raw machine id", async (t) => {
+  const h = await fixture(t);
+  await h.makeIssuer(h.store, MACHINE_ID).requestSession(h.identity);
+  assert.equal(h.serverErrors.length, 0);
+  assert.equal(h.starts.length, 1);
+  const expected = createHmac("sha256", h.origin).update(MACHINE_ID.toLowerCase()).digest("base64url");
+  assert.equal(h.starts[0]!.machineHint, expected);
+  assert.equal(machineHint(h.origin, MACHINE_ID), expected);
+  assert.equal(JSON.stringify(h.starts).toLowerCase().includes(MACHINE_ID.toLowerCase()), false);
+  assert.notEqual(machineHint("https://mcp.aiboard.me", MACHINE_ID), machineHint("https://mcp-staging.aiboard.me", MACHINE_ID));
+  assert.equal(machineHint(h.origin, ` ${MACHINE_ID.toLowerCase()}\n`), expected);
+});
+
+test("pairing without a readable machine id omits the hint and still succeeds", async (t) => {
+  const h = await fixture(t);
+  const session = await h.makeIssuer(h.store, undefined).requestSession(h.identity);
+  assert.equal(session.accountId, "account-test");
+  assert.equal("machineHint" in h.starts[0]!, false);
+  const failing = await fixture(t);
+  const issuer = new RelayPairingIssuer({ relayUrl: failing.relayUrl, rootKeys: [failing.rootKey], deviceStore: failing.store,
+    platform: "linux", runnerVersion: "0.1.0", present: () => undefined, openUrl: () => undefined,
+    now: () => new Date("2026-10-27T12:00:00Z"), sleep: async () => undefined, readMachineId: async () => { throw new Error("unreadable"); } });
+  await issuer.requestSession(failing.identity);
+  assert.equal("machineHint" in failing.starts[0]!, false);
+});
+
+test("re-pairing after the Runner data is wiped sends the same machine hint with a new device identity", async (t) => {
+  const h = await fixture(t, { statuses: ["approved", "approved"] });
+  await h.makeIssuer(h.store, MACHINE_ID).requestSession(h.identity);
+  await rm(h.device, { recursive: true, force: true });
+  await mkdir(h.device);
+  const wiped = new RemoteDeviceStore(h.device);
+  const fresh = wiped.ensure();
+  assert.notEqual(fresh.deviceId, h.identity.deviceId);
+  await h.makeIssuer(wiped, MACHINE_ID).requestSession(fresh);
+  assert.equal(h.starts.length, 2);
+  assert.equal(h.starts[1]!.deviceId, fresh.deviceId);
+  assert.notEqual(h.starts[1]!.publicKey, h.starts[0]!.publicKey);
+  assert.equal(h.starts[1]!.machineHint, h.starts[0]!.machineHint);
+});
+
+test("a relay that predates machine hints gets one retry without the hint", async (t) => {
+  const h = await fixture(t, { rejectMachineHint: true });
+  const session = await h.makeIssuer(h.store, MACHINE_ID).requestSession(h.identity);
+  assert.equal(session.accountId, "account-test");
+  assert.equal(h.starts.length, 2);
+  assert.equal(typeof h.starts[0]!.machineHint, "string");
+  assert.equal("machineHint" in h.starts[1]!, false);
+  assert.notEqual(h.starts[1]!.nonce, h.starts[0]!.nonce);
+  // Without a hint there is nothing to drop: a 400 is not retried.
+  const plain = await fixture(t, { startStatus: 400, rawStart: JSON.stringify({ error: "invalid_request" }) });
+  await assert.rejects(plain.makeIssuer(plain.store, undefined).requestSession(plain.identity), /invalid pairing response/);
+  assert.equal(plain.starts.length, 1);
+});
+
+test("machine ids are validated and the host reader never throws", async () => {
+  assert.equal(plausibleMachineId("0123456789abcdef0123456789ABCDEF\n"), "0123456789abcdef0123456789abcdef");
+  assert.equal(plausibleMachineId(MACHINE_ID), MACHINE_ID.toLowerCase());
+  for (const value of [undefined, "", "   ", "00000000-0000-0000-0000-000000000000", "not-a-machine-id", "0123456789abcdef"]) {
+    assert.equal(plausibleMachineId(value), undefined);
+  }
+  const id = await readMachineId();
+  assert.ok(id === undefined || plausibleMachineId(id) === id);
+  assert.equal(await readMachineId("aix"), undefined);
 });
