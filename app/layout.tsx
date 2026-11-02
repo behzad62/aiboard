@@ -116,6 +116,15 @@ export default function RootLayout({
               <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={footerLink}>
                 Contact
               </a>
+              <Link href="/terms" className={footerLink}>
+                Terms
+              </Link>
+              <Link href="/privacy" className={footerLink}>
+                Privacy
+              </Link>
+              <Link href="/refunds" className={footerLink}>
+                Refunds
+              </Link>
               <a
                 href="https://paypal.me/behzadashams"
                 target="_blank"

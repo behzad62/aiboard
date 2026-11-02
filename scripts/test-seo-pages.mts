@@ -37,6 +37,21 @@ for (const slug of publicPages) {
   check(`${slug} is linked from the layout footer`, layout.includes(`href="/${slug}"`), slug);
 }
 
+// Legal pages Paddle's domain review reads: public, in the sitemap, and
+// reachable from every page through the footer.
+const legalPages = ["terms", "privacy", "refunds"] as const;
+for (const slug of legalPages) {
+  const pagePath = `app/${slug}/page.tsx`;
+  check(`${slug} page file exists`, exists(pagePath), pagePath);
+  if (exists(pagePath)) {
+    const page = read(pagePath);
+    check(`${slug} has metadata`, page.includes("export const metadata"), pagePath);
+    check(`${slug} names the Merchant of Record`, page.includes("Merchant of Record"), pagePath);
+  }
+  check(`${slug} is included in sitemap`, sitemap.includes(`"/${slug}"`), slug);
+  check(`${slug} is linked from the layout footer`, layout.includes(`href="/${slug}"`), slug);
+}
+
 for (const slug of retiredPages) {
   check(`${slug} page is removed`, !exists(`app/${slug}`), slug);
   check(`${slug} is not in sitemap`, !sitemap.includes(`"/${slug}`), slug);
