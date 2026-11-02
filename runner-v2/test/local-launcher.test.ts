@@ -416,6 +416,9 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
     assert.ok(output.some((line) => line.includes("Desktop; account: account-1") && line.includes("Ctrl+C to disconnect")));
     assert.equal(opened[0], "https://mcp.aiboard.me/pair");
     assert.equal(opened[0]!.includes("BCDF"), false);
+    // The local web UI link is printed for `aiboard remote` but never opened.
+    assert.equal(opened.some((url) => url.startsWith("https://aiboard.me/connect")), false);
+    assert.ok(output.some((line) => line.includes("https://aiboard.me/connect#pair=")));
     // Live: a device revoked while running printed nothing; state changes after ready must still reach the terminal.
     children[0]!.emit("message", { type: "aiboard-remote-state", state: "disconnected", reasonCode: "socket_lost" });
     children[0]!.emit("message", { type: "aiboard-remote-state", state: "revoked", reasonCode: "device_key_revoked" });

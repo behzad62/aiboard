@@ -639,7 +639,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
       if (gitUnavailable) write(`${style.yellow("Warning:")} ${gitUnavailableNotice(gitUnavailable, runtime.platform ?? process.platform)}\n`);
       if (args.command === "remote" && remoteOnlyActive) write("Remote-only: Build and Chat are unavailable when started from a folder that contains AIBoard state.\n");
       const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
-      showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime, style);
+      // `aiboard remote` is for ChatGPT/Claude: the local web UI link is printed but not opened, so the browser shows only the relay page.
+      showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true || args.command === "remote", write, runtime, style);
     }
     if (inPlaceRemote) {
       write("Remote: on in this Runner. Ctrl+C turns Remote off and leaves the Runner running.\n");
