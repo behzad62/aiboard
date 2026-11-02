@@ -1059,3 +1059,33 @@ test("launcher output is colored only when asked, and plain text is unchanged", 
     await f.cleanup();
   }
 });
+
+test("the pairing code is shown in bold green when color is on", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  const baseSpawner = fakeSpawner(children, calls);
+  const spawnRunner = (command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    const child = baseSpawner(command, args, options);
+    const fake = children[children.length - 1]!;
+    fake.beforeReady = () => {
+      fake.emit("message", { type: "aiboard-remote-pairing", userCode: "BCDF-GHJK", verificationUri: "https://mcp.aiboard.me/pair",
+        expiresAt: new Date(Date.now() + 600_000).toISOString(), deviceName: "Desktop" });
+      fake.emit("message", { type: "aiboard-remote-state", state: "tool-ready", reasonCode: "ready" });
+    };
+    return child;
+  };
+  const environment = process.platform === "win32" ? { LOCALAPPDATA: join(f.root, "data") } : { XDG_DATA_HOME: join(f.root, "data") };
+  const runtime = { cwd: f.project, home: f.root, environment, spawnRunner, color: true, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.some((line) => line.includes("enter code")));
+    assert.ok(output.some((line) => line.includes("enter code \u001b[32m\u001b[1mBCDF-GHJK\u001b[22m\u001b[39m (expires in")));
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
+});

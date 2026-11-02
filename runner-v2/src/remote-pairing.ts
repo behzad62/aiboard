@@ -68,6 +68,7 @@ export class RelayPairingIssuer implements RemoteSessionIssuer {
   readonly pairingUrl: string;
   readonly requiresSessionRestore = true;
   private readonly origin: string;
+  get relayOrigin(): string { return this.origin; }
   private readonly roots: readonly RelayRoot[];
   private readonly now: () => Date;
   private readonly sleep: (ms: number) => Promise<void>;

@@ -165,6 +165,13 @@ export class RemoteService {
     }
     this.releaseOwnerLock = release;
     let identity = deviceStore.ensure();
+    // Account ids and device epochs are per relay, so an identity paired with another relay starts over here as a new device.
+    const relayOrigin = this.options.issuer.relayOrigin;
+    if (!identity.revoked && identity.accountId !== null && relayOrigin !== undefined) {
+      let stored: RemoteDeviceSession | undefined;
+      try { stored = deviceStore.loadSession(); } catch { stored = undefined; }
+      if (stored && stored.accountId === identity.accountId && stored.relayOrigin !== relayOrigin) identity = deviceStore.revoke();
+    }
     if (identity.revoked) identity = deviceStore.rotateIdentity();
     let session = this.options.issuer.requiresSessionRestore ? undefined : this.safeSession();
     if (!session) {

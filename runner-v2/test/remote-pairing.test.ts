@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac, createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -443,4 +443,49 @@ test("machine ids are validated and the host reader never throws", async () => {
   const id = await readMachineId();
   assert.ok(id === undefined || plausibleMachineId(id) === id);
   assert.equal(await readMachineId("aix"), undefined);
+});
+
+async function startService(h: Awaited<ReturnType<typeof fixture>>) {
+  const artifacts = new ArtifactStore(join(h.state, "artifacts"));
+  const host = createExecutionHost({ projectRoot: h.project, stateDirectory: h.state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
+  const transport: RemoteTransport = {
+    connect: async () => { throw new Error("offline"); }, close: async () => undefined, send: () => undefined,
+    onMessage: () => undefined, onClose: () => undefined,
+  };
+  const service = new RemoteService({ stateDirectory: h.state, deviceDirectory: h.device, workspacePath: h.project, host,
+    permissionProfile: "full", capabilitiesConfig: emptyRunnerCapabilitiesConfig(), createTransport: () => transport, issuer: h.makeIssuer() });
+  await service.start();
+  return { close: async () => { await service.close(); await host.close(); } };
+}
+
+test("an identity paired with another relay starts over as a new device instead of failing after approval", async (t) => {
+  const h = await fixture(t, { statuses: ["approved", "approved"] });
+  await h.makeIssuer().requestSession(h.identity);
+  // As if this identity had been paired with staging: its account id and epoch belong to that relay.
+  const sessionPath = join(h.device, "remote-device-session.json");
+  const stored = JSON.parse(await readFile(sessionPath, "utf8")) as Record<string, unknown>;
+  await writeFile(sessionPath, JSON.stringify({ ...stored, relayOrigin: "https://mcp-staging.aiboard.me" }));
+  h.store.advanceEpochTo("5");
+  const service = await startService(h);
+  try {
+    const fresh = h.store.load()!;
+    assert.notEqual(fresh.deviceId, h.identity.deviceId);
+    assert.notEqual(fresh.publicKey, h.identity.publicKey);
+    assert.equal(fresh.epoch, "1");
+    assert.equal(fresh.revoked, false);
+    assert.equal(fresh.accountId, "account-test");
+    assert.equal(h.starts.length, 2);
+    assert.equal(h.starts[1]!.deviceId, fresh.deviceId);
+    assert.equal(h.store.loadSession()!.relayOrigin, h.origin);
+  } finally { await service.close(); }
+});
+
+test("an identity paired with this relay keeps its device and restores without pairing", async (t) => {
+  const h = await fixture(t);
+  await h.makeIssuer().requestSession(h.identity);
+  const service = await startService(h);
+  try {
+    assert.equal(h.store.load()!.deviceId, h.identity.deviceId);
+    assert.equal(h.starts.length, 1);
+  } finally { await service.close(); }
 });
