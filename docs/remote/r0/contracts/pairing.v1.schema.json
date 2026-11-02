@@ -77,6 +77,11 @@
         "signature": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{86}$"
+        },
+        "machineHint": {
+          "description": "Optional, signed with the other fields. base64url HMAC-SHA256 of the OS machine id keyed by the relay origin; used only for free-tier limits. Omitted by Runners before 0.3.1 or when no machine id is readable.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
         }
       }
     },
