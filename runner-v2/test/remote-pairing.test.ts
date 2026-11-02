@@ -15,6 +15,7 @@ import { REMOTE_CONNECT_SCOPE } from "../src/remote-auth.js";
 import type { RemoteTransport } from "../src/remote-connector.js";
 import { RemoteDeviceStore } from "../src/remote-device-store.js";
 import { RelayPairingIssuer, RemotePairingError, type PairingPresentation } from "../src/remote-pairing.js";
+import { REMOTE_RELAY_ROOTS } from "../src/remote-relay-roots.js";
 import { RemoteService } from "../src/remote-service.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { parseArguments } from "../src/runner-start.js";
@@ -195,28 +196,88 @@ test("custom relay pins are required and hosted pins cannot be overridden", asyn
   assert.deepEqual(parseLauncherArguments(["remote", "--relay-url", h.relayUrl, "--relay-root-key", h.rootKey]).runnerFlags, ["--relay-url", h.relayUrl, "--relay-root-key", h.rootKey]);
 });
 
-test("the placeholder hosted root cannot authorize a session", async (t) => {
-  const h = await fixture(t);
-  const root = generateKeyPairSync("ed25519");
-  const requestKey = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
-  const response = (status: number, body: unknown) => new Response(JSON.stringify(body), {
-    status, headers: { "content-type": "application/json", "cache-control": "no-store" },
-  });
-  const fakeFetch: typeof fetch = async (input) => {
-    const target = String(input);
-    if (target.endsWith("/start")) return response(201, { pairingId: h.pairingId, pollSecret: h.pollSecret,
-      userCode: "BCDF-GHJK", verificationUri: "https://mcp.aiboard.me/pair", expiresAt: "2026-10-27T12:10:00.000Z", intervalSeconds: 5 });
-    const envelope = { accountId: "account-test", clientId: "runner", scope: REMOTE_CONNECT_SCOPE, issuedAt: "2026-10-27T12:00:00.000Z",
-      relayKeys: [{ keyId: "request-key", publicKey: requestKey }], authorizedScopes: ["scope-default"],
-      relayOrigin: "https://mcp.aiboard.me", envelopeKeyId: "PLACEHOLDER-production" };
-    return response(200, { status: "approved", session: { ...envelope,
-      envelopeSignature: sign(null, Buffer.from(canonicalJson(envelope)), root.privateKey).toString("base64url") } });
-  };
-  const issuer = new RelayPairingIssuer({ relayUrl: "wss://mcp.aiboard.me/connect", deviceStore: h.store, fetch: fakeFetch,
-    present: () => undefined, openUrl: () => undefined, now: () => new Date("2026-10-27T12:00:00Z"), sleep: async () => undefined });
-  await assert.rejects(issuer.requestSession(h.identity), /signature did not verify/);
-  assert.equal(h.store.loadSession(), undefined);
+test("hosted relay pins are distinct Ed25519 SPKI keys with ids, and production is the deployed root", () => {
+  assert.deepEqual(Object.keys(REMOTE_RELAY_ROOTS).sort(), ["https://mcp-staging.aiboard.me", "https://mcp.aiboard.me"]);
+  const keys = new Set<string>();
+  for (const [origin, roots] of Object.entries(REMOTE_RELAY_ROOTS)) {
+    assert.equal(new URL(origin).origin, origin);
+    assert.equal(new URL(origin).protocol, "https:");
+    assert.ok(roots.length >= 1);
+    for (const root of roots) {
+      assert.match(root.keyId, /^[A-Za-z0-9._:-]{1,128}$/);
+      assert.doesNotMatch(`${root.keyId} ${root.publicKey}`, /placeholder/i);
+      const key = createPublicKey({ key: Buffer.from(root.publicKey, "base64url"), format: "der", type: "spki" });
+      assert.equal(key.asymmetricKeyType, "ed25519");
+      assert.equal(key.export({ type: "spki", format: "der" }).toString("base64url"), root.publicKey);
+      assert.ok(!keys.has(root.publicKey), "hosted relays never share a root key");
+      keys.add(root.publicKey);
+    }
+  }
+  // The public half of /etc/aiboard/keys/production/root-key.pem, as RELAY_ROOT_KEY_ID production-root-1 serves it.
+  assert.deepEqual(REMOTE_RELAY_ROOTS["https://mcp.aiboard.me"], [
+    { keyId: "production-root-1", publicKey: "MCowBQYDK2VwAyEAb11m2u0oLpR9fiLcr09V02b027fbZKS_tB1BrBGg9Kc" }]);
 });
+
+// A root-signed key set the production relay sent in a /connect challenge on 2026-11-02 (public data only).
+const PRODUCTION_KEY_SET = {
+  statement: {
+    relayOrigin: "https://mcp.aiboard.me",
+    keys: [{ keyId: "production-signing-1", publicKey: "MCowBQYDK2VwAyEA2RBKWFrMEpjHRQDQVrJrxVQC7vEQQRjpaARF32RHctI" }],
+    issuedAt: "2026-11-02T06:55:19.059Z",
+    expiresAt: "2026-11-03T06:55:19.059Z",
+  },
+  rootKeyId: "production-root-1",
+  signature: "DutBRK1cuRkryrMCnIb0aT6yTNwmBR9KFt_cCt52NWRa1_LXV8o9NNPcPCU96abeFAGAaGNnvTJTWFEU8y9LBA",
+};
+
+test("a key set signed by the live production relay verifies only under the production pin, and not once altered", () => {
+  const verifies = (statement: object, rootKeyId: string, roots: readonly { keyId: string; publicKey: string }[]) =>
+    roots.some((root) => root.keyId === rootKeyId && verify(null, Buffer.from(canonicalJson(statement), "utf8"),
+      createPublicKey({ key: Buffer.from(root.publicKey, "base64url"), format: "der", type: "spki" }),
+      Buffer.from(PRODUCTION_KEY_SET.signature, "base64url")));
+  const production = REMOTE_RELAY_ROOTS["https://mcp.aiboard.me"]!;
+  const staging = REMOTE_RELAY_ROOTS["https://mcp-staging.aiboard.me"]!;
+  assert.equal(verifies(PRODUCTION_KEY_SET.statement, PRODUCTION_KEY_SET.rootKeyId, production), true);
+  assert.equal(verifies(PRODUCTION_KEY_SET.statement, "staging-root-1", staging), false);
+  assert.equal(verifies(PRODUCTION_KEY_SET.statement, "other-root", production), false);
+  assert.equal(verifies({ ...PRODUCTION_KEY_SET.statement, relayOrigin: "https://mcp-staging.aiboard.me" }, PRODUCTION_KEY_SET.rootKeyId, production), false);
+  assert.equal(verifies({ ...PRODUCTION_KEY_SET.statement, expiresAt: "2026-11-09T06:55:19.059Z" }, PRODUCTION_KEY_SET.rootKeyId, production), false);
+  const attacker = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+  assert.equal(verifies({ ...PRODUCTION_KEY_SET.statement, keys: [{ keyId: "production-signing-1", publicKey: attacker }] },
+    PRODUCTION_KEY_SET.rootKeyId, production), false);
+});
+
+test("a hosted relay's pins cannot be extended with --relay-root-key, even on the default relay", () => {
+  const key = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+  assert.throws(() => parseLauncherArguments(["remote", "--relay-root-key", key]), /require aiboard remote --relay-url/);
+  assert.throws(() => parseLauncherArguments(["remote", "--relay-url", "wss://mcp-staging.aiboard.me/connect", "--relay-root-key", key]), /cannot override/);
+});
+
+for (const [origin, roots] of Object.entries(REMOTE_RELAY_ROOTS)) {
+  for (const envelopeKeyId of [roots[0]!.keyId, "other-root"]) {
+    test(`${origin} refuses a session signed by an unpinned key under id ${envelopeKeyId}`, async (t) => {
+      const h = await fixture(t);
+      const root = generateKeyPairSync("ed25519");
+      const requestKey = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64url");
+      const response = (status: number, body: unknown) => new Response(JSON.stringify(body), {
+        status, headers: { "content-type": "application/json", "cache-control": "no-store" },
+      });
+      const fakeFetch: typeof fetch = async (input) => {
+        const target = String(input);
+        if (target.endsWith("/start")) return response(201, { pairingId: h.pairingId, pollSecret: h.pollSecret,
+          userCode: "BCDF-GHJK", verificationUri: `${origin}/pair`, expiresAt: "2026-10-27T12:10:00.000Z", intervalSeconds: 5 });
+        const envelope = { accountId: "account-test", clientId: "runner", scope: REMOTE_CONNECT_SCOPE, issuedAt: "2026-10-27T12:00:00.000Z",
+          relayKeys: [{ keyId: "request-key", publicKey: requestKey }], authorizedScopes: ["scope-default"], relayOrigin: origin, envelopeKeyId };
+        return response(200, { status: "approved", session: { ...envelope,
+          envelopeSignature: sign(null, Buffer.from(canonicalJson(envelope)), root.privateKey).toString("base64url") } });
+      };
+      const issuer = new RelayPairingIssuer({ relayUrl: `${origin.replace("https:", "wss:")}/connect`, deviceStore: h.store, fetch: fakeFetch,
+        present: () => undefined, openUrl: () => undefined, now: () => new Date("2026-10-27T12:00:00Z"), sleep: async () => undefined });
+      await assert.rejects(issuer.requestSession(h.identity), /signature did not verify/);
+      assert.equal(h.store.loadSession(), undefined);
+    });
+  }
+}
 
 test("concurrent requests for one device share a single flow", async (t) => {
   const h = await fixture(t, { statuses: ["pending", "approved"] });

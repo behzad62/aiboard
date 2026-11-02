@@ -108,7 +108,7 @@ export class StubRemoteSessionIssuer implements RemoteSessionIssuer {
   readonly pairingUrl = STUB_REMOTE_PAIRING_URL;
 
   async requestSession(): Promise<RemoteDeviceSession> {
-    throw new RemoteAuthError("unauthorized", "Remote pairing is unavailable until the relay identity service (P1) is built.");
+    throw new RemoteAuthError("unauthorized", "No relay is configured for this Runner; start Remote with `aiboard remote`.");
   }
 
   async restoreSession(): Promise<RemoteDeviceSession | undefined> {

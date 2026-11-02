@@ -45,6 +45,7 @@ import {
 } from "../src/remote-connector.js";
 import { createRemoteStateNotices } from "../src/remote-state-notice.js";
 import { RemoteDeviceStore, type RemoteDeviceSession } from "../src/remote-device-store.js";
+import { REMOTE_RELAY_ROOTS } from "../src/remote-relay-roots.js";
 import { RemoteService } from "../src/remote-service.js";
 import { composeRemoteRuntime, closeRemoteComposition } from "../src/runner-composition.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -406,6 +407,19 @@ for (const scenario of invalidKeySets) {
     const before = await readFile(file, "utf8");
     const frame = signedChallenge(harness.challenge, scenario.challengeKey ?? rotatedPair.privateKey,
       scenario.challengeKeyId ?? ROTATED_KEY_ID, scenario.keySet());
+    assert.throws(() => harness.authenticator.answerChallenge(frame, harness.session),
+      (error: unknown) => error instanceof RemoteAuthError && error.code === "unauthorized");
+    assert.equal(await readFile(file, "utf8"), before);
+  });
+}
+
+for (const [origin, roots] of Object.entries(REMOTE_RELAY_ROOTS)) {
+  test(`the built-in ${origin} pin refuses a key set signed by an unpinned key under its root id`, async (t) => {
+    const harness = await stubHarness(t, { session: { ...sessionFor(), relayOrigin: origin }, relayRoots: REMOTE_RELAY_ROOTS });
+    const file = join(harness.state, "remote-device-session.json");
+    const before = await readFile(file, "utf8");
+    const keySet = { ...signedKeySet({ relayOrigin: origin }, attackerPair.privateKey), rootKeyId: roots[0]!.keyId };
+    const frame = signedChallenge(harness.challenge, rotatedPair.privateKey, ROTATED_KEY_ID, keySet);
     assert.throws(() => harness.authenticator.answerChallenge(frame, harness.session),
       (error: unknown) => error instanceof RemoteAuthError && error.code === "unauthorized");
     assert.equal(await readFile(file, "utf8"), before);
