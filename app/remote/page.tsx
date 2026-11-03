@@ -9,7 +9,6 @@ import {
   Power,
   ScrollText,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { RemotePricing } from "@/components/remote/RemotePricing";
 import { Button } from "@/components/ui/button";
@@ -124,11 +123,7 @@ export default function RemotePage() {
   return (
     <div className="mx-auto max-w-6xl space-y-24 pb-8 sm:space-y-28">
       <section className="pt-6 text-center sm:pt-12">
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-semibold text-accent-foreground">
-          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-          Private beta
-        </span>
-        <h1 className="mx-auto mt-5 max-w-3xl font-display text-4xl font-semibold tracking-tight sm:text-6xl">
+        <h1 className="mx-auto max-w-3xl font-display text-4xl font-semibold tracking-tight sm:text-6xl">
           Let your AI assistant work on <span className="text-primary">your own computer</span>
         </h1>
         <p className="mx-auto mt-5 max-w-2xl text-lg text-muted-foreground">
