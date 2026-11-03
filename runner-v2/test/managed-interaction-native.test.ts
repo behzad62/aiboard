@@ -103,6 +103,11 @@ test("A1: a question without a newline is input_wait, then the answer turn ends 
   const answer = turn!.read as Read;
   assert.equal((turn!.write as { status: string }).status, "acknowledged");
   assert.deepEqual([answer.completion?.source, answer.completion?.confidence], ["exited", "certain"]);
+  assert.equal(answer.exitCode, 0);
+  // Real backend: a clean exit reads exited, or stopped once the session has been released; never "unknown".
+  assert.ok(["exited", "stopped"].includes(answer.status), answer.status);
+  const polled = blocks(await f.invoke("process.poll", { processId }))[0]!;
+  assert.ok(["exited", "stopped"].includes(polled.status as string), polled.status as string);
   assert.match(text(answer), /answer:y/);
   assert.doesNotMatch(text(answer), /Proceed with deploy/, "only this turn's output is returned");
 }));
