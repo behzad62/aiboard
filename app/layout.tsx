@@ -115,7 +115,7 @@ export default function RootLayout({
                 Runner guide
               </Link>
               <Link href="/remote" className={footerLink}>
-                Remote (beta)
+                Remote
               </Link>
               <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={footerLink}>
                 Contact
