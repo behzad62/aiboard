@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { createWindowsJobProcessChannelProvider, type WindowsJobChannelAuthority } from "../src/windows-job-process-channel.js";
 import type { BackpressuredOutputSettlement } from "../src/interactive-process-channel.js";
@@ -103,6 +104,50 @@ for (const fault of ["identity", "deadline"] as const) test(`C2 round6 Job final
     f.state.onReattest = () => { if (++calls === 2) { if (fault === "deadline") f.state.now = 1100; else return "live"; } return "exited"; };
     const result = await f.channel.settleBackpressuredOutput(1100);
     assert.equal(result.status, "blocked", "final terminal proof must remain exact through the last awaited observation");
+  } finally { await f.channel.detach(); }
+});
+
+test("an idle Job channel backs off its background output polling", async () => {
+  const f = await fixture();
+  try {
+    f.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // A fixed 1 ms cadence would issue hundreds of fenced reads here; doubling from 1 ms issues about nine.
+    assert.ok(f.state.reads >= 3 && f.state.reads <= 15, `idle reads: ${f.state.reads}`);
+  } finally { await f.channel.detach(); }
+});
+
+test("a slow fenced read never queues further background polls behind it", async () => {
+  const f = await fixture(); let resume!: () => void; let entered = false;
+  const hold = new Promise<void>((resolve) => { resume = resolve; });
+  try {
+    f.state.beforeRead = async () => { if (!entered) { entered = true; await hold; } };
+    f.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+    for (let turn = 0; turn < 20 && !entered; turn++) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(entered, true);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const whileHeld = f.state.reads;
+    resume();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(whileHeld, 1, "no poll may start while one is still reading");
+    assert.ok(f.state.reads <= 3, `reads after release: ${f.state.reads}`);
+  } finally { resume(); await f.channel.detach(); }
+});
+
+test("input returns an idle Job channel to the fast poll cadence", async () => {
+  const f = await fixture();
+  try {
+    const delivered: string[] = [];
+    f.channel.subscribeBackpressuredOutput(async (metadata, bytes) => { delivered.push(Buffer.from(bytes).toString()); return metadata; });
+    // Idle long enough that the next background poll is up to the 500 ms cap away.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const payload = Buffer.from("1+1\n");
+    await f.channel.write({ sequence: 1, byteLength: payload.byteLength, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 1000 }, payload);
+    f.state.bytes = Buffer.from("2\n>>> ");
+    const started = Date.now();
+    while (!delivered.length && Date.now() - started < 1000) await new Promise((resolve) => setTimeout(resolve, 2));
+    assert.deepEqual(delivered, ["2\n>>> "]);
+    assert.ok(Date.now() - started < 150, `output after input took ${Date.now() - started} ms`);
   } finally { await f.channel.detach(); }
 });
 
