@@ -4,7 +4,9 @@ import test from "node:test";
 import { ManagedProcessError, type ManagedOutputUntil } from "../src/managed-process-contracts.js";
 import {
   evaluateCompletion,
+  exitProven,
   interactionState,
+  MANAGED_PATTERN_EVAL_TIMEOUT_MS,
   matchKnownPrompt,
   matchOutputPattern,
   renderPlain,
@@ -125,7 +127,7 @@ test("matchKnownPrompt recognizes REPL and shell prompts but not prompt-looking 
 
 const idle: ManagedOutputUntil = Object.freeze({ idleMs: 1500 });
 function facts(overrides: Partial<ManagedCompletionFacts>): ManagedCompletionFacts {
-  return { until: idle, running: true, newBytes: 10, quietMs: 0, tailEndsWithNewline: false, plainNewTail: "", lastLine: "", ...overrides };
+  return { until: idle, running: true, exitProven: true, newBytes: 10, quietMs: 0, tailEndsWithNewline: false, plainNewTail: "", lastLine: "", ...overrides };
 }
 
 test("dc replay: a program's own [y/N] prompt is likely input_wait after the quiet window", () => {
@@ -173,6 +175,12 @@ test("legacy mode keeps today's any-new-byte semantics", () => {
 test("exit beats every condition and until.exit ignores idle and patterns", () => {
   assert.deepEqual(evaluateCompletion(facts({ running: false })), { source: "exited", confidence: "certain" });
   assert.deepEqual(evaluateCompletion(facts({ until: undefined, running: false, newBytes: 0 })), { source: "exited", confidence: "certain" });
+  // A session that stopped running without a proven exit (input/backend unavailable, cleanup pending) is never "certain".
+  assert.deepEqual(evaluateCompletion(facts({ running: false, exitProven: false })), { source: "unavailable", confidence: null });
+  assert.equal(interactionState({ source: "unavailable", confidence: null }, false), "unknown");
+  assert.equal(exitProven({ status: "exited_unknown", exitCode: null, signal: null }), false);
+  assert.equal(exitProven({ status: "exited_unknown", exitCode: 0, signal: null }), true);
+  assert.equal(exitProven({ status: "stopped", exitCode: null, signal: null }), true);
   assert.equal(evaluateCompletion(facts({ until: { exit: true }, quietMs: 99_999, cpuDeltaMs: 0, lastLine: ">>> " })), undefined);
 });
 
@@ -193,4 +201,24 @@ test("timeout and interaction states", () => {
   assert.equal(interactionState({ source: "pattern", confidence: "certain" }, true), "running");
   assert.equal(interactionState(undefined, true), "running");
   assert.equal(interactionState({ source: "input_wait", confidence: "likely" }, false), "exited");
+});
+
+test("a polynomial pattern that passes the static screen is stopped by the evaluation bound", () => {
+  // Review finding: `a*a*!` passes validateOutputPattern but takes ~10 s on a 4 KiB tail.
+  for (const pattern of ["a*a*!", ".*.*.*.*!", "[a]*[a]*[a]*!"]) {
+    assert.deepEqual(validateOutputPattern(pattern), { ok: true }, pattern);
+    const began = Date.now();
+    assert.throws(() => matchOutputPattern(pattern, undefined, "a".repeat(4096)), invalidArguments, pattern);
+    assert.ok(Date.now() - began < MANAGED_PATTERN_EVAL_TIMEOUT_MS * 10, `${pattern} took ${Date.now() - began} ms`);
+  }
+  assert.equal(matchOutputPattern("ready on port (\\d+)", undefined, "x".repeat(4000) + "ready on port 3000"), "ready on port 3000");
+});
+
+test("renderPlain stays linear on unterminated OSC and still strips terminated ones", () => {
+  const hostile = "\u001b]x".repeat(70_000);
+  const began = Date.now();
+  renderPlain(hostile);
+  assert.ok(Date.now() - began < 500, `unterminated OSC took ${Date.now() - began} ms`);
+  assert.equal(renderPlain("a\u001b]0;title\u0007b\u001b]8;;https://x\u001b\\c\n"), "abc\n");
+  assert.equal(renderPlain("\u001b]" + "t".repeat(5000) + "\nrest\n").endsWith("rest\n"), true, "an unterminated OSC swallows a bounded body only");
 });

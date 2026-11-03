@@ -174,4 +174,11 @@ Where the implementation differs from §2, this section wins.
   - The transport holds them per frozen call context and uses the input authorization once.
   - The acceptance run caught this: the first wiring asked for a second grant and was refused, fail-closed.
 - **Windows CPU evidence.** The job host polls Job accounting every 500 ms. It emits an `accounting` event when CPU time changed, or every 5 s otherwise. The helper assembly hash is computed at launch, so there is no static pin to regenerate.
+- **After independent review (2026-11-03):**
+  - **Pattern time bound.** Every `until.pattern` evaluation now runs under a hard 50 ms `vm` time bound, and an over-budget pattern fails the wait with `invalid_arguments`. The static ReDoS screen is only a first filter: `a*a*!` passes it and takes about 10 s on a 4 KiB tail.
+  - **Bounded OSC strip.** `renderPlain` bounds the OSC body, so stripping is linear even when a sequence is never terminated.
+  - **Unproven exits.** A process that stops running with no proven exit now reports completion `unavailable` (confidence `null`) and state `unknown`. Exit counts as proven only for a released session or an observed exit code or signal.
+  - **Accounting can't kill the process.** In the job host, an accounting failure or the 16 MiB accounting byte budget turns accounting off; neither can reach the lifecycle. CPU fields stay out of the durable status line.
+  - **CPU window.** Flat CPU counts as evidence only after the quiet window spans 1 s, two accounting polls.
+  - **Interact ordering.** `process.interact` always reads before writing, which validates a caller's cursor and `maxBytes` before any input. Turns run one at a time per process, after any in-flight stdin. A pre-write cancellation reports `process_input_rejected`, since nothing was sent.
 - **Not built in T1.** Linux `/proc` CPU sampling, macOS sampling, and the Linux stdin-syscall upgrade to `certain`. Off Windows, `input_wait` is therefore unavailable: a quiet process reports `idle` (`heuristic`), or `known_prompt`. A2 and A3 are Windows-only until POSIX CPU evidence exists.

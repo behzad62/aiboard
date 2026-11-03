@@ -86,7 +86,9 @@ const status = {
 
 function persistStatus() {
   status.updatedAt = new Date().toISOString();
-  appendFileSync(bootstrapStatusPath, `${JSON.stringify(status)}\n`, { mode: 0o600 });
+  // T1 CPU evidence is in-memory only: served by /status, never written to the durable status line.
+  const { cpuTimeMs: _cpuTimeMs, cpuSampledAt: _cpuSampledAt, ...durable } = status;
+  appendFileSync(bootstrapStatusPath, `${JSON.stringify(durable)}\n`, { mode: 0o600 });
   settleStatusWaiters();
 }
 

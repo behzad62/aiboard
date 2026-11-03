@@ -40,6 +40,10 @@ for (let i = 1; i <= 100; i++) out += '\\r[' + '#'.repeat(Math.floor(i / 10)).pa
 out += '\\n';
 for (let i = 1; i <= 5; i++) out += '\\u001b[3' + i + 'mcolor line ' + i + '\\u001b[0m\\n';
 process.stdout.write(out, () => process.exit(0));`,
+  // Review findings 6/7: a line REPL that answers each line after a short think, then re-prompts.
+  "echo.mjs": `import readline from 'node:readline';
+process.stdout.write('> ');
+readline.createInterface({ input: process.stdin }).on('line', line => setTimeout(() => process.stdout.write('got:' + line + '\\n> '), 300));`,
 };
 
 type Invoke = (name: string, input: Record<string, unknown>) => Promise<ToolExecutionOutput>;
@@ -205,4 +209,20 @@ test("A12: plain render collapses a carriage-return progress bar and strips ANSI
   assert.deepEqual(last.lines, ["color line 4", "color line 5"]);
   assert.equal(first.totalLines, 6); assert.equal(second.totalLines, 6);
   assert.equal(first.hasMore, true); assert.equal(second.hasMore, false);
+}));
+
+test("review 6/7: a bad cursor is refused before any input is sent; concurrent turns each get only their own reply", { timeout: 120_000 }, async t => withHost(t, async f => {
+  const { processId, read } = await startAndWait(f, { command: process.execPath, args: ["echo.mjs"], interactive: true, until: { pattern: "> $" }, waitMs: 15_000 });
+  assert.equal(read.completion?.source, "pattern");
+  const refused = await f.invoke("process.interact", { processId, data: "never-sent", cursor: "not-a-cursor" });
+  assert.equal(refused.isError, true); assert.equal(refused.error?.code, "process_output_cursor_invalid");
+  const tooSmall = await f.invoke("process.interact", { processId, data: "never-sent", maxBytes: 1 });
+  assert.equal(tooSmall.isError, true); assert.equal(tooSmall.error?.code, "invalid_arguments");
+  const [a, b] = await Promise.all(["alpha", "beta"].map(data => f.invoke("process.interact", { processId, data, until: { pattern: "got:\\w+\\n> $" } })));
+  const reply = (output: ToolExecutionOutput) => text((blocks(output)[0]!.read as Read));
+  assert.equal(reply(a!), "got:alpha\n> ");
+  assert.equal(reply(b!), "got:beta\n> ");
+  const [all] = blocks(await f.invoke("process.read_output", { processId, stream: "stdout" }));
+  assert.doesNotMatch(text(all as unknown as Read), /never-sent/, "refused turns delivered nothing");
+  await stop(f, processId);
 }));

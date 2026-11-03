@@ -5,7 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { ToolExecutionContext } from "./agent-contracts.js";
 import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_WAIT_MAX_MS, MANAGED_UNTIL_IDLE_DEFAULT_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedInteractionState, type ManagedOutputCompletion, type ManagedOutputUntil, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
 import { createManagedWaitTracker } from "./managed-process-wait-tracker.js";
-import { interactionState } from "./managed-process-wait.js";
+import { exitProven, interactionState } from "./managed-process-wait.js";
 import { MANAGED_OUTPUT_FINAL_SPILL_BYTES, MANAGED_OUTPUT_LIVE_TAIL_BYTES, decodeOutputCursor, encodeOutputCursor, hasNewOutput, normalizeOutputRead, sliceOutput, streamsFor, type ManagedOutputCursorBinding, type ManagedOutputReadRequest, type ManagedOutputReadResult, type ManagedOutputSlice, type ManagedOutputStreamName } from "./managed-process-output.js";
 import { historicalSnapshot, readHistoricalManagedProcessRecord } from "./managed-process-history.js";
 import { MAX_MANAGED_OUTPUT_BYTES, managedIdentity, managedProcessId, managedSnapshot, parseManagedSessionRecord, persistManagedSessionRecord, readManagedRecordValue, type ManagedSessionRecord } from "./managed-process-record.js";
@@ -62,6 +62,8 @@ export class ManagedProcessService {
   private readonly stops = new Map<string, Promise<ManagedProcessSnapshot>>();
   /** Per-process input order: one write settles (durably) before the next is admitted. */
   private readonly inputTails = new Map<string, Promise<unknown>>();
+  /** T1: one process.interact turn at a time per process. */
+  private readonly turns = new Map<string, Promise<unknown>>();
   /** T1: latest evidence-based completion per process (in memory; observation only). */
   private readonly interactions = new Map<string, Readonly<{ completion: ManagedOutputCompletion; state: ManagedInteractionState }>>();
   private cursorKeyBytes?: Uint8Array;
@@ -232,19 +234,37 @@ export class ManagedProcessService {
     const appendNewline = request.appendNewline ?? true;
     // The call's one grant covers this turn's input and its observation; the operation mirrors writeExact.
     const interaction = (request.data ?? "").length > 0 || appendNewline ? "write" as const : "close_input" as const;
-    // Without a caller cursor, this turn's output starts at the totals observed just before the write.
-    const cursor = request.cursor ?? (await this.readExact(processId, { stream: request.stream ?? "both", maxBytes: 4, tailBytes: 1 }, exact, interaction)).cursor;
-    const write = await this.writeExact(processId, { writeId, ...(request.data !== undefined ? { data: request.data } : {}),
-      appendNewline, ...(request.closeInput !== undefined ? { closeInput: request.closeInput } : {}) }, exact);
-    if (write.status !== "acknowledged") return Object.freeze({ processId: write.processId, write });
-    try {
-      const read = await this.readExact(processId, { cursor, until, waitMs, ...(request.stream !== undefined ? { stream: request.stream } : {}),
-        ...(request.maxBytes !== undefined ? { maxBytes: request.maxBytes } : {}) }, exact, interaction);
-      return Object.freeze({ processId: write.processId, write, read });
-    } catch (error) {
-      const code = error instanceof ManagedProcessError ? error.code : "process_output_unavailable";
-      return Object.freeze({ processId: write.processId, write, readError: Object.freeze({ code, message: error instanceof Error ? error.message : String(error) }) });
-    }
+    // Turns on one process run one at a time, after any in-flight stdin, so each turn's cursor
+    // starts exactly where its own input begins and replies are never attributed to another turn.
+    const previous = this.turns.get(processId) ?? Promise.resolve();
+    const turn = previous.catch(() => undefined).then(async () => {
+      await this.inputTails.get(processId)?.catch(() => undefined);
+      let cursor: string;
+      try {
+        // Always read before writing: it validates a caller's cursor and maxBytes up front, so an
+        // argument error can never follow delivered input. Without a cursor the turn starts here.
+        const pre = await this.readExact(processId, { stream: request.stream ?? "both", maxBytes: request.maxBytes ?? 4,
+          ...(request.cursor !== undefined ? { cursor: request.cursor } : { tailBytes: 1 }) }, exact, interaction);
+        cursor = request.cursor ?? pre.cursor;
+      } catch (error) {
+        // Nothing was written: a cancelled or timed-out pre-read is a refusal, never uncertain input.
+        if (error instanceof ManagedProcessError && !["process_cancelled", "process_timeout"].includes(error.code)) throw error;
+        throw new ManagedProcessError("process_input_rejected", `Nothing was sent: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const write = await this.writeExact(processId, { writeId, ...(request.data !== undefined ? { data: request.data } : {}),
+        appendNewline, ...(request.closeInput !== undefined ? { closeInput: request.closeInput } : {}) }, exact);
+      if (write.status !== "acknowledged") return Object.freeze({ processId: write.processId, write });
+      try {
+        const read = await this.readExact(processId, { cursor, until, waitMs, ...(request.stream !== undefined ? { stream: request.stream } : {}),
+          ...(request.maxBytes !== undefined ? { maxBytes: request.maxBytes } : {}) }, exact, interaction);
+        return Object.freeze({ processId: write.processId, write, read });
+      } catch (error) {
+        const code = error instanceof ManagedProcessError ? error.code : "process_output_unavailable";
+        return Object.freeze({ processId: write.processId, write, readError: Object.freeze({ code, message: error instanceof Error ? error.message : String(error) }) });
+      }
+    });
+    this.turns.set(processId, turn);
+    try { return await turn; } finally { if (this.turns.get(processId) === turn) this.turns.delete(processId); }
   }
 
   private async readExact(processId: string, request: ManagedOutputReadRequest, exact: Readonly<ToolExecutionContext>,
@@ -393,7 +413,8 @@ export class ManagedProcessService {
   private withInteraction(snapshot: ManagedProcessSnapshot): ManagedProcessSnapshot {
     const last = this.interactions.get(snapshot.processId);
     if (!last) return snapshot;
-    return Object.freeze({ ...snapshot, state: snapshot.status === "running" ? last.state : "exited" as const, lastCompletion: last.completion });
+    const state = snapshot.status === "running" ? last.state : exitProven(snapshot) ? "exited" as const : "unknown" as const;
+    return Object.freeze({ ...snapshot, state, lastCompletion: last.completion });
   }
   private load(entry: string): void {
     const value = readManagedRecordValue(join(this.stateDirectory, entry));

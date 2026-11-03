@@ -135,7 +135,7 @@ export function createManagedProcessTools(
     {
       definition: definition(
         "process.interact",
-        "One turn with an owned process started with interactive: true: send a line of input (appendNewline defaults to true), then wait for evidence that the turn is done and return only this turn's output. until defaults to { idleMs: 1500 }. completion says how the wait ended and how sure it is: exited/pattern/port are certain; input_wait is certain or likely; known_prompt and idle are heuristics; timeout means still running. A write that was not acknowledged returns no output (never resent automatically).",
+        "One turn with an owned process started with interactive: true: send a line of input (appendNewline defaults to true), then wait for evidence that the turn is done and return only this turn's output. until defaults to { idleMs: 1500 }. completion says how the wait ended and how sure it is: exited/pattern/port are certain; input_wait is certain or likely; known_prompt and idle are heuristics; timeout means still running; unavailable means it stopped running without a proven exit. A write that was not acknowledged returns no output (never resent automatically).",
         false,
         "workspace",
       ),

@@ -389,6 +389,7 @@ public static class ManagedProcessJobHost
             long lastAccountingMs = -1000000;
             long lastAccountingEmitMs = -1000000;
             long lastCpu = -1;
+            long accountingBytes = 0;
             while (true)
             {
                 if (!rootExited && WaitForSingleObject(processInfo.hProcess, 50) == WAIT_OBJECT_0)
@@ -399,18 +400,26 @@ public static class ManagedProcessJobHost
                 }
                 if (accounting)
                 {
-                    long elapsed = accountingClock.ElapsedMilliseconds;
-                    if (elapsed - lastAccountingMs >= 500)
+                    // Evidence must never become a lifecycle fact: any accounting failure (a
+                    // transiently locked or full event file, a failed query) or reaching the
+                    // byte budget only turns accounting off; callers then lose CPU evidence.
+                    try
                     {
-                        lastAccountingMs = elapsed;
-                        long cpu = TotalCpu100ns(job);
-                        if (cpu != lastCpu || elapsed - lastAccountingEmitMs >= 5000)
+                        long elapsed = accountingClock.ElapsedMilliseconds;
+                        if (elapsed - lastAccountingMs >= 500)
                         {
-                            lastCpu = cpu;
-                            lastAccountingEmitMs = elapsed;
-                            EmitAccounting(eventPath, processInfo.dwProcessId, cpu);
+                            lastAccountingMs = elapsed;
+                            long cpu = TotalCpu100ns(job);
+                            if (cpu != lastCpu || elapsed - lastAccountingEmitMs >= 5000)
+                            {
+                                lastCpu = cpu;
+                                lastAccountingEmitMs = elapsed;
+                                accountingBytes += EmitAccounting(eventPath, processInfo.dwProcessId, cpu);
+                                if (accountingBytes >= AccountingByteBudget) accounting = false;
+                            }
                         }
                     }
+                    catch (Exception) { accounting = false; }
                 }
                 if (rootExited)
                 {
@@ -500,11 +509,16 @@ public static class ManagedProcessJobHost
         finally { Marshal.FreeHGlobal(pointer); }
     }
 
-    private static void EmitAccounting(string eventPath, uint pid, long cpu100ns)
+    /// <summary>T1: accounting events stop after this many bytes so a long busy session cannot grow the event file without bound.</summary>
+    private const long AccountingByteBudget = 16L * 1024 * 1024;
+
+    private static int EmitAccounting(string eventPath, uint pid, long cpu100ns)
     {
-        File.AppendAllText(eventPath, "{\"type\":\"accounting\",\"pid\":" + pid +
+        string line = "{\"type\":\"accounting\",\"pid\":" + pid +
             ",\"exitCode\":null,\"activeProcesses\":0,\"error\":null,\"cpu100ns\":" + cpu100ns + "}" +
-            Environment.NewLine, new UTF8Encoding(false));
+            Environment.NewLine;
+        File.AppendAllText(eventPath, line, new UTF8Encoding(false));
+        return line.Length;
     }
 
     private const int DefaultStopDeadlineMs = 60000;

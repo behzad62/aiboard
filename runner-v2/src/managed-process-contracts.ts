@@ -174,18 +174,20 @@ export interface ManagedOutputUntil {
   /** Enables input_wait / known_prompt / idle after this much output silence. */
   readonly idleMs?: number;
 }
-export type ManagedCompletionSource = "exited" | "pattern" | "port" | "input_wait" | "idle" | "known_prompt" | "changed" | "timeout";
+/** `unavailable`: the session stopped running observably (input/backend unavailable, cleanup pending) without a proven exit. */
+export type ManagedCompletionSource = "exited" | "unavailable" | "pattern" | "port" | "input_wait" | "idle" | "known_prompt" | "changed" | "timeout";
 export type ManagedCompletionConfidence = "certain" | "likely" | "heuristic";
 export interface ManagedOutputCompletion {
   readonly source: ManagedCompletionSource;
-  /** null for changed and timeout, which make no claim about the process. */
+  /** null for changed, timeout and unavailable, which make no claim about the process. */
   readonly confidence: ManagedCompletionConfidence | null;
   readonly quietMs?: number;
   readonly cpuDeltaMs?: number;
   readonly preexistingPort?: true;
   readonly matched?: string;
 }
-export type ManagedInteractionState = "running" | "awaiting_input" | "idle" | "exited";
+/** `unknown`: not running, and exit is not proven (see ManagedCompletionSource `unavailable`). */
+export type ManagedInteractionState = "running" | "awaiting_input" | "idle" | "exited" | "unknown";
 export interface ManagedProcessCpuEvidence {
   /** User + kernel CPU time of the owned tree, monotonic within one launch. */
   readonly totalMs: number;

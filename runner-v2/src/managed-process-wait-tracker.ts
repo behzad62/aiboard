@@ -1,7 +1,7 @@
 import { createConnection } from "node:net";
 import type { ManagedOutputCompletion, ManagedOutputEvidence, ManagedOutputUntil } from "./managed-process-contracts.js";
 import type { ManagedOutputStreamName } from "./managed-process-output.js";
-import { evaluateCompletion, renderPlain, timeoutCompletion } from "./managed-process-wait.js";
+import { evaluateCompletion, exitProven, renderPlain, terminalCompletion, timeoutCompletion } from "./managed-process-wait.js";
 
 /** Bytes of each stream's newest retained output rendered for pattern and prompt checks. */
 const TRACKED_TAIL_BYTES = 8 * 1024;
@@ -9,6 +9,8 @@ const PORT_PROBE_INTERVAL_MS = 250;
 const PORT_PROBE_TIMEOUT_MS = 250;
 /** How often the transport re-evaluates time-based conditions (idle, port). */
 export const MANAGED_WAIT_RECHECK_MS = 200;
+/** Two Job host accounting polls (500 ms each): the shortest window over which flat CPU means idle. */
+export const MANAGED_CPU_EVIDENCE_MIN_WINDOW_MS = 1_000;
 
 export interface ManagedWaitTracker {
   /** The transport's `satisfied` predicate: one evaluation per observation. */
@@ -70,6 +72,9 @@ export async function createManagedWaitTracker(input: ManagedWaitTrackerInput): 
     // The CPU comparison covers only the window CPU evidence was sampled over.
     const cpuDeltaMs = evidence.cpu && cpuBase ? Math.max(0, evidence.cpu.totalMs - cpuBase.totalMs) : undefined;
     const quietMs = cpuDeltaMs !== undefined && cpuBase ? at - Math.max(lastChangeAt, cpuBase.at) : at - lastChangeAt;
+    // Samples arrive only when CPU changed (Job host poll: 500 ms), so "flat" is evidence only once
+    // the window spans two polls; until then idle-based rules wait (exit, pattern and port do not).
+    const cpuWindowShort = cpuDeltaMs !== undefined && quietMs < MANAGED_CPU_EVIDENCE_MIN_WINDOW_MS;
     const tails = input.streams.map(stream => ({ stream, text: newTail(evidence, stream, input.baseOffsets[stream]) }));
     // Arrival order across two pipes is not guaranteed (a REPL's stdout result can spool after its
     // stderr prompt), so every stream with new output this wait counts; the latest-changed is preferred.
@@ -81,7 +86,7 @@ export async function createManagedWaitTracker(input: ManagedWaitTrackerInput): 
     const lastLine = promptLike ? promptLike.text.slice(promptLike.text.lastIndexOf("\n") + 1) : "";
     const newBytes = input.streams.reduce((sum, stream) => sum + Math.max(0, totals[stream] - input.baseOffsets[stream]), 0);
     decided = evaluateCompletion({
-      until, running: evidence.snapshot.status === "running", newBytes, quietMs,
+      until, running: evidence.snapshot.status === "running", exitProven: exitProven(evidence.snapshot), newBytes, quietMs: cpuWindowShort ? 0 : quietMs,
       ...(cpuDeltaMs !== undefined ? { cpuDeltaMs } : {}),
       tailEndsWithNewline: withNew.length > 0 && withNew.every(entry => !unterminated(entry)),
       plainNewTail, lastLine,
@@ -93,7 +98,7 @@ export async function createManagedWaitTracker(input: ManagedWaitTrackerInput): 
   return Object.freeze({
     satisfied,
     completion(evidence: ManagedOutputEvidence): ManagedOutputCompletion {
-      if (!decided && evidence.snapshot.status !== "running") return Object.freeze({ source: "exited" as const, confidence: "certain" as const });
+      if (!decided && evidence.snapshot.status !== "running") return terminalCompletion(exitProven(evidence.snapshot));
       return decided ?? timeoutCompletion();
     },
     usage: until.idleMs !== undefined,

@@ -1,3 +1,4 @@
+import { Script, createContext } from "node:vm";
 import {
   MANAGED_INPUT_WAIT_CPU_FRACTION,
   MANAGED_PATTERN_MAX_CHARS,
@@ -48,8 +49,9 @@ export function validateUntil(value: unknown): ManagedOutputUntil {
 interface GroupFrame { quantified: boolean; alternation: boolean }
 
 /**
- * ReDoS guard, decided before any RegExp touches output: no backreferences, no lookaround, and no
- * quantified group that itself contains a quantifier or an alternation. Conservative by design.
+ * Static ReDoS screen, decided before any RegExp touches output: no backreferences, no lookaround, and no
+ * quantified group that itself contains a quantifier or an alternation. It is not a guarantee
+ * (`a*a*!` passes and is polynomial); matchOutputPattern's evaluation time bound is.
  */
 export function validateOutputPattern(pattern: string): { ok: true } | { ok: false; issue: string } {
   if (typeof pattern !== "string" || !pattern.length) return { ok: false, issue: "pattern is empty" };
@@ -94,16 +96,36 @@ export function validateOutputPattern(pattern: string): { ok: true } | { ok: fal
   return { ok: true };
 }
 
-/** Assumes validateOutputPattern passed. Only the bounded tail is ever searched. */
+/** Hard bound on one pattern evaluation. Ordinary patterns take ≤ ~11 ms on a full 4 KiB tail. */
+export const MANAGED_PATTERN_EVAL_TIMEOUT_MS = 50;
+// One reusable context: V8 interrupts a backtracking RegExp at the vm timeout, which no static
+// guard can promise (two adjacent quantifiers already cost seconds on a 4 KiB tail).
+const patternContext = createContext({ re: /(?:)/u, s: "" });
+const patternScript = new Script("re.exec(s)");
+
+/**
+ * Assumes validateOutputPattern passed. Only the bounded tail is ever searched, and never for longer
+ * than MANAGED_PATTERN_EVAL_TIMEOUT_MS: an over-budget pattern fails the wait with invalid_arguments
+ * instead of stalling the Runner's event loop.
+ */
 export function matchOutputPattern(pattern: string, flags: "i" | undefined, plainTail: string): string | undefined {
-  const match = new RegExp(pattern, flags === "i" ? "iu" : "u").exec(utf8Tail(plainTail, MANAGED_PATTERN_TAIL_BYTES));
+  patternContext.re = new RegExp(pattern, flags === "i" ? "iu" : "u");
+  patternContext.s = utf8Tail(plainTail, MANAGED_PATTERN_TAIL_BYTES);
+  let match: RegExpExecArray | null;
+  try { match = patternScript.runInContext(patternContext, { timeout: MANAGED_PATTERN_EVAL_TIMEOUT_MS }) as RegExpExecArray | null; }
+  catch (error) {
+    if ((error as { code?: string }).code === "ERR_SCRIPT_EXECUTION_TIMEOUT")
+      throw invalid(`until.pattern exceeded its ${MANAGED_PATTERN_EVAL_TIMEOUT_MS} ms evaluation bound; use a simpler pattern.`);
+    throw error;
+  } finally { patternContext.s = ""; }
   return match ? match[0].slice(0, 200) : undefined;
 }
 
 /** What a terminal would leave on screen for pipe output: no escapes, progress collapsed, repeats folded. */
 export function renderPlain(text: string): string {
   const stripped = text
-    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+    // OSC body bounded and ESC-free so an unterminated `ESC ]` can't make this quadratic.
+    .replace(/\x1b\][^\x07\x1b]{0,4096}(?:\x07|\x1b\\)?/g, "")
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\x1b[ -/]*[0-~]/g, "")
     .replace(/\x1b/g, "")
@@ -222,6 +244,8 @@ export interface ManagedCompletionFacts {
   /** undefined = legacy mode: any new byte satisfies the wait. */
   readonly until: ManagedOutputUntil | undefined;
   readonly running: boolean;
+  /** When not running: exit is proven (released session, or an observed exit code or signal). */
+  readonly exitProven: boolean;
   /** Bytes received on any stream since the wait began. */
   readonly newBytes: number;
   /** Milliseconds since the last byte on any stream (or since the wait began). */
@@ -242,7 +266,7 @@ export interface ManagedCompletionFacts {
 /** First satisfied rule wins; undefined means keep waiting. */
 export function evaluateCompletion(facts: ManagedCompletionFacts): ManagedOutputCompletion | undefined {
   const { until } = facts;
-  if (!facts.running) return Object.freeze({ source: "exited", confidence: "certain" });
+  if (!facts.running) return terminalCompletion(facts.exitProven);
   if (until === undefined) return facts.newBytes > 0 ? Object.freeze({ source: "changed", confidence: null }) : undefined;
   if (until.exit) return undefined;
   if (until.pattern !== undefined) {
@@ -274,8 +298,17 @@ export function timeoutCompletion(): ManagedOutputCompletion {
   return Object.freeze({ source: "timeout", confidence: null });
 }
 
+/** Exit is certain only for a released session or an observed exit code or signal. */
+export function exitProven(snapshot: Readonly<{ status: string; exitCode: number | null; signal: string | null }>): boolean {
+  return snapshot.status === "stopped" || snapshot.exitCode !== null || snapshot.signal !== null;
+}
+
+export function terminalCompletion(proven: boolean): ManagedOutputCompletion {
+  return proven ? Object.freeze({ source: "exited", confidence: "certain" }) : Object.freeze({ source: "unavailable", confidence: null });
+}
+
 export function interactionState(completion: ManagedOutputCompletion | undefined, running: boolean): ManagedInteractionState {
-  if (!running) return "exited";
+  if (!running) return completion?.source === "unavailable" ? "unknown" : "exited";
   if (completion?.source === "input_wait" || completion?.source === "known_prompt") return "awaiting_input";
   return completion?.source === "idle" ? "idle" : "running";
 }

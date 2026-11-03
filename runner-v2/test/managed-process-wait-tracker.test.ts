@@ -31,3 +31,20 @@ test("terminated output on every stream with new bytes stays idle, not a prompt"
   assert.equal(tracker.completion(evidence("done\n", "warning\n")).source, "idle");
   tracker.close();
 });
+
+test("flat CPU counts as evidence only once the quiet window spans the accounting cadence", async () => {
+  // Review finding: with idleMs below the Job host's 500 ms accounting poll, a busy process whose
+  // newest sample predates the window looked flat and was labeled input_wait.
+  let now = 0;
+  const withCpu = (stdout: string, totalMs: number) => ({ ...evidence(stdout, ""), cpu: { totalMs, sampledAt: new Date(0).toISOString() } }) as ManagedOutputEvidence;
+  const tracker = await createManagedWaitTracker({ until: { idleMs: 250 }, baseOffsets: { stdout: 0, stderr: 0 }, streams: ["stdout", "stderr"], now: () => now });
+  assert.equal(tracker.satisfied(withCpu("progress 45% ", 100)), false);
+  now = 300; assert.equal(tracker.satisfied(withCpu("progress 45% ", 100)), false, "no sample newer than the window start can exist yet");
+  now = 600; assert.equal(tracker.satisfied(withCpu("progress 45% ", 400)), false, "busy");
+  tracker.close();
+  const quiet = await createManagedWaitTracker({ until: { idleMs: 250 }, baseOffsets: { stdout: 0, stderr: 0 }, streams: ["stdout", "stderr"], now: () => now });
+  now = 0; assert.equal(quiet.satisfied(withCpu("Proceed? [y/N] ", 100)), false);
+  now = 1_100; assert.equal(quiet.satisfied(withCpu("Proceed? [y/N] ", 100)), true);
+  assert.deepEqual([quiet.completion(withCpu("Proceed? [y/N] ", 100)).source, quiet.completion(withCpu("Proceed? [y/N] ", 100)).confidence], ["input_wait", "likely"]);
+  quiet.close();
+});
