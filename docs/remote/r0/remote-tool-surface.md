@@ -4,7 +4,7 @@ Revised 2026-10-27 for owner decisions D15–D17.
 
 ## Status
 
-Proposed. This is an R0 contract, not an implemented or approved remote surface. The 25 fixed names below cover P2 and the image/browser requirements in T01; remote-enabled plugin names are additional and dynamic (`docs/plans/2026-10-27-aiboard-remote.md:223`, `docs/plans/2026-10-27-aiboard-remote.md:318`).
+Proposed. This is an R0 contract, not an implemented or approved remote surface. The 26 fixed names below cover P2 and the image/browser requirements in T01; remote-enabled plugin names are additional and dynamic (`docs/plans/2026-10-27-aiboard-remote.md:223`, `docs/plans/2026-10-27-aiboard-remote.md:318`).
 
 ## Context
 
@@ -32,11 +32,12 @@ In the table, `D` means `deviceId?`; omission is valid only with exactly one aut
 | `files_patch` | `fs.patch` (`runner-v2/src/filesystem-tools.ts:489`) | F/T/F/F | path, expectedSha256, search?/replace? or edits[], D, K | yes |
 | `files_move` | `fs.move` (`runner-v2/src/filesystem-tools.ts:551`) | F/T/F/F | source, destination, createDirectories?, D, K | yes |
 | `files_delete` | `fs.delete` (`runner-v2/src/filesystem-tools.ts:584`) | F/T/F/F | path, recursive?, D, K | yes |
-| `process_start` | `process.start` (`runner-v2/src/managed-process-tools.ts:23`) | F/T/F/T | command, args?, cwd?, env?, interactive?, D, K | yes |
-| `process_run` | `process.run` (`runner-v2/src/process-tools.ts:40`) | F/T/F/T | command/args or shell/script, cwd?, env?, timeoutMs?, D, K | yes |
-| `process_read_output` | `process.read_output` or `process.poll` for `view=snapshot` (`runner-v2/src/managed-process-tools.ts:50`, `runner-v2/src/managed-process-tools.ts:88`) | T/F/T/F | processId, view?, cursor?, stream?, maxBytes?, waitMs?, tailBytes?, range?, D | maybe |
-| `process_write_stdin` | `process.write_stdin` (`runner-v2/src/managed-process-tools.ts:61`) | F/T/F/T | processId, writeId, data?, appendNewline?, closeInput?, D, K | yes |
-| `process_signal` | `process.signal` (`runner-v2/src/managed-process-tools.ts:122`) | F/T/F/T | processId, signal, D, K | yes |
+| `process_start` | `process.start` (`runner-v2/src/managed-process-tools.ts:31`) | F/T/F/T | command, args?, cwd?, env?, interactive?, until?, waitMs?, render?, D, K | yes |
+| `process_run` | `process.run` (`runner-v2/src/process-tools.ts:40`) | F/T/F/T | command/args or shell/script, cwd?, env?, timeoutMs?, render? (raw/summary), D, K | yes |
+| `process_read_output` | `process.read_output` or `process.poll` for `view=snapshot` (`runner-v2/src/managed-process-tools.ts:107`, `runner-v2/src/managed-process-tools.ts:69`) | T/F/T/F | processId, view?, cursor?, stream?, maxBytes?, waitMs?, tailBytes?, range?, until?, render?, lines?, D | maybe |
+| `process_write_stdin` | `process.write_stdin` (`runner-v2/src/managed-process-tools.ts:80`) | F/T/F/T | processId, writeId, data?, appendNewline?, closeInput?, D, K | yes |
+| `process_interact` | `process.interact` (`runner-v2/src/managed-process-tools.ts:133`); one N1 write then an N2 read that waits on evidence, write identity derived from the admitted call | F/T/F/T | processId, data?, appendNewline?, closeInput?, until?, waitMs?, cursor?, stream?, maxBytes?, render?, lines?, D, K | yes |
+| `process_signal` | `process.signal` (`runner-v2/src/managed-process-tools.ts:177`) | F/T/F/T | processId, signal, D, K | yes |
 | `process_list` | `process.list` (`runner-v2/src/managed-process-tools.ts:113`) | T/F/T/F | D | maybe |
 | `git_status` | `git.status` (`runner-v2/src/git-tools.ts:22`) | T/F/T/F | repoPath?, D | maybe |
 | `git_diff` | `git.diff` (`runner-v2/src/git-tools.ts:44`) | T/F/T/F | repoPath?, staged?, base?, D | maybe |
@@ -92,7 +93,7 @@ The connector must route to the real broker and preserve effect, role, grant, ow
 | Complete directory listing | Current `fs.list` skips ignored/build-output paths and has no `includeIgnored` input; S1/P2 must extend the governed Runner listing if whole-machine enumeration needs those entries, while retaining the denylist (`runner-v2/src/filesystem-tools.ts:53`, `runner-v2/src/filesystem-tools.ts:643`). |
 | Filename search, `get_more_search_results`, `stop_search`, `list_searches` | `fs.search` is content search with a query-bound cursor and cancellation; filename search and listing all searches need separate design later (`runner-v2/src/filesystem-tools.ts:49`, `runner-v2/src/filesystem-tools.ts:648`). |
 | `list_processes`, `kill_process`, arbitrary `list_sessions` | Current process list and signal operate on the exact Runner owner; global host listing/kill is later under X2 with explicit approval and identity proof (`runner-v2/src/managed-process.ts:223`, `runner-v2/src/managed-process.ts:334`, `docs/plans/2026-10-27-aiboard-remote.md:270`). |
-| `interact_with_process` as a terminal | Existing interactive input is a pipe, not a PTY; a PTY adapter is later (`runner-v2/src/managed-process-tools.ts:163`, `docs/plans/2026-10-27-aiboard-remote.md:270`). |
+| `interact_with_process` as a terminal | `process_interact` covers the one-turn send-and-wait loop with labeled completion evidence (D19, `docs/plans/2026-11-03-remote-t1-interaction-ux.md`). Input is still a pipe, not a PTY; a PTY adapter is later (`docs/plans/2026-10-27-aiboard-remote.md:270`). |
 | `get_config`, `set_config_value` | No equivalent general remote Runner configuration API in the catalog. Keep security/extension configuration in user-controlled local/dashboard flows; never expose generic config mutation. |
 | Desktop GUI | Not a native remote tool; curated, explicitly enabled GUI plugins are post-launch (`docs/plans/2026-10-27-aiboard-remote.md:259`). |
 

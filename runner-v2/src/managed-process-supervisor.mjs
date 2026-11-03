@@ -3,8 +3,12 @@ import { spawn } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fstatSync,
+  openSync,
   readFileSync,
+  readSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
@@ -82,7 +86,9 @@ const status = {
 
 function persistStatus() {
   status.updatedAt = new Date().toISOString();
-  appendFileSync(bootstrapStatusPath, `${JSON.stringify(status)}\n`, { mode: 0o600 });
+  // T1 CPU evidence is in-memory only: served by /status, never written to the durable status line.
+  const { cpuTimeMs: _cpuTimeMs, cpuSampledAt: _cpuSampledAt, ...durable } = status;
+  appendFileSync(bootstrapStatusPath, `${JSON.stringify(durable)}\n`, { mode: 0o600 });
   settleStatusWaiters();
 }
 
@@ -602,14 +608,29 @@ function tryMarkStopped() {
 
 function pollInteractiveJobEvents() {
   if (!config?.eventPath || !existsSync(config.eventPath)) return;
-  const bytes = readFileSync(config.eventPath);
-  if (bytes.byteLength < jobEventBytes) return markOwnershipUncertain("Windows Job event evidence shrank unexpectedly.");
-  if (bytes.byteLength === jobEventBytes) return;
-  const suffix = bytes.subarray(jobEventBytes).toString("utf8");
-  const lines = suffix.split(/\r?\n/);
-  if (lines.at(-1) !== "") return;
-  jobEventBytes = bytes.byteLength;
-  for (const line of lines.slice(0, -1)) if (line) handleJobEvent(line);
+  // Incremental: the Job host appends periodic accounting events, so never
+  // re-read the whole journal on every 10 ms tick. Only complete lines are consumed.
+  const descriptor = openSync(config.eventPath, "r");
+  let suffix;
+  try {
+    const size = fstatSync(descriptor).size;
+    if (size < jobEventBytes) return markOwnershipUncertain("Windows Job event evidence shrank unexpectedly.");
+    if (size === jobEventBytes) return;
+    const bytes = Buffer.alloc(size - jobEventBytes);
+    let read = 0;
+    while (read < bytes.byteLength) {
+      const count = readSync(descriptor, bytes, read, bytes.byteLength - read, jobEventBytes + read);
+      if (count === 0) break;
+      read += count;
+    }
+    const complete = bytes.subarray(0, read).lastIndexOf(0x0a) + 1;
+    if (complete === 0) return;
+    jobEventBytes += complete;
+    suffix = bytes.subarray(0, complete).toString("utf8");
+  } finally {
+    closeSync(descriptor);
+  }
+  for (const line of suffix.split(/\r?\n/)) if (line) handleJobEvent(line);
   tryMarkStopped();
 }
 
@@ -639,6 +660,15 @@ function handleJobEvent(line) {
   }
   if (event.type === "stopped") {
     status.jobEmptyProof = true;
+    return;
+  }
+  if (event.type === "accounting") {
+    // T1 CPU evidence for input-wait detection: in-memory only (served by
+    // /status), never persisted, never a lifecycle or ownership fact.
+    if (Number.isSafeInteger(event.cpu100ns) && event.cpu100ns >= 0) {
+      status.cpuTimeMs = Math.floor(event.cpu100ns / 10_000);
+      status.cpuSampledAt = new Date().toISOString();
+    }
     return;
   }
   if (event.type === "error") {

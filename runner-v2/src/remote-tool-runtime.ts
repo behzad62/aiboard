@@ -81,10 +81,10 @@ export function remotePathGuardFor(options: Pick<RemoteToolRuntimeOptions, "prot
 }
 
 const ALLOWED_TOOLS = new Set(roleAllowList("remote", "remote"));
-const SHELL_TOOLS = new Set(["process.start", "process.run", "process.write_stdin"]);
+const SHELL_TOOLS = new Set(["process.start", "process.run", "process.write_stdin", "process.interact"]);
 const MUTATING_TOOLS = new Set([
   "fs.write", "fs.patch", "fs.move", "fs.delete", "process.start", "process.run",
-  "process.write_stdin", "process.signal",
+  "process.write_stdin", "process.interact", "process.signal",
 ]);
 const AUTHORITY_ARGUMENTS = new Set([
   "actor", "role", "runId", "sessionId", "workspace", "workspacePath", "scope", "scopeRef",
@@ -343,7 +343,7 @@ const LOCAL_TOOLS: Readonly<Record<string, string>> = Object.freeze({
   files_read: "fs.read", files_list: "fs.list", files_search: "fs.search", files_write: "fs.write",
   files_patch: "fs.patch", files_move: "fs.move", files_delete: "fs.delete",
   process_start: "process.start", process_run: "process.run", process_read_output: "process.read_output",
-  process_write_stdin: "process.write_stdin", process_signal: "process.signal", process_list: "process.list",
+  process_write_stdin: "process.write_stdin", process_interact: "process.interact", process_signal: "process.signal", process_list: "process.list",
   git_status: "git.status", git_diff: "git.diff", git_log: "git.log", image_inspect: "image.inspect",
 });
 const LOCAL_ALLOWED = new Set(roleAllowList("local_mcp", "local_mcp"));

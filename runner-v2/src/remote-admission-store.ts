@@ -954,7 +954,7 @@ export function parseRemoteRequest(raw: string): RemoteRequest {
 const REMOTE_EFFECT_NAMES: Readonly<Record<string, string>> = Object.freeze({
   files_write: "fs.write", files_patch: "fs.patch", files_move: "fs.move", files_delete: "fs.delete",
   files_search: "fs.search", process_start: "process.start", process_run: "process.run",
-  process_write_stdin: "process.write_stdin", process_signal: "process.signal",
+  process_write_stdin: "process.write_stdin", process_interact: "process.interact", process_signal: "process.signal",
 });
 
 /** Adapter for RemoteToolRuntime; installation is deliberately left to trusted R1d composition. */
@@ -1023,7 +1023,11 @@ export function createRemoteAdmissionAdapter(store: RemoteAdmissionStore): NonNu
     const unknown = ["tool_timeout", "tool_cancelled", "process_timeout", "process_cancelled", "reconciliation_required",
       "process_input_outcome_unknown", "process_input_interrupted"].includes(result.error?.code ?? "") ||
       (effect.toolName === "process.write_stdin" && result.content.some((block) => block.type === "json" &&
-        !!block.value && typeof block.value === "object" && "status" in block.value && block.value.status === "outcome_unknown"));
+        !!block.value && typeof block.value === "object" && "status" in block.value && block.value.status === "outcome_unknown")) ||
+      // process.interact reports its write under `write`; a read after an acknowledged write never makes the job uncertain.
+      (effect.toolName === "process.interact" && result.content.some((block) => block.type === "json" &&
+        !!block.value && typeof block.value === "object" && "write" in block.value && !!block.value.write &&
+        typeof block.value.write === "object" && "status" in block.value.write && block.value.write.status === "outcome_unknown"));
     const job = store.settle(effect.principal.identity, decision.job.jobId, unknown ? "outcome_unknown" : result.isError ? "failed" : "completed");
     if (unknown) return jobResult(job);
     return { ...result, content: [{ type: "json", value: response(job) }, ...result.content] };

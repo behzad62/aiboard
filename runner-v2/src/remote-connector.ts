@@ -143,6 +143,7 @@ export const REMOTE_TOOL_ID_TO_RUNNER: Readonly<Record<string, string>> = Object
   process_read_output: "process.read_output",
   process_list: "process.list",
   process_write_stdin: "process.write_stdin",
+  process_interact: "process.interact",
   process_signal: "process.signal",
   git_status: "git.status",
   git_diff: "git.diff",
@@ -158,7 +159,7 @@ const MAX_STUB_ARTIFACTS = 256;
 const MAX_INDEX_ARTIFACTS = 100_000;
 const MAX_INDEX_BYTES = MAX_INDEX_ARTIFACTS * 67 + 2;
 const EFFECT_TOOL_IDS: ReadonlySet<string> = new Set(["files_write", "files_patch", "files_move", "files_delete",
-  "process_start", "process_run", "process_write_stdin", "process_signal"]);
+  "process_start", "process_run", "process_write_stdin", "process_interact", "process_signal"]);
 
 export interface RemoteConnectorOptions {
   readonly deviceStore: RemoteDeviceStore;

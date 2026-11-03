@@ -18,6 +18,7 @@ import {
   parseProcessLaunchResult,
   parseProcessReconciliation,
   parseProcessReleaseResult,
+  parseProcessUsage,
   reattestProcessBackend,
   selectProcessBackend,
   type ProcessBackend,
@@ -25,7 +26,7 @@ import {
   type ProcessBackendRegistry,
   type ProcessEffectFence,
 } from "./process-backend.js";
-import type { SessionAuthority } from "./session-authority.js";
+import type { OperationAuthorizationAssertion, SessionAuthority, SessionOperationAuthorization } from "./session-authority.js";
 import {
   createStreamingProcessSessionRuntime,
   type StreamingHandshakeControl,
@@ -252,6 +253,20 @@ export function createExecutionHostStreamingGraph(
 
   return Object.freeze({
     runtime,
+    /**
+     * T1 read-only CPU evidence for an active owned session, under the same
+     * observe authority as bounded output. No fence, no effect; undefined when
+     * the backend cannot report it.
+     */
+    async observeUsage(input: { authorization: SessionOperationAuthorization; assertion: OperationAuthorizationAssertion }) {
+      if (input.assertion.operation !== "observe") throw new Error("Only read-only authority may observe process usage.");
+      options.sessions.assertOperationAuthorization(input.authorization, input.assertion);
+      const record = options.kernel.store.readBySession(input.assertion.sessionId);
+      if (!record || record.state !== "active") return undefined;
+      const backend = options.channelBackends.get(record.backendBinding.backendId);
+      if (!backend || typeof backend.usage !== "function") return undefined;
+      return parseProcessUsage(await backend.usage(record.backendBinding as unknown as ProcessBackendBinding));
+    },
     async open(request: ExecutionHostStreamingOpenRequest) {
       assertOpenRequest(request, options.permissionProfile);
       if (pending.has(request.launchId)) throw new Error(`Streaming launch ${request.launchId} is already pending.`);

@@ -75,3 +75,37 @@ for (const scenario of ["foreign-owner", "duplicate", "too-many"] as const) test
     assert.throws(() => authority.authorizeObservationBatch({ ...call, ...noAccess, sessionIds }), /bound|duplic|owner|match|invalid/i); passed = true;
   } finally { await f.close(passed); }
 });
+
+test("an interaction consumes its one call once for exactly one input and one observation of one session", async t => {
+  const f = await fixture(t); let passed = false;
+  try {
+    const call = await f.issue("process.interact");
+    const pair = f.authority.authorizeInteraction({ ...call, ...noAccess, sessionId: "one", operation: "write" });
+    const expected = (operation: string, sessionId = "one") => ({ sessionId, operation, binding: call.binding, ...noAccess }) as unknown as OperationAuthorizationAssertion;
+    f.authority.assertOperationAuthorization(pair.input, expected("write"));
+    f.authority.assertOperationAuthorization(pair.observe, expected("observe"));
+    assert.throws(() => f.authority.assertOperationAuthorization(pair.observe, expected("write")), /operation/i, "the observation never writes");
+    assert.throws(() => f.authority.assertOperationAuthorization(pair.input, expected("stop")), /operation/i);
+    assert.throws(() => f.authority.assertOperationAuthorization(pair.observe, expected("observe", "two")), /session|match/i, "bound to one session");
+    assert.throws(() => f.grants.consume(call.grant, call.binding), /consum/i);
+    assert.throws(() => f.authority.authorizeInteraction({ ...call, ...noAccess, sessionId: "one", operation: "write" }), /second|reuse|consum/i);
+    assert.throws(() => f.authority.authorizeOperation({ ...call, ...noAccess, sessionId: "one", operation: "observe" }), /second|reuse|consum/i);
+    await f.grants.revoke(call.grant, "completed");
+    assert.throws(() => f.authority.assertOperationAuthorization(pair.observe, expected("observe")), /revok|current|authority/i);
+    passed = true;
+  } finally { await f.close(passed); }
+});
+
+for (const scenario of ["observe-only", "stop", "foreign-owner", "input-unavailable"] as const) test(`an interaction refuses ${scenario}`, async t => {
+  const f = await fixture(t); let passed = false;
+  try {
+    if (scenario === "input-unavailable") {
+      const record = f.kernel.store.readBySession("one")!;
+      f.authority.recordDisposition({ sessionId: "one", ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, disposition: "input_unavailable" });
+    }
+    const call = await f.issue("process.interact", scenario === "foreign-owner" ? { role: "worker", id: "foreign" } : undefined);
+    const operation = scenario === "observe-only" ? "observe" : scenario === "stop" ? "stop" : "write";
+    assert.throws(() => f.authority.authorizeInteraction({ ...call, ...noAccess, sessionId: "one", operation } as never), /interaction|owner|match|active|unavailable/i);
+    passed = true;
+  } finally { await f.close(passed); }
+});

@@ -31,7 +31,13 @@ export interface ManagedProcessRunRuntime {
   /** Acknowledged, ordered stdin delivery through the owned session channel. Absent: typed unsupported. */
   writeInput?(target: ManagedProcessTarget, context: Readonly<ToolExecutionContext>, request: Readonly<{ bytes: Uint8Array; closeInput: boolean; timeoutMs: number }>): Promise<Readonly<{ inputClosed: boolean }>>;
   /** Exact bounded evidence bytes, optionally after one event-driven wait for new evidence or termination. */
-  readOutput?(target: ManagedProcessTarget, context: Readonly<ToolExecutionContext>, request: Readonly<{ waitMs: number; satisfied: (evidence: import("./managed-process-contracts.js").ManagedOutputEvidence) => boolean }>): Promise<import("./managed-process-contracts.js").ManagedOutputEvidence>;
+  readOutput?(target: ManagedProcessTarget, context: Readonly<ToolExecutionContext>, request: Readonly<{ waitMs: number; satisfied: (evidence: import("./managed-process-contracts.js").ManagedOutputEvidence) => boolean;
+    /** T1: attach read-only CPU evidence when the backend can report it. */
+    usage?: boolean;
+    /** T1: re-evaluate `satisfied` at least this often for time-based conditions (idle, port). */
+    recheckMs?: number;
+    /** T1: process.interact reads declare the turn's input operation; one grant covers input and observation. */
+    interaction?: "write" | "close_input" }>): Promise<import("./managed-process-contracts.js").ManagedOutputEvidence>;
   /** Finalized spill artifact bytes; read-only evidence, never an execution capability. */
   readSpill?(artifactId: string): Promise<Uint8Array>;
 }

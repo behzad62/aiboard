@@ -381,6 +381,15 @@ public static class ManagedProcessJobHost
             bool rootExited = false;
             bool rootReported = false;
             uint rootExitCode = 0;
+            // T1 CPU evidence (managed sessions only, never on the LSP stderr channel):
+            // whole-Job user+kernel time, at most every 500 ms when it changed, plus a
+            // 5 s heartbeat while unchanged. Evidence only, never a lifecycle fact.
+            bool accounting = !String.IsNullOrWhiteSpace(eventPath);
+            System.Diagnostics.Stopwatch accountingClock = System.Diagnostics.Stopwatch.StartNew();
+            long lastAccountingMs = -1000000;
+            long lastAccountingEmitMs = -1000000;
+            long lastCpu = -1;
+            long accountingBytes = 0;
             while (true)
             {
                 if (!rootExited && WaitForSingleObject(processInfo.hProcess, 50) == WAIT_OBJECT_0)
@@ -388,6 +397,29 @@ public static class ManagedProcessJobHost
                     rootExited = true;
                     if (!GetExitCodeProcess(processInfo.hProcess, out rootExitCode))
                         ThrowWin32("GetExitCodeProcess");
+                }
+                if (accounting)
+                {
+                    // Evidence must never become a lifecycle fact: any accounting failure (a
+                    // transiently locked or full event file, a failed query) or reaching the
+                    // byte budget only turns accounting off; callers then lose CPU evidence.
+                    try
+                    {
+                        long elapsed = accountingClock.ElapsedMilliseconds;
+                        if (elapsed - lastAccountingMs >= 500)
+                        {
+                            lastAccountingMs = elapsed;
+                            long cpu = TotalCpu100ns(job);
+                            if (cpu != lastCpu || elapsed - lastAccountingEmitMs >= 5000)
+                            {
+                                lastCpu = cpu;
+                                lastAccountingEmitMs = elapsed;
+                                accountingBytes += EmitAccounting(eventPath, processInfo.dwProcessId, cpu);
+                                if (accountingBytes >= AccountingByteBudget) accounting = false;
+                            }
+                        }
+                    }
+                    catch (Exception) { accounting = false; }
                 }
                 if (rootExited)
                 {
@@ -459,6 +491,34 @@ public static class ManagedProcessJobHost
             return accounting.ActiveProcesses;
         }
         finally { Marshal.FreeHGlobal(pointer); }
+    }
+
+    private static long TotalCpu100ns(IntPtr job)
+    {
+        int size = Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+        IntPtr pointer = Marshal.AllocHGlobal(size);
+        try
+        {
+            if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation,
+                pointer, (uint)size, IntPtr.Zero)) ThrowWin32("QueryInformationJobObject");
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting =
+                (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)Marshal.PtrToStructure(
+                    pointer, typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+            return accounting.TotalUserTime + accounting.TotalKernelTime;
+        }
+        finally { Marshal.FreeHGlobal(pointer); }
+    }
+
+    /// <summary>T1: accounting events stop after this many bytes so a long busy session cannot grow the event file without bound.</summary>
+    private const long AccountingByteBudget = 16L * 1024 * 1024;
+
+    private static int EmitAccounting(string eventPath, uint pid, long cpu100ns)
+    {
+        string line = "{\"type\":\"accounting\",\"pid\":" + pid +
+            ",\"exitCode\":null,\"activeProcesses\":0,\"error\":null,\"cpu100ns\":" + cpu100ns + "}" +
+            Environment.NewLine;
+        File.AppendAllText(eventPath, line, new UTF8Encoding(false));
+        return line.Length;
     }
 
     private const int DefaultStopDeadlineMs = 60000;

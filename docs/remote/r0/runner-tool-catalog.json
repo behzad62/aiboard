@@ -1059,6 +1059,25 @@
       "desktopCommanderEquivalent": null
     },
     {
+      "id": "process.interact",
+      "sourceFile": "runner-v2/src/managed-process-tools.ts",
+      "sourceLine": 133,
+      "readOnly": false,
+      "effect": "workspace",
+      "permissionClass": "process.write_stdin",
+      "rolesAllowed": [
+        "verifier",
+        "worker"
+      ],
+      "inputSummary": "processId; data, appendNewline, closeInput, until, waitMs, cursor, stream, maxBytes, render, lines",
+      "ownedOnly": true,
+      "remote": {
+        "proposal": "expose",
+        "reason": "Exposed by default as one write plus an evidence-based read; same device policy, approval and exact ownership as process.write_stdin"
+      },
+      "desktopCommanderEquivalent": "interact_with_process"
+    },
+    {
       "id": "process.list",
       "sourceFile": "runner-v2/src/managed-process-tools.ts",
       "sourceLine": 113,
@@ -1099,7 +1118,7 @@
     {
       "id": "process.read_output",
       "sourceFile": "runner-v2/src/managed-process-tools.ts",
-      "sourceLine": 89,
+      "sourceLine": 107,
       "readOnly": true,
       "effect": "none",
       "permissionClass": "none",
@@ -1107,7 +1126,7 @@
         "verifier",
         "worker"
       ],
-      "inputSummary": "processId; cursor, stream, maxBytes, waitMs, tailBytes, range",
+      "inputSummary": "processId; cursor, stream, maxBytes, waitMs, tailBytes, range, until, render, lines",
       "ownedOnly": true,
       "remote": {
         "proposal": "expose",
@@ -1125,7 +1144,7 @@
       "rolesAllowed": [
         "worker"
       ],
-      "inputSummary": "command/args OR shell/script; cwd, env, timeoutMs",
+      "inputSummary": "command/args OR shell/script; cwd, env, timeoutMs, render",
       "ownedOnly": false,
       "remote": {
         "proposal": "expose",
@@ -1136,7 +1155,7 @@
     {
       "id": "process.signal",
       "sourceFile": "runner-v2/src/managed-process-tools.ts",
-      "sourceLine": 122,
+      "sourceLine": 177,
       "readOnly": false,
       "effect": "workspace",
       "permissionClass": "process.signal",
@@ -1155,7 +1174,7 @@
     {
       "id": "process.start",
       "sourceFile": "runner-v2/src/managed-process-tools.ts",
-      "sourceLine": 23,
+      "sourceLine": 31,
       "readOnly": false,
       "effect": "external",
       "permissionClass": "process.start",
@@ -1163,7 +1182,7 @@
         "verifier",
         "worker"
       ],
-      "inputSummary": "command; args, cwd, env, interactive",
+      "inputSummary": "command; args, cwd, env, interactive, until, waitMs, render",
       "ownedOnly": false,
       "remote": {
         "proposal": "expose",
@@ -1174,7 +1193,7 @@
     {
       "id": "process.write_stdin",
       "sourceFile": "runner-v2/src/managed-process-tools.ts",
-      "sourceLine": 62,
+      "sourceLine": 80,
       "readOnly": false,
       "effect": "workspace",
       "permissionClass": "process.write_stdin",
@@ -1994,4 +2013,3 @@
     }
   ]
 }
-

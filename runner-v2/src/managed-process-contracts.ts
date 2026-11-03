@@ -147,6 +147,51 @@ export interface ManagedOutputEvidence {
   readonly source: "live" | "final" | "historical";
   readonly streams: readonly ManagedOutputStreamEvidence[];
   readonly waited?: "changed" | "terminal" | "timeout" | "cancelled" | "unavailable";
+  /** T1: CPU time of the whole owned tree, when the backend reports it. Absent: input_wait is unavailable. */
+  readonly cpu?: ManagedProcessCpuEvidence;
+}
+
+/**
+ * T1 evidence-based waits. A wait ends on the strongest available evidence and labels it:
+ * a heuristic may end a wait but never reports success (N1: no success from a guessed prompt).
+ */
+export const MANAGED_UNTIL_IDLE_MIN_MS = 250;
+export const MANAGED_UNTIL_IDLE_MAX_MS = 10_000;
+export const MANAGED_UNTIL_IDLE_DEFAULT_MS = 1_500;
+export const MANAGED_PATTERN_MAX_CHARS = 256;
+/** A pattern is evaluated only on this many trailing bytes of the plain new output. */
+export const MANAGED_PATTERN_TAIL_BYTES = 4 * 1024;
+/** input_wait requires tree CPU of at most this fraction of one core over the quiet window. */
+export const MANAGED_INPUT_WAIT_CPU_FRACTION = 0.02;
+
+export interface ManagedOutputUntil {
+  /** Only exit (or waitMs) ends the wait; exclusive with every other condition. */
+  readonly exit?: true;
+  readonly pattern?: string;
+  readonly patternFlags?: "i";
+  /** Something accepts TCP on loopback at this port. */
+  readonly port?: number;
+  /** Enables input_wait / known_prompt / idle after this much output silence. */
+  readonly idleMs?: number;
+}
+/** `unavailable`: the session stopped running observably (input/backend unavailable, cleanup pending) without a proven exit. */
+export type ManagedCompletionSource = "exited" | "unavailable" | "pattern" | "port" | "input_wait" | "idle" | "known_prompt" | "changed" | "timeout";
+export type ManagedCompletionConfidence = "certain" | "likely" | "heuristic";
+export interface ManagedOutputCompletion {
+  readonly source: ManagedCompletionSource;
+  /** null for changed, timeout and unavailable, which make no claim about the process. */
+  readonly confidence: ManagedCompletionConfidence | null;
+  readonly quietMs?: number;
+  readonly cpuDeltaMs?: number;
+  readonly preexistingPort?: true;
+  readonly matched?: string;
+}
+/** `unknown`: not running, and exit is not proven (see ManagedCompletionSource `unavailable`). */
+export type ManagedInteractionState = "running" | "awaiting_input" | "idle" | "exited" | "unknown";
+export interface ManagedProcessCpuEvidence {
+  /** User + kernel CPU time of the owned tree, monotonic within one launch. */
+  readonly totalMs: number;
+  readonly sampledAt: string;
 }
 
 export class ManagedProcessError extends Error {

@@ -153,6 +153,19 @@ export interface ProcessBackend {
     binding: ProcessBackendBinding,
     fence: ProcessEffectFence,
   ): Promise<unknown>;
+  /**
+   * T1 optional read-only resource evidence ({ cpuTimeMs, sampledAt } for the whole
+   * owned tree). Never a lifecycle, emptiness or fence fact; undefined when unavailable.
+   */
+  usage?(binding: ProcessBackendBinding): Promise<unknown>;
+}
+
+/** Strict parse of optional backend usage evidence; anything malformed is simply absent. */
+export function parseProcessUsage(value: unknown): Readonly<{ cpuTimeMs: number; sampledAt: string }> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { cpuTimeMs, sampledAt } = value as { cpuTimeMs?: unknown; sampledAt?: unknown };
+  if (!Number.isSafeInteger(cpuTimeMs) || (cpuTimeMs as number) < 0 || typeof sampledAt !== "string" || Number.isNaN(Date.parse(sampledAt))) return undefined;
+  return Object.freeze({ cpuTimeMs: cpuTimeMs as number, sampledAt });
 }
 
 interface TrustedEntry {

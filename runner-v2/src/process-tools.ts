@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 
+import { renderPlain, summarizeOutput } from "./managed-process-wait.js";
 import type {
   NativeTool,
   ToolExecutionContext,
@@ -20,6 +21,7 @@ interface ProcessInput {
   cwd?: string;
   env?: Record<string, string>;
   timeoutMs?: number;
+  render?: "raw" | "summary";
 }
 
 export interface ProcessToolsOptions {
@@ -51,6 +53,7 @@ export function createProcessTools(
           cwd: { type: "string" },
           env: { type: "object", additionalProperties: { type: "string" } },
           timeoutMs: { type: "integer", minimum: 1 },
+          render: { enum: ["raw", "summary"], description: "summary: for large output, plain text head + tail + diagnostics found in the omitted middle. Default raw." },
         },
         additionalProperties: false,
       },
@@ -112,6 +115,9 @@ function validateInput(input: unknown): ValidationResult<ProcessInput> {
   ) {
     return { ok: false, issues: ["timeoutMs must be a positive integer"] };
   }
+  if (value.render !== undefined && value.render !== "raw" && value.render !== "summary") {
+    return { ok: false, issues: ["render must be raw or summary"] };
+  }
   return { ok: true, value: value as ProcessInput };
 }
 
@@ -160,6 +166,8 @@ async function executeProcess(
     });
     const stdout = outputFor(result.process, "stdout");
     const stderr = outputFor(result.process, "stderr");
+    // T1: summary view keeps head, tail and diagnostics of large output; raw is unchanged.
+    const render = (text: string): string => input.render === "summary" ? summarizeOutput(renderPlain(text)).text : text;
     const timedOut = result.process.outcome === "timed_out";
     const cancelled = result.process.outcome === "cancelled";
     const metadata = {
@@ -174,27 +182,27 @@ async function executeProcess(
       ...(result.providerId ? { providerId: result.providerId } : {}),
     };
     if (result.process.outcome === "launch_failed") {
-      return withEvidence(metadata, stdout.tail, stderr.tail, true, {
+      return withEvidence(metadata, render(stdout.tail), render(stderr.tail), true, {
         code: "process_start_failed",
         message: "Process launch was not proven.",
       });
     }
-    if (timedOut) return withEvidence(metadata, stdout.tail, stderr.tail, true, {
+    if (timedOut) return withEvidence(metadata, render(stdout.tail), render(stderr.tail), true, {
       code: "process_timeout",
       message: `Process exceeded ${timeoutMs} ms.`,
     });
-    if (cancelled) return withEvidence(metadata, stdout.tail, stderr.tail, true, {
+    if (cancelled) return withEvidence(metadata, render(stdout.tail), render(stderr.tail), true, {
       code: "process_cancelled",
       message: "Process was cancelled.",
     });
     if (result.process.outcome === "cleanup_failed") return withEvidence(
       metadata,
-      stdout.tail,
-      stderr.tail,
+      render(stdout.tail),
+      render(stderr.tail),
       true,
       { code: "process_cleanup_failed", message: "Process cleanup could not be verified." },
     );
-    return withEvidence(metadata, stdout.tail, stderr.tail, false);
+    return withEvidence(metadata, render(stdout.tail), render(stderr.tail), false);
   } catch (error) {
     const value = error as { code?: unknown; message?: unknown };
     const code = typeof value.code === "string" ? value.code : "process_runtime_failed";

@@ -198,6 +198,16 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       await this.service.reconcileOwned(identity.processId, jobOwner(identity), fence));
     return snapshot.status === "stopped" && snapshot.ownershipReleased ? { empty: true, proofArtifactId: `windows-job-empty:${identity.processId}` } : { empty: false, detail: "Windows Job Object still contains active processes." };
   }
+  /** T1 read-only CPU evidence: no fence claim, no control lane, no effect. Undefined when unavailable. */
+  async usage(binding: ProcessBackendBinding): Promise<unknown> {
+    if (!this.service.usageOwned) return undefined;
+    let identity: JobIdentity;
+    try { identity = jobIdentity(binding); } catch { return undefined; }
+    try {
+      const usage = await this.service.usageOwned(identity.processId, jobOwner(identity));
+      return usage ? { cpuTimeMs: usage.cpuTimeMs, sampledAt: usage.sampledAt } : undefined;
+    } catch { return undefined; }
+  }
   async reconcile(binding: ProcessBackendBinding, fence?: ProcessEffectFence): Promise<unknown> {
     let identity: JobIdentity;
     try { identity = jobIdentity(binding); } catch (error) {

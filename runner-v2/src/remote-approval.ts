@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 
 export const APPROVAL_TOOLS: ReadonlySet<string> = new Set([
-  "process.start", "process.run", "process.write_stdin", "process.signal",
+  "process.start", "process.run", "process.write_stdin", "process.interact", "process.signal",
 ]);
 
 export interface CommandApprovalSummary {
@@ -32,9 +32,10 @@ export function commandApprovalSummary(jobId: string, code: string, toolName: st
   workspace: string, forceWorkspace = false): CommandApprovalSummary {
   if (!APPROVAL_TOOLS.has(toolName) || !isRecord(payload)) throw new Error("Invalid approval payload.");
   const launch = toolName === "process.start" || toolName === "process.run";
-  const allowed = toolName === "process.start" ? ["command", "args", "cwd", "env", "interactive"] :
-    toolName === "process.run" ? ["command", "args", "shell", "script", "cwd", "env", "timeoutMs"] :
+  const allowed = toolName === "process.start" ? ["command", "args", "cwd", "env", "interactive", "until", "waitMs", "render"] :
+    toolName === "process.run" ? ["command", "args", "shell", "script", "cwd", "env", "timeoutMs", "render"] :
     toolName === "process.write_stdin" ? ["processId", "writeId", "data", "appendNewline", "closeInput"] :
+    toolName === "process.interact" ? ["processId", "data", "appendNewline", "closeInput", "until", "waitMs", "cursor", "stream", "maxBytes", "render", "lines"] :
       ["processId", "signal"];
   if (Object.keys(payload).some((key) => !allowed.includes(key))) throw new Error("Invalid approval payload.");
   let executable = "";
@@ -52,9 +53,10 @@ export function commandApprovalSummary(jobId: string, code: string, toolName: st
     }
     executable = shell ? String(payload.shell) : String(payload.command);
     args = shell ? [String(payload.script)] : (payload.args as string[] | undefined) ?? [];
-  } else if (toolName === "process.write_stdin") {
-    if (typeof payload.processId !== "string" || !payload.processId || typeof payload.writeId !== "string" ||
-      !/^[A-Za-z0-9._:-]{1,128}$/.test(payload.writeId) ||
+  } else if (toolName === "process.write_stdin" || toolName === "process.interact") {
+    // process.interact carries no model writeId: its write identity is the admitted call.
+    if (typeof payload.processId !== "string" || !payload.processId ||
+      (toolName === "process.write_stdin" && (typeof payload.writeId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(payload.writeId))) ||
       (payload.data !== undefined && typeof payload.data !== "string") ||
       (payload.appendNewline !== undefined && typeof payload.appendNewline !== "boolean") ||
       (payload.closeInput !== undefined && typeof payload.closeInput !== "boolean")) throw new Error("Invalid approval payload.");
