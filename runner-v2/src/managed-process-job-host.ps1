@@ -381,6 +381,14 @@ public static class ManagedProcessJobHost
             bool rootExited = false;
             bool rootReported = false;
             uint rootExitCode = 0;
+            // T1 CPU evidence (managed sessions only, never on the LSP stderr channel):
+            // whole-Job user+kernel time, at most every 500 ms when it changed, plus a
+            // 5 s heartbeat while unchanged. Evidence only, never a lifecycle fact.
+            bool accounting = !String.IsNullOrWhiteSpace(eventPath);
+            System.Diagnostics.Stopwatch accountingClock = System.Diagnostics.Stopwatch.StartNew();
+            long lastAccountingMs = -1000000;
+            long lastAccountingEmitMs = -1000000;
+            long lastCpu = -1;
             while (true)
             {
                 if (!rootExited && WaitForSingleObject(processInfo.hProcess, 50) == WAIT_OBJECT_0)
@@ -388,6 +396,21 @@ public static class ManagedProcessJobHost
                     rootExited = true;
                     if (!GetExitCodeProcess(processInfo.hProcess, out rootExitCode))
                         ThrowWin32("GetExitCodeProcess");
+                }
+                if (accounting)
+                {
+                    long elapsed = accountingClock.ElapsedMilliseconds;
+                    if (elapsed - lastAccountingMs >= 500)
+                    {
+                        lastAccountingMs = elapsed;
+                        long cpu = TotalCpu100ns(job);
+                        if (cpu != lastCpu || elapsed - lastAccountingEmitMs >= 5000)
+                        {
+                            lastCpu = cpu;
+                            lastAccountingEmitMs = elapsed;
+                            EmitAccounting(eventPath, processInfo.dwProcessId, cpu);
+                        }
+                    }
                 }
                 if (rootExited)
                 {
@@ -459,6 +482,29 @@ public static class ManagedProcessJobHost
             return accounting.ActiveProcesses;
         }
         finally { Marshal.FreeHGlobal(pointer); }
+    }
+
+    private static long TotalCpu100ns(IntPtr job)
+    {
+        int size = Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+        IntPtr pointer = Marshal.AllocHGlobal(size);
+        try
+        {
+            if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation,
+                pointer, (uint)size, IntPtr.Zero)) ThrowWin32("QueryInformationJobObject");
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting =
+                (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)Marshal.PtrToStructure(
+                    pointer, typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+            return accounting.TotalUserTime + accounting.TotalKernelTime;
+        }
+        finally { Marshal.FreeHGlobal(pointer); }
+    }
+
+    private static void EmitAccounting(string eventPath, uint pid, long cpu100ns)
+    {
+        File.AppendAllText(eventPath, "{\"type\":\"accounting\",\"pid\":" + pid +
+            ",\"exitCode\":null,\"activeProcesses\":0,\"error\":null,\"cpu100ns\":" + cpu100ns + "}" +
+            Environment.NewLine, new UTF8Encoding(false));
     }
 
     private const int DefaultStopDeadlineMs = 60000;

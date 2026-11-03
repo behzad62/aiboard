@@ -145,10 +145,10 @@ Each slice goes on its own worktree and branch, `remote/t1x-…`.
 | A5 | 20 s of streaming output, read with `until.exit` | 1 call (2 calls if it outlasts the 30 s cap). Today's behavior, recorded as the baseline, is one call per chunk |
 | A6 | `python -i`: start with `until.idleMs`, then three interact turns, one of which raises | One call per turn; the banner and `>>>` are returned; `known_prompt` or `input_wait` |
 | A7 | Write `outcome_unknown` (fault-injected) | No output or completion in the result; the remote job settles `outcome_unknown`, identical to `write_stdin` |
-| A8 | Read cancelled after an acknowledged write | `isError: false`, `read.error` set; the remote job is `completed`, not `outcome_unknown` |
+| A8 | Read cancelled after an acknowledged write | `isError: false`, `readError` set; the remote job is `completed`, not `outcome_unknown` |
 | A9 | Catastrophic `pattern` (`(a+)+$`), backreference, 257 characters | `invalid_arguments` at validation; nothing evaluated |
 | A10 | `read_output` without `until` | Byte-identical to today's results (regression test against the existing `managed-interactive-io` and output suites) |
-| A11 | Policies: read-only, shell OFF, approvals ON | `process_interact` is blocked or approved exactly like `process_write_stdin`; the approval shows the input |
+| A11 | Policies: read-only, shell OFF, approvals ON | `process_interact` is blocked or approved exactly like `process_write_stdin`; like stdin, the approval summary never carries the input bytes (they may be secrets) |
 | A12 | `plain` view of a `\r` progress bar (100 updates) and ANSI color output | One final progress line; no escape bytes; `lines` paging consistent with `totalLines` |
 
 Regression suites to run: `managed-interactive-io`, `managed-interactive-native`, `managed-lifecycle-requirements`, `managed-observation-authority`, `streaming-output-v2`, `role-capabilities`, `remote-approvals`, `remote-jobs`, `remote-admission`, `remote-fake-relay`, `local-stdio-mcp`, plus the new suites. Also `npm run typecheck:runner-v2` and `npm run lint`.
@@ -159,3 +159,19 @@ Regression suites to run: `managed-interactive-io`, `managed-interactive-native`
 - An independent review signs off on the input-effect and admission changes.
 - The surface doc and catalog list `process_interact`.
 - A staging check with a real Claude or ChatGPT connector replays A1 and A6 through the relay.
+
+## 7. As built (2026-11-03)
+
+Where the implementation differs from §2, this section wins.
+
+- **Names.** The remote `process_read_output` already had `view` (`output` or `snapshot`), so the T1 rendering option is `render: "raw" | "plain"`, and the line window is a separate `lines: { start, count }`. `process.run` takes `render: "raw" | "summary"`.
+- **Result shape of `process.interact`.** `{ processId, write, read?, readError? }`. `read` is an ordinary `read_output` result plus `completion` and `state`. A read failure after an acknowledged write is `readError: { code, message }` with `isError: false`.
+- **Write identity.** `writeId` is `interact-` plus 48 hex characters of `sha256(callId)`. On the remote path the admitted job owns the call, so a retried `idempotencyKey` replays the job and never re-sends.
+- **`process.start` with `until` and no `waitMs`** waits the interaction default (15 s) instead of returning at once. Without `until`, `waitMs` still defaults to 0, which is today's behavior.
+- **Authority.** One ToolBroker call still consumes exactly one session grant:
+  - The same-call readiness read in `process.start` uses the existing launch-call path (`authorizeFirstOperation`). Only the exact launching call and grant can use it, and only once.
+  - `process.interact` uses a new `SessionAuthority.authorizeInteraction`. It consumes the call's grant once, with every check `authorizeOperation` makes, and issues exactly two authorizations for that one session: the input operation (`write` or `close_input`) and an `observe`.
+  - The transport holds them per frozen call context and uses the input authorization once.
+  - The acceptance run caught this: the first wiring asked for a second grant and was refused, fail-closed.
+- **Windows CPU evidence.** The job host polls Job accounting every 500 ms. It emits an `accounting` event when CPU time changed, or every 5 s otherwise. The helper assembly hash is computed at launch, so there is no static pin to regenerate.
+- **Not built in T1.** Linux `/proc` CPU sampling, macOS sampling, and the Linux stdin-syscall upgrade to `certain`. Off Windows, `input_wait` is therefore unavailable: a quiet process reports `idle` (`heuristic`), or `known_prompt`. A2 and A3 are Windows-only until POSIX CPU evidence exists.

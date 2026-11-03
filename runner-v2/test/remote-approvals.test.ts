@@ -231,6 +231,13 @@ test("approval summaries are bounded, escaped and carry no input data or environ
   assert.equal(stdin.commandLine, "");
   assert.doesNotMatch(JSON.stringify(stdin), /password123/);
   assert.equal(stdin.cwdCategory, "not applicable");
+  // T1 A11: an interaction turn is summarized exactly like the write it contains.
+  const turn = commandApprovalSummary("job-2b", "ABC123", "process.interact",
+    { processId: "p-1", data: "password123", until: { idleMs: 1500 }, waitMs: 5000 }, tmpdir());
+  assert.equal(turn.commandLine, "");
+  assert.doesNotMatch(JSON.stringify(turn), /password123/);
+  assert.equal(turn.cwdCategory, "not applicable");
+  assert.throws(() => commandApprovalSummary("job-2c", "ABC123", "process.interact", { processId: "p-1", writeId: "model-chosen" }, tmpdir()));
   assert.throws(() => commandApprovalSummary("job-3", "ABC123", "process.start", { command: "x", injected: true }, tmpdir()));
   assert.throws(() => commandApprovalSummary("job-4", "ABC123", "fs.write", { path: "x" }, tmpdir()));
 });

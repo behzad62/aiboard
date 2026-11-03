@@ -3,7 +3,9 @@ import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ToolExecutionContext } from "./agent-contracts.js";
-import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_WAIT_MAX_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
+import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_WAIT_MAX_MS, MANAGED_UNTIL_IDLE_DEFAULT_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedInteractionState, type ManagedOutputCompletion, type ManagedOutputUntil, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
+import { createManagedWaitTracker } from "./managed-process-wait-tracker.js";
+import { interactionState } from "./managed-process-wait.js";
 import { MANAGED_OUTPUT_FINAL_SPILL_BYTES, MANAGED_OUTPUT_LIVE_TAIL_BYTES, decodeOutputCursor, encodeOutputCursor, hasNewOutput, normalizeOutputRead, sliceOutput, streamsFor, type ManagedOutputCursorBinding, type ManagedOutputReadRequest, type ManagedOutputReadResult, type ManagedOutputSlice, type ManagedOutputStreamName } from "./managed-process-output.js";
 import { historicalSnapshot, readHistoricalManagedProcessRecord } from "./managed-process-history.js";
 import { MAX_MANAGED_OUTPUT_BYTES, managedIdentity, managedProcessId, managedSnapshot, parseManagedSessionRecord, persistManagedSessionRecord, readManagedRecordValue, type ManagedSessionRecord } from "./managed-process-record.js";
@@ -11,6 +13,29 @@ import type { ManagedProcessOwner, ManagedProcessRunRuntime } from "./managed-pr
 export * from "./managed-process-contracts.js";
 export type { ManagedOutputReadRequest, ManagedOutputReadResult } from "./managed-process-output.js";
 export { readHistoricalManagedProcessObservations } from "./managed-process-history.js";
+
+/** T1 default wait for one interaction turn; bounded by MANAGED_OUTPUT_WAIT_MAX_MS. */
+export const MANAGED_INTERACT_DEFAULT_WAIT_MS = 15_000;
+
+export interface ManagedInteractRequest {
+  readonly writeId: string;
+  readonly data?: string;
+  /** Default true: one turn is normally one line of input. */
+  readonly appendNewline?: boolean;
+  readonly closeInput?: boolean;
+  readonly until?: ManagedOutputUntil;
+  readonly waitMs?: number;
+  readonly cursor?: string;
+  readonly stream?: "stdout" | "stderr" | "both";
+  readonly maxBytes?: number;
+}
+
+export interface ManagedInteractResult {
+  readonly processId: string;
+  readonly write: ManagedInputWriteResult;
+  readonly read?: ManagedOutputReadResult;
+  readonly readError?: Readonly<{ code: string; message: string }>;
+}
 
 export interface ManagedProcessServiceOptions {
   stateDirectory: string;
@@ -37,6 +62,8 @@ export class ManagedProcessService {
   private readonly stops = new Map<string, Promise<ManagedProcessSnapshot>>();
   /** Per-process input order: one write settles (durably) before the next is admitted. */
   private readonly inputTails = new Map<string, Promise<unknown>>();
+  /** T1: latest evidence-based completion per process (in memory; observation only). */
+  private readonly interactions = new Map<string, Readonly<{ completion: ManagedOutputCompletion; state: ManagedInteractionState }>>();
   private cursorKeyBytes?: Uint8Array;
   private readonly stateDirectory: string;
   private readonly idFactory: () => string;
@@ -133,7 +160,11 @@ export class ManagedProcessService {
    * Payload bytes are never persisted or logged (digest and length only).
    */
   async writeInput(processId: string, request: ManagedInputWriteRequest, context: ToolExecutionContext): Promise<ManagedInputWriteResult> {
-    this.assertOpen(); const exact = exactCall(context, "process.write_stdin"); const record = this.owned(processId, exact);
+    this.assertOpen(); return await this.writeExact(processId, request, exactCall(context, "process.write_stdin"));
+  }
+
+  private async writeExact(processId: string, request: ManagedInputWriteRequest, exact: Readonly<ToolExecutionContext>): Promise<ManagedInputWriteResult> {
+    const record = this.owned(processId, exact);
     if (!("schemaVersion" in record)) throw new ManagedProcessError("process_input_unavailable", "Historical process records are read-only.");
     const writeId = checkedWriteId(request.writeId);
     if (request.data !== undefined && typeof request.data !== "string") throw new ManagedProcessError("invalid_arguments", "data must be a string.");
@@ -184,7 +215,41 @@ export class ManagedProcessService {
 
   /** N2: caller-held cursor, tail or explicit-range reads of exact bounded output evidence. */
   async readOutput(processId: string, request: ManagedOutputReadRequest, context: ToolExecutionContext): Promise<ManagedOutputReadResult> {
-    const exact = exactCall(context, "process.read_output"); const record = this.owned(processId, exact);
+    return await this.readExact(processId, request, exactCall(context, ["process.read_output", "process.start"]));
+  }
+
+  /**
+   * T1: one turn = an N1 write, then an N2 read that waits on evidence. The write is reported
+   * first and unchanged; an unacknowledged write is never followed by any output claim. A read
+   * failure after an acknowledged write stays in-band so delivery is never turned into uncertainty.
+   */
+  async interact(processId: string, request: ManagedInteractRequest, context: ToolExecutionContext): Promise<ManagedInteractResult> {
+    this.assertOpen(); const exact = exactCall(context, "process.interact");
+    const writeId = checkedWriteId(request.writeId);
+    const waitMs = request.waitMs ?? MANAGED_INTERACT_DEFAULT_WAIT_MS;
+    if (!Number.isSafeInteger(waitMs) || waitMs < 0 || waitMs > MANAGED_OUTPUT_WAIT_MAX_MS) throw new ManagedProcessError("invalid_arguments", `waitMs must be 0..${MANAGED_OUTPUT_WAIT_MAX_MS}.`);
+    const until: ManagedOutputUntil = request.until ?? { idleMs: MANAGED_UNTIL_IDLE_DEFAULT_MS };
+    const appendNewline = request.appendNewline ?? true;
+    // The call's one grant covers this turn's input and its observation; the operation mirrors writeExact.
+    const interaction = (request.data ?? "").length > 0 || appendNewline ? "write" as const : "close_input" as const;
+    // Without a caller cursor, this turn's output starts at the totals observed just before the write.
+    const cursor = request.cursor ?? (await this.readExact(processId, { stream: request.stream ?? "both", maxBytes: 4, tailBytes: 1 }, exact, interaction)).cursor;
+    const write = await this.writeExact(processId, { writeId, ...(request.data !== undefined ? { data: request.data } : {}),
+      appendNewline, ...(request.closeInput !== undefined ? { closeInput: request.closeInput } : {}) }, exact);
+    if (write.status !== "acknowledged") return Object.freeze({ processId: write.processId, write });
+    try {
+      const read = await this.readExact(processId, { cursor, until, waitMs, ...(request.stream !== undefined ? { stream: request.stream } : {}),
+        ...(request.maxBytes !== undefined ? { maxBytes: request.maxBytes } : {}) }, exact, interaction);
+      return Object.freeze({ processId: write.processId, write, read });
+    } catch (error) {
+      const code = error instanceof ManagedProcessError ? error.code : "process_output_unavailable";
+      return Object.freeze({ processId: write.processId, write, readError: Object.freeze({ code, message: error instanceof Error ? error.message : String(error) }) });
+    }
+  }
+
+  private async readExact(processId: string, request: ManagedOutputReadRequest, exact: Readonly<ToolExecutionContext>,
+    interaction?: "write" | "close_input"): Promise<ManagedOutputReadResult> {
+    const record = this.owned(processId, exact);
     if (!("schemaVersion" in record)) throw new ManagedProcessError("process_output_history_unsupported", "This historical record keeps only a bounded legacy tail without offsets; use process.poll.");
     const normalized = normalizeOutputRead(request);
     const runtime = this.runtime(record.runId);
@@ -194,7 +259,11 @@ export class ManagedProcessService {
     const offsets: Record<ManagedOutputStreamName, number> = normalized.cursor !== undefined ? decodeOutputCursor(key, binding, normalized.cursor) : { stdout: 0, stderr: 0 };
     const selected = normalized.range ? [normalized.range.stream] : streamsFor(normalized.stream);
     const waitMs = Math.min(normalized.waitMs, MANAGED_OUTPUT_WAIT_MAX_MS);
-    const read = runtime.readOutput(record, exact, { waitMs, satisfied: evidence => hasNewOutput(evidence, offsets, normalized.range ? normalized.range.stream : normalized.stream) })
+    const tracker = normalized.until ? await createManagedWaitTracker({ until: normalized.until, baseOffsets: offsets, streams: selected }) : undefined;
+    const read = runtime.readOutput(record, exact, { waitMs,
+      satisfied: tracker ? evidence => tracker.satisfied(evidence) : evidence => hasNewOutput(evidence, offsets, normalized.range ? normalized.range.stream : normalized.stream),
+      ...(tracker?.usage ? { usage: true } : {}), ...(tracker?.recheckMs ? { recheckMs: tracker.recheckMs } : {}),
+      ...(interaction ? { interaction } : {}) })
       .then(async evidence => {
         if (exact.signal?.aborted) throw cancelled("read");
         this.saveSnapshot(record.processId, { ...evidence.snapshot, stdout: record.stdout, stderr: record.stderr });
@@ -208,15 +277,19 @@ export class ManagedProcessService {
           if (!normalized.range) next[stream] = slice.endOffset;
         }
         const terminal = evidence.snapshot.status !== "running";
+        const completion = tracker?.completion(evidence);
+        const state = completion ? interactionState(completion, !terminal) : undefined;
+        if (completion && state) this.interactions.set(record.processId, Object.freeze({ completion, state }));
         return Object.freeze({
           processId: record.processId, status: evidence.snapshot.status, exitCode: evidence.snapshot.exitCode, signal: evidence.snapshot.signal,
           source: evidence.source, ...(evidence.waited ? { waited: evidence.waited } : {}), slices: Object.freeze(slices),
           cursor: encodeOutputCursor(key, binding, next),
           complete: terminal && evidence.source === "final" && !normalized.range && slices.every(slice => !slice.hasMore && !slice.gap && slice.lossyBytes === 0),
           limits: Object.freeze({ maxBytesPerStream: normalized.maxBytes, liveTailBytesPerStream: MANAGED_OUTPUT_LIVE_TAIL_BYTES, finalSpillBytesPerStream: MANAGED_OUTPUT_FINAL_SPILL_BYTES }),
+          ...(completion ? { completion, state } : {}),
         });
       });
-    this.reads.add(read); void read.finally(() => this.reads.delete(read)).catch(() => undefined);
+    this.reads.add(read); void read.finally(() => { this.reads.delete(read); tracker?.close(); }).catch(() => undefined);
     return await cancelRead(read, exact.signal);
   }
 
@@ -233,7 +306,7 @@ export class ManagedProcessService {
       .then(snapshots => {
         if (exact.signal?.aborted) throw cancelled("poll");
         if (snapshots.length !== records.length) throw new ManagedProcessError("process_record_invalid", "Managed batch returned different identities.");
-        return snapshots.map((snapshot, index) => this.saveSnapshot(records[index]!.processId, snapshot));
+        return snapshots.map((snapshot, index) => this.withInteraction(this.saveSnapshot(records[index]!.processId, snapshot)));
       });
     this.reads.add(read); void read.finally(() => this.reads.delete(read)).catch(() => undefined);
     return [...await cancelRead(read, exact.signal), ...old];
@@ -317,6 +390,11 @@ export class ManagedProcessService {
     try { return await work; } finally { if (this.stops.get(record.processId) === work) this.stops.delete(record.processId); }
   }
 
+  private withInteraction(snapshot: ManagedProcessSnapshot): ManagedProcessSnapshot {
+    const last = this.interactions.get(snapshot.processId);
+    if (!last) return snapshot;
+    return Object.freeze({ ...snapshot, state: snapshot.status === "running" ? last.state : "exited" as const, lastCompletion: last.completion });
+  }
   private load(entry: string): void {
     const value = readManagedRecordValue(join(this.stateDirectory, entry));
     if (value && typeof value === "object" && ("schemaVersion" in value || "recordKind" in value)) {
@@ -386,12 +464,13 @@ function bound(value: number, minimum: number, maximum: number): number {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new ManagedProcessError("invalid_arguments", "Managed process bound is invalid.");
   return value;
 }
-function exactCall(context: ToolExecutionContext, toolName: string): Readonly<ToolExecutionContext> {
+function exactCall(context: ToolExecutionContext, toolName: string | readonly string[]): Readonly<ToolExecutionContext> {
+  const tools: readonly string[] = typeof toolName === "string" ? [toolName] : toolName;
   if (!context || !context.runId || !context.sessionId || !context.actor?.id || !["architect", "worker", "subagent", "verifier", "remote", "local_mcp"].includes(context.actor.role) ||
-      !context.callId || context.toolName !== toolName || !context.executionGrant || !context.workspacePath || !isAbsolute(context.workspacePath)) {
+      !context.callId || !tools.includes(context.toolName ?? "") || !context.executionGrant || !context.workspacePath || !isAbsolute(context.workspacePath)) {
     throw new ManagedProcessError("process_authority_required", "Managed invocation requires its exact original ToolBroker grant and identity.");
   }
-  if (context.signal?.aborted) throw cancelled(toolName);
+  if (context.signal?.aborted) throw cancelled(tools[0]!);
   return Object.freeze({ ...context, actor: Object.freeze({ ...context.actor }) });
 }
 function cancelled(operation: string): ManagedProcessError {

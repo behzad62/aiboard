@@ -76,6 +76,7 @@ export const RUNNER_BUILTIN_TOOL_NAMES = Object.freeze([
   "process.run",
   "process.signal",
   "process.start",
+  "process.interact",
   "process.write_stdin",
   "propose_project_memory",
   "recall_project_memory",

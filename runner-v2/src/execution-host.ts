@@ -162,6 +162,8 @@ export interface ExecutionHostRunBinding {
   }>;
   readonly isolation: ExecutionIsolationSelector;
   readonly managedProcesses: ManagedProcessService;
+  /** T1 read-only whole-tree CPU evidence for an active owned streaming session. */
+  readonly observeProcessUsage?: ReturnType<typeof createExecutionHostStreamingGraph>["observeUsage"];
   openStreaming(request: ExecutionHostStreamingOpenRequest): ReturnType<
     ReturnType<typeof createExecutionHostStreamingGraph>["open"]
   >;
@@ -636,6 +638,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       isolation,
       managedProcesses: input.managedProcesses,
       openStreaming: streamingGraph.open,
+      observeProcessUsage: streamingGraph.observeUsage,
       async recover(recoveryInput: { readonly maxRecords: number; readonly timeoutMs: number }) {
         if (closed) throw new Error("ExecutionHost run binding is closed.");
         if (!Number.isSafeInteger(recoveryInput.maxRecords) || recoveryInput.maxRecords < 1 ||

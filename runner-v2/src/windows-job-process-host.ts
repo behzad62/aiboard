@@ -61,6 +61,8 @@ export interface WindowsJobProcessHost {
   releaseOwned(processId: string, owner: WindowsJobOwnershipKey, expectedStartedAt: string, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }>;
   readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }, fence?: WindowsJobWriterFence, maximumBytes?: number): WindowsJobOutputRead | Promise<WindowsJobOutputRead>;
   probeActiveJobCreateClose(): Promise<boolean>;
+  /** T1 read-only CPU evidence for an owned live Job. Never a lifecycle, release or fence fact. */
+  usageOwned?(processId: string, owner: WindowsJobOwnershipKey): Promise<{ readonly cpuTimeMs: number; readonly sampledAt: string } | undefined>;
   attachOwnedChannel?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState>;
   writeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }>;
   closeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void>;
@@ -152,6 +154,8 @@ interface SupervisorStatus {
   status: "starting" | "running" | "stopped" | "exited_unknown"; exitCode: number | null;
   signal: NodeJS.Signals | null; error: string | null; ownershipReleased: boolean; updatedAt: string;
   retainedOutputChunks: number; retainedOutputBytes: number;
+  /** T1: in-memory whole-Job CPU evidence from the Job host's accounting events. */
+  cpuTimeMs?: number; cpuSampledAt?: string;
   jobEmptyProof?: boolean;
   terminationRequested?: boolean;
   /** PX-2c: spare lifecycle marks persisted by the supervisor. */
@@ -886,6 +890,19 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (status.status !== "stopped" && status.terminationRequested !== true)
       throw new WindowsJobHostError("process_stop_timeout", `Windows Job process ${processId} did not stop.`);
     return this.snapshot(stoppedRecord);
+  }
+
+  /**
+   * T1: read-only CPU evidence. An outside-fence status read that never persists
+   * or applies the status, so it cannot disturb a writer's fence, cursor or proof.
+   */
+  async usageOwned(processId: string, owner: WindowsJobOwnershipKey): Promise<{ readonly cpuTimeMs: number; readonly sampledAt: string } | undefined> {
+    const record = this.ownedRecord(processId, owner);
+    if (record.backendOwnershipReleasedAt) return undefined;
+    const status = await this.authenticatedStatus(record, false);
+    if (status.status !== "running" || !Number.isSafeInteger(status.cpuTimeMs) || (status.cpuTimeMs as number) < 0 ||
+        typeof status.cpuSampledAt !== "string" || Number.isNaN(Date.parse(status.cpuSampledAt))) return undefined;
+    return Object.freeze({ cpuTimeMs: status.cpuTimeMs as number, sampledAt: status.cpuSampledAt });
   }
 
   async reconcileOwned(processId: string, owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }> {

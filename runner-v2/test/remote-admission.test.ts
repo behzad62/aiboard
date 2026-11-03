@@ -284,6 +284,22 @@ test("dispatch timeouts and thrown calls remain outcome_unknown", async () => te
       content: [{ type: "json", value: { status: "outcome_unknown", errorCode: "custom_input_failure" } }],
       isError: true, error: { code: "custom_input_failure", message: "Input delivery is uncertain." } }));
     assert.equal(response(result).status, "outcome_unknown");
+    // T1 A7: an interaction turn whose write was not acknowledged settles exactly like write_stdin.
+    const turn = { ...request, toolId: "process_interact", idempotencyKey: "uncertain-turn", payload: { processId: "process-1", data: "input" } };
+    turn.payloadDigest = remotePayloadDigest(turn);
+    const uncertainTurn = await admit({ ...effect(turn), toolName: "process.interact" }, async () => ({ callId: "call", toolName: "process.interact",
+      content: [{ type: "json", value: { processId: "process-1", write: { status: "outcome_unknown", errorCode: "custom_input_failure" } } }],
+      isError: true, error: { code: "custom_input_failure", message: "Input delivery is uncertain." } }));
+    assert.equal(response(uncertainTurn).status, "outcome_unknown");
+    assert.equal(store.getJob(identity, response(uncertainTurn).jobId as string)?.state, "outcome_unknown");
+    // T1 A8: a read that fails after an acknowledged write never turns delivery into uncertainty.
+    const delivered = { ...request, toolId: "process_interact", idempotencyKey: "delivered-turn", payload: { processId: "process-1", data: "input" } };
+    delivered.payloadDigest = remotePayloadDigest(delivered);
+    const readFailed = await admit({ ...effect(delivered), toolName: "process.interact" }, async () => ({ callId: "call", toolName: "process.interact",
+      content: [{ type: "json", value: { processId: "process-1", write: { status: "acknowledged" }, readError: { code: "process_cancelled", message: "cancelled" } } }],
+      isError: false }));
+    assert.equal(response(readFailed).status, "completed");
+    assert.equal(store.getJob(identity, response(readFailed).jobId as string)?.state, "completed");
   } finally { store.close(); }
 }));
 

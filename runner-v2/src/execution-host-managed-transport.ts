@@ -14,14 +14,19 @@ import { resolveLanguageServerExecutable } from "./language-server-executable.js
 import type { ArtifactStore } from "./artifact-store.js";
 import { ManagedProcessError, type ManagedOutputEvidence, type ManagedProcessSnapshot } from "./managed-process-contracts.js";
 import type { ManagedProcessIdentity, ManagedProcessRunRuntime, ManagedProcessTarget } from "./managed-process-transport.js";
-import type { OperationAuthorizationAssertion, SessionOperationAuthorization } from "./session-authority.js";
+import type { OperationAuthorizationAssertion, SessionInteractionAuthorization, SessionOperationAuthorization } from "./session-authority.js";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { StreamingSessionRecord } from "./streaming-session-store.js";
 
 type Facade = Awaited<ReturnType<ExecutionHostRunBinding["openStreaming"]>>;
 type Observation = Awaited<ReturnType<ExecutionHostRunBinding["streamingRuntime"]["observeOutput"]>>;
 type Entry = { abort: AbortController; opening?: Promise<Facade>; openingSettled?: boolean; facade?: Facade;
-  terminal?: Readonly<{ exitCode: number | null; signal: NodeJS.Signals | null }>; cleanup?: Promise<void> };
+  terminal?: Readonly<{ exitCode: number | null; signal: NodeJS.Signals | null }>; cleanup?: Promise<void>;
+  /** T1: the launching call, which may make its one first operation (a same-call readiness read). */
+  launch?: Readonly<{ callId: string; grant: unknown }> };
+type InputOperation = "write" | "close_input";
+/** T1: one interaction call's input and observation authorizations; the input is usable once. */
+type InteractionAuthority = { readonly operation: InputOperation; readonly authorization: Readonly<SessionInteractionAuthorization>; inputUsed: boolean };
 const noExtraAccess = Object.freeze({ requestAccess: Object.freeze([]), credentialNames: Object.freeze([]),
   networkApproved: false, externalApproved: false, destructiveApproved: false });
 const sessionId = (id: string) => `managed-stream-${id}`;
@@ -45,7 +50,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
     return record;
   };
   const expected = (target: ManagedProcessIdentity, context: Readonly<ToolExecutionContext>, operation: "observe" | "stop"): OperationAuthorizationAssertion => {
-    assertCall(context, target, run.runId, operation === "stop" ? ["process.signal"] : ["process.poll", "process.list", "process.read_output"]);
+    assertCall(context, target, run.runId, operation === "stop" ? ["process.signal"] : ["process.poll", "process.list", "process.read_output", "process.interact", "process.start"]);
     return { ...noExtraAccess, sessionId: sessionId(target.processId), operation, binding: bindingFor(context, options.permissionProfile) };
   };
   const snapshot = async (target: ManagedProcessTarget, authorization?: SessionOperationAuthorization, assertion?: OperationAuthorizationAssertion, maximum = 65536): Promise<ManagedProcessSnapshot> => {
@@ -74,12 +79,47 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
     if (final && final.state !== "released" || !final && launch && launch.state !== "released")
       throw new ManagedProcessError("process_cleanup_unverified", "Exact managed release conjunction is not verified.");
   };
+  // Keyed by the exact frozen call context the service threads through one interaction.
+  const interactions = new WeakMap<object, InteractionAuthority>();
+  const interactionAuthority = (target: ManagedProcessIdentity, context: Readonly<ToolExecutionContext>, operation: InputOperation): InteractionAuthority => {
+    const existing = interactions.get(context);
+    if (existing) {
+      if (existing.operation !== operation) throw refused("Interaction input operation does not match its authorization.");
+      return existing;
+    }
+    const facade = entries.get(target.processId)?.facade;
+    if (!facade) throw new ManagedProcessError("process_input_unavailable", "Process input needs this Runner's live owned session; a recovered or historical session is read-only.");
+    facade.retainOwnership();
+    const authorization = facade.authorizeInteraction({ ...noExtraAccess, sessionId: sessionId(target.processId), operation,
+      binding: bindingFor(context, options.permissionProfile), grant: context.executionGrant! });
+    const created: InteractionAuthority = { operation, authorization, inputUsed: false };
+    interactions.set(context, created);
+    return created;
+  };
+  const observeAuthorization = (target: ManagedProcessIdentity, context: Readonly<ToolExecutionContext>, assertion: OperationAuthorizationAssertion,
+    interaction?: InputOperation): SessionOperationAuthorization => {
+    const entry = entries.get(target.processId);
+    if (context.toolName === "process.start") {
+      // Only the exact launching call, once, through the launch-retained claims.
+      if (!entry?.facade || !entry.launch || entry.launch.callId !== context.callId || entry.launch.grant !== context.executionGrant)
+        throw refused("A same-call readiness read must come from the exact launching call.");
+      return entry.facade.authorizeFirstOperation({ ...noExtraAccess, sessionId: assertion.sessionId, operation: "observe" });
+    }
+    if (context.toolName === "process.interact") {
+      if (!interaction) throw refused("An interaction read needs its declared input operation.");
+      return interactionAuthority(target, context, interaction).authorization.observe;
+    }
+    entry?.facade?.retainOwnership();
+    return run.sessionAuthority.authorizeOperation({ ...assertion, grant: context.executionGrant! });
+  };
   const runtime: ManagedProcessRunRuntime = {
     runId: run.runId,
     async start(request) {
       assertCall(request.context, request.identity, run.runId, ["process.start"]);
       if (entries.has(request.identity.processId) || recordOf(request.identity)) throw refused("Managed launch identity cannot be replayed.");
-      const abort = new AbortController(), entry: Entry = { abort }; entries.set(request.identity.processId, entry);
+      const abort = new AbortController(), entry: Entry = { abort,
+        launch: Object.freeze({ callId: request.context.callId!, grant: request.context.executionGrant }) };
+      entries.set(request.identity.processId, entry);
       const signal = request.context.signal ? AbortSignal.any([abort.signal, request.context.signal]) : abort.signal;
       let expired = false;
       const timer = setTimeout(() => { expired = true; abort.abort(); }, request.startTimeoutMs);
@@ -199,7 +239,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       return await snapshot(target);
     },
     async writeInput(target, context, request) {
-      assertCall(context, target, run.runId, ["process.write_stdin"]);
+      assertCall(context, target, run.runId, ["process.write_stdin", "process.interact"]);
       const record = recordOf(target), facade = entries.get(target.processId)?.facade;
       if (!record || record.state !== "active" || entries.get(target.processId)?.terminal)
         throw new ManagedProcessError("process_input_unavailable", "Process input is unavailable: the owned session is no longer active.");
@@ -207,7 +247,13 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       const operation = request.bytes.byteLength ? "write" as const : "close_input" as const;
       const assertion: OperationAuthorizationAssertion = { ...noExtraAccess, sessionId: sessionId(target.processId), operation, binding: bindingFor(context, options.permissionProfile) };
       let authorization: SessionOperationAuthorization;
-      try { facade.retainOwnership(); authorization = facade.authorizeOperation({ ...assertion, grant: context.executionGrant! }); }
+      try {
+        if (context.toolName === "process.interact") {
+          const interaction = interactionAuthority(target, context, operation);
+          if (interaction.inputUsed) throw refused("An interaction delivers its input once.");
+          interaction.inputUsed = true; authorization = interaction.authorization.input;
+        } else { facade.retainOwnership(); authorization = facade.authorizeOperation({ ...assertion, grant: context.executionGrant! }); }
+      }
       catch (error) { throw new ManagedProcessError("process_input_rejected", `Process input was refused before delivery: ${error instanceof Error ? error.message : String(error)}`); }
       // From here a failure cannot prove the bytes were not delivered.
       try {
@@ -219,27 +265,32 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       return Object.freeze({ inputClosed: request.closeInput });
     },
     async readOutput(target, context, request) {
-      assertCall(context, target, run.runId, ["process.read_output"]);
+      assertCall(context, target, run.runId, ["process.read_output", "process.interact", "process.start"]);
       const durable = recordOf(target);
       if (!durable) throw new ManagedProcessError("process_output_unavailable", "This process never acquired an owned output session; no output evidence exists.");
       const assertion = expected(target, context, "observe");
-      entries.get(target.processId)?.facade?.retainOwnership();
-      const authorization = run.sessionAuthority.authorizeOperation({ ...assertion, grant: context.executionGrant! });
+      const authorization = observeAuthorization(target, context, assertion, request.interaction);
       const deadline = Date.now() + Math.max(0, request.waitMs);
+      // T1: CPU evidence is read only when a wait asks for it; absence is never an error.
+      const usage = async () => request.usage && run.observeProcessUsage
+        ? await run.observeProcessUsage({ authorization, assertion }).catch(() => undefined) : undefined;
       let waited: ManagedOutputEvidence["waited"];
       for (;;) {
         const observation = await run.streamingRuntime.observeOutput({ authorization, assertion });
         if (context.signal?.aborted) throw cancelled();
         run.sessionAuthority.assertOperationAuthorization(authorization, assertion);
-        const evidence = evidenceFrom(target, observation, waited);
+        const evidence = evidenceFrom(target, observation, waited, await usage());
         const remaining = deadline - Date.now();
         if (request.waitMs <= 0 || evidence.source !== "live" || waited === "terminal" || waited === "timeout" || remaining <= 0 || request.satisfied(evidence))
           return Object.freeze(request.waitMs > 0 && !waited && remaining <= 0 ? { ...evidence, waited: "timeout" as const } : evidence);
         const facade = entries.get(target.processId)?.facade;
         if (!facade) return Object.freeze({ ...evidence, waited: "unavailable" as const });
         // Event-driven: wakes on newly spooled evidence, terminal or close; cancellation ends only the wait.
-        waited = await facade.waitForEvidence(remaining, context.signal);
-        if (waited === "cancelled") throw cancelled();
+        // Time-based conditions (T1 idle/port) also re-check every recheckMs; an intermediate tick is not a timeout.
+        const slice = request.recheckMs ? Math.min(remaining, request.recheckMs) : remaining;
+        const result = await facade.waitForEvidence(slice, context.signal);
+        if (result === "cancelled") throw cancelled();
+        waited = result === "timeout" && slice < remaining ? undefined : result;
       }
     },
     async readSpill(artifactId) {
@@ -247,7 +298,8 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       return new Uint8Array(await options.artifacts.get(artifactId));
     },
   };
-  const evidenceFrom = (target: ManagedProcessTarget, observation: Observation, waited: ManagedOutputEvidence["waited"]): ManagedOutputEvidence => ({
+  const evidenceFrom = (target: ManagedProcessTarget, observation: Observation, waited: ManagedOutputEvidence["waited"],
+    usage?: Readonly<{ cpuTimeMs: number; sampledAt: string }>): ManagedOutputEvidence => ({
     snapshot: snapshotFrom(target, observation, 1),
     source: observation.record.state === "released" ? "final" : "live",
     streams: observation.output.streams.map(value => {
@@ -257,6 +309,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
         ...(spill.spillArtifactId && Number.isSafeInteger(spill.spillBytes) ? { spill: Object.freeze({ artifactId: spill.spillArtifactId, bytes: spill.spillBytes! }) } : {}) });
     }),
     ...(waited ? { waited } : {}),
+    ...(usage ? { cpu: Object.freeze({ totalMs: usage.cpuTimeMs, sampledAt: usage.sampledAt }) } : {}),
   });
   return Object.freeze(runtime);
 }

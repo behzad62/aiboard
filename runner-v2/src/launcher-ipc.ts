@@ -306,7 +306,7 @@ function isCommandApprovalRequest(value: unknown): value is CommandApprovalReque
     !/[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(item);
   return Object.keys(summary).length === 7 && typeof summary.jobId === "string" &&
     /^[A-Za-z0-9._:-]{1,128}$/.test(summary.jobId) && typeof summary.code === "string" && /^[0-9A-F]{6}$/.test(summary.code) &&
-    ["process.start", "process.run", "process.write_stdin", "process.signal"].includes(String(summary.toolName)) &&
+    ["process.start", "process.run", "process.write_stdin", "process.interact", "process.signal"].includes(String(summary.toolName)) &&
     safe(summary.executable, 200) && safe(summary.commandLine, 200) &&
     Number.isSafeInteger(summary.argumentCount) && Number(summary.argumentCount) >= 0 &&
     ["inside launch dir", "outside", "not applicable"].includes(String(summary.cwdCategory));

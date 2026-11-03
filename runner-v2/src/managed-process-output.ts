@@ -1,11 +1,15 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+  type ManagedInteractionState,
+  type ManagedOutputCompletion,
+  type ManagedOutputUntil,
   MANAGED_OUTPUT_READ_DEFAULT_BYTES,
   MANAGED_OUTPUT_READ_MAX_BYTES,
   ManagedProcessError,
   type ManagedOutputEvidence,
   type ManagedOutputStreamEvidence,
 } from "./managed-process-contracts.js";
+import { validateUntil } from "./managed-process-wait.js";
 
 /**
  * Incremental process-output reads (N2). Cursor state is caller-held and opaque: one reader's
@@ -33,6 +37,8 @@ export interface ManagedOutputReadRequest {
   readonly tailBytes?: number;
   /** Explicit earlier range of one stream, by absolute byte offset. */
   readonly range?: Readonly<{ stream: ManagedOutputStreamName; startOffset: number }>;
+  /** T1: evidence-based wait condition. Absent: today's any-new-byte wait, unchanged. */
+  readonly until?: ManagedOutputUntil;
 }
 
 export interface ManagedOutputSlice {
@@ -61,6 +67,9 @@ export interface ManagedOutputReadResult {
   /** True only when the process is terminal, every selected stream was read to its end and nothing was lost. */
   readonly complete: boolean;
   readonly limits: Readonly<{ maxBytesPerStream: number; liveTailBytesPerStream: number; finalSpillBytesPerStream: number }>;
+  /** T1: present only for reads that supplied `until`. */
+  readonly completion?: ManagedOutputCompletion;
+  readonly state?: ManagedInteractionState;
 }
 
 export const MANAGED_OUTPUT_LIVE_TAIL_BYTES = 128 * 1024;
@@ -101,8 +110,9 @@ export function normalizeOutputRead(request: ManagedOutputReadRequest): Required
   if (request.range !== undefined) {
     if (!["stdout", "stderr"].includes(request.range.stream) || !Number.isSafeInteger(request.range.startOffset) || request.range.startOffset < 0) throw invalid("range needs stream stdout|stderr and a non-negative startOffset");
     if (waitMs > 0) throw invalid("range reads do not wait");
+    if (request.until !== undefined) throw invalid("range reads do not wait");
   }
-  return { ...request, stream, maxBytes, waitMs };
+  return { ...request, stream, maxBytes, waitMs, ...(request.until !== undefined ? { until: validateUntil(request.until) } : {}) };
 }
 
 /** Selected streams have output beyond the given offsets, or the process is no longer running. */

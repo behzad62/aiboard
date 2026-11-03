@@ -20,7 +20,7 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
 | P4 | Dashboard at mcp.aiboard.me | P1, P2, P3 | IN PROGRESS — P4c (aiboard-tunnel 8f7d868): aiboard.me look on every relay page (shared /assets/aiboard.css with the main-site tokens, self-hosted Inter/Fraunces/JetBrains Mono, logo, dark default + ?theme= hand-off), Desktop-Commander-style sidebar with a live usage meter, Devices as landing; /pair and OAuth sign-in/consent restyled; aiboard.me header "Remote" link on ai-discussion-board branch remote/site-dashboard-link (1f93118b, not pushed). P4a DONE on staging 2026-10-30 (aiboard-tunnel 4e5b460 status/last seen, af838a7 + 7de34bf dashboard; aib-int 955ea669 Runner status frame): Overview + "Where you use it", Devices (truthful readiness, version, platform, allowed scope, last seen, rename, revoke, revoke-all), Settings (connected apps revoke, identities, sign out); Usage and Plan & billing are truthful placeholders until P3. Remaining P4b: usage/billing pages (P3), dashboard approvals (S1b-2), delete account, aiboard.me header link, Playwright DoD flows | codex (status, dashboard), architect (Runner frame, review, browser check, wording fixes) | relay 195, storage 13, accounts 4, e2e 10 on merged main; dashboard 7/7 (headers, CSP, no inline script/style, hostile names as text, actions, reauth, CSRF); mutants red: status extra-key check, last seen on close, Runner status send. Browser check on a local demo relay (fake IdP): sign-in, Overview, Devices at 360 px, revoke dialog + CSRF POST, Settings. Staging smoke: dashboard 200 with the strict CSP through Cloudflare |
 | Q1 | Security qualification | R4, S1, P2, P3 | IN PROGRESS — threat matrix draft docs/remote/q1-threat-matrix.md (22 rows: 11 Covered, 4 Partial, 3 Gap, 1 Blocked on P3, 3 awaiting owner decisions — rows 6/8/11); row 3 (audience confusion) closed by aiboard-tunnel 860f4b7, row 12 by R4e | architect | forged-audience test red with the check off |
 | Q2 | Reliability qualification | R4, R2, L2 | NOT STARTED | — | — |
-| T1 | Interaction UX for running processes (D19, pre-beta) | R1, R2, S1 | ACTIVE — plan docs/plans/2026-11-03-remote-t1-interaction-ux.md (slices T1a–T1e, acceptance A1–A12). T1a BUILT (branch remote/t1a-wait-module, not yet wired into any tool); T1b–T1e NOT STARTED | architect (no delegates, owner 2026-11-03) | T1a: managed-process-wait 19/19, 2 mutants red (busy-CPU guard, line-end `%` prompt), typecheck:runner-v2 0, eslint 0 on touched files |
+| T1 | Interaction UX for running processes (D19, pre-beta) | R1, R2, S1 | BUILT, awaiting independent review — plan docs/plans/2026-11-03-remote-t1-interaction-ux.md (§7 records as-built deviations). T1a–T1e on branch remote/t1-interaction-ux (aib-int) + remote/t1-process-interact (aiboard-tunnel 5da2806); not pushed. Open: independent review of the input-effect/admission/authority changes; staging connector replay of A1/A6 (needs deploy); POSIX CPU evidence (Linux /proc, macOS) not built, so A2/A3 are Windows-only | architect (no delegates, owner 2026-11-03) | T1a: managed-process-wait 19/19 + 2 mutants red. T1e acceptance `managed-interaction-native` 9/9 on Windows 10 (A1–A6, A7/A8, A9, A12); Linux (Docker node:24-bookworm on WSL2 kernel, non-root) 7 pass + 2 Windows-only skips after the cross-pipe prompt fix; authority 10/10; tracker 2/2 (mutant red); A10/A11 via existing suites (see Log 2026-11-03 T1b–T1e) |
 | Q3 | Staged launch | Stage-gated (Stage 0: L1, R1, S1, R2, P1, P2; Stage 1: R3, R4, P4, T1, Q1; Stage 2: P3, Q1, Q2) | NOT STARTED | — | — |
 | X1 | Plugin catalog incl. desktop GUI control | R1, P4; after Stage 2 | NOT STARTED | — | — |
 | S2 | Optional OS sandbox "safe mode" | S1; post-launch | NOT STARTED | — | — |
@@ -102,6 +102,36 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
   - Also built: `matchKnownPrompt`, where shell `$ `/`# `/`% `/`> ` match only as the whole line; `evaluateCompletion`, the evidence ladder; and `interactionState`. Contract types were added to `managed-process-contracts.ts`, including an optional `cpu` on `ManagedOutputEvidence` that nothing sets yet.
   - Evidence (Windows 10, Node 24.18.0): `npx tsx --test runner-v2/test/managed-process-wait.test.ts` 19/19. Mutants red: removing the busy-CPU guard fails "progress 45% with a busy CPU keeps waiting"; letting `% `/`$ ` match at the line end fails the prompt and sleep replays. `npm run typecheck:runner-v2` exit 0; eslint on the 3 touched files exit 0. One real fix during testing: diagnostics now recognize `C:\…\file.js:88:13`.
   - Next: T1b (CPU evidence in the Windows job host and supervisors) and T1c (service and tools wiring).
+- 2026-11-03 (T1b–T1e): Built by the architect without delegates, then accepted on real processes.
+  - T1b: the Windows job host emits `accounting` events (Job user+kernel CPU; polled every 500 ms, sent on change or every 5 s). The supervisor reads its event file incrementally and keeps CPU in memory only. CPU then flows read-only, with no fence and no effect: `usageOwned` → `backend.usage` → `observeUsage` → evidence `cpu`.
+  - T1c: added `until` on start and read_output, `process.interact`, `render` and `lines`, `process.run` `render: summary`, and list `state`/`lastCompletion`. The signal description is updated, and role lists include `process.interact`.
+  - T1d: wired the remote and local MCP surfaces: connector table, admission unknown-detection on `write.status`, approvals, device policy and launcher IPC. The relay schema is in aiboard-tunnel 5da2806, and the surface doc and catalog list 26 tools.
+  - Authority finding (fail-closed): the first wiring of start+read and interact asked for a second session grant per call and was refused ("A ToolBroker call cannot mint or reuse a second session grant"). That invariant is unchanged.
+    - start+read now uses the existing launch-call `authorizeFirstOperation` (exact launching call and grant only).
+    - interact uses the new `SessionAuthority.authorizeInteraction`. It consumes one grant once and yields exactly one input plus one observe authorization for one session. The input authorization is used once.
+  - A second finding came from the Linux run: across two pipes a REPL's stdout result can spool after its stderr prompt. Prompt and newline evidence now covers every stream with new output this wait.
+  - Evidence (Windows 10, Node 24.18.0, Python 3.14.6): `npx tsx --test runner-v2/test/managed-interaction-native.test.ts` 9/9:
+    - A1 input_wait likely, then exited;
+    - A2 exited at ≥ 4.5 s with no early stop;
+    - A3 input_wait likely at ≥ 1.5 s, < 5 s;
+    - A4 port certain at ≥ 1.9 s, and a pre-existing listener is heuristic with `preexistingPort`;
+    - A5 200 lines in one call;
+    - A6 banner + `>>>`, then three turns, one raising;
+    - A7/A8 at tool level, A9 validation, A12 plain + lines.
+  - More evidence:
+    - `managed-observation-authority` 10/10: `authorizeInteraction` consumes once and refuses a second grant, observe-only, stop, a foreign owner and an input-unavailable session.
+    - `managed-process-wait-tracker` 2/2, red without the cross-pipe fix.
+    - `remote-admission` 13/13: A7 interact `outcome_unknown` → job `outcome_unknown`; A8 `readError` after acknowledged → `completed`.
+    - `remote-device-policy` 4/4: A11, interact blocked under read-only and shell OFF for remote and local MCP.
+    - `remote-approvals` 9/9: the interact summary carries no input bytes, like stdin, and a model `writeId` is refused.
+    - Stale pins updated in `role-capabilities` and `managed-interactive-io`.
+    - Relay `mcp-gateway` 18/18. Its earlier `machine_hint` failure was a stale `packages/storage/dist` in tunnel main; rebuilding the dist fixed it.
+    - Linux (Docker `node:24-bookworm`, WSL2 kernel 6.18, uid node, Python 3.11.2): the interaction, tracker and wait suites give 28 pass + 2 skips (A2/A3 need CPU evidence).
+    - Windows regression across 27 affected files (managed-*, windows-job-*, streaming-output-v2, session-authority, streaming-process-session-runtime, remote-*, role-capabilities, process-tools, local-stdio-mcp): 481 pass / 17 fail. After the tracker fix, the interaction, tracker and wait suites give 30/30. `typecheck:runner-v2` 0; eslint 0 on touched files.
+  - Pre-existing on clean main 16927e5f, not T1 (each reproduced there):
+    - The 17 Windows failures: `process-tools` "private spill setup fails" (1), plus `streaming-process-session-runtime` "C3 real shared-spool spill failure …" and the 15 "C3 round4 observes finalized lossy manifest …" cases.
+    - On Linux, `managed-interactive-native` "large real output …" ends `exited_unknown` instead of `stopped`.
+    - All are spill/lossy-evidence or POSIX cleanup paths that T1 does not touch. They need their own investigation.
 
 ## Open items carried from R0
 
