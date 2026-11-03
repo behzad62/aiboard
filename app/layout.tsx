@@ -8,6 +8,7 @@ import {
   SITE_CONTACT_EMAIL,
   SITE_DESCRIPTION,
   SITE_GITHUB_URL,
+  SITE_LEGAL_NAME,
   SITE_NAME,
   SITE_URL,
 } from "@/lib/site";
@@ -106,7 +107,7 @@ export default function RootLayout({
           <main className="mx-auto w-full flex-1 px-4 py-8 sm:px-6">{children}</main>
           <footer className="px-4 py-6 text-xs text-muted-foreground">
             <div className="mx-auto flex max-w-[100rem] flex-wrap items-center justify-center gap-x-4 gap-y-2">
-              <span>© 2026 Behzad Shams · {SITE_NAME}</span>
+              <span>© 2026 {SITE_LEGAL_NAME} · {SITE_NAME}</span>
               <Link href="/about" className={footerLink}>
                 About
               </Link>

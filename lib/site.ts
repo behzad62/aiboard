@@ -11,7 +11,7 @@ export const SITE_CONTACT_EMAIL = "mail@aiboard.me";
  * Privacy Policy and Refund Policy. Paddle requires this exact name to match
  * the Paddle seller account, so change all three pages through these constants.
  */
-export const SITE_LEGAL_NAME = "Behzad Shams";
+export const SITE_LEGAL_NAME = "Behzad Amirzadeh Shams";
 export const SITE_LEGAL_ADDRESS =
   "Unit 107, Building W3, Wasl Green Park, Dubai, United Arab Emirates";
 /** Shown as "Last updated" on the legal pages; bump with the sitemap entries. */
