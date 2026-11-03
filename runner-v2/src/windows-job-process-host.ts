@@ -1571,7 +1571,7 @@ async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRec
     // agent holds the idle socket, and the supervisor's server.close waits for
     // it, lingering ~4 s after the result. A non-pooled agent plus
     // `Connection: close` lets the supervisor exit with the result.
-    const call = request({ hostname: "127.0.0.1", port: supervisor.port, path, method, agent: false, headers: { authorization: `Bearer ${supervisor.token}`, connection: "close", ...(payload ? { "content-type": "application/json", "content-length": String(payload.byteLength) } : {}) }, timeout: timeoutMs }, (response) => {
+    const call = request({ hostname: "127.0.0.1", port: supervisor.port, path, method, agent: false, headers: { authorization: `Bearer ${supervisor.token}`, connection: "close", ...(payload ? { "content-type": "application/json", "content-length": String(payload.byteLength) } : {}) } }, (response) => {
       const chunks: Buffer[] = []; response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
       response.once("error", fail);
       response.once("aborted", () => fail(new Error("Supervisor response was aborted.")));
@@ -1582,11 +1582,36 @@ async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRec
         try { const parsed = JSON.parse(text) as T; settled = true; resolvePromise(parsed); } catch (error) { fail(error); }
       });
     });
-    call.once("timeout", () => call.destroy(new Error("Supervisor request timed out.")));
+    const cancelDeadline = runnerTimeDeadline(timeoutMs, () => { if (!settled) call.destroy(new Error("Supervisor request timed out.")); });
+    call.once("close", cancelDeadline);
     call.once("error", fail);
     if (payload) call.write(payload);
     call.end();
   });
+}
+/**
+ * Staging 2026-11-03: a supervisor deadline measures supervisor silence, so it
+ * counts only time this Runner was running. After a main-thread pause (0% CPU,
+ * 10 s and 134 s on a Windows Remote Runner) timers run before pending I/O: a
+ * plain socket timeout then fired although the reply had already arrived, and
+ * every live session's in-flight /status probe failed together; the channel
+ * surfaced that as terminal and each LIVE sibling was cleaned up. Each tick
+ * credits at most two ticks, so a pause counts as a bounded slice; the final
+ * expiry waits one I/O turn so an already-received reply settles first.
+ */
+const SUPERVISOR_DEADLINE_TICK_MS = 100;
+function runnerTimeDeadline(timeoutMs: number, expire: () => void): () => void {
+  let elapsed = 0, last = performance.now(), cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined, turn: ReturnType<typeof setImmediate> | undefined;
+  const arm = () => { timer = setTimeout(tick, Math.max(1, Math.min(SUPERVISOR_DEADLINE_TICK_MS, timeoutMs - elapsed))); timer.unref?.(); };
+  const tick = () => {
+    const now = performance.now();
+    elapsed += Math.min(now - last, SUPERVISOR_DEADLINE_TICK_MS * 2); last = now;
+    if (elapsed < timeoutMs) { arm(); return; }
+    turn = setImmediate(() => { if (!cancelled) expire(); });
+  };
+  arm();
+  return () => { cancelled = true; if (timer) clearTimeout(timer); if (turn) clearImmediate(turn); };
 }
 async function writeSupervisorConfig(launcher: ChildProcess, serialized: string): Promise<void> {
   if (!launcher.stdin) throw new Error("Supervisor configuration pipe is unavailable.");
