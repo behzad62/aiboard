@@ -177,7 +177,7 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
     - Linux wider regression (posix-process-backend, portable-process channel and protocol, process-backend-contract, managed-interactive-io and -native, managed-lifecycle-requirements, managed-observation-authority, streaming-output-v2, static-adapter-policy, package-parity), run before the mid-wait fix, which touches only the tracker: 249 pass / 7 fail. All 7 also fail on untouched HEAD in that container: 4 package tests that need git history and the pinned source, `C4 POSIX child-crash anchor release`, the known "large real output", and "a real interactive process receives ordered…", which also passed once on the branch, so it is flaky.
     - Windows 10: 10 affected files 105 pass, 4 POSIX-only skips. A2/A3 8/8 rounds after the mid-wait fix. `typecheck:runner-v2` 0, eslint 0.
     - Mutants on Linux: no POSIX evidence fails A1, all three A2 variants and A3; removing the fresh-sample gate, the per-PID growth, the stale check or the mid-wait rule each fails its unit test. Counting the anchor fails only its unit test, not the real-process tests, because its poll is cheap on Linux.
-    - macOS: not run locally; CI only.
+    - macOS: not run locally, and never on a real user's Mac. GitHub Actions run 41808089092 at 5cc7d0f7, on `macos-latest` and `ubuntu-latest`: A1, three A2 variants, A3, A6 and the real-process sampling tests all ran and passed.
 
 ## Open items carried from R0
 
