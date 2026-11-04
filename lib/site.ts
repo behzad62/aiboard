@@ -17,7 +17,6 @@ export const SITE_LEGAL_ADDRESS =
 /** Shown as "Last updated" on the legal pages; bump with the sitemap entries. */
 export const LEGAL_LAST_UPDATED = "4 November 2026";
 export const PADDLE_BUYER_TERMS_URL = "https://www.paddle.com/legal/buyer-terms";
-export const PADDLE_PRIVACY_URL = "https://www.paddle.com/legal/privacy";
 export const SITE_GITHUB_URL = "https://github.com/behzad62/aiboard";
 /** AI Board Remote dashboard (relay at mcp.aiboard.me): devices, usage and connected AI apps. */
 export const SITE_REMOTE_URL = "https://mcp.aiboard.me/";

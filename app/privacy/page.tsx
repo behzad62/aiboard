@@ -1,8 +1,6 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
 import { LegalDocument, legalLink, type LegalSection } from "@/components/LegalDocument";
 import {
-  PADDLE_PRIVACY_URL,
   SITE_CONTACT_EMAIL,
   SITE_LEGAL_ADDRESS,
   SITE_LEGAL_NAME,
@@ -23,24 +21,12 @@ const mail = (
   </a>
 );
 
-const external = (href: string, label: string) => (
-  <a href={href} target="_blank" rel="noopener noreferrer" className={legalLink}>
-    {label}
-  </a>
-);
-
 // A stacked list rather than a table: it stays readable at phone width.
-const PROCESSORS: { name: string; where: string; role: ReactNode }[] = [
+const PROCESSORS: { name: string; where: string; role: string }[] = [
   {
-    name: "Paddle.com Market Limited",
-    where: "UK and worldwide",
-    role: (
-      <>
-        Our reseller and Merchant of Record: checkout, payments, tax, invoices
-        and refunds. Paddle is an independent controller of your payment data
-        under its {external(PADDLE_PRIVACY_URL, "Privacy Notice")}.
-      </>
-    ),
+    name: "Our payment provider",
+    where: "Worldwide",
+    role: "Checkout, payments, tax and invoices for paid plans, under its own privacy policy.",
   },
   {
     name: "Cloudflare, Inc.",
@@ -212,11 +198,9 @@ const SECTIONS: LegalSection[] = [
             took in our service logs.
           </li>
           <li>
-            <strong>Billing</strong> (paid plans only). Paddle&apos;s customer
-            and subscription ids, your plan, the subscription status and
-            renewal dates, and records of refunds or chargebacks. Paddle holds
-            your name, email, address and payment details; we never see your
-            card number.
+            <strong>Billing</strong> (paid plans only). Your plan, its status
+            and renewal dates, refund records, and the customer and subscription
+            ids our payment provider uses. We never see your card number.
           </li>
           <li>
             <strong>Messages you send us.</strong> If you email us, we keep the
@@ -279,8 +263,8 @@ const SECTIONS: LegalSection[] = [
           interest in running a safe, reliable service.
         </li>
         <li>
-          <strong>To handle payments, tax and accounting</strong>, together
-          with Paddle. Legal basis: contract, and our legal obligations.
+          <strong>To handle payments, tax and accounting</strong>. Legal basis:
+          contract, and our legal obligations.
         </li>
         <li>
           <strong>To answer you</strong> when you contact us, and to tell you
@@ -347,8 +331,7 @@ const SECTIONS: LegalSection[] = [
           </li>
           <li>
             <strong>Connected AI apps</strong>: until you revoke them, or 90
-            days after last use. Access tokens last one hour; refresh tokens at
-            most 90 days.
+            days after last use.
           </li>
           <li>
             <strong>Per-call usage records</strong>: the current and previous
@@ -359,14 +342,12 @@ const SECTIONS: LegalSection[] = [
           </li>
           <li>
             <strong>Server and web logs</strong> (which may include IP
-            addresses at the web-server level, device ids and the start of your
-            account id, but never your email or tool-call content): up to 30
-            days.
+            addresses and device ids, but never your email or tool-call
+            content): up to 30 days.
           </li>
           <li>
-            <strong>Billing records</strong>: for as long as your account
-            exists and then as long as tax and accounting law requires.
-            Paddle keeps its own records under its policy.
+            <strong>Billing records</strong>: as needed for tax, accounting and
+            legal purposes.
           </li>
           <li>
             <strong>Backups</strong>: database backups are kept for up to 90
@@ -375,19 +356,10 @@ const SECTIONS: LegalSection[] = [
         </ul>
         <p>
           To delete your Remote account, email {mail} from the address on the
-          account. We will delete your account data within 30 days. Your
-          sign-in, connected AI apps and paired computers stop working as soon
-          as we do. If you still have a paid plan, we cancel it first. We keep
-          billing records we must keep by law, with the link to your account
-          removed; Paddle keeps its own records under its policy.
-        </p>
-        <p>
-          A few traces last a little longer and then expire on their own: for
-          up to 30 days, each computer&apos;s device id and public key and the
-          account id they belonged to, so a Runner that was offline can verify
-          it was removed; server and web logs for up to 30 days; and copies in
-          backups until those backups expire. If we ever restore a backup, we
-          delete your account from it again before the service restarts.
+          account. We will delete your account data within 30 days, except
+          billing records we need for tax, accounting or legal reasons. Device
+          records, logs and backup copies last a little longer and then expire
+          on their own.
         </p>
       </>
     ),
@@ -406,10 +378,9 @@ const SECTIONS: LegalSection[] = [
           <strong>mcp.aiboard.me</strong> uses three strictly necessary
           cookies: one keeps you signed in (up to 90 days), one protects forms
           against cross-site request forgery, and one secures the sign-in
-          redirect (10 minutes). On the checkout page, Paddle&apos;s payment
-          form loads from Paddle and may set its own cookies to process the
-          payment and prevent fraud. We use no advertising or analytics
-          cookies.
+          redirect (10 minutes). On the checkout page, our payment
+          provider&apos;s form may set its own cookies to process the payment
+          and prevent fraud. We use no advertising or analytics cookies.
         </p>
       </>
     ),
@@ -496,8 +467,7 @@ export default function PrivacyPage() {
             They are encrypted in transit but not end to end.
           </li>
           <li>
-            Paddle handles payments; we never see your card. No ads, no
-            analytics, no selling data.
+            We never see your card. No ads, no analytics, no selling data.
           </li>
         </ul>
       }

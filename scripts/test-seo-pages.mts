@@ -46,7 +46,8 @@ for (const slug of legalPages) {
   if (exists(pagePath)) {
     const page = read(pagePath);
     check(`${slug} has metadata`, page.includes("export const metadata"), pagePath);
-    check(`${slug} names the Merchant of Record`, page.includes("Merchant of Record"), pagePath);
+    // The privacy page names no payment provider, by the owner's choice (2026-11-04).
+    if (slug !== "privacy") check(`${slug} names the Merchant of Record`, page.includes("Merchant of Record"), pagePath);
   }
   check(`${slug} is included in sitemap`, sitemap.includes(`"/${slug}"`), slug);
   check(`${slug} is linked from the layout footer`, layout.includes(`href="/${slug}"`), slug);
