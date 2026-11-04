@@ -395,7 +395,7 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
       fake.emit("message", { type: "aiboard-remote-pairing", userCode: "BCDF-GHJK", verificationUri: "https://mcp.aiboard.me/pair",
         expiresAt: new Date(Date.now() + 600_000).toISOString(), deviceName: "Desktop" });
       fake.emit("message", { type: "aiboard-remote-open", url: "https://mcp.aiboard.me/pair" });
-      fake.emit("message", { type: "aiboard-remote-session", deviceName: "Desktop", accountId: "account-1" });
+      fake.emit("message", { type: "aiboard-remote-session", deviceName: "Desktop", accountId: "account-1", accountLabel: "you\u001b@example.test" });
       fake.emit("message", { type: "aiboard-remote-state", state: "tool-ready", reasonCode: "ready" });
     };
     return child;
@@ -413,12 +413,18 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
     assert.deepEqual(relayFlags, [DEFAULT_REMOTE_RELAY_URL]);
     assert.equal(DEFAULT_REMOTE_RELAY_URL, "wss://mcp.aiboard.me/connect");
     assert.ok(output.some((line) => line.includes("open https://mcp.aiboard.me/pair and enter code BCDF-GHJK")));
-    assert.ok(output.some((line) => line.includes("Desktop; account: account-1") && line.includes("Ctrl+C to disconnect")));
+    assert.ok(output.some((line) => line.includes("Desktop; account: you@example.test") && line.includes("Ctrl+C to disconnect")));
+    assert.ok(output.some((line) => line.includes("Sign in with the account this computer should be on")));
     assert.equal(opened[0], "https://mcp.aiboard.me/pair");
     assert.equal(opened[0]!.includes("BCDF"), false);
-    // The local web UI link is printed for `aiboard remote` but never opened.
+    // The local web UI link is offered for `aiboard remote` but never opened.
     assert.equal(opened.some((url) => url.startsWith("https://aiboard.me/connect")), false);
-    assert.ok(output.some((line) => line.includes("https://aiboard.me/connect#pair=")));
+    await waitUntil(() => output.some((line) => line.includes("https://aiboard.me/connect#pair=")));
+    const printed = output.join("");
+    assert.match(printed, /Optional: to also use AI Board's Build mode in a browser on this computer, open:/);
+    assert.match(printed, /Runner running\nProject: /);
+    // The Runner's local address, PID and bare pairing code say nothing to someone working from an AI app.
+    assert.doesNotMatch(printed, /URL: |PID: |Pairing code: |Connect: /);
     // Live: a device revoked while running printed nothing; state changes after ready must still reach the terminal.
     children[0]!.emit("message", { type: "aiboard-remote-state", state: "disconnected", reasonCode: "socket_lost" });
     children[0]!.emit("message", { type: "aiboard-remote-state", state: "revoked", reasonCode: "device_key_revoked" });

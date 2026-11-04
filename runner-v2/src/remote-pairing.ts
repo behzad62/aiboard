@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { machineHint, readMachineId, type MachineIdReader } from "./machine-hint.js";
 import { canonicalJson, rejectDuplicateKeys } from "./remote-admission-store.js";
 import { REMOTE_CONNECT_SCOPE, type RemoteSessionIssuer } from "./remote-auth.js";
-import { checkedSessionShape, type RemoteDeviceSession, type RemoteDeviceStore } from "./remote-device-store.js";
+import { checkedSessionShape, cleanAccountLabel, type RemoteDeviceSession, type RemoteDeviceStore } from "./remote-device-store.js";
 import { REMOTE_RELAY_ROOTS } from "./remote-relay-roots.js";
 import { validateRelayUrl } from "./remote-websocket-transport.js";
 
@@ -170,14 +170,22 @@ export class RelayPairingIssuer implements RemoteSessionIssuer {
     this.options.present({ userCode: userCode!, verificationUri: verificationUri!, expiresAt: expiresAt!, deviceName: this.deviceName });
     try { this.options.openUrl(verificationUri!); } catch { /* The terminal instructions remain usable. */ }
     let interval = start.body.intervalSeconds as number;
+    let askForLabel = true;
     for (;;) {
       const remaining = expiry - this.now().getTime();
       if (remaining <= 0) throw new RemotePairingError("pairing_expired", "Pairing expired.");
       await this.wait(Math.min(interval * 1000, remaining));
       if (this.now().getTime() >= expiry) throw new RemotePairingError("pairing_expired", "Pairing expired.");
       let poll: { status: number; body: unknown };
-      try { poll = await this.post("/pair/v2/poll", { pairingId, pollSecret }, expiry - this.now().getTime()); }
-      catch (error) {
+      try {
+        poll = await this.post("/pair/v2/poll", { pairingId, pollSecret, ...(askForLabel ? { accountLabel: true } : {}) }, expiry - this.now().getTime());
+        // Relays without account labels refuse unknown fields; poll without asking. On a current relay a 400
+        // has another cause and the single plain retry fails the same way.
+        if (askForLabel && poll.status === 400 && isRecord(poll.body) && poll.body.error === "invalid_request" && only(poll.body, ["error"])) {
+          askForLabel = false;
+          poll = await this.post("/pair/v2/poll", { pairingId, pollSecret }, expiry - this.now().getTime());
+        }
+      } catch (error) {
         if (this.now().getTime() >= expiry) throw new RemotePairingError("pairing_expired", "Pairing expired.");
         throw error;
       }
@@ -187,7 +195,8 @@ export class RelayPairingIssuer implements RemoteSessionIssuer {
       if (poll.body.status === "pending" && only(poll.body, ["status"])) continue;
       if (poll.body.status === "expired" && only(poll.body, ["status"])) throw new RemotePairingError("pairing_expired", "Pairing expired.");
       if (poll.body.status === "denied" && only(poll.body, ["status"])) throw new RemotePairingError("pairing_denied", "Pairing was denied.");
-      if (poll.body.status !== "approved" || !only(poll.body, ["status", "session"])) throw new RemotePairingError("pairing_invalid_response", "The relay returned an invalid pairing status.");
+      const labelled = typeof poll.body.accountLabel === "string" && only(poll.body, ["status", "session", "accountLabel"]);
+      if (poll.body.status !== "approved" || !(labelled || only(poll.body, ["status", "session"]))) throw new RemotePairingError("pairing_invalid_response", "The relay returned an invalid pairing status.");
       if (this.now().getTime() >= expiry) throw new RemotePairingError("pairing_expired", "Pairing expired.");
       const session = this.verifySession(poll.body.session);
       const latest = this.options.deviceStore.load();
@@ -197,6 +206,10 @@ export class RelayPairingIssuer implements RemoteSessionIssuer {
       }
       this.options.deviceStore.setAccountId(session.accountId);
       this.options.deviceStore.saveSession(session);
+      const accountLabel = labelled ? cleanAccountLabel(poll.body.accountLabel as string) : undefined;
+      if (accountLabel) {
+        try { this.options.deviceStore.saveAccountLabel(session.accountId, accountLabel); } catch { /* a display label never blocks pairing */ }
+      }
       return session;
     }
   }

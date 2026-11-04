@@ -56,10 +56,17 @@ export interface RemoteDeviceSession {
 const IDENTITY_FILE = "remote-device.json";
 const KEY_FILE = "remote-device-key";
 const SESSION_FILE = "remote-device-session.json";
+const ACCOUNT_LABEL_FILE = "remote-device-account-label.json";
 const NOTICE_FILE = "remote-notice.json";
 const OWNER_LOCK_FILE = "remote-device-owner.sqlite";
 const OWNER_RECORD_FILE = "remote-device-owner.json";
 const PAIRING_LOCK_FILE = "remote-device-pairing.sqlite";
+
+/** An account label comes from the relay and reaches the terminal, so it carries no control or direction characters. */
+export function cleanAccountLabel(value: string): string | undefined {
+  const label = value.replace(/\p{C}/gu, "").trim();
+  return label.length >= 1 && label.length <= 254 ? label : undefined;
+}
 
 /**
  * Device custody: an Ed25519 keypair generated on this machine. The private key
@@ -70,6 +77,7 @@ export class RemoteDeviceStore {
   private readonly identityPath: string;
   private readonly keyPath: string;
   private readonly sessionPath: string;
+  private readonly accountLabelPath: string;
   private readonly noticePath: string;
   private readonly lockPath: string;
   private readonly ownerRecordPath: string;
@@ -81,6 +89,7 @@ export class RemoteDeviceStore {
     this.identityPath = join(stateDirectory, IDENTITY_FILE);
     this.keyPath = join(stateDirectory, KEY_FILE);
     this.sessionPath = join(stateDirectory, SESSION_FILE);
+    this.accountLabelPath = join(stateDirectory, ACCOUNT_LABEL_FILE);
     this.noticePath = join(stateDirectory, NOTICE_FILE);
     this.lockPath = join(stateDirectory, OWNER_LOCK_FILE);
     this.ownerRecordPath = join(stateDirectory, OWNER_RECORD_FILE);
@@ -220,6 +229,7 @@ export class RemoteDeviceStore {
         if (readPrivateText(this.sessionPath) !== sessionText) throw new Error("Remote device session changed during rotation.");
         unlinkSync(this.sessionPath);
       }
+      this.clearAccountLabel();
       const created = writePrivateExclusive(keyPath, Buffer.from(privateDer.toString("base64url"), "utf8"));
       if (!created) throw new Error("Remote device rotation key already exists.");
       try { this.save(identity); }
@@ -250,6 +260,23 @@ export class RemoteDeviceStore {
     const checked = checkedSessionShape(value);
     if (!checked) throw new Error("Remote device session record is invalid.");
     return checked;
+  }
+
+  /** Display only: what the relay called this account at pairing. It is unsigned and decides nothing. */
+  saveAccountLabel(accountId: string, label: string): void {
+    writePrivateAtomic(this.accountLabelPath, JSON.stringify({ accountId, label }));
+  }
+
+  /** The saved label for this account, if it still belongs to it. A missing or unreadable label is simply not shown. */
+  accountLabel(accountId: string): string | undefined {
+    try {
+      const value: unknown = JSON.parse(readPrivateText(this.accountLabelPath));
+      return isRecord(value) && value.accountId === accountId && typeof value.label === "string" ? cleanAccountLabel(value.label) : undefined;
+    } catch { return undefined; }
+  }
+
+  private clearAccountLabel(): void {
+    try { unlinkSync(this.accountLabelPath); } catch (error) { if (!isMissing(error)) throw error; }
   }
 
   noticeAcknowledged(): boolean {
@@ -346,6 +373,7 @@ export class RemoteDeviceStore {
     }
     try {
       try { unlinkSync(this.sessionPath); } catch (error) { if (!isMissing(error)) throw error; }
+      this.clearAccountLabel();
     } finally { release(); }
   }
 
