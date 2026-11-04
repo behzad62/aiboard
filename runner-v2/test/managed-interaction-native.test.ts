@@ -17,9 +17,8 @@ import type { ToolExecutionOutput } from "../src/agent-contracts.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 
 // T1 acceptance (docs/plans/2026-11-03-remote-t1-interaction-ux.md §5) on real processes.
-// CPU evidence comes from Windows Job accounting; elsewhere input_wait degrades to the idle heuristic.
-const windows = process.platform === "win32";
-const python = ["python", "python3"].map(name => spawnSync(name, ["-c", "import sys; print(sys.executable)"], { encoding: "utf8", windowsHide: true }))
+// CPU evidence comes from Windows Job accounting, or from the POSIX supervisor's sampling of the owned group.
+const python =["python", "python3"].map(name => spawnSync(name, ["-c", "import sys; print(sys.executable)"], { encoding: "utf8", windowsHide: true }))
   .find(probe => probe.status === 0)?.stdout.trim();
 
 const fixtures: Record<string, string> = {
@@ -28,6 +27,14 @@ const fixtures: Record<string, string> = {
 const end = Date.now() + 5000; let x = 0; while (Date.now() < end) x += Math.sqrt(x + 1);
 process.stdout.write('\\ndone\\n', () => process.exit(0));`,
   "sleepy.mjs": `process.stdout.write('progress 45% '); setTimeout(() => process.stdout.write('\\ndone\\n', () => process.exit(0)), 5000);`,
+  // A2 variants: a finished-looking line before the work; the work in a descendant while the launcher only waits.
+  "busy-line.mjs": `process.stdout.write('step 1 done\\n');
+const end = Date.now() + 5000; let x = 0; while (Date.now() < end) x += Math.sqrt(x + 1);
+process.stdout.write('done\\n', () => process.exit(0));`,
+  "busy-child.mjs": `import { spawn } from 'node:child_process';
+process.stdout.write('building ');
+spawn(process.execPath, ['busy-child-work.mjs'], { stdio: 'ignore' }).once('exit', () => process.stdout.write('\\ndone\\n', () => process.exit(0)));`,
+  "busy-child-work.mjs": `const end = Date.now() + 5000; let x = 0; while (Date.now() < end) x += Math.sqrt(x + 1);`,
   // A4: listens on argv[2] after 2 s.
   "server.mjs": `import http from 'node:http';
 setTimeout(() => http.createServer((_q, s) => s.end('ok')).listen(Number(process.argv[2]), '127.0.0.1', () => process.stdout.write('listening\\n')), 2000);`,
@@ -94,11 +101,9 @@ test("A1: a question without a newline is input_wait, then the answer turn ends 
   const { processId, read, elapsedMs } = await startAndWait(f, { command: python!, args: ["-u", "-c", "x = input('Proceed with deploy? [y/N] '); print('answer:' + x)"],
     interactive: true, until: { idleMs: 1500 }, waitMs: 15_000 });
   assert.match(text(read), /Proceed with deploy\? \[y\/N\] $/);
-  if (windows) {
-    assert.deepEqual([read.completion?.source, read.completion?.confidence], ["input_wait", "likely"], JSON.stringify(read.completion));
-    assert.ok(elapsedMs < 6_000, `input_wait took ${elapsedMs} ms`);
-  } else assert.ok(["input_wait", "idle"].includes(read.completion!.source), JSON.stringify(read.completion));
-  assert.equal(read.state, windows ? "awaiting_input" : read.completion!.source === "idle" ? "idle" : "awaiting_input");
+  assert.deepEqual([read.completion?.source, read.completion?.confidence], ["input_wait", "likely"], JSON.stringify(read.completion));
+  assert.ok(elapsedMs < 6_000, `input_wait took ${elapsedMs} ms`);
+  assert.equal(read.state, "awaiting_input");
   const [turn] = blocks(await f.invoke("process.interact", { processId, data: "y" }));
   const answer = turn!.read as Read;
   assert.equal((turn!.write as { status: string }).status, "acknowledged");
@@ -112,14 +117,16 @@ test("A1: a question without a newline is input_wait, then the answer turn ends 
   assert.doesNotMatch(text(answer), /Proceed with deploy/, "only this turn's output is returned");
 }));
 
-test("A2: an unterminated progress line followed by CPU work is not cut short", { timeout: 120_000, skip: windows ? false : "CPU evidence is Windows-only in T1" }, async t => withHost(t, async f => {
-  const { read, elapsedMs } = await startAndWait(f, { command: process.execPath, args: ["busy.mjs"], until: { idleMs: 1500 }, waitMs: 20_000 });
-  assert.deepEqual([read.completion?.source, read.completion?.confidence], ["exited", "certain"], JSON.stringify(read.completion));
-  assert.ok(elapsedMs >= 4_500, `returned after ${elapsedMs} ms, before the busy loop ended`);
-  assert.match(text(read), /done/);
-}));
+for (const [name, script] of [["an unterminated progress line", "busy.mjs"], ["a finished-looking line", "busy-line.mjs"], ["work in a descendant while the launcher only waits", "busy-child.mjs"]] as const) {
+  test(`A2: CPU work after ${name} is not cut short`, { timeout: 120_000 }, async t => withHost(t, async f => {
+    const { read, elapsedMs } = await startAndWait(f, { command: process.execPath, args: [script], until: { idleMs: 1500 }, waitMs: 20_000 });
+    assert.deepEqual([read.completion?.source, read.completion?.confidence], ["exited", "certain"], JSON.stringify(read.completion));
+    assert.ok(elapsedMs >= 4_500, `returned after ${elapsedMs} ms, before the busy loop ended`);
+    assert.match(text(read), /done/);
+  }));
+}
 
-test("A3: an unterminated progress line followed by sleep is input_wait likely, never before idleMs", { timeout: 120_000, skip: windows ? false : "CPU evidence is Windows-only in T1" }, async t => withHost(t, async f => {
+test("A3: an unterminated progress line followed by sleep is input_wait likely, never before idleMs", { timeout: 120_000 }, async t => withHost(t, async f => {
   const { processId, read, elapsedMs } = await startAndWait(f, { command: process.execPath, args: ["sleepy.mjs"], until: { idleMs: 1500 }, waitMs: 20_000 });
   assert.deepEqual([read.completion?.source, read.completion?.confidence], ["input_wait", "likely"], JSON.stringify(read.completion));
   assert.ok(elapsedMs >= 1_500 && elapsedMs < 5_000, `elapsed ${elapsedMs} ms`);

@@ -154,18 +154,19 @@ export interface ProcessBackend {
     fence: ProcessEffectFence,
   ): Promise<unknown>;
   /**
-   * T1 optional read-only resource evidence ({ cpuTimeMs, sampledAt } for the whole
-   * owned tree). Never a lifecycle, emptiness or fence fact; undefined when unavailable.
+   * T1 optional read-only resource evidence ({ cpuTimeMs, sampledAt, steady? } for the whole
+   * owned tree). `steady`: sampledAt is refreshed on a fixed cadence even when CPU is flat.
+   * Never a lifecycle, emptiness or fence fact; undefined when unavailable.
    */
   usage?(binding: ProcessBackendBinding): Promise<unknown>;
 }
 
 /** Strict parse of optional backend usage evidence; anything malformed is simply absent. */
-export function parseProcessUsage(value: unknown): Readonly<{ cpuTimeMs: number; sampledAt: string }> | undefined {
+export function parseProcessUsage(value: unknown): Readonly<{ cpuTimeMs: number; sampledAt: string; steady?: true }> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const { cpuTimeMs, sampledAt } = value as { cpuTimeMs?: unknown; sampledAt?: unknown };
+  const { cpuTimeMs, sampledAt, steady } = value as { cpuTimeMs?: unknown; sampledAt?: unknown; steady?: unknown };
   if (!Number.isSafeInteger(cpuTimeMs) || (cpuTimeMs as number) < 0 || typeof sampledAt !== "string" || Number.isNaN(Date.parse(sampledAt))) return undefined;
-  return Object.freeze({ cpuTimeMs: cpuTimeMs as number, sampledAt });
+  return Object.freeze({ cpuTimeMs: cpuTimeMs as number, sampledAt, ...(steady === true ? { steady: true as const } : {}) });
 }
 
 interface TrustedEntry {

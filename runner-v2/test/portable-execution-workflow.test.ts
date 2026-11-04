@@ -121,6 +121,12 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   assert.match(portable,
     /if:\s*runner\.os\s*!=\s*'Windows'[\s\S]*?--test-name-pattern=[^\n]*POSIX native session fixture owns descendants after launcher exit[\s\S]*?posix-process-backend\.test\.ts/,
     "The repaired POSIX observation must run only as a targeted POSIX regression.");
+  const inputWaitStep = portable.indexOf("      - name: Run T1 input-wait evidence and acceptance on POSIX hosts");
+  assert.ok(inputWaitStep > 0, "T1 acceptance is the only proof of POSIX CPU evidence on Linux and macOS.");
+  const inputWaitBlock = portable.slice(inputWaitStep);
+  assert.match(inputWaitBlock, /if:\s*runner\.os\s*!=\s*'Windows'/);
+  for (const testPath of ["posix-process-usage", "managed-process-wait-tracker", "managed-interaction-native"])
+    assert.equal(inputWaitBlock.includes(`runner-v2/test/${testPath}.test.ts`), true, `POSIX T1 CI omits ${testPath}.`);
   for (const testPath of qualificationOnlyLeakGuards) {
     assert.equal(source.includes(testPath), false, `Host-sensitive qualification-only test leaked into required PR CI: ${testPath}.`);
   }

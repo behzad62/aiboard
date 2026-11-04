@@ -299,7 +299,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
     },
   };
   const evidenceFrom = (target: ManagedProcessTarget, observation: Observation, waited: ManagedOutputEvidence["waited"],
-    usage?: Readonly<{ cpuTimeMs: number; sampledAt: string }>): ManagedOutputEvidence => ({
+    usage?: Readonly<{ cpuTimeMs: number; sampledAt: string; steady?: true }>): ManagedOutputEvidence => ({
     snapshot: snapshotFrom(target, observation, 1),
     source: observation.record.state === "released" ? "final" : "live",
     streams: observation.output.streams.map(value => {
@@ -309,7 +309,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
         ...(spill.spillArtifactId && Number.isSafeInteger(spill.spillBytes) ? { spill: Object.freeze({ artifactId: spill.spillArtifactId, bytes: spill.spillBytes! }) } : {}) });
     }),
     ...(waited ? { waited } : {}),
-    ...(usage ? { cpu: Object.freeze({ totalMs: usage.cpuTimeMs, sampledAt: usage.sampledAt }) } : {}),
+    ...(usage ? { cpu: Object.freeze({ totalMs: usage.cpuTimeMs, sampledAt: usage.sampledAt, ...(usage.steady ? { steady: true as const } : {}) }) } : {}),
   });
   return Object.freeze(runtime);
 }

@@ -192,6 +192,8 @@ export interface ManagedProcessCpuEvidence {
   /** User + kernel CPU time of the owned tree, monotonic within one launch. */
   readonly totalMs: number;
   readonly sampledAt: string;
+  /** sampledAt is refreshed on a fixed cadence even when CPU is flat, so an old sample really is old (POSIX). */
+  readonly steady?: true;
 }
 
 export class ManagedProcessError extends Error {
