@@ -10,6 +10,7 @@ import {
   matchKnownPrompt,
   matchOutputPattern,
   renderPlain,
+  reportedStatus,
   sliceLines,
   summarizeOutput,
   timeoutCompletion,
@@ -181,6 +182,12 @@ test("exit beats every condition and until.exit ignores idle and patterns", () =
   assert.equal(exitProven({ status: "exited_unknown", exitCode: null, signal: null }), false);
   assert.equal(exitProven({ status: "exited_unknown", exitCode: 0, signal: null }), true);
   assert.equal(exitProven({ status: "stopped", exitCode: null, signal: null }), true);
+  // The response status follows the same proof: "exited" only beside a proven exit.
+  assert.equal(reportedStatus({ status: "exited_unknown", exitCode: 0, signal: null }), "exited");
+  assert.equal(reportedStatus({ status: "exited_unknown", exitCode: null, signal: "SIGKILL" }), "exited");
+  assert.equal(reportedStatus({ status: "exited_unknown", exitCode: null, signal: null }), "exited_unknown");
+  assert.equal(reportedStatus({ status: "running", exitCode: 0, signal: null }), "running");
+  assert.equal(reportedStatus({ status: "stopped", exitCode: 0, signal: null }), "stopped");
   assert.equal(evaluateCompletion(facts({ until: { exit: true }, quietMs: 99_999, cpuDeltaMs: 0, lastLine: ">>> " })), undefined);
 });
 

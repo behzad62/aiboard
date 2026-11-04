@@ -20,7 +20,7 @@ import {
   type ManagedProcessSnapshot,
   type ManagedProcessService,
 } from "./managed-process.js";
-import { renderPlain, sliceLines, validateUntil } from "./managed-process-wait.js";
+import { renderPlain, reportedStatus, sliceLines, validateUntil } from "./managed-process-wait.js";
 
 type Input = Record<string, unknown>;
 
@@ -172,7 +172,8 @@ export function createManagedProcessTools(
       validate: objectInput,
       execute: async (_input, context) => {
         try {
-          return { content: [{ type: "json", value: { processes: await service.list(context) } }], isError: false };
+          const processes = (await service.list(context)).map(snapshot => ({ ...snapshot, status: reportedStatus(snapshot) }));
+          return { content: [{ type: "json", value: { processes } }], isError: false };
         } catch (error) { return managedError(error); }
       },
     },
@@ -385,9 +386,10 @@ function renderIssues(input: Input, allowLines: boolean): string[] {
 function presentRead(read: ManagedOutputReadResult, input: Input): unknown {
   const render = input.render as "raw" | "plain" | undefined;
   const lines = input.lines as { start: number; count: number } | undefined;
-  if (!lines && render !== "plain") return read;
+  const reported = { ...read, status: reportedStatus(read) };
+  if (!lines && render !== "plain") return reported;
   return {
-    ...read,
+    ...reported,
     slices: read.slices.map(slice => {
       const plain = renderPlain(slice.text);
       if (!lines) return { ...slice, text: plain, render: "plain" };
@@ -437,7 +439,7 @@ function snapshotOutput(snapshot: ManagedProcessSnapshot): ToolExecutionOutput {
   const { stdout, stderr, ...metadata } = snapshot;
   return {
     content: [
-      { type: "json", value: metadata },
+      { type: "json", value: { ...metadata, status: reportedStatus(snapshot) } },
       ...(stdout || stderr
         ? [
             {

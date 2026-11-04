@@ -303,6 +303,14 @@ export function exitProven(snapshot: Readonly<{ status: string; exitCode: number
   return snapshot.status === "stopped" || snapshot.exitCode !== null || snapshot.signal !== null;
 }
 
+/**
+ * Tool-response status only, never persisted: a proven exit the Runner did not cause reads "exited",
+ * matching completion { source: "exited", confidence: "certain" }. An unproven one stays "exited_unknown".
+ */
+export function reportedStatus(snapshot: Readonly<{ status: string; exitCode: number | null; signal: string | null }>): string {
+  return snapshot.status === "exited_unknown" && exitProven(snapshot) ? "exited" : snapshot.status;
+}
+
 export function terminalCompletion(proven: boolean): ManagedOutputCompletion {
   return proven ? Object.freeze({ source: "exited", confidence: "certain" }) : Object.freeze({ source: "unavailable", confidence: null });
 }
