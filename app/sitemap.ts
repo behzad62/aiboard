@@ -13,9 +13,9 @@ const pages: { path: string; lastModified: string; priority: number }[] = [
   { path: "/runner-guide", lastModified: "2026-10-31", priority: 0.6 },
   { path: "/remote", lastModified: "2026-11-03", priority: 0.6 },
   // Legal pages: keep in step with LEGAL_LAST_UPDATED in lib/site.ts.
-  { path: "/terms", lastModified: "2026-11-03", priority: 0.3 },
-  { path: "/privacy", lastModified: "2026-11-03", priority: 0.3 },
-  { path: "/refunds", lastModified: "2026-11-03", priority: 0.3 },
+  { path: "/terms", lastModified: "2026-11-04", priority: 0.3 },
+  { path: "/privacy", lastModified: "2026-11-04", priority: 0.3 },
+  { path: "/refunds", lastModified: "2026-11-04", priority: 0.3 },
 ];
 
 // /settings, /discussion, and /benchmark are deliberately absent: they render
