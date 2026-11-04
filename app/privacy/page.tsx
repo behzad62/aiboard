@@ -359,8 +359,9 @@ const SECTIONS: LegalSection[] = [
           </li>
           <li>
             <strong>Server and web logs</strong> (which may include IP
-            addresses at the web-server level, but never tool-call content):
-            up to 30 days.
+            addresses at the web-server level, device ids and the start of your
+            account id, but never your email or tool-call content): up to 30
+            days.
           </li>
           <li>
             <strong>Billing records</strong>: for as long as your account
@@ -374,9 +375,19 @@ const SECTIONS: LegalSection[] = [
         </ul>
         <p>
           To delete your Remote account, email {mail} from the address on the
-          account. We will delete your account data within 30 days, except
-          billing records we must keep by law. Copies in backups disappear as
-          those backups expire.
+          account. We will delete your account data within 30 days. Your
+          sign-in, connected AI apps and paired computers stop working as soon
+          as we do. If you still have a paid plan, we cancel it first. We keep
+          billing records we must keep by law, with the link to your account
+          removed; Paddle keeps its own records under its policy.
+        </p>
+        <p>
+          A few traces last a little longer and then expire on their own: for
+          up to 30 days, each computer&apos;s device id and public key and the
+          account id they belonged to, so a Runner that was offline can verify
+          it was removed; server and web logs for up to 30 days; and copies in
+          backups until those backups expire. If we ever restore a backup, we
+          delete your account from it again before the service restarts.
         </p>
       </>
     ),
