@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -51,6 +52,7 @@ async function runNativeDescendant(): Promise<void> {
             },
             evidence: () => readFileSync(join(directory, "state.json"), "utf8"),
           });
+    const stateBeforeSignal = readFileSync(join(directory, "state.json"), "utf8");
     let terminated: unknown;
     const signalDeadline = Date.now() + 15_000;
     while (terminated === undefined) {
@@ -60,9 +62,35 @@ async function runNativeDescendant(): Promise<void> {
               await new Promise((resolve) => setTimeout(resolve, 100));
             }
           }
-    assert.equal(parseProcessSignalResult(terminated).state, "running");
+    const signalled = parseProcessSignalResult(terminated).state;
+    if (signalled !== "running") {
+      assert.fail(`windows native descendant reported ${signalled} after terminate, expected running; evidence=${nativeDescendantEvidence(directory, stateBeforeSignal)}`);
+    }
     assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, QUAL_FENCE)).empty, false);
   } });
+}
+
+/**
+ * Tells fragile timing apart from a lost child: an "exited" report with the launcher's child still alive and
+ * missing from the tracked set is a Runner bug. Nothing here may throw, or it would hide the real failure, and
+ * the process query is bounded so a slow host still reports it.
+ */
+function nativeDescendantEvidence(directory: string, stateBeforeSignal: string): string {
+  const read = (name: string) => { try { return readFileSync(join(directory, name), "utf8"); } catch (error) { return `unreadable: ${String(error)}`; } };
+  const parse = (text: string): unknown => { try { return JSON.parse(text); } catch { return text; } };
+  const childPid = Number(read("stdout.log").trim());
+  const before = parse(stateBeforeSignal) as { knownProcesses?: { pid: number }[] };
+  const pids = [...new Set([...(before.knownProcesses ?? []).map(({ pid }) => pid), ...(Number.isSafeInteger(childPid) && childPid > 0 ? [childPid] : [])])];
+  const inventory = pids.length === 0 ? undefined : spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+    `Get-CimInstance Win32_Process -Filter "${pids.map((pid) => `ProcessId=${pid}`).join(" OR ")}"|ForEach-Object{"$($_.ProcessId),$($_.ParentProcessId),$($_.Name)"}`,
+  ], { encoding: "utf8", windowsHide: true, timeout: 15_000 });
+  return JSON.stringify({
+    launcherChildPid: childPid,
+    stateBeforeSignal: before,
+    stateAfterSignal: parse(read("state.json")),
+    aliveNow: { pidParentName: String(inventory?.stdout ?? "").split(/\r?\n/).filter(Boolean), queryStatus: inventory?.status ?? null },
+  });
 }
 
 async function runJobDescendant(): Promise<void> {
