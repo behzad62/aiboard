@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renam
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createPosixCpuSampler,
   inspectPosixProcessIdentity,
   isExactPosixAnchorRelease,
   listOwnedPosixGroupMembers,
@@ -24,6 +25,7 @@ import {
 
 const config = JSON.parse(Buffer.from(process.argv[2] ?? "", "base64url").toString("utf8"));
 const statePath = join(config.directory, "state.json");
+const usagePath = join(config.directory, "usage.json");
 const controlPath = join(config.directory, "control.json");
 const stdoutPath = join(config.directory, "stdout.log");
 const stderrPath = join(config.directory, "stderr.log");
@@ -103,6 +105,7 @@ let posixControlInspectionDetail = "";
 let posixDeferredControlSignature = null;
 let posixForceControlApplied = false;
 const posixRecordedMembers = new Map();
+let posixCpuSampler;
 let posixChildStatusSignature;
 let posixStdoutClosed = false;
 let posixStderrClosed = false;
@@ -344,6 +347,16 @@ function recordOwnedPosixMembers(memberPids) {
   }
 }
 
+// T1 CPU evidence stays out of state.json: it is not a lifecycle fact and must not bump its revision.
+function samplePosixCpu(memberPids) {
+  posixCpuSampler ??= createPosixCpuSampler({
+    groupId: posixWorkloadGroup.groupId,
+    leaderPid: posixWorkloadGroup.leaderPid,
+    publish: (sample) => writeAtomic(usagePath, JSON.stringify({ nonce: config.nonce, ...sample })),
+  });
+  posixCpuSampler.tick(memberPids);
+}
+
 function tickPosix() {
   handleChannelAcks();
   handleChannelInput();
@@ -438,6 +451,7 @@ function tickPosix() {
     return;
   }
   recordOwnedPosixMembers(anchor.members);
+  samplePosixCpu(anchor.members);
   if (posixAnchorReleaseRequested && !hasCurrentPosixAnchorReleaseAuthority()) {
     posixAnchorReleaseRequested = false;
     posixAnchorReleaseAuthority = null;

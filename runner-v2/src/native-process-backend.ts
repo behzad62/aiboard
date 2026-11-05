@@ -2,6 +2,7 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,8 @@ const WINDOWS_PORTABLE_STARTUP_DEADLINE_MS = 30_000;
 const PORTABLE_STARTUP_DEADLINE_MS = 6_000;
 const POSIX_FORCE_SETTLEMENT_DEADLINE_MS = 5_000;
 const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
+/** A healthy supervisor refreshes CPU evidence every 500 ms at most; much older means it can no longer read it. */
+const POSIX_USAGE_MAX_AGE_MS = 5_000;
 
 export interface NativeOwnedProcessBackendOptions {
   readonly stateDirectory?: string;
@@ -572,6 +575,23 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       ...(finalState.exitCode === null ? {} : { exitCode: finalState.exitCode }),
       ...(finalState.signal ? { signal: finalState.signal } : {}),
     };
+  }
+
+  /**
+   * T1 read-only CPU evidence the POSIX supervisor samples: no fence claim, no effect. Undefined
+   * when missing, foreign or stale, so a wait falls back to its labeled heuristic instead of
+   * reading a frozen total as flat CPU.
+   */
+  async usage(binding: ProcessBackendBinding): Promise<unknown> {
+    if (this.options.platform !== "posix") return undefined;
+    let identity: Identity, sample: { nonce?: unknown; cpuTimeMs?: unknown; sampledAt?: unknown } | null;
+    try {
+      identity = this.identity(binding);
+      sample = JSON.parse(await readFile(join(identity.directory, "usage.json"), "utf8")) as typeof sample;
+    } catch { return undefined; }
+    if (sample?.nonce !== identity.nonce || typeof sample.sampledAt !== "string" || !(Date.now() - Date.parse(sample.sampledAt) <= POSIX_USAGE_MAX_AGE_MS))
+      return undefined;
+    return { cpuTimeMs: sample.cpuTimeMs, sampledAt: sample.sampledAt, steady: true };
   }
 
   async release(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {

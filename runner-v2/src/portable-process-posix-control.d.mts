@@ -35,6 +35,29 @@ export function reattestOwnedPosixDescendants(
   inspect?: (pid: number) => PosixProcessIdentityInspection,
   listMembers?: (groupId: number) => readonly number[] | undefined,
 ): PosixDescendantAttestation;
+export function parseLinuxProcStatCpu(pid: number, stat: string): { readonly groupId: number; readonly ticks: number } | undefined;
+export function parsePosixCpuClock(value: string): number | undefined;
+export function parsePosixPsCpu(output: string, groupId: number): Map<number, number> | undefined;
+export function readLinuxProcCpu(
+  pids: readonly number[],
+  groupId: number,
+  readStat?: (pid: number) => string,
+  ticksPerSecond?: () => number,
+): Map<number, number> | undefined;
+export function readPosixPsCpu(pids: readonly number[], groupId: number): Map<number, number> | undefined;
+export function readOwnedPosixCpu(pids: readonly number[], groupId: number): Map<number, number> | undefined;
+export interface PosixCpuSample {
+  readonly cpuTimeMs: number;
+  readonly sampledAt: string;
+}
+export function createPosixCpuSampler(options: {
+  readonly groupId: number;
+  readonly leaderPid: number;
+  readonly publish: (sample: PosixCpuSample) => void;
+  readonly read?: (pids: readonly number[], groupId: number) => ReadonlyMap<number, number> | undefined;
+  readonly now?: () => number;
+  readonly intervalMs?: number;
+}): { tick(members: readonly number[]): void };
 export function parsePosixBootstrapPrepared(
   value: unknown,
   nonce: string,

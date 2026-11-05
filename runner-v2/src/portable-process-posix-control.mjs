@@ -1,8 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 // RUNNER_RAW_PROCESS_BOUNDARY: POSIX process/group identity inspection for owned-tree lifecycle enforcement.
 import { readFileSync } from "node:fs";
 
 const POSIX_INSPECTION_DEADLINE_MS = 15_000;
+const POSIX_CPU_INSPECTION_DEADLINE_MS = 2_000;
+const POSIX_CPU_SAMPLE_INTERVAL_MS = process.platform === "linux" ? 250 : 500;
+const POSIX_CPU_RETRY_INTERVAL_MS = 1_000;
 const POSIX_PREPARED_PROTOCOL = "aiboard-portable-process/v2-posix-prepared";
 const POSIX_GO_PROTOCOL = "aiboard-portable-process/v2-posix-go";
 const POSIX_ANCHOR_RELEASE_PROTOCOL = "aiboard-portable-process/v2-posix-anchor-release";
@@ -178,6 +181,117 @@ export function signalOwnedPosixGroup(action, signal = process.kill, groupId) {
     // as a throw crashes the supervisor before it can retire the workload.
     if (error?.code !== "ESRCH") throw error;
   }
+}
+
+/** Group and CPU (own plus reaped children's, in clock ticks) from Linux /proc/<pid>/stat. */
+export function parseLinuxProcStatCpu(pid, stat) {
+  if (!positivePid(pid) || typeof stat !== "string") return undefined;
+  const close = stat.lastIndexOf(")");
+  const prefix = /^\s*(\d+)\s+\(/.exec(stat.slice(0, close + 1));
+  if (close < 1 || !prefix || Number(prefix[1]) !== pid) return undefined;
+  const fields = stat.slice(close + 1).trim().split(/\s+/);
+  // Fields 14-17 of the stat line: utime, stime, cutime, cstime. The child times are signed in the kernel ABI.
+  const times = fields.slice(11, 15);
+  const groupId = Number(fields[2]);
+  if (!positivePid(groupId) || times.length !== 4 || !times.every((value) => /^-?\d+$/.test(value))) return undefined;
+  return { groupId, ticks: times.reduce((sum, value) => sum + Math.max(0, Number(value)), 0) };
+}
+
+/** `ps -o time=` as milliseconds: [dd-][hh:]mm:ss[.cc]. BSD reports centiseconds, procps whole seconds. */
+export function parsePosixCpuClock(value) {
+  const match = typeof value === "string" ? /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d{2})(?:\.(\d{1,3}))?$/.exec(value) : null;
+  if (!match) return undefined;
+  const fraction = Number((match[5] ?? "").padEnd(3, "0"));
+  const total = (Number(match[1] ?? 0) * 24 + Number(match[2] ?? 0)) * 3_600_000 + Number(match[3]) * 60_000 + Number(match[4]) * 1_000 + fraction;
+  return Number.isSafeInteger(total) ? total : undefined;
+}
+
+/** Rows of `ps -o pid=,pgid=,time=`; only the group's own rows count. Anything malformed voids the sample. */
+export function parsePosixPsCpu(output, groupId) {
+  if (typeof output !== "string" || !positivePid(groupId)) return undefined;
+  const readings = new Map();
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
+    const cpuMs = match ? parsePosixCpuClock(match[3]) : undefined;
+    if (cpuMs === undefined || !positivePid(Number(match[1]))) return undefined;
+    if (Number(match[2]) === groupId) readings.set(Number(match[1]), cpuMs);
+  }
+  return readings;
+}
+
+let linuxClockTicksPerSecond;
+function linuxClockTicks() {
+  if (linuxClockTicksPerSecond) return linuxClockTicksPerSecond;
+  const value = Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8", timeout: POSIX_CPU_INSPECTION_DEADLINE_MS }).trim());
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error("Linux clock tick rate is unavailable.");
+  linuxClockTicksPerSecond = value;
+  return value;
+}
+
+export function readLinuxProcCpu(pids, groupId, readStat = (pid) => readFileSync(`/proc/${pid}/stat`, "utf8"), ticksPerSecond = linuxClockTicks) {
+  const readings = new Map();
+  if (pids.length === 0) return readings;
+  const hz = ticksPerSecond();
+  for (const pid of pids) {
+    let stat;
+    try { stat = readStat(pid); }
+    catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ESRCH") continue; // exited since the membership snapshot
+      throw error;
+    }
+    const parsed = parseLinuxProcStatCpu(pid, stat);
+    if (!parsed) return undefined;
+    if (parsed.groupId === groupId) readings.set(pid, Math.floor(parsed.ticks * 1_000 / hz));
+  }
+  return readings;
+}
+
+export function readPosixPsCpu(pids, groupId) {
+  if (pids.length === 0) return new Map();
+  const result = spawnSync("ps", ["-o", "pid=,pgid=,time=", "-p", pids.join(",")], { encoding: "utf8", timeout: POSIX_CPU_INSPECTION_DEADLINE_MS });
+  const stdout = String(result.stdout ?? "");
+  // ps exits 1 with no output at all when every listed PID has already gone.
+  const allGone = result.status === 1 && !stdout.trim() && !String(result.stderr ?? "").trim();
+  if (result.error || (result.status !== 0 && !allGone)) return undefined;
+  return parsePosixPsCpu(stdout, groupId);
+}
+
+export function readOwnedPosixCpu(pids, groupId) {
+  return process.platform === "linux" ? readLinuxProcCpu(pids, groupId) : readPosixPsCpu(pids, groupId);
+}
+
+/**
+ * T1 CPU evidence for one owned workload group, fed the membership the supervisor already attested.
+ * Read-only and never a lifecycle fact: a failed read publishes nothing (the reader then sees stale,
+ * then absent, evidence), and a failed publication only turns sampling off.
+ *
+ * The group's leader is the Runner's own anchor, a Node process that polls on a timer. Its startup
+ * and polling aren't workload CPU, so it is excluded. The total only ever grows, like Job accounting:
+ * each PID contributes its own growth, so a member's exit can't hide a sibling's work.
+ * A child's time can count twice, once sampled and again in its parent's reaped-children time. That
+ * errs toward "busy", the safe direction for a wait. Scope is the process group, the POSIX ownership
+ * model: a descendant that moves to its own group is outside it, and so is its CPU.
+ */
+export function createPosixCpuSampler({ groupId, leaderPid, publish, read = readOwnedPosixCpu, now = Date.now, intervalMs = POSIX_CPU_SAMPLE_INTERVAL_MS }) {
+  let totalMs = 0, nextAt = 0, stopped = false;
+  let last = new Map();
+  return Object.freeze({
+    tick(members) {
+      if (stopped) return;
+      const at = now();
+      if (at < nextAt) return;
+      let readings;
+      try { readings = read(members.filter((pid) => pid !== leaderPid), groupId); } catch { readings = undefined; }
+      if (!readings) { nextAt = at + POSIX_CPU_RETRY_INTERVAL_MS; return; }
+      nextAt = at + intervalMs;
+      for (const [pid, cpuMs] of readings) totalMs += Math.max(0, cpuMs - (last.get(pid) ?? 0));
+      last = readings;
+      // Stamped before the reads: every value in this sample was read at or after sampledAt.
+      try { publish({ cpuTimeMs: totalMs, sampledAt: new Date(at).toISOString() }); }
+      catch { stopped = true; }
+    },
+  });
 }
 
 function validWorkloadGroup(value) {

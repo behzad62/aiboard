@@ -4346,7 +4346,7 @@ function extractOptionalNamedFunction(source: string, name: string): string {
   return declaration?.getText(file) ?? "";
 }
 function extractTickPosix(source: string): string {
-  return `function recordOwnedPosixMembers() {}\n${extractNamedFunction(source, "tickPosix")}`;
+  return `function recordOwnedPosixMembers() {}\nfunction samplePosixCpu() {}\n${extractNamedFunction(source, "tickPosix")}`;
 }
 function extractFenceEffectFunctions(source: string): string {
   return `const inspectionOwner = undefined;\nconst FENCE_HOLDER_READ_RETRY_MS = 250;\nconst FENCE_HOLDER_READ_RETRY_DELAY_MS = 5;\n${extractNamedFunction(source, "normalizeBirth")}\n${extractNamedFunction(source, "sameBirth")}\n${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`;

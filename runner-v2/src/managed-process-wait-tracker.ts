@@ -9,7 +9,7 @@ const PORT_PROBE_INTERVAL_MS = 250;
 const PORT_PROBE_TIMEOUT_MS = 250;
 /** How often the transport re-evaluates time-based conditions (idle, port). */
 export const MANAGED_WAIT_RECHECK_MS = 200;
-/** Two Job host accounting polls (500 ms each): the shortest window over which flat CPU means idle. */
+/** Two polls of the slowest CPU source (Job host, macOS: 500 ms): the shortest window over which flat CPU means idle. */
 export const MANAGED_CPU_EVIDENCE_MIN_WINDOW_MS = 1_000;
 
 export interface ManagedWaitTracker {
@@ -57,6 +57,8 @@ export async function createManagedWaitTracker(input: ManagedWaitTrackerInput): 
   let lastChangeAt = now();
   let lastChanged: ManagedOutputStreamName[] = [];
   let cpuBase: { totalMs: number; at: number } | undefined;
+  let cpuSeen = false;
+  let cpuLostAt: number | undefined;
   let decided: ManagedOutputCompletion | undefined;
 
   const satisfied = (evidence: ManagedOutputEvidence): boolean => {
@@ -68,13 +70,22 @@ export async function createManagedWaitTracker(input: ManagedWaitTrackerInput): 
     const grew = input.streams.filter(stream => totals[stream] > lastTotals![stream]);
     if (grew.length) { lastChangeAt = at; lastChanged = grew; cpuBase = undefined; }
     lastTotals = totals;
-    if (evidence.cpu && !cpuBase) cpuBase = { totalMs: evidence.cpu.totalMs, at };
+    // A steady sampler's sample older than the last output would charge the work that led up to that
+    // output (a program's own startup) to the quiet window, so the window starts at the next sample.
+    const cpuBasePending = !!evidence.cpu && !cpuBase && evidence.cpu.steady === true && Date.parse(evidence.cpu.sampledAt) < lastChangeAt;
+    if (evidence.cpu && !cpuBase && !cpuBasePending) cpuBase = { totalMs: evidence.cpu.totalMs, at };
     // The CPU comparison covers only the window CPU evidence was sampled over.
     const cpuDeltaMs = evidence.cpu && cpuBase ? Math.max(0, evidence.cpu.totalMs - cpuBase.totalMs) : undefined;
-    const quietMs = cpuDeltaMs !== undefined && cpuBase ? at - Math.max(lastChangeAt, cpuBase.at) : at - lastChangeAt;
-    // Samples arrive only when CPU changed (Job host poll: 500 ms), so "flat" is evidence only once
-    // the window spans two polls; until then idle-based rules wait (exit, pattern and port do not).
-    const cpuWindowShort = cpuDeltaMs !== undefined && quietMs < MANAGED_CPU_EVIDENCE_MIN_WINDOW_MS;
+    // CPU evidence that disappears mid-wait says nothing about the quiet time before it: usage stops
+    // as a process exits, just before the session stops reading running, and a busy program must not
+    // read as idle in that gap. The heuristic clock restarts at the loss; a real loss still ends the wait.
+    if (evidence.cpu) { cpuSeen = true; cpuLostAt = undefined; }
+    else if (cpuSeen) cpuLostAt ??= at;
+    const quietMs = cpuDeltaMs !== undefined && cpuBase ? at - Math.max(lastChangeAt, cpuBase.at) : at - Math.max(lastChangeAt, cpuLostAt ?? lastChangeAt);
+    // Job host samples arrive only when CPU changed (poll: 500 ms), and any sample lags its source,
+    // so "flat" is evidence only once the window spans two polls; until then idle-based rules wait
+    // (exit, pattern and port do not).
+    const cpuWindowShort = cpuBasePending || ((cpuDeltaMs !== undefined || cpuLostAt !== undefined) && quietMs < MANAGED_CPU_EVIDENCE_MIN_WINDOW_MS);
     const tails = input.streams.map(stream => ({ stream, text: newTail(evidence, stream, input.baseOffsets[stream]) }));
     // Arrival order across two pipes is not guaranteed (a REPL's stdout result can spool after its
     // stderr prompt), so every stream with new output this wait counts; the latest-changed is preferred.
