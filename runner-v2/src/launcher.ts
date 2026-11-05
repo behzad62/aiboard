@@ -19,7 +19,7 @@ import { REMOTE_IN_PLACE_LEASE_MS, type RemoteEnableSettings } from "./remote-in
 import { LOCAL_MCP_DEPTH_LIMIT, parseMcpDepth } from "./child-environment.js";
 import { serveLocalStdioMcp } from "./local-stdio-mcp.js";
 import { createLocalPairTicket, type LocalPairPeer } from "./local-pairing.js";
-import { RemoteDeviceStore } from "./remote-device-store.js";
+import { cleanAccountLabel, RemoteDeviceStore } from "./remote-device-store.js";
 import { DEFAULT_REMOTE_RELAY_URL } from "./remote-relay-roots.js";
 import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-principal.js";
 import { RemoteAuditStore } from "./remote-audit-store.js";
@@ -249,7 +249,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     const present = deviceStore.loadSession() !== undefined;
     deviceStore.logout();
     write(present
-      ? "Remote device logged out. The saved session was cleared; the device key was retained.\n"
+      ? "Remote device logged out. The saved session was cleared; the device key was retained. Run `aiboard remote` to pair again, with any account.\n"
       : "Remote device logged out. No saved session was present.\n");
     return;
   }
@@ -635,12 +635,16 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         for (const fresh of freshChildren) if (fresh.connected) fresh.send({ type: "aiboard-launcher-stop" });
       }
     } else {
-      for (const kind of selected) write(describe(instances.get(kind)!, freshKinds.has(kind) ? "running" : "already running", kind, style));
+      for (const kind of selected) {
+        const state = freshKinds.has(kind) ? "running" : "already running";
+        write(args.command === "remote" ? describeForRemote(instances.get(kind)!, state, kind, style) : describe(instances.get(kind)!, state, kind, style));
+      }
       if (gitUnavailable) write(`${style.yellow("Warning:")} ${gitUnavailableNotice(gitUnavailable, runtime.platform ?? process.platform)}\n`);
       if (args.command === "remote" && remoteOnlyActive) write("Remote-only: Build and Chat are unavailable when started from a folder that contains AIBoard state.\n");
       const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
-      // `aiboard remote` is for ChatGPT/Claude: the local web UI link is printed but not opened, so the browser shows only the relay page.
-      showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true || args.command === "remote", write, runtime, style);
+      // `aiboard remote` is for ChatGPT/Claude: the local web UI link is offered but not opened, so the browser shows only the relay page.
+      if (args.command !== "remote") showPairing(tickets.get(anchorKind)!.code, orderedPorts, args.noOpen === true, write, runtime, style);
+      else if (!remoteOnlyActive) write(`${style.dim("Optional: to also use AI Board's Build mode in a browser on this computer, open:")}\n${style.cyan(connectUrl(tickets.get(anchorKind)!.code, orderedPorts))}\n`);
     }
     if (inPlaceRemote) {
       write("Remote: on in this Runner. Ctrl+C turns Remote off and leaves the Runner running.\n");
@@ -794,13 +798,14 @@ function showRemoteMessage(message: Record<string, unknown>, write: (message: st
   if (message.type === "aiboard-remote-pairing" && typeof message.verificationUri === "string" && typeof message.userCode === "string" &&
     typeof message.expiresAt === "string" && /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(message.userCode)) {
     const minutes = Math.max(1, Math.ceil((Date.parse(message.expiresAt) - Date.now()) / 60_000));
-    write(`Pair this computer: open ${message.verificationUri} and enter code ${style.green(style.bold(message.userCode))} (expires in ${minutes} min)\n`);
+    write(`Pair this computer: open ${message.verificationUri} and enter code ${style.green(style.bold(message.userCode))} (expires in ${minutes} min). Sign in with the account this computer should be on.\n`);
   } else if (message.type === "aiboard-remote-notice" && typeof message.message === "string") {
     write(`${style.yellow("Note:")} ${message.message.replace(/[^\x20-\x7e]/g, " ").slice(0, 500)}\n`);
   } else if (message.type === "aiboard-remote-open" && typeof message.url === "string" && open) {
     try { open(message.url); } catch { /* terminal instructions are the fallback */ }
   } else if (message.type === "aiboard-remote-session" && typeof message.deviceName === "string" && typeof message.accountId === "string") {
-    write(`Remote device: ${message.deviceName}; account: ${message.accountId}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);
+    const account = (typeof message.accountLabel === "string" ? cleanAccountLabel(message.accountLabel) : undefined) ?? message.accountId;
+    write(`Remote device: ${message.deviceName}; account: ${account}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);
   }
 }
 
@@ -1082,9 +1087,13 @@ async function waitForLifetimeRelease(stateDirectory: string): Promise<() => voi
   throw new Error("runner_shutdown_pending: Runner cleanup is still in progress; retry status later.");
 }
 
+function connectUrl(code: string, ports: readonly number[]): string {
+  return `https://aiboard.me/connect#pair=${code}&runners=${ports.join(",")}`;
+}
+
 function showPairing(code: string, ports: readonly number[], noOpen: boolean, write: (message: string) => void, runtime: LauncherRuntime,
   style: TerminalStyle = PLAIN_STYLE): void {
-  const url = `https://aiboard.me/connect#pair=${code}&runners=${ports.join(",")}`;
+  const url = connectUrl(code, ports);
   write(`${style.bold("Pairing code:")} ${code}\n${style.bold("Connect:")} ${style.cyan(url)}\n`);
   if (style.enabled) write(style.dim(noOpen ? "Open the link above in your browser to connect AI Board.\n" : "Opening AI Board in your browser; keep this terminal open. Ctrl+C stops the Runner.\n"));
   if (noOpen) return;
@@ -1166,6 +1175,11 @@ function describe(instance: LauncherInstance, state: string, kind: RunnerKind = 
     `${style.dim("URL:")} http://127.0.0.1:${instance.port}\n${style.dim("PID:")} ${instance.pid}\n`;
 }
 
+/** `aiboard remote` users work from their AI app, so the local URL and PID stay in `aiboard status`. */
+function describeForRemote(instance: LauncherInstance, state: string, kind: RunnerKind, style: TerminalStyle): string {
+  return `${style.green(style.bold(`${RUNNER_TITLES[kind]} ${state}`))}\n${style.dim("Project:")} ${instance.projectPath}\n`;
+}
+
 /** The bin entry points' error output: plain text unless the terminal takes color. */
 export function reportLauncherError(error: unknown, stream: NodeJS.WriteStream = process.stderr): void {
   const message = error instanceof Error ? error.message : String(error);
@@ -1189,7 +1203,7 @@ function help(): string {
     "  --port <number>           Runner port (0 selects an available port).",
     "  --capabilities-config, --extensions-home, --mcp, --mcp-envelope,",
     "  --allow-origin, --set-aside-run  Pass existing Runner options through.",
-    "  aiboard remote            Start Runner V2 connected to the AIBoard relay (mcp.aiboard.me); --logout clears the session.",
+    "  aiboard remote            Start Runner V2 connected to the AIBoard relay (mcp.aiboard.me); --logout signs this computer out, so it can pair again with any account.",
     "  remote --relay-url <wss-url> [--relay-root-key <base64url-spki> ...]",
     "  remote --only-here|--anywhere --read-only|--writable --no-shell|--shell",
     "  remote --approve-commands|--no-approve-commands  Set per-command approval.",

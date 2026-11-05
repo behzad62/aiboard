@@ -32,6 +32,10 @@ interface FakeOptions {
   verificationUri?: string;
   /** Answer starts carrying machineHint like a relay that predates it. */
   rejectMachineHint?: boolean;
+  /** Answer polls asking for accountLabel like a relay that predates it. */
+  rejectAccountLabel?: boolean;
+  /** Returned beside the session to a poll that asks for it. */
+  accountLabel?: unknown;
   startStatus?: number;
   /** Account id of each approval in turn; account-test once they run out. */
   accounts?: string[];
@@ -96,7 +100,13 @@ async function fixture(t: test.TestContext, options: FakeOptions = {}) {
       return;
     }
     assert.equal(req.url, "/pair/v2/poll");
-    assert.deepEqual(body, { pairingId, pollSecret });
+    const { accountLabel: asked, ...credentials } = body as Record<string, unknown>;
+    assert.deepEqual(credentials, { pairingId, pollSecret });
+    if (asked !== undefined && options.rejectAccountLabel) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: "invalid_request" }));
+      return;
+    }
     polls.push(body);
     const status = statuses.shift() ?? "pending";
     if (status !== "approved") {
@@ -111,7 +121,7 @@ async function fixture(t: test.TestContext, options: FakeOptions = {}) {
       ...(options.unknownSessionMember ? { extra: true } : {}),
     };
     const envelopeSignature = sign(null, Buffer.from(canonicalJson(envelope)), options.wrongKey ? wrongRoot.privateKey : relayRoot.privateKey).toString("base64url");
-    res.end(JSON.stringify({ status, session: { ...envelope, envelopeSignature } }));
+    res.end(JSON.stringify({ status, session: { ...envelope, envelopeSignature }, ...(asked === true && options.accountLabel !== undefined ? { accountLabel: options.accountLabel } : {}) }));
   }
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   const address = server.address();
@@ -525,4 +535,41 @@ test("an identity paired with this relay keeps its device and restores without p
     assert.equal(h.store.load()!.deviceId, h.identity.deviceId);
     assert.equal(h.starts.length, 1);
   } finally { await service.close(); }
+});
+
+test("pairing keeps the relay's account label for display, without control characters", async (t) => {
+  const h = await fixture(t, { statuses: ["approved"], accountLabel: "you\u001b[31m@example.test\u202e" });
+  const session = await h.makeIssuer().requestSession(h.identity);
+  assert.equal(h.polls[0]!.accountLabel, true);
+  assert.equal(h.store.accountLabel(session.accountId), "you[31m@example.test");
+  assert.equal(h.store.accountLabel("another-account"), undefined, "a label belongs to one account");
+  assert.equal("accountLabel" in session, false, "the label stays out of the signed session");
+  assert.deepEqual(h.store.loadSession(), session);
+  h.store.logout();
+  assert.equal(h.store.accountLabel(session.accountId), undefined, "signing out forgets the label");
+});
+
+test("rotating a revoked identity forgets the account label", async (t) => {
+  const h = await fixture(t, { statuses: ["approved"], accountLabel: "you@example.test" });
+  const session = await h.makeIssuer().requestSession(h.identity);
+  assert.equal(h.store.accountLabel(session.accountId), "you@example.test");
+  h.store.revoke();
+  h.store.rotateIdentity();
+  assert.equal(h.store.accountLabel(session.accountId), undefined);
+});
+
+test("a relay that predates account labels still pairs", async (t) => {
+  const h = await fixture(t, { statuses: ["pending", "approved"], rejectAccountLabel: true });
+  const session = await h.makeIssuer().requestSession(h.identity);
+  assert.equal(session.accountId, "account-test");
+  assert.deepEqual(h.polls.map((body) => body.accountLabel), [undefined, undefined], "it stops asking after the first refusal");
+  assert.equal(h.store.accountLabel(session.accountId), undefined);
+});
+
+test("a relay's unusable account label is ignored or refused, never shown", async (t) => {
+  const blank = await fixture(t, { statuses: ["approved"], accountLabel: "\u0007\u202e" });
+  const session = await blank.makeIssuer().requestSession(blank.identity);
+  assert.equal(blank.store.accountLabel(session.accountId), undefined);
+  const wrongType = await fixture(t, { statuses: ["approved"], accountLabel: 5 });
+  await assert.rejects(wrongType.makeIssuer().requestSession(wrongType.identity), /invalid pairing status/);
 });
