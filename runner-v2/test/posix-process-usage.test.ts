@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -179,7 +179,7 @@ const fence = Object.freeze({ ownerId: "owner", fencingToken: 1 });
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 type UsageSample = { cpuTimeMs: number; sampledAt: string };
-async function withWorkload(t: TestContext, script: string, body: (f: { usage: () => Promise<UsageSample | undefined>; nextSample: () => Promise<UsageSample>; directory: string }) => Promise<void>) {
+async function withWorkload(t: TestContext, script: string, body: (f: { usage: () => Promise<UsageSample | undefined>; nextSample: () => Promise<UsageSample>; directory: string; workingDirectory: string }) => Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), "posix-usage-live-"));
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }));
   const backend = createPosixProcessBackend({ stateDirectory: root });
@@ -200,7 +200,7 @@ async function withWorkload(t: TestContext, script: string, body: (f: { usage: (
     }
     throw new Error("no CPU sample within 10 s");
   };
-  try { await body({ usage, nextSample, directory }); }
+  try { await body({ usage, nextSample, directory, workingDirectory: root }); }
   finally {
     await backend.signal(binding as never, "force_terminate", fence);
     for (const deadline = Date.now() + 10_000;;) {
@@ -235,14 +235,36 @@ test("a busy workload's CPU grows at about one core", posixOnly, async t => with
   assert.ok(second.cpuTimeMs - first.cpuTimeMs >= 0.5 * windowMs, `busy workload charged ${second.cpuTimeMs - first.cpuTimeMs} ms over ${windowMs} ms`);
 }));
 
+// The child starts only after the baseline sample and burns a CPU budget, not a span of wall-clock time,
+// so a slow machine can't shrink its work. ps can't see the stretch since the child's last sample, so
+// the budget leaves room for a whole sample gap to go unseen. Growth is judged only on samples from the
+// child's lifetime: on Linux its parent's reaped-children time would otherwise show its work after it exits.
 test("CPU of a descendant in the group counts, and its exit never lowers the total", posixOnly, async t => withWorkload(t,
   `const { spawn } = require('node:child_process');
-   spawn(process.execPath, ['-e', 'const end = Date.now() + 1500; while (Date.now() < end);'], { stdio: 'ignore' });
+   const { existsSync, writeFileSync } = require('node:fs');
+   const burn = 'while (process.cpuUsage().user + process.cpuUsage().system < 2000000);';
+   const waiting = setInterval(() => {
+     if (!existsSync('child-go')) return;
+     clearInterval(waiting);
+     spawn(process.execPath, ['-e', burn], { stdio: 'ignore' }).on('exit', () => writeFileSync('child-done', ''));
+   }, 10);
    setInterval(() => {}, 1000);`, async f => {
-    const totals: number[] = [];
-    for (const deadline = Date.now() + 3_500; Date.now() < deadline;) totals.push((await f.nextSample()).cpuTimeMs);
-    assert.deepEqual(totals, [...totals].sort((a, b) => a - b), "the total never falls");
-    assert.ok(totals.at(-1)! - totals[0]! >= 500, `descendant work not counted: ${totals.join(",")}`);
+    const baseline = await f.nextSample();
+    const samples = [baseline];
+    let lastWhileAlive = baseline;
+    const childDone = () => existsSync(join(f.workingDirectory, "child-done"));
+    writeFileSync(join(f.workingDirectory, "child-go"), "");
+    for (const deadline = Date.now() + 30_000; !childDone();) {
+      assert.ok(Date.now() < deadline, "the descendant didn't finish its CPU budget within 30 s");
+      const sample = await f.nextSample();
+      samples.push(sample);
+      if (!childDone()) lastWhileAlive = sample;
+    }
+    samples.push(await f.nextSample(), await f.nextSample()); // the total after the child has gone
+    const totals = samples.map(sample => sample.cpuTimeMs);
+    const trace = samples.map(sample => `${sample.cpuTimeMs}@${sample.sampledAt}`).join(", ");
+    assert.deepEqual(totals, [...totals].sort((a, b) => a - b), `the total never falls: ${trace}`);
+    assert.ok(lastWhileAlive.cpuTimeMs - baseline.cpuTimeMs >= 500, `a live descendant's work isn't counted: ${trace}`);
   }));
 
 test("both real readers see a busy process in its own group", posixOnly, async t => {
