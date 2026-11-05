@@ -34,9 +34,9 @@ const PROCESSORS: { name: string; where: string; role: string }[] = [
     role: "Network, TLS and attack protection in front of aiboard.me and mcp.aiboard.me. Sees request data and, for Remote, traffic in transit.",
   },
   {
-    name: "Akamai Technologies (Linode)",
-    where: "London, UK",
-    role: "The virtual server that hosts the website and the Remote relay, its database and backups.",
+    name: "Our hosting and backup providers",
+    where: "UK and EU",
+    role: "Host the website and Remote, including its database and backups.",
   },
   {
     name: "Google and GitHub",
