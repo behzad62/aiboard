@@ -7,7 +7,7 @@ import { RemoteAuthError, type SignedRelayChallenge, type RemoteAuthorization, t
 import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
 import type { VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
-import type { CommandApprovalRequest, CommandApprovalSummary } from "./remote-approval.js";
+import { COMMAND_APPROVAL_WINDOW_MS, type CommandApprovalNotice, type CommandApprovalRequest, type CommandApprovalSummary } from "./remote-approval.js";
 import { ArtifactTransferError, ArtifactTransferManager, type ArtifactTransferFrame } from "./remote-artifact-transfer.js";
 import { DEFAULT_REMOTE_FRAME_LIMITS, frameByteLength, negotiateFrameLimits, type RemoteFrameLimits } from "./remote-frame-codec.js";
 
@@ -72,6 +72,10 @@ export type RemoteTransportMessage =
   | { readonly type: "heartbeat"; readonly at: string }
   | ({ readonly type: "status"; readonly state: "tool-ready" | "connected-degraded"; readonly reasonCode: RemoteConnectionReason } & RemoteStatusReport)
   | { readonly type: "revoked" }
+  /** The commands waiting right now, sent whenever the list changes. Replaces whatever the relay held. */
+  | { readonly type: "approvals"; readonly pending: readonly CommandApprovalNotice[] }
+  /** A signed dashboard answer; RemoteAuthenticator.verifyApprovalAnswer decides whether it counts. */
+  | { readonly type: "approval_answer"; readonly answer: unknown }
   | ArtifactTransferFrame
   | { readonly type: "chunk_ack"; readonly transferId: string; readonly seq: number }
   | { readonly type: "artifact_abort"; readonly transferId: string }
@@ -193,7 +197,9 @@ export interface RemoteConnectorOptions {
   /** Admitted extension tools for the current generation/policy (R1c), when composed. */
   readonly pluginTools?: RemotePluginToolProvider;
   readonly auditApproval?: (identity: VerifiedRemoteIdentity | undefined, jobId: string,
-    decision: "requested" | "approved" | "denied" | "expired" | "fenced") => void;
+    decision: "requested" | "approved" | "denied" | "expired" | "fenced", origin?: "local" | "remote") => void;
+  /** A dashboard answer was applied, so the person at the computer can see what happened. */
+  readonly onDashboardApproval?: (summary: CommandApprovalSummary, approved: boolean) => void;
   /** Artifact store for large results and the R3 artifact data plane. */
   readonly artifacts?: RemoteArtifactSource;
   /** Metadata-only audit of artifact reads (job id and outcome; never the hash or bytes). */
@@ -236,6 +242,8 @@ export class RemoteConnector {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
   private session: RemoteDeviceSession;
+  /** Nonces of the waiting commands last sent to the relay on this connection. */
+  private approvalsSent = "";
   private transport: RemoteTransport | undefined;
   private current: RemoteConnectionState;
   private admitting = false;
@@ -576,6 +584,15 @@ export class RemoteConnector {
         await this.onRequest(request, message.authorization);
         return;
       }
+      case "approval_answer": {
+        if (this.pendingEpoch !== undefined) return;
+        let verified: { readonly jobId: string; readonly nonce: string; readonly approved: boolean };
+        // A bad answer changes nothing: the command keeps waiting for a real one or for its deadline.
+        try { verified = this.options.authenticator.verifyApprovalAnswer(message.answer, this.session); }
+        catch { return; }
+        this.answerCommandApproval(verified.jobId, verified.nonce, verified.approved, "remote");
+        return;
+      }
       case "chunk_ack":
         this.transfers.ack(message.transferId, message.seq);
         return;
@@ -598,6 +615,7 @@ export class RemoteConnector {
     this.authWaiter = undefined;
     this.admitting = false;
     this.transfers.abortAll();
+    this.approvalsSent = "";
     if (this.current.state === "revoked" || this.current.state === "suspended") return;
     // Another connection for this device id took over; reconnecting would only knock it off in turn.
     if (code === SUPERSEDED_CLOSE_CODE) { this.transition("suspended", "superseded"); return; }
@@ -915,10 +933,10 @@ export class RemoteConnector {
     return this.queue.find((entry) => !entry.settled && entry.approval)?.approval;
   }
 
-  answerCommandApproval(jobId: string, nonce: string, approved: boolean): boolean {
+  answerCommandApproval(jobId: string, nonce: string, approved: boolean, origin: "local" | "remote" = "local"): boolean {
     const entry = [...this.inFlight].find((item) => item.jobId === jobId);
     const record = (decision: "approved" | "denied" | "fenced") =>
-      this.options.auditApproval?.(entry?.identity, jobId, decision);
+      this.options.auditApproval?.(entry?.identity, jobId, decision, origin);
     if (!entry || entry.settled || !entry.approval || typeof approved !== "boolean" ||
       entry.approval.nonce !== nonce || entry.approvalDeadline === undefined) {
       record("fenced");
@@ -936,7 +954,11 @@ export class RemoteConnector {
       return false;
     }
     record(approved ? "approved" : "denied");
+    const summary = entry.approval.summary;
     entry.approval = undefined;
+    if (origin === "remote") {
+      try { this.options.onDashboardApproval?.(summary, approved); } catch { /* a notice can never alter the decision */ }
+    }
     if (approved) {
       this.options.admission.approve(entry.identity, jobId);
       entry.approvalGranted = true;
@@ -947,8 +969,27 @@ export class RemoteConnector {
       this.finish(entry, this.options.admission.denyApproval(entry.identity, jobId, "approval_denied"));
       this.inFlight.delete(entry);
     }
+    this.reportApprovals();
     this.pump();
     return true;
+  }
+
+  /** Tell the relay what is waiting. Nothing is sent on a connection that has never had anything to report. */
+  private reportApprovals(): void {
+    const transport = this.transport;
+    if (!transport || this.pendingEpoch !== undefined) return;
+    const pending: CommandApprovalNotice[] = [];
+    for (const entry of this.queue) {
+      if (entry.settled || !entry.approval || entry.approvalDeadline === undefined) continue;
+      pending.push({ ...entry.approval.summary, nonce: entry.approval.nonce, expiresAt: new Date(entry.approvalDeadline).toISOString() });
+      if (pending.length === 32) break;
+    }
+    const key = pending.map((item) => item.nonce).join(",");
+    if (key === this.approvalsSent) return;
+    this.approvalsSent = key;
+    try {
+      void Promise.resolve(transport.send({ type: "approvals", pending })).catch(() => { this.approvalsSent = ""; });
+    } catch { this.approvalsSent = ""; }
   }
 
   private prepareApproval(entry: InFlight): void {
@@ -957,7 +998,7 @@ export class RemoteConnector {
       const code = randomBytes(3).toString("hex").toUpperCase();
       const summary = this.options.runtime.summarizeCommandApproval(entry.identity, entry.jobId, code, entry.runnerName, entry.request.payload);
       const job = this.options.admission.markAwaitingApproval(entry.identity, entry.jobId);
-      const deadline = Math.min(Date.parse(entry.request.expiresAt), Date.parse(job.createdAt) + 120_000);
+      const deadline = Math.min(Date.parse(entry.request.expiresAt), Date.parse(job.createdAt) + COMMAND_APPROVAL_WINDOW_MS);
       entry.approvalDeadline = deadline;
       entry.approval = Object.freeze({ summary, nonce: randomBytes(32).toString("hex") });
       this.options.auditApproval?.(entry.identity, entry.jobId, "requested");
@@ -967,6 +1008,7 @@ export class RemoteConnector {
         this.pump();
       }, Math.max(1, deadline - this.now().getTime()));
       entry.approvalTimer.unref();
+      this.reportApprovals();
     } catch {
       const job = this.options.admission.getJob(entry.identity, entry.jobId);
       if (!job || entry.settled) return;
@@ -994,6 +1036,7 @@ export class RemoteConnector {
     finally {
       this.finish(entry, blocked);
       this.inFlight.delete(entry);
+      this.reportApprovals();
     }
   }
 
@@ -1225,6 +1268,7 @@ export class RemoteConnector {
       if (index >= 0) this.queue.splice(index, 1);
       this.finish(entry, this.options.admission.view(entry.identity, entry.jobId).job);
       this.inFlight.delete(entry);
+      this.reportApprovals();
       this.pump();
       return;
     }
@@ -1257,6 +1301,8 @@ export class RemoteConnector {
   private reportStatus(state: "tool-ready" | "connected-degraded", reasonCode: RemoteConnectionReason): void {
     const transport = this.transport;
     if (!transport || this.pendingEpoch !== undefined) return;
+    // A reconnect starts with an empty list on the relay, and waiting commands outlive the socket.
+    this.reportApprovals();
     let report: RemoteStatusReport | undefined;
     try { report = this.options.statusReport?.(); } catch { return; }
     if (!report) return;

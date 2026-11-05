@@ -26,7 +26,7 @@ import { RemoteAuditStore } from "./remote-audit-store.js";
 import { REMOTE_FIRST_RUN_NOTICE } from "./remote-service.js";
 import { createRemoteStateNotices, REMOTE_REPAIR_NOTICE, REMOTE_STATE_MESSAGE, stampRemoteNotice } from "./remote-state-notice.js";
 import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
-import { promptCommandApproval } from "./remote-approval.js";
+import { commandApprovalsMessage, promptCommandApproval } from "./remote-approval.js";
 import { pairingRelayConfiguration } from "./remote-pairing.js";
 import { runDoctorCommand, runUninstallCommand, runUpdateCommand } from "./self-update.js";
 import { gitUnavailableNotice } from "./git-preflight.js";
@@ -799,6 +799,9 @@ function showRemoteMessage(message: Record<string, unknown>, write: (message: st
     typeof message.expiresAt === "string" && /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/.test(message.userCode)) {
     const minutes = Math.max(1, Math.ceil((Date.parse(message.expiresAt) - Date.now()) / 60_000));
     write(`Pair this computer: open ${message.verificationUri} and enter code ${style.green(style.bold(message.userCode))} (expires in ${minutes} min). Sign in with the account this computer should be on.\n`);
+  } else if (message.type === "aiboard-remote-approvals") {
+    const relayOrigin = typeof message.relayOrigin === "string" && /^https?:\/\/[A-Za-z0-9.:-]+$/.test(message.relayOrigin) ? message.relayOrigin : undefined;
+    write(`${style.yellow("Note:")} ${commandApprovalsMessage(relayOrigin, process.stdin.isTTY === true)}\n`);
   } else if (message.type === "aiboard-remote-notice" && typeof message.message === "string") {
     write(`${style.yellow("Note:")} ${message.message.replace(/[^\x20-\x7e]/g, " ").slice(0, 500)}\n`);
   } else if (message.type === "aiboard-remote-open" && typeof message.url === "string" && open) {
@@ -1206,7 +1209,7 @@ function help(): string {
     "  aiboard remote            Start Runner V2 connected to the AIBoard relay (mcp.aiboard.me); --logout signs this computer out, so it can pair again with any account.",
     "  remote --relay-url <wss-url> [--relay-root-key <base64url-spki> ...]",
     "  remote --only-here|--anywhere --read-only|--writable --no-shell|--shell",
-    "  remote --approve-commands|--no-approve-commands  Set per-command approval.",
+    "  remote --approve-commands|--no-approve-commands  Set per-command approval (answer in the terminal or on the dashboard).",
     "  remote --no-audit|--audit-on  Set local device policy; --policy shows it.",
     "  remote --audit [--limit N]  Show recent local audit records.",
     "  aiboard mcp serve --stdio Serve local tools through this project's Runner (maximum MCP nesting depth: 2).",

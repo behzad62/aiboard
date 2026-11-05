@@ -67,6 +67,7 @@ import { assertExternalState, canonicalFuturePath, projectIdentity, remoteDevice
 import { receiveLauncherHandshake, startLauncherControl, type LauncherHandshake } from "./launcher-ipc.js";
 import { LocalMcpSessions } from "./local-stdio-mcp.js";
 import { LocalPairing } from "./local-pairing.js";
+import { commandApprovalsMessage, type CommandApprovalSummary } from "./remote-approval.js";
 import { RemoteService } from "./remote-service.js";
 import { StubRemoteSessionIssuer, type RemoteSessionIssuer } from "./remote-auth.js";
 import { RemoteDeviceStore, type RemoteDeviceSession } from "./remote-device-store.js";
@@ -732,6 +733,17 @@ function createRunnerRemoteService(input: RunnerRemoteInput): RemoteService {
         process.stdout.write(`Remote device: ${pairing.deviceName}; account: ${accountLabel ?? session.accountId}. Return to ChatGPT/Claude; keep this running; Ctrl+C to disconnect.\n`);
       }
     } } : {}),
+    onApprovalsOn: () => {
+      const relayOrigin = pairing?.relayOrigin;
+      if (!deliver({ type: "aiboard-remote-approvals", ...(relayOrigin ? { relayOrigin } : {}) })) {
+        // Started without the launcher, nothing here reads the keyboard, so only the dashboard can answer.
+        process.stdout.write(`Note: ${commandApprovalsMessage(relayOrigin, false)}\n`);
+      }
+    },
+    onDashboardApproval: (summary: CommandApprovalSummary, approved: boolean) => {
+      const message = `Command ${summary.code} was ${approved ? "approved" : "denied"} from the dashboard.`;
+      if (!deliver({ type: "aiboard-remote-notice", message })) process.stdout.write(`Note: ${message}\n`);
+    },
     ...(pairing ? { onStateChange: (() => {
       const notices = createRemoteStateNotices();
       return (state: RemoteConnectionState) => {
