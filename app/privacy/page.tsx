@@ -39,6 +39,11 @@ const PROCESSORS: { name: string; where: string; role: string }[] = [
     role: "The virtual server that hosts the website and the Remote relay, its database and backups.",
   },
   {
+    name: "Microsoft Azure",
+    where: "Sweden",
+    role: "Backup storage.",
+  },
+  {
     name: "Google and GitHub",
     where: "USA and worldwide",
     role: "Sign-in to Remote, if you choose them. They tell us who you are; we don't give them your Remote data.",
