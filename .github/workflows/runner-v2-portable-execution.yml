@@ -234,9 +234,14 @@ jobs:
           runner-v2/test/filesystem-tools.test.ts
           runner-v2/test/openrouter-apply-patch-tool.test.ts
           runner-v2/test/tool-broker.test.ts
-          runner-v2/test/openrouter-apply-patch-factory.test.ts
           runner-v2/test/git-fixture-canonical-root.test.ts
           runner-v2/test/npm-installed-profile.test.ts
+      # Off on Windows by owner decision (2026-11-05): this test intermittently hangs on hosted Windows runners
+      # until the job's time limit, with no cause found after many attempts, and hasn't been seen failing elsewhere.
+      # To run it there by hand, dispatch this workflow with qualification-scope windows-factory-diagnostic.
+      - name: Run native patch factory coverage (not on Windows)
+        if: runner.os != 'Windows'
+        run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/openrouter-apply-patch-factory.test.ts
       - name: Typecheck Runner V2 (t8-portable-coverage probe only)
         if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 't8-portable-coverage'
         run: npm run typecheck:runner-v2
