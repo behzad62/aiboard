@@ -33,6 +33,8 @@ export const REMOTE_FIRST_RUN_NOTICE = [
   "Disconnect with Ctrl+C. To clear the saved session, run:",
   "  aiboard remote --logout",
   "File-tool exclusions do not confine shell commands; they run as your OS user.",
+  "Files and web pages an agent reads can mislead it. AIBoard can't prevent that,",
+  "so keep these limits as tight as your work allows.",
 ].join("\n");
 
 export type RemoteServiceStatus =

@@ -346,6 +346,8 @@ test("an answer that is not exactly right leaves the command waiting and runs no
   const jobId = response.jobId!;
   const stranger = generateKeyPairSync("ed25519").privateKey;
   const good = h.dashboardAnswer(jobId, pending.nonce, true);
+  // The harness clock is fixed, so times are relative to when this answer was issued.
+  const at = (offsetMs: number) => new Date(Date.parse(String(good.claims.issuedAt)) + offsetMs).toISOString();
   const refused: Record<string, unknown> = {
     "wrong signing key": h.dashboardAnswer(jobId, pending.nonce, true, {}, stranger),
     "key that is not pinned": h.dashboardAnswer(jobId, pending.nonce, true, {}, relayKey.privateKey, "other"),
@@ -356,8 +358,11 @@ test("an answer that is not exactly right leaves the command waiting and runs no
     "an old connection": h.dashboardAnswer(jobId, pending.nonce, true, { deviceEpoch: "4" }),
     "another relay": h.dashboardAnswer(jobId, pending.nonce, true, { audience: "evil.example" }),
     "something else the relay signed": h.dashboardAnswer(jobId, pending.nonce, true, { purpose: "other" }),
-    "expired": h.dashboardAnswer(jobId, pending.nonce, true, { expiresAt: new Date(Date.parse(String(good.claims.issuedAt)) - 1).toISOString() }),
-    "too long a lifetime": h.dashboardAnswer(jobId, pending.nonce, true, { expiresAt: new Date(Date.parse(String(good.claims.issuedAt)) + 121_000).toISOString() }),
+    "signed properly but expired a moment ago": h.dashboardAnswer(jobId, pending.nonce, true, { issuedAt: at(-61_000), expiresAt: at(-1_000) }),
+    "still in date but ending before it starts": h.dashboardAnswer(jobId, pending.nonce, true, { issuedAt: at(20_000), expiresAt: at(10_000) }),
+    "issued too far in the future": h.dashboardAnswer(jobId, pending.nonce, true, { issuedAt: at(3_600_000), expiresAt: at(3_660_000) }),
+    "a date that is not a date": h.dashboardAnswer(jobId, pending.nonce, true, { expiresAt: "soon" }),
+    "too long a lifetime": h.dashboardAnswer(jobId, pending.nonce, true, { expiresAt: at(121_000) }),
     "approved is not a boolean": h.dashboardAnswer(jobId, pending.nonce, true, { approved: "true" }),
     "an extra claim": h.dashboardAnswer(jobId, pending.nonce, true, { extra: "x" }),
     "a missing claim": h.dashboardAnswer(jobId, pending.nonce, true, { nonce: undefined }),

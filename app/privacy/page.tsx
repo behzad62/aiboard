@@ -234,14 +234,29 @@ const SECTIONS: LegalSection[] = [
             takes to pass it on.
           </li>
           <li>
+            If you turn on command approvals, a command waiting for your answer
+            is the one exception. Its first 200 characters stay in our
+            relay&apos;s memory so your dashboard can show them, until you
+            answer, the 5-minute wait ends, or the computer disconnects. They
+            are not written to disk or to logs.
+          </li>
+          <li>
             The AI app you connected receives the results and handles them
             under its own privacy policy.
+          </li>
+          <li>
+            An AI model can be misled by what it reads, such as a file or web
+            page containing hidden instructions. We can&apos;t prevent that. A
+            remote request can&apos;t widen the limits you set on the Runner,
+            but with shell commands on, a misled model can run anything your
+            account can.
           </li>
         </ul>
         <p>
           Only expose files and commands you are comfortable sending through
           this path. The Runner lets you restrict Remote to one folder, make it
-          read-only, or turn off shell commands.
+          read-only, turn off shell commands, or require your approval for each
+          command.
         </p>
       </>
     ),
