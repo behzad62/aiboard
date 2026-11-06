@@ -1,5 +1,16 @@
 # Runner V2 Task 12 — Durable Gate Status
 
+## 2026-11-06 — Portable channel idle polling starved the Windows process inventory (branch `claude/runner-first-inventory`)
+
+Not gate work, but it changes what is known about Windows slow-runner failures.
+
+- **Cause found.** The portable channel took the durable fence snapshot (a SQLite write transaction with `synchronous=FULL`) on every 25 ms output poll, even with no output. On hosted Windows that I/O slowed a cold PowerShell + CIM inventory from about 3 s to 10-12 s, and the supervisor needs that inventory to report exit. Slowing only the polling restored about 3.5 s; CPU load and process lineage had no effect.
+- **Fixed.** Idle output polls now run the same validating read without the lock. The fence is still checked every tick; anomalies and all delivery still take the fenced path. No deadline changed.
+- **What this does not explain:**
+  - **Active-Job probe.** It took 2.7-3.5 s on cold VMs with and without the fix (10 VMs), always inside its 5 s limit, so these runs do not link it to this cause. Its T8 failures remain unexplained.
+  - **Job channel fence and supervisor timeouts.** The Job channel already has idle backoff, so it does not have this polling pattern. Not tested further.
+- **Open lead.** `windowsBatchArgv` timed out in a standalone probe harness on 10 of 10 hosted VMs, with and without this fix, and passed on a local PC. Not investigated.
+
 ## 2026-10-31 — Gate C: Windows T8 fence-lock failure (IN_PROGRESS, branch `claude/t8-fence-lock`, PR #112)
 
 The owner approved fixing the intermittent Windows T8 failure. **It is not fixed yet.** PR #112 fixes a real, reproduced lock defect, but hosted CI showed that defect is not what fails T8.
