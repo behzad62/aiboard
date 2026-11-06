@@ -69,7 +69,7 @@ const FAQ = [
   {
     question: "What happens when I reach my limit?",
     answer:
-      "New tool calls are refused with a clear message until your allowance resets at the start of the next month (UTC), or until you upgrade. Nothing on your computers is changed or deleted.",
+      "New tool calls are refused with a clear message until your allowance resets at the start of the next month (UTC). Nothing on your computers is changed or deleted.",
   },
   {
     question: "Can I switch plans or cancel?",
