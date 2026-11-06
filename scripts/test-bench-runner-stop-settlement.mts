@@ -246,6 +246,7 @@ for (const phase of ["startup", "health"] as const) {
     const start = runInNewContext(`(() => { ${functionText("startAttemptRunner")}; return startAttemptRunner; })()`, {
       validateAttemptId: (id: string) => id, requiredString: (body: { attemptId: string }) => body.attemptId,
       attemptWorkspacePath: () => "workspace", readMeta: async () => ({}), runnerV2Launcher: { directory: "launcher" },
+      warmWindowsProcessInventory: async () => undefined,
       runnerSourceDigest: async () => "a".repeat(64), process: { platform: "win32" },
       managedAttemptRunners: managed, benchChildStops: stops, hasSettledBenchChild: () => false,
       runnerStatePath: () => "state", rm: async () => { removals += 1; }, mkdir: async () => undefined,
@@ -331,6 +332,7 @@ for (const terminal of ["exitCode", "signalCode", "exited"] as const) {
     if (terminal === "exited") managed.exited = true;
     const start = runInNewContext(`(${functionText("startAttemptRunner")})`, {
       validateAttemptId: (id: string) => id, requiredString: () => "owned", attemptWorkspacePath: () => "workspace",
+      warmWindowsProcessInventory: async () => undefined,
       readMeta: async () => ({}), runnerV2Launcher: {}, managedAttemptRunners: new Map([["owned", managed]]),
       hasSettledBenchChild: () => false, benchChildStops: new WeakMap(),
       managedRunnerResult: (_managed: unknown, running: boolean) => ({ running }),
@@ -341,3 +343,125 @@ for (const terminal of ["exitCode", "signalCode", "exited"] as const) {
     assert.equal((await start({})).running, true, "a healthy existing child remains reusable");
   });
 }
+
+function inventoryWarmupFixture(platform = "win32", spawnFailure?: Error) {
+  const inspector = Object.assign(new EventEmitter(), { kills: [] as string[], kill(signal: string) { inspector.kills.push(signal); return true; } });
+  const spawned: { command: string; args: string[]; options: Record<string, unknown> }[] = [];
+  const warnings: string[] = [];
+  let expire: (() => void) | undefined;
+  let cleared = 0;
+  const warm = runInNewContext(`(() => { let windowsInventoryWarmup; ${functionText("warmWindowsProcessInventory")}; return warmWindowsProcessInventory; })()`, {
+    Promise, Error, process: { platform, env: { SystemRoot: "C:\\Windows" } },
+    join: (...parts: string[]) => parts.join("\\"),
+    WINDOWS_INVENTORY_SCRIPT: "inventory-script", WINDOWS_INVENTORY_WARMUP_DEADLINE_MS: 90_000,
+    console: { warn: (message: string) => warnings.push(message) },
+    setTimeout: (callback: () => void) => { expire = callback; return { unref() {} }; },
+    clearTimeout: () => { cleared += 1; },
+    spawn: (command: string, args: string[], options: Record<string, unknown>) => {
+      if (spawnFailure) throw spawnFailure;
+      spawned.push({ command, args, options });
+      return inspector;
+    },
+  }) as () => Promise<void>;
+  return { warm, inspector, spawned, warnings, expire: () => expire?.(), cleared: () => cleared };
+}
+
+test("the warm-up runs the exact inventory the Runner V2 supervisor runs", () => {
+  const scriptConstant = (file: string, name: string) => {
+    const filePath = fileURLToPath(new URL(file, import.meta.url));
+    const parsed = ts.createSourceFile(filePath, readFileSync(filePath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    for (const statement of parsed.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      for (const declared of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declared.name) && declared.name.text === name && declared.initializer && ts.isStringLiteral(declared.initializer)) return declared.initializer.text;
+      }
+    }
+    throw new Error(`${name} not found in ${file}`);
+  };
+  assert.equal(
+    scriptConstant("./bench-runner.mjs", "WINDOWS_INVENTORY_SCRIPT"),
+    scriptConstant("../runner-v2/src/portable-process-supervisor.mjs", "WINDOWS_TREE_SCRIPT"),
+  );
+});
+
+test("the warm-up runs one inventory per bench process with the supervisor's PowerShell flags", async () => {
+  const fixture = inventoryWarmupFixture();
+  const first = fixture.warm();
+  const second = fixture.warm();
+  assert.equal(first, second, "concurrent and later starts share one warm-up");
+  assert.equal(fixture.spawned.length, 1);
+  assert.equal(fixture.spawned[0].command, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+  assert.equal(JSON.stringify(fixture.spawned[0].args), JSON.stringify(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "inventory-script"]));
+  fixture.inspector.emit("close", 0);
+  await first;
+  assert.equal(fixture.cleared(), 1);
+  assert.deepEqual(fixture.warnings, []);
+});
+
+test("the warm-up does nothing off Windows", async () => {
+  const fixture = inventoryWarmupFixture("linux");
+  await fixture.warm();
+  assert.equal(fixture.spawned.length, 0);
+});
+
+test("a stuck warm-up is killed at its deadline and never fails the Runner start", async () => {
+  const fixture = inventoryWarmupFixture();
+  const warmed = fixture.warm();
+  fixture.expire();
+  await warmed;
+  assert.deepEqual(fixture.inspector.kills, ["SIGKILL"]);
+  assert.match(fixture.warnings.join(), /timed out after 90000ms/);
+});
+
+for (const [name, fail] of [
+  ["a nonzero exit", (fixture: ReturnType<typeof inventoryWarmupFixture>) => fixture.inspector.emit("close", 1)],
+  ["a spawn error event", (fixture: ReturnType<typeof inventoryWarmupFixture>) => fixture.inspector.emit("error", new Error("spawn EPERM"))],
+] as const) {
+  test(`${name} during the warm-up is reported and never fails the Runner start`, async () => {
+    const fixture = inventoryWarmupFixture();
+    const warmed = fixture.warm();
+    fail(fixture);
+    await warmed;
+    assert.equal(fixture.warnings.length, 1);
+    assert.equal(fixture.cleared(), 1);
+  });
+}
+
+test("a synchronous spawn failure during the warm-up never fails the Runner start", async () => {
+  const fixture = inventoryWarmupFixture("win32", new Error("spawn blocked"));
+  await fixture.warm();
+  assert.match(fixture.warnings.join(), /spawn blocked/);
+});
+
+test("the Runner startup clock starts only after the inventory warm-up finishes", async () => {
+  const events: string[] = [];
+  let finishWarmup: () => void = () => {};
+  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
+  let now = 1_000;
+  const start = runInNewContext(`(() => { ${functionText("startAttemptRunner")}; return startAttemptRunner; })()`, {
+    Date: { now: () => now }, Math, Object,
+    validateAttemptId: (id: string) => id, requiredString: () => "owned",
+    attemptWorkspacePath: () => "workspace", readMeta: async () => ({}), runnerV2Launcher: { directory: "launcher" },
+    warmWindowsProcessInventory: () => { events.push("warmup-start"); return new Promise<void>((resolve) => { finishWarmup = () => { events.push("warmup-done"); resolve(); }; }); },
+    managedAttemptRunners: new Map(), benchChildStops: new WeakMap(), hasSettledBenchChild: () => false,
+    runnerStatePath: () => "state", rm: async () => undefined, mkdir: async () => undefined,
+    randomBytes: () => ({ toString: () => "opaque-test-token" }), runnerV2Invocation: () => ({ command: "fixture", args: [] }),
+    runnerSourceDigest: async () => "a".repeat(64), process: { platform: "win32" },
+    spawn: () => { events.push("spawn"); return child; }, trackBenchChild: (target: typeof child) => target,
+    waitForRunnerV2Startup: async (_child: unknown, timeoutMs: number) => { events.push(`startup-wait ${timeoutMs}`); return { url: "fixture" }; },
+    readManagedRunnerHealth: async (_url: string, _token: string, _root: string, remainingMs: number) => {
+      events.push(`health-budget ${remainingMs}`); return { nodeVersion: "24.18.0" };
+    },
+    managedRunnerResult: () => ({ started: true }),
+    terminateChild: async () => undefined,
+    HttpError: class extends Error { constructor(readonly status: number, message: string) { super(message); } },
+  }) as (body: unknown) => Promise<unknown>;
+  const started = start({});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ["warmup-start"], "no Runner process exists while the warm-up is running");
+  now += 60_000;
+  finishWarmup();
+  await started;
+  assert.deepEqual(events, ["warmup-start", "warmup-done", "spawn", "startup-wait 45000", "health-budget 45000"],
+    "a 60 s warm-up leaves the whole 45 s Runner startup budget");
+});
