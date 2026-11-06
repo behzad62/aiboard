@@ -548,12 +548,15 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         v2Child.stdout?.resume();
         v2Closed = childClose(v2Child);
         closedByChild.set(v2Child, v2Closed);
+        let childReadyDetached = false;
         if (args.command === "remote") {
           // Lives for the whole session (childReady detaches at ready): lost / reconnected / revoked reach the terminal.
           const notices = createRemoteStateNotices();
           v2Child.on("message", (message: unknown) => {
             if (typeof message !== "object" || message === null) return;
             const { type, state, reasonCode, persisted } = message as Record<string, unknown>;
+            // Until ready, childReady shows notices; afterwards only this listener can (a dashboard approval answer, say).
+            if (type === "aiboard-remote-notice" && childReadyDetached) showRemoteMessage(message as Record<string, unknown>, write, undefined, style);
             if (type !== REMOTE_STATE_MESSAGE) return;
             if (state === "revoked" && persisted === true) {
               // The next start rotates the identity and pairs (tested path); stop this Runner cleanly, then run again.
@@ -570,6 +573,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         }
         const ready = childReady(v2Child, handshake, (message) => showRemoteMessage(message, write, args.noOpen ? undefined : remoteUrlOpener(runtime), style),
           (code) => { gitUnavailable = code; });
+        void ready.then(() => { childReadyDetached = true; }, () => undefined);
         const instance = await Promise.race([
           ready,
           v2Closed.then(() => {
