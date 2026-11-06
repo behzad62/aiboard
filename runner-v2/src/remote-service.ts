@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionHost } from "./execution-host.js";
 import type { RemoteSessionIssuer } from "./remote-auth.js";
+import type { CommandApprovalSummary } from "./remote-approval.js";
 import type { RemoteDeviceSession } from "./remote-device-store.js";
 import {
   RemoteConnector,
@@ -27,11 +28,13 @@ export const REMOTE_FIRST_RUN_NOTICE = [
   "AIBoard Remote: cloud agents will be able to run commands as you and read",
   "anything your account can read on this machine. There is no per-action",
   "approval by default; every call is audited locally. Restrict this device with",
-  "--read-only, --only-here or --no-shell, and review activity with",
-  "aiboard remote --audit.",
+  "--read-only, --only-here, --no-shell or --approve-commands, and review activity",
+  "with aiboard remote --audit.",
   "Disconnect with Ctrl+C. To clear the saved session, run:",
   "  aiboard remote --logout",
   "File-tool exclusions do not confine shell commands; they run as your OS user.",
+  "Files and web pages an agent reads can mislead it. AIBoard can't prevent that,",
+  "so keep these limits as tight as your work allows.",
 ].join("\n");
 
 export type RemoteServiceStatus =
@@ -76,6 +79,10 @@ export interface RemoteServiceOptions {
   readonly onNewDevice?: (previousRelayOrigin: string | undefined) => void;
   /** Every connector state change, after the status file is written (terminal notices). */
   readonly onStateChange?: (state: RemoteConnectionState) => void;
+  /** This device requires command approvals, so the person starting it must be told where to answer. */
+  readonly onApprovalsOn?: () => void;
+  /** A dashboard answer was applied to a waiting command. */
+  readonly onDashboardApproval?: (summary: CommandApprovalSummary, approved: boolean) => void;
 }
 
 /**
@@ -203,6 +210,9 @@ export class RemoteService {
     const verified = { accountId: session.accountId, clientId: session.clientId, deviceId: identity.deviceId };
     this.composition.principals.getOrCreate(verified);
     if (Object.keys(this.options.policyPatch ?? {}).length > 0) this.composition.principals.updatePolicy(verified, this.options.policyPatch!, "local");
+    if (this.composition.principals.policy(verified).approvals) {
+      try { this.options.onApprovalsOn?.(); } catch { /* a notice failure never blocks the connection */ }
+    }
     const admission = this.composition.admission;
     const runnerVersion = (() => { try { return readRunnerVersion(); } catch { return ""; } })();
     const platform = process.platform;
@@ -218,7 +228,8 @@ export class RemoteService {
         try { enabled = principals.policy(identity).audit; } catch { /* unknown principal: audit */ }
         principals.auditStore.recordTool({ role: "remote", ...identity, toolName: "artifacts.read", decision, outcomeCode, jobId }, enabled);
       },
-      auditApproval: (identity, jobId, decision) => this.composition.principals.auditStore.recordApproval(identity, jobId, decision),
+      auditApproval: (identity, jobId, decision, origin) => this.composition.principals.auditStore.recordApproval(identity, jobId, decision, origin),
+      ...(this.options.onDashboardApproval ? { onDashboardApproval: this.options.onDashboardApproval } : {}),
       session,
       createTransport: this.options.createTransport,
       ...(this.options.pluginTools ? { pluginTools: this.options.pluginTools } : {}),
