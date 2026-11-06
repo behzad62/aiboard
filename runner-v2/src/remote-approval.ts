@@ -21,6 +21,24 @@ export interface CommandApprovalRequest {
   readonly nonce: string;
 }
 
+/** How long a waiting command stays answerable; the request's own expiry can make it shorter. */
+export const COMMAND_APPROVAL_WINDOW_MS = 5 * 60_000;
+
+/** One waiting command as the dashboard is told about it. The nonce only ever goes back in a signed answer. */
+export interface CommandApprovalNotice extends CommandApprovalSummary {
+  readonly nonce: string;
+  readonly expiresAt: string;
+}
+
+/** What the person starting `aiboard remote --approve-commands` is told. */
+export function commandApprovalsMessage(relayOrigin: string | undefined, hasTerminal: boolean): string {
+  const page = relayOrigin ? relayOrigin + "/approvals" : undefined;
+  const where = hasTerminal && page ? "in this terminal or at " + page
+    : hasTerminal ? "in this terminal"
+      : page ? "at " + page + " (this terminal cannot answer)" : "nowhere: this terminal cannot answer";
+  return "Command approvals are on. Each remote command waits up to 5 minutes for your answer " + where + ".";
+}
+
 type TtyInput = Readable & {
   readonly isTTY?: boolean;
   readonly isRaw?: boolean;

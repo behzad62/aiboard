@@ -74,9 +74,9 @@ export class RemoteAuditStore {
   }
 
   recordApproval(identity: VerifiedRemoteIdentity | undefined, jobId: string,
-    decision: "requested" | "approved" | "denied" | "expired" | "fenced"): void {
-    this.append({ kind: "approval", role: "local", ...(identity ?? {}), jobId,
-      decision, outcomeCode: "recorded", origin: "local", beforeFlags: null, afterFlags: null });
+    decision: "requested" | "approved" | "denied" | "expired" | "fenced", origin: "local" | "remote" = "local"): void {
+    this.append({ kind: "approval", role: origin, ...(identity ?? {}), jobId,
+      decision, outcomeCode: "recorded", origin, beforeFlags: null, afterFlags: null });
   }
 
   recordPolicy(identity: VerifiedRemoteIdentity, origin: "local" | "remote" | "system", before: Readonly<RemoteDevicePolicy>, after: Readonly<RemoteDevicePolicy>): void {

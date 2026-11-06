@@ -46,7 +46,7 @@ const FEATURES = [
   {
     icon: Lock,
     title: "As much access as you allow",
-    body: "Limit the Runner to one folder, make it read-only, or turn off shell commands.",
+    body: "Limit the Runner to one folder, make it read-only, turn off shell commands, or approve each command yourself.",
   },
   {
     icon: ScrollText,

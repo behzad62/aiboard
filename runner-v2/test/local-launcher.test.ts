@@ -1102,3 +1102,32 @@ test("the pairing code is shown in bold green when color is on", async () => {
     await f.cleanup();
   }
 });
+
+test("a Remote notice reaches the terminal once, before and after the Runner is ready", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  const baseSpawner = fakeSpawner(children, calls);
+  const spawnRunner = (command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    const child = baseSpawner(command, args, options);
+    const fake = children[children.length - 1]!;
+    fake.beforeReady = () => { fake.emit("message", { type: "aiboard-remote-notice", message: "Before ready." }); };
+    return child;
+  };
+  const environment = process.platform === "win32" ? { LOCALAPPDATA: join(f.root, "data") } : { XDG_DATA_HOME: join(f.root, "data") };
+  const runtime = { cwd: f.project, home: f.root, environment, spawnRunner, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.some((line) => line.includes("Runner running")));
+    children[children.length - 1]!.emit("message", { type: "aiboard-remote-notice", message: "Command D35D94 was approved from the dashboard." });
+    await waitUntil(() => output.some((line) => line.includes("approved from the dashboard")));
+    assert.equal(output.filter((line) => line.includes("Before ready.")).length, 1);
+    assert.equal(output.filter((line) => line.includes("approved from the dashboard")).length, 1);
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
+});
