@@ -16,6 +16,12 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const MAX_VERIFIER_RESULT_BYTES = 64 * 1024 * 1024;
 const META_FILE = ".bench-run.json";
+// The exact inventory the Runner V2 portable supervisor runs, so a warm-up pages in the same files.
+// scripts/test-bench-runner-stop-settlement.mts fails if the two drift apart.
+const WINDOWS_INVENTORY_SCRIPT = "$ErrorActionPreference='Stop';Get-CimInstance Win32_Process|ForEach-Object{\"$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.ToUniversalTime().ToString('o'))\"}";
+// Only caps the wait; it is not a Runner ownership deadline. The slowest cold inventory measured on a
+// hosted Windows runner took about 36 s; a warm one takes 300-500 ms.
+const WINDOWS_INVENTORY_WARMUP_DEADLINE_MS = 90_000;
 const DEFAULT_APP_ORIGINS = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -56,6 +62,7 @@ const rjsReplayStateRoot = join(root, ".trusted-rjs-replay");
 const managedAttemptRunners = new Map();
 const closedBenchChildren = new WeakSet();
 const benchChildStops = new WeakMap();
+let windowsInventoryWarmup;
 const activeVerifierRuns = new Map();
 const runnerV2Discovery = discoverRunnerV2(runnerV2DirectoryOption);
 const runnerV2Launcher = runnerV2Discovery?.ready ? runnerV2Discovery : null;
@@ -799,6 +806,8 @@ async function startAttemptRunner(body) {
         "Managed Runner V2 is unavailable; configure --runner-v2-dir."
     );
   }
+  // Before the startup clock, and before the existing-runner check so this wait cannot widen a start race.
+  await warmWindowsProcessInventory();
   const existing = managedAttemptRunners.get(attemptId);
   if (existing && !hasSettledBenchChild(existing.child)) {
     if (existing.starting || benchChildStops.has(existing.child) || existing.child.exitCode !== null || existing.child.signalCode !== null || existing.exited) {
@@ -1457,6 +1466,42 @@ async function runnerV2Invocation(launcher, projectPath, statePath, runnerToken)
       "--launcher-ipc",
     ],
   };
+}
+
+// Runner V2 cannot finish starting until its supervisor completes a PowerShell + CIM process inventory, and
+// the supervisor allows that three tries of 2, 4 and 8 s (14 s in all) before reporting outcome_unknown.
+// Those limits suit a warm machine. On a cold one, such as a fresh hosted VM that has not run Windows
+// PowerShell yet, paging those files in from disk takes 6-36 s while the CPU sits idle. Hosted runs passed
+// only on their third try, and failed with a 504 whenever a slower disk made that try miss too.
+// So let one inventory run to completion first, outside the Runner's startup clock. This changes no Runner
+// deadline or ownership rule: if the warm-up fails or times out, startup still proceeds and fails closed.
+function warmWindowsProcessInventory() {
+  if (process.platform !== "win32") return Promise.resolve();
+  windowsInventoryWarmup ??= new Promise((resolveWarmup) => {
+    const finish = (problem) => {
+      clearTimeout(deadline);
+      if (problem) console.warn(`Windows process inventory warm-up did not complete: ${problem}`);
+      resolveWarmup();
+    };
+    let deadline;
+    try {
+      const inspector = spawn(
+        join(process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_INVENTORY_SCRIPT],
+        { windowsHide: true, stdio: "ignore" }
+      );
+      deadline = setTimeout(() => {
+        try { inspector.kill("SIGKILL"); } catch {}
+        finish(`timed out after ${WINDOWS_INVENTORY_WARMUP_DEADLINE_MS}ms`);
+      }, WINDOWS_INVENTORY_WARMUP_DEADLINE_MS);
+      deadline.unref?.();
+      inspector.once("error", (error) => finish(error.message));
+      inspector.once("close", (code) => finish(code === 0 ? null : `exit code ${code}`));
+    } catch (error) {
+      finish(error instanceof Error ? error.message : String(error));
+    }
+  });
+  return windowsInventoryWarmup;
 }
 
 function waitForRunnerV2Startup(child, timeoutMs, handshake) {
