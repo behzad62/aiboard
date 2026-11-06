@@ -19,8 +19,8 @@ const META_FILE = ".bench-run.json";
 // The exact inventory the Runner V2 portable supervisor runs, so a warm-up pages in the same files.
 // scripts/test-bench-runner-stop-settlement.mts fails if the two drift apart.
 const WINDOWS_INVENTORY_SCRIPT = "$ErrorActionPreference='Stop';Get-CimInstance Win32_Process|ForEach-Object{\"$($_.ProcessId),$($_.ParentProcessId),$($_.CreationDate.ToUniversalTime().ToString('o'))\"}";
-// Only caps the wait; it is not a Runner ownership deadline. The slowest cold inventory measured on a
-// hosted Windows runner took about 36 s; a warm one takes 300-500 ms.
+// Only caps the wait; it is not a Runner ownership deadline. On a hosted Windows runner this normally takes
+// about 3 s. The worst run measured needed about 36 s across all its tries.
 const WINDOWS_INVENTORY_WARMUP_DEADLINE_MS = 90_000;
 const DEFAULT_APP_ORIGINS = [
   "http://localhost:3000",
@@ -1470,11 +1470,12 @@ async function runnerV2Invocation(launcher, projectPath, statePath, runnerToken)
 
 // Runner V2 cannot finish starting until its supervisor completes a PowerShell + CIM process inventory, and
 // the supervisor allows that three tries of 2, 4 and 8 s (14 s in all) before reporting outcome_unknown.
-// Those limits suit a warm machine. On a cold one, such as a fresh hosted VM that has not run Windows
-// PowerShell yet, paging those files in from disk takes 6-36 s while the CPU sits idle. Hosted runs passed
-// only on their third try, and failed with a 504 whenever a slower disk made that try miss too.
-// So let one inventory run to completion first, outside the Runner's startup clock. This changes no Runner
-// deadline or ownership rule: if the warm-up fails or times out, startup still proceeds and fails closed.
+// Those limits suit a warm machine, where an inventory takes under a second. On a fresh hosted VM, the first
+// inventory launched during Runner startup takes 9-13 s with the CPU mostly idle. Hosted runs passed only on
+// their third try, and failed with a 504 whenever disk contention made that try miss too.
+// The same first inventory takes about 3 s before the Runner exists, and later ones then take about 1 s.
+// So let one run to completion first, outside the Runner's startup clock. This changes no Runner deadline or
+// ownership rule: if the warm-up fails or times out, startup still proceeds and fails closed.
 function warmWindowsProcessInventory() {
   if (process.platform !== "win32") return Promise.resolve();
   windowsInventoryWarmup ??= new Promise((resolveWarmup) => {
