@@ -283,8 +283,8 @@ const SECTIONS: LegalSection[] = [
           service. Today these are 120 tool calls per minute and 8 at the same
           time per account, plus limits on request size and duration. When you
           reach a monthly allowance or a rate limit, further tool calls are
-          refused until the limit resets or you upgrade. Nothing on your
-          computer is deleted. We may change limits; we will give paying
+          refused until the limit resets or, once paid plans are on sale, you
+          upgrade. Nothing on your computer is deleted. We may change limits; we will give paying
           customers notice before reducing their plan&apos;s allowance.
         </p>
       </>
