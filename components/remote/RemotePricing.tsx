@@ -13,7 +13,7 @@ const TERMS: { id: Term; label: string; months: number; save?: string }[] = [
   { id: "12m", label: "Yearly", months: 12, save: "20%" },
 ];
 
-// Keep in step with the Paddle catalog: the relay sells exactly these prices.
+// Keep in step with the payment provider's catalog: the relay sells exactly these prices.
 // Features mirror the plan cards on the mcp.aiboard.me billing page.
 const PLANS: {
   id: string;
@@ -49,7 +49,7 @@ const PLANS: {
       "5× the Free allowance",
       "Switch or cancel any time",
     ],
-    cta: "Get Pro",
+    cta: "Coming soon",
     featured: true,
   },
   {
@@ -63,7 +63,7 @@ const PLANS: {
       "No monthly cap; fair-use rate limits apply",
       "Switch or cancel any time",
     ],
-    cta: "Get Max",
+    cta: "Coming soon",
   },
 ];
 

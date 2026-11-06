@@ -89,7 +89,7 @@ const FAQ = [
   {
     question: "Who handles payment?",
     answer:
-      "Paddle.com, our online reseller and Merchant of Record. Paddle processes the payment, issues the invoice, and handles sales tax.",
+      "Paid plans are not on sale yet. Before they are, we will name the payment provider here. It will process the payment, issue the invoice, and handle sales tax.",
   },
 ];
 
@@ -228,8 +228,7 @@ export default function RemotePage() {
             until you cancel.
           </p>
           <p>
-            Our order process is conducted by our online reseller Paddle.com. Paddle.com is the Merchant of Record
-            for all our orders and handles payments, invoices, and sales tax.
+            Paid plans are not on sale yet. The Free plan is available now.
           </p>
         </div>
       </section>

@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { LegalDocument, legalLink, type LegalSection } from "@/components/LegalDocument";
 import {
-  PADDLE_BUYER_TERMS_URL,
   SITE_CONTACT_EMAIL,
   SITE_GITHUB_URL,
   SITE_LEGAL_ADDRESS,
@@ -13,7 +12,7 @@ import {
 export const metadata = pageMetadata({
   title: "Terms of Service",
   description:
-    "The terms for using AI Board, the AI Board Runner and AIBoard Remote, including plans, limits, payments through Paddle, and your responsibilities.",
+    "The terms for using AI Board, the AI Board Runner and AIBoard Remote, including plans, limits, payments, and your responsibilities.",
   path: "/terms",
 });
 
@@ -297,22 +296,12 @@ const SECTIONS: LegalSection[] = [
     body: (
       <>
         <p>
-          <strong>
-            Our order process is conducted by our online reseller Paddle.com.
-            Paddle.com is the Merchant of Record for all our orders. Paddle
-            provides all customer service inquiries and handles returns.
-          </strong>{" "}
-          When you buy a plan, you buy it from Paddle, under the{" "}
-          <a
-            href={PADDLE_BUYER_TERMS_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={legalLink}
-          >
-            Paddle Buyer Terms
-          </a>
-          . Paddle takes your payment, charges any sales tax or VAT, and issues
-          your invoices. We never see your card details.
+          <strong>Paid plans are not on sale yet.</strong> Before they go on
+          sale, we will update these terms to name our payment provider. It
+          will take your payment, charge any sales tax or VAT, and issue your
+          invoices, and it may sell the plan to you itself as our reseller,
+          under its own buyer terms. We never see your card details. The rules
+          below apply once paid plans are on sale.
         </p>
         <ul className="list-disc space-y-2 pl-6">
           <li>
@@ -322,19 +311,19 @@ const SECTIONS: LegalSection[] = [
           </li>
           <li>
             <strong>Cancelling.</strong> You can cancel at any time from the
-            Remote billing page or through Paddle. Cancelling stops the next
+            Remote billing page. Cancelling stops the next
             renewal; you keep your plan until the end of the period you paid
             for, then move to Free.
           </li>
           <li>
             <strong>Changing plans.</strong> Upgrading, or changing your
-            billing period, takes effect straight away and Paddle charges or
-            credits the prorated difference. Moving to a lower plan takes effect
+            billing period, takes effect straight away and the prorated difference
+            is charged or credited. Moving to a lower plan takes effect
             at the end of the period you have paid for.
           </li>
           <li>
             <strong>Failed payments.</strong> If a renewal payment fails, you
-            keep your plan while Paddle retries. If the subscription ends up
+            keep your plan while payment is retried. If the subscription ends up
             paused or cancelled, your account moves to Free.
           </li>
           <li>
@@ -504,17 +493,7 @@ const SECTIONS: LegalSection[] = [
     body: (
       <p>
         {SITE_LEGAL_NAME}, trading as {SITE_NAME}. {SITE_LEGAL_ADDRESS}. Email:{" "}
-        {mail}. Questions about a payment, invoice or refund can also go to
-        Paddle at{" "}
-        <a
-          href="https://paddle.net"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={legalLink}
-        >
-          paddle.net
-        </a>
-        .
+        {mail}.
       </p>
     ),
   },
@@ -536,8 +515,8 @@ export default function TermsPage() {
             what an AI app may do there, and you are responsible for it.
           </li>
           <li>
-            Paddle sells paid plans as our Merchant of Record. Cancel any time;
-            a full refund is available within 14 days of any payment.
+            Paid plans are not on sale yet. Once they are, you can cancel any
+            time, and a full refund is available within 14 days of any payment.
           </li>
           <li>
             Remote is in beta, with no uptime guarantee. Every plan has
