@@ -19,8 +19,8 @@ const LEGAL_PAGES = [
 
 /**
  * Shared shell for /terms, /privacy and /refunds: title, plain-English
- * summary, a table of contents, then the numbered sections. Paddle's domain
- * review reads these pages, so they must stay public and server-rendered.
+ * summary, a table of contents, then the numbered sections. Payment providers'
+ * site reviews read these pages, so they must stay public and server-rendered.
  */
 export function LegalDocument({
   title,

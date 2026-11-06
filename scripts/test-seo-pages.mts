@@ -37,7 +37,7 @@ for (const slug of publicPages) {
   check(`${slug} is linked from the layout footer`, layout.includes(`href="/${slug}"`), slug);
 }
 
-// Legal pages Paddle's domain review reads: public, in the sitemap, and
+// Legal pages a payment provider's site review reads: public, in the sitemap, and
 // reachable from every page through the footer.
 const legalPages = ["terms", "privacy", "refunds"] as const;
 for (const slug of legalPages) {
@@ -46,8 +46,8 @@ for (const slug of legalPages) {
   if (exists(pagePath)) {
     const page = read(pagePath);
     check(`${slug} has metadata`, page.includes("export const metadata"), pagePath);
-    // The privacy page names no payment provider, by the owner's choice (2026-11-04).
-    if (slug !== "privacy") check(`${slug} names the Merchant of Record`, page.includes("Merchant of Record"), pagePath);
+    // No page names a payment provider until one has accepted the account (owner, 2026-11-06).
+    check(`${slug} does not name Paddle`, !/paddle/i.test(page), pagePath);
   }
   check(`${slug} is included in sitemap`, sitemap.includes(`"/${slug}"`), slug);
   check(`${slug} is linked from the layout footer`, layout.includes(`href="/${slug}"`), slug);
