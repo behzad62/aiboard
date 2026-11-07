@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { access, lstat, open, readdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import {
   ArtifactNotFoundError,
@@ -211,14 +212,14 @@ async function pathExists(path: string): Promise<boolean> {
 
 function collectSqliteHashes(path: string, hashes: Set<string>): void {
   try {
-    collectOpenSqliteHashes(new DatabaseSync(path, { readOnly: true }), hashes);
+    collectOpenSqliteHashes(new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true }), hashes);
   } catch (error) {
     // A database a killed process left mid-transaction has a hot journal, and only a writable
     // connection may roll it back; read-only it fails with "attempt to write a readonly database",
     // and a job-host fence lock nobody reopens failed every startup cleanup (tunnel run). The scan
     // runs quiescent, so recovering here is what the next normal open would do anyway.
     if (!/readonly database/i.test(error instanceof Error ? error.message : String(error))) throw error;
-    collectOpenSqliteHashes(new DatabaseSync(path), hashes);
+    collectOpenSqliteHashes(new DatabaseSync(sqliteDatabaseLocation(path)), hashes);
   }
 }
 

@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import { openEncryptedJson, writeEncryptedJson } from "./encrypted-provider-config-store.js";
 import { validateProviderConfigs, type RunnerProviderConfig } from "./provider-config-store.js";
@@ -73,7 +74,7 @@ export function prepareCredentialStores(options: {
 
   // Do not create even the lock or the storage key until every legacy envelope authenticates.
   if (!existsSync(pointerPath)) readLegacySnapshot(stateDirectory, legacyToken);
-  const lock = new DatabaseSync(join(stateDirectory, "credential-migration-lock.sqlite"), { timeout: 0 });
+  const lock = new DatabaseSync(sqliteDatabaseLocation(join(stateDirectory, "credential-migration-lock.sqlite")), { timeout: 0 });
   let locked = false;
   try {
     try {

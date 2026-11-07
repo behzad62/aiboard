@@ -55,6 +55,7 @@ import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./proces
 import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
 import type { LocalPairing } from "./local-pairing.js";
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
+import { WINDOWS_PATH_TOO_LONG } from "./windows-path-limits.mjs";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
@@ -70,6 +71,8 @@ export interface ControlServerOptions {
   supervisor: RunSupervisor;
   token: string;
   checkGit?: () => Promise<GitPreflightResult>;
+  /** Set when Build workspaces could not run any process on this machine; Build and ToolBench answer 412 with it. */
+  buildPathProblem?: string;
   bootstrapRun: (input: RunBootstrapInput) => Promise<RunBootstrapResult>;
   heartbeatMs?: number;
   builds?: BuildControlPlane;
@@ -260,6 +263,7 @@ export class ControlServer {
   private readonly localMcp?: LocalMcpSessions;
   private readonly allowLocalPairDevOrigin: boolean;
   private readonly remoteStatus?: ControlServerOptions["remoteStatus"];
+  private readonly buildPathProblem?: string;
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
@@ -273,6 +277,7 @@ export class ControlServer {
       available: false, version: null, code: "git_missing",
       reason: "An explicit Runner-owned Git preflight is required.",
     }));
+    this.buildPathProblem = options.buildPathProblem;
     this.bootstrapRun = options.bootstrapRun;
     this.heartbeatMs = options.heartbeatMs ?? 15_000;
     this.builds = options.builds;
@@ -510,6 +515,7 @@ export class ControlServer {
     if (segments[1] === "toolbench-sessions") {
       if (!this.toolBench) throw new HttpError(404, "toolbench_unavailable", "Solo ToolBench sessions are unavailable; update the runner.");
       if (segments.length === 2 && request.method === "POST") {
+        if (this.buildPathProblem) throw new HttpError(412, WINDOWS_PATH_TOO_LONG, this.buildPathProblem);
         const git = await this.gitPreflight();
         if (!git.available) throw new HttpError(412, git.code, git.reason);
         sendJson(response, 200, await this.toolBench.start(await readJson<ToolBenchSessionRequest>(request))); return;
@@ -608,6 +614,7 @@ export class ControlServer {
       if (request.method === "POST") {
         const body = await readJson<CreateRunBody>(request);
         assertCreateRunBody(body);
+        if (this.buildPathProblem) throw new HttpError(412, WINDOWS_PATH_TOO_LONG, this.buildPathProblem);
         const git = await this.gitPreflight();
         if (!git.available) {
           throw new HttpError(412, git.code, git.reason);

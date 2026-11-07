@@ -10,6 +10,7 @@ import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
 import { COMMAND_APPROVAL_WINDOW_MS, type CommandApprovalNotice, type CommandApprovalRequest, type CommandApprovalSummary } from "./remote-approval.js";
 import { ArtifactTransferError, ArtifactTransferManager, type ArtifactTransferFrame } from "./remote-artifact-transfer.js";
 import { DEFAULT_REMOTE_FRAME_LIMITS, frameByteLength, negotiateFrameLimits, type RemoteFrameLimits } from "./remote-frame-codec.js";
+import { WINDOWS_PATH_TOO_LONG } from "./windows-path-limits.mjs";
 
 export type RemoteConnectionStateName =
   | "disconnected" | "authenticating" | "connected-degraded" | "tool-ready" | "suspended" | "revoked";
@@ -1173,7 +1174,8 @@ export class RemoteConnector {
           stopEvidence?.effect ?? "no_effect"));
       } else if (!brokerInvoked && result.isError) {
         this.finish(entry, admission.settle(identity, jobId, "failed",
-          { inline: Buffer.from(JSON.stringify({ reason: result.error?.code ?? "dispatch_refused" }), "utf8") }));
+          { inline: Buffer.from(JSON.stringify({ reason: result.error?.code ?? "dispatch_refused",
+            ...(result.error?.code === WINDOWS_PATH_TOO_LONG ? { message: result.error.message } : {}) }), "utf8") }));
       } else if (entry.controller.signal.aborted && unknown) {
         admission.recordStop(identity, jobId, "unverified");
         this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown"));
