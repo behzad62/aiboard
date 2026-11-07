@@ -37,7 +37,7 @@ No outage for Runners that update in time. Runners that don't update are refused
    ```
 2. Add the new key beside the old one in `remote-relay-roots.ts`, with a new key id. Merge and release the Runner through the normal signed release.
 3. Give Runners time to update, and tell users to. Nothing shows Runner versions across accounts yet, so you can't count who has updated.
-4. Put the new key at `/etc/aiboard/relay-root-key.pem` on the host, owned by root and mode `0600`, and copy it into the data volume with the same ownership and mode as the signing key. Set `RELAY_ROOT_KEY_FILE` and `RELAY_ROOT_KEY_ID` in the target's env file, then redeploy the same image digest with **Deploy relay**. Check `/readyz`, and that a Runner reconnects without pairing.
+4. Put the new key at `/etc/aiboard/relay-root-key.pem` on the host, owned by root and mode `0600`, and copy it into the data volume with the same ownership and mode as the signing key. Set `RELAY_ROOT_KEY_FILE` and `RELAY_ROOT_KEY_ID` in the target's env file, then run **Publish relay image** and deploy the new digest it prints with **Deploy relay**. Deploying the digest already running does nothing, so the new key wouldn't load (see "Applying an env change" in `deploy/README.md`). Check `/readyz`, and that a Runner reconnects without pairing.
 5. Pair a new device to confirm the pairing session verifies under the new root.
 6. Release a Runner that pins only the new key, then remove the old key file and every copy of it.
 
