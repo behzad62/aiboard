@@ -22,9 +22,8 @@ export const metadata = pageMetadata({
   path: "/remote",
 });
 
-// Public on purpose, even while SITE_REMOTE_ENABLED keeps Remote out of the
-// nav: payment-provider review needs the product and its prices visible
-// without signing in. Prices live in components/remote/RemotePricing.tsx.
+// Public on purpose: visitors and payment-provider reviews need the product and
+// its prices visible without signing in. Prices live in components/remote/RemotePricing.tsx.
 const BILLING_URL = `${SITE_REMOTE_URL}billing`;
 
 const FEATURES = [
