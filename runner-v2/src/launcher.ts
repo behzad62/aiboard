@@ -29,7 +29,7 @@ import { resolveRunnerOwnedRoots } from "./runner-owned-roots.js";
 import { commandApprovalsMessage, promptCommandApproval } from "./remote-approval.js";
 import { pairingRelayConfiguration } from "./remote-pairing.js";
 import { runDoctorCommand, runUninstallCommand, runUpdateCommand } from "./self-update.js";
-import { gitUnavailableNotice } from "./git-preflight.js";
+import { gitUnavailableNotice, type GitUnavailableCode } from "./git-preflight.js";
 import { formatCliError, PLAIN_STYLE, styleFor, terminalStyle, type TerminalStyle } from "./terminal-style.js";
 
 export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
@@ -481,7 +481,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     /** Set when `aiboard remote` reuses a healthy Runner whose Remote is off: turn it on in that Runner. */
     let inPlaceRemote: RemoteEnableSettings | undefined;
     /** Reported by a freshly started Runner V2 that found no usable Git (Build and ToolBench are off). */
-    let gitUnavailable: "git_missing" | "git_too_old" | undefined;
+    let gitUnavailable: { code: GitUnavailableCode; reason?: string } | undefined;
+    let buildPathProblem: string | undefined;
     if (selected.includes("runner")) {
       let reuseV2 = false;
       const freeLifetime = tryAcquireLock(stateDirectory, "lifetime");
@@ -572,7 +573,7 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
           });
         }
         const ready = childReady(v2Child, handshake, (message) => showRemoteMessage(message, write, args.noOpen ? undefined : remoteUrlOpener(runtime), style),
-          (code) => { gitUnavailable = code; });
+          (code, reason) => { gitUnavailable = { code, ...(reason ? { reason } : {}) }; }, (problem) => { buildPathProblem = problem; });
         void ready.then(() => { childReadyDetached = true; }, () => undefined);
         const instance = await Promise.race([
           ready,
@@ -643,7 +644,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
         const state = freshKinds.has(kind) ? "running" : "already running";
         write(args.command === "remote" ? describeForRemote(instances.get(kind)!, state, kind, style) : describe(instances.get(kind)!, state, kind, style));
       }
-      if (gitUnavailable) write(`${style.yellow("Warning:")} ${gitUnavailableNotice(gitUnavailable, runtime.platform ?? process.platform)}\n`);
+      if (gitUnavailable) write(`${style.yellow("Warning:")} ${gitUnavailableNotice(gitUnavailable.code, runtime.platform ?? process.platform, gitUnavailable.reason)}\n`);
+      if (buildPathProblem) write(`${style.yellow("Warning:")} ${buildPathProblem}\n`);
       if (args.command === "remote" && remoteOnlyActive) write("Remote-only: Build and Chat are unavailable when started from a folder that contains AIBoard state.\n");
       const orderedPorts = [instances.get(anchorKind)!.port, ...selected.filter((kind) => kind !== anchorKind).map((kind) => instances.get(kind)!.port)];
       // `aiboard remote` is for ChatGPT/Claude: the local web UI link is offered but not opened, so the browser shows only the relay page.
@@ -1049,7 +1051,8 @@ async function waitForControlDown(instance: LauncherInstance): Promise<void> {
 }
 
 function childReady(child: ChildProcess, handshake: LauncherHandshake, onRemoteMessage?: (message: Record<string, unknown>) => void,
-  onGitUnavailable?: (code: "git_missing" | "git_too_old") => void): Promise<LauncherInstance> {
+  onGitUnavailable?: (code: GitUnavailableCode, reason?: string) => void,
+  onBuildPathProblem?: (problem: string) => void): Promise<LauncherInstance> {
   return new Promise((resolve, reject) => {
     let initialized = false;
     const onMessage = (message: unknown) => {
@@ -1070,7 +1073,10 @@ function childReady(child: ChildProcess, handshake: LauncherHandshake, onRemoteM
       }
       if (message.type !== "aiboard-launcher-ready" || !initialized || !("instance" in message)) return;
       child.off("message", onMessage); child.off("error", reject);
-      if ("git" in message && (message.git === "git_missing" || message.git === "git_too_old")) onGitUnavailable?.(message.git);
+      if ("git" in message && (message.git === "git_missing" || message.git === "git_too_old" || message.git === "git_unverified")) {
+        onGitUnavailable?.(message.git, "gitReason" in message && typeof message.gitReason === "string" ? message.gitReason : undefined);
+      }
+      if ("buildPathProblem" in message && typeof message.buildPathProblem === "string") onBuildPathProblem?.(message.buildPathProblem);
       resolve(message.instance as LauncherInstance);
     };
     child.on("message", onMessage); child.once("error", reject);

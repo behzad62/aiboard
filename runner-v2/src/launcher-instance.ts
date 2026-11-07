@@ -4,6 +4,7 @@ import { lstat, mkdir, open, readdir, realpath, rename, stat, unlink, writeFile 
 import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, win32, posix } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 export interface LauncherIdentity {
   projectPath: string;
@@ -266,7 +267,7 @@ export async function assertProjectBinding(stateDirectory: string, identity: Lau
 export function tryAcquireLock(stateDirectory: string, kind: "discovery" | "lifetime"): (() => void) | null {
   const file = join(stateDirectory, `launcher-${kind}.sqlite`);
   assertLockFileIdentity(file);
-  const database = new DatabaseSync(file, { timeout: 0 });
+  const database = new DatabaseSync(sqliteDatabaseLocation(file), { timeout: 0 });
   try {
     database.exec("BEGIN IMMEDIATE");
     assertLockFileIdentity(file, { held: true });

@@ -109,7 +109,9 @@ class FakeRunner extends EventEmitter {
   healthy = true;
   beforeReady?: () => void;
   /** What the Runner reports about Git in its ready message (absent: Git is usable). */
-  git?: "git_missing" | "git_too_old";
+  git?: "git_missing" | "git_too_old" | "git_unverified";
+  gitReason?: string;
+  buildPathProblem?: string;
 
   send(message: unknown, callback?: (error: Error | null) => void): boolean {
     callback?.(null);
@@ -148,7 +150,7 @@ class FakeRunner extends EventEmitter {
       registerPair: () => undefined, remote: this.remote.control(),
     });
     this.beforeReady?.();
-    this.emit("message", { type: "aiboard-launcher-ready", instance: this.control.instance, ...(this.git ? { git: this.git } : {}) });
+    this.emit("message", { type: "aiboard-launcher-ready", instance: this.control.instance, ...(this.git ? { git: this.git } : {}), ...(this.gitReason ? { gitReason: this.gitReason } : {}), ...(this.buildPathProblem ? { buildPathProblem: this.buildPathProblem } : {}) });
   }
 
   async stop(): Promise<void> {
@@ -1015,6 +1017,36 @@ test("a Runner without Git starts, and the launcher says how to install Git", as
   try {
     await waitUntil(() => output.join("").includes("Pairing code:"));
     assert.match(output.join(""), /Runner running[\s\S]*Warning: Git was not found, so Build and ToolBench are off\. Chat and account providers still work\. Install Git for Windows from https:\/\/git-scm\.com\/download\/win/);
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await running;
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
+});
+
+test("a Runner that could not check Git, or whose Build workspaces do not fit, says why instead of asking to install Git", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  const spawnRunner = (command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    const child = fakeSpawner(children, calls)(command, args, options);
+    children.at(-1)!.git = "git_unverified";
+    children.at(-1)!.gitReason = "The Runner could not start Git to check it. windows_path_too_long: A process working directory is 300 characters long.";
+    children.at(-1)!.buildPathProblem = "windows_path_too_long: Build and ToolBench are off, because their workspaces would be 259 characters long.";
+    return child;
+  };
+  const runtime = { cwd: f.project, spawnRunner, platform: "win32" as const, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["runner", "--state-dir", f.state, "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.join("").includes("Pairing code:"));
+    const text = output.join("");
+    assert.match(text, /Warning: Git could not be checked, so Build and ToolBench are off\. Chat and account providers still work\. The Runner could not start Git to check it\. windows_path_too_long: A process working directory is 300 characters long\./);
+    assert.match(text, /Warning: windows_path_too_long: Build and ToolBench are off, because their workspaces would be 259 characters long\./);
+    assert.doesNotMatch(text, /Install Git/);
     await runLauncher(["stop", "--state-dir", f.state], runtime);
     await running;
   } finally {

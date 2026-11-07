@@ -210,12 +210,12 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
   - The owner opened it on production through real Google sign-in and it works. Suspend, manual plans and delete have only run in local tests. A connected app after a suspension is untested.
   - behzad62/aiboard-tunnel#24 and behzad62/aiboard#144: deploying the digest already running does nothing, so an env or key change needs a new image. Staging stopped afterwards.
   - The owner confirmed Azure backups are running and that they hold a copy of the root key.
-- **2026-11-07: Remote opened to everyone.**
+- **2026-11-07: Remote opened to everyone** (behzad62/aiboard#145 merged, `25ce24f5`).
   - Owner decision: `SITE_REMOTE_ENABLED` on, free until a payment provider exists. The site header links to the dashboard and the Runner guide shows the Remote command.
   - Still untested on production: a real command through dashboard approvals, which was the last open Stage 1 check. The owner chose to open without waiting for it.
-  - `deploy/nginx/aiboard.me.conf`: addresses ending in a slash redirect instead of 403, and unknown addresses are real 404s. Tested with nginx 1.27 in a container against a fake export. The deploy workflow doesn't install this file, so it needs applying on the VPS.
+  - `deploy/nginx/aiboard.me.conf`: addresses ending in a slash redirect instead of 403, and unknown addresses are real 404s. Tested with nginx 1.27 in a container against a fake export. The deploy workflow doesn't install this file; the owner applied it on the VPS, and it was checked live on 2026-11-07: 301 on `/remote/`, real 404s, no broken links across the 52 internal links on the main pages.
   - Cloudflare's analytics script no longer appears on either home page (checked 2026-11-07), which closes that 2026-11-05 note.
-  - In progress: failure alerts on the console, and the long `LOCALAPPDATA` Runner failure.
+  - Open: failure alerts on the console (behzad62/aiboard-tunnel#25). The long `LOCALAPPDATA` failure is fixed on main once merged, and reaches users only with the next Runner release: SQLite past about 250 characters, not git, was the real cause. `runner-v2/test/task8-raw-launch-closure.test.ts` fails the same way with and without that fix, and isn't in the workflows that gate main.
 
 ## Open items carried from R0
 

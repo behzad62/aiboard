@@ -21,6 +21,7 @@ import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
 import { resolveProtectedLocations, type ProtectedLocations } from "./protected-locations.js";
 import { createRemotePathGuard, RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
 import { ToolBroker } from "./tool-broker.js";
+import { findWindowsPathTooLongError } from "./windows-path-limits.mjs";
 
 export interface RemoteToolRuntimeOptions {
   readonly host: ExecutionHost;
@@ -215,7 +216,14 @@ export class RemoteToolRuntime {
     if (isMutating(name, args) && !this.options.admitEffect) {
       return failure(callId, name, "effect_admission_required", "Durable remote effect admission is unavailable.");
     }
-    const bound = await this.binding(principal);
+    let bound: BoundRemote;
+    try { bound = await this.binding(principal); }
+    catch (error) {
+      // No tool ran. Say why, rather than leaving the job as a bare outcome_unknown.
+      const tooLong = findWindowsPathTooLongError(error);
+      if (tooLong) return failure(callId, name, tooLong.code, tooLong.message);
+      throw error;
+    }
     // Binding and recovery can await; revocation and narrowing must win before dispatch.
     principal = this.options.principals.find(identity)!;
     if (!principal || principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
