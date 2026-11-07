@@ -1,3 +1,4 @@
+import { findWindowsPathTooLongError } from "./windows-path-limits.mjs";
 import { reserveExecutionGrantForProcessRecovery, type ExecutionGrantAuthority, type OpaqueExecutionGrant, type ExecutionGrantBinding } from "./execution-grants.js";
 import { createHmac, randomUUID } from "node:crypto";
 import { types as nodeTypes } from "node:util";
@@ -763,7 +764,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       );
       throw new SubprocessRuntimeError(
         "launch_not_proven",
-        "Process launch was not proven.",
+        findWindowsPathTooLongError(error)?.message ?? "Process launch was not proven.",
         { cause: error },
       );
     }

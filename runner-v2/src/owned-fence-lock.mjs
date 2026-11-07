@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_DEADLINE_MS = 2_000;
@@ -220,7 +221,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
     let database;
     let committed = false;
     try {
-      database = new DatabaseSync(path);
+      database = new DatabaseSync(sqliteDatabaseLocation(path));
       assertCoordinationPathIdentity(path, pathIdentity);
       database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
       for (;;) {
@@ -310,7 +311,7 @@ export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {})
   const deadline = Date.now() + deadlineMs;
   let database;
   try {
-    database = new DatabaseSync(path);
+    database = new DatabaseSync(sqliteDatabaseLocation(path));
     assertCoordinationPathIdentity(path, pathIdentity);
     database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
     for (;;) {
@@ -340,7 +341,7 @@ export function retiredOwnedFenceCleanupAvailable(path) {
   try {
     const pathIdentity = assertCoordinationPath(path);
     assertNoProtocolSidecars(path, pathIdentity);
-    database = new DatabaseSync(path, { readOnly: true });
+    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     assertCoordinationPathSnapshot(path, pathIdentity);
     assertRetiredProtocol(database, authorityId);
     return true;
@@ -495,7 +496,7 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
         waitForProtocolRetry(error, deadline, retryDelayMs);
         continue;
       }
-      database = new DatabaseSync(path);
+      database = new DatabaseSync(sqliteDatabaseLocation(path));
       try {
         pathIdentity = assertCoordinationPath(path);
         if (!samePathSnapshot(beforeOpenIdentity, pathIdentity)) {
@@ -995,7 +996,7 @@ function preflightExistingProtocol(path, expectedSnapshot, authorityId) {
   let database;
   let validatedSnapshot;
   try {
-    database = new DatabaseSync(path, { readOnly: true });
+    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     assertProtocolObservation(path, expectedSnapshot, "immediately after read-only preflight open");
     assertExistingProtocolPreflight(database, authorityId);
     validatedSnapshot = assertProtocolObservation(path, expectedSnapshot, "after read-only validation");
@@ -1204,7 +1205,7 @@ function captureProtocolRemovalAuthority(path, expectedMainIdentity, authorityId
   assertNoProtocolSidecars(path, preValidationSnapshot);
   let database;
   try {
-    database = new DatabaseSync(path, { readOnly: true });
+    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     assertCoordinationPathIdentity(path, expectedMainIdentity);
     assertRetiredProtocol(database, authorityId);
     assertCoordinationPathIdentity(path, expectedMainIdentity);
@@ -1226,7 +1227,7 @@ function revalidateProtocolRemovalAuthority(path, authority) {
   assertNoProtocolSidecars(path, authority.mainSnapshot);
   let database;
   try {
-    database = new DatabaseSync(path, { readOnly: true });
+    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     assertCoordinationPathSnapshot(path, authority.mainSnapshot);
     assertRetiredProtocol(database, authority.authorityId);
     assertCoordinationPathSnapshot(path, authority.mainSnapshot);

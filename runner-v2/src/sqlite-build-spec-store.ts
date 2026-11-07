@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import {
   cloneBuildSpec,
@@ -22,7 +23,7 @@ export class SqliteBuildSpecStore implements BuildSpecStore {
 
   constructor(databasePath: string) {
     mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(databasePath));
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS build_specs (

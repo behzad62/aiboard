@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import type { AgentActor } from "./agent-contracts.js";
 import type { HistoricalReadProvenance } from "./historical-read-provenance.js";
@@ -68,7 +69,7 @@ export class SqliteEvidenceStore implements ExtendedEvidenceStore {
   constructor(databasePath: string, options: SqliteEvidenceStoreOptions = {}) {
     this.readOnly = options.readOnly ?? false;
     if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    this.database = new DatabaseSync(sqliteDatabaseLocation(databasePath), { readOnly: this.readOnly });
     if (this.readOnly) return;
     try {
       this.database.exec(`

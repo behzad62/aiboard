@@ -8,13 +8,17 @@ import {
   type RunnerInternalOwnedProcess,
   type RunnerInternalProcessKernel,
 } from "./runner-internal-process-kernel.js";
+import { findWindowsPathTooLongError } from "./windows-path-limits.mjs";
 
-export type GitPreflightCode = "git_missing" | "git_too_old" | "git_ready";
+export type GitPreflightCode = "git_missing" | "git_too_old" | "git_unverified" | "git_ready";
+export type GitUnavailableCode = Exclude<GitPreflightCode, "git_ready">;
 
 export interface GitCommandResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /** The Runner could not start the command for a reason other than a missing executable, so this says nothing about Git. */
+  launchFailure?: string;
 }
 
 export type GitCommandExecutor = (
@@ -32,7 +36,7 @@ export type GitPreflightResult =
   | {
       available: false;
       version: string | null;
-      code: "git_missing" | "git_too_old";
+      code: GitUnavailableCode;
       reason: string;
     };
 
@@ -126,10 +130,12 @@ export function createBoundedGitCommandExecutor(
           access: options.cwd ? [{ canonicalPath: options.cwd, mode: "read" }] : [],
         });
       } catch (error) {
+        const missing = errorChainCode(error, "ENOENT");
         return {
-          exitCode: errorChainCode(error, "ENOENT") ? 127 : 1,
+          exitCode: missing ? 127 : 1,
           stdout: "",
           stderr: error instanceof Error ? error.message : String(error),
+          ...(missing ? {} : { launchFailure: describeLaunchFailure(error) }),
         };
       }
       owned.setOutputSink((metadata, chunk) => {
@@ -209,6 +215,9 @@ export async function checkGit(
   if (typeof execute !== "function") return missingGit();
   const minimumVersion = options.minimumVersion ?? DEFAULT_MINIMUM_VERSION;
   const result = await execute("git", ["--version"]);
+  if (result.launchFailure) {
+    return { available: false, version: null, code: "git_unverified", reason: `The Runner could not start Git to check it. ${result.launchFailure}` };
+  }
   if (result.exitCode !== 0) return missingGit();
 
   const match = /^git version\s+([^\s]+)\s*$/im.exec(result.stdout);
@@ -233,7 +242,8 @@ export function gitInstallHint(platform: NodeJS.Platform = process.platform): st
 }
 
 /** One-paragraph startup notice for a Runner without usable Git: Chat works, Build and ToolBench stay off. */
-export function gitUnavailableNotice(code: "git_missing" | "git_too_old", platform: NodeJS.Platform = process.platform): string {
+export function gitUnavailableNotice(code: GitUnavailableCode, platform: NodeJS.Platform = process.platform, reason?: string): string {
+  if (code === "git_unverified") return `Git could not be checked, so Build and ToolBench are off. Chat and account providers still work. ${reason ?? ""}`.trimEnd();
   const problem = code === "git_too_old"
     ? `Git is older than ${DEFAULT_MINIMUM_VERSION}, so Build and ToolBench are off.`
     : "Git was not found, so Build and ToolBench are off.";
@@ -246,8 +256,9 @@ export function gitUnavailableNotice(code: "git_missing" | "git_too_old", platfo
  */
 export function assertGitForUnfinishedRuns(git: GitPreflightResult, unfinishedRunIds: readonly string[], platform: NodeJS.Platform = process.platform): void {
   if (git.available || unfinishedRunIds.length === 0) return;
+  const hint = git.code === "git_unverified" ? "" : `${gitInstallHint(platform)} `;
   throw new Error(
-    `${git.code}: ${git.reason} It is needed to resume ${unfinishedRunIds.length} unfinished Build run(s). ${gitInstallHint(platform)} ` +
+    `${git.code}: ${git.reason} It is needed to resume ${unfinishedRunIds.length} unfinished Build run(s). ${hint}` +
     `Or start with ${unfinishedRunIds.map((runId) => `--set-aside-run ${runId}`).join(" ")} to leave them untouched.`,
   );
 }
@@ -295,6 +306,20 @@ async function waitForGitTerminal(
       signal.addEventListener("abort", onAbort, { once: true });
     });
   }
+}
+
+function describeLaunchFailure(error: unknown): string {
+  const tooLong = findWindowsPathTooLongError(error);
+  if (tooLong) return tooLong.message;
+  const messages: string[] = [];
+  const visit = (value: unknown) => {
+    if (!(value instanceof Error) || messages.length >= 4) return;
+    messages.push(value.message);
+    if (value instanceof AggregateError) value.errors.forEach(visit);
+    visit(value.cause);
+  };
+  visit(error);
+  return (messages.join(" ") || String(error)).slice(0, 600);
 }
 
 function errorChainCode(error: unknown, code: string, seen = new Set<unknown>()): boolean {

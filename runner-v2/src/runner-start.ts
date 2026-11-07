@@ -2,9 +2,10 @@ import { configureMcpServers, mcpConfigurationDigest } from "./mcp-configuration
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import { ControlServer } from "./control-server.js";
 import { ToolBenchSessions } from "./toolbench-session.js";
@@ -15,7 +16,9 @@ import { ExtensionRunBindings } from "./extension-run-bindings.js";
 import { createRemotePluginToolProvider, fetchPackageMetadata, ManagedMcpRuntime } from "./extension-mcp.js";
 import { activateStagedRunnerExtensions, createPluginHandler, type RunnerExtensionActivation } from "./extension-plugin.js";
 import { OAUTH_CALLBACK_PATH } from "./extension-control-routes.js";
-import { assertGitForUnfinishedRuns, createBoundedGitCommandExecutor, gitUnavailableNotice, type GitPreflightResult } from "./git-preflight.js";
+import { assertGitForUnfinishedRuns, createBoundedGitCommandExecutor, gitUnavailableNotice, type GitPreflightResult, type GitUnavailableCode } from "./git-preflight.js";
+import { assertStateDirectoryUsable, assertTempDirectoryUsable, buildWorkspacePathProblem } from "./windows-path-limits.mjs";
+import { deepestBuildWorkingDirectory } from "./git-run-context.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildUserMediaStore } from "./build-user-media.js";
@@ -165,6 +168,9 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     if (isHelpRequested(args)) { printHelp(); return { started: false, shutdown: async () => undefined }; }
     const options = parseArguments(args);
     await assertDirectory(options.projectPath, "project");
+    assertStateDirectoryUsable(options.stateDirectory);
+    assertTempDirectoryUsable(tmpdir());
+    const buildPathProblem = buildWorkspacePathProblem(deepestBuildWorkingDirectory(options.projectPath, options.stateDirectory));
     const location = seams.location ?? { platform: process.platform, environment: process.env, home: homedir() };
     const deviceDirectory = options.remoteDeviceDirectory ?? (launcher ? remoteDeviceDirectory(location) : undefined);
     const ownedRoots = options.remote ? await resolveRunnerOwnedRoots({
@@ -513,6 +519,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       token: options.token,
       // Re-checked until found, so Git installed on PATH while the Runner runs is picked up.
       checkGit: async () => (git.available ? git : (git = await gitPreflight())),
+      ...(buildPathProblem ? { buildPathProblem } : {}),
       bootstrapRun: async (input) => {
         if (resolve(input.projectPath) !== options.projectPath) {
           throw new Error(
@@ -548,7 +555,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       stateDirectory: options.stateDirectory,
       ...(remoteOnly ? { localAgents: "unavailable_nested_state" } : {}),
       gitVersion: git.available ? git.version : `${git.version ?? "not found"} (Build and ToolBench are off)`,
-      ...(git.available ? {} : { gitUnavailable: git.code }),
+      ...(git.available ? {} : { gitUnavailable: git.code, gitReason: git.reason }),
+      ...(buildPathProblem ? { buildPathProblem } : {}),
       mcp: mcpStatus.status(),
       allowOrigins: options.allowOrigins,
     };
@@ -625,7 +633,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         },
         shutdown: requestLauncherShutdown,
       });
-      if (process.connected) process.send?.({ type: "aiboard-launcher-ready", instance: launcherControl.instance, ...(git.available ? {} : { git: git.code }) });
+      if (process.connected) process.send?.({ type: "aiboard-launcher-ready", instance: launcherControl.instance, ...(git.available ? {} : { git: git.code, gitReason: git.reason }), ...(buildPathProblem ? { buildPathProblem } : {}) });
       if (launcherStopRequested || !process.connected) requestLauncherShutdown();
     } else if (address) {
       process.stdout.write(`${JSON.stringify(readiness)}\n`);
@@ -792,7 +800,7 @@ function hasStoredBuildSpecs(stateDirectory: string): boolean {
   const path = join(stateDirectory, "build-specs.sqlite");
   if (!existsSync(path)) return false;
   try {
-    const database = new DatabaseSync(path, { readOnly: true });
+    const database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     try {
       const row = database.prepare("SELECT EXISTS(SELECT 1 FROM build_specs LIMIT 1) AS present").get() as { present: number } | undefined;
       return row?.present !== 0;
@@ -1132,7 +1140,9 @@ function writeReadableStartupSummary(
     projectPath: string;
     stateDirectory: string;
     gitVersion: string;
-    gitUnavailable?: "git_missing" | "git_too_old";
+    gitUnavailable?: GitUnavailableCode;
+    gitReason?: string;
+    buildPathProblem?: string;
     mcp: unknown[];
     allowOrigins: string[];
   }
@@ -1160,7 +1170,8 @@ function writeReadableStartupSummary(
     lines.push("    - https://aiboard.me");
     lines.push("    - https://www.aiboard.me");
   }
-  if (readiness.gitUnavailable) lines.push("", `  ${gitUnavailableNotice(readiness.gitUnavailable)}`);
+  if (readiness.gitUnavailable) lines.push("", `  ${gitUnavailableNotice(readiness.gitUnavailable, process.platform, readiness.gitReason)}`);
+  if (readiness.buildPathProblem) lines.push("", `  ${readiness.buildPathProblem}`);
   lines.push("");
   lines.push("  Tip: Use --help to show all CLI flags and defaults.");
   process.stderr.write(`${lines.join("\n")}\n`);
