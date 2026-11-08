@@ -459,7 +459,8 @@ export class RemoteAdmissionStore {
     effect: "no_effect" | "known" | "effect_outcome_unknown", result?: RemoteJobResult): RemoteJob {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);
-    if (!["no_effect", "known", "effect_outcome_unknown"].includes(effect) || (result && effect !== "known")) {
+    // A result is what the tool returned: proof of a known effect, or evidence while the effect is unknown. No effect has none.
+    if (!["no_effect", "known", "effect_outcome_unknown"].includes(effect) || (result && effect === "no_effect")) {
       throw new RemoteAdmissionError("invalid_request", "Invalid cancellation settlement.");
     }
     return this.transaction(() => {
