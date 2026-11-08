@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
 import type { ToolExecutionContext } from "./agent-contracts.js";
 import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_WAIT_MAX_MS, MANAGED_UNTIL_IDLE_DEFAULT_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedInteractionState, type ManagedOutputCompletion, type ManagedOutputEvidence, type ManagedOutputStreamEvidence, type ManagedOutputUntil, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
 import { createManagedWaitTracker } from "./managed-process-wait-tracker.js";
@@ -141,6 +142,7 @@ export class ManagedProcessService {
     if (this.records.has(processId) || this.legacy.has(processId) || this.records.size + this.legacy.size >= 4096) throw new ManagedProcessError("process_capacity_exceeded", "Managed identity is already used or its record bound was reached.");
     const command = checkedCommand(input.command), args = checkedArguments(input.args ?? []), environment = checkedEnvironment(input.env ?? {});
     const cwd = resolve(workspaceRoot, input.cwd ?? "."), at = this.clock();
+    assertUsableWorkingDirectory(cwd);
     const identity = managedIdentity({ processId, runId: exact.runId, sessionId: exact.sessionId, actor: exact.actor });
     if (input.interactive !== undefined && typeof input.interactive !== "boolean") throw new ManagedProcessError("invalid_arguments", "interactive must be a boolean.");
     const record: ManagedSessionRecord = { ...identity, recordKind: "runner.managed-process", schemaVersion: 2,

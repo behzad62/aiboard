@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import type { ToolResult } from "./agent-contracts.js";
 import { initializeRemoteAdmissionSchema } from "./remote-admission-schema.js";
@@ -148,7 +149,7 @@ export class RemoteAdmissionStore {
     this.key = Buffer.from(storageKey);
     this.cursorKey = createHmac("sha256", this.key).update("remote-admission-cursor-v1").digest();
     mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 });
-    this.database = new DatabaseSync(databasePath);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(databasePath));
     try {
       this.database.exec("PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
       initializeRemoteAdmissionSchema(this.database, this.key, this.resultTtlMs);

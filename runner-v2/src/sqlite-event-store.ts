@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import {
   RUNNER_V2_SCHEMA_VERSION,
@@ -61,7 +62,7 @@ export class SqliteEventStore implements EventStore {
 
   constructor(databasePath: string) {
     mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(databasePath));
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;

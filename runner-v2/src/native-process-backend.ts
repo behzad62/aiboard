@@ -18,6 +18,7 @@ import type { ExecutionLifecycleScope, ExecutionSafetyCapabilities, ProcessEscal
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
 import { parsePosixGroupMembers } from "./portable-process-posix-control.mjs";
 import { PortableOutputRetirementBlockedError, runPortableFenceSnapshotSync } from "./portable-process-protocol.mjs";
+import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
 import { OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 import type { OwnedFenceLockOptions } from "./owned-fence-lock.mjs";
 import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
@@ -206,6 +207,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async launch(request: ProcessLaunchRequest): Promise<unknown> {
     this.assertPlatform();
+    if (this.options.platform === "windows") assertUsableWorkingDirectory(request.intent.workingDirectory, "win32");
     const startupDeadline = Math.min(
       Date.now() + (this.options.platform === "windows" ? WINDOWS_PORTABLE_STARTUP_DEADLINE_MS : PORTABLE_STARTUP_DEADLINE_MS),
       this.startupDeadlineAt ?? Number.MAX_SAFE_INTEGER,
