@@ -1178,11 +1178,13 @@ export class RemoteConnector {
             ...(result.error?.code === WINDOWS_PATH_TOO_LONG ? { message: result.error.message } : {}) }), "utf8") }));
       } else if (entry.controller.signal.aborted && unknown) {
         admission.recordStop(identity, jobId, "unverified");
-        this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown"));
+        this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown", await this.storedResult(result)));
       } else {
         if (entry.controller.signal.aborted) admission.recordStop(identity, jobId, "unverified");
         const state = unknown ? "outcome_unknown" : result.isError ? "failed" : "completed";
-        this.finish(entry, admission.settle(identity, jobId, state, unknown ? undefined : await this.storedResult(result)));
+        // An unknown outcome keeps what the tool returned, such as what a timed-out command printed and its processId.
+        // It is evidence, not a resolution: the job stays outcome_unknown, and its key returns it and never runs it again.
+        this.finish(entry, admission.settle(identity, jobId, state, await this.storedResult(result)));
       }
     } catch {
       if (!entry.settled) {
