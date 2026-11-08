@@ -1,6 +1,11 @@
 import { resolve } from "node:path";
 
-import { renderPlain, summarizeOutput } from "./managed-process-wait.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
+import { renderPlain, renderPlainCompact, renderPlainLines, summarizeOutput } from "./managed-process-wait.js";
+import { MANAGED_OUTPUT_SEARCH_SCHEMA, newlinesIn, retainedRegions, searchOutput, validateOutputSearch, type ManagedOutputSearchRequest } from "./managed-process-search.js";
+import type { ManagedOutputStreamEvidence } from "./managed-process-contracts.js";
+import type { ManagedRetainedOutput } from "./managed-process.js";
+import type { GenericProcessResult, ProcessOutputDisposition } from "./execution-safety-contracts.js";
 import type {
   NativeTool,
   ToolExecutionContext,
@@ -11,6 +16,7 @@ import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
 import {
   outputFor,
   type OneShotCommandExecutor,
+  type OneShotCommandResult,
 } from "./one-shot-command-executor.js";
 
 interface ProcessInput {
@@ -22,7 +28,25 @@ interface ProcessInput {
   env?: Record<string, string>;
   timeoutMs?: number;
   render?: "raw" | "summary";
+  search?: ManagedOutputSearchRequest;
 }
+
+/** What a client outside Build (remote or local MCP) gets from process.run, and what serving it takes. */
+export interface ProcessToolsExternal {
+  /** Keeps a finished command's output readable through process.read_output; returns the id to read it by. */
+  retainOutput(context: Readonly<ToolExecutionContext>, output: ManagedRetainedOutput): string;
+  readArtifact(artifactId: string): Promise<Uint8Array>;
+}
+
+/** Output at or under this size comes back whole. A stream's summary stays near it, inside the broker's 8 KiB inline bound. */
+const CLIENT_SUMMARY_BYTES = 6 * 1024;
+const CLIENT_SUMMARY_HEAD_LINES = 20;
+const CLIENT_SUMMARY_TAIL_LINES = 40;
+/** A summary's real head comes from the stored output; past this size only the retained tail is read for it. */
+const WHOLE_SUMMARY_MAX_BYTES = 16 * 1024 * 1024;
+
+/** What a client's result takes beyond the command: stopping what is left of it, then summarizing or searching its output. */
+const CLIENT_RESULT_GRACE_MS = AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS + 30_000;
 
 export interface ProcessToolsOptions {
   execution?: OneShotCommandExecutor;
@@ -31,6 +55,7 @@ export interface ProcessToolsOptions {
   defaultTimeoutMs?: number;
   maximumTimeoutMs?: number;
   allowedCommands?: readonly string[];
+  external?: ProcessToolsExternal;
 }
 
 export function createProcessTools(
@@ -41,8 +66,9 @@ export function createProcessTools(
   const tool: NativeTool<ProcessInput> = {
     definition: {
       name: "process.run",
-      description:
-        "Run an argument-array command or an explicitly selected shell script and record its mechanical result",
+      description: options.external
+        ? "Run an argument-array command or an explicitly selected shell script and wait for it. Large output comes back as its head, tail and diagnostics with a processId for process.read_output; search returns only the matching lines."
+        : "Run an argument-array command or an explicitly selected shell script and record its mechanical result",
       inputSchema: {
         type: "object",
         properties: {
@@ -53,14 +79,17 @@ export function createProcessTools(
           cwd: { type: "string" },
           env: { type: "object", additionalProperties: { type: "string" } },
           timeoutMs: { type: "integer", minimum: 1 },
-          render: { enum: ["raw", "summary"], description: "summary: for large output, plain text head + tail + diagnostics found in the omitted middle. Default raw." },
+          render: { enum: ["raw", "summary"], description: `summary: for large output, plain text head + tail + diagnostics found in the omitted middle. Default ${options.external ? "summary" : "raw"}.` },
+          ...(options.external ? { search: MANAGED_OUTPUT_SEARCH_SCHEMA } : {}),
         },
         additionalProperties: false,
       },
       readOnly: false,
       effect: "external",
     },
-    validate: validateInput,
+    validate: (input) => validateInput(input, options.external !== undefined),
+    // The command's own limit decides. The broker's default would end a longer one with nothing to show for it.
+    ...(options.external ? { timeoutMs: (input: ProcessInput) => Math.min(input.timeoutMs ?? defaultTimeoutMs, maximumTimeoutMs) + CLIENT_RESULT_GRACE_MS } : {}),
     assessAccess: (input) => ({
       capability: input.shell ? "process.shell" : "process.execute",
       paths: [{ path: input.cwd ?? ".", access: "write" }],
@@ -73,13 +102,14 @@ export function createProcessTools(
         options.execution,
         defaultTimeoutMs,
         maximumTimeoutMs,
-        options.allowedCommands
+        options.allowedCommands,
+        options.external
       ),
   };
   return [tool as NativeTool<unknown>];
 }
 
-function validateInput(input: unknown): ValidationResult<ProcessInput> {
+function validateInput(input: unknown, searchable: boolean): ValidationResult<ProcessInput> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return { ok: false, issues: ["input must be an object"] };
   }
@@ -118,6 +148,10 @@ function validateInput(input: unknown): ValidationResult<ProcessInput> {
   if (value.render !== undefined && value.render !== "raw" && value.render !== "summary") {
     return { ok: false, issues: ["render must be raw or summary"] };
   }
+  if (searchable && value.search !== undefined) {
+    try { validateOutputSearch(value.search); }
+    catch (error) { return { ok: false, issues: [error instanceof Error ? error.message : "search is invalid"] }; }
+  }
   return { ok: true, value: value as ProcessInput };
 }
 
@@ -127,7 +161,8 @@ async function executeProcess(
   execution: OneShotCommandExecutor | undefined,
   defaultTimeoutMs: number,
   maximumTimeoutMs: number,
-  allowedCommands: readonly string[] | undefined
+  allowedCommands: readonly string[] | undefined,
+  external: ProcessToolsExternal | undefined,
 ): Promise<ToolExecutionOutput> {
   if (!context.workspacePath) {
     return processError("workspace_required", "Process tool requires a workspace.");
@@ -164,6 +199,8 @@ async function executeProcess(
         ...(context.signal ? { signal: context.signal } : {}),
       },
     });
+    const failure = runFailure(result.process.outcome, timeoutMs);
+    if (external) return await clientRunResult(input, context, result, failure, external);
     const stdout = outputFor(result.process, "stdout");
     const stderr = outputFor(result.process, "stderr");
     // T1: summary view keeps head, tail and diagnostics of large output; raw is unchanged.
@@ -181,34 +218,93 @@ async function executeProcess(
       disclosure: result.disclosure,
       ...(result.providerId ? { providerId: result.providerId } : {}),
     };
-    if (result.process.outcome === "launch_failed") {
-      return withEvidence(metadata, render(stdout.tail), render(stderr.tail), true, {
-        code: "process_start_failed",
-        message: "Process launch was not proven.",
-      });
-    }
-    if (timedOut) return withEvidence(metadata, render(stdout.tail), render(stderr.tail), true, {
-      code: "process_timeout",
-      message: `Process exceeded ${timeoutMs} ms.`,
-    });
-    if (cancelled) return withEvidence(metadata, render(stdout.tail), render(stderr.tail), true, {
-      code: "process_cancelled",
-      message: "Process was cancelled.",
-    });
-    if (result.process.outcome === "cleanup_failed") return withEvidence(
-      metadata,
-      render(stdout.tail),
-      render(stderr.tail),
-      true,
-      { code: "process_cleanup_failed", message: "Process cleanup could not be verified." },
-    );
-    return withEvidence(metadata, render(stdout.tail), render(stderr.tail), false);
+    return withEvidence(metadata, render(stdout.tail), render(stderr.tail), failure !== undefined, failure);
   } catch (error) {
     const value = error as { code?: unknown; message?: unknown };
     const code = typeof value.code === "string" ? value.code : "process_runtime_failed";
     const message = typeof value.message === "string" ? value.message : String(error);
     return processError(code, message);
   }
+}
+
+function runFailure(outcome: GenericProcessResult["outcome"], timeoutMs: number): { code: string; message: string } | undefined {
+  switch (outcome) {
+    case "launch_failed": return { code: "process_start_failed", message: "Process launch was not proven." };
+    case "timed_out": return { code: "process_timeout", message: `Process exceeded ${timeoutMs} ms.` };
+    case "cancelled": return { code: "process_cancelled", message: "Process was cancelled." };
+    case "cleanup_failed": return { code: "process_cleanup_failed", message: "Process cleanup could not be verified." };
+    default: return undefined;
+  }
+}
+
+/**
+ * A command's result for a client outside Build: what it did and what it printed, without the bookkeeping
+ * that holds for nearly every command. Anything left out of the text stays readable by processId, so a
+ * model never has to run a command again to see more of what it printed.
+ */
+async function clientRunResult(
+  input: ProcessInput,
+  context: ToolExecutionContext,
+  result: OneShotCommandResult,
+  failure: { code: string; message: string } | undefined,
+  external: ProcessToolsExternal,
+): Promise<ToolExecutionOutput> {
+  const run = result.process;
+  const streams = (["stdout", "stderr"] as const).map((stream) => streamEvidence(outputFor(run, stream)));
+  const printed = streams.some((stream) => stream.totalBytes > 0);
+  const retain = input.search ? printed : streams.some((stream) => stream.totalBytes > CLIENT_SUMMARY_BYTES);
+  const processId = retain ? external.retainOutput(context, { exitCode: run.exitCode ?? null, signal: run.signal ?? null, streams }) : undefined;
+  // The command already ran, so a search that fails must not cost the model its result.
+  const search = input.search
+    ? await searchOutput({ streams, request: input.search, readSpill: external.readArtifact }).catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+    : undefined;
+  const failed = failure !== undefined || (run.exitCode ?? 0) !== 0 || run.signal !== undefined || (search !== undefined && "error" in search);
+  const sections = search && !failed ? [] : await Promise.all(streams.map(async (stream) => {
+    const text = await clientStreamText(stream, input.render ?? "summary", processId, external);
+    return text ? `${stream.stream.toUpperCase()}\n${text}` : "";
+  }));
+  const metadata = {
+    exitCode: run.exitCode ?? null,
+    ...(run.signal ? { signal: run.signal } : {}),
+    ...(failure ? { error: failure.message } : {}),
+    ...(run.outcome === "timed_out" ? { timedOut: true } : {}),
+    ...(run.outcome === "cancelled" ? { cancelled: true } : {}),
+    ...(run.cleanup.state === "verified_empty" || run.cleanup.state === "not_required" ? {} : { cleanup: run.cleanup }),
+    ...(run.output.some((entry) => entry.lossyBytes > 0) ? { outputLossy: true } : {}),
+    ...(result.enforcement === "unconfined_explicit_full" ? {} : { enforcement: result.enforcement, disclosure: result.disclosure }),
+    ...(result.providerId ? { providerId: result.providerId } : {}),
+    ...(processId ? { processId, stdoutBytes: streams[0]!.totalBytes, stderrBytes: streams[1]!.totalBytes } : {}),
+    ...(search ? { search } : {}),
+  };
+  return {
+    // One block per stream: each stays under the broker's inline bound on its own.
+    content: [{ type: "json", value: metadata }, ...sections.filter(Boolean).map((text) => ({ type: "text" as const, text }))],
+    isError: failure !== undefined,
+    ...(failure ? { error: failure } : {}),
+  };
+}
+
+function streamEvidence(output: ProcessOutputDisposition): ManagedOutputStreamEvidence {
+  const bytes = output.tailBytesBase64 !== undefined ? Buffer.from(output.tailBytesBase64, "base64") : Buffer.from(output.tail);
+  return Object.freeze({ stream: output.stream, totalBytes: output.totalBytes, tail: new Uint8Array(bytes.subarray(Math.max(0, bytes.byteLength - output.totalBytes))),
+    lossyBytes: output.lossyBytes, lossReasons: Object.freeze([]),
+    ...(output.spillArtifactId ? { spill: Object.freeze({ artifactId: output.spillArtifactId, bytes: output.spillBytes }) } : {}) });
+}
+
+export async function clientStreamText(stream: ManagedOutputStreamEvidence, render: "raw" | "summary", processId: string | undefined, external: Pick<ProcessToolsExternal, "readArtifact">): Promise<string> {
+  if (render === "raw") return Buffer.from(stream.tail).toString("utf8");
+  // A summary starts where the output really starts, not where the retained tail happens to.
+  const regions = await retainedRegions(stream, external.readArtifact).catch(() => undefined);
+  const whole = regions?.length === 1 && regions[0]!.fromOffset === 0 ? regions[0]!.bytes : undefined;
+  const bytes = whole && whole.byteLength <= WHOLE_SUMMARY_MAX_BYTES ? whole : stream.tail;
+  const missing = stream.totalBytes - bytes.byteLength;
+  // Its numbers are the ones search and lines use. Counting lines is cheap where rendering them is not, and past a gap nobody knows them.
+  const firstLine = missing === 0 ? 1 : whole ? 1 + await newlinesIn(whole.subarray(0, missing)) : null;
+  const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
+  const summary = summarizeOutput(renderPlainLines(text), { maxBytes: CLIENT_SUMMARY_BYTES, headLines: CLIENT_SUMMARY_HEAD_LINES, tailLines: CLIENT_SUMMARY_TAIL_LINES, firstLine,
+    ...(processId ? { omittedHint: `find them with process_read_output {processId: "${processId}", search: {pattern}} or read them with lines: {start, count}` } : {}) });
+  const shown = summary.summarized ? summary.text : renderPlainCompact(text);
+  return missing > 0 ? `… (first ${missing} bytes not shown) …\n${shown}` : shown;
 }
 
 function commandInvocation(input: ProcessInput): {
@@ -236,7 +332,7 @@ function withEvidence(
   stdout: string,
   stderr: string,
   isError: boolean,
-  errorValue?: { code: string; message: string }
+  errorValue?: { code: string; message: string } | undefined
 ): ToolExecutionOutput {
   const sections = [
     stdout ? `STDOUT\n${stdout}` : "",

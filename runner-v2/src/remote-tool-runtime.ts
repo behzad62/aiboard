@@ -324,7 +324,11 @@ async function createGovernedBinding(
       ...(localMcpDepth !== undefined ? { approve: async (request) => !request.outsideWorkspace } : {}) });
     const tools = [
       ...createFilesystemTools({ artifacts: options.host.artifacts, pathGuard }), ...createGitTools(binding.git),
-      ...createProcessTools({ execution: binding.commandExecution }), ...createManagedProcessTools(binding.managedProcesses),
+      ...createProcessTools({ execution: binding.commandExecution, external: {
+        retainOutput: (context, output) => binding.managedProcesses.retainOutput(context, output),
+        readArtifact: (artifactId) => options.host.artifacts.get(artifactId),
+      } }),
+      ...createManagedProcessTools(binding.managedProcesses, { external: true }),
       ...createImageTools({ artifacts: options.host.artifacts, pathGuard }),
     ];
     for (const tool of tools) if (allowed.has(tool.definition.name) && tool.definition.lifecycle !== true) broker.register(tool);
@@ -410,6 +414,8 @@ export class LocalMcpToolSession {
       if (!definition) throw new Error(`Local MCP tool ${name} is unavailable.`);
       const schema = structuredClone(definition.inputSchema) as { type: "object"; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown };
       if (name === "process_read_output") schema.properties = { ...schema.properties, view: { enum: ["output", "snapshot"] } };
+      // The hash has a default, the revision this session last read or wrote, and a missing one is never sent as an empty check.
+      if (name === "files_patch") schema.required = schema.required?.filter((key) => key !== "expectedSha256");
       if (name === "image_inspect") {
         delete schema.properties?.artifactHash;
         schema.required = ["path"];

@@ -3,9 +3,10 @@ import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ToolExecutionContext } from "./agent-contracts.js";
-import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_WAIT_MAX_MS, MANAGED_UNTIL_IDLE_DEFAULT_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedInteractionState, type ManagedOutputCompletion, type ManagedOutputUntil, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
+import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_WAIT_MAX_MS, MANAGED_UNTIL_IDLE_DEFAULT_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedInteractionState, type ManagedOutputCompletion, type ManagedOutputEvidence, type ManagedOutputStreamEvidence, type ManagedOutputUntil, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
 import { createManagedWaitTracker } from "./managed-process-wait-tracker.js";
-import { exitProven, interactionState } from "./managed-process-wait.js";
+import { exitProven, interactionState, terminalCompletion } from "./managed-process-wait.js";
+import { readOutputLines, searchOutput } from "./managed-process-search.js";
 import { MANAGED_OUTPUT_FINAL_SPILL_BYTES, MANAGED_OUTPUT_LIVE_TAIL_BYTES, decodeOutputCursor, encodeOutputCursor, hasNewOutput, normalizeOutputRead, sliceOutput, streamsFor, type ManagedOutputCursorBinding, type ManagedOutputReadRequest, type ManagedOutputReadResult, type ManagedOutputSlice, type ManagedOutputStreamName } from "./managed-process-output.js";
 import { historicalSnapshot, readHistoricalManagedProcessRecord } from "./managed-process-history.js";
 import { MAX_MANAGED_OUTPUT_BYTES, managedIdentity, managedProcessId, managedSnapshot, parseManagedSessionRecord, persistManagedSessionRecord, readManagedRecordValue, type ManagedSessionRecord } from "./managed-process-record.js";
@@ -37,6 +38,29 @@ export interface ManagedInteractResult {
   readonly readError?: Readonly<{ code: string; message: string }>;
 }
 
+/** A finished process.run whose output stays readable through process.read_output. */
+export interface ManagedRetainedOutput {
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+  readonly streams: readonly ManagedOutputStreamEvidence[];
+}
+
+const RETAINED_RUN_PREFIX = "run-";
+/** The newest finished commands kept. Each holds its tails in memory; its spills stay in the artifact store. */
+const RETAINED_RUN_LIMIT = 32;
+
+interface OutputPresentation {
+  readonly processId: string;
+  readonly evidence: ManagedOutputEvidence;
+  readonly normalized: ReturnType<typeof normalizeOutputRead>;
+  readonly selected: readonly ManagedOutputStreamName[];
+  readonly offsets: Readonly<Record<ManagedOutputStreamName, number>>;
+  readonly binding: ManagedOutputCursorBinding;
+  readonly key: Uint8Array;
+  readonly completion?: ManagedOutputCompletion;
+  readonly readSpill?: (artifactId: string) => Promise<Uint8Array>;
+}
+
 export interface ManagedProcessServiceOptions {
   stateDirectory: string;
   /** Compatibility-only descriptor. Semantic platform selection belongs to ExecutionHost. */
@@ -66,6 +90,8 @@ export class ManagedProcessService {
   private readonly turns = new Map<string, Promise<unknown>>();
   /** T1: latest evidence-based completion per process (in memory; observation only). */
   private readonly interactions = new Map<string, Readonly<{ completion: ManagedOutputCompletion; state: ManagedInteractionState }>>();
+  /** In memory only: after a restart the call says so, and the command can simply run again. */
+  private readonly retainedRuns = new Map<string, Readonly<ManagedRetainedOutput & ManagedProcessOwner & { finishedAt: string }>>();
   private cursorKeyBytes?: Uint8Array;
   private readonly stateDirectory: string;
   private readonly idFactory: () => string;
@@ -267,8 +293,70 @@ export class ManagedProcessService {
     try { return await turn; } finally { if (this.turns.get(processId) === turn) this.turns.delete(processId); }
   }
 
+  /** Keeps a finished command's output readable by its owner, under an id that behaves like a stopped process's. */
+  retainOutput(owner: ManagedProcessOwner, output: ManagedRetainedOutput): string {
+    const processId = `${RETAINED_RUN_PREFIX}${randomUUID()}`;
+    this.retainedRuns.set(processId, Object.freeze({ runId: owner.runId, sessionId: owner.sessionId, actor: Object.freeze({ ...owner.actor }), ...output, finishedAt: this.clock() }));
+    if (this.retainedRuns.size > RETAINED_RUN_LIMIT) this.retainedRuns.delete(this.retainedRuns.keys().next().value!);
+    return processId;
+  }
+
+  private async readRetained(processId: string, request: ManagedOutputReadRequest, exact: Readonly<ToolExecutionContext>): Promise<ManagedOutputReadResult> {
+    const retained = this.retainedRuns.get(processId);
+    if (!retained) throw new ManagedProcessError("process_not_found", "This command's output is no longer retained; run it again.");
+    if (!sameOwner(retained, exact)) throw new ManagedProcessError("process_not_owned", "Managed process belongs to another exact owner.");
+    const normalized = normalizeOutputRead(request);
+    const binding: ManagedOutputCursorBinding = { processId, launchId: processId, generation: "one-shot" };
+    const key = this.cursorKey();
+    const offsets = normalized.cursor !== undefined ? decodeOutputCursor(key, binding, normalized.cursor) : { stdout: 0, stderr: 0 };
+    const snapshot: ManagedProcessSnapshot = Object.freeze({ processId, pid: 0, status: "stopped" as const, exitCode: retained.exitCode, signal: retained.signal as NodeJS.Signals | null,
+      startedAt: retained.finishedAt, updatedAt: retained.finishedAt, stdout: "", stderr: "" });
+    const runtime = this.runtime(exact.runId);
+    const read = this.presentOutput({ processId, evidence: { snapshot, source: "final", streams: retained.streams }, normalized, binding, key, offsets,
+      selected: normalized.range ? [normalized.range.stream] : streamsFor(normalized.stream),
+      ...(normalized.until ? { completion: terminalCompletion(true) } : {}),
+      ...(runtime.readSpill ? { readSpill: runtime.readSpill.bind(runtime) } : {}) });
+    this.reads.add(read); void read.finally(() => this.reads.delete(read)).catch(() => undefined);
+    return await cancelRead(read, exact.signal);
+  }
+
+  private async presentOutput(input: OutputPresentation): Promise<ManagedOutputReadResult> {
+    const { processId, evidence, normalized, selected, offsets, binding, key, completion, readSpill } = input;
+    const terminal = evidence.snapshot.status !== "running";
+    const state = completion ? interactionState(completion, !terminal) : undefined;
+    const finish = (fields: Pick<ManagedOutputReadResult, "slices" | "cursor" | "complete" | "search" | "lineWindows">): ManagedOutputReadResult => Object.freeze({
+      processId, status: evidence.snapshot.status, exitCode: evidence.snapshot.exitCode, signal: evidence.snapshot.signal,
+      source: evidence.source, ...(evidence.waited ? { waited: evidence.waited } : {}), ...fields,
+      limits: Object.freeze({ maxBytesPerStream: normalized.maxBytes, liveTailBytesPerStream: MANAGED_OUTPUT_LIVE_TAIL_BYTES, finalSpillBytesPerStream: MANAGED_OUTPUT_FINAL_SPILL_BYTES }),
+      ...(completion ? { completion, state } : {}),
+    });
+    if (normalized.search || normalized.lines) {
+      const streams = evidence.streams.filter((entry) => selected.includes(entry.stream));
+      const spill = evidence.source === "final" && readSpill ? { readSpill } : {};
+      // Both cover everything kept, so the cursor moves past it: a later read returns only what is new.
+      const end = { ...offsets };
+      for (const stream of selected) end[stream] = evidence.streams.find((entry) => entry.stream === stream)?.totalBytes ?? 0;
+      const cursor = encodeOutputCursor(key, binding, end);
+      if (normalized.lines) return finish({ slices: Object.freeze([]), lineWindows: await readOutputLines({ streams, ...normalized.lines, ...spill }), cursor, complete: false });
+      const search = await searchOutput({ streams, request: normalized.search!, ...spill });
+      return finish({ slices: Object.freeze([]), search, cursor, complete: terminal && evidence.source === "final" && search.exhaustive });
+    }
+    const slices: ManagedOutputSlice[] = [];
+    const next = { ...offsets };
+    for (const stream of selected) {
+      const total = evidence.streams.find(entry => entry.stream === stream)?.totalBytes ?? 0;
+      const start = normalized.range ? normalized.range.startOffset : normalized.tailBytes !== undefined ? Math.max(0, total - normalized.tailBytes) : offsets[stream];
+      const slice = await sliceOutput({ evidence, stream, startOffset: start, maxBytes: normalized.maxBytes, ...(readSpill ? { readSpill } : {}) });
+      slices.push(slice);
+      if (!normalized.range) next[stream] = slice.endOffset;
+    }
+    return finish({ slices: Object.freeze(slices), cursor: encodeOutputCursor(key, binding, next),
+      complete: terminal && evidence.source === "final" && !normalized.range && slices.every(slice => !slice.hasMore && !slice.gap && slice.lossyBytes === 0) });
+  }
+
   private async readExact(processId: string, request: ManagedOutputReadRequest, exact: Readonly<ToolExecutionContext>,
     interaction?: "write" | "close_input"): Promise<ManagedOutputReadResult> {
+    if (processId.startsWith(RETAINED_RUN_PREFIX) && !this.records.has(processId) && !this.legacy.has(processId)) return await this.readRetained(processId, request, exact);
     const record = this.owned(processId, exact);
     if (!("schemaVersion" in record)) throw new ManagedProcessError("process_output_history_unsupported", "This historical record keeps only a bounded legacy tail without offsets; use process.poll.");
     const normalized = normalizeOutputRead(request);
@@ -287,27 +375,11 @@ export class ManagedProcessService {
       .then(async evidence => {
         if (exact.signal?.aborted) throw cancelled("read");
         this.saveSnapshot(record.processId, { ...evidence.snapshot, stdout: record.stdout, stderr: record.stderr });
-        const slices: ManagedOutputSlice[] = [];
-        const next = { ...offsets };
-        for (const stream of selected) {
-          const total = evidence.streams.find(entry => entry.stream === stream)?.totalBytes ?? 0;
-          const start = normalized.range ? normalized.range.startOffset : normalized.tailBytes !== undefined ? Math.max(0, total - normalized.tailBytes) : offsets[stream];
-          const slice = await sliceOutput({ evidence, stream, startOffset: start, maxBytes: normalized.maxBytes, readSpill: runtime.readSpill?.bind(runtime) });
-          slices.push(slice);
-          if (!normalized.range) next[stream] = slice.endOffset;
-        }
-        const terminal = evidence.snapshot.status !== "running";
         const completion = tracker?.completion(evidence);
-        const state = completion ? interactionState(completion, !terminal) : undefined;
-        if (completion && state) this.interactions.set(record.processId, Object.freeze({ completion, state }));
-        return Object.freeze({
-          processId: record.processId, status: evidence.snapshot.status, exitCode: evidence.snapshot.exitCode, signal: evidence.snapshot.signal,
-          source: evidence.source, ...(evidence.waited ? { waited: evidence.waited } : {}), slices: Object.freeze(slices),
-          cursor: encodeOutputCursor(key, binding, next),
-          complete: terminal && evidence.source === "final" && !normalized.range && slices.every(slice => !slice.hasMore && !slice.gap && slice.lossyBytes === 0),
-          limits: Object.freeze({ maxBytesPerStream: normalized.maxBytes, liveTailBytesPerStream: MANAGED_OUTPUT_LIVE_TAIL_BYTES, finalSpillBytesPerStream: MANAGED_OUTPUT_FINAL_SPILL_BYTES }),
-          ...(completion ? { completion, state } : {}),
-        });
+        const result = await this.presentOutput({ processId: record.processId, evidence, normalized, selected, offsets, binding, key,
+          ...(completion ? { completion } : {}), ...(runtime.readSpill ? { readSpill: runtime.readSpill.bind(runtime) } : {}) });
+        if (completion && result.state) this.interactions.set(record.processId, Object.freeze({ completion, state: result.state }));
+        return result;
       });
     this.reads.add(read); void read.finally(() => { this.reads.delete(read); tracker?.close(); }).catch(() => undefined);
     return await cancelRead(read, exact.signal);

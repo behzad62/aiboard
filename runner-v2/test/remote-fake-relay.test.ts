@@ -321,6 +321,41 @@ test("scenario 4-5: managed process and plugin tool pass; plugin crash degrades,
   await h.waitJob(output);
   assert.match(JSON.stringify(h.results.at(-1)?.content), /managed-hello/);
 
+  // A huge command's output, summarized, and searched afterwards under the same remote owner.
+  const noisy = await h.send(makeRequest(h.device.deviceId, {
+    toolId: "process_run", operationClass: "write",
+    payload: { command: process.execPath, args: ["-e", "for (let n = 1; n <= 5000; n += 1) console.log(n === 3210 ? 'NEEDLE here' : 'filler ' + n + ' ' + 'x'.repeat(30));"] },
+  }, 210));
+  assert.equal(noisy.admitted, true, JSON.stringify(noisy));
+  assert.equal((await h.waitJob(noisy)).state, "completed");
+  const ran = h.results.at(-1)!.content;
+  const ranMetadata = ran.find((block) => block.type === "json");
+  assert.ok(ranMetadata && ranMetadata.type === "json");
+  const runId = (ranMetadata.value as { processId: string }).processId;
+  assert.match(runId, /^run-/);
+  assert.match(JSON.stringify(ran), /lines omitted; find them with process_read_output/);
+  const searched = await h.send(makeRequest(h.device.deviceId, {
+    toolId: "process_read_output", operationClass: "read", payload: { processId: runId, search: { pattern: "needle" } },
+  }, 211));
+  assert.equal(searched.admitted, true, JSON.stringify(searched));
+  await h.waitJob(searched);
+  const hits = h.results.at(-1)!.content.find((block) => block.type === "json");
+  assert.ok(hits && hits.type === "json");
+  assert.deepEqual((hits.value as { search: { matches: { line: number; text: string }[] } }).search.matches.map((match) => [match.line, match.text.trim()]), [[3210, "NEEDLE here"]]);
+
+  // A start that waits through a lot of output still binds its process: the identity cannot become a preview.
+  const loud = await h.send(makeRequest(h.device.deviceId, {
+    toolId: "process_start", operationClass: "write",
+    payload: { command: process.execPath, args: ["-e", "for (let n = 0; n < 2000; n += 1) { console.log('out ' + n + ' ' + 'x'.repeat(30)); console.error('err ' + n + ' ' + 'y'.repeat(30)); }"], until: { exit: true }, waitMs: 20_000 },
+  }, 212));
+  assert.equal(loud.admitted, true, JSON.stringify(loud));
+  assert.equal((await h.waitJob(loud)).state, "completed");
+  const loudOutput = h.results.at(-1)!.content;
+  const loudIdentity = loudOutput[0];
+  assert.ok(loudIdentity && loudIdentity.type === "json");
+  assert.equal(typeof (loudIdentity.value as { processId: unknown }).processId, "string");
+  assert.equal(loudOutput.some((block) => block.type === "artifact"), false);
+
   // Approved plugin tool through the connector.
   const read = await h.send(makeRequest(h.device.deviceId, {
     toolId: plugin.relayToolId, operationClass: "read", payload: {},

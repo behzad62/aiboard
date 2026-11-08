@@ -105,7 +105,7 @@ test("SDK clients use Runner broker grants and exact local managed-process owner
     assert.equal(typeof started.processId, "string");
     const processId = started.processId as string;
     const read = await client.callTool({ name: "process_read_output", arguments: { processId, waitMs: 10_000 } });
-    const stdout = (jsonResult(read).slices as Array<{ stream: string; text: string }>).find((slice) => slice.stream === "stdout")!.text;
+    const stdout = (read as CallResult).content.find((item) => item.type === "text" && item.text?.startsWith("STDOUT\n"))!.text!.slice("STDOUT\n".length);
     assert.equal((JSON.parse(stdout) as { depth?: string }).depth, "1", "a Runner-started child of a depth-0 session sees depth 1");
     assert.doesNotMatch(resultText(read), new RegExp(first.token));
     assert.doesNotMatch(resultText(read), new RegExp(second.token));

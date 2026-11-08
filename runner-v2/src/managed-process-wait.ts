@@ -136,6 +136,27 @@ export function renderPlain(text: string): string {
   return foldRepeats(lines).join("\n") + (trailing ? "\n" : "");
 }
 
+const CONTROL_CHARACTER = /[\x00-\x08\x0b-\x1f\x7f]/;
+
+/** renderPlain, line for line: nothing is folded and every newline stays, so a line keeps its number. */
+export function renderPlainLines(text: string): string {
+  const unified = text.replace(/\r\n/g, "\n");
+  if (!CONTROL_CHARACTER.test(unified)) return unified;
+  return unified
+    // Unlike renderPlain, an unterminated OSC ends at its line.
+    .replace(/\x1b\][^\x07\x1b\n]{0,4096}(?:\x07|\x1b\\)?/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[ -/]*[0-~]/g, "")
+    .replace(/\x1b/g, "")
+    .split("\n").map(renderLine).join("\n");
+}
+
+/** renderPlain, unless its fold marks would make short repeated lines longer than they are. */
+export function renderPlainCompact(text: string): string {
+  const folded = renderPlain(text), whole = renderPlainLines(text);
+  return Buffer.byteLength(folded) <= Buffer.byteLength(whole) ? folded : whole;
+}
+
 function renderLine(line: string): string {
   // A carriage return rewinds the line: keep the last segment that wrote something.
   const segments = line.split("\r");
@@ -196,26 +217,60 @@ export interface ManagedOutputSummary {
   readonly errorLines: ReadonlyArray<Readonly<{ line: number; text: string }>>;
 }
 
+export interface ManagedOutputSummaryOptions {
+  /** Output up to this size comes back whole, and a larger summary stays near it. Default: 8 KiB, and only line counts bound the summary. */
+  readonly maxBytes?: number;
+  readonly headLines?: number;
+  readonly tailLines?: number;
+  /** How to get at what was left out; it goes in the marker. Default: run something narrower. */
+  readonly omittedHint?: string;
+  /** The number of the first line. Default 0. null: it is not known, so lines carry no number. */
+  readonly firstLine?: number | null;
+}
+
 /** Large output: head + tail + diagnostics found in the omitted middle, with absolute line numbers. */
-export function summarizeOutput(plain: string): ManagedOutputSummary {
+export function summarizeOutput(plain: string, options: ManagedOutputSummaryOptions = {}): ManagedOutputSummary {
   const lines = splitLines(plain);
-  if (Buffer.byteLength(plain) <= SUMMARY_THRESHOLD_BYTES) return Object.freeze({ text: plain, summarized: false, totalLines: lines.length, errorLines: Object.freeze([]) });
+  if (Buffer.byteLength(plain) <= (options.maxBytes ?? SUMMARY_THRESHOLD_BYTES)) return Object.freeze({ text: plain, summarized: false, totalLines: lines.length, errorLines: Object.freeze([]) });
   const trailing = plain.endsWith("\n") ? "\n" : "";
-  if (lines.length <= SUMMARY_HEAD_LINES + SUMMARY_TAIL_LINES)
-    return Object.freeze({ text: lines.map(clip).join("\n") + trailing, summarized: true, totalLines: lines.length, errorLines: Object.freeze([]) });
-  const middleEnd = lines.length - SUMMARY_TAIL_LINES;
+  const share = (fraction: number) => options.maxBytes === undefined ? Number.POSITIVE_INFINITY : options.maxBytes * fraction;
+  const head = linesWithin(lines.length, (n) => lines[n]!, options.headLines ?? SUMMARY_HEAD_LINES, share(1 / 3));
+  const tail = linesWithin(lines.length - head, (n) => lines[lines.length - 1 - n]!, options.tailLines ?? SUMMARY_TAIL_LINES, share(1 / 2));
+  const middleEnd = lines.length - tail;
   const errorLines: { line: number; text: string }[] = [];
-  for (let n = SUMMARY_HEAD_LINES; n < middleEnd && errorLines.length < SUMMARY_MAX_DIAGNOSTICS; n++) {
+  let diagnosticBytes = 0;
+  for (let n = head; n < middleEnd && errorLines.length < SUMMARY_MAX_DIAGNOSTICS; n++) {
     const line = lines[n]!;
-    if (FILE_LOCATION.test(line) || FAILURE_WORD.test(line)) errorLines.push(Object.freeze({ line: n, text: clip(line) }));
+    if (!FILE_LOCATION.test(line) && !FAILURE_WORD.test(line)) continue;
+    diagnosticBytes += Buffer.byteLength(clip(line)) + 8;
+    if (diagnosticBytes > share(1 / 6)) break;
+    errorLines.push(Object.freeze({ line: n + (options.firstLine ?? 0), text: clip(line) }));
   }
+  const shownHead = lines.slice(0, head), shownTail = lines.slice(middleEnd);
+  const hint = options.omittedHint ?? "run a narrower command, or send the output to a file, to see them";
+  const clipped = options.omittedHint !== undefined && [...shownHead, ...shownTail].some((line) => line.length > SUMMARY_MAX_LINE_CHARS);
+  // A client's text arrives unfolded, so that its lines keep their numbers; Build's was folded by renderPlain.
+  // Folding comes before clipping: lines that differ only past the clip are not identical.
+  const fold = (shown: readonly string[]): readonly string[] => options.maxBytes === undefined ? shown : foldRepeats(shown);
   const parts = [
-    ...lines.slice(0, SUMMARY_HEAD_LINES).map(clip),
-    `… (${middleEnd - SUMMARY_HEAD_LINES} lines omitted; read the full output by cursor or lines) …`,
-    ...(errorLines.length ? ["Diagnostics from omitted lines:", ...errorLines.map((entry) => `L${entry.line}: ${entry.text}`)] : []),
-    ...lines.slice(middleEnd).map(clip),
+    ...fold(shownHead).map(clip),
+    ...(middleEnd > head ? [`… (${middleEnd - head} lines omitted; ${hint}) …`] : []),
+    ...(errorLines.length ? ["Diagnostics from omitted lines:", ...errorLines.map((entry) => options.firstLine === null ? entry.text : `L${entry.line}: ${entry.text}`)] : []),
+    ...fold(shownTail).map(clip),
+    ...(clipped && middleEnd <= head ? [`… (long lines clipped; ${hint}) …`] : []),
   ];
   return Object.freeze({ text: parts.join("\n") + trailing, summarized: true, totalLines: lines.length, errorLines: Object.freeze(errorLines) });
+}
+
+/** How many lines, taken in order, fit the count and the budget. At least one, if there is one. */
+function linesWithin(available: number, lineAt: (index: number) => string, limit: number, budget: number): number {
+  let bytes = 0, count = 0;
+  while (count < available && count < limit) {
+    bytes += Buffer.byteLength(clip(lineAt(count))) + 1;
+    if (bytes > budget && count > 0) break;
+    count += 1;
+  }
+  return count;
 }
 
 /**
