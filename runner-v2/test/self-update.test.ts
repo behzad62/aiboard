@@ -86,6 +86,67 @@ async function installedLayout(): Promise<{ dir: string; layout: InstallLayout }
 
 const pointer = (layout: InstallLayout, name: string) => readFile(join(layout.root, name), "utf8").then((value) => value.trim()).catch(() => undefined);
 
+/** The install still runs 0.1.0 with nothing new recorded, and versions/ holds no new version or staging directory. */
+async function assertNothingChanged(layout: InstallLayout, label = "nothing changed"): Promise<void> {
+  assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "previous"), await pointer(layout, "sequence")], ["0.1.0", undefined, "1"], label);
+  assert.deepEqual(await readdir(layout.versionsDirectory), ["0.1.0"], label);
+}
+
+// Production-shaped GitHub hosting: the signed manifest names releases/download links, the fallback uses the REST API.
+const githubPrefix = "https://github.com/behzad62/aiboard/releases/download/";
+const githubChannel: ReleaseChannelConfig = { ...config, manifestUrl: "https://aiboard.me/release/stable/manifest.json", artifactPrefix: githubPrefix };
+const githubApi = "https://api.github.com/repos/behzad62/aiboard";
+const assetHost = "https://release-assets.githubusercontent.com/github-production-release-asset/1268204606/asset?sig=abc&exp=123";
+const linuxAssetId = 723420152;
+
+function githubRelease(version: string, sequence: number) {
+  const fixture = release(version, sequence);
+  const manifest = JSON.parse(fixture.manifest.toString("utf8"));
+  for (const artifact of manifest.artifacts) artifact.url = `${githubPrefix}v${version}/aiboard-${version}-${artifact.target}.${artifact.format}`;
+  const bytes = Buffer.from(serializeManifest(manifest));
+  return {
+    manifest: bytes, signature: signManifestBytes(bytes, key.privateKey), archive: [...fixture.archives.values()][0]!,
+    link: `${githubPrefix}v${version}/aiboard-${version}-linux-x64.tar.gz`,
+    lookup: `${githubApi}/releases/tags/v${version}`,
+    asset: `${githubApi}/releases/assets/${linuxAssetId}`,
+    listing: {
+      tag_name: `v${version}`,
+      assets: [
+        ...RELEASE_TARGETS.map((target, index) => ({ id: target === "linux-x64" ? linuxAssetId : 1000 + index, name: `aiboard-${version}-${target}.${targetFormat(target)}`, state: "uploaded" })),
+        { id: 999, name: "manifest.json", state: "uploaded" },
+      ],
+    },
+  };
+}
+
+type Route = () => Response | Promise<Response>;
+const gatewayTimeout: Route = () => new Response("The server didn't respond in time.", { status: 504, headers: { "x-github-request-id": "C0DE:2A6F:1:2:3" } });
+const jsonResponse = (value: unknown) => new Response(JSON.stringify(value), { headers: { "content-type": "application/json; charset=utf-8" } });
+
+/** By default the releases/download link answers 504 and the API route works, as on 2026-11-08. */
+function fakeGithub(fixture: ReturnType<typeof githubRelease>, routes: { link?: Route; lookup?: Route; asset?: Route; download?: Route } = {}) {
+  const calls: string[] = [];
+  const headers = new Map<string, Headers>();
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(url);
+    headers.set(url, new Headers(init?.headers));
+    if (url === githubChannel.manifestUrl) return new Response(new Uint8Array(fixture.manifest));
+    if (url === `${githubChannel.manifestUrl}.sig`) return new Response(fixture.signature);
+    if (url === fixture.link) return (routes.link ?? gatewayTimeout)();
+    if (url === fixture.lookup) return (routes.lookup ?? (() => jsonResponse(fixture.listing)))();
+    if (url === fixture.asset) return (routes.asset ?? (() => new Response(null, { status: 302, headers: { location: assetHost } })))();
+    if (url === assetHost) return (routes.download ?? (() => new Response(new Uint8Array(fixture.archive))))();
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+  return { fetch: fetchImpl, calls, headers };
+}
+
+const githubUpdate = (layout: InstallLayout, fetchImpl: typeof fetch, messages: string[] = []) =>
+  ({ layout, config: githubChannel, fetch: fetchImpl, write: (message: string) => { messages.push(message); }, smoke: async () => undefined });
+
+const sharingViolation = (code: string) => Object.assign(new Error(`${code}: operation not permitted, rename`), { code });
+
 test("update verifies, smoke-checks and atomically switches; rollback returns without lowering the sequence", async () => {
   const { dir, layout } = await installedLayout();
   try {
@@ -254,6 +315,175 @@ test("update fails closed and leaves the active version untouched", async () => 
     // Offline: actionable message, nothing changed.
     const offline = (async () => { throw new TypeError("fetch failed"); }) as unknown as typeof fetch;
     await assert.rejects(runUpdateCommand([], { layout, config, fetch: offline, write: () => undefined }), /update_offline: .*nothing was changed/);
+    assert.equal(await pointer(layout, "current"), "0.1.0");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a GitHub releases/download link failing with 5xx, a timeout or a network error falls back to the GitHub API", async () => {
+  const fixture = githubRelease("0.2.0", 2);
+  const failures: [string, Route][] = [
+    ["HTTP 504", gatewayTimeout],
+    ["HTTP 503", () => new Response("unavailable", { status: 503 })],
+    ["network error", () => { throw new TypeError("fetch failed"); }],
+    ["timeout", () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); }],
+    ["interrupted body", () => new Response(new ReadableStream({ start(controller) { controller.error(new TypeError("terminated")); } }))],
+  ];
+  for (const [name, link] of failures) {
+    const { dir, layout } = await installedLayout();
+    try {
+      const github = fakeGithub(fixture, { link });
+      const messages: string[] = [];
+      await runUpdateCommand([], githubUpdate(layout, github.fetch, messages));
+      assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "previous"), await pointer(layout, "sequence")], ["0.2.0", "0.1.0", "0:2"], name);
+      assert.deepEqual(github.calls.slice(2), [fixture.link, fixture.lookup, fixture.asset, assetHost], name);
+      const lookup = github.headers.get(fixture.lookup)!;
+      assert.deepEqual([lookup.get("accept"), lookup.get("user-agent"), lookup.get("authorization")], ["application/vnd.github+json", "AIBoard-Runner/0.1.0", null], name);
+      assert.equal(github.headers.get(fixture.asset)!.get("accept"), "application/octet-stream", name);
+      assert.match(messages.join(""), /The GitHub download link failed \(.+\); trying the GitHub API/, name);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("when the link and the GitHub API both fail, update reports the link's own error and changes nothing", async () => {
+  const { dir, layout } = await installedLayout();
+  const fixture = githubRelease("0.2.0", 2);
+  const linkError = `update_download_failed: ${fixture.link} answered HTTP 504; nothing was changed.`;
+  const offline: Route = () => { throw new TypeError("fetch failed"); };
+  try {
+    const cases: { name: string; routes: Parameters<typeof fakeGithub>[1]; error: string; note: RegExp }[] = [
+      { name: "the release lookup answers 503", routes: { lookup: () => new Response("unavailable", { status: 503 }) }, error: linkError, note: /The GitHub API failed too \(HTTP 503\)/ },
+      { name: "the asset answers 502", routes: { asset: () => new Response("bad gateway", { status: 502 }) }, error: linkError, note: /The GitHub API failed too \(HTTP 502\)/ },
+      { name: "the release does not list the bundle", routes: { lookup: () => jsonResponse({ assets: [{ id: 1, name: "aiboard-0.2.0-linux-x64.zip" }] }) }, error: linkError, note: /did not list aiboard-0\.2\.0-linux-x64\.tar\.gz/ },
+      { name: "the release answer is not JSON", routes: { lookup: () => new Response("<html>busy</html>") }, error: linkError, note: /did not list aiboard-0\.2\.0-linux-x64\.tar\.gz/ },
+      { name: "offline", routes: { link: offline, lookup: offline }, error: "update_offline: Could not reach https://github.com (fetch failed). Check your connection and retry; nothing was changed.", note: /failed too \(fetch failed\)/ },
+    ];
+    for (const entry of cases) {
+      const github = fakeGithub(fixture, entry.routes);
+      const messages: string[] = [];
+      await assert.rejects(runUpdateCommand([], githubUpdate(layout, github.fetch, messages)), (error: Error) => { assert.equal(error.message, entry.error, entry.name); return true; });
+      assert.match(messages.join(""), entry.note, entry.name);
+      await assertNothingChanged(layout, entry.name);
+    }
+    // A 4xx answer is not transient, so the API is not tried.
+    const missing = fakeGithub(fixture, { link: () => new Response("Not Found", { status: 404 }) });
+    await assert.rejects(runUpdateCommand([], githubUpdate(layout, missing.fetch)), (error: Error) => {
+      assert.equal(error.message, `update_download_failed: ${fixture.link} answered HTTP 404; nothing was changed.`);
+      return true;
+    });
+    assert.ok(!missing.calls.some((url) => url.startsWith("https://api.github.com/")));
+    // A link that is not a GitHub release asset has no second route.
+    const local = release("0.2.0", 2);
+    const localCalls: string[] = [];
+    const localFetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      localCalls.push(url);
+      if (url === config.manifestUrl) return new Response(new Uint8Array(local.manifest));
+      if (url === `${config.manifestUrl}.sig`) return new Response(local.signature);
+      return gatewayTimeout();
+    }) as typeof fetch;
+    await assert.rejects(runUpdateCommand([], { layout, config, fetch: localFetch, write: () => undefined, smoke: async () => undefined }), /answered HTTP 504; nothing was changed/);
+    assert.equal(localCalls.length, 3);
+    await assertNothingChanged(layout);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("bytes from the GitHub API route are checked against the signed manifest like the link's", async () => {
+  const { dir, layout } = await installedLayout();
+  const fixture = githubRelease("0.2.0", 2);
+  const altered = Buffer.from(fixture.archive);
+  altered[altered.length - 1] ^= 0xff;
+  try {
+    for (const [name, served] of [["other bytes of the signed size", altered], ["a truncated bundle", fixture.archive.subarray(0, -1)]] as const) {
+      const github = fakeGithub(fixture, { download: () => new Response(new Uint8Array(served)) });
+      await assert.rejects(runUpdateCommand([], githubUpdate(layout, github.fetch)), /update_checksum_mismatch: .*nothing was installed/, name);
+      assert.ok(github.calls.includes(assetHost), name);
+      await assertNothingChanged(layout, name);
+    }
+    // The signed size still caps a download through the API.
+    const oversized = fakeGithub(fixture, { download: () => new Response(new Uint8Array(fixture.archive.length + 1)) });
+    const messages: string[] = [];
+    await assert.rejects(runUpdateCommand([], githubUpdate(layout, oversized.fetch, messages)), (error: Error) => {
+      assert.equal(error.message, `update_download_failed: ${fixture.link} answered HTTP 504; nothing was changed.`);
+      return true;
+    });
+    assert.match(messages.join(""), /The GitHub API failed too \(update_download_failed: \S+ is larger than expected/);
+    await assertNothingChanged(layout);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("on Windows a briefly held rename of the new version is retried with a short backoff", async () => {
+  const { dir, layout } = await installedLayout();
+  try {
+    const state = { release: release("0.2.0", 2), calls: [] as string[] };
+    let failures = ["EPERM", "EPERM"];
+    let attempts = 0;
+    const waits: number[] = [];
+    const runtime = {
+      layout, config, fetch: fetchFrom(state), write: () => undefined, smoke: async () => undefined, platform: "win32" as const,
+      sleep: async (ms: number) => { waits.push(ms); },
+      renameVersion: async (from: string, to: string) => {
+        attempts += 1;
+        const code = failures.shift();
+        if (code) throw sharingViolation(code);
+        await rename(from, to);
+      },
+    };
+    await runUpdateCommand([], runtime);
+    assert.equal(attempts, 3);
+    assert.equal(waits.length, 2);
+    assert.ok(waits[0]! > 0 && waits[1]! >= waits[0]!, `backoff ${waits.join(", ")}`);
+    assert.deepEqual([await pointer(layout, "current"), await pointer(layout, "previous"), await pointer(layout, "sequence")], ["0.2.0", "0.1.0", "0:2"]);
+    assert.deepEqual((await readdir(layout.versionsDirectory)).sort(), ["0.1.0", "0.2.0"], "the staging directory is gone");
+    // EBUSY and EACCES are retried the same way.
+    failures = ["EBUSY", "EACCES"];
+    attempts = 0;
+    waits.length = 0;
+    state.release = release("0.3.0", 3);
+    await runUpdateCommand([], runtime);
+    assert.deepEqual([attempts, waits.length, await pointer(layout, "current")], [3, 2, "0.3.0"]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a rename still held after the bounded retries fails cleanly and removes its staging directory", async () => {
+  const { dir, layout } = await installedLayout();
+  try {
+    const state = { release: release("0.2.0", 2), calls: [] as string[] };
+    let attempts = 0;
+    const waits: number[] = [];
+    const base = { layout, config, fetch: fetchFrom(state), write: () => undefined, smoke: async () => undefined, sleep: async (ms: number) => { waits.push(ms); } };
+    await assert.rejects(runUpdateCommand([], { ...base, platform: "win32", renameVersion: async () => { attempts += 1; throw sharingViolation("EPERM"); } }),
+      /update_version_busy: Windows kept a file of the new version busy \(EPERM: operation not permitted, rename\); the current version stays active/);
+    const total = waits.reduce((sum, ms) => sum + ms, 0);
+    assert.equal(attempts, waits.length + 1);
+    assert.ok(waits.length >= 3 && total >= 2_000 && total <= 5_000, `retried for a bounded few seconds (${waits.join(", ")})`);
+    assert.ok(waits.every((ms, index) => index === 0 || ms >= waits[index - 1]!), "the backoff never shortens");
+    await assertNothingChanged(layout);
+
+    // Other platforms and other errors fail at once, with the original error.
+    for (const [platform, code] of [["linux", "EPERM"], ["darwin", "EBUSY"], ["win32", "ENOSPC"]] as const) {
+      attempts = 0;
+      waits.length = 0;
+      await assert.rejects(runUpdateCommand([], { ...base, platform, renameVersion: async () => { attempts += 1; throw sharingViolation(code); } }), (error: Error) => {
+        assert.equal(error.message, `${code}: operation not permitted, rename`, `${platform} ${code}`);
+        return true;
+      });
+      assert.deepEqual([attempts, waits.length], [1, 0], `${platform} ${code}`);
+      await assertNothingChanged(layout, `${platform} ${code}`);
+    }
+
+    // Each retry first re-checks that staging is still the directory this update created; a replacement is left alone.
+    let replaced = "";
+    await assert.rejects(runUpdateCommand([], { ...base, platform: "win32", renameVersion: async (from: string) => {
+      if (!replaced) {
+        replaced = dirname(from);
+        await rename(replaced, `${replaced}-moved`);
+        await mkdir(replaced);
+        await writeFile(join(replaced, "user-file"), "keep");
+      }
+      throw sharingViolation("EPERM");
+    } }), /update_staging_invalid/);
+    assert.equal(waits.length, 1, "the replacement is found before a second attempt");
+    assert.equal(await readFile(join(replaced, "user-file"), "utf8"), "keep");
     assert.equal(await pointer(layout, "current"), "0.1.0");
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
