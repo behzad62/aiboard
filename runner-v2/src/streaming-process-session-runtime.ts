@@ -1566,9 +1566,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
             renewOwnedSessionLease(request.sessionId, undefined, facadeFence);
             return options.sessions.authorizeInteraction(operation);
           },
-          /** Renews this owner's lease (same fence check) without authorizing or consuming a grant. */
-          retainOwnership: () => {
-            renewOwnedSessionLease(request.sessionId, undefined, facadeFence);
+          /** Renews this owner's lease (same fence check), through `throughMs` when given, without authorizing or consuming a grant. */
+          retainOwnership: (throughMs?: number) => {
+            renewOwnedSessionLease(request.sessionId, throughMs === undefined ? undefined : clock().getTime() + throughMs, facadeFence);
           },
           write: async (
             authorization: SessionOperationAuthorization,

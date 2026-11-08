@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import type {
   ArchiveProjectMemoryInput,
@@ -57,7 +58,7 @@ export class SqliteProjectMemoryStore implements ProjectMemoryStore, DefectFindi
   ) {
     this.readOnly = options.readOnly ?? false;
     if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    this.database = new DatabaseSync(sqliteDatabaseLocation(databasePath), { readOnly: this.readOnly });
     if (this.readOnly) return;
     this.database.exec(`
       PRAGMA journal_mode = WAL;

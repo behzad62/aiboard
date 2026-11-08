@@ -21,6 +21,7 @@ import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
 import { resolveProtectedLocations, type ProtectedLocations } from "./protected-locations.js";
 import { createRemotePathGuard, RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
 import { ToolBroker } from "./tool-broker.js";
+import { findWindowsPathTooLongError } from "./windows-path-limits.mjs";
 
 export interface RemoteToolRuntimeOptions {
   readonly host: ExecutionHost;
@@ -215,7 +216,14 @@ export class RemoteToolRuntime {
     if (isMutating(name, args) && !this.options.admitEffect) {
       return failure(callId, name, "effect_admission_required", "Durable remote effect admission is unavailable.");
     }
-    const bound = await this.binding(principal);
+    let bound: BoundRemote;
+    try { bound = await this.binding(principal); }
+    catch (error) {
+      // No tool ran. Say why, rather than leaving the job as a bare outcome_unknown.
+      const tooLong = findWindowsPathTooLongError(error);
+      if (tooLong) return failure(callId, name, tooLong.code, tooLong.message);
+      throw error;
+    }
     // Binding and recovery can await; revocation and narrowing must win before dispatch.
     principal = this.options.principals.find(identity)!;
     if (!principal || principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
@@ -324,7 +332,11 @@ async function createGovernedBinding(
       ...(localMcpDepth !== undefined ? { approve: async (request) => !request.outsideWorkspace } : {}) });
     const tools = [
       ...createFilesystemTools({ artifacts: options.host.artifacts, pathGuard }), ...createGitTools(binding.git),
-      ...createProcessTools({ execution: binding.commandExecution }), ...createManagedProcessTools(binding.managedProcesses),
+      ...createProcessTools({ execution: binding.commandExecution, external: {
+        retainOutput: (context, output) => binding.managedProcesses.retainOutput(context, output),
+        readArtifact: (artifactId) => options.host.artifacts.get(artifactId),
+      } }),
+      ...createManagedProcessTools(binding.managedProcesses, { external: true }),
       ...createImageTools({ artifacts: options.host.artifacts, pathGuard }),
     ];
     for (const tool of tools) if (allowed.has(tool.definition.name) && tool.definition.lifecycle !== true) broker.register(tool);
@@ -410,6 +422,8 @@ export class LocalMcpToolSession {
       if (!definition) throw new Error(`Local MCP tool ${name} is unavailable.`);
       const schema = structuredClone(definition.inputSchema) as { type: "object"; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown };
       if (name === "process_read_output") schema.properties = { ...schema.properties, view: { enum: ["output", "snapshot"] } };
+      // The hash has a default, the revision this session last read or wrote, and a missing one is never sent as an empty check.
+      if (name === "files_patch") schema.required = schema.required?.filter((key) => key !== "expectedSha256");
       if (name === "image_inspect") {
         delete schema.properties?.artifactHash;
         schema.required = ["path"];

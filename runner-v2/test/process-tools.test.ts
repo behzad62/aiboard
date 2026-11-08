@@ -272,3 +272,34 @@ function text(result: ToolResult): string {
     .map((block) => block.text)
     .join("\n");
 }
+
+test("a client's command runs to its own limit, past the broker's, and Build's still stops at the broker's", async (t) => {
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-limit-"));
+  const external = { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() };
+  const broker = (client: boolean) => {
+    const made = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, toolTimeoutMs: 300 });
+    for (const tool of createProcessTools({ execution: createTestOneShotCommandExecutor(t), ...(client ? { external } : {}) })) made.register(tool);
+    return made;
+  };
+  const slow = { command: process.execPath, args: ["-e", "setTimeout(() => console.log('done'), 1500)"], timeoutMs: 10_000 };
+  try {
+    // Build first, so its stopped command is gone before the workspace is removed.
+    const build = await invoke(broker(false), "build-slow", slow);
+    assert.equal(build.error?.code, "tool_timeout", JSON.stringify(build));
+    const client = await invoke(broker(true), "client-slow", slow);
+    assert.equal(client.isError, false, JSON.stringify(client));
+    assert.match(text(client), /done/u, "the result gets back, output and all");
+    const [tool] = createProcessTools({ external });
+    assert.ok(tool!.timeoutMs!({ command: "x", timeoutMs: 99_000_000 }) <= 30 * 60_000 + 120_000, "the Runner's maximum still holds");
+    assert.ok(tool!.timeoutMs!({ command: "x" }) > 120_000, "and a command stopped at the default limit still has time to report");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("Build's process.run ignores a stray search, as it did before search existed, and a client's is checked", () => {
+  const [build] = createProcessTools();
+  assert.equal(build!.validate({ command: "node", search: { pattern: "(a+)+$", regex: true } }).ok, true);
+  const [client] = createProcessTools({ external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
+  assert.equal(client!.validate({ command: "node", search: { pattern: "(a+)+$", regex: true } }).ok, false);
+});

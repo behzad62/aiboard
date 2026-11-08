@@ -95,6 +95,26 @@ test("managed poll and list by the live owner renew a lease that lapsed while it
   }
 }));
 
+test("a long wait keeps the owner's lease for as long as it waits", { timeout: 120_000 }, async t => withHost(t, async f => {
+  // Ledgerline run: a read arrived with 23 s of lease left, too much for the 20 s renew window, waited 30 s and
+  // then failed its own post-wait check with "Streaming session ownership lease has expired".
+  const started = metadata(await f.invoke("process.start", {}));
+  const session = f.run.streamingState.listSessionIds()[0]!;
+  const lease = () => Date.parse(f.run.streamingState.readSession(session)!.leaseExpiresAt);
+  t.mock.timers.enable({ apis: ["Date"], now: lease() - 25_000 });
+  try {
+    const waitMs = 30_000, begun = Date.now();
+    const read = f.invoke("process.read_output", { processId: started.processId, waitMs, until: { exit: true } });
+    // Date is frozen here, so this counts real attempts: the lease should reach the wait's end as the wait begins.
+    for (let attempt = 0; attempt < 80 && lease() < begun + waitMs; attempt++) await new Promise(resolve => setTimeout(resolve, 25));
+    t.mock.timers.setTime(begun + waitMs + 1);
+    assert.equal((await f.outputMetadata(await read)).status, "running");
+    assert.equal(metadata(await f.invoke("process.signal", { processId: started.processId, signal: "SIGTERM" })).status, "stopped");
+  } finally {
+    t.mock.timers.reset();
+  }
+}));
+
 test("managed natural exit retains the exact exit code and final output after shared cleanup", { timeout: 120_000 }, async t => withHost(t, async f => {
   const started = metadata(await f.invoke("process.start", {}));
   await writeFile(f.quit, "exit only this owned fixture");

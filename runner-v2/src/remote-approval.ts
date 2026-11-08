@@ -51,7 +51,7 @@ export function commandApprovalSummary(jobId: string, code: string, toolName: st
   if (!APPROVAL_TOOLS.has(toolName) || !isRecord(payload)) throw new Error("Invalid approval payload.");
   const launch = toolName === "process.start" || toolName === "process.run";
   const allowed = toolName === "process.start" ? ["command", "args", "cwd", "env", "interactive", "until", "waitMs", "render"] :
-    toolName === "process.run" ? ["command", "args", "shell", "script", "cwd", "env", "timeoutMs", "render"] :
+    toolName === "process.run" ? ["command", "args", "shell", "script", "cwd", "env", "timeoutMs", "render", "search"] :
     toolName === "process.write_stdin" ? ["processId", "writeId", "data", "appendNewline", "closeInput"] :
     toolName === "process.interact" ? ["processId", "data", "appendNewline", "closeInput", "until", "waitMs", "cursor", "stream", "maxBytes", "render", "lines"] :
       ["processId", "signal"];

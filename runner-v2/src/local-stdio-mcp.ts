@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 import type { Readable, Writable } from "node:stream";
 import { Server, type Tool, type Transport } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
@@ -60,7 +61,7 @@ export class LocalMcpSessions {
     this.options = { ...options, policyIdentity,
       policy: options.policy ?? (() => { const identity = policyIdentity(); return identity && this.principals ? this.principals.policy(identity) : DEFAULT_REMOTE_DEVICE_POLICY; }),
       ...(options.auditStore || this.principals ? { auditStore: options.auditStore ?? this.principals!.auditStore } : {}) };
-    this.database = new DatabaseSync(options.statePath);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(options.statePath));
     this.database.exec(`PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;
       CREATE TABLE IF NOT EXISTS local_mcp_owners (
         run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, principal_id TEXT NOT NULL UNIQUE,

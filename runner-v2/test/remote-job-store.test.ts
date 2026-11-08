@@ -160,6 +160,26 @@ test("running cancellation requires evidence, and completion can win the race", 
   }
 }));
 
+test("a cancellation with an unknown effect keeps what the tool returned; a proven no-effect one keeps nothing", async () => withStore((h) => {
+  const evidence = Buffer.from(JSON.stringify({ content: [{ type: "text", text: "STDOUT\nprinted before the stop" }] }));
+  const cancelled = inState(h, "running", "cancel-with-evidence");
+  h.store.requestCancel(identity, cancelled.jobId, "cancel-evidence", "trace-evidence");
+  const uncertain = h.store.settleCancelled(identity, cancelled.jobId, "effect_outcome_unknown", { inline: evidence });
+  assert.equal(uncertain.state, "outcome_unknown");
+  assert.equal(uncertain.cancellation?.effect, "effect_outcome_unknown");
+  assert.deepEqual(h.store.result(identity, cancelled.jobId), { state: "outcome_unknown", inline: evidence });
+  // Evidence settles nothing: the key still returns the same unknown job, and only a reconciliation resolves it.
+  const retry = h.store.admit(identity, JSON.stringify(h.request("cancel-with-evidence")));
+  assert.equal(retry.created, false);
+  assert.equal(retry.job.state, "outcome_unknown");
+
+  const stopped = inState(h, "running", "no-effect-with-result");
+  h.store.requestCancel(identity, stopped.jobId, "cancel-no-effect-result", "trace-no-effect-result");
+  h.store.recordStop(identity, stopped.jobId, "verified");
+  assert.throws(() => h.store.settleCancelled(identity, stopped.jobId, "no_effect", { inline: evidence }), isCode("invalid_request"));
+  assert.equal(h.store.getJob(identity, stopped.jobId)?.state, "running");
+}));
+
 test("cancel on every terminal outcome preserves its proven state", async () => withStore((h) => {
   for (const state of ["completed", "failed", "cancelled", "outcome_unknown", "blocked_policy", "blocked_quota"] as const) {
     const job = inState(h, state, "terminal-cancel-" + state);

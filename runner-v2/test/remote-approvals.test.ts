@@ -401,6 +401,9 @@ test("approval summaries are bounded, escaped and carry no input data or environ
   assert.doesNotMatch(control.commandLine, /[\u0000-\u001f\u007f-\u009f\u202e]/);
   assert.match(control.commandLine, /\\u001b\[31mred\\u0007\\u000anext\\u202e/);
   assert.doesNotMatch(JSON.stringify(control), /do-not-show|SECRET/);
+  // What a command is searched for afterwards does not change what is being approved.
+  const searched = commandApprovalSummary("job-1b", "ABC123", "process.run", { command: "node", args: ["noisy.mjs"], search: { pattern: "NEEDLE" } }, tmpdir());
+  assert.equal(searched.commandLine, "node noisy.mjs");
   const stdin = commandApprovalSummary("job-2", "ABC123", "process.write_stdin",
     { processId: "p-1", writeId: "w-1", data: "password123\n" }, tmpdir());
   assert.equal(stdin.commandLine, "");

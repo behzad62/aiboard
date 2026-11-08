@@ -195,7 +195,7 @@ test("real broker binds remote grants and preserves exact managed-process owners
     const reconnected = reopened.getOrCreate({ ...alice });
     assert.deepEqual(reconnected, owner); reopened.close();
     assert.equal(json(await runtime.invoke(reconnected.identity, "process.poll", { processId })).processId, processId);
-    const output = json(await runtime.invoke(reconnected.identity, "process.read_output", { processId, stream: "stdout", waitMs: 10_000 }));
+    const output = (await runtime.invoke(reconnected.identity, "process.read_output", { processId, stream: "stdout", waitMs: 10_000 })).content;
     assert.match(JSON.stringify(output), /ready/);
     assert.equal(json(await runtime.invoke(reconnected.identity, "process.write_stdin", { processId, writeId: "own", data: "hello\n" })).status, "acknowledged");
     assert.equal((json(await runtime.invoke(reconnected.identity, "process.list", {})).processes as unknown[]).length, 1);

@@ -1249,7 +1249,9 @@ async function successRevision(
   diagnostics?: Pick<LanguageIntelligenceProvider, "diagnostics">,
   notice?: string,
 ): Promise<ToolExecutionOutput> {
-  const secretNotice = submissionSecretNotice(displayPath(context, path), bytes.toString("utf8"));
+  // Only Build's own agents submit their work. A remote or local MCP client has no submit_task to warn about.
+  const external = context.actor?.role === "remote" || context.actor?.role === "local_mcp";
+  const secretNotice = external ? undefined : submissionSecretNotice(displayPath(context, path), bytes.toString("utf8"));
   const notices = [notice, secretNotice].filter((value): value is string => value !== undefined);
   const metadata: Record<string, unknown> = {
     path: displayPath(context, path),

@@ -380,6 +380,27 @@ test("fs.patch names no-op edits and refuses a batch that changes nothing; write
   }
 });
 
+test("a client with no submit_task is not warned about one", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-fs-external-secret-")));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const broker = brokerWithFilesystem(workspace, new ArtifactStore(join(root, "artifacts")));
+  const write = (role: "remote" | "local_mcp" | "subagent", path: string) => broker.invoke(
+    { type: "tool_call", callId: "write_" + role, name: "fs.write", arguments: { path, content: 'const DEVICE_TOKEN = "dt_live_0123456789abcdefABCDEF";\n' } },
+    { runId: "run_1", sessionId: "session_1", actor: { role, id: role } });
+  try {
+    for (const role of ["remote", "local_mcp"] as const) {
+      const written = await write(role, role + ".ts");
+      assert.equal(written.isError, false, JSON.stringify(written));
+      assert.doesNotMatch(JSON.stringify(written), /submit_task/);
+    }
+    // A subagent's writes land in its worker's change set, which submit_task does check.
+    assert.match(JSON.stringify(await write("subagent", "subagent.ts")), /submit_task will refuse/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("fs.stat reports a workspace link and its target instead of refusing it", async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-fs-stat-link-")));
   const workspace = join(root, "workspace");

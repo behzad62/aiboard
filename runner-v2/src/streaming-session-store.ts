@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 import { parseEvidenceContinuation, type EvidenceContinuation } from "./evidence-continuation.js";
 import { parseExecutionLifecycleAttestation, parseExecutionSafetyCapabilities, type ExecutionLifecycleAttestation, type ExecutionSafetyCapabilities } from "./execution-safety-contracts.js";
 
@@ -534,7 +535,7 @@ export function openSqliteStreamingSessionStore(
   }
   const readOnly = options.readOnly === true;
   if (!readOnly) mkdirSync(dirname(path), { recursive: true });
-  const database = new DatabaseSync(path, { readOnly });
+  const database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly });
   if (!readOnly) {
     database.exec(
       "CREATE TABLE IF NOT EXISTS streaming_sessions (" +
