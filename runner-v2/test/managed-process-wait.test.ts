@@ -104,7 +104,7 @@ test("summarizeOutput keeps small output and condenses large output around diagn
   assert.deepEqual(summary.errorLines.map((entry) => entry.line), [500, 600]);
   const text = summary.text.split("\n");
   assert.equal(text[0], lines[0]);
-  assert.equal(text[40], "… (880 lines omitted; read the full output by cursor or lines) …");
+  assert.equal(text[40], "… (880 lines omitted; run a narrower command, or send the output to a file, to see them) …");
   assert.equal(text[41], "Diagnostics from omitted lines:");
   assert.equal(text[42], `L500: ${lines[500]}`);
   assert.equal(text.at(-2), lines[999]);

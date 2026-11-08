@@ -276,6 +276,9 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
         ? await run.observeProcessUsage({ authorization, assertion }).catch(() => undefined) : undefined;
       let waited: ManagedOutputEvidence["waited"];
       for (;;) {
+        // The renew window is shorter than the longest wait, so a read that landed just outside it used to wait
+        // past its own lease and then fail with "ownership lease has expired" (Ledgerline run).
+        entries.get(target.processId)?.facade?.retainOwnership(Math.max(0, deadline - Date.now()));
         const observation = await run.streamingRuntime.observeOutput({ authorization, assertion });
         if (context.signal?.aborted) throw cancelled();
         run.sessionAuthority.assertOperationAuthorization(authorization, assertion);
