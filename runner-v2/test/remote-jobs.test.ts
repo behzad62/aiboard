@@ -326,6 +326,67 @@ test("a managed-start cancellation result alone does not prove a process stopped
   assert.equal(job.cancellation?.effect, "effect_outcome_unknown");
 });
 
+/** process.run's result for a command it stopped: what it printed, and the processId that reads the rest. */
+const stoppedRun = (name: string, code: "process_timeout" | "process_cancelled"): ToolResult => ({
+  callId: "fixture", toolName: name, isError: true, error: { code, message: "Process exceeded 50 ms." },
+  content: [{ type: "json", value: { exitCode: null, error: "Process exceeded 50 ms.", timedOut: true, processId: "run-fixture", stdoutBytes: 8192, stderrBytes: 0 } },
+    { type: "text", text: "STDOUT\nprinted before the stop" }],
+});
+
+function storedResult(data: unknown): ToolResult {
+  const page = data as { inline?: string; encoding?: string };
+  assert.equal(page.encoding, "base64", "no stored result: " + JSON.stringify(data));
+  return JSON.parse(Buffer.from(page.inline!, "base64").toString("utf8")) as ToolResult;
+}
+
+test("a command stopped at its timeout keeps what it printed, its effect stays unknown, and its key never runs it again", async (t) => {
+  const h = await harness(t);
+  h.setWork(async (name) => ({ result: stoppedRun(name, "process_timeout"), brokerInvoked: true }));
+  await h.connect();
+  const run = { toolId: "process_run", operationClass: "write", idempotencyKey: "run-once", payload: { command: "fixture", timeoutMs: 50 } };
+  const request = h.request(run);
+  const jobId = (await h.response(request)).response.jobId!;
+  await h.waitState(request, jobId, "outcome_unknown");
+  const read = await h.response(h.request({ toolId: "jobs_result", payload: { jobId } }));
+  assert.equal(read.response.status, "outcome_unknown");
+  assert.equal(read.response.errorCode, "outcome_unknown");
+  assert.equal(read.response.uncertainty, "effect_outcome_unknown");
+  assert.equal((read.data as { state: string }).state, "outcome_unknown");
+  const stored = storedResult(read.data);
+  assert.deepEqual(stored.content, stoppedRun("process.run", "process_timeout").content);
+  assert.equal(stored.error?.code, "process_timeout");
+  const status = await h.response(h.request({ toolId: "jobs_status", payload: { jobId } }));
+  assert.equal((status.data as { job: { state: string } }).job.state, "outcome_unknown");
+  const retry = await h.response(h.request(run));
+  assert.equal(retry.response.jobId, jobId);
+  assert.equal(retry.response.status, "outcome_unknown");
+  assert.equal(h.calls.length, 1);
+});
+
+test("a cancelled command keeps what it printed, and its stop and effect stay unverified", async (t) => {
+  // The grace is long, so only the dispatch's own settlement can settle the job.
+  const h = await harness(t, { grace: 2_000 });
+  const started = deferred();
+  h.setWork(async (name, signal) => {
+    started.resolve();
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    return { result: stoppedRun(name, "process_cancelled"), brokerInvoked: true };
+  });
+  await h.connect();
+  const request = h.request({ toolId: "process_run", operationClass: "write", payload: { command: "fixture" } });
+  const jobId = (await h.response(request)).response.jobId!;
+  await started.promise;
+  await h.response(h.request({ toolId: "jobs_cancel", operationClass: "write", payload: { jobId } }));
+  await h.waitState(request, jobId, "outcome_unknown");
+  const job = h.admission.view({ accountId: ACCOUNT, clientId: CLIENT, deviceId: h.device.deviceId }, jobId).job;
+  assert.equal(job.cancellation?.stop, "unverified");
+  assert.equal(job.cancellation?.effect, "effect_outcome_unknown");
+  const read = await h.response(h.request({ toolId: "jobs_result", payload: { jobId } }));
+  assert.equal(read.response.status, "outcome_unknown");
+  assert.equal(storedResult(read.data).error?.code, "process_cancelled");
+  assert.match(JSON.stringify(storedResult(read.data).content), /printed before the stop/u);
+});
+
 test("plugin failures preserve uncertainty after cancellation and an unknown remote outcome", async (t) => {
   const started = deferred();
   let calls = 0;

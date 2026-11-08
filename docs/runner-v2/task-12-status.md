@@ -1,5 +1,14 @@
 # Runner V2 Task 12 — Durable Gate Status
 
+## 2026-11-08 — Windows Job bulk output re-attested after every 256 KiB window (branch `claude/runner-windows-test-fixes`)
+
+Not gate work. It was found because a Windows test used 24.4 s of its 25 s command limit (`process-tools.test.ts`, 65 MiB through the production graph).
+
+- **Measured.** 65 MiB crosses the Job channel as 260 full 256 KiB windows. Each window takes a fenced read and a fenced ACK, and the owned fence lock alone costs about 21 ms per effect on a local PC. While output flowed, `waitForTerminal` also re-attested (a fenced reconcile) after nearly every window: 134 reconciles, 5.3 s of 24 s.
+- **Changed.** While a poll fills the whole window, the terminal wait drains the next window instead of re-attesting. It still re-attests at least once a second (`WINDOWS_JOB_DRAIN_REATTEST_MAX_MS`). Every read and ACK still reloads the durable fence and authenticates supervisor status, a short read re-attests as before, and the settlement path is unchanged. 65 MiB now takes 18.7 s with 19 reconciles. No deadline changed.
+- **Floor.** Two fenced effects per window remain, about 4 MB/s here. Going faster needs a larger replay window or a combined ACK-and-read effect. Both change the channel protocol and need their own review.
+- **Not changed.** `readSupervisorStatus` reads all of `supervisor.jsonl` on every call, and the supervisor appends a line per 16 KiB chunk and per ACK. Status reads therefore grow with output: 1.7 MB and about 3.5 ms per read at 65 MiB.
+
 ## 2026-11-06 — Portable channel idle polling starved the Windows process inventory (branch `claude/runner-first-inventory`)
 
 Not gate work, but it changes what is known about Windows slow-runner failures.

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import { RemoteAuditStore } from "./remote-audit-store.js";
 
@@ -58,7 +59,7 @@ export class RemotePrincipalStore {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.auditStore = auditStore ?? new RemoteAuditStore(join(dirname(path), "remote-audit.sqlite"));
     this.ownsAuditStore = auditStore === undefined;
-    this.database = new DatabaseSync(path);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(path));
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS remote_principals (
@@ -78,7 +79,7 @@ export class RemotePrincipalStore {
     this.policyTable = devicePolicyPath ? "remote_device.remote_device_policy" : "remote_device_policy";
     if (devicePolicyPath) {
       mkdirSync(dirname(devicePolicyPath), { recursive: true, mode: 0o700 });
-      this.database.prepare("ATTACH DATABASE ? AS remote_device").run(devicePolicyPath);
+      this.database.prepare("ATTACH DATABASE ? AS remote_device").run(sqliteDatabaseLocation(devicePolicyPath));
       this.database.exec(`CREATE TABLE IF NOT EXISTS remote_device.remote_device_policy (
         account_id TEXT NOT NULL, device_id TEXT NOT NULL, shell INTEGER NOT NULL, approvals INTEGER NOT NULL,
         read_only INTEGER NOT NULL, only_here INTEGER NOT NULL, audit INTEGER NOT NULL, narrowed_at TEXT,
@@ -158,7 +159,7 @@ export class RemotePrincipalStore {
   static readDevicePolicy(path: string, identity: VerifiedRemoteIdentity): { readonly policy: Readonly<RemoteDevicePolicy>; readonly fromDefaults: boolean } {
     if (!isAbsolute(path)) throw new Error("Remote device policy path must be absolute.");
     const verified = checkedIdentity(identity);
-    const database = new DatabaseSync(path, { readOnly: true });
+    const database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     try {
       const row = database.prepare(`SELECT shell, approvals, read_only, only_here, audit FROM remote_device_policy
         WHERE account_id = ? AND device_id = ?`).get(verified.accountId, verified.deviceId) as unknown as PolicyRow | undefined;

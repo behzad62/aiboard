@@ -97,8 +97,9 @@ test("process family production graph continues truthfully when private spill se
       command: process.execPath, args: ["-e", "process.stdout.write('z'.repeat(256*1024))"],
     });
     assert.equal(result.isError, false);
-    assert.equal((json(result) as { outputLossy: boolean }).outputLossy, true);
-    assert.match(text(result), /runner output lossy/);
+    assert.equal((json(result) as { outputLossy: boolean }).outputLossy, true, "the injected spill-root fault must leave the output lossy");
+    // Name the injected fault, so a fixture that stops injecting it fails here instead of passing on another loss.
+    assert.match(text(result), /\[runner output lossy: spill_root_invalid\]/);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

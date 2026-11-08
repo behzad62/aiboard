@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import type { ToolResult } from "./agent-contracts.js";
 import { initializeRemoteAdmissionSchema } from "./remote-admission-schema.js";
@@ -148,7 +149,7 @@ export class RemoteAdmissionStore {
     this.key = Buffer.from(storageKey);
     this.cursorKey = createHmac("sha256", this.key).update("remote-admission-cursor-v1").digest();
     mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 });
-    this.database = new DatabaseSync(databasePath);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(databasePath));
     try {
       this.database.exec("PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;");
       initializeRemoteAdmissionSchema(this.database, this.key, this.resultTtlMs);
@@ -458,7 +459,8 @@ export class RemoteAdmissionStore {
     effect: "no_effect" | "known" | "effect_outcome_unknown", result?: RemoteJobResult): RemoteJob {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);
-    if (!["no_effect", "known", "effect_outcome_unknown"].includes(effect) || (result && effect !== "known")) {
+    // A result is what the tool returned: proof of a known effect, or evidence while the effect is unknown. No effect has none.
+    if (!["no_effect", "known", "effect_outcome_unknown"].includes(effect) || (result && effect === "no_effect")) {
       throw new RemoteAdmissionError("invalid_request", "Invalid cancellation settlement.");
     }
     return this.transaction(() => {

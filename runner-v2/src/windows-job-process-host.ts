@@ -9,6 +9,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { recoverRevokedOwnedFenceLock, withOwnedFenceLock } from "./owned-fence-lock.mjs";
+import { assertUsableWorkingDirectory, windowsNativeFilePath } from "./windows-path-limits.mjs";
 
 import type { BackpressuredOutputMetadata } from "./interactive-process-channel.js";
 
@@ -441,6 +442,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   async launchOwned(input: WindowsJobLaunchRequest): Promise<WindowsJobProcessSnapshot> {
     if (this.platform !== "win32" || process.platform !== "win32")
       throw new WindowsJobHostError("process_containment_unavailable", "Windows Job containment is unavailable on this platform.");
+    assertUsableWorkingDirectory(input.workingDirectory, "win32");
     // PX-2c: claim the pre-started spare when one is waiting. Any miss, death,
     // staleness, or identity failure returns null and the call starts the
     // normal way below, exactly as today.
@@ -492,8 +494,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // Add-Type compile.
     try {
       await writeSupervisorConfig(launcher, JSON.stringify({
-        processId, token, statusPath, stdoutPath: record.stdoutPath, stderrPath: record.stderrPath,
-        eventPath: join(processDirectory, "job-events.jsonl"),
+        processId, token, statusPath, stdoutPath: windowsNativeFilePath(record.stdoutPath), stderrPath: windowsNativeFilePath(record.stderrPath),
+        eventPath: windowsNativeFilePath(join(processDirectory, "job-events.jsonl")),
         recordPath: this.containedProcessPath(processId, ".json"),
         command: input.command, args: [...input.args], cwd: record.cwd,
         env: { ...input.environment }, stopDeadlineMs: this.stopDeadlineMs, interactive: input.interactive === true,
@@ -618,8 +620,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     const idleTimeoutMs = this.spareOptions.idleTimeoutMs;
     try {
       await writeSupervisorConfig(launcher, JSON.stringify({
-        processId, token, statusPath, stdoutPath: record.stdoutPath, stderrPath: record.stderrPath,
-        eventPath: join(processDirectory, "job-events.jsonl"),
+        processId, token, statusPath, stdoutPath: windowsNativeFilePath(record.stdoutPath), stderrPath: windowsNativeFilePath(record.stderrPath),
+        eventPath: windowsNativeFilePath(join(processDirectory, "job-events.jsonl")),
         recordPath: this.containedProcessPath(processId, ".json"),
         stopDeadlineMs: this.stopDeadlineMs, interactive: true,
         maxPollBytes: this.maxPollBytes,

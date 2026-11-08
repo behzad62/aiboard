@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { createWindowsJobProcessChannelProvider, type WindowsJobChannelAuthority } from "../src/windows-job-process-channel.js";
+import { createWindowsJobProcessChannelProvider, WINDOWS_JOB_DRAIN_REATTEST_MAX_MS, type WindowsJobChannelAuthority } from "../src/windows-job-process-channel.js";
 import type { BackpressuredOutputSettlement } from "../src/interactive-process-channel.js";
 import type { ProcessBackendBinding } from "../src/process-backend.js";
 
@@ -151,6 +151,49 @@ test("input returns an idle Job channel to the fast poll cadence", async () => {
   } finally { await f.channel.detach(); }
 });
 
+test("a Job terminal wait drains full output windows without re-attesting between them", async () => {
+  const f = await drainFixture({ windows: 8 });
+  try {
+    const delivered: Buffer[] = [];
+    f.channel.subscribeBackpressuredOutput(async (metadata, bytes) => { delivered.push(Buffer.from(bytes)); return metadata; });
+    assert.deepEqual(await f.channel.waitForTerminal(), { state: "exited", exitCode: 0 });
+    assert.equal(Buffer.concat(delivered).equals(f.bytes), true, "every window is delivered and acknowledged in order");
+    // Re-attesting after every poll cost one fenced reconcile per window the wait drains: 7 here.
+    assert.equal(f.state.reattests, 1, "only the short read after the last full window re-attests");
+  } finally { await f.channel.detach(); }
+});
+
+test("a Job terminal wait still re-attests at least once a second while output fills every window", async () => {
+  const f = await drainFixture({ windows: 9, clockStepMs: WINDOWS_JOB_DRAIN_REATTEST_MAX_MS * 0.6 });
+  try {
+    f.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+    assert.deepEqual(await f.channel.waitForTerminal(), { state: "exited", exitCode: 0 });
+    // The wait drains 8 full windows, each read moving the clock 0.6 s: 4.8 s of sustained output.
+    assert.ok(f.state.reattests >= 4, `a full-window drain must still re-attest at least once a second: ${f.state.reattests}`);
+    assert.ok(f.state.reattests < 8, `full windows must not each re-attest: ${f.state.reattests}`);
+  } finally { await f.channel.detach(); }
+});
+
+test("a Job terminal wait re-attests after every full window while the clock steps back", async () => {
+  const f = await drainFixture({ windows: 8, clockStepMs: -WINDOWS_JOB_DRAIN_REATTEST_MAX_MS });
+  try {
+    f.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+    assert.deepEqual(await f.channel.waitForTerminal(), { state: "exited", exitCode: 0 });
+    assert.equal(f.state.reattests, 7, "a negative interval since the last re-attestation cannot extend the drain");
+  } finally { await f.channel.detach(); }
+});
+
+test("a Job terminal wait that drains without re-attesting still refuses a stale fence", async () => {
+  const f = await drainFixture({ windows: 8 });
+  try {
+    let windows = 0;
+    f.channel.subscribeBackpressuredOutput(async (metadata) => { if (++windows === 3) f.state.stale = true; return metadata; });
+    await assert.rejects(f.channel.waitForTerminal(), /stale fence/);
+    assert.equal(f.state.reattests, 0, "the next fenced ACK refuses the stale fence; no re-attestation was needed to catch it");
+    assert.equal(f.state.acknowledged, 2 * f.window, "the window delivered under the stale fence is never acknowledged");
+  } finally { await f.channel.detach(); }
+});
+
 async function settle(channel: unknown, deadlineAt: number): Promise<BackpressuredOutputSettlement> {
   const candidate = channel as { settleBackpressuredOutput?: (deadlineAt: number) => Promise<BackpressuredOutputSettlement> };
   return candidate.settleBackpressuredOutput ? await candidate.settleBackpressuredOutput(deadlineAt) : { status: "blocked", reason: "outcome_unknown" };
@@ -183,4 +226,38 @@ async function fixture() {
     }) };
   const channel = await createWindowsJobProcessChannelProvider(options).acquire({} as ProcessBackendBinding, fence);
   return { channel, state };
+}
+
+/** A finished workload with `windows` full replay windows of stdout still retained. */
+async function drainFixture(options: { windows: number; clockStepMs?: number }) {
+  const window = 16; const bytes = Buffer.alloc(window * options.windows, 0x61);
+  const state = { now: 1000, acknowledged: 0, reattests: 0, stale: false };
+  const owner = { runId: "drain-run", sessionId: "drain-session" }; const fence = { ownerId: "drain-owner", fencingToken: 1 };
+  const startedAt = "2026-11-08T00:00:00.000Z";
+  const exact = () => { if (state.stale) throw new Error("synthetic stale fence"); };
+  // Mirrors native tryMarkStopped: the job reports stopped only once every retained byte is acknowledged.
+  const settled = () => state.acknowledged === bytes.length;
+  const snapshot = () => ({ processId: "job", pid: 42, status: settled() ? "stopped" as const : "running" as const, exitCode: settled() ? 0 : null,
+    signal: null, startedAt, updatedAt: startedAt, stdout: "", stderr: "", ownershipReleased: settled() });
+  const service = {
+    claimOwnedFence: async () => { exact(); },
+    attachOwnedChannel: async () => ({ nextSequence: 1, inputClosed: false, outputOffsets: { stdout: 0, stderr: 0 }, outputSequences: { stdout: 0, stderr: 0 }, snapshot: snapshot() }),
+    readOwnedOutput: async (_id: string, _owner: unknown, offsets: { stdout: number }, _fence: unknown, maximumBytes: number) => {
+      exact(); state.now += options.clockStepMs ?? 0;
+      const stdout = bytes.subarray(offsets.stdout, offsets.stdout + maximumBytes);
+      return { stdout, stderr: new Uint8Array(), next: { stdout: offsets.stdout + stdout.byteLength, stderr: 0 } };
+    },
+    acknowledgeOwnedOutput: async (_id: string, _owner: unknown, _fence: unknown, _stream: string, endOffset: number) => { exact(); state.acknowledged = endOffset; },
+    reconcileOwned: async () => { exact(); return snapshot(); },
+    waitOwnedStatusChange: async () => undefined,
+  } as unknown as WindowsJobChannelAuthority["service"];
+  const channel = await createWindowsJobProcessChannelProvider({ replayCapacityChunks: 4, replayCapacityBytes: window,
+    // A long interval leaves the background loop at its first read, so the terminal wait drains the rest.
+    pollIntervalMs: 60_000, clock: () => state.now,
+    authority: (): WindowsJobChannelAuthority => ({ processId: "job", owner, fence, service,
+      control: async (effect) => { exact(); return await effect(); },
+      reattest: async () => { exact(); state.reattests++; return settled() ? "exited" : "live"; } }),
+  }).acquire({ startedAt } as unknown as ProcessBackendBinding, fence);
+  state.reattests = 0; // acquire's own re-attestation precedes the terminal wait
+  return { channel, state, bytes, window };
 }

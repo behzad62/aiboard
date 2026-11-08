@@ -3,6 +3,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 import { types as nodeTypes } from "node:util";
 
 import {
@@ -574,7 +575,7 @@ class SqliteDurableProcessStore extends AuthorityStore {
     this.coordinationId = `sqlite-${resolve(path).toLowerCase()}`;
     this.readOnly = readOnly;
     if (!readOnly) mkdirSync(dirname(path), { recursive: true });
-    this.database = new DatabaseSync(path, { readOnly });
+    this.database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly });
     this.database.exec("PRAGMA busy_timeout = 5000");
     if (!readOnly) {
       try {

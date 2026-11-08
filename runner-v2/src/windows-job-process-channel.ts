@@ -18,6 +18,14 @@ import type { WindowsJobChannelState, WindowsJobOwnershipKey, WindowsJobProcessH
  */
 export const WINDOWS_JOB_IDLE_POLL_MAX_MS = 500;
 
+/**
+ * Longest the terminal wait goes without re-attesting while every read fills the whole replay
+ * window. A full window means more output is queued behind it, and the job cannot report stopped
+ * while retained output is unacknowledged. Re-attesting after each window cost one more fenced
+ * effect per window, about a fifth of bulk-output time (65 MiB: 134 reconciles, 5.3 of 24 s).
+ */
+export const WINDOWS_JOB_DRAIN_REATTEST_MAX_MS = 1_000;
+
 type DuplexWindowsJobProcessHost =WindowsJobProcessHost & Required<Pick<WindowsJobProcessHost,
   "attachOwnedChannel" | "writeOwnedInput" | "closeOwnedInput" | "acknowledgeOwnedOutput" | "claimOwnedFence">>;
 
@@ -151,11 +159,18 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
   }
   async waitForTerminal(): Promise<unknown> {
     this.assertAttached(); this.startPolling();
+    let attestedAt = this.clock();
     for (;;) {
       this.assertAttached();
-      await this.poll();
+      const filledWindow = await this.poll();
       this.assertAttached();
+      // While reads keep filling the window, drain the next one before re-attesting: each read and
+      // ACK already reloads the durable fence and authenticates supervisor status. A short read,
+      // WINDOWS_JOB_DRAIN_REATTEST_MAX_MS without one, or a clock that stepped back re-attests as before.
+      const sinceAttested = this.clock() - attestedAt;
+      if (filledWindow && sinceAttested >= 0 && sinceAttested < WINDOWS_JOB_DRAIN_REATTEST_MAX_MS) continue;
       const state = await this.authority.reattest();
+      attestedAt = this.clock();
       this.assertAttached();
       if (state === "exited") {
         for (;;) {
@@ -319,9 +334,11 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     clearTimeout(this.timer);
     this.armBackgroundPoll(this.pollGeneration, this.pollIntervalMs);
   }
-  private async poll() {
+  /** Resolves true only when this poll's own read filled the whole window and all of it was acknowledged. */
+  private async poll(): Promise<boolean> {
     if (this.outputFailure) throw this.outputFailure;
-    if (this.detached || !this.sink) return;
+    if (this.detached || !this.sink) return false;
+    let filledWindow = false;
     this.outputTail = this.outputTail.then(async () => {
       this.assertOutputDeadline();
       const sink = this.sink;
@@ -330,6 +347,7 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
       this.assertOutputDeadline();
       const empty = unread.stdout.byteLength === 0 && unread.stderr.byteLength === 0;
       this.idlePolls = empty ? Math.min(this.idlePolls + 1, 8) : 0;
+      let acknowledgedBytes = 0;
       for (const stream of ["stdout", "stderr"] as const) {
         if (this.detached || this.sink !== sink) return;
         const bytes = unread[stream].subarray(0, this.maximumBytes);
@@ -346,11 +364,14 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
         });
         this.assertOutputDeadline();
         this.offsets[stream] = endOffset; this.acknowledgedSequences[stream] += 1;
+        acknowledgedBytes += bytes.byteLength;
         if (this.detached || this.sink !== sink) return;
       }
+      filledWindow = acknowledgedBytes >= this.maximumBytes;
     });
     try { await this.outputTail; }
     catch (error) { this.rememberOutputFailure(error); throw this.outputFailure; }
+    return filledWindow;
   }
   private rememberOutputFailure(error: unknown) { this.outputFailure ??= error instanceof Error ? error : new Error(String(error)); }
   private assertAttached() { if (this.detached) throw new Error("Windows Job channel is detached."); }

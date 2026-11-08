@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 export interface RemoteDeviceIdentity {
   readonly deviceId: string;
@@ -300,7 +301,7 @@ export class RemoteDeviceStore {
    */
   acquireOwnerLock(projectPath?: string): (() => void) | null {
     if (this.ownerDatabase) throw new Error("Remote device owner lock is already held.");
-    const database = new DatabaseSync(this.lockPath, { timeout: 0 });
+    const database = new DatabaseSync(sqliteDatabaseLocation(this.lockPath), { timeout: 0 });
     try {
       database.exec("BEGIN IMMEDIATE");
     } catch (error) {
@@ -348,7 +349,7 @@ export class RemoteDeviceStore {
 
   /** A separate, crash-released fence serializes pairing even across processes. */
   acquirePairingLock(): (() => void) | null {
-    const database = new DatabaseSync(this.pairingLockPath, { timeout: 0 });
+    const database = new DatabaseSync(sqliteDatabaseLocation(this.pairingLockPath), { timeout: 0 });
     try { database.exec("BEGIN IMMEDIATE"); }
     catch (error) {
       database.close();
