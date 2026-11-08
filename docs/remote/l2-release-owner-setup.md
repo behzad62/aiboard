@@ -17,7 +17,7 @@ Plan packet L2, ADR-E, owner decision D18 (GitHub Releases + CI signing in a pro
 - **What gets verified:**
   - Installers and the updater verify the signature *before* parsing.
   - They then check expiry and replay (sequence).
-  - Then the size and SHA-256 of the bundle.
+  - Then the size and SHA-256 of the bundle, whichever route it came by. If a bundle's GitHub `releases/download` link answers 5xx, times out or fails on the network, the one-line installers fetch the same asset once more through GitHub's REST API, without a token.
   - Then the `release.json` inventory of the extracted files.
   - Then a smoke run.
   - Only after all of these does `current` switch. There is no unverified fallback: without `openssl`, `install.sh` stops.
