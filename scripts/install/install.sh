@@ -19,6 +19,9 @@ INSTALLER_PROTOCOL=2
 # "<key id> <base64 DER SubjectPublicKeyInfo>" per line.
 TRUSTED_KEYS='__AIBOARD_TRUSTED_KEYS_SH__'
 RECOVERY_KEYS='__AIBOARD_RECOVERY_KEYS_SH__'
+# GitHub's site and REST API, for the bundle download fallback in download_bundle.
+GITHUB_WEB='https://github.com'
+GITHUB_API='https://api.github.com'
 
 # Color only on a terminal; NO_COLOR turns it off and FORCE_COLOR decides when set (0/false: off).
 if [ -n "${FORCE_COLOR:-}" ]; then
@@ -50,37 +53,114 @@ allowed_url() {
 }
 
 download() {
+  fetch_url "$1" "$2" || fail "could not download $1. Check your connection and retry; nothing was changed."
+}
+
+# Fetches $1 into $2, sending "Accept: $3" when given. Returns 0 once $2 holds the download, 2 when it failed
+# in a way another route may avoid (an HTTP 5xx answer, a timeout or a network error), and 1 for any other
+# failure; $fetch_reason then says what went wrong. An unsafe redirect always stops the install.
+fetch_url() {
   allowed_url "$1" || fail "refusing a non-HTTPS download: $1"
-  if command -v curl >/dev/null 2>&1; then
-    if [ "$ALLOW_LOOPBACK" = 1 ]; then
-      curl -fsSL --retry 2 -o "$2" "$1" || fail "could not download $1. Check your connection and retry; nothing was changed."
-    else
-      curl -fsSL --retry 2 --proto =https --proto-redir =https -o "$2" "$1" || fail "could not download $1. Check your connection and retry; nothing was changed."
-    fi
-  else
-    wget_checked "$1" "$2" || fail "could not download $1. Check your connection and retry; nothing was changed."
+  fetch_reason=""
+  if ! command -v curl >/dev/null 2>&1; then
+    wget_checked "$1" "$2" "${3:-}"
+    return
   fi
+  fetch_status=0
+  if [ "$ALLOW_LOOPBACK" = 1 ]; then
+    fetch_code=$(curl -fsSL --retry 2 -H "Accept: ${3:-*/*}" -w '%{http_code}' -o "$2" "$1") || fetch_status=$?
+  else
+    fetch_code=$(curl -fsSL --retry 2 --proto =https --proto-redir =https -H "Accept: ${3:-*/*}" -w '%{http_code}' -o "$2" "$1") || fetch_status=$?
+  fi
+  [ "$fetch_status" != 0 ] || return 0
+  fetch_code=${fetch_code#"${fetch_code%???}"}
+  case "$fetch_status" in
+    22) fetch_reason="HTTP $fetch_code"; case "$fetch_code" in 5??) return 2 ;; esac; return 1 ;;
+    # Name lookup, connect, HTTP/2, partial body, timeout, TLS handshake, empty reply, send and receive errors.
+    6|7|16|18|28|35|52|55|56|92) fetch_reason="curl error $fetch_status"; return 2 ;;
+  esac
+  fetch_reason="curl error $fetch_status"
+  return 1
 }
 
 # wget has no option that keeps redirects on HTTPS, so redirects are followed by hand (at most 5) and
 # every hop is checked with allowed_url before it is contacted. Needs GNU wget (--max-redirect, -S).
+# Returns like fetch_url; "Accept: $3" is sent on every hop when given.
 wget_checked() {
   wget --version 2>/dev/null | grep -q 'GNU Wget' || fail "curl or GNU wget is required."
   wget_next=$1
   wget_hop=0
   while :; do
     allowed_url "$wget_next" || fail "refusing a non-HTTPS download or redirect: $wget_next"
-    if wget -S --max-redirect=0 -O "$2" "$wget_next" 2> "$2.headers"; then rm -f "$2.headers"; return 0; fi
+    wget_status=0
+    if [ -n "${3:-}" ]; then
+      wget -S --max-redirect=0 --header="Accept: $3" -O "$2" "$wget_next" 2> "$2.headers" || wget_status=$?
+    else
+      wget -S --max-redirect=0 -O "$2" "$wget_next" 2> "$2.headers" || wget_status=$?
+    fi
+    if [ "$wget_status" = 0 ]; then rm -f "$2.headers"; return 0; fi
     wget_location=$(sed -n 's/^ *[Ll]ocation: *\([^[:space:]]*\).*/\1/p' "$2.headers" | tail -n 1)
+    wget_code=$(sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' "$2.headers" | tail -n 1)
     rm -f "$2.headers"
     case "$wget_location" in
       https://*|http://*) wget_next=$wget_location ;;
       /*) wget_next=$(printf '%s' "$wget_next" | sed 's#^\([a-z]*://[^/]*\).*#\1#')$wget_location ;;
-      *) return 1 ;;
+      *)
+        if [ -n "$wget_code" ]; then
+          fetch_reason="HTTP $wget_code"
+          case "$wget_code" in 5??) return 2 ;; esac
+          return 1
+        fi
+        # Exit status 4 is a network failure, timeouts included.
+        fetch_reason="wget error $wget_status"
+        [ "$wget_status" = 4 ] && return 2
+        return 1 ;;
     esac
     wget_hop=$((wget_hop + 1))
     [ "$wget_hop" -le 5 ] || fail "too many redirects downloading $1."
   done
+}
+
+# GitHub's releases/download links have answered 504 for many minutes while the same asset kept working
+# through its REST API. A bundle on such a link that fails with an HTTP 5xx, a timeout or a network error is
+# fetched once more through the API, without a token: the release by tag gives the asset id, then the asset
+# itself. Only the numeric id comes from GitHub's answer; the caller checks the bundle against the signed
+# manifest either way. When both routes fail, the link's own error is reported.
+download_bundle() {
+  bundle_status=0
+  fetch_url "$1" "$2" || bundle_status=$?
+  [ "$bundle_status" != 0 ] || return 0
+  bundle_failed="could not download $1. Check your connection and retry; nothing was changed."
+  bundle_rest=${1#"$GITHUB_WEB/"}
+  bundle_route=""
+  if [ "$bundle_status" = 2 ] && [ "$bundle_rest" != "$1" ]; then
+    bundle_route=$(printf '%s' "$bundle_rest" | sed -n 's|^\([A-Za-z0-9-][A-Za-z0-9-]*/[A-Za-z0-9._-][A-Za-z0-9._-]*\)/releases/download/\([^/][^/]*\)/[^/][^/]*$|\1 \2|p')
+  fi
+  [ -n "$bundle_route" ] || fail "$bundle_failed"
+  say "The GitHub download link failed ($fetch_reason); trying the GitHub API..."
+  bundle_api="$GITHUB_API/repos/${bundle_route% *}"
+  bundle_listing="$2.release.json"
+  bundle_id=""
+  if fetch_url "$bundle_api/releases/tags/${bundle_route#* }" "$bundle_listing" "application/vnd.github+json"; then
+    if [ "$(wc -c < "$bundle_listing" | tr -d ' ')" -le 1048576 ]; then
+      # Every asset has one API "url" ending in /releases/assets/<id> and one "browser_download_url", in the same order.
+      grep -o '"url"[[:space:]]*:[[:space:]]*"[^"]*/releases/assets/[0-9][0-9]*"' "$bundle_listing" | sed 's|.*/||; s|"$||' > "$bundle_listing.ids"
+      grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$bundle_listing" | sed 's|^[^:]*:[[:space:]]*"||; s|"$||' > "$bundle_listing.links"
+      if [ "$(wc -l < "$bundle_listing.ids" | tr -d ' ')" = "$(wc -l < "$bundle_listing.links" | tr -d ' ')" ]; then
+        bundle_line=$(grep -n -x -F -e "$1" "$bundle_listing.links" | cut -d : -f 1)
+        case "$bundle_line" in ''|*[!0-9]*) ;; *) bundle_id=$(sed -n "${bundle_line}p" "$bundle_listing.ids") ;; esac
+      fi
+    fi
+    case "$bundle_id" in ''|*[!0-9]*) bundle_id="" ;; esac
+    [ "${#bundle_id}" -le 15 ] || bundle_id=""
+    if [ -n "$bundle_id" ]; then
+      fetch_url "$bundle_api/releases/assets/$bundle_id" "$2" "application/octet-stream" && return 0
+    else
+      fetch_reason="GitHub's API did not list ${1##*/} in release ${bundle_route#* }"
+    fi
+  fi
+  say "The GitHub API failed too ($fetch_reason)."
+  fail "$bundle_failed"
 }
 
 sha256_of() {
@@ -264,7 +344,7 @@ NODE
     # 3. Bundle: size and SHA-256 must match the signed manifest before extraction.
     archive="$work/aiboard-$version-$target.tar.gz"
     say "Downloading AI Board Runner $version for $target..."
-    download "$url" "$archive"
+    download_bundle "$url" "$archive"
     [ "$(wc -c < "$archive" | tr -d ' ')" = "$bytes" ] || fail "the downloaded bundle has the wrong size. Nothing was installed."
     [ "$(sha256_of "$archive")" = "$sha" ] || fail "the downloaded bundle does not match the signed checksum. Nothing was installed."
 

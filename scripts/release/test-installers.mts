@@ -1,6 +1,6 @@
 /* Rendered one-line installer checks (run: npx tsx scripts/release/test-installers.mts) */
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { createPublicKey, generateKeyPairSync } from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -234,6 +234,172 @@ check("installers run every staged-bundle command through the bound",
       }
       expectations("install.sh wget fallback", results);
     }
+  } finally {
+    server.close();
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
+// GitHub outage: a bundle whose releases/download link fails with 5xx, a timeout or a network error is fetched
+// once through GitHub's REST API. A loopback server stands in for github.com, api.github.com and the asset host;
+// the rendered GITHUB_WEB / GITHUB_API constants are pointed at it, and everything else is the real rendered code.
+{
+  const repo = "behzad62/aiboard";
+  const firstAssetId = 723420152;
+  const names = RELEASE_TARGETS.map((target) => `aiboard-0.2.0-${target}.${targetFormat(target)}`);
+  const state = { link: "504", lookup: "ok", payload: Buffer.from("bundle-bytes"), manifest: Buffer.alloc(0), signature: "" };
+  const requests: { url: string; accept: string }[] = [];
+  const server = createServer((request, response) => {
+    const url = request.url ?? "";
+    requests.push({ url, accept: String(request.headers.accept ?? "") });
+    const web = `http://127.0.0.1:${(server.address() as AddressInfo).port}/web/${repo}/releases/download/v0.2.0/`;
+    if (url === "/m") response.end(state.manifest);
+    else if (url === "/m.sig") response.end(state.signature);
+    else if (url.startsWith(`/web/${repo}/releases/download/v0.2.0/`)) {
+      if (state.link === "drop") { request.socket.destroy(); return; }
+      response.writeHead(Number(state.link)); response.end("The server didn't respond in time.");
+    } else if (url === `/api/repos/${repo}/releases/tags/v0.2.0`) {
+      if (state.lookup === "503") { response.writeHead(503); response.end(); return; }
+      const user = { login: "behzad62", id: 1, url: "https://api.github.com/users/behzad62", following_url: "https://api.github.com/users/behzad62/following{/other_user}" };
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({
+        url: `https://api.github.com/repos/${repo}/releases/1`, assets_url: `https://api.github.com/repos/${repo}/releases/1/assets`, tag_name: "v0.2.0", name: "v0.2.0", author: user,
+        // Text inside a JSON string has its quotes escaped, so it can never pass for an asset field.
+        body: 'Notes with "quotes", {braces} and "url":"https://api.github.com/repos/x/y/releases/assets/9"',
+        assets: names.map((name, index) => ({ url: `https://api.github.com/repos/${repo}/releases/assets/${firstAssetId + index}`, id: firstAssetId + index,
+          name, label: "", uploader: user, state: "uploaded", size: 12, browser_download_url: `${web}${name}` }))
+          .filter((asset) => state.lookup !== "unlisted" || !asset.name.includes("x64")),
+      }));
+    } else if (/^\/api\/repos\/behzad62\/aiboard\/releases\/assets\/\d+$/.test(url)) {
+      response.writeHead(302, { Location: `/cdn/asset-${url.split("/").pop()}?sig=abc` }); response.end();
+    } else if (url.startsWith("/cdn/asset-")) { response.writeHead(200); response.end(state.payload); }
+    else { response.writeHead(404); response.end(); }
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const prefix = `${origin}/web/${repo}/releases/download/`;
+  const linkFor = (target: string) => `${prefix}v0.2.0/${names[RELEASE_TARGETS.indexOf(target as typeof RELEASE_TARGETS[number])]}`;
+  const toLoopback = (text: string) => text
+    .replace("GITHUB_WEB='https://github.com'", `GITHUB_WEB='${origin}/web'`).replace("GITHUB_API='https://api.github.com'", `GITHUB_API='${origin}/api'`)
+    .replace("$GithubWeb = 'https://github.com'", `$GithubWeb = '${origin}/web'`).replace("$GithubApi = 'https://api.github.com'", `$GithubApi = '${origin}/api'`);
+  check("production installers name GitHub's real hosts", rendered.sh.includes("GITHUB_WEB='https://github.com'\nGITHUB_API='https://api.github.com'") &&
+    rendered.ps1.includes("$GithubWeb = 'https://github.com'\n  $GithubApi = 'https://api.github.com'"));
+  const scripts = renderInstallers({ ...production, manifestUrl: `${origin}/m`, artifactPrefix: prefix });
+  const sh = toLoopback(scripts.sh);
+  const ps1 = toLoopback(scripts.ps1);
+  check("the GitHub hosts can be pointed at the loopback stand-in", sh.includes(`GITHUB_API='${origin}/api'`) && ps1.includes(`$GithubApi = '${origin}/api'`));
+  const run = (command: string, args: string[], env: NodeJS.ProcessEnv = process.env) => new Promise<{ code: number | null; output: string }>((done) => {
+    execFile(command, args, { encoding: "utf8", timeout: 120_000, env }, (error, stdout, stderr) => done({ code: error ? (typeof error.code === "number" ? error.code : 1) : 0, output: stdout + stderr }));
+  });
+  const work = mkdtempSync(join(tmpdir(), "aiboard-github-fallback-"));
+  type Scenario = { name: string; link: string; lookup: string; expect: "fallback" | "fail" | "no-api"; note?: RegExp };
+  const scenarios: Scenario[] = [
+    { name: "a 504 link falls back to the API", link: "504", lookup: "ok", expect: "fallback" },
+    { name: "a dropped connection falls back to the API", link: "drop", lookup: "ok", expect: "fallback" },
+    { name: "both routes failing reports the link's own error", link: "502", lookup: "503", expect: "fail", note: /The GitHub API failed too \(HTTP 503\)/ },
+    { name: "a release that does not list the bundle fails cleanly", link: "504", lookup: "unlisted", expect: "fail", note: /did not list aiboard-0\.2\.0-\w+-x64\.(tar\.gz|zip) in release v0\.2\.0/ },
+    { name: "a 404 link is reported without trying the API", link: "404", lookup: "ok", expect: "no-api" },
+  ];
+  const judge = (label: string, scenario: Scenario, target: string, result: { code: number | null; output: string }, file: string) => {
+    const api = requests.filter((entry) => entry.url.startsWith("/api/"));
+    const lookup = api.find((entry) => entry.url.includes("/releases/tags/"));
+    const asset = api.find((entry) => entry.url.includes("/releases/assets/"));
+    let ok: boolean;
+    if (scenario.expect === "fallback") {
+      ok = result.code === 0 && readFileSync(file, "utf8") === "bundle-bytes" && /The GitHub download link failed \(.+\); trying the GitHub API/.test(result.output) &&
+        lookup?.accept === "application/vnd.github+json" && asset?.accept === "application/octet-stream" &&
+        asset.url.endsWith(`/releases/assets/${firstAssetId + RELEASE_TARGETS.indexOf(target as typeof RELEASE_TARGETS[number])}`);
+    } else if (scenario.expect === "fail") {
+      ok = result.code !== 0 && result.output.includes(`could not download ${linkFor(target)}`) && result.output.includes("nothing was changed") && (scenario.note?.test(result.output) ?? true);
+    } else ok = result.code !== 0 && result.output.includes(`could not download ${linkFor(target)}`) && api.length === 0;
+    check(`${label}: ${scenario.name}`, ok, { output: result.output, requests });
+  };
+  try {
+    // install.sh with curl, the path almost every Linux and macOS machine takes (also Git Bash's curl on Windows).
+    if (spawnSync("sh", ["-c", "command -v curl"]).status === 0) {
+      const pick = (pattern: RegExp, name: string) => { const found = pattern.exec(sh)?.[0]; check(`install.sh defines ${name}`, Boolean(found)); return found ?? ""; };
+      const functions = [
+        pick(/\nALLOW_LOOPBACK=.*\n/, "ALLOW_LOOPBACK"), pick(/\nGITHUB_WEB=.*\nGITHUB_API=.*\n/, "the GitHub hosts"), "paint() { printf '%s' \"$2\"; }\n",
+        pick(/\nsay\(\) .*\n/, "say"), pick(/\nfail\(\) .*\n/, "fail"), pick(/\nallowed_url\(\) \{[\s\S]*?\n\}\n/, "allowed_url"),
+        pick(/\nfetch_url\(\) \{[\s\S]*?\n\}\n/, "fetch_url"), pick(/\nwget_checked\(\) \{[\s\S]*?\n\}\n/, "wget_checked"), pick(/\ndownload_bundle\(\) \{[\s\S]*?\n\}\n/, "download_bundle"),
+      ].join("");
+      for (const [index, scenario] of scenarios.entries()) {
+        Object.assign(state, { link: scenario.link, lookup: scenario.lookup });
+        requests.length = 0;
+        const file = join(work, `sh-${index}`).replace(/\\/g, "/");
+        const result = await run("sh", ["-c", `set -eu\n${functions}\ndownload_bundle "$1" "$2"`, "sh", linkFor("linux-x64"), file]);
+        judge("install.sh (curl)", scenario, "linux-x64", result, file);
+      }
+    }
+    // The wget path classifies a 5xx answer and a dropped connection as transient, and a 404 as final.
+    const wget = spawnSync("wget", ["--version"], { encoding: "utf8" });
+    if (process.platform !== "win32" && wget.status === 0 && /GNU Wget/.test(wget.stdout)) {
+      const pick = (pattern: RegExp) => pattern.exec(sh)?.[0] ?? "";
+      const functions = [pick(/\nALLOW_LOOPBACK=.*\n/), "paint() { printf '%s' \"$2\"; }\n", pick(/\nfail\(\) .*\n/), pick(/\nallowed_url\(\) \{[\s\S]*?\n\}\n/), pick(/\nwget_checked\(\) \{[\s\S]*?\n\}\n/)].join("");
+      const wgetrc = join(work, "wgetrc");
+      writeFileSync(wgetrc, "tries = 1\n");
+      const statuses: Record<string, string> = {};
+      for (const link of ["504", "404", "drop"]) {
+        state.link = link;
+        const { output } = await run("sh", ["-c", `set -eu\nfetch_reason=\n${functions}\nstatus=0; wget_checked "$1" "$2" || status=$?; echo "status=$status reason=$fetch_reason"`, "sh", linkFor("linux-x64"), join(work, `wget-${link}`)],
+          { ...process.env, WGETRC: wgetrc });
+        statuses[link] = output.trim().split("\n").pop() ?? output;
+      }
+      check("install.sh wget classifies 5xx and dropped connections as transient, a 404 as final",
+        statuses["504"] === "status=2 reason=HTTP 504" && statuses["404"] === "status=1 reason=HTTP 404" && statuses.drop === "status=2 reason=wget error 4", statuses);
+    }
+    // install.ps1 under Windows PowerShell and pwsh.
+    if (process.platform === "win32") {
+      const pick = (pattern: RegExp, name: string) => { const found = pattern.exec(ps1)?.[0]; check(`install.ps1 defines ${name}`, Boolean(found)); return found ?? ""; };
+      const functions = [
+        pick(/\n {2}\$AllowLoopback = .*\n/, "$AllowLoopback"), pick(/\n {2}\$GithubWeb = .*\n {2}\$GithubApi = .*\n/, "the GitHub hosts"), pick(/\n {2}function Fail.*\n/, "Fail"),
+        pick(/\n {2}function Test-AllowedUrl[\s\S]*?\n {2}\}\n/, "Test-AllowedUrl"), pick(/\n {2}function Get-Download[\s\S]*?\n {2}\}\n/, "Get-Download"),
+        pick(/\n {2}function Get-Bundle[\s\S]*?\n {2}\}\n/, "Get-Bundle"),
+      ].join("");
+      for (const shell of ["powershell.exe", ...(spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).status === 0 ? ["pwsh"] : [])]) {
+        for (const [index, scenario] of scenarios.entries()) {
+          Object.assign(state, { link: scenario.link, lookup: scenario.lookup });
+          requests.length = 0;
+          const file = join(work, `ps-${shell}-${index}`);
+          const script = ["$ErrorActionPreference = 'Stop'", "Set-StrictMode -Version 2.0", "function Say([string]$Message) { [Console]::Out.WriteLine($Message) }", functions,
+            `try { Get-Bundle '${linkFor("win-x64")}' '${file}' } catch { [Console]::Out.WriteLine($_.Exception.Message); exit 1 }`].join("\n");
+          const result = await run(shell, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]);
+          judge(`install.ps1 Get-Bundle (${shell})`, scenario, "win-x64", result, file);
+        }
+      }
+    }
+
+    // The whole rendered installer still checks a bundle from the API route against the signed manifest
+    // (install.ps1 on Windows, install.sh elsewhere: install.sh does not run on Windows).
+    const signer = generateKeyPairSync("rsa", { modulusLength: 3072 });
+    const signedScripts = renderInstallers({ ...production, manifestUrl: `${origin}/m`, artifactPrefix: prefix, keys: [trustedKeyFromPublicKey("outage-test", signer.publicKey)] });
+    const signedBundle = Buffer.from("the signed bundle bytes");
+    const now = new Date();
+    const stamp = (date: Date) => date.toISOString().replace(/\.\d{3}Z$/, "Z");
+    state.manifest = Buffer.from(serializeManifest({ schemaVersion: 1, product: RELEASE_PRODUCT, channel: "stable", version: "0.2.0", sequence: 1,
+      createdAt: stamp(now), expiresAt: stamp(new Date(now.getTime() + 86400_000)), minInstallerVersion: INSTALLER_PROTOCOL, keyId: "outage-test", nodeVersion: "24.18.0",
+      artifacts: RELEASE_TARGETS.map((target) => ({ target, format: targetFormat(target), preview: PREVIEW_TARGETS.has(target), bytes: signedBundle.length,
+        sha256: createHash("sha256").update(signedBundle).digest("hex"), url: linkFor(target) })) }));
+    state.signature = signManifestBytes(state.manifest, signer.privateKey);
+    const home = mkdtempSync(join(tmpdir(), "aiboard-outage-installer-"));
+    const installer = join(home, process.platform === "win32" ? "install.ps1" : "install.sh");
+    writeFileSync(installer, toLoopback(process.platform === "win32" ? signedScripts.ps1 : signedScripts.sh));
+    const install = () => run(process.platform === "win32" ? "powershell.exe" : "sh",
+      process.platform === "win32" ? ["-NoProfile", "-NonInteractive", "-File", installer] : [installer],
+      { ...process.env, HOME: home, LOCALAPPDATA: home, AIBOARD_ALLOW_ROOT: "1", AIBOARD_NO_MODIFY_PATH: "1" });
+    try {
+      Object.assign(state, { link: "504", lookup: "ok" });
+      for (const [name, payload] of [["other bytes of the signed size", Buffer.from("the forged bundle bytes")], ["a different size", Buffer.from("short")]] as const) {
+        state.payload = payload;
+        const result = await install();
+        check(`installer refuses ${name} from the API route`, result.code !== 0 && /trying the GitHub API/.test(result.output) &&
+          /(does not match the signed checksum|has the wrong size)\. Nothing was installed\./.test(result.output) && !/is installed in/.test(result.output), result.output);
+      }
+      state.payload = signedBundle;
+      const accepted = await install();
+      check("installer accepts the signed bytes from the API route and moves on to extraction", accepted.code !== 0 && /trying the GitHub API/.test(accepted.output) &&
+        !/signed checksum|wrong size|could not download/.test(accepted.output), accepted.output);
+    } finally { rmSync(home, { recursive: true, force: true }); }
   } finally {
     server.close();
     rmSync(work, { recursive: true, force: true });
