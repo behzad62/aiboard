@@ -47,15 +47,22 @@ for (const family of FAMILIES) {
     const adapter = await createFamilyAdapter(t, family);
     const marker = join(adapter.workspace, "cancel-grandchild.pid");
     const controller = new AbortController();
+    let running: Promise<FamilyResult> | undefined;
     try {
-      const running = adapter.run({ args: hangingTree(marker), timeoutMs: 10_000, signal: controller.signal });
+      running = adapter.run({ args: hangingTree(marker), timeoutMs: 10_000, signal: controller.signal });
       await waitFor(() => existsSync(marker) && adapter.launched(), 8_000);
       controller.abort();
       const result = await running;
       assert.equal(result.outcome, "cancelled", JSON.stringify(result));
       assert.equal(result.cleanupState, "verified_empty");
       assert.equal(await processExited(Number(readFileSync(marker, "utf8"))), true);
-    } finally { controller.abort(); await adapter.close(); }
+    } finally {
+      controller.abort();
+      // Let the aborted run settle before close() deletes its workspace. Otherwise a failed wait is
+      // reported as the run's own ENOENT from that deleted workspace instead of the wait's error.
+      await running?.catch(() => undefined);
+      await adapter.close();
+    }
   });
 
   test(`${family} public family maps strict capability failure before launch`, async (t) => {
@@ -174,9 +181,11 @@ async function createFamilyAdapter(t: TestContext, family: Family,
     stateDirectory: join(root, "verification-state"), runId: `run-${identity}`, targetRevision: revision });
   await manager.create();
   const generationId = `generation-${identity}`;
+  // Run ordinals start at Date.now() unless pinned, so call ids differ across runner restarts.
+  // launched() below predicts this run's call id (`<generation>:build:0:1`), so pin the start at 0.
   const runtime = new FinalVerificationRuntime({ workspaceManager: manager, artifacts,
     runId: `run-${identity}`, taskId: "final-verification", integrationRevision: () => revision,
-    generationId, execution: graph.runnerOwnedExecution });
+    generationId, runOrdinalStart: 0, execution: graph.runnerOwnedExecution });
   return finish(async ({ args, timeoutMs, signal }) => {
     const command = { label: "matrix", executable: process.execPath, args, timeoutMs };
     const run = await runtime.run({ plan: finalPlan(), executionProfile: {
