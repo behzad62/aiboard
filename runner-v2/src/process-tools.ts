@@ -47,6 +47,8 @@ const WHOLE_SUMMARY_MAX_BYTES = 16 * 1024 * 1024;
 
 /** What a client's result takes beyond the command: stopping what is left of it, then summarizing or searching its output. */
 const CLIENT_RESULT_GRACE_MS = AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS + 30_000;
+/** A command's limit when the call names no timeoutMs. The MCP servers' instructions quote it. */
+export const PROCESS_RUN_DEFAULT_TIMEOUT_MS = 120_000;
 
 export interface ProcessToolsOptions {
   execution?: OneShotCommandExecutor;
@@ -61,7 +63,7 @@ export interface ProcessToolsOptions {
 export function createProcessTools(
   options: ProcessToolsOptions = {}
 ): NativeTool<unknown>[] {
-  const defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
+  const defaultTimeoutMs = options.defaultTimeoutMs ?? PROCESS_RUN_DEFAULT_TIMEOUT_MS;
   const maximumTimeoutMs = options.maximumTimeoutMs ?? 30 * 60_000;
   const tool: NativeTool<ProcessInput> = {
     definition: {
