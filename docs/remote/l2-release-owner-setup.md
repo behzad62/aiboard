@@ -13,7 +13,7 @@ Plan packet L2, ADR-E, owner decision D18 (GitHub Releases + CI signing in a pro
 - **Where the files are served:**
   - The signed manifest is served by aiboard.me from `public/release/stable/manifest.json` and `manifest.json.sig`. The release workflow commits these to `main` after signing (an epoch-opening manifest from the recovery procedure is still committed by hand). Every epoch-opening manifest and its signature also remain at sibling paths `epoch-<n>.json` and `epoch-<n>.json.sig` permanently.
   - The bundles are served from the GitHub release `v<version>` of `behzad62/aiboard`.
-  - If a bundle's `releases/download` link answers 5xx, times out or fails on the network, `aiboard update` fetches the same asset once more through GitHub's REST API, without a token: `releases/tags/v<version>` for the asset id, then `releases/assets/<id>`. Either way the bytes must match the signed manifest. The one-line installers have no such fallback yet.
+  - If a bundle's `releases/download` link answers 5xx, times out or fails on the network, `aiboard update` fetches the same asset once more through GitHub's REST API, without a token: `releases/tags/v<version>` for the asset id, then `releases/assets/<id>`. Either way the bytes must match the signed manifest.
 - **What gets verified:**
   - Installers and the updater verify the signature *before* parsing.
   - They then check expiry and replay (sequence).
