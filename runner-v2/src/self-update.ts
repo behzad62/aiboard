@@ -16,12 +16,13 @@ import { chmod, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, un
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import { extractFiles, readArchive } from "./release-archive.js";
 import {
   isReleaseVersion, parseReleaseChannelConfig, releaseAnchorDigest, RELEASE_PRODUCT, RELEASE_TARGETS, verifyReleaseEpochOpening, verifyReleaseManifest,
-  type ReleaseChannelConfig, type ReleaseManifest, type ReleaseTarget,
+  type ReleaseArtifact, type ReleaseChannelConfig, type ReleaseManifest, type ReleaseTarget,
 } from "./release-manifest.js";
 
 export interface InstallLayout {
@@ -50,6 +51,10 @@ export interface SelfUpdateRuntime {
   interactive?: boolean;
   confirm?: (question: string) => Promise<boolean>;
   smoke?: (versionDirectory: string, version: string) => Promise<void>;
+  /** Moves a verified bundle out of staging into versions/<version>. */
+  renameVersion?: (from: string, to: string) => Promise<void>;
+  /** Waits between the Windows retries of renameVersion. */
+  sleep?: (ms: number) => Promise<void>;
   editUserPath?: (binDirectory: string) => Promise<void>;
   platform?: NodeJS.Platform;
   environment?: NodeJS.ProcessEnv;
@@ -60,7 +65,15 @@ export interface SelfUpdateRuntime {
 
 const MANIFEST_LIMIT = 64 * 1024;
 const SIGNATURE_LIMIT = 4 * 1024;
+/** GitHub's release metadata, read only to find a bundle's asset id (v0.3.6 is 15 KB). */
+const GITHUB_RELEASE_LIMIT = 1024 * 1024;
 const MAX_RECOVERY_EPOCHS = 16;
+/**
+ * Windows: an antivirus scan, or the smoke check's node.exe that has just exited, can hold a file of a new bundle
+ * for a moment, so moving it into versions\ fails with EPERM. About 4.5 s of retries in all.
+ */
+const WINDOWS_RENAME_RETRY_DELAYS_MS: readonly number[] = [50, 100, 200, 400, 800, 1000, 1000, 1000];
+const WINDOWS_RENAME_RETRY_CODES: ReadonlySet<string> = new Set(["EPERM", "EACCES", "EBUSY"]);
 const PROFILE_MARKER_START = "# >>> aiboard installer >>>";
 const PROFILE_MARKER_END = "# <<< aiboard installer <<<";
 const PROFILE_BLOCK = [PROFILE_MARKER_START, 'case ":${PATH}:" in *":$HOME/.aiboard/bin:"*) ;; *) export PATH="$HOME/.aiboard/bin:$PATH" ;; esac', PROFILE_MARKER_END].join("\n");
@@ -241,7 +254,16 @@ export async function acquireInstallLock(root: string): Promise<InstallLockRelea
   }, { ownerName });
 }
 
-async function fetchLimited(fetchImpl: typeof fetch, url: string, limit: number): Promise<Buffer> {
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** A download failure that another route may avoid: an HTTP 5xx answer, a timeout, or a network error. */
+class TransientDownloadError extends Error {
+  constructor(message: string, readonly reason: string) { super(message); this.name = "TransientDownloadError"; }
+}
+
+async function fetchLimited(fetchImpl: typeof fetch, url: string, limit: number, headers?: Record<string, string>): Promise<Buffer> {
   const initial = new URL(url);
   const loopbackOrigin = initial.protocol === "http:" && initial.hostname === "127.0.0.1" ? initial.origin : undefined;
   const allowed = (candidate: URL): boolean => !candidate.username && !candidate.password &&
@@ -251,9 +273,10 @@ async function fetchLimited(fetchImpl: typeof fetch, url: string, limit: number)
   let current = initial;
   let response: Response | undefined;
   for (let redirects = 0; redirects <= 5; redirects += 1) {
-    try { response = await fetchImpl(current.href, { redirect: "manual", signal }); }
+    try { response = await fetchImpl(current.href, { redirect: "manual", signal, ...(headers ? { headers } : {}) }); }
     catch (error) {
-      throw new Error(`update_offline: Could not reach ${current.origin} (${error instanceof Error ? error.message : String(error)}). Check your connection and retry; nothing was changed.`);
+      const reason = errorText(error);
+      throw new TransientDownloadError(`update_offline: Could not reach ${current.origin} (${reason}). Check your connection and retry; nothing was changed.`, reason);
     }
     if (![301, 302, 303, 307, 308].includes(response.status)) break;
     const location = response.headers.get("location");
@@ -268,20 +291,88 @@ async function fetchLimited(fetchImpl: typeof fetch, url: string, limit: number)
     current = next;
   }
   if (!response) throw new Error("update_download_failed: No response was received; nothing was changed.");
-  if (!response.ok || !response.body) throw new Error(`update_download_failed: ${url} answered HTTP ${response.status}; nothing was changed.`);
+  if (!response.ok || !response.body) {
+    await response.body?.cancel().catch(() => undefined);
+    const message = `update_download_failed: ${url} answered HTTP ${response.status}; nothing was changed.`;
+    throw response.status >= 500 ? new TransientDownloadError(message, `HTTP ${response.status}`) : new Error(message);
+  }
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (declared > limit) throw new Error(`update_download_failed: ${url} is larger than expected; nothing was changed.`);
   const chunks: Buffer[] = [];
   let total = 0;
   const reader = response.body.getReader();
   for (;;) {
-    const { done, value } = await reader.read();
+    let chunk: Awaited<ReturnType<typeof reader.read>>;
+    try { chunk = await reader.read(); }
+    catch (error) {
+      // The ten-minute timeout or a dropped connection while the body streams.
+      const reason = errorText(error);
+      throw new TransientDownloadError(`update_offline: The download from ${current.origin} was interrupted (${reason}). Check your connection and retry; nothing was changed.`, reason);
+    }
+    const { done, value } = chunk;
     if (done) break;
     total += value.byteLength;
     if (total > limit) { await reader.cancel().catch(() => undefined); throw new Error(`update_download_failed: ${url} is larger than expected; nothing was changed.`); }
     chunks.push(Buffer.from(value));
   }
   return Buffer.concat(chunks);
+}
+
+interface GithubReleaseAsset { owner: string; repository: string; tag: string; name: string }
+
+/** Parses `https://github.com/<owner>/<repository>/releases/download/<tag>/<name>`, the link a GitHub release asset is published under. */
+function githubReleaseAsset(url: string): GithubReleaseAsset | undefined {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return undefined; }
+  if (parsed.protocol !== "https:" || parsed.host !== "github.com" || parsed.username || parsed.password || parsed.search || parsed.hash) return undefined;
+  const match = /^\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)\/releases\/download\/([^/]+)\/([^/]+)$/.exec(parsed.pathname);
+  if (!match) return undefined;
+  try {
+    return { owner: match[1]!, repository: match[2]!, tag: decodeURIComponent(match[3]!), name: decodeURIComponent(match[4]!) };
+  } catch { return undefined; }
+}
+
+/**
+ * The same asset through GitHub's REST API, without a token: the release-by-tag answer gives the asset id, and
+ * `releases/assets/<id>` with `Accept: application/octet-stream` redirects to the asset's download host. Only the
+ * numeric id comes from GitHub's answer; the repository and the expected size come from the signed manifest.
+ */
+async function fetchGithubReleaseAsset(fetchImpl: typeof fetch, asset: GithubReleaseAsset, limit: number, userAgent: string): Promise<Buffer> {
+  const repository = `https://api.github.com/repos/${asset.owner}/${asset.repository}`;
+  const metadata = await fetchLimited(fetchImpl, `${repository}/releases/tags/${encodeURIComponent(asset.tag)}`, GITHUB_RELEASE_LIMIT,
+    { accept: "application/vnd.github+json", "user-agent": userAgent });
+  let id: unknown;
+  try {
+    const release = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(metadata)) as { assets?: unknown };
+    const matches = Array.isArray(release.assets)
+      ? release.assets.filter((entry: unknown) => typeof entry === "object" && entry !== null && (entry as { name?: unknown }).name === asset.name)
+      : [];
+    if (matches.length === 1) id = (matches[0] as { id?: unknown }).id;
+  } catch { /* Reported below. */ }
+  if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) {
+    throw new Error(`update_download_failed: GitHub's API did not list ${asset.name} in release ${asset.tag}; nothing was changed.`);
+  }
+  return fetchLimited(fetchImpl, `${repository}/releases/assets/${id}`, limit, { accept: "application/octet-stream", "user-agent": userAgent });
+}
+
+/**
+ * Downloads a release bundle. GitHub's releases/download links have answered 504 for many minutes while the same
+ * asset kept working through the REST API, so a transient failure of such a link is retried once through the API.
+ * The caller verifies whatever arrives against the signed manifest, so the route cannot change what gets installed.
+ * When both routes fail, the link's own error is thrown.
+ */
+async function downloadArtifact(fetchImpl: typeof fetch, artifact: ReleaseArtifact, userAgent: string, write: (message: string) => void): Promise<Buffer> {
+  try { return await fetchLimited(fetchImpl, artifact.url, artifact.bytes); }
+  catch (error) {
+    const asset = githubReleaseAsset(artifact.url);
+    if (!(error instanceof TransientDownloadError) || !asset) throw error;
+    write(`The GitHub download link failed (${error.reason}); trying the GitHub API...\n`);
+    try { return await fetchGithubReleaseAsset(fetchImpl, asset, artifact.bytes, userAgent); }
+    catch (fallback) {
+      write(`The GitHub API failed too (${fallback instanceof TransientDownloadError ? fallback.reason : errorText(fallback)}).\n`);
+      throw error;
+    }
+  }
 }
 
 async function verifyCurrentRelease(bytes: Buffer, signature: string, initial: ReleaseChannelConfig, state: InstallState,
@@ -405,6 +496,25 @@ function sameDirectory(before: Stats, after: Stats): boolean {
   return before.isDirectory() && after.isDirectory() && before.dev === after.dev && before.ino === after.ino;
 }
 
+/** Renames a verified bundle into place; on Windows a briefly held file is retried with backoff, re-checking staging first. */
+async function renameVersionDirectory(from: string, to: string, options: {
+  platform: NodeJS.Platform; rename: (from: string, to: string) => Promise<void>; sleep: (ms: number) => Promise<void>; beforeRetry: () => Promise<void>;
+}): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try { await options.rename(from, to); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (options.platform !== "win32" || typeof code !== "string" || !WINDOWS_RENAME_RETRY_CODES.has(code)) throw error;
+      const wait = WINDOWS_RENAME_RETRY_DELAYS_MS[attempt];
+      if (wait === undefined) {
+        throw new Error(`update_version_busy: Windows kept a file of the new version busy (${errorText(error)}); the current version stays active. Retry in a minute.`);
+      }
+      await options.sleep(wait);
+      await options.beforeRetry();
+    }
+  }
+}
+
 interface UpdateArguments { check: boolean; rollback: boolean }
 
 function parseUpdateArguments(raw: string[]): UpdateArguments {
@@ -465,7 +575,7 @@ async function installVersion(layout: InstallLayout, state: InstallState, target
     await verifyVersionDirectory(destination, { version: manifest.version, target });
   } else {
     write(`Downloading AIBoard Runner ${manifest.version} for ${target}...\n`);
-    const archive = await fetchLimited(fetchImpl, artifact.url, artifact.bytes);
+    const archive = await downloadArtifact(fetchImpl, artifact, `AIBoard-Runner/${layout.runningVersion}`, write);
     if (archive.length !== artifact.bytes || sha256(archive) !== artifact.sha256) {
       throw new Error("update_checksum_mismatch: The downloaded bundle does not match the signed release manifest; nothing was installed.");
     }
@@ -476,12 +586,18 @@ async function installVersion(layout: InstallLayout, state: InstallState, target
       await mkdir(staging);
       created = await lstat(staging);
       if (!created.isDirectory()) throw new Error("update_staging_invalid: The staging directory changed during creation.");
+      const owned = created;
+      const stagingUnchanged = async () => {
+        if (!sameDirectory(owned, await lstat(staging))) throw new Error("update_staging_invalid: The staging directory changed during extraction.");
+      };
       await extractFiles(readArchive(archive, artifact.format), extracted);
       await verifyVersionDirectory(extracted, { version: manifest.version, target });
       await smoke(extracted, manifest.version);
-      if (!sameDirectory(created, await lstat(staging))) throw new Error("update_staging_invalid: The staging directory changed during extraction.");
-      await rename(extracted, destination);
-      if (!sameDirectory(created, await lstat(staging))) throw new Error("update_staging_invalid: The staging directory changed during extraction.");
+      await stagingUnchanged();
+      await renameVersionDirectory(extracted, destination, {
+        platform: runtime.platform ?? process.platform, rename: runtime.renameVersion ?? rename, sleep: runtime.sleep ?? ((ms) => delay(ms)), beforeRetry: stagingUnchanged,
+      });
+      await stagingUnchanged();
       await rmdir(staging);
       created = undefined;
     } catch (error) {
