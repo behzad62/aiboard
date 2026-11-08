@@ -17,7 +17,7 @@ import { createExecutionHost, type ExecutionHost, type ExecutionHostRunBinding }
 import { openLauncherMcpSession } from "../src/launcher-ipc.js";
 import type { LauncherInstance } from "../src/launcher-instance.js";
 import { parseLauncherArguments, runLauncher, runnerSpawnArguments } from "../src/launcher.js";
-import { createLocalMcpProxy, LocalMcpSessions } from "../src/local-stdio-mcp.js";
+import { createLocalMcpProxy, LOCAL_MCP_INSTRUCTIONS, LocalMcpSessions } from "../src/local-stdio-mcp.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunSupervisor } from "../src/run-supervisor.js";
@@ -79,6 +79,9 @@ test("SDK clients use Runner broker grants and exact local managed-process owner
     assert.ok(names.includes("process_start"));
     assert.ok(names.includes("image_inspect"));
     for (const name of ["jobs_status", "jobs_events", "jobs_result", "jobs_cancel", "artifact_read", "git_commit", "browser", "devices_list", "complete_run"]) assert.ok(!names.includes(name), name);
+    const instructions = client.getInstructions() ?? "";
+    assert.equal(instructions, LOCAL_MCP_INSTRUCTIONS);
+    for (const mentioned of instructions.match(/\b[a-z]+_[a-z_]+\b/gu) ?? []) assert.ok(names.includes(mentioned), `${mentioned} is not a local tool`);
     assert.match(resultText(await client.callTool({ name: "files_read", arguments: { path: "fixture.txt" } })), /local fixture/);
     const writeArgs = { path: "written.txt", content: "once", idempotencyKey: "write-once" };
     assert.equal((await client.callTool({ name: "files_write", arguments: writeArgs }) as CallResult).isError, undefined);
@@ -206,4 +209,52 @@ test("stdio emits only MCP protocol frames and never the session token", async (
     assert.deepEqual(frames.map((frame) => [frame.jsonrpc, frame.id]), [["2.0", 1], ["2.0", 2]]);
     assert.ok(!`${first}${second}`.includes(token));
   } finally { await server.close(); input.destroy(); output.destroy(); }
+});
+
+/**
+ * The relay's MCP_INSTRUCTIONS (packages/relay/src/mcp-tools.ts in aiboard-tunnel, as of aiboard-tunnel#27), verbatim.
+ * When the relay's text changes, change this copy too; the test below then says what the local text must change.
+ */
+const RELAY_MCP_INSTRUCTIONS = [
+  "AIBoard Remote runs tools on the user's own computer through their AI Board Runner.",
+  "- deviceId is only needed when several devices are online; devices_list gives the ids.",
+  "- Commands: process_run waits up to 45 s and returns the result; a longer command returns a jobId, and jobs_result has its result once jobs_status says it finished. Large output comes back as head, tail and diagnostics plus a processId. process_read_output with that processId takes search to find lines and lines to read them by number (process_run takes search too); do not run the command again or pipe it to see more.",
+  "- Servers, long jobs and interactive programs: process_start with until (port, pattern or exit), because process_run stops a command at timeoutMs (default 120 s): what it printed comes back, but its effect is unknown. process_read_output with until {exit: true} and waitMs waits up to 30 s a call, so there is no need to poll quickly. process_interact sends one line and returns that turn's reply. process_signal stops a process and confirms it.",
+  "- Files: files_read returns the file's sha256, even for a one-line range. files_patch (exact search and replace) and files_write default to the revision you last read or wrote, so read a file before changing it.",
+  "- Git: status, diff and log have their own tools; commit by running git through process_run.",
+  "- Every action that changes something needs an idempotencyKey: a new string per action, reused only to retry that same action.",
+].join("\n");
+
+/** The relay's wording that fits only the remote path, and what the local text says instead. The rest is shared word for word. */
+const REMOTE_ONLY_WORDING: ReadonlyArray<readonly [relay: string, local: string]> = [
+  ["AIBoard Remote runs tools on the user's own computer through their AI Board Runner.",
+    "AI Board Runner runs these tools on this computer, in the project folder it was started for."],
+  // There is one device, and the local server refuses deviceId.
+  ["\n- deviceId is only needed when several devices are online; devices_list gives the ids.", ""],
+  // No relay holds the call and there are no jobs: the call lasts as long as the command.
+  ["process_run waits up to 45 s and returns the result; a longer command returns a jobId, and jobs_result has its result once jobs_status says it finished.",
+    "process_run waits for the command to finish and returns the result."],
+];
+
+test("initialize gives a local client the relay's guidance, less what only the remote path has", async () => {
+  const server = createLocalMcpProxy(async () => ({ tools: [] }));
+  const input = new PassThrough(), output = new PassThrough();
+  await server.connect(new StdioServerTransport(input, output));
+  let instructions: string | undefined;
+  try {
+    const reply = once(output, "data");
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fixture", version: "1" } } })}\n`);
+    const [frame] = await reply;
+    instructions = (JSON.parse(String(frame).split("\n")[0]!) as { result: { instructions?: string } }).result.instructions;
+  } finally { await server.close(); input.destroy(); output.destroy(); }
+  assert.equal(instructions, LOCAL_MCP_INSTRUCTIONS);
+  let expected = RELAY_MCP_INSTRUCTIONS;
+  for (const [relay, local] of REMOTE_ONLY_WORDING) {
+    assert.ok(expected.includes(relay), `the relay text no longer says: ${relay.trim()}`);
+    expected = expected.replace(relay, local);
+  }
+  // The Runner's own numbers (the 120 s default, the 30 s wait) are in the local text, so a change to one fails here too.
+  assert.equal(LOCAL_MCP_INSTRUCTIONS, expected, "change the relay's text with this one, or list the difference in REMOTE_ONLY_WORDING");
+  assert.equal(LOCAL_MCP_INSTRUCTIONS.length, 1307);
+  assert.ok(LOCAL_MCP_INSTRUCTIONS.length < 1500, "this text sits in every session's context");
 });
