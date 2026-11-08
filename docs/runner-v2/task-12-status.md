@@ -1,6 +1,6 @@
 # Runner V2 Task 12 — Durable Gate Status
 
-## 2026-11-08 — Windows Job bulk output re-attested after every 256 KiB window (uncommitted, on `main` at `25ce24f5`)
+## 2026-11-08 — Windows Job bulk output re-attested after every 256 KiB window (branch `claude/runner-windows-test-fixes`)
 
 Not gate work. It was found because a Windows test used 24.4 s of its 25 s command limit (`process-tools.test.ts`, 65 MiB through the production graph).
 
