@@ -24,7 +24,7 @@ import { SqliteEventStore } from "../src/sqlite-event-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import { ToolBroker } from "../src/tool-broker.js";
 import {
-  assertStateDirectoryUsable, assertTempDirectoryUsable, assertUsableWorkingDirectory, buildWorkspacePathProblem, sqliteDatabaseLocation,
+  assertTempDirectoryUsable, assertUsableWorkingDirectory, buildWorkspacePathProblem, sqliteDatabaseLocation,
   windowsNativeFilePath, WINDOWS_MAX_TEMP_DIRECTORY, WINDOWS_PLAIN_PATH_LIMIT, WindowsPathTooLongError,
 } from "../src/windows-path-limits.mjs";
 import { FakeRelay, FixtureWebSocketTransport, pairedDuplex, TestRelayAuthority } from "./fixtures/remote-fake-relay.js";
@@ -48,7 +48,8 @@ async function directoryOfLength(root: string, length: number): Promise<string> 
 test("a database past MAX_PATH opens and journals its writes", windowsOnly, async () => {
   const root = await mkdtemp(join(tmpdir(), "aiboard-long-sqlite-"));
   try {
-    for (const length of [251, 252, 260, 313, 900]) {
+    // 1040 and up are past SQLite's default Windows path buffer, which the \\?\ form alone does not get past.
+    for (const length of [251, 252, 260, 313, 900, 1040, 1100, 5000, 32_000]) {
       const directory = await directoryOfLength(root, length - "\\events.sqlite".length);
       const file = join(directory, "events.sqlite");
       const store = new SqliteEventStore(file);
@@ -56,6 +57,29 @@ test("a database past MAX_PATH opens and journals its writes", windowsOnly, asyn
       assert.equal(existsSync(file), true, `database at ${file.length} characters`);
     }
   } finally { await rm(root, { recursive: true, force: true }).catch(() => undefined); }
+});
+
+test("a long database keeps WAL, ATTACH, reopening and file names SQLite reads as URI syntax", windowsOnly, async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiboard-long-uri-"));
+  try {
+    const directory = await directoryOfLength(root, 2000);
+    const main = join(directory, "main 100% #1.sqlite");
+    const attached = join(directory, "device policy%3F.sqlite");
+    const database = new DatabaseSync(sqliteDatabaseLocation(main));
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE kept(value TEXT); INSERT INTO kept VALUES ('main');");
+    database.prepare("ATTACH DATABASE ? AS other").run(sqliteDatabaseLocation(attached));
+    database.exec("CREATE TABLE other.kept(value TEXT); INSERT INTO other.kept VALUES ('attached');");
+    database.close();
+    // Exactly these names, in exactly this folder: nothing decoded or created anywhere else.
+    assert.deepEqual((await readdir(directory)).sort(), ["device policy%3F.sqlite", "main 100% #1.sqlite"]);
+    const reopened = new DatabaseSync(sqliteDatabaseLocation(main), { readOnly: true });
+    assert.deepEqual({ ...reopened.prepare("SELECT value FROM kept").get() }, { value: "main" });
+    assert.throws(() => reopened.exec("INSERT INTO kept VALUES ('no')"), /readonly/);
+    reopened.close();
+    const other = new DatabaseSync(sqliteDatabaseLocation(attached), { readOnly: true });
+    assert.deepEqual({ ...other.prepare("SELECT value FROM kept").get() }, { value: "attached" });
+    other.close();
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("the owned fence lock works on a path past MAX_PATH", windowsOnly, async () => {
@@ -207,10 +231,11 @@ async function startRemoteRunner(t: TestContext, localAppDataLength: number, lon
   return { runner, send, results, project, state, device, localAppData };
 }
 
-// 129 puts the deepest channel file at the 313 characters of the original report. 195 with TEMP under it is the longest
+// 129 puts the deepest channel file at the 313 characters of the original report, and 1000 puts every Runner database
+// past SQLite's default 1040-byte path buffer. 195 with TEMP under it is the longest
 // TEMP the Runner accepts. Long-TEMP cases run first: the compiled Job host helper is cached per process, and in a long
 // TEMP it falls back to compiling in-process, which is the path that has to work there.
-for (const [localAppDataLength, longTemp] of [[129, true], [195, true], [320, false]] as const) test(`remote tools work with a ${localAppDataLength}-character LOCALAPPDATA and ${longTemp ? "a TEMP inside it" : "a short TEMP"}`, { ...windowsOnly, timeout: 240_000 }, async (t) => {
+for (const [localAppDataLength, longTemp] of [[129, true], [195, true], [320, false], [1000, false]] as const) test(`remote tools work with a ${localAppDataLength}-character LOCALAPPDATA and ${longTemp ? "a TEMP inside it" : "a short TEMP"}`, { ...windowsOnly, timeout: 240_000 }, async (t) => {
   const { runner, send, results, project, state } = await startRemoteRunner(t, localAppDataLength, longTemp);
   assert.ok(state.length > 210, `state folder is ${state.length} characters`);
   const channelFile = join(state, "internal-processes", `owned-${"0".repeat(36)}`, "channel", "output", "stdout-000000000001.json");
@@ -297,27 +322,32 @@ test("a refusal raised before a tool's effect starts settles durably; any other 
   }
 });
 
-test("a state folder no database can open is refused at startup, naming the path and its length", windowsOnly, async () => {
-  const root = await mkdtemp(join(tmpdir(), "aiboard-long-refusal-"));
+test("a state folder past SQLite's default path buffer starts, with its databases in it", { ...windowsOnly, timeout: 120_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiboard-long-state-"));
   const oldExitCode = process.exitCode;
+  let runner: StartedRunner | undefined;
+  let shutdownResolve!: (error?: unknown) => void;
+  const shutdownComplete = new Promise<unknown>((resolve) => { shutdownResolve = resolve; });
   try {
     const project = join(root, "project");
     await mkdir(project);
-    const state = join(root, "s".repeat(240), "s".repeat(240), "s".repeat(240), "s".repeat(240));
+    const state = join(root, "s".repeat(240), "s".repeat(240), "s".repeat(240), "s".repeat(240), "s".repeat(240));
+    assert.ok(state.length > 1040, `state folder is ${state.length} characters`);
     let failure: unknown;
-    const result = await startRunner(["--project", project, "--state-dir", state], {
-      controlListener: "none", onStartupError: (error) => { failure = error; },
+    runner = await startRunner(["--project", project, "--state-dir", state], {
+      controlListener: "none", onStartupError: (error) => { failure = error; }, onShutdownComplete: shutdownResolve,
     });
-    assert.equal(result.started, false);
-    assert.ok(failure instanceof Error);
-    assert.ok(failure.message.startsWith("windows_path_too_long: The Runner state folder is "), failure.message);
-    assert.ok(failure.message.includes(state), "names the path");
-    assert.ok(failure.message.includes(`${state.length} characters`), "gives its length");
-    assert.match(failure.message, /--state-dir/);
-    assert.equal(existsSync(state), false, "no state was created");
+    assert.equal(runner.started, true, String(failure));
+    const databases = (await readdir(state, { recursive: true })).filter((name) => name.endsWith(".sqlite"));
+    assert.ok(databases.length > 0, "the Runner keeps its databases in the long state folder");
   } finally {
+    if (runner?.started) {
+      await runner.shutdown();
+      const error = await shutdownComplete;
+      if (error) throw error;
+    }
     process.exitCode = oldExitCode;
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -433,7 +463,7 @@ test("state written through a plain path stays readable and locked once the Runn
     const directory = await directoryOfLength(root, 245 - "\\e.sqlite".length);
     const file = join(directory, "e.sqlite");
     assert.equal(file.length, 245);
-    assert.ok(sqliteDatabaseLocation(file).startsWith("\\\\?\\"));
+    assert.ok(sqliteDatabaseLocation(file).startsWith("file:////%3F/"));
     const older = new DatabaseSync(file, { timeout: 0 });
     older.exec("CREATE TABLE kept(value TEXT); INSERT INTO kept VALUES ('from before');");
     const current = new DatabaseSync(sqliteDatabaseLocation(file), { timeout: 0 });
@@ -457,15 +487,17 @@ test("paths the Windows limits do not reach are left exactly as given", () => {
   const atLimit = `C:\\${"x".repeat(WINDOWS_PLAIN_PATH_LIMIT - 4)}`;
   assert.equal(sqliteDatabaseLocation(atLimit, "win32"), atLimit);
   const past = `${atLimit}x`;
-  assert.equal(sqliteDatabaseLocation(past, "win32"), `\\\\?\\${past}`);
+  assert.equal(windowsNativeFilePath(past, "win32"), `\\\\?\\${past}`);
+  assert.equal(sqliteDatabaseLocation(past, "win32"), `file:////%3F/C:/${"x".repeat(WINDOWS_PLAIN_PATH_LIMIT - 3)}?vfs=win32-longpath`);
   assert.equal(windowsNativeFilePath(past, "linux"), past);
   const server = `\\\\server\\share\\${"x".repeat(300)}`;
-  assert.equal(sqliteDatabaseLocation(server, "win32"), `\\\\?\\UNC\\server\\share\\${"x".repeat(300)}`);
-  assert.throws(() => sqliteDatabaseLocation(`C:\\${"x".repeat(1100)}`, "win32"), /windows_path_too_long: A Runner database path is 1103 characters long/);
+  assert.equal(sqliteDatabaseLocation(server, "win32"), `file:////%3F/UNC/server/share/${"x".repeat(300)}?vfs=win32-longpath`);
+  const odd = `C:\\${"x".repeat(300)}\\a 100%#b%3F.sqlite`;
+  assert.equal(sqliteDatabaseLocation(odd, "win32"), `file:////%3F/C:/${"x".repeat(300)}/a 100%25%23b%253F.sqlite?vfs=win32-longpath`);
+  assert.equal(sqliteDatabaseLocation("file:already-a-uri.sqlite", "win32"), "file:already-a-uri.sqlite");
   assert.doesNotThrow(() => assertUsableWorkingDirectory(`C:\\${"x".repeat(255)}`, "win32"));
   assert.throws(() => assertUsableWorkingDirectory(`C:\\${"x".repeat(256)}`, "win32"), /259 characters long/);
   assert.doesNotThrow(() => assertUsableWorkingDirectory(`/home/${"x".repeat(400)}`, "linux"));
-  assert.doesNotThrow(() => assertStateDirectoryUsable(`/home/${"x".repeat(2000)}`, "linux"));
   assert.doesNotThrow(() => assertTempDirectoryUsable(`/tmp/${"x".repeat(2000)}`, "linux"));
 });
 

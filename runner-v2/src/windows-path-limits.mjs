@@ -3,9 +3,11 @@
 //
 // 1. SQLite, opened with a plain path, stops working once the database path plus its "-journal" suffix passes
 //    MAX_PATH. That is true even with Windows long paths enabled (measured at 252 characters on Windows 10 with
-//    LongPathsEnabled=1). Given the \\?\ form it works up to its own 1040-byte path limit, which is what
-//    sqliteDatabaseLocation does. File locks belong to the file, not the spelling of its path, so a Runner using
-//    the \\?\ form and one using the plain form still exclude each other.
+//    LongPathsEnabled=1). Its default Windows VFS also stops at a 1040-byte path buffer, even in the \\?\ form.
+//    Its "win32-longpath" VFS, given the \\?\ form, reaches the Windows limit of 32,767 characters (measured to
+//    32,077 with WAL, -shm and ATTACH). Node only selects a VFS through a URI, so sqliteDatabaseLocation hands long
+//    paths over as one. File locks belong to the file, not the spelling of its path or the VFS that opened it, so a
+//    Runner using the URI and one using the plain path still exclude each other.
 // 2. A process cannot start in a working directory past 258 characters, whatever the registry says. Nothing can
 //    move that limit, so assertUsableWorkingDirectory reports it before any process is spawned.
 // 3. The Windows PowerShell Job host opens its log files with plain Win32 and .NET calls, which pass 260 characters
@@ -23,13 +25,6 @@ export const WINDOWS_MAX_WORKING_DIRECTORY = 258;
 export const WINDOWS_PLAIN_PATH_LIMIT = 240;
 /** The longest TEMP the Runner accepts: the longest measured to work every time (see 4 above). */
 export const WINDOWS_MAX_TEMP_DIRECTORY = 200;
-/** SQLite's Windows path buffer is 1040 bytes and must also hold "-journal" (measured: 1024 opens, 1034 fails). */
-export const SQLITE_MAX_LOCATION_BYTES = 1032;
-/**
- * How far below the state folder the Runner keeps a database: builds\<51-character run>\process-backend\
- * owned-<uuid>\.fence.lock is the deepest, 129 characters.
- */
-export const STATE_DATABASE_RESERVE = 140;
 
 const SHORTER_STATE = "Start the Runner with a shorter state folder, for example --state-dir C:\\aiboard-state, or shorten LOCALAPPDATA.";
 const SHORTER_FOLDER = `Run it from a shorter folder. If this folder is inside the Runner's state folder: ${SHORTER_STATE}`;
@@ -54,15 +49,17 @@ export function windowsNativeFilePath(path, platform = process.platform) {
   return full.length < WINDOWS_PLAIN_PATH_LIMIT ? path : win32.toNamespacedPath(full);
 }
 
-/** What to hand DatabaseSync for a database file. */
+/**
+ * What to hand DatabaseSync, or ATTACH, for a database file. A long Windows path comes back as a URI naming the
+ * \\?\ form and the win32-longpath VFS: file:////%3F/C:/.../x.sqlite?vfs=win32-longpath. The empty authority keeps
+ * the escaped "?" in the path, and "%", "?" and "#" are escaped because SQLite reads them as URI syntax.
+ */
 export function sqliteDatabaseLocation(path, platform = process.platform) {
   if (path === ":memory:" || path.startsWith("file:")) return path;
   const location = windowsNativeFilePath(path, platform);
-  if (location !== path && Buffer.byteLength(location, "utf8") > SQLITE_MAX_LOCATION_BYTES) {
-    const full = win32.resolve(path);
-    throw new WindowsPathTooLongError("A Runner database path", full, full.length, `the ${SQLITE_MAX_LOCATION_BYTES} bytes SQLite can open`);
-  }
-  return location;
+  if (location === path) return path;
+  const escaped = location.replaceAll("\\", "/").replace(/[%?#]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `file://${escaped}?vfs=win32-longpath`;
 }
 
 /** Fails before a process is spawned, because the failure it replaces is a bare ENOENT that reads as "command not found". */
@@ -71,16 +68,6 @@ export function assertUsableWorkingDirectory(path, platform = process.platform) 
   const full = win32.resolve(path);
   if (full.length > WINDOWS_MAX_WORKING_DIRECTORY) {
     throw new WindowsPathTooLongError("A process working directory", full, full.length, `the ${WINDOWS_MAX_WORKING_DIRECTORY} characters Windows allows`, true);
-  }
-}
-
-/** Refuses at startup a state folder whose databases could never open, before any state is created in it. */
-export function assertStateDirectoryUsable(stateDirectory, platform = process.platform) {
-  if (platform !== "win32") return;
-  const full = win32.resolve(stateDirectory);
-  const available = SQLITE_MAX_LOCATION_BYTES - "\\\\?\\".length - STATE_DATABASE_RESERVE;
-  if (Buffer.byteLength(full, "utf8") > available) {
-    throw new WindowsPathTooLongError("The Runner state folder", full, full.length, `the ${available} bytes that leave room for its databases`);
   }
 }
 

@@ -17,7 +17,7 @@ import { createRemotePluginToolProvider, fetchPackageMetadata, ManagedMcpRuntime
 import { activateStagedRunnerExtensions, createPluginHandler, type RunnerExtensionActivation } from "./extension-plugin.js";
 import { OAUTH_CALLBACK_PATH } from "./extension-control-routes.js";
 import { assertGitForUnfinishedRuns, createBoundedGitCommandExecutor, gitUnavailableNotice, type GitPreflightResult, type GitUnavailableCode } from "./git-preflight.js";
-import { assertStateDirectoryUsable, assertTempDirectoryUsable, buildWorkspacePathProblem } from "./windows-path-limits.mjs";
+import { assertTempDirectoryUsable, buildWorkspacePathProblem } from "./windows-path-limits.mjs";
 import { deepestBuildWorkingDirectory } from "./git-run-context.js";
 import { SkillCatalog } from "./skill-catalog.js";
 import { ArtifactStore } from "./artifact-store.js";
@@ -168,7 +168,6 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     if (isHelpRequested(args)) { printHelp(); return { started: false, shutdown: async () => undefined }; }
     const options = parseArguments(args);
     await assertDirectory(options.projectPath, "project");
-    assertStateDirectoryUsable(options.stateDirectory);
     assertTempDirectoryUsable(tmpdir());
     const buildPathProblem = buildWorkspacePathProblem(deepestBuildWorkingDirectory(options.projectPath, options.stateDirectory));
     const location = seams.location ?? { platform: process.platform, environment: process.env, home: homedir() };
