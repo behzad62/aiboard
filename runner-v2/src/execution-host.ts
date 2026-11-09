@@ -188,6 +188,11 @@ export interface ExecutionHost {
   withGitInspection<T>(input: ExecutionHostGitInspectionInput, inspect: (git: GitCommandRunner) => Promise<T>): Promise<T>;
   activeRunIds(): readonly string[];
   filteredEnvironmentSource(): Readonly<Record<string, string>>;
+  /**
+   * Run the one-time host process checks now, so the first bound run does not wait for them (about 9 s on Windows).
+   * The same checks, run once and shared with every binding; never rejects.
+   */
+  prepare?(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -393,6 +398,13 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
     },
     filteredEnvironmentSource() {
       return Object.freeze({ ...ambientEnvironment });
+    },
+    prepare() {
+      if (closed || platform !== "windows" || options.processHostFacts) return Promise.resolve();
+      const warm = resolveWindowsFacts().then(() => undefined, () => undefined);
+      inspectionOperations.add(warm);
+      void warm.finally(() => inspectionOperations.delete(warm));
+      return warm;
     },
     async close() {
       if (closeComplete) return;
