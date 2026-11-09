@@ -95,6 +95,13 @@ test("device controls confine remote and local MCP tools and audit refusals", { 
     for (const role of ["remote", "local_mcp"] as const) {
       const inside = await call(role, "fs.read", { path: "inside.txt" });
       assert.equal(inside.isError, false, JSON.stringify(inside));
+      if (role === "local_mcp") {
+        // As on the relay: a null argument counts as one left out (live: until: {pattern, port: null}), except inside env.
+        const nulls = await call(role, "fs.read", { path: "inside.txt", startLine: null, endLine: null });
+        assert.equal(nulls.isError, false, JSON.stringify(nulls));
+        const unset = await call(role, "process.run", { command: process.execPath, args: ["--version"], env: { NODE_ENV: null } });
+        assert.equal(unset.isError, true, "a null env value would ask to unset it, which no tool does");
+      }
       const protectedRead = await call(role, "fs.read", { path: join(home, ".ssh", "key") });
       assert.equal(protectedRead.error?.code, "path_denied");
       assert.equal(principals.auditStore.list(1)[0]?.pathCategory, "ssh");

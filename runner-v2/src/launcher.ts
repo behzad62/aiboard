@@ -1183,14 +1183,19 @@ async function showRemoteLocalState(stateDirectory: string, deviceDirectory: str
 
 const RUNNER_TITLES: Readonly<Record<RunnerKind, string>> = { runner: "Runner", accounts: "Account runner", legacy: "Legacy runner", bench: "Bench runner" };
 
+/**
+ * The version is the running instance's own, from its record: after `aiboard update`, a Runner started before it
+ * still runs the old version, and this is how to tell.
+ */
 function describe(instance: LauncherInstance, state: string, kind: RunnerKind = "runner", style: TerminalStyle = PLAIN_STYLE): string {
   return `${style.green(style.bold(`${RUNNER_TITLES[kind]} ${state}`))}\n${style.dim("Project:")} ${instance.projectPath}\n` +
-    `${style.dim("URL:")} http://127.0.0.1:${instance.port}\n${style.dim("PID:")} ${instance.pid}\n`;
+    `${style.dim("Version:")} ${instance.version}\n${style.dim("URL:")} http://127.0.0.1:${instance.port}\n${style.dim("PID:")} ${instance.pid}\n`;
 }
 
 /** `aiboard remote` users work from their AI app, so the local URL and PID stay in `aiboard status`. */
 function describeForRemote(instance: LauncherInstance, state: string, kind: RunnerKind, style: TerminalStyle): string {
-  return `${style.green(style.bold(`${RUNNER_TITLES[kind]} ${state}`))}\n${style.dim("Project:")} ${instance.projectPath}\n`;
+  return `${style.green(style.bold(`${RUNNER_TITLES[kind]} ${state}`))}\n${style.dim("Project:")} ${instance.projectPath}\n` +
+    `${style.dim("Version:")} ${instance.version}\n`;
 }
 
 /** The bin entry points' error output: plain text unless the terminal takes color. */

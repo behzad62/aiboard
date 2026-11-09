@@ -140,6 +140,32 @@ test("process.run records stdout, stderr, and exit code without semantic verdict
   }
 });
 
+test("a command with its arguments typed in is refused at once, and says where they go", async () => {
+  // Live 2026-11-08: command "npm test" with no args spent 13.7 s, then said only "Process launch was not proven."
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-typed-args-"));
+  const calls: unknown[] = [];
+  const execution: OneShotCommandExecutor = { execute: async (request) => { calls.push(request); throw new Error("must not launch"); } };
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace });
+  for (const tool of createProcessTools({ execution })) broker.register(tool);
+  try {
+    const typed = await invoke(broker, "typed", { command: "npm test" });
+    assert.equal(typed.isError, true);
+    assert.equal(typed.error?.code, "command_has_arguments");
+    assert.match(typed.error!.message, /nothing ran.*its arguments go in args\. For this one: command "npm", args \["test"\]\./u);
+    const quoted = await invoke(broker, "quoted", { command: "git commit -m \"fix it\"", args: [] });
+    assert.equal(quoted.error?.code, "command_has_arguments");
+    assert.doesNotMatch(quoted.error!.message, /For this one/u, "no example that would split a quoted argument wrongly");
+    assert.equal(calls.length, 0);
+    // A path with spaces, or a program with its arguments in args, goes to the launch as before.
+    for (const input of [{ command: "C:\\Program Files\\nodejs\\node.exe" }, { command: "/opt/my tools/run" }, { command: "npm", args: ["test"] }]) {
+      await invoke(broker, "launch-" + calls.length, input);
+    }
+    assert.equal(calls.length, 3);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("exec mode does not interpret shell syntax and cwd cannot escape workspace", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-process-boundary-"));
   const workspace = join(root, "workspace");
@@ -302,4 +328,17 @@ test("Build's process.run ignores a stray search, as it did before search existe
   assert.equal(build!.validate({ command: "node", search: { pattern: "(a+)+$", regex: true } }).ok, true);
   const [client] = createProcessTools({ external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
   assert.equal(client!.validate({ command: "node", search: { pattern: "(a+)+$", regex: true } }).ok, false);
+});
+
+test("a client's process_run description says where a command stops and what a long one needs, in the names the client sees", () => {
+  // Some clients give sub-agents tool descriptions but no server instructions; a live run lost ~170 s running a 150 s job with process_run.
+  const [client] = createProcessTools({ external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
+  const description = client!.definition.description;
+  assert.match(description, /stopped at timeoutMs \(default 120 s\), which leaves its effect unknown, so start servers, long jobs and interactive programs with process_start\./u);
+  assert.match(description, /command is one program, with its arguments in args\./u);
+  assert.doesNotMatch(description, /process\.[a-z_]+/u, "clients see process_start and process_read_output, not the internal names");
+  const [short] = createProcessTools({ defaultTimeoutMs: 30_000, external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
+  assert.match(short!.definition.description, /default 30 s/u, "it quotes the limit the tool really uses");
+  const [build] = createProcessTools();
+  assert.doesNotMatch(build!.definition.description, /process_start/u, "Build's own description is unchanged");
 });

@@ -314,6 +314,11 @@ test("racing same-project launches reuse one verified Runner and never disclose 
     assert.ok(!JSON.stringify(output).includes(key));
     await runLauncher(["status", "--state-dir", f.state], runtime);
     assert.match(output.at(-1)!, /Runner running[\s\S]*URL: http:\/\/127\.0\.0\.1:/);
+    // Live 2026-11-08: after an update nothing showed which version a running Runner was.
+    const version = children[0]!.handshake!.version;
+    assert.ok(version, "the fake Runner got a version");
+    assert.ok(output.at(-1)!.includes(`\nVersion: ${version}\n`), output.at(-1)!);
+    assert.ok(output.some((line) => line.startsWith("Runner running") && line.includes(`\nVersion: ${version}\n`)), "the start output says it too");
     await runLauncher(["stop", "--state-dir", f.state], runtime);
     await Promise.all([first, second]);
     assert.equal(children[0]!.stops, 1);
@@ -424,7 +429,7 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
     await waitUntil(() => output.some((line) => line.includes("https://aiboard.me/connect#pair=")));
     const printed = output.join("");
     assert.match(printed, /Optional: to also use AI Board's Build mode in a browser on this computer, open:/);
-    assert.match(printed, /Runner running\nProject: /);
+    assert.match(printed, /Runner running\nProject: [^\n]+\nVersion: \S+\n/);
     // The Runner's local address, PID and bare pairing code say nothing to someone working from an AI app.
     assert.doesNotMatch(printed, /URL: |PID: |Pairing code: |Connect: /);
     // Live: a device revoked while running printed nothing; state changes after ready must still reach the terminal.

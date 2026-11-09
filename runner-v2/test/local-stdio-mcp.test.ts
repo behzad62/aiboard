@@ -212,12 +212,12 @@ test("stdio emits only MCP protocol frames and never the session token", async (
 });
 
 /**
- * The relay's MCP_INSTRUCTIONS (packages/relay/src/mcp-tools.ts in aiboard-tunnel, as of aiboard-tunnel#27), verbatim.
+ * The relay's MCP_INSTRUCTIONS (packages/relay/src/mcp-tools.ts in aiboard-tunnel, as of aiboard-tunnel#29), verbatim.
  * When the relay's text changes, change this copy too; the test below then says what the local text must change.
  */
 const RELAY_MCP_INSTRUCTIONS = [
   "AIBoard Remote runs tools on the user's own computer through their AI Board Runner.",
-  "- deviceId is only needed when several devices are online; devices_list gives the ids.",
+  "- deviceId may be left out while you use one device and no other is online; otherwise the call is refused.",
   "- Commands: process_run waits up to 45 s and returns the result; a longer command returns a jobId, and jobs_result has its result once jobs_status says it finished. Large output comes back as head, tail and diagnostics plus a processId. process_read_output with that processId takes search to find lines and lines to read them by number (process_run takes search too); do not run the command again or pipe it to see more.",
   "- Servers, long jobs and interactive programs: process_start with until (port, pattern or exit), because process_run stops a command at timeoutMs (default 120 s): what it printed comes back, but its effect is unknown. process_read_output with until {exit: true} and waitMs waits up to 30 s a call, so there is no need to poll quickly. process_interact sends one line and returns that turn's reply. process_signal stops a process and confirms it.",
   "- Files: files_read returns the file's sha256, even for a one-line range. files_patch (exact search and replace) and files_write default to the revision you last read or wrote, so read a file before changing it.",
@@ -230,7 +230,7 @@ const REMOTE_ONLY_WORDING: ReadonlyArray<readonly [relay: string, local: string]
   ["AIBoard Remote runs tools on the user's own computer through their AI Board Runner.",
     "AI Board Runner runs these tools on this computer, in the project folder it was started for."],
   // There is one device, and the local server refuses deviceId.
-  ["\n- deviceId is only needed when several devices are online; devices_list gives the ids.", ""],
+  ["\n- deviceId may be left out while you use one device and no other is online; otherwise the call is refused.", ""],
   // No relay holds the call and there are no jobs: the call lasts as long as the command.
   ["process_run waits up to 45 s and returns the result; a longer command returns a jobId, and jobs_result has its result once jobs_status says it finished.",
     "process_run waits for the command to finish and returns the result."],
