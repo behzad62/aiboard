@@ -156,6 +156,7 @@ test("a client finds a line in a huge command's output without reading it or run
     const stopped = await call("process_signal", { processId: managed, signal: "SIGTERM" });
     assert.equal(stopped.content.length, 1);
     assert.equal(metadata(stopped).status, "stopped");
+    assert.match(String(metadata(stopped).confirmed), /every process it started have exited.*No further check is needed/u, "a verified stop says the tree is gone");
     assert.equal(stopped.content[0]!.type, "json");
     const after = metadata(await call("process_read_output", { processId: managed, search: { pattern: "got hi" } }));
     assert.equal((after.search as { matches: unknown[] }).matches.length, 1, "output stays searchable after the stop");

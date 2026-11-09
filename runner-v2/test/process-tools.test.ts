@@ -336,6 +336,7 @@ test("a client's process_run description says where a command stops and what a l
   const description = client!.definition.description;
   assert.match(description, /stopped at timeoutMs \(default 120 s\), which leaves its effect unknown, so start servers, long jobs and interactive programs with process_start\./u);
   assert.match(description, /command is one program, with its arguments in args\./u);
+  assert.match(description, /Commands that run one after another.*go in one script instead of separate calls/u);
   assert.doesNotMatch(description, /process\.[a-z_]+/u, "clients see process_start and process_read_output, not the internal names");
   const [short] = createProcessTools({ defaultTimeoutMs: 30_000, external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
   assert.match(short!.definition.description, /default 30 s/u, "it quotes the limit the tool really uses");
