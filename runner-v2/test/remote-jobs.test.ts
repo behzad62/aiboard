@@ -76,8 +76,10 @@ async function harness(t: test.TestContext, limits: { running?: number; queued?:
   let work: Work = async (name) => ({ result: success(name), brokerInvoked: true });
   let stop: (clientId: string, processId: string) => Promise<boolean> = async () => false;
   const calls: string[] = [];
+  const revoked = new Set<string>();
   const runtime: RemoteRequestRuntime = {
     latestPolicyNarrowing: () => undefined,
+    authorizeJob: (identity) => revoked.has(identity.clientId) ? "unauthorized" : undefined,
     invoke: async (_identity, name) => success(name),
     stopStartedProcess: async (identity, processId) => await stop(identity.clientId, processId),
     invokeAdmitted: async (identity, name, _args, signal, _raw, _jobId, beforeBroker) => {
@@ -165,7 +167,7 @@ async function harness(t: test.TestContext, limits: { running?: number; queued?:
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   return {
-    root, databasePath, device, admission, connector, calls, connect, request, send, response, idFor, waitState,
+    root, databasePath, device, admission, connector, calls, revoked, connect, request, send, response, idFor, waitState,
     transport: () => transport,
     replaceTransport: () => { transport = new FixtureTransport(); },
     setWork: (next: Work) => { work = next; },
@@ -236,12 +238,22 @@ test("job reads and cancellation are principal-scoped and require relay authoriz
   const result = await h.response(h.request({ toolId: "jobs_result", payload: { jobId, maxBytes: 10 } }));
   assert.ok((result.data as { inline?: string }).inline);
   assert.ok((result.data as { nextCursor?: string }).nextCursor);
+  // Another conversation of the same account on this device reads the job as its owner would, but cannot cancel it.
+  const peerStatus = await h.response(h.request({ clientId: "client-b", toolId: "jobs_status", payload: { jobId } }));
+  assert.equal((peerStatus.data as { job: { state: string } }).job.state, "completed");
+  const peerEvents = await h.response(h.request({ clientId: "client-b", toolId: "jobs_events", payload: { jobId, limit: 2 } }));
+  assert.equal((peerEvents.data as { events: unknown[] }).events.length, 2);
+  const peerResult = await h.response(h.request({ clientId: "client-b", toolId: "jobs_result", payload: { jobId, maxBytes: 10 } }));
+  assert.equal((peerResult.data as { inline?: string }).inline, (result.data as { inline?: string }).inline);
+  assert.equal((await h.response(h.request({ clientId: "client-b", toolId: "jobs_cancel", payload: { jobId } }))).response.errorCode, "not_found");
   for (const toolId of ["jobs_status", "jobs_events", "jobs_result", "jobs_cancel"]) {
-    const foreign = await h.response(h.request({ clientId: "client-b", toolId, payload: { jobId } }));
-    assert.equal(foreign.response.errorCode, "not_found");
     const missing = await h.response(h.request({ clientId: "client-b", toolId, payload: { jobId: "missing" } }));
-    assert.equal(missing.response.errorCode, foreign.response.errorCode);
+    assert.equal(missing.response.errorCode, "not_found");
   }
+  h.revoked.add(CLIENT);
+  assert.equal((await h.response(h.request({ clientId: "client-b", toolId: "jobs_status", payload: { jobId } }))).response.errorCode, "not_found",
+    "a revoked conversation's jobs are nobody's to read");
+  h.revoked.delete(CLIENT);
   let reads = 0;
   const view = h.admission.view.bind(h.admission);
   h.admission.view = (...args) => { reads++; return view(...args); };

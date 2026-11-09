@@ -299,7 +299,9 @@ export async function requestLauncherApproval(instance: LauncherInstance, key: B
 }
 
 function isCommandApprovalRequest(value: unknown): value is CommandApprovalRequest {
-  if (!isObject(value) || Object.keys(value).length !== 2 || typeof value.nonce !== "string" ||
+  const session = isObject(value) ? value.session : undefined;
+  if (!isObject(value) || Object.keys(value).length !== (session === undefined ? 2 : 3) ||
+    (session !== undefined && (typeof session !== "string" || !/^[a-z2-9]{6}$/.test(session))) || typeof value.nonce !== "string" ||
     !/^[0-9a-f]{64}$/.test(value.nonce) || !isObject(value.summary)) return false;
   const summary = value.summary;
   const safe = (item: unknown, max: number) => typeof item === "string" && item.length <= max &&

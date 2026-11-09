@@ -193,6 +193,7 @@ test("approvals on: a shell job waits with zero dispatch, and one approval dispa
   assert.equal(pending.summary.jobId, response.jobId);
   assert.equal(pending.summary.executable, "node.exe");
   assert.match(pending.nonce, /^[0-9a-f]{64}$/);
+  assert.equal(pending.session, undefined, "a client id without a session code names no session");
   // A forged nonce or another job id is fenced and leaves the job waiting.
   assert.equal(h.connector.answerCommandApproval(response.jobId!, "0".repeat(64), true), false);
   assert.equal(h.connector.answerCommandApproval("job-other", pending.nonce, true), false);
@@ -241,6 +242,14 @@ test("cancel while awaiting approval has no effect and fences a later approval",
   assert.equal(h.connector.answerCommandApproval(response.jobId!, pending.nonce, true), false);
   await tick();
   assert.equal(h.calls.length, 0);
+});
+
+test("a waiting command names the conversation that asked", async (t) => {
+  const h = await harness(t, true);
+  const response = await h.submit(h.request({ clientId: "mcp-" + "0".repeat(32) + "-k7m2qa" }));
+  assert.equal(response.status, "awaiting_approval");
+  await tick();
+  assert.equal(h.connector.pendingCommandApproval()?.session, "k7m2qa");
 });
 
 test("non-shell tools are unaffected when approvals are on", async (t) => {
@@ -418,6 +427,8 @@ test("approval summaries are bounded, escaped and carry no input data or environ
   assert.throws(() => commandApprovalSummary("job-2c", "ABC123", "process.interact", { processId: "p-1", writeId: "model-chosen" }, tmpdir()));
   assert.throws(() => commandApprovalSummary("job-3", "ABC123", "process.start", { command: "x", injected: true }, tmpdir()));
   assert.throws(() => commandApprovalSummary("job-4", "ABC123", "fs.write", { path: "x" }, tmpdir()));
+  assert.equal(commandApprovalSummary("job-5", "ABC123", "process.signal", { processId: "p-1", signal: "SIGTERM", otherSession: true }, tmpdir()).toolName, "process.signal");
+  assert.throws(() => commandApprovalSummary("job-6", "ABC123", "process.signal", { processId: "p-1", signal: "SIGTERM", otherSession: "yes" }, tmpdir()));
 });
 
 test("the terminal prompt reads one key from a TTY and never answers without one", async () => {
@@ -430,6 +441,12 @@ test("the terminal prompt reads one key from a TTY and never answers without one
   assert.equal(await answeredYes, true);
   assert.equal(yes.isRaw, false, "raw mode is restored");
   assert.match(output.join(""), /Remote command approval ABC123/);
+  assert.doesNotMatch(output.join(""), /Session:/);
+  const named: string[] = [];
+  const answeredNamed = promptCommandApproval({ ...request, session: "k7m2qa" }, yes, (text) => named.push(text));
+  yes.write("n");
+  assert.equal(await answeredNamed, false);
+  assert.ok(named.join("").includes("\nSession: k7m2qa\nAllow? [y/N] "), named.join(""));
   const no = tty();
   const answeredNo = promptCommandApproval(request, no, () => undefined);
   no.write("x");
@@ -456,7 +473,7 @@ test("aiboard remote parses approval flags and refuses conflicts", () => {
 
 test("approvals travel only over the HMAC-keyed launcher control channel", async (t) => {
   const key = randomBytes(32);
-  const pending: CommandApprovalRequest = { nonce: "b".repeat(64),
+  let pending: CommandApprovalRequest = { nonce: "b".repeat(64),
     summary: commandApprovalSummary("job-7", "C0FFEE", "process.start", { command: "node", args: ["-v"] }, tmpdir()) };
   const answers: string[] = [];
   const control = await startLauncherControl({
@@ -469,6 +486,12 @@ test("approvals travel only over the HMAC-keyed launcher control channel", async
   t.after(async () => { await control.close(); });
   const polled = await requestLauncherApproval(control.instance, key);
   assert.deepEqual(polled.approval, pending);
+  // The conversation that asked travels too, so the terminal can name it.
+  pending = { ...pending, session: "k7m2qa" };
+  assert.deepEqual((await requestLauncherApproval(control.instance, key)).approval, pending);
+  pending = { ...pending, session: "Bad code" };
+  await assert.rejects(requestLauncherApproval(control.instance, key));
+  pending = { nonce: pending.nonce, summary: pending.summary };
   assert.deepEqual(await requestLauncherApproval(control.instance, key, { jobId: "job-7", nonce: pending.nonce, approved: true }), { accepted: true });
   assert.deepEqual(answers, ["job-7:bbbb:true"]);
   // A caller without the per-instance key gets nothing and cannot answer.
