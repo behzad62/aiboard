@@ -73,7 +73,7 @@ export function createProcessTools(
       description: options.external
         ? "Run an argument-array command or an explicitly selected shell script and wait for it. " +
           `It is stopped at timeoutMs (default ${defaultTimeoutMs / 1000} s), which leaves its effect unknown, so start servers, long jobs and interactive programs with process_start. ` +
-          "command is one program, with its arguments in args. Large output comes back as its head, tail and diagnostics with a processId for process_read_output; search returns only the matching lines."
+          "command is one program, with its arguments in args. Commands that run one after another, such as git add then git commit or a build then its tests, go in one script instead of separate calls. Large output comes back as its head, tail and diagnostics with a processId for process_read_output; search returns only the matching lines."
         : "Run an argument-array command or an explicitly selected shell script and record its mechanical result",
       inputSchema: {
         type: "object",

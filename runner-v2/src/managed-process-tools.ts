@@ -224,7 +224,7 @@ export function createManagedProcessTools(
             context
           );
           // Stopping is what was asked; the output stays readable through read_output if it is wanted.
-          return external ? { content: [{ type: "json", value: clientSnapshot(stopped) }], isError: false } : snapshotOutput(stopped);
+          return external ? { content: [{ type: "json", value: stoppedSnapshot(stopped) }], isError: false } : snapshotOutput(stopped);
         } catch (error) {
           return managedError(error);
         }
@@ -530,6 +530,18 @@ function clientSnapshot(snapshot: ManagedProcessSnapshot): Record<string, unknow
   return { processId: snapshot.processId, pid: snapshot.pid, status: reportedStatus(snapshot),
     ...(snapshot.exitCode !== null ? { exitCode: snapshot.exitCode } : {}),
     ...(snapshot.signal !== null ? { signal: snapshot.signal } : {}) };
+}
+
+/**
+ * A signal returns only after the Runner's verified release (otherwise it throws process_cleanup_unverified), so a
+ * stopped or exited result means the whole owned tree is gone. Saying so answers the check a model would otherwise
+ * spend a turn or two on (listing processes, probing the port).
+ */
+function stoppedSnapshot(snapshot: ManagedProcessSnapshot): Record<string, unknown> {
+  const value = clientSnapshot(snapshot);
+  return value.status === "stopped" || value.status === "exited"
+    ? { ...value, confirmed: "The process and every process it started have exited, so any port it listened on is closed. No further check is needed." }
+    : value;
 }
 
 function clientListedProcess(snapshot: ManagedProcessSnapshot): Record<string, unknown> {

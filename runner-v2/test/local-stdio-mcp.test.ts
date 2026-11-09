@@ -212,7 +212,7 @@ test("stdio emits only MCP protocol frames and never the session token", async (
 });
 
 /**
- * The relay's MCP_INSTRUCTIONS (packages/relay/src/mcp-tools.ts in aiboard-tunnel, as of aiboard-tunnel#33), verbatim.
+ * The relay's MCP_INSTRUCTIONS (packages/relay/src/mcp-tools.ts in aiboard-tunnel, as of aiboard-tunnel#34), verbatim.
  * When the relay's text changes, change this copy too; the test below then says what the local text must change.
  */
 const RELAY_MCP_INSTRUCTIONS = [
@@ -221,7 +221,7 @@ const RELAY_MCP_INSTRUCTIONS = [
   "- Commands: process_run waits up to 45 s and returns the result; a longer command returns a jobId, and jobs_result has its result once jobs_status says it finished. Large output comes back as head, tail and diagnostics plus a processId. process_read_output with that processId takes search to find lines and lines to read them by number; do not run the command again or pipe it to see more.",
   "- Servers, long jobs and interactive programs: process_start with until (port, pattern or exit), because process_run stops a command at timeoutMs (default 120 s): what it printed comes back, but its effect is unknown. process_read_output with until {exit: true} and waitMs waits up to 30 s a call, so there is no need to poll quickly. process_interact sends one line and returns that turn's reply. process_signal stops a process and confirms it.",
   "- Files: files_read returns the file's sha256, even for a one-line range. files_patch (exact search and replace) and files_write default to the revision you last read or wrote, so read a file before changing it.",
-  "- Git: status, diff and log have their own tools; commit by running git through process_run.",
+  "- Git: status, diff and log have their own tools; commit in one process_run script.",
   "- Every call to a device needs session, this conversation's code from devices_list (keep it in any summary); a change also needs an idempotencyKey, new per action.",
 ].join("\n");
 
@@ -260,6 +260,6 @@ test("initialize gives a local client the relay's guidance, less what only the r
   }
   // The Runner's own numbers (the 120 s default, the 30 s wait) are in the local text, so a change to one fails here too.
   assert.equal(LOCAL_MCP_INSTRUCTIONS, expected, "change the relay's text with this one, or list the difference in REMOTE_ONLY_WORDING");
-  assert.equal(LOCAL_MCP_INSTRUCTIONS.length, 1307);
+  assert.equal(LOCAL_MCP_INSTRUCTIONS.length, 1298);
   assert.ok(LOCAL_MCP_INSTRUCTIONS.length < 1500, "this text sits in every session's context");
 });
