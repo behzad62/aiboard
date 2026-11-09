@@ -640,6 +640,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     } else {
       process.stdout.write(`${JSON.stringify({ remoteSignalRunnerReady: true, pid: process.pid })}\n`);
     }
+    // After readiness, so startup is not slowed: the first remote, local MCP or Build call then finds the checks done.
+    void executionHost.prepare?.();
     return {
       started: true,
       ...(remoteOnly ? { remoteOnly: true } : {}),

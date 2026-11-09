@@ -240,9 +240,15 @@ test("Windows semantic probes exclude unrelated ambient credentials from the enc
 test("live Windows portable probes actively attest duplex, argv boundaries, and birth-tagged tree behavior", { timeout: 60_000 }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows semantic fixtures require Windows."); return; }
   const active = createWindowsProcessSemanticProbeSource({ ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), registerCleanup: (cleanup) => { t.after(cleanup); } });
+  let started = performance.now();
   const portableDuplex = await active.portableDuplex();
+  const duplexMs = performance.now() - started;
   const windowsBatchArgv = await active.windowsBatchArgv();
+  started = performance.now();
   const exactTreeBirth = await active.exactTreeBirth();
+  const treeMs = performance.now() - started;
+  // The tree fixture is released once its processes are recorded, not after a fixed lifetime (it used to be 4 s).
+  if (duplexMs < 2_000) assert.ok(treeMs < 4_000, `tree probe took ${Math.round(treeMs)} ms; duplex took ${Math.round(duplexMs)} ms`);
   const facts = await probeProcessHostSemantics({
     portableDuplex: async () => portableDuplex,
     windowsBatchArgv: async () => windowsBatchArgv,
