@@ -179,7 +179,9 @@ test("a Job terminal wait re-attests after every full window while the clock ste
   try {
     f.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
     assert.deepEqual(await f.channel.waitForTerminal(), { state: "exited", exitCode: 0 });
-    assert.equal(f.state.reattests, 7, "a negative interval since the last re-attestation cannot extend the drain");
+    // The wait's first pass joins the background read of window 1 instead of queuing its own, so
+    // every one of the 8 full windows, the first included, is followed by a re-attestation.
+    assert.equal(f.state.reattests, 8, "a negative interval since the last re-attestation cannot extend the drain");
   } finally { await f.channel.detach(); }
 });
 

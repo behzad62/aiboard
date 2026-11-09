@@ -91,6 +91,8 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
   private pollGeneration = 0;
   /** Consecutive background polls that found no output; drives the idle back-off. */
   private idlePolls = 0;
+  /** The background poll's read while it is in flight; waitForTerminal joins it instead of queuing another read behind it. */
+  private backgroundRead?: Promise<boolean>;
   private sink?: (metadata: BackpressuredOutputMetadata, bytes: Uint8Array) => Promise<BackpressuredOutputAcknowledgement>;
   private outputTail = Promise.resolve();
   private outputFailure?: Error;
@@ -162,7 +164,9 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     let attestedAt = this.clock();
     for (;;) {
       this.assertAttached();
-      const filledWindow = await this.poll();
+      // A background read already in flight serves as this pass's read: the read before re-attest
+      // only delivers progress, and an observed exit still drains with fresh reads started after it.
+      const filledWindow = await (this.backgroundRead ?? this.poll());
       this.assertAttached();
       // While reads keep filling the window, drain the next one before re-attesting: each read and
       // ACK already reloads the durable fence and authenticates supervisor status. A short read,
@@ -309,7 +313,10 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
    */
   private runBackgroundPoll(generation: number) {
     this.timer = undefined;
-    void this.poll().catch((error) => this.rememberOutputFailure(error)).finally(() => {
+    const read = this.poll();
+    this.backgroundRead = read;
+    void read.catch((error) => this.rememberOutputFailure(error)).finally(() => {
+      if (this.backgroundRead === read) this.backgroundRead = undefined;
       if (generation !== this.pollGeneration || this.detached || this.outputFailure) return;
       this.armBackgroundPoll(generation, this.idlePollDelay());
     });

@@ -155,7 +155,10 @@ export function createChildEnvironmentFactory(
       const path = environment.get("PATH");
       if (path) {
         const entries = path.value.split(delimiter);
-        const retained = entries.filter((entry) => !installRoots.some((root) => insideInstall(root, entry, request.workingDirectory)));
+        const retained = entries.filter((entry) => {
+          const candidate = pathEntryCandidate(entry, request.workingDirectory);
+          return candidate === undefined || !installRoots.some((root) => insideInstall(root, candidate));
+        });
         if (retained.length !== entries.length) {
           setEnvironment(environment, path.name, retained.join(delimiter));
           decisions.push({ kind: "removed_runner_path", name: path.name, count: entries.length - retained.length });
@@ -322,10 +325,13 @@ function canonicalPath(path: string): string {
   const absolute = resolve(path);
   try { return realpathSync.native(absolute); } catch { return absolute; }
 }
-function insideInstall(root: string, entry: string, workingDirectory?: string): boolean {
+/** The canonical path a PATH entry names, resolved once per entry; undefined when a relative entry has no directory to resolve against. */
+function pathEntryCandidate(entry: string, workingDirectory?: string): string | undefined {
   const value = entry.trim().replace(/^"(.*)"$/, "$1");
-  if (!isAbsolute(value) && !workingDirectory) return false;
-  const candidate = canonicalPath(isAbsolute(value) ? value : resolve(workingDirectory!, value));
+  if (!isAbsolute(value) && !workingDirectory) return undefined;
+  return canonicalPath(isAbsolute(value) ? value : resolve(workingDirectory!, value));
+}
+function insideInstall(root: string, candidate: string): boolean {
   const fold = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
   const traversal = relative(fold(root), fold(candidate));
   return traversal === "" || (traversal !== ".." && !traversal.startsWith(`..${sep}`) && !isAbsolute(traversal));
