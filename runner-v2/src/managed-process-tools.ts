@@ -24,6 +24,7 @@ import {
 import { utf8CompleteLength } from "./managed-process-output.js";
 import { renderPlain, renderPlainCompact, renderPlainLines, reportedStatus, sliceLines, validateUntil } from "./managed-process-wait.js";
 import { MANAGED_OUTPUT_SEARCH_SCHEMA, validateOutputSearch, type ManagedOutputSearchRequest } from "./managed-process-search.js";
+import { commandLineShell, shellInvocation } from "./command-line.js";
 
 type Input = Record<string, unknown>;
 
@@ -56,7 +57,7 @@ export function createManagedProcessTools(
   };
   const tools: NativeTool<Input>[] = [
     {
-      definition: definition("process.start", "Start a durable background process. Optionally wait in the same call (until/waitMs) for readiness: a port, a pattern, a prompt or exit.", false, "external"),
+      definition: definition("process.start", "Start a durable background process from a command line, or a program with args. Optionally wait in the same call (until/waitMs) for readiness: a port, a pattern, a prompt or exit. A job that takes a minute or more (a long test suite, a build, a slow script) starts here before the other steps, even if the task lists it later; do them while it runs, then read its result.", false, "external"),
       validate: validateStart,
       assessAccess: (input) => ({
         capability: "process.start",
@@ -371,7 +372,11 @@ function validateStart(input: unknown): ValidationResult<Input> {
   ) {
     return { ok: false, issues: ["args must be strings"] };
   }
-  return { ok: true, value: input };
+  // A command line (see command-line.ts) starts in the platform shell, which stays inside the owned process tree.
+  const shell = commandLineShell(input.command, input.args as string[] | undefined);
+  if (!shell) return { ok: true, value: input };
+  const { command, args } = shellInvocation(shell, input.command.trim());
+  return { ok: true, value: { ...input, command, args } };
 }
 
 function validateWriteStdin(input: unknown): ValidationResult<Input> {

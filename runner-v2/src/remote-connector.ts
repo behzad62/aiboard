@@ -50,6 +50,8 @@ export interface RemoteStatusReport {
   readonly runnerVersion: string;
   readonly platform: "win32" | "darwin" | "linux";
   readonly policy: { readonly shell: boolean; readonly approvals: boolean; readonly readOnly: boolean; readonly onlyHere: boolean; readonly audit: boolean };
+  /** The shells a script can run in, such as "powershell 5.1" or "pwsh 7.6" (shell-inventory.ts), so a client can pick one. */
+  readonly shells?: readonly string[];
 }
 
 export interface RemoteResponseMessage {
@@ -1318,6 +1320,12 @@ export class RemoteConnector {
     if (needsEpoch) this.reportStatus(state as "tool-ready" | "connected-degraded", reasonCode);
   }
 
+  /** Sends the status again, as when something in it changed (the shells, once the Runner has learned them). */
+  refreshStatus(): void {
+    const { state, reasonCode } = this.current;
+    if (state === "tool-ready" || state === "connected-degraded") this.reportStatus(state, reasonCode);
+  }
+
   private reportStatus(state: "tool-ready" | "connected-degraded", reasonCode: RemoteConnectionReason): void {
     const transport = this.transport;
     if (!transport || this.pendingEpoch !== undefined) return;
@@ -1328,7 +1336,7 @@ export class RemoteConnector {
     if (!report) return;
     try {
       void Promise.resolve(transport.send({ type: "status", state, reasonCode, runnerVersion: report.runnerVersion,
-        platform: report.platform, policy: { ...report.policy } })).catch(() => { /* readiness is advisory; socket loss is handled elsewhere */ });
+        platform: report.platform, policy: { ...report.policy }, ...(report.shells ? { shells: [...report.shells] } : {}) })).catch(() => { /* readiness is advisory; socket loss is handled elsewhere */ });
     } catch { /* same */ }
   }
 }

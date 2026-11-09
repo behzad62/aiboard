@@ -703,6 +703,12 @@ public static class ManagedProcessJobHost
 
     private static string BuildCommandLine(string command, string[] arguments)
     {
+        // cmd.exe reads no \" escapes: with /s /c it runs everything between the first and the last quote as typed,
+        // so a script keeps its own quotes (git commit -m "fix: tests") only when it is passed that way.
+        string name = Path.GetFileName(command);
+        if (arguments.Length == 4 && arguments[0] == "/d" && arguments[1] == "/s" && arguments[2] == "/c" &&
+            (String.Equals(name, "cmd.exe", StringComparison.OrdinalIgnoreCase) || String.Equals(name, "cmd", StringComparison.OrdinalIgnoreCase)))
+            return Quote(command) + " /d /s /c \"" + arguments[3] + "\"";
         StringBuilder result = new StringBuilder(Quote(command));
         foreach (string argument in arguments)
             result.Append(' ').Append(Quote(argument));

@@ -13,6 +13,8 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
+import { commandLineShell, shellInvocation } from "./command-line.js";
+import { knownShells, SHELL_NAMES, shellMayRun, type ShellName } from "./shell-inventory.js";
 import {
   outputFor,
   type OneShotCommandExecutor,
@@ -22,7 +24,7 @@ import {
 interface ProcessInput {
   command?: string;
   args?: string[];
-  shell?: "powershell" | "cmd" | "bash";
+  shell?: ShellName;
   script?: string;
   cwd?: string;
   env?: Record<string, string>;
@@ -71,16 +73,16 @@ export function createProcessTools(
       // Some clients give sub-agents tool descriptions but not the server's instructions, so this says what a long command needs.
       // Clients see the tools as process_start and process_read_output (remote-tool-runtime.ts LOCAL_TOOLS), so it names them so.
       description: options.external
-        ? "Run an argument-array command or an explicitly selected shell script and wait for it. " +
+        ? "Run a command and wait for it. " +
           `It is stopped at timeoutMs (default ${defaultTimeoutMs / 1000} s), which leaves its effect unknown, so start servers, long jobs and interactive programs with process_start. ` +
-          "command is one program, with its arguments in args. Commands that run one after another, such as git add then git commit or a build then its tests, go in one script instead of separate calls. Large output comes back as its head, tail and diagnostics with a processId for process_read_output; search returns only the matching lines."
+          "command is a whole command line, run by cmd.exe on Windows and bash elsewhere, or one program with its arguments in args; for another shell, such as PowerShell or Git Bash, send shell and script instead. Commands that run one after another, such as git add then git commit or a build then its tests, go in one call. Large output comes back as its head, tail and diagnostics with a processId for process_read_output; search returns only the matching lines."
         : "Run an argument-array command or an explicitly selected shell script and record its mechanical result",
       inputSchema: {
         type: "object",
         properties: {
           command: { type: "string" },
           args: { type: "array", items: { type: "string" } },
-          shell: { enum: ["powershell", "cmd", "bash"] },
+          shell: { enum: [...SHELL_NAMES], ...(options.external ? { description: "powershell is Windows PowerShell 5.1, pwsh is PowerShell 7 where installed, bash is Git Bash on Windows." } : {}) },
           script: { type: "string" },
           cwd: { type: "string" },
           env: { type: "object", additionalProperties: { type: "string" } },
@@ -97,7 +99,7 @@ export function createProcessTools(
     // The command's own limit decides. The broker's default would end a longer one with nothing to show for it.
     ...(options.external ? { timeoutMs: (input: ProcessInput) => Math.min(input.timeoutMs ?? defaultTimeoutMs, maximumTimeoutMs) + CLIENT_RESULT_GRACE_MS } : {}),
     assessAccess: (input) => ({
-      capability: input.shell ? "process.shell" : "process.execute",
+      capability: input.shell || (input.command !== undefined && commandLineShell(input.command, input.args)) ? "process.shell" : "process.execute",
       paths: [{ path: input.cwd ?? ".", access: "write" }],
       external: true,
     }),
@@ -125,7 +127,7 @@ function validateInput(input: unknown, searchable: boolean): ValidationResult<Pr
     (value.args === undefined ||
       (Array.isArray(value.args) && value.args.every((item) => typeof item === "string")));
   const shellMode =
-    (value.shell === "powershell" || value.shell === "cmd" || value.shell === "bash") &&
+    (SHELL_NAMES as readonly unknown[]).includes(value.shell) &&
     typeof value.script === "string";
   if (commandMode === shellMode) {
     return {
@@ -158,7 +160,7 @@ function validateInput(input: unknown, searchable: boolean): ValidationResult<Pr
     try { validateOutputSearch(value.search); }
     catch (error) { return { ok: false, issues: [error instanceof Error ? error.message : "search is invalid"] }; }
   }
-  return { ok: true, value: value as ProcessInput };
+  return { ok: true, value: asShellLine(value as ProcessInput) };
 }
 
 async function executeProcess(
@@ -173,6 +175,10 @@ async function executeProcess(
   if (!context.workspacePath) {
     return processError("workspace_required", "Process tool requires a workspace.");
   }
+  input = asShellLine(input);
+  if (input.shell && !shellMayRun(input.shell)) {
+    return processError("shell_unavailable", `${input.shell} is not installed on this device, so nothing ran. Its shells: ${knownShells()!.join(", ")}.`);
+  }
   if (!execution || !context.executionGrant || !context.callId) {
     return processError(
       "process_runtime_unavailable",
@@ -185,8 +191,6 @@ async function executeProcess(
       "Command is not allowlisted for this WorkBench attempt."
     );
   }
-  const typedArguments = argumentsInCommand(input);
-  if (typedArguments) return processError("command_has_arguments", typedArguments);
   const invocation = commandInvocation(input);
   const cwd = resolve(context.workspacePath, input.cwd ?? ".");
   const timeoutMs = Math.min(input.timeoutMs ?? defaultTimeoutMs, maximumTimeoutMs);
@@ -315,18 +319,13 @@ export async function clientStreamText(stream: ManagedOutputStreamEvidence, rend
   return missing > 0 ? `… (first ${missing} bytes not shown) …\n${shown}` : shown;
 }
 
-/**
- * What to say when a command has its arguments typed into it, such as "npm test", or undefined. A program named on
- * PATH never has a space in its name, so a spaced name with no args and no path in it cannot launch; it is refused at
- * once instead of after the launch fails. (Live 2026-11-08: "npm test" spent 13.7 s, then said "Process launch was not proven.")
- * A path such as C:\Program Files\nodejs\node.exe is left to the launch.
- */
-function argumentsInCommand(input: ProcessInput): string | undefined {
-  if (!input.command || (input.args?.length ?? 0) > 0 || /[\\/]/u.test(input.command)) return undefined;
-  const words = input.command.trim().split(/\s+/u);
-  if (words.length < 2) return undefined;
-  const example = /["'`]/u.test(input.command) ? "" : ` For this one: command ${JSON.stringify(words[0])}, args ${JSON.stringify(words.slice(1))}.`;
-  return `command ${JSON.stringify(input.command)} has arguments in it, so nothing ran. command is one program, and its arguments go in args.${example}`;
+/** A command line in command (see command-line.ts) becomes the shell script it is, so every later step sees a shell launch. */
+function asShellLine(input: ProcessInput): ProcessInput {
+  if (input.command === undefined) return input;
+  const shell = commandLineShell(input.command, input.args);
+  if (!shell) return input;
+  const { command, args: _args, ...rest } = input;
+  return { ...rest, shell, script: command.trim() };
 }
 
 function commandInvocation(input: ProcessInput): {
@@ -334,19 +333,8 @@ function commandInvocation(input: ProcessInput): {
   args: string[];
 } {
   if (input.command) return { command: input.command, args: input.args ?? [] };
-  switch (input.shell) {
-    case "powershell":
-      return {
-        command: "powershell.exe",
-        args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", input.script!],
-      };
-    case "cmd":
-      return { command: "cmd.exe", args: ["/d", "/s", "/c", input.script!] };
-    case "bash":
-      return { command: "bash", args: ["-lc", input.script!] };
-    default:
-      throw new Error("Invalid process invocation.");
-  }
+  if (!input.shell || input.script === undefined) throw new Error("Invalid process invocation.");
+  return shellInvocation(input.shell, input.script);
 }
 
 function withEvidence(
