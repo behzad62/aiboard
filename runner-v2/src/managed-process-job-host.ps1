@@ -1,5 +1,8 @@
 # RUNNER_RAW_PROCESS_BOUNDARY: audited Win32 CreateProcess/Job Object host for managed and LSP workloads.
 $ErrorActionPreference = "Stop"
+# Load ConvertFrom-Json's module (~50 ms) before the config line arrives: a pre-started spare does it
+# while it waits instead of after its claim; a fresh launch pays the same cost either way.
+$null = '{}' | ConvertFrom-Json
 
 $jobHostCsSource = @'
 using System;
