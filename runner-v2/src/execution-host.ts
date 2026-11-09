@@ -22,7 +22,7 @@ import {
 } from "./execution-host-streaming.js";
 import { ManagedProcessService } from "./managed-process.js";
 import { createExecutionHostManagedRuntime } from "./execution-host-managed-transport.js";
-import { createWindowsJobProcessHost, type WindowsJobProcessHost } from "./windows-job-process-host.js";
+import { createWindowsJobProcessHost, type WindowsJobProcessHost, type WindowsJobSpareOptions } from "./windows-job-process-host.js";
 import {
   createBoundedProcessOutputFactory,
   createRuntimeBackedOneShotCommandExecutor,
@@ -89,6 +89,8 @@ export interface ExecutionHostOptions {
   readonly ambientEnvironment?: Readonly<Record<string, string | undefined>>;
   readonly managedProcesses?: ManagedProcessService;
   readonly windowsJobHost?: WindowsJobProcessHost;
+  /** Pre-started Job-host spares for the default Windows Job host (ignored with an injected windowsJobHost). Absent: none. */
+  readonly windowsJobSpare?: WindowsJobSpareOptions;
   readonly processHostFacts?: ProcessHostSemanticFacts;
   readonly streamingStoreOptions?: SqliteStreamingSessionStoreOptions;
   readonly streamingOutput?: Pick<
@@ -222,6 +224,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
   const windowsJobHost = options.windowsJobHost ?? createWindowsJobProcessHost({
     stateDirectory: join(stateDirectory, "managed-processes-job-host"),
     platform: platform === "windows" ? "win32" : "linux",
+    ...(options.windowsJobSpare ? { spare: options.windowsJobSpare } : {}),
   });
   const internalProcesses = createRunnerInternalProcessKernel({
     stateDirectory: join(stateDirectory, "internal-processes"),

@@ -1340,6 +1340,211 @@ test("spare pin: a failing claimed-record persist surfaces and never runs the ca
   }
 });
 
+// keepWarm — a fresh call warms a spare for its run in the background, and the
+// run's next call claims it; run end still leaves zero processes.
+test("spare pin: keepWarm warms a spare after a fresh call and the next call claims it", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const world = await createPrivateSpareWorld("keepwarm", { keepWarm: true, idleTimeoutMs: 120000 });
+  const call = { project: join(world.root, "project"), runId: world.runId, sessionId: world.sessionId, jobHostDir: world.jobHostDir };
+  try {
+    await runTokenCall(world.binding, call, `kw1-${randomUUID().slice(0, 8)}`);
+    assert.equal(world.service.spareStats?.().claims ?? 0, 0, "the first call has no spare to claim");
+    await waitFor(() => readSpareRecords(world.jobHostDir).some((entry) => entry.spare && !entry.spareClaimed && processAlive(entry.supervisorPid)), 20_000, "keepWarm spare after a fresh call");
+    const waiting = readSpareRecords(world.jobHostDir).find((entry) => entry.spare && !entry.spareClaimed)!;
+    const { processId } = await runTokenCall(world.binding, call, `kw2-${randomUUID().slice(0, 8)}`);
+    assert.equal(processId, waiting.processId, "the run's next call must claim the warmed spare");
+    assert.equal(world.service.spareStats?.().claims ?? 0, 1, "exactly one claim");
+    await world.binding.close();
+    await assertNoLiveSupervisors(world.jobHostDir);
+  } finally {
+    try { await world.service.retireSpare?.(); } catch {}
+    try { await world.binding.close(); } catch {}
+    try { await world.host.close(); } catch {}
+    rmSync(world.root, { recursive: true, force: true });
+  }
+});
+
+// keepWarm with maxSpares — two runs taking turns each keep their own spare and
+// each claims only its own; closing one run retires only that run's spare.
+test("spare pin: keepWarm keeps one spare per run within maxSpares", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const world = await createPrivateSpareWorld("keepwarmruns", { keepWarm: true, idleTimeoutMs: 120000, maxSpares: 2 });
+  const runB = `${world.runId}-b`;
+  const bindingB = await world.host.bindRun({
+    runId: runB,
+    permissionProfile: "full",
+    capabilityContract: { digest: "c".repeat(64) } as RunnerCapabilityContract,
+    capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
+  });
+  const project = join(world.root, "project");
+  const callA = { project, runId: world.runId, sessionId: world.sessionId, jobHostDir: world.jobHostDir };
+  const callB = { project, runId: runB, sessionId: `session-${runB}`, jobHostDir: world.jobHostDir };
+  const runOf = (file: string): string | undefined => {
+    try { return (JSON.parse(readFileSync(join(world.jobHostDir, file), "utf8")) as { runId?: string }).runId; } catch { return undefined; }
+  };
+  const waitingFor = (runId: string) => readSpareRecords(world.jobHostDir).find((entry) => entry.spare && !entry.spareClaimed &&
+    runOf(entry.file) === runId && processAlive(entry.supervisorPid));
+  try {
+    await runTokenCall(world.binding, callA, `kwa1-${randomUUID().slice(0, 8)}`);
+    await runTokenCall(bindingB, callB, `kwb1-${randomUUID().slice(0, 8)}`);
+    await waitFor(() => waitingFor(world.runId) !== undefined && waitingFor(runB) !== undefined, 20_000, "a spare for each run");
+    const spareA = waitingFor(world.runId)!, spareB = waitingFor(runB)!;
+    assert.equal((await runTokenCall(world.binding, callA, `kwa2-${randomUUID().slice(0, 8)}`)).processId, spareA.processId, "run A claims its own spare");
+    assert.equal((await runTokenCall(bindingB, callB, `kwb2-${randomUUID().slice(0, 8)}`)).processId, spareB.processId, "run B claims its own spare");
+    assert.equal(world.service.spareStats?.().claims ?? 0, 2, "both runs' second calls used a spare");
+    await waitFor(() => waitingFor(world.runId) !== undefined && waitingFor(runB) !== undefined, 20_000, "replacement spares for both runs");
+    const replacementA = waitingFor(world.runId)!;
+    await bindingB.close();
+    await waitFor(() => waitingFor(runB) === undefined, 20_000, "run B's spare retired at its run end");
+    assert.ok(processAlive(replacementA.supervisorPid), "run A's spare survives run B's end");
+    await world.binding.close();
+    await assertNoLiveSupervisors(world.jobHostDir);
+  } finally {
+    try { await world.service.retireSpare?.(); } catch {}
+    try { await bindingB.close(); } catch {}
+    try { await world.binding.close(); } catch {}
+    try { await world.host.close(); } catch {}
+    rmSync(world.root, { recursive: true, force: true });
+  }
+});
+
+// keepWarm — a run whose spare is retired while one of its calls is still
+// launching gets no new spare when that call finishes: nothing outlives run end.
+test("spare pin: keepWarm starts no spare for a run retired during its last launch", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const world = await createPrivateSpareWorld("keepwarmretired", { keepWarm: true, idleTimeoutMs: 120000 });
+  const call = { project: join(world.root, "project"), runId: world.runId, sessionId: world.sessionId, jobHostDir: world.jobHostDir };
+  try {
+    const service = world.service as unknown as { launchOwned(input: { runId: string }): Promise<unknown> };
+    const launch = service.launchOwned.bind(world.service);
+    service.launchOwned = async (input) => {
+      const launched = launch(input);
+      await world.service.retireSpare?.({ runId: input.runId });
+      return await launched;
+    };
+    await runTokenCall(world.binding, call, `kw3-${randomUUID().slice(0, 8)}`);
+    await sleep(3000);
+    assert.equal(world.service.spareStats?.().prestarts ?? 0, 0, "a retired run must get no new spare");
+    assert.equal(readSpareRecords(world.jobHostDir).filter((entry) => entry.spare).length, 0, "no spare record may exist");
+  } finally {
+    try { await world.service.retireSpare?.(); } catch {}
+    try { await world.binding.close(); } catch {}
+    try { await world.host.close(); } catch {}
+    rmSync(world.root, { recursive: true, force: true });
+  }
+});
+
+// N7 — the claim reaches the supervisor but its acknowledgement is lost. That
+// is no proof the call never started, so the call fails like a post-ack
+// failure and the command runs exactly once: no fallback may re-run it.
+test("spare pin: a lost claim acknowledgement never runs the call twice", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  await withLostAckWorld("lostack", async (world, counter, launch) => {
+    const owned = world.service as unknown as { sendSpareClaim(...args: never[]): Promise<boolean> };
+    const origSend = owned.sendSpareClaim.bind(world.service);
+    owned.sendSpareClaim = async (...args: never[]): Promise<boolean> => {
+      await origSend(...args);
+      // Lose the acknowledgement only once the command has really started.
+      const end = Date.now() + 10_000;
+      while (Date.now() < end) {
+        try { if (readFileSync(counter, "utf8").length > 0) break; } catch {}
+        await sleep(25);
+      }
+      return false;
+    };
+    const fallbacksBefore = world.service.spareStats?.().fallbacks ?? 0;
+    let failure: unknown;
+    try { await launch(); } catch (error) { failure = error; }
+    assert.equal((failure as { code?: unknown })?.code, "process_start_failed", "a lost acknowledgement after a landed claim must surface as a launch failure");
+    await sleep(6000);
+    assert.equal(countRuns(counter), 1, "the landed command must have run exactly once");
+    assert.equal(world.service.spareStats?.().fallbacks ?? 0, fallbacksBefore, "no fallback may follow a claim that landed");
+  });
+});
+
+// N7 — the claim never reaches the supervisor. The aborted supervisor's
+// durable status proves nothing launched, so the call falls back to a fresh
+// launch and the command runs exactly once.
+test("spare pin: an undelivered claim falls back and runs the call once", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  await withLostAckWorld("undelivered", async (world, counter, launch) => {
+    const owned = world.service as unknown as { sendSpareClaim(...args: never[]): Promise<boolean> };
+    owned.sendSpareClaim = async (): Promise<boolean> => false;
+    const fallbacksBefore = world.service.spareStats?.().fallbacks ?? 0;
+    const snapshot = await launch();
+    assert.ok(snapshot.pid > 0, "the fallback launch must start the command");
+    await sleep(6000);
+    assert.equal(countRuns(counter), 1, "the command must run exactly once on the fresh launch");
+    assert.equal(world.service.spareStats?.().fallbacks ?? 0, fallbacksBefore + 1, "a proven-unlanded claim counts one fallback");
+  });
+});
+
+// N7 — an acked claim whose child starts after the startup wait gave up. The
+// Job host already holds the call, so the call fails and is never re-run.
+test("spare pin: an acked claim with a slow child start never runs the call twice", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  await withLostAckWorld("slowstart", async (world, counter, launch) => {
+    // The first startup wait after prestart (the claimed call's) gets 1 ms; any later one the normal budget.
+    const owned = world.service as unknown as { startDeadlineMs: number };
+    const normal = owned.startDeadlineMs;
+    let reads = 0;
+    Object.defineProperty(world.service, "startDeadlineMs", { configurable: true, get: () => (reads++ === 0 ? 1 : normal) });
+    const fallbacksBefore = world.service.spareStats?.().fallbacks ?? 0;
+    let failure: unknown;
+    try { await launch(); } catch (error) { failure = error; }
+    assert.equal((failure as { code?: unknown })?.code, "process_start_failed", "a claim that did not settle in time must surface as a launch failure");
+    await sleep(8000);
+    // The failed call may or may not have started before its supervisor was stopped; it never runs twice.
+    assert.ok(countRuns(counter) <= 1, `the claimed command must never run twice: ${countRuns(counter)}`);
+    assert.equal(world.service.spareStats?.().fallbacks ?? 0, fallbacksBefore, "no fallback may follow an acked claim");
+  });
+});
+
+function countRuns(counter: string): number {
+  try { return readFileSync(counter, "utf8").length; } catch { return 0; }
+}
+
+async function withLostAckWorld(
+  label: string,
+  body: (
+    world: Awaited<ReturnType<typeof createPrivateSpareWorld>>,
+    counter: string,
+    launch: () => Promise<{ pid: number }>,
+  ) => Promise<void>,
+): Promise<void> {
+  const world = await createPrivateSpareWorld(label, { idleTimeoutMs: 120000 });
+  const token = `n7${label}-${randomUUID().slice(0, 8)}`;
+  const counter = join(world.root, `${token}.txt`);
+  try {
+    await prestartSpareOrFail(world.service, { runId: world.runId, sessionId: world.sessionId });
+    await body(world, counter, async () => await world.service.launchOwned({
+      runId: world.runId,
+      sessionId: world.sessionId,
+      command: process.execPath,
+      args: ["-e", `require('fs').appendFileSync(${JSON.stringify(counter)},'x');setTimeout(()=>process.exit(0),4000)`],
+      workingDirectory: world.root,
+      environment: { ...process.env } as Record<string, string>,
+      interactive: true,
+      fence: { ownerId: `px2c-${label}`, fencingToken: 1 },
+    }));
+  } finally {
+    try {
+      const rec = readSpareRecords(world.jobHostDir).find((entry) => entry.args.some((arg) => arg.includes(token)));
+      if (rec) await killIdentifiedPids([rec.pid, rec.supervisorPid].filter((pid) => pid > 0));
+    } catch {}
+    try { await world.service.retireSpare?.(); } catch {}
+    try { await world.binding.close(); } catch {}
+    try { await world.host.close(); } catch {}
+    rmSync(world.root, { recursive: true, force: true });
+  }
+}
+
 // PX-2e: no supervisor or Job host started by this file (temp roots
 // `aiboard-px2c-*`) may still be alive at file end. The per-test record
 // gates above stay authoritative; this process-level guard additionally

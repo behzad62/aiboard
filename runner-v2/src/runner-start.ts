@@ -249,6 +249,10 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       allowNestedRunnerState: remoteOnly,
       artifacts,
       ambientEnvironment,
+      // A pre-started supervisor and Job host waits for each run that launched (up to 4 runs, about
+      // 85 MB each), so the run's next command skips their startup (~200 ms). Each retires after 60 s
+      // idle, at run end, or with the Runner.
+      windowsJobSpare: { keepWarm: true, idleTimeoutMs: 60_000, maxSpares: 4 },
     });
     resources.executionHost = executionHost;
     const internalExecutionContext = createRunnerInternalExecutionContext({
