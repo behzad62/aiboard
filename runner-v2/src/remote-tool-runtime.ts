@@ -14,7 +14,8 @@ import { createProcessTools } from "./process-tools.js";
 import { roleAllowList } from "./role-capabilities.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
-import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore, type LocalMcpIdentity, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
+import type { ManagedProcessObservation } from "./managed-process-contracts.js";
+import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore, remoteSessionCode, type LocalMcpIdentity, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteAuditStore } from "./remote-audit-store.js";
 import { APPROVAL_TOOLS, commandApprovalSummary, type CommandApprovalSummary } from "./remote-approval.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
@@ -245,6 +246,9 @@ export class RemoteToolRuntime {
       let dispatchArgs: unknown;
       try { dispatchArgs = await constrainArguments(this.pathGuard, this.workspacePath, this.options.principals.policy(identity), name, args, `remote:${principal.principalId}`); }
       catch (error) { if (error instanceof RemotePathDeniedError) { const result = failure(callId, name, error.code, error.message); onDispatch?.(result); return result; } throw error; }
+      const crossSession = await this.crossSession(identity, principal, bound, callId, name, dispatchArgs, onBrokerInvoke);
+      if (crossSession) { onDispatch?.(crossSession); return crossSession; }
+      dispatchArgs = withoutSessionFlags(name, dispatchArgs);
       onBrokerInvoke?.();
       const result = await bound.broker.invoke({ type: "tool_call", callId, name, arguments: dispatchArgs }, {
         runId: principal.runId, sessionId: principal.sessionId,
@@ -258,6 +262,15 @@ export class RemoteToolRuntime {
           catch (cause) { if (cause instanceof RemotePathDeniedError) { const denied = failure(callId, name, cause.code, cause.message); onDispatch?.(denied); return denied; } throw cause; }
         }
       }
+      if (name === "process.list" && (args as { allSessions?: unknown } | undefined)?.allSessions === true && !result.isError) {
+        const others = (await this.peerProcesses(identity)).map(({ peer, item }) => ({ processId: item.processId,
+          session: remoteSessionCode(peer.identity.clientId) ?? "another app", command: [item.command, ...item.args].join(" ").slice(0, 200),
+          status: item.status, ...(item.exitCode !== null ? { exitCode: item.exitCode } : {}), startedAt: item.startedAt }));
+        const listed = { ...result, content: result.content.map((part) => part.type === "json" && part.value && typeof part.value === "object"
+          ? { type: "json" as const, value: { ...(part.value as object), otherSessions: others } } : part) };
+        onDispatch?.(listed);
+        return listed;
+      }
       onDispatch?.(result);
       return result;
     };
@@ -267,6 +280,51 @@ export class RemoteToolRuntime {
         ...(admittedJobId !== undefined ? { admittedJobId } : {}), authorize }, dispatch);
     }
     return await dispatch();
+  }
+
+  /**
+   * Processes other conversations of this account started on this device. Each conversation is its own principal and run,
+   * so this observes their runs through the trusted control plane, and only bindings that are already live: binding a
+   * peer's run would recover it. Their output is read-only here and the owner's grants are never used.
+   */
+  private async peerProcesses(identity: VerifiedRemoteIdentity): Promise<{ peer: RemotePrincipal; bound: BoundRemote; item: ManagedProcessObservation }[]> {
+    const found: { peer: RemotePrincipal; bound: BoundRemote; item: ManagedProcessObservation }[] = [];
+    for (const peer of this.options.principals.peers(identity)) {
+      const pending = this.bindings.get(peer.principalId);
+      if (!pending) continue;
+      let bound: BoundRemote;
+      try { bound = await pending; } catch { continue; }
+      for (const item of await bound.binding.managedProcesses.listRun(peer.runId)) {
+        if (item.sessionId === peer.sessionId && item.actor.role === "remote" && item.actor.id === peer.principalId) found.push({ peer, bound, item });
+      }
+    }
+    return found;
+  }
+
+  /** A read or stop of another conversation's process; undefined lets the call go to this conversation's own broker. */
+  private async crossSession(identity: VerifiedRemoteIdentity, principal: RemotePrincipal, bound: BoundRemote, callId: string,
+    name: string, args: unknown, onStop?: () => void): Promise<ToolResult | undefined> {
+    const input = args && typeof args === "object" ? args as Record<string, unknown> : {};
+    const reading = name === "process.read_output";
+    if ((!reading && !(name === "process.signal" && input.otherSession === true)) || typeof input.processId !== "string") return undefined;
+    const own = (await bound.binding.managedProcesses.listRun(principal.runId)).some((item) => item.processId === input.processId);
+    if (own) return undefined;
+    const match = (await this.peerProcesses(identity)).find(({ item }) => item.processId === input.processId);
+    if (!match) return reading ? undefined : failure(callId, name, "process_not_found", "No other conversation still connected to this device owns that process.");
+    const session = remoteSessionCode(match.peer.identity.clientId) ?? "another app";
+    if (reading) {
+      const limit = Number(input.tailBytes ?? input.maxBytes ?? 8192);
+      const value = { processId: match.item.processId, session, status: match.item.status,
+        ...(match.item.exitCode !== null ? { exitCode: match.item.exitCode } : {}),
+        stdout: match.item.stdout.slice(-limit), stderr: match.item.stderr.slice(-limit),
+        note: "Session " + session + " owns this process, so this is a read-only tail of its latest output; cursor, waitMs, until and lines work only there." };
+      return { callId, toolName: name, content: [{ type: "json", value }], isError: false };
+    }
+    onStop?.();
+    await match.bound.binding.managedProcesses.stopProcesses([match.item.processId]);
+    const after = (await match.bound.binding.managedProcesses.listRun(match.peer.runId)).find((item) => item.processId === match.item.processId);
+    return { callId, toolName: name, content: [{ type: "json", value: { processId: match.item.processId, session, status: after?.status ?? "stopped",
+      ...(after && after.exitCode !== null ? { exitCode: after.exitCode } : {}) } }], isError: false };
   }
 
   private binding(principal: RemotePrincipal): Promise<BoundRemote> {
@@ -604,6 +662,13 @@ function freezeArguments(value: unknown, seen = new WeakSet<object>()): unknown 
     Object.freeze(value);
   }
   return value;
+}
+
+/** allSessions and otherSession are the Runner's own; the managed-process tools take neither. */
+function withoutSessionFlags(name: string, args: unknown): unknown {
+  if ((name !== "process.list" && name !== "process.signal") || !args || typeof args !== "object" || Array.isArray(args)) return args;
+  const { allSessions: _all, otherSession: _other, ...rest } = args as Record<string, unknown>;
+  return rest;
 }
 
 function failure(callId: string, toolName: string, code: string, message: string): ToolResult {

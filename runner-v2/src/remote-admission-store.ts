@@ -179,6 +179,21 @@ export class RemoteAdmissionStore {
     });
   }
 
+  /**
+   * The caller that owns a job of this account on this device, for another conversation's read-only job tools
+   * (status, events, result). Never used to cancel: only the owner cancels.
+   */
+  jobOwner(identity: VerifiedRemoteIdentity, jobId: string): VerifiedRemoteIdentity | undefined {
+    this.requireReconciled();
+    const principal = checkedPrincipal(identity);
+    checkedId(jobId);
+    const row = (this.database.prepare("SELECT account_id, client_id, device_id FROM remote_jobs WHERE job_id = ? AND account_id = ? AND device_id = ?")
+      .get(jobId, principal.accountId, principal.deviceId) ??
+      this.database.prepare("SELECT account_id, client_id, device_id FROM remote_job_tombstones WHERE job_id = ? AND account_id = ? AND device_id = ?")
+        .get(jobId, principal.accountId, principal.deviceId)) as { account_id: string; client_id: string; device_id: string } | undefined;
+    return row ? { accountId: row.account_id, clientId: row.client_id, deviceId: row.device_id } : undefined;
+  }
+
   admit(identity: VerifiedRemoteIdentity, rawRequest: string, options: { rejectNew?: boolean; policyNarrowing?: string | null } = {}): AdmissionDecision {
     this.requireReconciled();
     const principal = checkedPrincipal(identity);

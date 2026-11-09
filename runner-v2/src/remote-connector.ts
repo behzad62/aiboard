@@ -5,7 +5,7 @@ import type { ToolResult } from "./agent-contracts.js";
 import { RemoteAdmissionError, parseRemoteRequest, remotePayloadDigest, type RemoteAdmissionStore, type RemoteJob, type RemoteRequest } from "./remote-admission-store.js";
 import { RemoteAuthError, type SignedRelayChallenge, type RemoteAuthorization, type RemoteAuthenticator } from "./remote-auth.js";
 import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
-import type { VerifiedRemoteIdentity } from "./remote-principal.js";
+import { remoteSessionCode, type VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
 import { COMMAND_APPROVAL_WINDOW_MS, type CommandApprovalNotice, type CommandApprovalRequest, type CommandApprovalSummary } from "./remote-approval.js";
 import { ArtifactTransferError, ArtifactTransferManager, type ArtifactTransferFrame } from "./remote-artifact-transfer.js";
@@ -662,7 +662,7 @@ export class RemoteConnector {
         if (beforeSend && !beforeSend()) {
           try {
             if (request.toolId === "jobs_status") {
-              const refreshed = this.jobTool({ accountId: request.accountId, clientId: request.clientId, deviceId: request.deviceId }, request);
+              const refreshed = this.jobTool(this.jobReader({ accountId: request.accountId, clientId: request.clientId, deviceId: request.deviceId }, request), request);
               await transport?.send({ type: "response", response: refreshed.response, data: refreshed.data });
             } else await transport?.send({ type: "response", response: rejected(request, "result_withheld_by_policy") });
           } catch { /* socket loss */ }
@@ -706,13 +706,14 @@ export class RemoteConnector {
       const refusal = this.options.runtime.authorizeJob?.(identity);
       if (refusal) { await respond(rejected(request, "unauthorized")); return; }
       if (JOB_TOOL_IDS.has(request.toolId)) {
-        const answer = this.jobTool(identity, request);
+        const reader = this.jobReader(identity, request);
+        const answer = this.jobTool(reader, request);
         const jobId = request.toolId === "jobs_result" || (request.toolId === "jobs_status" &&
           (answer.data as { job?: RemoteJob }).job?.outputRef) ? jobArguments(request).jobId : undefined;
         await respond(answer.response, answer.data, jobId ? () => {
           try {
-            const job = this.options.admission.getJob(identity, jobId);
-            return !!job && !this.resultWithheld(identity, job);
+            const job = this.options.admission.getJob(reader, jobId);
+            return !!job && !this.resultWithheld(reader, job);
           } catch { return false; }
         } : undefined);
         return;
@@ -875,6 +876,20 @@ export class RemoteConnector {
     });
   }
 
+  /**
+   * Whose job a job tool reads. Each conversation is its own caller (the relay's client id carries its session code),
+   * so a job another conversation of this account on this device started is read as its owner: status, events and
+   * result only. A cancel always acts as the caller, so only the owner can cancel.
+   */
+  private jobReader(identity: VerifiedRemoteIdentity, request: RemoteRequest): VerifiedRemoteIdentity {
+    if (request.toolId === "jobs_cancel") return identity;
+    let jobId: string;
+    try { jobId = jobArguments(request).jobId; } catch { return identity; }
+    if (this.options.admission.getJob(identity, jobId)) return identity;
+    const owner = this.options.admission.jobOwner(identity, jobId);
+    return owner && !this.options.runtime.authorizeJob?.(owner) ? owner : identity;
+  }
+
   private jobTool(identity: VerifiedRemoteIdentity, request: RemoteRequest): { response: RemoteResponseMessage; data: unknown } {
     const args = jobArguments(request);
     const admission = this.options.admission;
@@ -1001,7 +1016,8 @@ export class RemoteConnector {
       const job = this.options.admission.markAwaitingApproval(entry.identity, entry.jobId);
       const deadline = Math.min(Date.parse(entry.request.expiresAt), Date.parse(job.createdAt) + COMMAND_APPROVAL_WINDOW_MS);
       entry.approvalDeadline = deadline;
-      entry.approval = Object.freeze({ summary, nonce: randomBytes(32).toString("hex") });
+      const session = remoteSessionCode(entry.identity.clientId);
+      entry.approval = Object.freeze({ summary, nonce: randomBytes(32).toString("hex"), ...(session ? { session } : {}) });
       this.options.auditApproval?.(entry.identity, entry.jobId, "requested");
       if (this.now().getTime() >= deadline) { this.expireApproval(entry); return; }
       entry.approvalTimer = setTimeout(() => {

@@ -19,6 +19,8 @@ export interface CommandApprovalSummary {
 export interface CommandApprovalRequest {
   readonly summary: CommandApprovalSummary;
   readonly nonce: string;
+  /** The conversation that asked (remoteSessionCode), shown only here; the dashboard gets its label from the relay. */
+  readonly session?: string;
 }
 
 /** How long a waiting command stays answerable; the request's own expiry can make it shorter. */
@@ -54,7 +56,7 @@ export function commandApprovalSummary(jobId: string, code: string, toolName: st
     toolName === "process.run" ? ["command", "args", "shell", "script", "cwd", "env", "timeoutMs", "render", "search"] :
     toolName === "process.write_stdin" ? ["processId", "writeId", "data", "appendNewline", "closeInput"] :
     toolName === "process.interact" ? ["processId", "data", "appendNewline", "closeInput", "until", "waitMs", "cursor", "stream", "maxBytes", "render", "lines"] :
-      ["processId", "signal"];
+      ["processId", "signal", "otherSession"];
   if (Object.keys(payload).some((key) => !allowed.includes(key))) throw new Error("Invalid approval payload.");
   let executable = "";
   let args: string[] = [];
@@ -79,7 +81,7 @@ export function commandApprovalSummary(jobId: string, code: string, toolName: st
       (payload.appendNewline !== undefined && typeof payload.appendNewline !== "boolean") ||
       (payload.closeInput !== undefined && typeof payload.closeInput !== "boolean")) throw new Error("Invalid approval payload.");
   } else if (typeof payload.processId !== "string" || !payload.processId ||
-    !["SIGTERM", "SIGINT", "SIGKILL"].includes(String(payload.signal))) {
+    !["SIGTERM", "SIGINT", "SIGKILL"].includes(String(payload.signal)) || (payload.otherSession !== undefined && typeof payload.otherSession !== "boolean")) {
     throw new Error("Invalid approval payload.");
   }
   const basename = executable.split(/[\\/]/).pop() ?? "";
@@ -131,7 +133,7 @@ export async function promptCommandApproval(request: CommandApprovalRequest, inp
   write("\nRemote command approval " + summary.code + " (job " + summary.jobId + ")\n" +
     "Tool: " + summary.toolName + "\nExecutable: " + (summary.executable || "(not available)") +
     "\nArguments: " + summary.argumentCount + "\nCommand: " + (summary.commandLine || "(not available)") +
-    "\nCwd: " + summary.cwdCategory + "\nAllow? [y/N] ");
+    "\nCwd: " + summary.cwdCategory + (request.session ? "\nSession: " + request.session : "") + "\nAllow? [y/N] ");
   return await new Promise<boolean | undefined>((finish) => {
     let done = false;
     const wasRaw = input.isRaw === true;
