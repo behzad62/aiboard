@@ -5,6 +5,13 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+# One deploy at a time, in start order: two pushes close together (two merges seconds apart on 2026-11-08) used
+# to race, and the older build finished last and overwrote the newer site. A newer queued deploy replaces an
+# older queued one; a running deploy is never cancelled mid-upload.
+concurrency:
+  group: deploy-aiboard-production
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
