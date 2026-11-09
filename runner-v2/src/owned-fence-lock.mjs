@@ -384,6 +384,14 @@ function acquire(path, options) {
   let proposalInserted = false;
   let claimed = false;
   try {
+    if (tryProposeAndClaimFree(context)) {
+      proposalInserted = true;
+      claimed = true;
+      retainedHolders.delete(path);
+      liveAcquisitions.set(path, acquisitionId);
+      context.afterClaim?.();
+      return context;
+    }
     while (!proposalInserted) {
       try {
         assertCoordinationPathIdentity(path, pathIdentity);
@@ -701,6 +709,36 @@ function tryClaim(context) {
     return true;
   } catch (error) {
     rollbackQuietly(database);
+    throw error;
+  }
+}
+
+// Uncontended fast path. When no holder row exists, the proposal and the claim commit in one
+// IMMEDIATE transaction. That leaves exactly the rows the two-step path leaves when no writer
+// runs between its proposal and its claim, with one durable commit instead of two. Any holder
+// row (live, stale, or this instance's own unstarted one), any busy result, or anything else
+// unusual rolls back with nothing committed, and the caller takes the two-step path unchanged.
+function tryProposeAndClaimFree(context) {
+  const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, trace } = context;
+  try { database.exec("BEGIN IMMEDIATE"); }
+  catch (error) { if (isBusy(error)) { trace.busy += 1; return false; } throw error; }
+  try {
+    acquisitionTimeRemaining(context);
+    assertCoordinationPathIdentity(path, pathIdentity);
+    assertActiveProtocol(database, authorityId);
+    if (holderProposal(database)) { database.exec("ROLLBACK"); return false; }
+    trace.attempts += 1;
+    trace.holderRead = true;
+    database.prepare("INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES (?, ?, ?)")
+      .run(acquisitionId, holderPid, holderBirth);
+    insertHolder(database, acquisitionId, holderPid, holderBirth);
+    assertCoordinationPathIdentity(path, pathIdentity);
+    acquisitionTimeRemaining(context);
+    database.exec("COMMIT");
+    return true;
+  } catch (error) {
+    rollbackQuietly(database);
+    if (isBusy(error)) { trace.busy += 1; return false; }
     throw error;
   }
 }
