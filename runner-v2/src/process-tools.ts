@@ -68,8 +68,12 @@ export function createProcessTools(
   const tool: NativeTool<ProcessInput> = {
     definition: {
       name: "process.run",
+      // Some clients give sub-agents tool descriptions but not the server's instructions, so this says what a long command needs.
+      // Clients see the tools as process_start and process_read_output (remote-tool-runtime.ts LOCAL_TOOLS), so it names them so.
       description: options.external
-        ? "Run an argument-array command or an explicitly selected shell script and wait for it. Large output comes back as its head, tail and diagnostics with a processId for process.read_output; search returns only the matching lines."
+        ? "Run an argument-array command or an explicitly selected shell script and wait for it. " +
+          `It is stopped at timeoutMs (default ${defaultTimeoutMs / 1000} s), which leaves its effect unknown, so start servers, long jobs and interactive programs with process_start. ` +
+          "command is one program, with its arguments in args. Large output comes back as its head, tail and diagnostics with a processId for process_read_output; search returns only the matching lines."
         : "Run an argument-array command or an explicitly selected shell script and record its mechanical result",
       inputSchema: {
         type: "object",
@@ -181,6 +185,8 @@ async function executeProcess(
       "Command is not allowlisted for this WorkBench attempt."
     );
   }
+  const typedArguments = argumentsInCommand(input);
+  if (typedArguments) return processError("command_has_arguments", typedArguments);
   const invocation = commandInvocation(input);
   const cwd = resolve(context.workspacePath, input.cwd ?? ".");
   const timeoutMs = Math.min(input.timeoutMs ?? defaultTimeoutMs, maximumTimeoutMs);
@@ -307,6 +313,20 @@ export async function clientStreamText(stream: ManagedOutputStreamEvidence, rend
     ...(processId ? { omittedHint: `find them with process_read_output {processId: "${processId}", search: {pattern}} or read them with lines: {start, count}` } : {}) });
   const shown = summary.summarized ? summary.text : renderPlainCompact(text);
   return missing > 0 ? `… (first ${missing} bytes not shown) …\n${shown}` : shown;
+}
+
+/**
+ * What to say when a command has its arguments typed into it, such as "npm test", or undefined. A program named on
+ * PATH never has a space in its name, so a spaced name with no args and no path in it cannot launch; it is refused at
+ * once instead of after the launch fails. (Live 2026-11-08: "npm test" spent 13.7 s, then said "Process launch was not proven.")
+ * A path such as C:\Program Files\nodejs\node.exe is left to the launch.
+ */
+function argumentsInCommand(input: ProcessInput): string | undefined {
+  if (!input.command || (input.args?.length ?? 0) > 0 || /[\\/]/u.test(input.command)) return undefined;
+  const words = input.command.trim().split(/\s+/u);
+  if (words.length < 2) return undefined;
+  const example = /["'`]/u.test(input.command) ? "" : ` For this one: command ${JSON.stringify(words[0])}, args ${JSON.stringify(words.slice(1))}.`;
+  return `command ${JSON.stringify(input.command)} has arguments in it, so nothing ran. command is one program, and its arguments go in args.${example}`;
 }
 
 function commandInvocation(input: ProcessInput): {

@@ -468,7 +468,7 @@ export class LocalMcpToolSession {
     if (!internal) return failure(callId, name, "tool_unavailable", "Tool is unavailable to local MCP.");
     if (!input || typeof input !== "object" || Array.isArray(input)) return failure(callId, name, "invalid_arguments", "Tool arguments must be an object.");
     let args: Record<string, unknown>;
-    try { args = structuredClone(input) as Record<string, unknown>; } catch { return failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely."); }
+    try { args = withoutNulls(structuredClone(input)) as Record<string, unknown>; } catch { return failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely."); }
     if (Object.keys(args).some((key) => AUTHORITY_ARGUMENTS.has(key) || ["root", "repoPath", "deviceId"].includes(key))) return failure(callId, name, "invalid_arguments", "Tool arguments cannot supply Runner authority.");
     if (internal === "image.inspect" && Object.hasOwn(args, "artifactHash")) return failure(callId, name, "tool_unavailable", "Artifact-hash inspection is unavailable.");
     if (args.env && typeof args.env === "object" && Object.keys(args.env).some((key) => key.toUpperCase() === "AIBOARD_MCP_DEPTH")) return failure(callId, name, "invalid_arguments", "MCP ancestry is Runner-owned.");
@@ -608,4 +608,16 @@ function freezeArguments(value: unknown, seen = new WeakSet<object>()): unknown 
 
 function failure(callId: string, toolName: string, code: string, message: string): ToolResult {
   return { callId, toolName, content: [{ type: "text", text: message }], isError: true, error: { code, message } };
+}
+
+/**
+ * The arguments without their null properties, as the relay does (withoutNulls in aiboard-tunnel's mcp-gateway.ts).
+ * No tool argument takes null, and models fill in every field of an object they use part of (until: {pattern, port: null}),
+ * so null means the field is not set. Not inside env: its keys are variable names, where null could mean unset, which no
+ * tool does, so it stays an error there.
+ */
+function withoutNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutNulls);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null).map(([key, entry]) => [key, key === "env" ? entry : withoutNulls(entry)]));
 }
