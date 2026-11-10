@@ -56,7 +56,7 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
    ```
    Review and commit the public `recoveryKeys` entry. The release workflow refuses to sign while the list is empty.
 4. **Create the `release` environment.** In GitHub, open behzad62/aiboard → Settings → Environments → New environment → `release`.
-   - **Required reviewers:** add yourself (`behzad62`). Leave "Prevent self-review" off, because you both dispatch and approve.
+   - **Required reviewers:** none (removed 2026-11-10). Dispatching the workflow from `main` is the release decision; a second click on the same run added nothing.
    - **Deployment branches and tags:** choose "Selected branches", then add `main` only.
    - **Environment secret** `AIBOARD_RELEASE_SIGNING_KEY`: the full PEM text of `aiboard-release-2026a.pem`. Set it from the file, so the key never passes through a clipboard or chat:
      ```bash
@@ -87,15 +87,15 @@ Do steps 1–3 on a machine you trust, ideally offline. Never paste key material
    The workflow then:
    - builds all six bundles on Linux and on Windows and requires them to be byte-identical;
    - runs `aiboard version` and `aiboard doctor` from each bundle on its own OS and CPU (`macos-15-intel` for darwin-x64, `windows-11-arm` for the win-arm64 preview);
-   - waits for **your approval** of the `release` environment.
-3. **Approve the signing job.** The signing job:
+   - moves straight on to signing in the `release` environment.
+3. **Signing (automatic).** The signing job:
    - signs with `--require-commit`, which refuses bundles that were not built from a clean checkout of the dispatched commit;
    - refuses to sign if `main` has moved since the dispatch, so a queued run cannot sign with an older key policy; re-dispatch from the current `main`;
    - reserves its sequence before signing by creating the tag `release-sequence/stable/epoch-<epoch>/<n>` on the repository. Legacy `release-sequence/stable/<n>` tags count in epoch 0. Every run gets a different sequence, even if a draft is later deleted. A run whose reservation fails stops before signing; sequences may have gaps;
    - checks the signature again with `openssl`, exactly as `install.sh` does;
    - creates a **draft** release `v<version>` with the six bundles, `manifest.json` and `manifest.json.sig`.
 
-   Approving this job is the only manual step of a release.
+   Dispatching the workflow is the only manual step of a release.
 4. **Publish (automatic).** A `publish` job then runs outside the `release` environment, without the signing key:
    - verifies the signed manifest against the six bundles, and against the manifest committed on `main`, so it refuses one whose sequence is not higher (publication order);
    - publishes the draft, which makes the bundle URLs in the manifest live, and marks it the latest release;
