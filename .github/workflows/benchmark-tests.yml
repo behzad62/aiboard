@@ -1,13 +1,32 @@
 name: Benchmark Tests
 
+# Benchmarks are not worth a full run on every change: Runner-only, docs-only and other-workflow changes skip it here
+# (Runner V2 portable execution covers the Runner), and the nightly run catches anything those changes break here.
 on:
   pull_request:
+    paths-ignore:
+      - "runner-v2/**"
+      - "docs/**"
+      - "**/*.md"
+      - ".github/workflows/runner-*.yml"
+      - ".github/workflows/funboard-*.yml"
+      - ".github/workflows/deploy-aiboard.yml"
   push:
     branches: [main]
+    paths-ignore:
+      - "runner-v2/**"
+      - "docs/**"
+      - "**/*.md"
+      - ".github/workflows/runner-*.yml"
+      - ".github/workflows/funboard-*.yml"
+      - ".github/workflows/deploy-aiboard.yml"
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
 
 jobs:
   benchmark:
-    name: Certified benchmark checks (${{ matrix.os }})
+    name: Certified benchmark checks (${{ matrix.os }}, ${{ matrix.part }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -15,6 +34,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         node-version: [24.18.0]
+        # Two halves run in parallel: suite is npm run test:benchmark; qualification is the RJS qualification, the site
+        # build and the native browser profile. One job did both in about 14 minutes on Windows.
+        part: [suite, qualification]
 
     steps:
       - name: Checkout
@@ -33,26 +55,53 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Read the Playwright version
+        id: playwright
+        shell: bash
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # The RJS bundle test (suite) and the native browser profile (qualification) both need Chromium. The bundle pins
+      # the repository's Playwright version, so its own setup:browser finds this browser instead of downloading another.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.os == 'Windows' && '~/AppData/Local/ms-playwright' || '~/.cache/ms-playwright' }}
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      # --with-deps installs Linux system packages; on Windows it only adds Windows Server features (about 3 minutes).
+      - name: Install the Playwright browser
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi
+
       - name: Run benchmark suite
+        if: matrix.part == 'suite'
         shell: bash
         run: |
           set -o pipefail
           mkdir -p benchmark-results
           npm run publish-downloads 2>&1 | tee benchmark-results/publish-downloads.log
           npm run test:benchmark 2>&1 | tee benchmark-results/test-benchmark.log
-          npm run test:benchmark:rjs-qualification 2>&1 | tee benchmark-results/test-recoverable-job-service.log
-          npm run build 2>&1 | tee benchmark-results/build.log
 
-      - name: Install browser for native ToolBench qualification
-        run: npx playwright install --with-deps chromium
+      - name: Run RJS qualification and build
+        if: matrix.part == 'qualification'
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p benchmark-results
+          npm run publish-downloads 2>&1 | tee benchmark-results/publish-downloads.log
+          npm run test:benchmark:rjs-qualification 2>&1 | tee benchmark-results/test-recoverable-job-service.log
+          # --ignore-scripts skips the prebuild hook, which would publish the downloads a second time.
+          npm run build --ignore-scripts 2>&1 | tee benchmark-results/build.log
 
       - name: Verify native ToolBench browser profile
+        if: matrix.part == 'qualification'
         run: npm run test:benchmark:native-browser
 
       - name: Upload benchmark logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: benchmark-results-${{ matrix.os }}
+          name: benchmark-results-${{ matrix.os }}-${{ matrix.part }}
           path: benchmark-results/
           if-no-files-found: warn
