@@ -23,6 +23,7 @@ const allowedRawProcessBoundaries = new Set([
   "src/extension-mcp-launcher.ts",
   "src/self-update.ts",
   "src/machine-hint.ts",
+  "src/shell-inventory.ts",
 ]);
 const allowedNativeScriptProcessBoundaries = new Set([
   "src/managed-process-job-host.ps1",
