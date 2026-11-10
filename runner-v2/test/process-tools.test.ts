@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -85,6 +85,26 @@ test("process family production graph scrubs inherited secrets and continues bey
   }
 });
 
+test("a command line runs on the production graph with its operators and its own quotes intact", async (t) => {
+  // cmd.exe reads no \" escapes, so the Windows Job host passes `/d /s /c "<line>"` as typed (managed-process-job-host.ps1).
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-command-line-production-"));
+  const graph = createProductionOneShotCommandFixture(t);
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, toolTimeoutMs: 30_000, executionGrants: graph.executionGrants });
+  for (const tool of createProcessTools({ execution: graph.execution })) broker.register(tool);
+  try {
+    const node = JSON.stringify(process.execPath);
+    const result = await invoke(broker, "production-command-line", {
+      command: `echo first&& ${node} -e "console.log(JSON.stringify(process.argv.slice(1)))" "fix: tests & more" plain`,
+      timeoutMs: 25_000,
+    });
+    assert.equal(result.isError, false, result.error?.message ?? text(result));
+    assert.match(text(result), /first/u);
+    assert.match(text(result), /\["fix: tests & more","plain"\]/u);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("process family production graph continues truthfully when private spill setup fails", async (t) => {
   const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-production-spill-fault-"));
   const graph = createProductionOneShotCommandFixture(t, { spillFault: true });
@@ -140,27 +160,32 @@ test("process.run records stdout, stderr, and exit code without semantic verdict
   }
 });
 
-test("a command with its arguments typed in is refused at once, and says where they go", async () => {
-  // Live 2026-11-08: command "npm test" with no args spent 13.7 s, then said only "Process launch was not proven."
-  const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-typed-args-"));
-  const calls: unknown[] = [];
-  const execution: OneShotCommandExecutor = { execute: async (request) => { calls.push(request); throw new Error("must not launch"); } };
+test("a command line in command runs in the platform shell, exactly as that shell's script would", async () => {
+  // Live 2026-11-10: `cd /d D:\proj && git add ... && git commit ...` sent as command failed with "Process launch was
+  // not proven", and the model split every later commit into separate calls. Models write commands as one line.
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-command-line-"));
+  const spaced = join(workspace, "my tools", "run.exe");
+  mkdirSync(join(workspace, "my tools"));
+  writeFileSync(spaced, "");
+  const calls: Array<{ executable: string; arguments: readonly string[] }> = [];
+  const execution: OneShotCommandExecutor = { execute: async (request) => { calls.push(request); throw new Error("not launched in this test"); } };
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace });
-  for (const tool of createProcessTools({ execution })) broker.register(tool);
+  const tools = createProcessTools({ execution });
+  for (const tool of tools) broker.register(tool);
+  const shell = process.platform === "win32"
+    ? (line: string) => ({ executable: "cmd.exe", arguments: ["/d", "/s", "/c", line] })
+    : (line: string) => ({ executable: "bash", arguments: ["-lc", line] });
   try {
-    const typed = await invoke(broker, "typed", { command: "npm test" });
-    assert.equal(typed.isError, true);
-    assert.equal(typed.error?.code, "command_has_arguments");
-    assert.match(typed.error!.message, /nothing ran.*its arguments go in args\. For this one: command "npm", args \["test"\]\./u);
-    const quoted = await invoke(broker, "quoted", { command: "git commit -m \"fix it\"", args: [] });
-    assert.equal(quoted.error?.code, "command_has_arguments");
-    assert.doesNotMatch(quoted.error!.message, /For this one/u, "no example that would split a quoted argument wrongly");
-    assert.equal(calls.length, 0);
-    // A path with spaces, or a program with its arguments in args, goes to the launch as before.
-    for (const input of [{ command: "C:\\Program Files\\nodejs\\node.exe" }, { command: "/opt/my tools/run" }, { command: "npm", args: ["test"] }]) {
-      await invoke(broker, "launch-" + calls.length, input);
-    }
-    assert.equal(calls.length, 3);
+    const lines = ["npm test", "git add a.txt && git commit -m \"fix: tests\"", "  node --version  "];
+    for (const line of lines) await invoke(broker, "line-" + calls.length, { command: line, args: [] });
+    assert.deepEqual(calls.map(({ executable, arguments: args }) => ({ executable, arguments: [...args] })), lines.map((line) => shell(line.trim())));
+    // The same capability as an explicit shell script, so a command line gets no access a script would not.
+    assert.equal(tools[0]!.assessAccess!({ command: "npm test" } as never, {} as never)?.capability, "process.shell");
+    assert.equal(tools[0]!.assessAccess!({ command: "npm", args: ["test"] } as never, {} as never)?.capability, "process.execute");
+    // One program stays one program: a bare name, a program with args, and an existing path with a space in it.
+    calls.length = 0;
+    for (const input of [{ command: "node" }, { command: "npm", args: ["test"] }, { command: spaced }]) await invoke(broker, "program-" + calls.length, input);
+    assert.deepEqual(calls.map(({ executable }) => executable), ["node", "npm", spaced]);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
@@ -335,8 +360,8 @@ test("a client's process_run description says where a command stops and what a l
   const [client] = createProcessTools({ external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
   const description = client!.definition.description;
   assert.match(description, /stopped at timeoutMs \(default 120 s\), which leaves its effect unknown, so start servers, long jobs and interactive programs with process_start\./u);
-  assert.match(description, /command is one program, with its arguments in args\./u);
-  assert.match(description, /Commands that run one after another.*go in one script instead of separate calls/u);
+  assert.match(description, /command is a whole command line, run by cmd\.exe on Windows and bash elsewhere, or one program with its arguments in args; for another shell, such as PowerShell or Git Bash, send shell and script instead\./u);
+  assert.match(description, /Commands that run one after another.*go in one call\./u);
   assert.doesNotMatch(description, /process\.[a-z_]+/u, "clients see process_start and process_read_output, not the internal names");
   const [short] = createProcessTools({ defaultTimeoutMs: 30_000, external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
   assert.match(short!.definition.description, /default 30 s/u, "it quotes the limit the tool really uses");

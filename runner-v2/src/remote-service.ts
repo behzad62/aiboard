@@ -17,6 +17,7 @@ import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import type { RemoteDevicePolicy } from "./remote-principal.js";
 import { readRunnerVersion } from "./remote-pairing.js";
 import type { ProtectedLocations } from "./protected-locations.js";
+import { knownShells, shellInventory } from "./shell-inventory.js";
 import {
   closeRemoteComposition,
   composeRemoteRuntime,
@@ -256,12 +257,15 @@ export class RemoteService {
       statusReport: () => {
         if (!runnerVersion || (platform !== "win32" && platform !== "darwin" && platform !== "linux")) return undefined;
         const { shell, approvals, readOnly, onlyHere, audit } = this.composition.principals.policy(verified);
-        return { runnerVersion, platform, policy: { shell, approvals, readOnly, onlyHere, audit } };
+        const shells = knownShells();
+        return { runnerVersion, platform, policy: { shell, approvals, readOnly, onlyHere, audit }, ...(shells ? { shells } : {}) };
       },
       ...(this.options.onShutdownStep ? { onShutdownStep: this.options.onShutdownStep } : {}),
     });
     this.connector = connector;
     this.writeStatusFile(connector.state());
+    // The device status lists the shells once they are known (shell-inventory.ts); the connection never waits for them.
+    void shellInventory().then(() => { if (this.connector === connector) connector.refreshStatus(); });
     await connector.start();
   }
 

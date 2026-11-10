@@ -85,6 +85,7 @@ import { RemoteController, type RemoteEnableSettings, type RemoteEvent } from ".
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
 import { openPairUrl } from "./launcher.js";
 import { styleFor } from "./terminal-style.js";
+import { shellInventory } from "./shell-inventory.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -243,6 +244,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     await mkdir(artifactDirectory, { recursive: true });
     const artifacts = new ArtifactStore(artifactDirectory);
     const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
+    // Learn the shells in the background: the device status lists them, and a script for a missing one is refused at once.
+    void shellInventory();
     const executionHost = createExecutionHost({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,

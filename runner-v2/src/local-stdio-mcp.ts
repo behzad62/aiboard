@@ -224,9 +224,9 @@ const seconds = (ms: number): string => `${ms / 1000} s`;
 export const LOCAL_MCP_INSTRUCTIONS = [
   "AI Board Runner runs these tools on this computer, in the project folder it was started for.",
   "- Commands: process_run waits for the command to finish and returns the result. Large output comes back as head, tail and diagnostics plus a processId. process_read_output with that processId takes search to find lines and lines to read them by number (process_run takes search too); do not run the command again or pipe it to see more.",
-  "- Servers, long jobs and interactive programs: process_start with until (port, pattern or exit), because process_run stops a command at timeoutMs (default " + seconds(PROCESS_RUN_DEFAULT_TIMEOUT_MS) + "): what it printed comes back, but its effect is unknown. process_read_output with until {exit: true} and waitMs waits up to " + seconds(MANAGED_OUTPUT_WAIT_MAX_MS) + " a call, so there is no need to poll quickly. process_interact sends one line and returns that turn's reply. process_signal stops a process and confirms it.",
+  "- Servers, long jobs and interactive programs: process_start with until (port, pattern or exit), because process_run stops a command at timeoutMs (default " + seconds(PROCESS_RUN_DEFAULT_TIMEOUT_MS) + "): what it printed comes back, but its effect is unknown. When a task includes a job that takes a minute or more, start it with process_start before the other steps, even if the task lists it later, and do them while it runs; when nothing else is left, process_read_output with until {exit: true} waits up to " + seconds(MANAGED_OUTPUT_WAIT_MAX_MS) + " a call. process_interact sends one line and returns that turn's reply.",
   "- Files: files_read returns the file's sha256, even for a one-line range. files_patch (exact search and replace) and files_write default to the revision you last read or wrote, so read a file before changing it.",
-  "- Git: status, diff and log have their own tools; commit in one process_run script.",
+  "- Git: status, diff and log have their own tools; commit in one process_run call.",
   "- Every action that changes something needs an idempotencyKey: a new string per action, reused only to retry that same action.",
 ].join("\n");
 
