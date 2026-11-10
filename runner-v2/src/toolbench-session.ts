@@ -13,7 +13,7 @@ import { createEvidenceTools } from "./evidence-tools.js";
 import type { ExecutionHost, ExecutionHostRunBinding } from "./execution-host.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createOpenRouterApplyPatchTool } from "./openrouter-apply-patch-tool.js";
-import { createProcessTools } from "./process-tools.js";
+import { createProcessTools, processOutputRetention } from "./process-tools.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
 import { providerUsageConfig, type ProviderConfigStore, type RunnerProviderConfig } from "./provider-config-store.js";
 import { createProviderModel, providerCostEstimator, providerModelCostBasis } from "./native-build-factory.js";
@@ -184,7 +184,8 @@ export class ToolBenchSessions {
         ...createFilesystemTools({ artifacts, hiddenPaths: request.hiddenPaths, protectedPaths: request.protectedPaths }),
         createOpenRouterApplyPatchTool({ protectedPaths: request.protectedPaths }),
         ...createArtifactTools(artifacts),
-        ...createProcessTools({ execution: binding.commandExecution, allowedCommands: request.allowedCommands }),
+        ...createProcessTools({ execution: binding.commandExecution, allowedCommands: request.allowedCommands,
+          retention: processOutputRetention(binding.managedProcesses, artifacts) }),
         ...createManagedProcessTools(binding.managedProcesses),
         ...createEvidenceTools({ git: binding.git, store: evidence, artifacts, taskId: request.sessionId, execution: binding.commandExecution, allowedCommands: request.allowedCommands }),
       ];

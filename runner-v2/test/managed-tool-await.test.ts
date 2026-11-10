@@ -12,7 +12,8 @@ for (const name of ["process.poll", "process.list"] as const) {
     const result = await tool.execute({ processId: "owned" }, {} as ToolExecutionContext);
     assert.equal(result.isError, false);
     const json = result.content.find(block => block.type === "json"); assert.ok(json?.type === "json");
-    if (name === "process.list") assert.deepEqual(json.value, { processes: [snapshot] });
+    // A listed process says what the model can act on: its identity, status and start (managed-process-tools.ts clientListedProcess).
+    if (name === "process.list") assert.deepEqual(json.value, { processes: [{ processId: "owned", pid: 1, status: "running", startedAt: snapshot.startedAt }] });
     else { const { stdout: _stdout, stderr: _stderr, ...metadata } = snapshot; assert.deepEqual(json.value, metadata); }
   });
   test(`managed ${name} translates an asynchronous observation refusal into the existing typed tool error`, async () => {

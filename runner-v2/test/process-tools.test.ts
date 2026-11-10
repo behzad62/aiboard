@@ -11,7 +11,7 @@ import { ToolBroker } from "../src/tool-broker.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 import { createProductionOneShotCommandFixture } from "./support/one-shot-command-executor.js";
 
-test("process.run routes through the injected shared executor and discloses Full enforcement", async () => {
+test("process.run routes through the injected shared executor, and output volume alone does not fail it", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-routed-"));
   const calls: unknown[] = [];
   const execution: OneShotCommandExecutor = {
@@ -41,16 +41,8 @@ test("process.run routes through the injected shared executor and discloses Full
     assert.equal(calls.length, 1);
     assert.equal(result.isError, false, "output volume alone must not fail the command");
     assert.match(text(result), /routed/);
-    assert.deepEqual(json(result), {
-      exitCode: 0,
-      signal: null,
-      timedOut: false,
-      cancelled: false,
-      cleanup: { state: "verified_empty", verifiedAt: "2026-08-29T00:00:01.000Z" },
-      outputLossy: true,
-      enforcement: "unconfined_explicit_full",
-      disclosure: "unconfined_explicit_full",
-    });
+    // What holds for nearly every command (a verified cleanup, Full enforcement, no signal) is left out; a loss is not.
+    assert.deepEqual(json(result), { exitCode: 0, outputLossy: true });
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
@@ -72,13 +64,16 @@ test("process family production graph scrubs inherited secrets and continues bey
       command: process.execPath,
       args: ["-e", `const marker=String(process.env.${secretName} ?? "absent"); process.stdout.write(marker + "|"); process.stdout.write("x".repeat(65 * 1024 * 1024)); process.stdout.write("|" + marker);`],
       timeoutMs: 25_000,
+      // The raw tail, which is what is bounded; a summary would clip this one 65 MiB line to its start.
+      render: "raw",
     });
     assert.equal(result.isError, false, result.error?.message ?? "process command unexpectedly failed");
     assert.equal(text(result).includes("must-not-reach-child"), false);
-    assert.equal(text(result).includes("absent"), true);
+    assert.equal(text(result).includes("absent"), true, text(result).slice(-300));
     assert.equal(text(result).length < 256 * 1024, true, "model-visible output remains a bounded tail");
     assert.equal((json(result) as { outputLossy: boolean }).outputLossy, true);
-    assert.equal((json(result) as { disclosure: string }).disclosure, "unconfined_explicit_full");
+    // Full enforcement is what nearly every command has, so the result names only a narrower one.
+    assert.equal((json(result) as { disclosure?: string }).disclosure, undefined);
   } finally {
     if (previous === undefined) delete process.env[secretName]; else process.env[secretName] = previous;
     rmSync(workspace, { recursive: true, force: true });
@@ -119,7 +114,7 @@ test("process family production graph continues truthfully when private spill se
     assert.equal(result.isError, false);
     assert.equal((json(result) as { outputLossy: boolean }).outputLossy, true, "the injected spill-root fault must leave the output lossy");
     // Name the injected fault, so a fixture that stops injecting it fails here instead of passing on another loss.
-    assert.match(text(result), /\[runner output lossy: spill_root_invalid\]/);
+    assert.deepEqual((json(result) as { lossReasons: string[] }).lossReasons, ["spill_root_invalid"]);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
@@ -137,22 +132,8 @@ test("process.run records stdout, stderr, and exit code without semantic verdict
       ],
     });
     assert.equal(result.isError, false);
-    assert.deepEqual({
-      ...(json(result) as Record<string, unknown>),
-      cleanup: undefined,
-      outputLossy: undefined,
-      enforcement: undefined,
-      disclosure: undefined,
-    }, {
-      exitCode: 2,
-      signal: null,
-      timedOut: false,
-      cancelled: false,
-      cleanup: undefined,
-      outputLossy: undefined,
-      enforcement: undefined,
-      disclosure: undefined,
-    });
+    const { enforcement: _enforcement, disclosure: _disclosure, ...facts } = json(result) as Record<string, unknown>;
+    assert.deepEqual(facts, { exitCode: 2 });
     assert.match(text(result), /looks successful/);
     assert.match(text(result), /warning/);
   } finally {
@@ -324,23 +305,23 @@ function text(result: ToolResult): string {
     .join("\n");
 }
 
-test("a client's command runs to its own limit, past the broker's, and Build's still stops at the broker's", async (t) => {
+test("a command runs to its own limit, past the broker's, in Build and for a client alike", async (t) => {
   const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-limit-"));
-  const external = { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() };
-  const broker = (client: boolean) => {
+  const retention = { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() };
+  const broker = (names: "build" | "mcp") => {
     const made = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, toolTimeoutMs: 300 });
-    for (const tool of createProcessTools({ execution: createTestOneShotCommandExecutor(t), ...(client ? { external } : {}) })) made.register(tool);
+    for (const tool of createProcessTools({ execution: createTestOneShotCommandExecutor(t), retention, names })) made.register(tool);
     return made;
   };
   const slow = { command: process.execPath, args: ["-e", "setTimeout(() => console.log('done'), 1500)"], timeoutMs: 10_000 };
   try {
-    // Build first, so its stopped command is gone before the workspace is removed.
-    const build = await invoke(broker(false), "build-slow", slow);
-    assert.equal(build.error?.code, "tool_timeout", JSON.stringify(build));
-    const client = await invoke(broker(true), "client-slow", slow);
-    assert.equal(client.isError, false, JSON.stringify(client));
-    assert.match(text(client), /done/u, "the result gets back, output and all");
-    const [tool] = createProcessTools({ external });
+    // Build's broker used to end it at its own default, with nothing to show for the run.
+    for (const names of ["build", "mcp"] as const) {
+      const result = await invoke(broker(names), `${names}-slow`, slow);
+      assert.equal(result.isError, false, JSON.stringify(result));
+      assert.match(text(result), /done/u, "the result gets back, output and all");
+    }
+    const [tool] = createProcessTools();
     assert.ok(tool!.timeoutMs!({ command: "x", timeoutMs: 99_000_000 }) <= 30 * 60_000 + 120_000, "the Runner's maximum still holds");
     assert.ok(tool!.timeoutMs!({ command: "x" }) > 120_000, "and a command stopped at the default limit still has time to report");
   } finally {
@@ -348,23 +329,28 @@ test("a client's command runs to its own limit, past the broker's, and Build's s
   }
 });
 
-test("Build's process.run ignores a stray search, as it did before search existed, and a client's is checked", () => {
-  const [build] = createProcessTools();
-  assert.equal(build!.validate({ command: "node", search: { pattern: "(a+)+$", regex: true } }).ok, true);
-  const [client] = createProcessTools({ external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
-  assert.equal(client!.validate({ command: "node", search: { pattern: "(a+)+$", regex: true } }).ok, false);
+test("a search is checked the same way in Build and for a client", () => {
+  for (const names of ["build", "mcp"] as const) {
+    const [tool] = createProcessTools({ names });
+    assert.equal(tool!.validate({ command: "node", search: { pattern: "(a+)+$", regex: true } }).ok, false, names);
+    assert.equal(tool!.validate({ command: "node", search: { pattern: "error" } }).ok, true, names);
+  }
 });
 
-test("a client's process_run description says where a command stops and what a long one needs, in the names the client sees", () => {
+test("Build and a client get the same process.run, each in the names it sees", () => {
   // Some clients give sub-agents tool descriptions but no server instructions; a live run lost ~170 s running a 150 s job with process_run.
-  const [client] = createProcessTools({ external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
-  const description = client!.definition.description;
-  assert.match(description, /stopped at timeoutMs \(default 120 s\), which leaves its effect unknown, so start servers, long jobs and interactive programs with process_start\./u);
-  assert.match(description, /command is a whole command line, run by cmd\.exe on Windows and bash elsewhere, or one program with its arguments in args; for another shell, such as PowerShell or Git Bash, send shell and script instead\./u);
-  assert.match(description, /Commands that run one after another.*go in one call\./u);
-  assert.doesNotMatch(description, /process\.[a-z_]+/u, "clients see process_start and process_read_output, not the internal names");
-  const [short] = createProcessTools({ defaultTimeoutMs: 30_000, external: { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() } });
-  assert.match(short!.definition.description, /default 30 s/u, "it quotes the limit the tool really uses");
+  const [client] = createProcessTools({ names: "mcp" });
   const [build] = createProcessTools();
-  assert.doesNotMatch(build!.definition.description, /process_start/u, "Build's own description is unchanged");
+  for (const tool of [client!, build!]) {
+    const description = tool.definition.description;
+    assert.match(description, /stopped at timeoutMs \(default 120 s\), which leaves its effect unknown, so start servers, long jobs and interactive programs with process[._]start\./u);
+    assert.match(description, /command is a whole command line, run by cmd\.exe on Windows and bash elsewhere, or one program with its arguments in args; for another shell, such as PowerShell or Git Bash, send shell and script instead\./u);
+    assert.match(description, /Commands that run one after another.*go in one call\./u);
+  }
+  assert.doesNotMatch(client!.definition.description, /process\.[a-z_]+/u, "clients see process_start and process_read_output, not the internal names");
+  assert.doesNotMatch(build!.definition.description, /process_[a-z]+/u, "Build's models see process.start and process.read_output");
+  assert.doesNotMatch(build!.definition.description, /git commit/u, "Build's changes reach the project through change sets, not commits");
+  assert.deepEqual(build!.definition.inputSchema, client!.definition.inputSchema, "the same arguments");
+  const [short] = createProcessTools({ defaultTimeoutMs: 30_000, names: "mcp" });
+  assert.match(short!.definition.description, /default 30 s/u, "it quotes the limit the tool really uses");
 });

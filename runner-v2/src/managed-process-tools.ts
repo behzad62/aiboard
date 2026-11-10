@@ -25,16 +25,17 @@ import { utf8CompleteLength } from "./managed-process-output.js";
 import { renderPlain, renderPlainCompact, renderPlainLines, reportedStatus, sliceLines, validateUntil } from "./managed-process-wait.js";
 import { MANAGED_OUTPUT_SEARCH_SCHEMA, validateOutputSearch, type ManagedOutputSearchRequest } from "./managed-process-search.js";
 import { commandLineShell, shellInvocation } from "./command-line.js";
+import { processToolName, type ProcessToolNames } from "./process-tools.js";
 
 type Input = Record<string, unknown>;
 
 export interface ManagedProcessToolsOptions {
-  /** A client outside Build (remote or local MCP): results without Build's bookkeeping, and search on a read. */
-  readonly external?: boolean;
+  /** The names the model sees: Build's (the default) or the MCP servers' (Remote, local MCP). Nothing else differs. */
+  readonly names?: ProcessToolNames;
 }
 
 /**
- * The most of one stream a read gives such a client. It goes in a text block of its own, and the broker bounds each
+ * The most of one stream a read gives. It goes in a text block of its own, and the broker bounds each
  * block at 8 KiB, so the page stays inline, with hasMore and a cursor, instead of losing its middle to a preview.
  */
 const CLIENT_READ_MAX_BYTES = 7 * 1024;
@@ -45,19 +46,16 @@ export function createManagedProcessTools(
   service: ManagedProcessService,
   options: ManagedProcessToolsOptions = {},
 ): NativeTool<unknown>[] {
-  const external = options.external === true;
-  const pageSize = (input: Input) => external
-    ? { maxBytes: Math.min((input.maxBytes as number | undefined) ?? CLIENT_READ_MAX_BYTES, CLIENT_READ_MAX_BYTES) }
-    : input.maxBytes !== undefined ? { maxBytes: input.maxBytes as number } : {};
-  /** A read for Build is one JSON block; for a client, JSON about the read and then its output in text blocks. */
+  const name = (tool: `process.${string}`) => processToolName(options.names, tool);
+  const pageSize = (input: Input) => ({ maxBytes: Math.min((input.maxBytes as number | undefined) ?? CLIENT_READ_MAX_BYTES, CLIENT_READ_MAX_BYTES) });
+  /** JSON about the read, then its output in text blocks. */
   const readContent = (read: ManagedOutputReadResult, input: Input, around: (value: unknown) => unknown): ToolExecutionOutput["content"] => {
-    if (!external) return [{ type: "json", value: around(presentRead(read, input)) }];
     const { value, output } = presentClientRead(read, input);
     return [{ type: "json", value: around(value) }, ...output];
   };
   const tools: NativeTool<Input>[] = [
     {
-      definition: definition("process.start", "Start a durable background process from a command line, or a program with args. Optionally wait in the same call (until/waitMs) for readiness: a port, a pattern, a prompt or exit. When a task has a job that takes a minute or more (a long test suite, a build, a slow script), start it here as your first action after reading the task, before every other step, even ones listed before it; do the other steps while it runs. Read its output with process.read_output and its processId; until {exit: true} waits for it to finish.", false, "external"),
+      definition: definition("process.start", `Start a durable background process from a command line, or a program with args. Optionally wait in the same call (until/waitMs) for readiness: a port, a pattern, a prompt or exit. When a task has a job that takes a minute or more (a long test suite, a build, a slow script), start it here as your first action after reading the task, before every other step, even ones listed before it; do the other steps while it runs. Read its output with ${name("process.read_output")} and its processId; until {exit: true} waits for it to finish.`, false, "external"),
       validate: validateStart,
       assessAccess: (input) => ({
         capability: "process.start",
@@ -77,18 +75,18 @@ export function createManagedProcessTools(
             context,
             context.workspacePath!
           );
-          if (input.until === undefined && !input.waitMs) return external ? clientSnapshotOutput(snapshot) : snapshotOutput(snapshot);
+          if (input.until === undefined && !input.waitMs) return clientSnapshotOutput(snapshot);
           // T1: the start is already admitted and reported; a failed wait stays in-band.
           // A client's read holds everything the snapshot's text would repeat. The identity keeps a block of its own:
           // the connector binds the job to it, and the broker replaces a block it finds too large.
-          const started: ToolExecutionOutput = external ? { content: [{ type: "json", value: clientSnapshot(snapshot) }], isError: false } : snapshotOutput(snapshot);
+          const started: ToolExecutionOutput = { content: [{ type: "json", value: clientSnapshot(snapshot) }], isError: false };
           const withRead = (content: ToolExecutionOutput["content"]): ToolExecutionOutput => ({ ...started, content: [...started.content, ...content] });
           try {
             const read = await service.readOutput(snapshot.processId, {
               ...(input.until !== undefined ? { until: input.until as ManagedOutputUntil } : {}),
               // until without waitMs waits the interaction default rather than returning at once.
               waitMs: (input.waitMs as number | undefined) ?? (input.until !== undefined ? MANAGED_INTERACT_DEFAULT_WAIT_MS : 0),
-              ...(external ? { maxBytes: CLIENT_READ_MAX_BYTES } : {}),
+              maxBytes: CLIENT_READ_MAX_BYTES,
             }, context);
             return withRead(readContent(read, input, (value) => ({ read: value })));
           } catch (error) {
@@ -114,7 +112,7 @@ export function createManagedProcessTools(
     {
       definition: definition(
         "process.write_stdin",
-        "Send line-oriented UTF-8 input to an owned process started with interactive: true. Returns only after the input is acknowledged (status acknowledged), refused before delivery (rejected) or not acknowledged (outcome_unknown; never resent automatically). Reuse the same writeId to retry safely; it is never sent twice. closeInput sends end-of-input (EOF), not a signal. Read responses with process.read_output.",
+        `Send line-oriented UTF-8 input to an owned process started with interactive: true. Returns only after the input is acknowledged (status acknowledged), refused before delivery (rejected) or not acknowledged (outcome_unknown; never resent automatically). Reuse the same writeId to retry safely; it is never sent twice. closeInput sends end-of-input (EOF), not a signal. Read responses with ${name("process.read_output")}.`,
         false,
         "workspace",
       ),
@@ -129,7 +127,7 @@ export function createManagedProcessTools(
             ...(input.closeInput !== undefined ? { closeInput: input.closeInput as boolean } : {}),
           }, context);
           return {
-            content: [{ type: "json", value: external ? clientWrite(result) : result }],
+            content: [{ type: "json", value: clientWrite(result) }],
             isError: result.status !== "acknowledged",
             ...(result.status !== "acknowledged" ? { error: { code: result.errorCode ?? `process_input_${result.status}`, message: result.message ?? `Input ${result.status}.` } } : {}),
           };
@@ -139,13 +137,13 @@ export function createManagedProcessTools(
       },
     },
     {
-      definition: withSearch(external, definition(
+      definition: withSearch(name, definition(
         "process.read_output",
         "Read an owned process's output incrementally. Pass the cursor from the previous result to get only new output; omit it to start from the beginning; use tailBytes for the latest output or range for an earlier retained byte range. waitMs waits (bounded) for new output or exit; until waits for evidence instead (exit, pattern, port, idleMs) and adds a labeled completion. render: plain strips terminal control sequences; lines selects a line window. Results report offsets, hasMore, and any gap where bounded retention lost bytes.",
         true,
         "none",
       )),
-      validate: (input) => validateReadOutput(input, external),
+      validate: validateReadOutput,
       execute: async (input, context) => {
         try {
           const request: ManagedOutputReadRequest = {
@@ -154,11 +152,11 @@ export function createManagedProcessTools(
             ...pageSize(input),
             ...(input.waitMs !== undefined ? { waitMs: input.waitMs as number } : {}),
             // A tail read is for the end of the output, so a client's stays one page that reaches it.
-            ...(input.tailBytes !== undefined ? { tailBytes: external ? Math.min(input.tailBytes as number, CLIENT_READ_MAX_BYTES) : input.tailBytes as number } : {}),
+            ...(input.tailBytes !== undefined ? { tailBytes: Math.min(input.tailBytes as number, CLIENT_READ_MAX_BYTES) } : {}),
             ...(input.range !== undefined ? { range: input.range as { stream: "stdout" | "stderr"; startOffset: number } } : {}),
             ...(input.until !== undefined ? { until: input.until as ManagedOutputUntil } : {}),
             ...(input.search !== undefined ? { search: input.search as ManagedOutputSearchRequest } : {}),
-            ...(external && input.lines !== undefined ? { lines: input.lines as { start: number; count: number } } : {}),
+            ...(input.lines !== undefined ? { lines: input.lines as { start: number; count: number } } : {}),
           };
           return { content: readContent(await service.readOutput(input.processId as string, request, context), input, (value) => value), isError: false };
         } catch (error) {
@@ -189,7 +187,7 @@ export function createManagedProcessTools(
             ...(input.stream !== undefined ? { stream: input.stream as "stdout" | "stderr" | "both" } : {}),
             ...pageSize(input),
           }, context);
-          const turn = (read?: unknown) => ({ ...(external ? {} : { processId: result.processId }), write: external ? clientWrite(result.write) : result.write,
+          const turn = (read?: unknown) => ({ write: clientWrite(result.write),
             ...(read !== undefined ? { read } : {}), ...(result.readError ? { readError: result.readError } : {}) });
           const content: ToolExecutionOutput["content"] = result.read ? readContent(result.read, input, turn) : [{ type: "json", value: turn() }];
           if (result.write.status === "acknowledged") return { content, isError: false };
@@ -208,7 +206,7 @@ export function createManagedProcessTools(
       validate: objectInput,
       execute: async (_input, context) => {
         try {
-          const processes = (await service.list(context)).map(snapshot => external ? clientListedProcess(snapshot) : ({ ...snapshot, status: reportedStatus(snapshot) }));
+          const processes = (await service.list(context)).map(clientListedProcess);
           return { content: [{ type: "json", value: { processes } }], isError: false };
         } catch (error) { return managedError(error); }
       },
@@ -225,7 +223,7 @@ export function createManagedProcessTools(
             context
           );
           // Stopping is what was asked; the output stays readable through read_output if it is wanted.
-          return external ? { content: [{ type: "json", value: stoppedSnapshot(stopped) }], isError: false } : snapshotOutput(stopped);
+          return { content: [{ type: "json", value: stoppedSnapshot(stopped) }], isError: false };
         } catch (error) {
           return managedError(error);
         }
@@ -244,11 +242,10 @@ function definition(
   return { name, description, inputSchema: managedProcessSchema(name), readOnly, effect } as const;
 }
 
-function withSearch(external: boolean, base: ReturnType<typeof definition>) {
-  if (!external) return base;
+function withSearch(name: (tool: `process.${string}`) => string, base: ReturnType<typeof definition>) {
   const schema = base.inputSchema as { properties: Record<string, unknown> };
   return { ...base,
-    description: `${base.description} A process.run that returned a processId reads the same way, whole. search finds lines in everything kept, and lines reads them by 1-based number; either replaces the byte slice.`,
+    description: `${base.description} A ${name("process.run")} that returned a processId reads the same way, whole. search finds lines in everything kept, and lines reads them by 1-based number; either replaces the byte slice.`,
     inputSchema: { ...base.inputSchema, properties: { ...schema.properties, search: MANAGED_OUTPUT_SEARCH_SCHEMA, lines: CLIENT_LINES_SCHEMA } } } as const;
 }
 
@@ -390,16 +387,16 @@ function validateWriteStdin(input: unknown): ValidationResult<Input> {
   return issues.length ? { ok: false, issues } : { ok: true, value: input };
 }
 
-function validateReadOutput(input: unknown, searchable: boolean): ValidationResult<Input> {
+function validateReadOutput(input: unknown): ValidationResult<Input> {
   if (!isObject(input) || typeof input.processId !== "string") return { ok: false, issues: ["processId must be a string"] };
   const issues: string[] = [];
-  for (const key of Object.keys(input)) if (!["processId", "cursor", "stream", "maxBytes", "waitMs", "tailBytes", "range", "until", "render", "lines", ...(searchable ? ["search"] : [])].includes(key)) issues.push(`${key} is not allowed`);
+  for (const key of Object.keys(input)) if (!["processId", "cursor", "stream", "maxBytes", "waitMs", "tailBytes", "range", "until", "render", "lines", "search"].includes(key)) issues.push(`${key} is not allowed`);
   issues.push(...untilIssues(input), ...renderIssues(input, true));
-  if (searchable && input.search !== undefined) {
+  if (input.search !== undefined) {
     try { validateOutputSearch(input.search); } catch (error) { issues.push(error instanceof Error ? error.message : "search is invalid"); }
     for (const key of ["cursor", "tailBytes", "range", "lines"]) if (input[key] !== undefined) issues.push(`search covers everything kept, so it cannot be combined with ${key}`);
   }
-  if (searchable && input.lines !== undefined) {
+  if (input.lines !== undefined) {
     for (const key of ["cursor", "tailBytes", "range"]) if (input[key] !== undefined) issues.push(`lines reads by number across everything kept, so it cannot be combined with ${key}`);
   }
   if (input.cursor !== undefined && typeof input.cursor !== "string") issues.push("cursor must be a string");
@@ -439,29 +436,7 @@ function renderIssues(input: Input, allowLines: boolean): string[] {
 }
 
 /**
- * Model-facing presentation of a read. raw keeps today's slices; plain renders each slice as a
- * terminal would leave it; lines pages the plain text. Line numbers are absolute only when the
- * slice starts at byte 0; otherwise they count from the slice start and say so.
- */
-function presentRead(read: ManagedOutputReadResult, input: Input): unknown {
-  const render = input.render as "raw" | "plain" | undefined;
-  const lines = input.lines as { start: number; count: number } | undefined;
-  const reported = { ...read, status: reportedStatus(read) };
-  if (!lines && render !== "plain") return reported;
-  return {
-    ...reported,
-    slices: read.slices.map(slice => {
-      const plain = renderPlain(slice.text);
-      if (!lines) return { ...slice, text: plain, render: "plain" };
-      const { text: _text, ...rest } = slice;
-      return { ...rest, render: "lines", ...sliceLines(plain, lines),
-        ...(slice.startOffset === 0 ? {} : { linesRelativeToByteOffset: slice.startOffset }) };
-    }),
-  };
-}
-
-/**
- * A read as a client outside Build needs it: nothing the model could not act on, nothing empty. Offsets appear
+ * A read as the model needs it: nothing the model could not act on, nothing empty. Offsets appear
  * only when more output waits, and the cursor only when another read could return something. The output goes in
  * text blocks, one per stream, which the model reads without JSON escapes; a page that decoding grew past the
  * broker's bound takes more than one.
