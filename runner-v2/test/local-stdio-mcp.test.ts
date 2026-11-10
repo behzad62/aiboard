@@ -97,8 +97,9 @@ test("SDK clients use Runner broker grants and exact local managed-process owner
     await writeFile(join(project, "a.txt"), "alpha\n"); await writeFile(join(project, "b.txt"), "beta\n");
     const both = await client.callTool({ name: "batch_files_read", arguments: { paths: ["a.txt", "b.txt"] } }) as CallResult;
     assert.equal(both.isError, undefined);
-    const bothText = both.content.map((part) => part.text ?? "").join("\n");
-    assert.match(bothText, /^=== a\.txt\n[\s\S]*alpha[\s\S]*\n=== b\.txt\n[\s\S]*beta/u, "in the order asked, each under its path");
+    // As Claude Code shows it: the blocks' text with nothing between them, so the headers carry the line breaks.
+    const bothText = both.content.map((part) => part.text ?? "").join("");
+    assert.match(bothText, /^=== a\.txt\n[^\n=]+[\s\S]*alpha\n\n=== b\.txt\n[^\n=]+[\s\S]*beta\n$/u, "in the order asked, each under its own header line");
     const partialRead = await client.callTool({ name: "batch_files_read", arguments: { paths: ["a.txt", "missing.txt"] } }) as CallResult;
     assert.equal(partialRead.isError, undefined, "a read is an error only when no file could be read");
     assert.match(partialRead.content.map((part) => part.text ?? "").join("\n"), /=== missing\.txt \(failed\)/u);
