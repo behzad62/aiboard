@@ -1,3 +1,5 @@
+// RUNNER_RAW_PROCESS_BOUNDARY: asks a detected powershell.exe / pwsh for its version once per Runner start; runs only
+// that shell with a fixed $PSVersionTable query, no profile, bounded by a 10 s timeout, with no secrets.
 import { execFile } from "node:child_process";
 import { existsSync, lstatSync } from "node:fs";
 import { delimiter, join } from "node:path";
