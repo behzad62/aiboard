@@ -57,7 +57,7 @@ export function createManagedProcessTools(
   };
   const tools: NativeTool<Input>[] = [
     {
-      definition: definition("process.start", "Start a durable background process from a command line, or a program with args. Optionally wait in the same call (until/waitMs) for readiness: a port, a pattern, a prompt or exit. When a task has a job that takes a minute or more (a long test suite, a build, a slow script), start it here as your first action after reading the task, before every other step, even ones listed before it; do the other steps while it runs, then read its result.", false, "external"),
+      definition: definition("process.start", "Start a durable background process from a command line, or a program with args. Optionally wait in the same call (until/waitMs) for readiness: a port, a pattern, a prompt or exit. When a task has a job that takes a minute or more (a long test suite, a build, a slow script), start it here as your first action after reading the task, before every other step, even ones listed before it; do the other steps while it runs. Read its output with process.read_output and its processId; until {exit: true} waits for it to finish.", false, "external"),
       validate: validateStart,
       assessAccess: (input) => ({
         capability: "process.start",
