@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -88,6 +88,40 @@ test("SDK clients use Runner broker grants and exact local managed-process owner
     assert.equal((await client.callTool({ name: "files_write", arguments: writeArgs }) as CallResult).isError, undefined);
     assert.equal((await client.callTool({ name: "files_write", arguments: { ...writeArgs, content: "twice" } }) as CallResult).isError, true);
     assert.match(resultText(await client.callTool({ name: "files_read", arguments: { path: "written.txt" } })), /once/);
+    // Several files in one call, as the relay gives them: each file is an ordinary files_read or files_patch.
+    const batchRead = listed.tools.find((tool) => tool.name === "batch_files_read")!, batchPatch = listed.tools.find((tool) => tool.name === "batch_files_patch")!;
+    assert.equal(batchRead.annotations?.readOnlyHint, true);
+    assert.equal(batchPatch.annotations?.destructiveHint, true);
+    assert.deepEqual(batchPatch.inputSchema.required, ["files", "idempotencyKey"]);
+    assert.ok(!((batchPatch.inputSchema.properties!.files as { items: { required?: string[] } }).items.required ?? []).includes("idempotencyKey"), "the batch has the key, not each file");
+    await writeFile(join(project, "a.txt"), "alpha\n"); await writeFile(join(project, "b.txt"), "beta\n");
+    const both = await client.callTool({ name: "batch_files_read", arguments: { paths: ["a.txt", "b.txt"] } }) as CallResult;
+    assert.equal(both.isError, undefined);
+    const bothText = both.content.map((part) => part.text ?? "").join("\n");
+    assert.match(bothText, /^=== a\.txt\n[\s\S]*alpha[\s\S]*\n=== b\.txt\n[\s\S]*beta/u, "in the order asked, each under its path");
+    const partialRead = await client.callTool({ name: "batch_files_read", arguments: { paths: ["a.txt", "missing.txt"] } }) as CallResult;
+    assert.equal(partialRead.isError, undefined, "a read is an error only when no file could be read");
+    assert.match(partialRead.content.map((part) => part.text ?? "").join("\n"), /=== missing\.txt \(failed\)/u);
+    const patchFiles = [{ path: "a.txt", search: "alpha", replace: "ALPHA" }, { path: "b.txt", edits: [{ search: "beta", replace: "BETA" }] }];
+    const patchedBoth = await client.callTool({ name: "batch_files_patch", arguments: { files: patchFiles, idempotencyKey: "rename-both" } }) as CallResult;
+    assert.equal(patchedBoth.isError, undefined, JSON.stringify(patchedBoth));
+    assert.equal(await readFile(join(project, "a.txt"), "utf8"), "ALPHA\n");
+    assert.equal(await readFile(join(project, "b.txt"), "utf8"), "BETA\n");
+    const retried = await client.callTool({ name: "batch_files_patch", arguments: { files: patchFiles, idempotencyKey: "rename-both" } }) as CallResult;
+    assert.equal(retried.isError, undefined, "a retry with the same key repeats each file's own key: " + JSON.stringify(retried));
+    const halfFailed = await client.callTool({ name: "batch_files_patch", arguments: { idempotencyKey: "half",
+      files: [{ path: "a.txt", search: "ALPHA", replace: "alpha" }, { path: "b.txt", search: "not there", replace: "x" }] } }) as CallResult;
+    assert.equal(halfFailed.isError, true, "one failed patch makes the batch an error");
+    assert.match(halfFailed.content.map((part) => part.text ?? "").join("\n"), /=== b\.txt \(failed\)/u);
+    assert.equal(await readFile(join(project, "a.txt"), "utf8"), "alpha\n", "each file is applied on its own");
+    for (const args of [{ paths: ["a.txt"] }, { paths: ["a.txt", "b.txt"], deviceId: "x" }]) {
+      assert.equal((await client.callTool({ name: "batch_files_read", arguments: args }) as CallResult).isError, true, JSON.stringify(args));
+    }
+    for (const args of [{ files: patchFiles }, { files: patchFiles.map((file) => ({ ...file, idempotencyKey: "each" })), idempotencyKey: "k" }]) {
+      assert.equal((await client.callTool({ name: "batch_files_patch", arguments: args }) as CallResult).isError, true, JSON.stringify(args));
+    }
+    assert.equal((await client.callTool({ name: "batch_files_read", arguments: { paths: ["a.txt", join(outside, "secret.txt")] } }) as CallResult).content
+      .some((part) => /outside fixture/u.test(part.text ?? "")), false, "each file keeps the project boundary");
     const routed = await localRoute(sessions, first.token, { operation: "call", name: "files_read", arguments: { path: "fixture.txt" } });
     assert.equal(routed.status, 200);
     assert.match(routed.body, /local fixture/);

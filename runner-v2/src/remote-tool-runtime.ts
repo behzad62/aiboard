@@ -417,6 +417,17 @@ const LOCAL_TOOLS: Readonly<Record<string, string>> = Object.freeze({
   git_status: "git.status", git_diff: "git.diff", git_log: "git.log", image_inspect: "image.inspect",
 });
 const LOCAL_ALLOWED = new Set(roleAllowList("local_mcp", "local_mcp"));
+/**
+ * Several files in one call, as the relay gives them (batch_files_* in aiboard-tunnel's mcp-tools.ts and mcp-gateway.ts).
+ * Claude Code runs calls that change things one at a time, so a files_patch per file costs the model a whole turn each.
+ * Nothing new reaches the broker: each file is an ordinary files_read or files_patch through invoke, checked and audited
+ * on its own. Reads run BATCH_READ_PARALLEL at a time; patches run in order, each with the batch key plus "-<n>".
+ */
+const LOCAL_BATCH_TOOLS: Readonly<Record<string, string>> = Object.freeze({ batch_files_read: "files_read", batch_files_patch: "files_patch" });
+const MAX_BATCH_FILES = 20;
+const BATCH_READ_PARALLEL = 4;
+/** Leaves room for the "-<n>" each file's key gets, within the 128 a key may have. */
+const BATCH_KEY = /^[A-Za-z0-9._:-]{1,120}$/;
 
 export interface LocalMcpToolDefinition {
   readonly name: string;
@@ -475,7 +486,7 @@ export class LocalMcpToolSession {
     const bound = await this.binding();
     if (this.closed) throw new Error("Local MCP session is revoked.");
     const definitions = new Map(bound.broker.definitions().map((definition) => [definition.name, definition]));
-    return Object.entries(LOCAL_TOOLS).map(([name, internal]) => {
+    const tools: LocalMcpToolDefinition[] = Object.entries(LOCAL_TOOLS).map(([name, internal]) => {
       const definition = definitions.get(internal);
       if (!definition) throw new Error(`Local MCP tool ${name} is unavailable.`);
       const schema = structuredClone(definition.inputSchema) as { type: "object"; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown };
@@ -496,9 +507,23 @@ export class LocalMcpToolSession {
       return { name, description: description + (mutating ? " The local call completes inline; job APIs are unavailable." : "") + " Artifact retrieval is not available.", inputSchema: schema,
         annotations: { readOnlyHint: readOnly, destructiveHint: mutating, idempotentHint: readOnly, openWorldHint: internal.startsWith("process.") && mutating } };
     });
+    // A batch entry is files_patch's own arguments, less the key: the batch has one, and each file gets it plus "-<n>".
+    const patch = tools.find((tool) => tool.name === "files_patch")!;
+    const { idempotencyKey: _key, ...patchProperties } = (patch.inputSchema.properties ?? {}) as Record<string, unknown>;
+    const patchItem = { ...structuredClone(patch.inputSchema), properties: patchProperties,
+      required: ((patch.inputSchema.required ?? []) as string[]).filter((key) => key !== "idempotencyKey") };
+    return [...tools,
+      { name: "batch_files_read", description: `Read several whole files in one call (2 to ${MAX_BATCH_FILES} paths). Each comes back as files_read gives it, with its sha256, so it can be patched next.`,
+        inputSchema: { type: "object", properties: { paths: { type: "array", items: { type: "string", minLength: 1 }, minItems: 2, maxItems: MAX_BATCH_FILES } }, required: ["paths"], additionalProperties: false },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+      { name: "batch_files_patch", description: `Exact search and replace in several files in one call (2 to ${MAX_BATCH_FILES}), each file applied atomically on its own; the result lists each file. As with files_patch, read a file first; expectedSha256 defaults to the revision you last read or wrote.`,
+        inputSchema: { type: "object", properties: { files: { type: "array", items: patchItem, minItems: 2, maxItems: MAX_BATCH_FILES },
+          idempotencyKey: { type: "string", pattern: BATCH_KEY.source } }, required: ["files", "idempotencyKey"], additionalProperties: false },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } }];
   }
 
   invoke(name: string, input: unknown): Promise<ToolResult> {
+    if (Object.hasOwn(LOCAL_BATCH_TOOLS, name)) return this.invokeBatch(name, input);
     const work = this.pathGuard.withWorkspaceScope(resolve(this.options.workspacePath), () => true, async (scope) => {
       const identity = this.options.policyIdentity?.();
       let result: ToolResult;
@@ -517,6 +542,48 @@ export class LocalMcpToolSession {
     this.active.add(work);
     void work.finally(() => this.active.delete(work)).catch(() => undefined);
     return work;
+  }
+
+  private async invokeBatch(name: string, input: unknown): Promise<ToolResult> {
+    const callId = `local-batch-${randomUUID()}`;
+    if (this.closed) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
+    if (!input || typeof input !== "object" || Array.isArray(input)) return failure(callId, name, "invalid_arguments", "Tool arguments must be an object.");
+    const args = withoutNulls(input) as Record<string, unknown>;
+    const reading = name === "batch_files_read";
+    const field = reading ? "paths" : "files";
+    if (Object.keys(args).some((key) => key !== field && (reading || key !== "idempotencyKey"))) return failure(callId, name, "invalid_arguments", "Unknown tool argument.");
+    const list = args[field];
+    if (!Array.isArray(list) || list.length < 2 || list.length > MAX_BATCH_FILES) return failure(callId, name, "invalid_arguments", `${field} takes 2 to ${MAX_BATCH_FILES} entries.`);
+    const key = args.idempotencyKey;
+    if (!reading && (typeof key !== "string" || !BATCH_KEY.test(key))) return failure(callId, name, "invalid_arguments", "A valid idempotencyKey is required.");
+    const items: Array<Record<string, unknown> & { path: string }> = [];
+    for (const [index, entry] of list.entries()) {
+      const item: unknown = reading ? { path: entry } : entry;
+      if (!item || typeof item !== "object" || Array.isArray(item) || typeof (item as { path?: unknown }).path !== "string" ||
+        (item as { path: string }).path.length === 0 || Object.hasOwn(item, "idempotencyKey")) {
+        return failure(callId, name, "invalid_arguments", `${field} entry ${index + 1} is not ${reading ? "a path" : "one file's files_patch arguments, without idempotencyKey"}.`);
+      }
+      const one = item as Record<string, unknown> & { path: string };
+      items.push(reading ? one : { ...one, idempotencyKey: `${key as string}-${index + 1}` });
+    }
+    const single = LOCAL_BATCH_TOOLS[name]!;
+    const results: ToolResult[] = new Array(items.length);
+    if (reading) {
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(BATCH_READ_PARALLEL, items.length) }, async () => {
+        while (next < items.length) { const index = next++; results[index] = await this.invoke(single, items[index]); }
+      }));
+    } else {
+      for (const [index, item] of items.entries()) results[index] = await this.invoke(single, item);
+    }
+    const failed = results.filter((result) => result.isError);
+    const texts = results.map((result) => JSON.stringify(result.content));
+    // A refusal that is not about any one file (a revoked session) comes back once, as a single call gives it.
+    if (failed.length === results.length && texts.every((text) => text === texts[0])) return { ...results[0]!, callId, toolName: name };
+    const isError = reading ? failed.length === results.length : failed.length > 0;
+    return { callId, toolName: name, isError,
+      content: results.flatMap((result, index) => [{ type: "text" as const, text: `=== ${items[index]!.path}${result.isError ? " (failed)" : ""}` }, ...result.content]),
+      ...(isError ? { error: { code: "batch_failed", message: `${failed.length} of ${results.length} files failed.` } } : {}) };
   }
 
   private async invokeChecked(name: string, input: unknown): Promise<ToolResult> {
