@@ -582,7 +582,9 @@ export class LocalMcpToolSession {
     if (failed.length === results.length && texts.every((text) => text === texts[0])) return { ...results[0]!, callId, toolName: name };
     const isError = reading ? failed.length === results.length : failed.length > 0;
     return { callId, toolName: name, isError,
-      content: results.flatMap((result, index) => [{ type: "text" as const, text: `=== ${items[index]!.path}${result.isError ? " (failed)" : ""}` }, ...result.content]),
+      // The header carries its own line breaks: Claude Code joins a result's text blocks with nothing between them.
+      content: results.flatMap((result, index) => [{ type: "text" as const,
+        text: `${index === 0 ? "" : "\n"}=== ${items[index]!.path}${result.isError ? " (failed)" : ""}\n` }, ...result.content]),
       ...(isError ? { error: { code: "batch_failed", message: `${failed.length} of ${results.length} files failed.` } } : {}) };
   }
 
