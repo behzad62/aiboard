@@ -76,21 +76,22 @@ function onPath(name: string, excluded: (directory: string) => boolean = () => f
   return undefined;
 }
 
-/** A Store app's command (WindowsAppspwsh.exe) is an app execution alias: stat cannot follow it, but it launches. */
+/** A Store app's command (WindowsApps\pwsh.exe) is an app execution alias: stat cannot follow it, but it launches. */
 function present(path: string): boolean {
   if (existsSync(path)) return true;
   try { lstatSync(path); return true; } catch { return false; }
 }
 
 /**
- * The pwsh a script runs in: the path found on PATH, so the launch needs no search of its own. Never the Microsoft
- * Store's pwsh (an alias under WindowsApps): a packaged app leaves the Runner's Job, so stopping it cannot stop what it
- * started. (Measured 2026-11-10: pwsh 7.6.9 from the Store started node; process_signal failed after 60 s and node
- * kept running. The same through Windows PowerShell stopped in 0.4 s with node gone.)
+ * The pwsh a script runs in: the path found on PATH, so the launch needs no search of its own. That may be the
+ * Microsoft Store's pwsh (an alias under WindowsApps). A packaged program's children are created outside the Runner's
+ * Job by default, and the Job host's desktop app policy (managed-process-job-host.ps1 StartSuspended) is what keeps
+ * them in, so a stop still reaches them. (Measured 2026-11-10 with Store pwsh 7.6.9 starting node: without the
+ * policy node outlived the stop; with it node died with the Job.)
  */
 let pwshPath: string | null | undefined;
 export function pwshExecutable(platform: NodeJS.Platform = process.platform): string | undefined {
-  if (pwshPath === undefined) pwshPath = onPath(platform === "win32" ? "pwsh.exe" : "pwsh", platform === "win32" ? storeApps : () => false) ?? null;
+  if (pwshPath === undefined) pwshPath = onPath(platform === "win32" ? "pwsh.exe" : "pwsh") ?? null;
   return pwshPath ?? undefined;
 }
 

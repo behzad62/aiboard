@@ -50,6 +50,7 @@ import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { createWindowsJobProcessHost, type WindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { createWindowsProcessBackend } from "../src/windows-process-backend.js";
+import { pwshExecutable } from "../src/shell-inventory.js";
 import { checkNoWindowsJobProcessesLeft } from "./support/windows-job-leftover-guard.js";
 
 const WINDOWS_SKIP = "Windows Job real-host pin requires a Windows host.";
@@ -1415,6 +1416,45 @@ test(
         // Removal below reports a genuine leak.
       }
       rmSync(host2Root, { recursive: true, force: true });
+    }
+  },
+);
+
+// A packaged (Microsoft Store) root: Windows creates its children outside the Job unless the Job host's desktop app
+// policy keeps them in. Store pwsh starts node; a timeout must kill node too and only then report verified_empty.
+test(
+  "real-host pin: a Store-packaged root's child dies with its Job",
+  { timeout: 55_000 },
+  async (t) => {
+    const h = needsJob(t);
+    if (!h) return;
+    const pwsh = pwshExecutable();
+    if (!pwsh || !/\\windowsapps\\/iu.test(pwsh)) {
+      t.skip("needs the Microsoft Store's pwsh first on PATH");
+      return;
+    }
+    const marker = join(h.root, `px2t-store-${randomUUID().slice(0, 8)}.pid`);
+    const childScript = join(h.root, "px2t-store-child.cjs");
+    writeFileSync(childScript, "require('fs').writeFileSync(process.argv[2], String(process.pid));" +
+      "setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 90000);");
+    try {
+      const call = runnerCall("process.run", h);
+      const result = await h.binding.commandExecution.execute({
+        executable: pwsh,
+        arguments: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `& '${process.execPath}' '${childScript}' '${marker}'`],
+        workingDirectory: h.project,
+        timeoutMs: 8_000,
+        context: call.context,
+      });
+      const childPid = Number(readFileSync(marker, "utf8").trim());
+      assert.ok(Number.isSafeInteger(childPid) && childPid > 0, "marker must hold the node child's PID");
+      assert.equal(result.process.outcome, "timed_out", JSON.stringify(result.process.cleanup));
+      assert.equal(result.process.cleanup.state, "verified_empty");
+      await waitForDeath([childPid], 2_000, "Store pwsh's node child at return");
+      rmSync(marker, { force: true });
+      await assertNoLiveSupervisors(h);
+    } finally {
+      await cleanupOwnTree(h, marker);
     }
   },
 );

@@ -146,15 +146,21 @@ test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway
   assert.doesNotMatch(jobHost, /\b0x00000800\b/);
   assert.doesNotMatch(jobHost, /\b0x00001000\b/);
   assert.doesNotMatch(jobHost, /\b0x01000000\b/);
+  // Both launches (managed and LSP) go through StartSuspended, the one CreateProcess call.
+  assert.equal([...jobHost.matchAll(/StartSuspended\(launch, commandLine/g)].length, 2);
   const createProcessFlags = [...jobHost.matchAll(/CreateProcess\([\s\S]*?true, ([^,]+),/g)].map((match) => match[1]!.trim());
+  assert.deepEqual(createProcessFlags, ["creationFlags"]);
   assert.deepEqual(
-    createProcessFlags,
-    [
-      "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
-      "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
-    ],
+    [...jobHost.matchAll(/creationFlags (?:\|?=) ([^;]+);/g)].map((match) => match[1]!.trim()),
+    ["CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW", "EXTENDED_STARTUPINFO_PRESENT"],
     "CreateProcess must not request CREATE_BREAKAWAY_FROM_JOB",
   );
+  // The only process attribute keeps a packaged root's descendants in the Job (DISABLE_PROCESS_TREE); never the
+  // breakaway-enabling values.
+  assert.match(jobHost, /PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE = 0x00000002;/);
+  assert.doesNotMatch(jobHost, /DESKTOP_APP_BREAKAWAY_ENABLE|DESKTOP_APP_BREAKAWAY_OVERRIDE/);
+  assert.deepEqual([...jobHost.matchAll(/Marshal\.WriteInt32\(policy, ([^)]+)\)/g)].map((match) => match[1]),
+    ["PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE"]);
 });function sourceCodeFiles(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);
