@@ -63,6 +63,15 @@ check(
   workflow
 );
 
+check("benchmark CI skips Runner-only changes on pull requests and main pushes, and runs nightly to catch what they break",
+  workflow.split('- "runner-v2/**"').length === 3 && /schedule:\s+- cron:/.test(workflow));
+check("benchmark CI runs the suite and the qualification half in parallel jobs",
+  workflow.includes("part: [suite, qualification]") && /if: matrix\.part == 'suite'[\s\S]*npm run test:benchmark 2>&1/.test(workflow));
+check("benchmark CI publishes the downloads once per job, not again through the prebuild hook",
+  workflow.includes("npm run build --ignore-scripts"));
+check("benchmark CI installs Linux system packages for the browser, never Windows Server features",
+  workflow.includes('if [ "$RUNNER_OS" = "Linux" ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi'));
+
 check(
   "benchmark CI uses the exact supported Node 24.18.0 RJS runtime",
   /node-version:\s*\[[^\]]*24\.18\.0[^\]]*\]/.test(workflow),
