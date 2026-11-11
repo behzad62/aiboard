@@ -5,16 +5,18 @@ import { ManagedProcessError, type ManagedOutputStreamEvidence } from "./managed
 import type { ManagedOutputReadResult } from "./managed-process-output.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { SESSION_HOST_COMMAND, SESSION_HOST_SCRIPT } from "./shell-session-host.js";
-import { isStoreAppAlias, pwshExecutable } from "./shell-inventory.js";
+import { BASH_SESSION_HOST_COMMAND, BASH_SESSION_HOST_SCRIPT } from "./shell-session-bash-host.js";
+import { bashExecutable, isStoreAppAlias, pwshExecutable } from "./shell-inventory.js";
 
 /**
- * Shell sessions: process.run with shellSession runs its script in a PowerShell that stays up between calls, so variables,
- * functions, $env: values and the current location carry over (shell-session-host.ts). A session is an ordinary managed
+ * Shell sessions: process.run with shellSession runs its script in a PowerShell or bash that stays up between calls, so
+ * variables, functions, environment values and the current location carry over (shell-session-host.ts,
+ * shell-session-bash-host.ts). A session is an ordinary managed
  * process in the run's Job, owned by the exact caller that started it: the same launch, input and output authority as
  * process.start and process.interact, under the process.run call's own grant. It ends with its owner, when it is idle
  * for SESSION_IDLE_MS, or by process.signal on its processId.
  */
-export const SESSION_SHELLS = ["powershell", "pwsh"] as const;
+export const SESSION_SHELLS = ["powershell", "pwsh", "bash"] as const;
 export type SessionShell = (typeof SESSION_SHELLS)[number];
 export const SESSION_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/u;
 /**
@@ -23,8 +25,11 @@ export const SESSION_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/u;
  */
 export const SESSION_MAX_TIMEOUT_MS = 90_000;
 const SESSION_IDLE_MS = 15 * 60_000;
-/** After a command's limit the session stops it like Ctrl+C; past this as well, the session is ended. */
+/** After a command's limit PowerShell stops it like Ctrl+C; past this as well, the session is ended. */
 const STOP_GRACE_MS = 10_000;
+/** Bash cannot stop one command and keep the shell, so its session ends at the limit, after the reply's own margin. */
+const BASH_STOP_GRACE_MS = 1_000;
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 /** The first command travels in the launch environment, whose values are bounded at 32 KiB. */
 const FIRST_COMMAND_MAX_BYTES = 24 * 1024;
 /** Per stream, the most of one command's output kept in memory; past it the oldest is dropped and counted as lost. */
@@ -67,6 +72,8 @@ interface Session {
 
 export class ShellSessions {
   private readonly sessions = new Map<string, Session>();
+  /** Sessions this service ended (a command past its limit, the shell's exit, idleness): the next call there says replaced. */
+  private readonly ended = new Set<string>();
   private readonly queues = new Map<string, Promise<unknown>>();
 
   constructor(private readonly service: ManagedProcessService) {}
@@ -74,6 +81,8 @@ export class ShellSessions {
   /** Runs one command in the caller's session of this name, starting the session when it has none. */
   async run(command: SessionCommand, context: ToolExecutionContext): Promise<SessionOutcome> {
     if (!SESSION_NAME_PATTERN.test(command.name)) throw new ManagedProcessError("invalid_arguments", "shellSession is 1-64 characters of letters, digits, '.', '_' or '-'.");
+    const badName = command.shell === "bash" ? Object.keys(command.env ?? {}).find((name) => !ENV_NAME.test(name)) : undefined;
+    if (badName !== undefined) throw new ManagedProcessError("invalid_arguments", `${JSON.stringify(badName)} is not a bash variable name; use letters, digits and '_', not starting with a digit.`);
     const key = sessionKey(context, command.name);
     // One command at a time per session: a second call waits for the first, as a shell would.
     const previous = this.queues.get(key) ?? Promise.resolve();
@@ -90,7 +99,8 @@ export class ShellSessions {
     // Checked from the record, before this call's grant is used: once it has been, the call cannot launch a new session.
     if (existing && this.service.isRunning(existing.processId, context)) return await this.send(existing, command, context);
     if (existing) this.forget(existing);
-    return await this.start(key, command, context, existing ? "replaced" : "started");
+    const replaced = existing !== undefined || this.ended.delete(key);
+    return await this.start(key, command, context, replaced ? "replaced" : "started");
   }
 
   private async start(key: string, command: SessionCommand, context: ToolExecutionContext, began: "started" | "replaced"): Promise<SessionOutcome> {
@@ -102,7 +112,8 @@ export class ShellSessions {
     const snapshot = await this.service.start({
       ...launch(command.shell),
       ...(command.cwd ? { cwd: command.cwd } : {}),
-      env: { ...command.env, AIBOARD_SESSION_NONCE: nonce, AIBOARD_SESSION_FIRST: first, AIBOARD_SESSION_HOST: SESSION_HOST_SCRIPT },
+      env: { ...command.env, AIBOARD_SESSION_NONCE: nonce, AIBOARD_SESSION_FIRST: first,
+        AIBOARD_SESSION_HOST: command.shell === "bash" ? BASH_SESSION_HOST_SCRIPT : SESSION_HOST_SCRIPT },
       interactive: true,
     }, context, context.workspacePath!);
     const session: Session = { key, shell: command.shell, processId: snapshot.processId, nonce, turns: 1 };
@@ -118,7 +129,7 @@ export class ShellSessions {
     } catch (error) {
       // It ended after its record last said it was running. Nothing ran; the next call starts a new session.
       if (error instanceof ManagedProcessError && ["process_not_found", "process_input_unavailable", "process_input_closed"].includes(error.code)) {
-        this.forget(session);
+        this.forget(session, true);
         throw new ManagedProcessError("session_ended", "The session had already ended, so nothing ran. Send the command again to run it in a new session; its variables and location start fresh.");
       }
       throw error;
@@ -133,7 +144,7 @@ export class ShellSessions {
       ...(input ? { input } : {}),
       consume: (read) => reply.add(read),
       until: { pattern: escapeRegExp(`<<aiboard:${session.nonce}:${id}:end>>`) },
-      deadline: Date.now() + command.timeoutMs + STOP_GRACE_MS,
+      deadline: Date.now() + command.timeoutMs + (command.shell === "bash" ? BASH_STOP_GRACE_MS : STOP_GRACE_MS),
     }, context);
     if (exchange.ended === "not_sent") {
       const write = exchange.write!;
@@ -143,12 +154,14 @@ export class ShellSessions {
     }
     let ended: string | undefined;
     if (exchange.ended === "deadline") {
-      ended = `The session did not stop the command at its ${command.timeoutMs} ms limit, so the session was ended; its variables and location are gone.`;
+      ended = command.shell === "bash"
+        ? `The command ran past its ${command.timeoutMs} ms limit. Bash cannot stop one command and keep the shell, so the session was ended; its variables and location are gone.`
+        : `The session did not stop the command at its ${command.timeoutMs} ms limit, so the session was ended; its variables and location are gone.`;
       await this.service.stopProcesses([session.processId]).catch(() => undefined);
     } else if (exchange.ended === "exited") {
       ended = "The session's shell exited, so its variables and location are gone.";
     }
-    if (ended) this.forget(session);
+    if (ended) this.forget(session, true);
     else this.keepAlive(session);
     return reply.outcome(session.processId, {
       ...(ended ? { ended } : {}),
@@ -161,15 +174,16 @@ export class ShellSessions {
     clearTimeout(session.idle);
     session.idle = setTimeout(() => {
       if (this.sessions.get(session.key) !== session) return;
-      this.forget(session);
+      this.forget(session, true);
       void this.service.stopProcesses([session.processId]).catch(() => undefined);
     }, SESSION_IDLE_MS);
     session.idle.unref();
   }
 
-  private forget(session: Session): void {
+  private forget(session: Session, ended = false): void {
     clearTimeout(session.idle);
     if (this.sessions.get(session.key) === session) this.sessions.delete(session.key);
+    if (ended) this.ended.add(session.key);
   }
 }
 
@@ -188,6 +202,12 @@ export function shellSessionsFor(service: ManagedProcessService): ShellSessions 
  * follows the alias. The Job host's desktop app policy keeps it in the Job (shell-inventory.ts pwshExecutable).
  */
 function launch(shell: SessionShell): { command: string; args: string[] } {
+  // Git Bash on Windows without its profile, which can cd to the home folder; a login shell elsewhere, as process.run's bash.
+  if (shell === "bash") {
+    return process.platform === "win32"
+      ? { command: bashExecutable() ?? "bash.exe", args: ["--noprofile", "--norc", "-c", BASH_SESSION_HOST_COMMAND] }
+      : { command: "bash", args: ["-lc", BASH_SESSION_HOST_COMMAND] };
+  }
   const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", SESSION_HOST_COMMAND];
   if (shell === "powershell") return { command: "powershell.exe", args };
   const pwsh = pwshExecutable() ?? "pwsh.exe";
@@ -199,6 +219,13 @@ function sessionKey(context: ToolExecutionContext, name: string): string {
 }
 
 function frame(id: number, command: SessionCommand, withPlace: boolean): string {
+  if (command.shell === "bash") {
+    const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
+    const env = withPlace && command.env && Object.keys(command.env).length
+      ? Object.entries(command.env).map(([name, value]) => `${name}:${b64(value)}`).join(",") : "-";
+    // Forward slashes: Git Bash takes D:/path as it is.
+    return [String(id), b64(command.script), withPlace && command.cwd ? b64(command.cwd.replaceAll("\\", "/")) : "-", env].join(" ");
+  }
   return Buffer.from(JSON.stringify({ id, script: command.script, timeoutMs: command.timeoutMs,
     ...(withPlace && command.cwd ? { cwd: command.cwd } : {}),
     ...(withPlace && command.env && Object.keys(command.env).length ? { env: command.env } : {}) }), "utf8").toString("base64");

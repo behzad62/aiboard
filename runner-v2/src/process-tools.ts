@@ -113,7 +113,7 @@ export function createProcessTools(
       description: "Run a command and wait for it. " +
         `It is stopped at timeoutMs (default ${defaultTimeoutMs / 1000} s), which leaves its effect unknown, so start servers, long jobs and interactive programs with ${name("process.start")}. ` +
         `command is a whole command line, run by cmd.exe on Windows and bash elsewhere, or one program with its arguments in args; for another shell, such as PowerShell or Git Bash, send shell and script instead. Commands that run one after another, ${together}, go in one call. Large output comes back as its head, tail and diagnostics with a processId for ${name("process.read_output")}; search returns only the matching lines. ` +
-        `With shellSession, a PowerShell script runs in a shell kept between calls that name the same shellSession, so its variables, functions, $env: values and location carry over.`,
+        `With shellSession, a PowerShell or bash script runs in a shell kept between calls that name the same shellSession, so its variables, functions, environment values and location carry over.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -126,7 +126,7 @@ export function createProcessTools(
           timeoutMs: { type: "integer", minimum: 1 },
           render: { enum: ["raw", "summary"], description: "summary: for large output, plain text head + tail + diagnostics found in the omitted middle. Default summary." },
           search: MANAGED_OUTPUT_SEARCH_SCHEMA,
-          shellSession: { type: "string", description: `Optional; leave it out unless a later call needs this one's variables, functions or location. Any name, with shell powershell or pwsh and script; the first call starts that shell, and a command in it runs up to ${SESSION_MAX_TIMEOUT_MS / 1000} s (a longer timeoutMs is capped).` },
+          shellSession: { type: "string", description: `Optional; leave it out unless a later call needs this one's variables, functions or location. Any name, with shell powershell, pwsh or bash and script; the first call starts that shell, and a command in it runs up to ${SESSION_MAX_TIMEOUT_MS / 1000} s (a longer timeoutMs is capped).` },
         },
         additionalProperties: false,
       },
@@ -202,7 +202,7 @@ function validateInput(input: unknown): ValidationResult<ProcessInput> {
   const line = asShellLine(value as ProcessInput);
   if (value.shellSession !== undefined) {
     if (typeof value.shellSession !== "string" || !SESSION_NAME_PATTERN.test(value.shellSession)) return { ok: false, issues: ["shellSession is a name of 1-64 letters, digits, '.', '_' or '-'"] };
-    if (!(SESSION_SHELLS as readonly unknown[]).includes(line.shell) || line.script === undefined) return { ok: false, issues: ["a shellSession runs PowerShell: send shell powershell or pwsh with script"] };
+    if (!(SESSION_SHELLS as readonly unknown[]).includes(line.shell) || line.script === undefined) return { ok: false, issues: ["a shellSession runs PowerShell or bash: send shell powershell, pwsh or bash with script"] };
   }
   return { ok: true, value: line };
 }
@@ -324,7 +324,7 @@ async function executeSession(input: ProcessInput, context: ToolExecutionContext
         ...(outcome.lossReasons.length || outcome.streams.some((stream) => stream.lossyBytes > 0)
           ? { outputLossy: true, ...(outcome.lossReasons.length ? { lossReasons: [...outcome.lossReasons] } : {}) } : {}),
         shellSession: { name: input.shellSession, processId: outcome.processId, ...(outcome.began ? { [outcome.began]: true } : {}),
-          ...(moved ? { cwd: outcome.cwd } : {}), ...(outcome.ended ? { ended: outcome.ended } : {}) },
+          ...(moved ? { cwd: resolve(outcome.cwd!) } : {}), ...(outcome.ended ? { ended: outcome.ended } : {}) },
       },
     }, support, readTool);
   } catch (error) {

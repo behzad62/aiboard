@@ -12,7 +12,8 @@ import { createProcessTools, processRunSupport } from "../src/process-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import type { ToolExecutionOutput } from "../src/agent-contracts.js";
-import { pwshExecutable } from "../src/shell-inventory.js";
+import { bashExecutable, pwshExecutable } from "../src/shell-inventory.js";
+import { bashCall, bashResult } from "../src/anthropic-bash-tool.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 
 // process.run with shellSession on real PowerShell processes, owned by the run's Job like any managed process.
@@ -121,7 +122,73 @@ for (const shell of ["powershell", "pwsh"] as const) {
   });
 }
 
-test("a session takes PowerShell only and a name; a longer timeout is capped, not refused", async () => {
+const bashSkip = !bashExecutable() ? "bash is not installed" : false;
+
+test("bash: variables, functions, exported values, cwd and env carry over; stdin is not the session's", { skip: bashSkip }, async (t) => {
+  await withHost(t, async ({ project, invoke }) => {
+    const first = await invoke("process.run", { shell: "bash", shellSession: "b", script: "x=41; twice() { echo $(( $1 * 2 )); }; export PROBE=bar; cd sub; echo ready" });
+    assert.equal(first.isError, false, JSON.stringify(first.content));
+    assert.deepEqual(lines(stream(first, "STDOUT")), ["ready"]);
+    const session = meta(first).shellSession as Record<string, unknown>;
+    assert.equal(session.started, true);
+    assert.equal(session.cwd, join(project, "sub"));
+
+    const second = await invoke("process.run", { shell: "bash", shellSession: "b", env: { EXTRA: "a \"b\" c" }, script: "echo $((x + 1)); twice 21; echo $PROBE; echo \"$EXTRA\"; cat; echo after-cat" });
+    assert.equal(second.isError, false, JSON.stringify(second.content));
+    assert.deepEqual(lines(stream(second, "STDOUT")), ["42", "42", "bar", "a \"b\" c", "after-cat"]);
+    assert.equal((meta(second).shellSession as Record<string, unknown>).processId, session.processId);
+
+    const moved = await invoke("process.run", { shell: "bash", shellSession: "b", cwd: project, script: "pwd -W 2>/dev/null || pwd" });
+    assert.equal((meta(moved).shellSession as Record<string, unknown>).cwd, undefined, "back in the workspace");
+    const bad = await invoke("process.run", { shell: "bash", shellSession: "b", env: { "NOT-A-NAME": "x" }, script: "true" });
+    assert.equal(bad.isError, true);
+    assert.match(JSON.stringify(bad.content), /not a bash variable name/u);
+  });
+});
+
+test("bash: exit codes and stderr; a command past its limit, or exit, ends the session and the next call replaces it", { skip: bashSkip }, async (t) => {
+  await withHost(t, async ({ invoke }) => {
+    await invoke("process.run", { shell: "bash", shellSession: "b", script: "keep=kept" });
+    const failed = await invoke("process.run", { shell: "bash", shellSession: "b", script: "echo out; echo err >&2; (exit 3)" });
+    assert.equal(meta(failed).exitCode, 3);
+    assert.deepEqual(lines(stream(failed, "STDOUT")), ["out"]);
+    assert.deepEqual(lines(stream(failed, "STDERR")), ["err"]);
+    assert.deepEqual(lines(stream(await invoke("process.run", { shell: "bash", shellSession: "b", script: "echo $keep" }), "STDOUT")), ["kept"]);
+
+    const stopped = await invoke("process.run", { shell: "bash", shellSession: "b", script: "echo started; sleep 30", timeoutMs: 1500 });
+    assert.equal(stopped.isError, true);
+    assert.equal(meta(stopped).timedOut, true);
+    assert.match(String((meta(stopped).shellSession as Record<string, unknown>).ended), /Bash cannot stop one command/u);
+    assert.deepEqual(lines(stream(stopped, "STDOUT")), ["started"]);
+    const fresh = await invoke("process.run", { shell: "bash", shellSession: "b", script: "echo \"keep=[$keep]\"" });
+    assert.deepEqual(lines(stream(fresh, "STDOUT")), ["keep=[]"]);
+    assert.equal((meta(fresh).shellSession as Record<string, unknown>).replaced, true);
+
+    const exited = await invoke("process.run", { shell: "bash", shellSession: "b", script: "exit 0" });
+    assert.match(String((meta(exited).shellSession as Record<string, unknown>).ended), /exited/u);
+    assert.equal((meta(await invoke("process.run", { shell: "bash", shellSession: "b", script: "true" })).shellSession as Record<string, unknown>).replaced, true);
+  });
+});
+
+test("Anthropic's bash tool runs in one kept bash through process.run: state, exit codes, restart", { skip: bashSkip }, async (t) => {
+  await withHost(t, async ({ invoke }) => {
+    let n = 0;
+    const bash = async (input: Record<string, unknown>) => {
+      const call = bashCall(`toolu_${++n}`, input);
+      const result = await invoke(call.name, call.arguments as Record<string, unknown>);
+      return bashResult(call.nativeCall!.input, { ...result, callId: call.callId, toolName: call.name });
+    };
+    assert.deepEqual(await bash({ command: "x=5; cd sub; echo set" }), { text: "set", isError: false });
+    assert.deepEqual(await bash({ command: "echo $x $(basename \"$PWD\")" }), { text: "5 sub", isError: false });
+    assert.deepEqual(await bash({ command: "echo bad >&2; false" }), { text: "bad\n[exit code 1]", isError: false });
+    assert.deepEqual(await bash({ restart: true }), { text: "The bash shell has been restarted.", isError: false });
+    const fresh = await bash({ command: "echo \"[$x]\"" });
+    assert.equal(fresh.isError, false);
+    assert.match(fresh.text, /^\[\]\n\[A new shell started/u);
+  });
+});
+
+test("a session takes PowerShell or bash and a name; a longer timeout is capped, not refused", async () => {
   const [tool] = createProcessTools();
   const issues = (input: Record<string, unknown>) => { const result = tool!.validate!(input); return result.ok ? [] : result.issues; };
   assert.deepEqual(issues({ shell: "powershell", script: "1", shellSession: "a.b-c_1" }), []);

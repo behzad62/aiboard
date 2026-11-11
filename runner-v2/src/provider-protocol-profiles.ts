@@ -34,6 +34,15 @@ export interface ProviderProtocolProfile {
      */
     readonly nativeTools?: ReadonlyArray<{ readonly wire: Readonly<Record<string, unknown>>; readonly replaces: readonly string[] }>;
   };
+  readonly messages?: {
+    /**
+     * Anthropic's text editor in place of fs.read, fs.write and fs.patch, for the models its docs list
+     * (anthropic-text-editor.ts maps each call onto those tools).
+     */
+    readonly textEditor?: boolean;
+    /** Anthropic's bash in place of process.run, in one kept bash session (anthropic-bash-tool.ts). */
+    readonly bash?: boolean;
+  };
   readonly docsUrl: string;
   readonly verifiedAt: string;
 }
@@ -54,6 +63,14 @@ const CODEX_APPLY_PATCH_DESCRIPTION = [
 ].join("\n");
 
 export const PROVIDER_PROTOCOL_PROFILES: Readonly<Record<string, ProviderProtocolProfile>> = Object.freeze({
+  // text_editor_20250728 (str_replace_based_edit_tool): client-run, schema-less, no beta header;
+  // view, create, str_replace and insert. bash_20250124 (bash): {command} or {restart: true} in one shell that keeps
+  // its state; the client owns the timeout (platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool).
+  anthropic: Object.freeze({
+    messages: Object.freeze({ textEditor: true, bash: true }),
+    docsUrl: "https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool",
+    verifiedAt: "2026-11-11",
+  }),
   deepseek: Object.freeze({
     chatReasoningContent: true,
     // deepseek-flash and deepseek-v4-pro (api-docs.deepseek.com/quick_start/pricing).

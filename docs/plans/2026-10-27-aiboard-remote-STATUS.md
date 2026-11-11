@@ -232,6 +232,26 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
   - New lab scenario `chain`: a PowerShell helper that takes 8 s to load, then four lookups where each answer names the next. Old relay tools (no `shellSession`): 5 of 5 passed in 51–54 s, with 4 loads each. New tools: 10 of 10 passed. 6 of the 10 runs used a session: 1 load, 27–30 s. The other 4 ran one-shot commands like the old tools (51–55 s).
   - Negative control: 16 of 16 runs across tests, rename, csv, quiz, slow, noisy, fail and commit; none sent `shellSession`.
   - Every first session call sent `timeoutMs: 120000` (process_run's usual timeout) and was refused, costing a round trip. A longer `timeoutMs` is now capped at 90 s instead, and the timeout message points to `process_start` for longer jobs. After that change: 6 calls and 1 load per session run, with no refusals.
+- **2026-11-11: Anthropic's text editor in Build** (branch `claude/shared-process-tools`; Build only, never on the MCP surface).
+  - A Claude 4.5+ model (`supportsTextEditor`, per the docs' model list) in a session with `fs.read`, `fs.write` and `fs.patch` is offered `text_editor_20250728` (`str_replace_based_edit_tool`) instead of those three tools. `anthropic-text-editor.ts` maps each call onto one of them, so grants, the fence, revisions and policy paths are unchanged:
+    - `view` → `fs.read` with a line range;
+    - `create` → `fs.write`;
+    - `str_replace` → `fs.patch`;
+    - `insert` → `fs.patch` with an internal `_insert` edit, which is not in the schema.
+  - The call goes back to Claude as it wrote it. Results take the docs' form: `N: line` numbering, "Successfully replaced text at exactly one location.", and `Error: …`. Notices and diagnostics from the `fs` tools are appended. `undo_edit` and malformed input run nothing and say why. `create` over a file the model has not viewed is refused, as `fs.write` refuses it.
+  - Shared changes: `fs.read` of a folder now lists it two levels deep (hidden and build-output entries skipped, policy paths filtered) instead of failing with EISDIR. Remote's `files_read` gets the same listing.
+  - Not done: OpenAI's shell.
+- **2026-11-11: bash shell sessions; Anthropic's bash tool in Build** (branch `claude/shared-process-tools`).
+  - `shellSession` now takes `shell: "bash"` (Git Bash on Windows) as well as PowerShell. `shell-session-bash-host.ts` uses the same markers as the PowerShell host. Its frames are space-separated base64 fields, because bash has no JSON parser.
+    - Each command runs in the shell itself, with stdin from `/dev/null`, so a program reading stdin can't swallow the next command.
+    - `exit`, or a failure under `set -e`, ends the session.
+    - Bash cannot stop one foreground command and keep the shell, so a command past its limit ends the session, and the result says so.
+    - After any session the Runner ended (limit, exit, idle), the next call reports `replaced`.
+  - Claude 4+ in Build, where a bash can run and the session has `process.run`, is offered `bash_20250124` (`bash`) instead of `process.run` (`anthropic-bash-tool.ts`).
+    - `{command}` runs as `process.run` with shell bash in one session per agent (`claude-bash`). The allowlist, grant, Job and output handling stay the same.
+    - `{restart: true}` runs `exit 0` there.
+    - Results read like a terminal: output, then `[exit code N]` and what happened to the shell. A command past 90 s points to `process_start`.
+    - `process_start` and the other process tools stay offered.
 
 ## Open items carried from R0
 
