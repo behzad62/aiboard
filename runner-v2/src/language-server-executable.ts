@@ -1,5 +1,6 @@
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
-import { lstat, realpath, stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { lstat, readlink, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, join, resolve, sep } from "node:path";
 
 const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
@@ -189,7 +190,7 @@ async function identifyExecutable(
       `Language server command ${requested} must be a regular file.`,
     );
   }
-  const canonical = await realpath(requested);
+  const canonical = await canonicalExecutablePath(requested, metadata, platform);
   const actual = await stat(canonical);
   if (!actual.isFile()) {
     throw new UnusableLanguageServerExecutableCandidateError(
@@ -223,6 +224,32 @@ async function identifyExecutable(
     digest,
     launcher,
   };
+}
+
+/**
+ * A Microsoft Store app execution alias (an AppExecLink reparse point, e.g.
+ * %LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe) cannot be opened, so
+ * realpath fails with EACCES even though CreateProcess launches it. Its link
+ * data names the package's real program, which can be opened, hashed and
+ * launched directly; pin that program instead. Resolved on every call, so a
+ * Store update that moves the package is followed, never cached.
+ */
+async function canonicalExecutablePath(
+  requested: string,
+  metadata: Stats,
+  platform: NodeJS.Platform,
+): Promise<string> {
+  try {
+    return await realpath(requested);
+  } catch (error) {
+    if (platform !== "win32" || !metadata.isSymbolicLink() || !(isErrno(error, "EACCES") || isErrno(error, "EPERM"))) {
+      throw error;
+    }
+    let target: string;
+    try { target = await readlink(requested); } catch { throw error; }
+    if (!isAbsolute(target) || target.includes("\0")) throw error;
+    return await realpath(target);
+  }
 }
 
 function isBareCommand(command: string): boolean {
