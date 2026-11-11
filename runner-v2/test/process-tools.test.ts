@@ -310,7 +310,7 @@ test("a command runs to its own limit, past the broker's, in Build and for a cli
   const retention = { retainOutput: () => "run-1", readArtifact: async () => new Uint8Array() };
   const broker = (names: "build" | "mcp") => {
     const made = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, toolTimeoutMs: 300 });
-    for (const tool of createProcessTools({ execution: createTestOneShotCommandExecutor(t), retention, names })) made.register(tool);
+    for (const tool of createProcessTools({ execution: createTestOneShotCommandExecutor(t), support: retention, names })) made.register(tool);
     return made;
   };
   const slow = { command: process.execPath, args: ["-e", "setTimeout(() => console.log('done'), 1500)"], timeoutMs: 10_000 };

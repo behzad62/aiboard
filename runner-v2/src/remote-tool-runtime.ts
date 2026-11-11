@@ -10,7 +10,7 @@ import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createImageTools } from "./image-tools.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
-import { createProcessTools, processOutputRetention } from "./process-tools.js";
+import { createProcessTools, processRunSupport } from "./process-tools.js";
 import { roleAllowList } from "./role-capabilities.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
@@ -392,7 +392,7 @@ async function createGovernedBinding(
       ...createFilesystemTools({ artifacts: options.host.artifacts, pathGuard }), ...createGitTools(binding.git),
       // The same process tools Build's workers get (worker-runtime.ts); a client only sees them by its own names.
       ...createProcessTools({ execution: binding.commandExecution, names: "mcp",
-        retention: processOutputRetention(binding.managedProcesses, options.host.artifacts) }),
+        support: processRunSupport(binding.managedProcesses, options.host.artifacts) }),
       ...createManagedProcessTools(binding.managedProcesses, { names: "mcp" }),
       ...createImageTools({ artifacts: options.host.artifacts, pathGuard }),
     ];

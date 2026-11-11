@@ -41,7 +41,7 @@ import { evidenceFactArtifactHashes, type EvidenceStore } from "./evidence-store
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createOpenRouterApplyPatchTool } from "./openrouter-apply-patch-tool.js";
 import { createGitTools } from "./git-tools.js";
-import { createProcessTools, processOutputRetention } from "./process-tools.js";
+import { createProcessTools, processRunSupport } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
@@ -224,7 +224,7 @@ export async function runWorkerTask(
     ...(options.allowedCommands
       ? { allowedCommands: options.allowedCommands }
       : {}),
-    retention: processOutputRetention(options.managedProcesses, options.artifacts),
+    support: processRunSupport(options.managedProcesses, options.artifacts),
   })) registerStaticWorkerTool(broker, tool);
   if (options.managedProcesses) {
     for (const tool of createManagedProcessTools(options.managedProcesses)) {

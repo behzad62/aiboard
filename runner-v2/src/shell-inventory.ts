@@ -2,7 +2,7 @@
 // that shell with a fixed $PSVersionTable query, no profile, bounded by a 10 s timeout, with no secrets.
 import { execFile } from "node:child_process";
 import { existsSync, lstatSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 /** A shell process.run can be asked for. pwsh is PowerShell 7 and later, powershell is Windows PowerShell 5.1. */
 export type ShellName = "powershell" | "pwsh" | "cmd" | "bash";
@@ -93,6 +93,11 @@ let pwshPath: string | null | undefined;
 export function pwshExecutable(platform: NodeJS.Platform = process.platform): string | undefined {
   if (pwshPath === undefined) pwshPath = onPath(platform === "win32" ? "pwsh.exe" : "pwsh") ?? null;
   return pwshPath ?? undefined;
+}
+
+/** True for a Microsoft Store app's command, an app execution alias under WindowsApps. */
+export function isStoreAppAlias(path: string): boolean {
+  return storeApps(dirname(path).replace(/[\\/]+$/u, "").toLowerCase());
 }
 
 /** %LOCALAPPDATA%\Microsoft\WindowsApps and the per-app folders under it hold Store app aliases. */

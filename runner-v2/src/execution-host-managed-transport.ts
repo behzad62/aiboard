@@ -50,7 +50,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
     return record;
   };
   const expected = (target: ManagedProcessIdentity, context: Readonly<ToolExecutionContext>, operation: "observe" | "stop"): OperationAuthorizationAssertion => {
-    assertCall(context, target, run.runId, operation === "stop" ? ["process.signal"] : ["process.poll", "process.list", "process.read_output", "process.interact", "process.start"]);
+    assertCall(context, target, run.runId, operation === "stop" ? ["process.signal"] : ["process.poll", "process.list", "process.read_output", "process.interact", "process.start", "process.run"]);
     return { ...noExtraAccess, sessionId: sessionId(target.processId), operation, binding: bindingFor(context, options.permissionProfile) };
   };
   const snapshot = async (target: ManagedProcessTarget, authorization?: SessionOperationAuthorization, assertion?: OperationAuthorizationAssertion, maximum = 65536): Promise<ManagedProcessSnapshot> => {
@@ -81,6 +81,8 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
   };
   // Keyed by the exact frozen call context the service threads through one interaction.
   const interactions = new WeakMap<object, InteractionAuthority>();
+  // Keyed the same way: the launching call's one observation, reused by that call's later reads.
+  const launchReads = new WeakMap<object, SessionOperationAuthorization>();
   const interactionAuthority = (target: ManagedProcessIdentity, context: Readonly<ToolExecutionContext>, operation: InputOperation): InteractionAuthority => {
     const existing = interactions.get(context);
     if (existing) {
@@ -99,13 +101,20 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
   const observeAuthorization = (target: ManagedProcessIdentity, context: Readonly<ToolExecutionContext>, assertion: OperationAuthorizationAssertion,
     interaction?: InputOperation): SessionOperationAuthorization => {
     const entry = entries.get(target.processId);
-    if (context.toolName === "process.start") {
-      // Only the exact launching call, once, through the launch-retained claims.
+    // process.run reads a shell session (shell-session.ts): on the call that launched it, as process.start's readiness
+    // read; on a later call, as the observation of the input it sent, as process.interact.
+    if (context.toolName === "process.start" || context.toolName === "process.run" && !interaction) {
+      // Only the exact launching call, through the launch-retained claims, for its one first operation.
       if (!entry?.facade || !entry.launch || entry.launch.callId !== context.callId || entry.launch.grant !== context.executionGrant)
         throw refused("A same-call readiness read must come from the exact launching call.");
-      return entry.facade.authorizeFirstOperation({ ...noExtraAccess, sessionId: assertion.sessionId, operation: "observe" });
+      // A session's first command can outlast one bounded read, so that call's later reads reuse the same observation.
+      const existing = launchReads.get(context);
+      if (existing) return existing;
+      const authorization = entry.facade.authorizeFirstOperation({ ...noExtraAccess, sessionId: assertion.sessionId, operation: "observe" });
+      launchReads.set(context, authorization);
+      return authorization;
     }
-    if (context.toolName === "process.interact") {
+    if (context.toolName === "process.interact" || context.toolName === "process.run") {
       if (!interaction) throw refused("An interaction read needs its declared input operation.");
       return interactionAuthority(target, context, interaction).authorization.observe;
     }
@@ -115,7 +124,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
   const runtime: ManagedProcessRunRuntime = {
     runId: run.runId,
     async start(request) {
-      assertCall(request.context, request.identity, run.runId, ["process.start"]);
+      assertCall(request.context, request.identity, run.runId, ["process.start", "process.run"]);
       if (entries.has(request.identity.processId) || recordOf(request.identity)) throw refused("Managed launch identity cannot be replayed.");
       const abort = new AbortController(), entry: Entry = { abort,
         launch: Object.freeze({ callId: request.context.callId!, grant: request.context.executionGrant }) };
@@ -239,7 +248,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       return await snapshot(target);
     },
     async writeInput(target, context, request) {
-      assertCall(context, target, run.runId, ["process.write_stdin", "process.interact"]);
+      assertCall(context, target, run.runId, ["process.write_stdin", "process.interact", "process.run"]);
       const record = recordOf(target), facade = entries.get(target.processId)?.facade;
       if (!record || record.state !== "active" || entries.get(target.processId)?.terminal)
         throw new ManagedProcessError("process_input_unavailable", "Process input is unavailable: the owned session is no longer active.");
@@ -248,7 +257,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       const assertion: OperationAuthorizationAssertion = { ...noExtraAccess, sessionId: sessionId(target.processId), operation, binding: bindingFor(context, options.permissionProfile) };
       let authorization: SessionOperationAuthorization;
       try {
-        if (context.toolName === "process.interact") {
+        if (context.toolName === "process.interact" || context.toolName === "process.run") {
           const interaction = interactionAuthority(target, context, operation);
           if (interaction.inputUsed) throw refused("An interaction delivers its input once.");
           interaction.inputUsed = true; authorization = interaction.authorization.input;
@@ -265,7 +274,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       return Object.freeze({ inputClosed: request.closeInput });
     },
     async readOutput(target, context, request) {
-      assertCall(context, target, run.runId, ["process.read_output", "process.interact", "process.start"]);
+      assertCall(context, target, run.runId, ["process.read_output", "process.interact", "process.start", "process.run"]);
       const durable = recordOf(target);
       if (!durable) throw new ManagedProcessError("process_output_unavailable", "This process never acquired an owned output session; no output evidence exists.");
       const assertion = expected(target, context, "observe");

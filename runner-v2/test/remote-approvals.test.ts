@@ -413,6 +413,10 @@ test("approval summaries are bounded, escaped and carry no input data or environ
   // What a command is searched for afterwards does not change what is being approved.
   const searched = commandApprovalSummary("job-1b", "ABC123", "process.run", { command: "node", args: ["noisy.mjs"], search: { pattern: "NEEDLE" } }, tmpdir());
   assert.equal(searched.commandLine, "node noisy.mjs");
+  // A session command is approved as the script it runs, in the shell it names, pwsh included.
+  const session = commandApprovalSummary("job-1c", "ABC123", "process.run", { shell: "pwsh", script: "$x = 1", shellSession: "main" }, tmpdir());
+  assert.equal(session.commandLine, "pwsh $x = 1");
+  assert.throws(() => commandApprovalSummary("job-1d", "ABC123", "process.run", { command: "node", shellSession: "main" }, tmpdir()), /Invalid approval payload/u);
   const stdin = commandApprovalSummary("job-2", "ABC123", "process.write_stdin",
     { processId: "p-1", writeId: "w-1", data: "password123\n" }, tmpdir());
   assert.equal(stdin.commandLine, "");

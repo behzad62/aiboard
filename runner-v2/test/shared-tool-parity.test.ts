@@ -30,7 +30,7 @@ test("Build and the MCP servers build their tools from the same modules", () => 
     }
   }
   // Large output stays readable by processId the same way on both sides.
-  for (const file of ["worker-runtime.ts", "subagent-tools.ts", "remote-tool-runtime.ts"]) assert.match(source(file), /processOutputRetention\(/u, file);
+  for (const file of ["worker-runtime.ts", "subagent-tools.ts", "remote-tool-runtime.ts"]) assert.match(source(file), /processRunSupport\(/u, file);
 });
 
 test("the process tools take no option that changes what they do, only the names they are seen by", () => {

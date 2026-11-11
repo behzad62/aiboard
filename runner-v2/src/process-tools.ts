@@ -15,6 +15,7 @@ import type {
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
 import { commandLineShell, shellInvocation } from "./command-line.js";
 import { knownShells, SHELL_NAMES, shellMayRun, type ShellName } from "./shell-inventory.js";
+import { SESSION_MAX_TIMEOUT_MS, SESSION_NAME_PATTERN, SESSION_SHELLS, shellSessionsFor, type SessionShell, type ShellSessions } from "./shell-session.js";
 import {
   outputFor,
   type OneShotCommandExecutor,
@@ -31,6 +32,7 @@ interface ProcessInput {
   timeoutMs?: number;
   render?: "raw" | "summary";
   search?: ManagedOutputSearchRequest;
+  shellSession?: string;
 }
 
 /**
@@ -44,27 +46,30 @@ export function processToolName(names: ProcessToolNames | undefined, name: `proc
   return names === "mcp" ? name.replace(".", "_") : name;
 }
 
-/** Where process.run keeps a finished command's output, so it stays readable by processId (search, lines). */
-export interface ProcessOutputRetention {
+/** What process.run uses beyond the command: where a finished command's output stays readable by processId (search, lines), and the shell sessions. */
+export interface ProcessRunSupport {
   /** Keeps a finished command's output readable through process.read_output; returns the id to read it by. */
   retainOutput?(context: Readonly<ToolExecutionContext>, output: ManagedRetainedOutput): string;
   readArtifact(artifactId: string): Promise<Uint8Array>;
+  /** Runs a command with shellSession in a shell that stays up between calls (shell-session.ts). */
+  sessions?: ShellSessions;
 }
 
 /**
  * What Build and the MCP servers both give process.run: the run's managed processes keep a finished command's output
- * readable by processId, and its artifact store holds whatever spilled past the retained tail.
+ * readable by processId and hold its shell sessions, and its artifact store holds whatever spilled past the retained tail.
  */
-export function processOutputRetention(managedProcesses: Pick<ManagedProcessService, "retainOutput"> | undefined,
-  artifacts: { get(artifactId: string): Promise<Uint8Array> }): ProcessOutputRetention {
+export function processRunSupport(managedProcesses: ManagedProcessService | undefined,
+  artifacts: { get(artifactId: string): Promise<Uint8Array> }): ProcessRunSupport {
   return Object.freeze({
-    ...(managedProcesses ? { retainOutput: (context: Readonly<ToolExecutionContext>, output: ManagedRetainedOutput) => managedProcesses.retainOutput(context, output) } : {}),
+    ...(managedProcesses ? { retainOutput: (context: Readonly<ToolExecutionContext>, output: ManagedRetainedOutput) => managedProcesses.retainOutput(context, output),
+      sessions: shellSessionsFor(managedProcesses) } : {}),
     readArtifact: (artifactId: string) => artifacts.get(artifactId),
   });
 }
 
 /** No store: large output is still summarized, from the retained tail, and has no processId. */
-const NO_RETENTION: ProcessOutputRetention = Object.freeze({
+const NO_RETENTION: ProcessRunSupport = Object.freeze({
   readArtifact: async () => { throw new Error("This command's stored output is not readable here."); },
 });
 
@@ -88,7 +93,7 @@ export interface ProcessToolsOptions {
   maximumTimeoutMs?: number;
   allowedCommands?: readonly string[];
   /** Keeps large output readable by processId. Without it, process.run still summarizes large output, with no processId. */
-  retention?: ProcessOutputRetention;
+  support?: ProcessRunSupport;
   /** The names the model sees: Build's (the default) or the MCP servers'. */
   names?: ProcessToolNames;
 }
@@ -107,7 +112,8 @@ export function createProcessTools(
       // Some clients give sub-agents tool descriptions but not the server's instructions, so this says what a long command needs.
       description: "Run a command and wait for it. " +
         `It is stopped at timeoutMs (default ${defaultTimeoutMs / 1000} s), which leaves its effect unknown, so start servers, long jobs and interactive programs with ${name("process.start")}. ` +
-        `command is a whole command line, run by cmd.exe on Windows and bash elsewhere, or one program with its arguments in args; for another shell, such as PowerShell or Git Bash, send shell and script instead. Commands that run one after another, ${together}, go in one call. Large output comes back as its head, tail and diagnostics with a processId for ${name("process.read_output")}; search returns only the matching lines.`,
+        `command is a whole command line, run by cmd.exe on Windows and bash elsewhere, or one program with its arguments in args; for another shell, such as PowerShell or Git Bash, send shell and script instead. Commands that run one after another, ${together}, go in one call. Large output comes back as its head, tail and diagnostics with a processId for ${name("process.read_output")}; search returns only the matching lines. ` +
+        `With shellSession, a PowerShell script runs in a shell kept between calls that name the same shellSession, so its variables, functions, $env: values and location carry over.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -120,6 +126,7 @@ export function createProcessTools(
           timeoutMs: { type: "integer", minimum: 1 },
           render: { enum: ["raw", "summary"], description: "summary: for large output, plain text head + tail + diagnostics found in the omitted middle. Default summary." },
           search: MANAGED_OUTPUT_SEARCH_SCHEMA,
+          shellSession: { type: "string", description: `Optional; leave it out unless a later call needs this one's variables, functions or location. Any name, with shell powershell or pwsh and script; the first call starts that shell, and a command in it can run up to ${SESSION_MAX_TIMEOUT_MS / 1000} s.` },
         },
         additionalProperties: false,
       },
@@ -142,7 +149,7 @@ export function createProcessTools(
         defaultTimeoutMs,
         maximumTimeoutMs,
         options.allowedCommands,
-        options.retention ?? NO_RETENTION,
+        options.support ?? NO_RETENTION,
         name("process.read_output"),
       ),
   };
@@ -192,7 +199,15 @@ function validateInput(input: unknown): ValidationResult<ProcessInput> {
     try { validateOutputSearch(value.search); }
     catch (error) { return { ok: false, issues: [error instanceof Error ? error.message : "search is invalid"] }; }
   }
-  return { ok: true, value: asShellLine(value as ProcessInput) };
+  const line = asShellLine(value as ProcessInput);
+  if (value.shellSession !== undefined) {
+    if (typeof value.shellSession !== "string" || !SESSION_NAME_PATTERN.test(value.shellSession)) return { ok: false, issues: ["shellSession is a name of 1-64 letters, digits, '.', '_' or '-'"] };
+    if (!(SESSION_SHELLS as readonly unknown[]).includes(line.shell) || line.script === undefined) return { ok: false, issues: ["a shellSession runs PowerShell: send shell powershell or pwsh with script"] };
+    if (line.timeoutMs !== undefined && line.timeoutMs > SESSION_MAX_TIMEOUT_MS) {
+      return { ok: false, issues: [`a shellSession command can run up to ${SESSION_MAX_TIMEOUT_MS} ms; start a longer job with process.start`] };
+    }
+  }
+  return { ok: true, value: line };
 }
 
 async function executeProcess(
@@ -202,7 +217,7 @@ async function executeProcess(
   defaultTimeoutMs: number,
   maximumTimeoutMs: number,
   allowedCommands: readonly string[] | undefined,
-  retention: ProcessOutputRetention,
+  retention: ProcessRunSupport,
   readTool: string,
 ): Promise<ToolExecutionOutput> {
   if (!context.workspacePath) {
@@ -212,7 +227,7 @@ async function executeProcess(
   if (input.shell && !shellMayRun(input.shell)) {
     return processError("shell_unavailable", `${input.shell} is not installed on this device, so nothing ran. Its shells: ${knownShells()!.join(", ")}.`);
   }
-  if (!execution || !context.executionGrant || !context.callId) {
+  if ((!execution && input.shellSession === undefined) || !context.executionGrant || !context.callId) {
     return processError(
       "process_runtime_unavailable",
       "The shared subprocess runtime is unavailable for this command.",
@@ -224,11 +239,12 @@ async function executeProcess(
       "Command is not allowlisted for this WorkBench attempt."
     );
   }
+  if (input.shellSession !== undefined) return await executeSession(input, context, retention, readTool);
   const invocation = commandInvocation(input);
   const cwd = resolve(context.workspacePath, input.cwd ?? ".");
   const timeoutMs = Math.min(input.timeoutMs ?? defaultTimeoutMs, maximumTimeoutMs);
   try {
-    const result = await execution.execute({
+    const result = await execution!.execute({
       executable: invocation.command,
       arguments: invocation.args,
       workingDirectory: cwd,
@@ -264,24 +280,91 @@ function runFailure(outcome: GenericProcessResult["outcome"], timeoutMs: number)
   }
 }
 
-/**
- * A command's result: what it did and what it printed, without the bookkeeping that holds for nearly every command.
- * Anything left out of the text stays readable by processId, so a model never has to run a command again to see
- * more of what it printed.
- */
+/** A command's result: its one-shot run, told the way every process.run result is (presentRun). */
 async function runResult(
   input: ProcessInput,
   context: ToolExecutionContext,
   result: OneShotCommandResult,
   failure: { code: string; message: string } | undefined,
-  retention: ProcessOutputRetention,
+  retention: ProcessRunSupport,
   readTool: string,
 ): Promise<ToolExecutionOutput> {
   const run = result.process;
-  const streams = (["stdout", "stderr"] as const).map((stream) => streamEvidence(outputFor(run, stream)));
+  return await presentRun(input, context, {
+    streams: (["stdout", "stderr"] as const).map((stream) => streamEvidence(outputFor(run, stream))),
+    exitCode: run.exitCode ?? null,
+    ...(run.signal ? { signal: run.signal } : {}),
+    ...(failure ? { failure } : {}),
+    details: {
+      ...(run.outcome === "timed_out" ? { timedOut: true } : {}),
+      ...(run.outcome === "cancelled" ? { cancelled: true } : {}),
+      ...(run.cleanup.state === "verified_empty" || run.cleanup.state === "not_required" ? {} : { cleanup: run.cleanup }),
+      ...(run.output.some((entry) => entry.lossyBytes > 0) ? { outputLossy: true, ...lossReasons(run) } : {}),
+      ...(result.enforcement === "unconfined_explicit_full" ? {} : { enforcement: result.enforcement, disclosure: result.disclosure }),
+      ...(result.providerId ? { providerId: result.providerId } : {}),
+    },
+  }, retention, readTool);
+}
+
+/** A command in a shell session (shell-session.ts). */
+async function executeSession(input: ProcessInput, context: ToolExecutionContext, support: ProcessRunSupport, readTool: string): Promise<ToolExecutionOutput> {
+  if (!support.sessions) return processError("session_unavailable", "Shell sessions are not available here, so nothing ran; run the command without shellSession.");
+  const timeoutMs = Math.min(input.timeoutMs ?? SESSION_MAX_TIMEOUT_MS, SESSION_MAX_TIMEOUT_MS);
+  try {
+    const outcome = await support.sessions.run({ name: input.shellSession!, shell: input.shell as SessionShell, script: input.script!, timeoutMs,
+      ...(input.cwd !== undefined ? { cwd: resolve(context.workspacePath!, input.cwd) } : {}), ...(input.env ? { env: input.env } : {}) }, context);
+    const failure = outcome.error ?? (outcome.timedOut
+      ? { code: "process_timeout", message: `Command exceeded ${timeoutMs} ms${outcome.ended ? "." : "; the session stopped it and kept its state."}` }
+      : undefined);
+    const moved = outcome.cwd !== undefined && !samePath(outcome.cwd, context.workspacePath!);
+    return await presentRun(input, context, {
+      streams: outcome.streams,
+      exitCode: outcome.exitCode,
+      ...(failure ? { failure } : {}),
+      details: {
+        ...(outcome.timedOut ? { timedOut: true } : {}),
+        ...(outcome.lossReasons.length || outcome.streams.some((stream) => stream.lossyBytes > 0)
+          ? { outputLossy: true, ...(outcome.lossReasons.length ? { lossReasons: [...outcome.lossReasons] } : {}) } : {}),
+        shellSession: { name: input.shellSession, processId: outcome.processId, ...(outcome.began ? { [outcome.began]: true } : {}),
+          ...(moved ? { cwd: outcome.cwd } : {}), ...(outcome.ended ? { ended: outcome.ended } : {}) },
+      },
+    }, support, readTool);
+  } catch (error) {
+    const value = error as { code?: unknown; message?: unknown };
+    return processError(typeof value.code === "string" ? value.code : "process_runtime_failed", typeof value.message === "string" ? value.message : String(error));
+  }
+}
+
+function samePath(a: string, b: string): boolean {
+  const normal = (path: string) => resolve(path).replace(/[\\/]+$/u, "");
+  return process.platform === "win32" ? normal(a).toLowerCase() === normal(b).toLowerCase() : normal(a) === normal(b);
+}
+
+interface RunOutcome {
+  readonly streams: readonly ManagedOutputStreamEvidence[];
+  readonly exitCode: number | null;
+  readonly signal?: string;
+  readonly failure?: { code: string; message: string };
+  /** Shown after exitCode, signal and error. */
+  readonly details: Record<string, unknown>;
+}
+
+/**
+ * A command's result: what it did and what it printed, without the bookkeeping that holds for nearly every command.
+ * Anything left out of the text stays readable by processId, so a model never has to run a command again to see
+ * more of what it printed.
+ */
+async function presentRun(
+  input: ProcessInput,
+  context: ToolExecutionContext,
+  run: RunOutcome,
+  retention: ProcessRunSupport,
+  readTool: string,
+): Promise<ToolExecutionOutput> {
+  const { streams, failure } = run;
   const printed = streams.some((stream) => stream.totalBytes > 0);
   const retain = input.search ? printed : streams.some((stream) => stream.totalBytes > SUMMARY_BYTES);
-  const processId = retain && retention.retainOutput ? retention.retainOutput(context, { exitCode: run.exitCode ?? null, signal: run.signal ?? null, streams }) : undefined;
+  const processId = retain && retention.retainOutput ? retention.retainOutput(context, { exitCode: run.exitCode, signal: run.signal ?? null, streams }) : undefined;
   // The command already ran, so a search that fails must not cost the model its result.
   const search = input.search
     ? await searchOutput({ streams, request: input.search, readSpill: retention.readArtifact }).catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
@@ -292,15 +375,10 @@ async function runResult(
     return text ? `${stream.stream.toUpperCase()}\n${text}` : "";
   }));
   const metadata = {
-    exitCode: run.exitCode ?? null,
+    exitCode: run.exitCode,
     ...(run.signal ? { signal: run.signal } : {}),
     ...(failure ? { error: failure.message } : {}),
-    ...(run.outcome === "timed_out" ? { timedOut: true } : {}),
-    ...(run.outcome === "cancelled" ? { cancelled: true } : {}),
-    ...(run.cleanup.state === "verified_empty" || run.cleanup.state === "not_required" ? {} : { cleanup: run.cleanup }),
-    ...(run.output.some((entry) => entry.lossyBytes > 0) ? { outputLossy: true, ...lossReasons(run) } : {}),
-    ...(result.enforcement === "unconfined_explicit_full" ? {} : { enforcement: result.enforcement, disclosure: result.disclosure }),
-    ...(result.providerId ? { providerId: result.providerId } : {}),
+    ...run.details,
     ...(processId ? { processId, stdoutBytes: streams[0]!.totalBytes, stderrBytes: streams[1]!.totalBytes } : {}),
     ...(search ? { search } : {}),
   };
@@ -325,7 +403,7 @@ function streamEvidence(output: ProcessOutputDisposition): ManagedOutputStreamEv
     ...(output.spillArtifactId ? { spill: Object.freeze({ artifactId: output.spillArtifactId, bytes: output.spillBytes }) } : {}) });
 }
 
-export async function clientStreamText(stream: ManagedOutputStreamEvidence, render: "raw" | "summary", processId: string | undefined, retention: Pick<ProcessOutputRetention, "readArtifact">, readTool = "process_read_output"): Promise<string> {
+export async function clientStreamText(stream: ManagedOutputStreamEvidence, render: "raw" | "summary", processId: string | undefined, retention: Pick<ProcessRunSupport, "readArtifact">, readTool = "process_read_output"): Promise<string> {
   if (render === "raw") return Buffer.from(stream.tail).toString("utf8");
   // A summary starts where the output really starts, not where the retained tail happens to.
   const regions = await retainedRegions(stream, retention.readArtifact).catch(() => undefined);
