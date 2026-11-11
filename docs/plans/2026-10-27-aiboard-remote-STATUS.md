@@ -257,6 +257,10 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
   - Each `shell_call` command runs as its own `process.run` with shell bash, in order, keeping no directory or variables, as the docs' `sh -c` executors do. `timeout_ms` becomes `timeoutMs`.
   - The answer is one `shell_call_output` per call: one `{stdout, stderr, outcome}` per command, `max_output_length` echoed, each stream cut to it in the middle. A command the Runner did not run reports its reason on stderr with exit code 1.
   - Not tried against a live GPT-6 model.
+- **2026-11-11: release closure check on PRs; Store pwsh `process_start` checked** (branch `claude/closure-ci-store-pwsh`).
+  - New workflow `runner-bundle-closure.yml` runs `scripts/release/test-bundle-closure.mts` on every PR that changes a shipped file: `runner-v2/src/**`, the peer files in `bundle-contents.mts`, the two closure scripts, `package.json` and `package-lock.json`. Before, only `runner-installer.yml` ran it, on release paths, so #168 reached the release first. Replay: the pre-#169 scanner on #168's tree fails the check; current main passes. The check itself takes under a second.
+  - Store pwsh, checked on 0.3.16 code (Windows 10, Store pwsh 7.6.9 first on PATH): `process_start` with `pwsh`, `pwsh.exe`, the alias path, or `interactive: true` all fail at once with `EACCES: permission denied, realpath '…\WindowsApps\pwsh.exe'`. A command line (`pwsh -Command …` with no args) works because it runs through cmd.exe, and so does `process_run` with `shell: "pwsh"`. Not fixed.
+  - Fix direction, if wanted: the alias's real target (`C:\Program Files\WindowsApps\Microsoft.PowerShell_<version>_x64__8wekyb3d8bbwe\pwsh.exe`) resolves with `realpath`, is readable (so it can be pinned and hashed) and starts directly. Resolve it once (pwsh can report its own `MainModule.FileName`), and resolve again when a Store update removes that versioned folder. Routing arbitrary `process_start` args through cmd.exe, as sessions do with their fixed host script, is not safe: cmd would expand `%VAR%` and a quote in an argument could end cmd's quoting.
 
 ## Open items carried from R0
 
