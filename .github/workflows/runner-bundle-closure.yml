@@ -1,0 +1,45 @@
+name: Runner bundle closure
+
+# The release bundle ships the git-tracked runner-v2/src plus a few peer files
+# (scripts/release/bundle-contents.mts). A new or changed source file can import
+# something the bundle leaves out; runner-installer.yml only runs on release paths,
+# so #168 reached the release before this check saw it. This runs the same static
+# check on every PR that changes a shipped file. It needs no build and takes seconds.
+on:
+  pull_request:
+    paths:
+      - "runner-v2/src/**"
+      - "lib/account-provider-runner.mjs"
+      - "lib/account-provider-copilot-sdk.mjs"
+      - "scripts/local-pair-runner.mjs"
+      - "scripts/runner.mjs"
+      - "scripts/runner-lib.mjs"
+      - "scripts/runner-panel.html"
+      - "scripts/runner-help.html"
+      - "scripts/release/bundle-contents.mts"
+      - "scripts/release/test-bundle-closure.mts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/runner-bundle-closure.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  closure:
+    name: Bundle import closure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Node (release builder pin)
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Every shipped import is shipped
+        run: node node_modules/tsx/dist/cli.mjs scripts/release/test-bundle-closure.mts
