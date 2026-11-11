@@ -10,7 +10,7 @@ import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createImageTools } from "./image-tools.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
-import { createProcessTools } from "./process-tools.js";
+import { createProcessTools, processRunSupport } from "./process-tools.js";
 import { roleAllowList } from "./role-capabilities.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
@@ -390,11 +390,10 @@ async function createGovernedBinding(
       ...(localMcpDepth !== undefined ? { approve: async (request) => !request.outsideWorkspace } : {}) });
     const tools = [
       ...createFilesystemTools({ artifacts: options.host.artifacts, pathGuard }), ...createGitTools(binding.git),
-      ...createProcessTools({ execution: binding.commandExecution, external: {
-        retainOutput: (context, output) => binding.managedProcesses.retainOutput(context, output),
-        readArtifact: (artifactId) => options.host.artifacts.get(artifactId),
-      } }),
-      ...createManagedProcessTools(binding.managedProcesses, { external: true }),
+      // The same process tools Build's workers get (worker-runtime.ts); a client only sees them by its own names.
+      ...createProcessTools({ execution: binding.commandExecution, names: "mcp",
+        support: processRunSupport(binding.managedProcesses, options.host.artifacts) }),
+      ...createManagedProcessTools(binding.managedProcesses, { names: "mcp" }),
       ...createImageTools({ artifacts: options.host.artifacts, pathGuard }),
     ];
     for (const tool of tools) if (allowed.has(tool.definition.name) && tool.definition.lifecycle !== true) broker.register(tool);

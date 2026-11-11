@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
+import { SHELL_NAMES } from "./shell-inventory.js";
 
 export const APPROVAL_TOOLS: ReadonlySet<string> = new Set([
   "process.start", "process.run", "process.write_stdin", "process.interact", "process.signal",
@@ -53,7 +54,7 @@ export function commandApprovalSummary(jobId: string, code: string, toolName: st
   if (!APPROVAL_TOOLS.has(toolName) || !isRecord(payload)) throw new Error("Invalid approval payload.");
   const launch = toolName === "process.start" || toolName === "process.run";
   const allowed = toolName === "process.start" ? ["command", "args", "cwd", "env", "interactive", "until", "waitMs", "render"] :
-    toolName === "process.run" ? ["command", "args", "shell", "script", "cwd", "env", "timeoutMs", "render", "search"] :
+    toolName === "process.run" ? ["command", "args", "shell", "script", "cwd", "env", "timeoutMs", "render", "search", "shellSession"] :
     toolName === "process.write_stdin" ? ["processId", "writeId", "data", "appendNewline", "closeInput"] :
     toolName === "process.interact" ? ["processId", "data", "appendNewline", "closeInput", "until", "waitMs", "cursor", "stream", "maxBytes", "render", "lines"] :
       ["processId", "signal", "otherSession"];
@@ -62,12 +63,13 @@ export function commandApprovalSummary(jobId: string, code: string, toolName: st
   let args: string[] = [];
   if (launch) {
     const command = typeof payload.command === "string" && payload.command.length > 0;
-    const shell = toolName === "process.run" && ["powershell", "cmd", "bash"].includes(String(payload.shell)) && typeof payload.script === "string";
+    const shell = toolName === "process.run" && (SHELL_NAMES as readonly string[]).includes(String(payload.shell)) && typeof payload.script === "string";
     if (command === shell || (payload.args !== undefined && (!Array.isArray(payload.args) || !payload.args.every((item) => typeof item === "string"))) ||
       (payload.cwd !== undefined && typeof payload.cwd !== "string") ||
       (payload.env !== undefined && (!isRecord(payload.env) || !Object.values(payload.env).every((item) => typeof item === "string"))) ||
       (payload.interactive !== undefined && typeof payload.interactive !== "boolean") ||
       (payload.timeoutMs !== undefined && (!Number.isSafeInteger(payload.timeoutMs) || Number(payload.timeoutMs) < 1)) ||
+      (payload.shellSession !== undefined && (!shell || typeof payload.shellSession !== "string")) ||
       (shell && payload.args !== undefined) || (command && (payload.shell !== undefined || payload.script !== undefined))) {
       throw new Error("Invalid approval payload.");
     }

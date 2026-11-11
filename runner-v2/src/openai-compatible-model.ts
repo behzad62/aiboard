@@ -25,6 +25,8 @@ import { providerProtocolProfile } from "./provider-protocol-profiles.js";
 import { NATIVE_PATCH_EXECUTOR, mergeNativePatchResults, nativePatchCallId, nativePatchPartId, parseCodexPatch, type CodexPatchOperation } from "./codex-apply-patch.js";
 import { ProviderTransportError } from "./account-runner-model.js";
 import { streamOpenAIChat, streamOpenAIResponses } from "./openai-streaming.js";
+import { SHELL_NAME, SHELL_REPLACES, SHELL_WIRE, shellCallBlocks, shellCallId, shellCallItem, shellCallOutput, supportsOpenAIShell } from "./openai-shell-tool.js";
+import { bashAvailable } from "./anthropic-bash-tool.js";
 
 export interface OpenAICompatibleModelOptions {
   baseUrl: string;
@@ -38,6 +40,8 @@ export interface OpenAICompatibleModelOptions {
   supportsTools?: boolean;
   hostedTools?: readonly AgentHostedToolDefinition[];
   fetch?: typeof globalThis.fetch;
+  /** Whether a bash can run here, which OpenAI's shell tool needs (tests set it). */
+  bashAvailable?: () => boolean;
 }
 
 interface OpenAIResponse {
@@ -80,6 +84,7 @@ interface OpenAIResponsesResponse {
         [key: string]: unknown;
       }
     | { type: "custom_tool_call"; id?: string; call_id?: string; name?: string; input?: string }
+    | { type: "shell_call"; id?: string; call_id?: string; action?: unknown }
     | { type: "reasoning"; content?: Array<{ type?: string; text?: string }>; summary?: Array<{ type?: string; text?: string }> }
   >;
   usage?: {
@@ -214,7 +219,11 @@ export class OpenAICompatibleModel implements AgentModel {
     const profile = providerProtocolProfile(this.options.providerId);
     const canEdit = request.tools.some((tool) => tool.name === "fs.patch");
     const nativeTools = this.options.supportsTools === false || !canEdit ? [] : profile?.responses?.nativeTools ?? [];
-    const replaced = new Set(nativeTools.flatMap((tool) => tool.replaces));
+    // The shell tool takes process.run's place where its commands can run as bash (openai-shell-tool.ts).
+    const shell = this.options.supportsTools !== false && profile?.responses?.shell === true &&
+      supportsOpenAIShell(this.options.modelId) && request.tools.some((tool) => tool.name === "process.run") &&
+      (this.options.bashAvailable ?? bashAvailable)();
+    const replaced = new Set([...nativeTools.flatMap((tool) => tool.replaces), ...(shell ? SHELL_REPLACES : [])]);
     const localTools = this.options.supportsTools === false ? [] : request.tools.filter((tool) => !replaced.has(tool.name));
     const toolSearchEnabled =
       this.options.providerId === "openrouter" && localTools.length > 16;
@@ -224,6 +233,7 @@ export class OpenAICompatibleModel implements AgentModel {
     );
     const responseTools = dedupeRunnerTools([
       ...nativeTools.map((tool) => ({ ...tool.wire })),
+      ...(shell ? [structuredClone(SHELL_WIRE)] : []),
       ...hostedTools,
       ...(toolSearchEnabled ? [{ type: "openrouter:tool_search" }] : []),
       ...localTools.map((tool) =>
@@ -301,6 +311,8 @@ export class OpenAICompatibleModel implements AgentModel {
         if (text) blocks.push({ type: "reasoning", text });
       } else if (output.type === "custom_tool_call" && output.name === "apply_patch") {
         blocks.push(...nativePatchBlocks(output.call_id ?? output.id ?? `patch_${index + 1}`, output.input ?? ""));
+      } else if (output.type === "shell_call") {
+        blocks.push(...shellCallBlocks(output.call_id ?? output.id ?? `shell_${index + 1}`, output.action));
       } else if (output.type === "apply_patch_call") {
         const { type: _type, id: _id, call_id: _callId, ...argumentsValue } = output;
         blocks.push({
@@ -371,24 +383,35 @@ function responsesInput(
   toolNames: import("./provider-model-utils.js").ToolNameCodec,
   options: { reasoningItems?: boolean }
 ): Array<Record<string, unknown>> {
-  const parts = new Map<string, { callId: string; parts: number; operation?: CodexPatchOperation }>();
+  const parts = new Map<string, { callId: string; parts: number; name: string; input: string; operation?: CodexPatchOperation }>();
   for (const message of messages) {
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
     for (const block of message.content) {
       if (block.type !== "tool_call" || !block.nativeCall) continue;
       const args = isRecord(block.arguments) ? block.arguments : {};
       parts.set(block.callId, {
-        callId: block.nativeCall.callId, parts: block.nativeCall.parts,
+        callId: block.nativeCall.callId, parts: block.nativeCall.parts, name: block.nativeCall.name, input: block.nativeCall.input,
         ...(isRecord(args.operation) ? { operation: args.operation as CodexPatchOperation } : {}),
       });
     }
   }
   const pending = new Map<string, Array<{ operation?: CodexPatchOperation; isError: boolean; text: string }>>();
+  const shellResults = new Map<string, ToolResult[]>();
   const input: Array<Record<string, unknown>> = [];
   for (const message of messages) {
     if (message.role === "tool") {
       const result = message.content as ToolResult;
       const part = parts.get(result.callId);
+      if (part && part.name === SHELL_NAME && shellCallId(result.callId) === part.callId) {
+        // One shell_call_output per call, with one entry per command, once every command has its result.
+        const collected = [...(shellResults.get(part.callId) ?? []), result];
+        shellResults.set(part.callId, collected);
+        if (collected.length === part.parts) {
+          input.push(shellCallOutput(part.callId, part.input, collected));
+          shellResults.delete(part.callId);
+        }
+        continue;
+      }
       if (part && nativePatchCallId(result.callId) === part.callId) {
         const collected = pending.get(part.callId) ?? [];
         collected.push({
@@ -503,7 +526,9 @@ function toResponsesInput(
     if (block.type !== "tool_call") continue;
     if (block.nativeCall) {
       // Sent back once, as the provider's own call; its parts are runner bookkeeping.
-      if (block.nativeCall.part === 1) {
+      if (block.nativeCall.part === 1 && block.nativeCall.name === SHELL_NAME) {
+        result.push(shellCallItem(block.nativeCall.callId, block.nativeCall.input));
+      } else if (block.nativeCall.part === 1) {
         result.push({ type: "custom_tool_call", call_id: block.nativeCall.callId, name: block.nativeCall.name, input: block.nativeCall.input });
       }
       continue;

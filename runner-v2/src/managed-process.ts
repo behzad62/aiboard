@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "
 import { isAbsolute, join, resolve } from "node:path";
 import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
 import type { ToolExecutionContext } from "./agent-contracts.js";
-import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_WAIT_MAX_MS, MANAGED_UNTIL_IDLE_DEFAULT_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedInteractionState, type ManagedOutputCompletion, type ManagedOutputEvidence, type ManagedOutputStreamEvidence, type ManagedOutputUntil, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
+import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_READ_MAX_BYTES, MANAGED_OUTPUT_WAIT_MAX_MS, MANAGED_UNTIL_IDLE_DEFAULT_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedInteractionState, type ManagedOutputCompletion, type ManagedOutputEvidence, type ManagedOutputStreamEvidence, type ManagedOutputUntil, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
 import { createManagedWaitTracker } from "./managed-process-wait-tracker.js";
 import { exitProven, interactionState, terminalCompletion } from "./managed-process-wait.js";
 import { readOutputLines, searchOutput } from "./managed-process-search.js";
@@ -36,6 +36,23 @@ export interface ManagedInteractResult {
   readonly processId: string;
   readonly write: ManagedInputWriteResult;
   readonly read?: ManagedOutputReadResult;
+  readonly readError?: Readonly<{ code: string; message: string }>;
+}
+
+export interface ManagedExchangeRequest {
+  /** Sent once before reading. Absent on the call that launched the process, which only reads. */
+  readonly input?: Readonly<{ writeId: string; data: string }>;
+  /** Called with each read in order; true ends the exchange. */
+  readonly consume: (read: ManagedOutputReadResult) => boolean;
+  /** Ends each bounded wait early, such as a pattern the reply ends with. */
+  readonly until: ManagedOutputUntil;
+  /** Epoch ms after which no further read starts. */
+  readonly deadline: number;
+}
+
+export interface ManagedExchangeResult {
+  readonly write?: ManagedInputWriteResult;
+  readonly ended: "done" | "deadline" | "exited" | "not_sent" | "read_failed";
   readonly readError?: Readonly<{ code: string; message: string }>;
 }
 
@@ -135,7 +152,8 @@ export class ManagedProcessService {
   }
 
   async start(input: StartManagedProcessInput, context: ToolExecutionContext, workspaceRoot = context.workspacePath): Promise<ManagedProcessSnapshot> {
-    this.assertOpen(); const exact = exactCall(context, "process.start");
+    // process.run launches a shell session (shell-session.ts) under its own grant, as process.start launches a process.
+    this.assertOpen(); const exact = exactCall(context, ["process.start", "process.run"]);
     if (!workspaceRoot || !isAbsolute(workspaceRoot) || !exact.workspacePath || resolve(workspaceRoot) !== resolve(exact.workspacePath)) throw new ManagedProcessError("invalid_arguments", "Managed start requires the actual absolute calling workspace.");
     const runtime = this.runtime(exact.runId);
     const processId = managedProcessId(this.idFactory());
@@ -293,6 +311,55 @@ export class ManagedProcessService {
     });
     this.turns.set(processId, turn);
     try { return await turn; } finally { if (this.turns.get(processId) === turn) this.turns.delete(processId); }
+  }
+
+  /**
+   * One command in a shell session (shell-session.ts), as process.run: the call that launched the session only reads,
+   * under its launch's one first operation; a later call sends its input once and reads its reply, under the one
+   * interaction its grant allows. Reads go on, a bounded wait at a time, until consume says the reply is complete, the
+   * deadline passes or the process ends.
+   */
+  async exchange(processId: string, request: ManagedExchangeRequest, context: ToolExecutionContext): Promise<ManagedExchangeResult> {
+    this.assertOpen(); const exact = exactCall(context, "process.run");
+    const interaction = request.input ? "write" as const : undefined;
+    const previous = this.turns.get(processId) ?? Promise.resolve();
+    const turn = previous.catch(() => undefined).then(async (): Promise<ManagedExchangeResult> => {
+      await this.inputTails.get(processId)?.catch(() => undefined);
+      let cursor: string | undefined, write: ManagedInputWriteResult | undefined;
+      if (request.input) {
+        try { cursor = (await this.readExact(processId, { stream: "both", maxBytes: 4, tailBytes: 1 }, exact, interaction)).cursor; }
+        catch (error) {
+          if (error instanceof ManagedProcessError && !["process_cancelled", "process_timeout"].includes(error.code)) throw error;
+          throw new ManagedProcessError("process_input_rejected", `Nothing was sent: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        write = await this.writeExact(processId, { writeId: request.input.writeId, data: request.input.data, appendNewline: true }, exact);
+        if (write.status !== "acknowledged") return Object.freeze({ write, ended: "not_sent" as const });
+      }
+      for (;;) {
+        const remaining = request.deadline - Date.now();
+        if (remaining <= 0) return Object.freeze({ ...(write ? { write } : {}), ended: "deadline" as const });
+        let read: ManagedOutputReadResult;
+        try {
+          read = await this.readExact(processId, { ...(cursor !== undefined ? { cursor } : {}), stream: "both", maxBytes: MANAGED_OUTPUT_READ_MAX_BYTES,
+            until: request.until, waitMs: Math.min(remaining, MANAGED_OUTPUT_WAIT_MAX_MS) }, exact, interaction);
+        } catch (error) {
+          const code = error instanceof ManagedProcessError ? error.code : "process_output_unavailable";
+          return Object.freeze({ ...(write ? { write } : {}), ended: "read_failed" as const,
+            readError: Object.freeze({ code, message: error instanceof Error ? error.message : String(error) }) });
+        }
+        cursor = read.cursor;
+        if (request.consume(read)) return Object.freeze({ ...(write ? { write } : {}), ended: "done" as const });
+        if (read.status !== "running" && read.slices.every((slice) => !slice.hasMore)) return Object.freeze({ ...(write ? { write } : {}), ended: "exited" as const });
+      }
+    });
+    this.turns.set(processId, turn);
+    try { return await turn; } finally { if (this.turns.get(processId) === turn) this.turns.delete(processId); }
+  }
+
+  /** Whether this owner's process was running when its record was last updated. No operation on the process, so no grant. */
+  isRunning(processId: string, owner: ManagedProcessOwner): boolean {
+    try { const record = this.owned(processId, owner); return "schemaVersion" in record && record.status === "running"; }
+    catch { return false; }
   }
 
   /** Keeps a finished command's output readable by its owner, under an id that behaves like a stopped process's. */

@@ -101,7 +101,8 @@ test("fail closed: an unproven exit never reads exited and stays unavailable/unk
   f.setFacts({ status: "exited_unknown", exitCode: null, signal: null });
   allAre("exited_unknown", await f.everyStatus(processId));
   const read = (await f.invoke("process.read_output", { processId, until: { exit: true } }))[0]!;
-  assert.deepEqual(read.completion, { source: "unavailable", confidence: null });
+  // No confidence at all, so none is named.
+  assert.deepEqual(read.completion, { source: "unavailable" });
   assert.equal(read.state, "unknown");
 });
 

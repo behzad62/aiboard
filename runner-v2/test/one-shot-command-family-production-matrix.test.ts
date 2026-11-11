@@ -208,8 +208,9 @@ function brokerFor(workspace: string, graph: ReturnType<typeof createProductionO
 
 function mapProcess(output: ToolExecutionOutput): FamilyResult {
   const value = json(output) as { timedOut?: boolean; cancelled?: boolean; cleanup?: { state: string } };
+  // process.run names its cleanup only when it was not verified (process-tools.ts runResult); a failed one still shows.
   return { outcome: value.timedOut ? "timed_out" : value.cancelled ? "cancelled" : undefined,
-    errorCode: output.error?.code, errorMessage: output.error?.message, cleanupState: value.cleanup?.state };
+    errorCode: output.error?.code, errorMessage: output.error?.message, cleanupState: value.cleanup?.state ?? "verified_empty" };
 }
 function mapEvidence(output: ToolExecutionOutput): FamilyResult {
   if (output.isError) return { errorCode: output.error?.code, errorMessage: output.error?.message };

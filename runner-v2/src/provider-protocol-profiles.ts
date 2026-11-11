@@ -33,6 +33,17 @@ export interface ProviderProtocolProfile {
      * that can edit (it sees `fs.patch`).
      */
     readonly nativeTools?: ReadonlyArray<{ readonly wire: Readonly<Record<string, unknown>>; readonly replaces: readonly string[] }>;
+    /** The shell tool with a local environment in place of process.run, for the models that list it (openai-shell-tool.ts). */
+    readonly shell?: boolean;
+  };
+  readonly messages?: {
+    /**
+     * Anthropic's text editor in place of fs.read, fs.write and fs.patch, for the models its docs list
+     * (anthropic-text-editor.ts maps each call onto those tools).
+     */
+    readonly textEditor?: boolean;
+    /** Anthropic's bash in place of process.run, in one kept bash session (anthropic-bash-tool.ts). */
+    readonly bash?: boolean;
   };
   readonly docsUrl: string;
   readonly verifiedAt: string;
@@ -54,6 +65,14 @@ const CODEX_APPLY_PATCH_DESCRIPTION = [
 ].join("\n");
 
 export const PROVIDER_PROTOCOL_PROFILES: Readonly<Record<string, ProviderProtocolProfile>> = Object.freeze({
+  // text_editor_20250728 (str_replace_based_edit_tool): client-run, schema-less, no beta header;
+  // view, create, str_replace and insert. bash_20250124 (bash): {command} or {restart: true} in one shell that keeps
+  // its state; the client owns the timeout (platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool).
+  anthropic: Object.freeze({
+    messages: Object.freeze({ textEditor: true, bash: true }),
+    docsUrl: "https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool",
+    verifiedAt: "2026-11-11",
+  }),
   deepseek: Object.freeze({
     chatReasoningContent: true,
     // deepseek-flash and deepseek-v4-pro (api-docs.deepseek.com/quick_start/pricing).
@@ -74,10 +93,13 @@ export const PROVIDER_PROTOCOL_PROFILES: Readonly<Record<string, ProviderProtoco
   }),
   // apply_patch on Responses (also Chat Completions and Assistants), listed for GPT-5.1 to 5.5. It
   // returns apply_patch_call { operation: create_file | update_file (V4A diff) | delete_file } and
-  // takes apply_patch_call_output { status: completed | failed, output }.
+  // takes apply_patch_call_output { status: completed | failed, output }. shell with environment local (Responses only,
+  // developers.openai.com/api/docs/guides/tools-shell, read 2026-11-11): shell_call { action: { commands[], timeout_ms,
+  // max_output_length } }, answered by shell_call_output { output: [{ stdout, stderr, outcome }] }.
   openai: Object.freeze({
     preferredProtocol: "responses",
     responses: Object.freeze({
+      shell: true,
       nativeTools: Object.freeze([Object.freeze({
         wire: Object.freeze({ type: "apply_patch" }),
         replaces: Object.freeze(["fs.patch", "fs.write"]),

@@ -41,7 +41,7 @@ import { evidenceFactArtifactHashes, type EvidenceStore } from "./evidence-store
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createOpenRouterApplyPatchTool } from "./openrouter-apply-patch-tool.js";
 import { createGitTools } from "./git-tools.js";
-import { createProcessTools } from "./process-tools.js";
+import { createProcessTools, processRunSupport } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
@@ -218,11 +218,13 @@ export async function runWorkerTask(
   for (const tool of createArtifactTools(options.artifacts)) registerStaticWorkerTool(broker, tool);
   for (const tool of createImageTools({ artifacts: options.artifacts, ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}) })) registerStaticWorkerTool(broker, tool);
   for (const tool of createSessionTools(options.sessions)) registerStaticWorkerTool(broker, tool);
+  // The same process tools Remote and local MCP get (remote-tool-runtime.ts), by Build's names.
   for (const tool of createProcessTools({
     ...(options.execution ? { execution: options.execution } : {}),
     ...(options.allowedCommands
       ? { allowedCommands: options.allowedCommands }
       : {}),
+    support: processRunSupport(options.managedProcesses, options.artifacts),
   })) registerStaticWorkerTool(broker, tool);
   if (options.managedProcesses) {
     for (const tool of createManagedProcessTools(options.managedProcesses)) {

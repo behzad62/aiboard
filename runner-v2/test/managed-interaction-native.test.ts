@@ -15,6 +15,7 @@ import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import type { ToolExecutionOutput } from "../src/agent-contracts.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
+import { decodeProcessToolOutput } from "./support/process-tool-output.js";
 
 // T1 acceptance (docs/plans/2026-11-03-remote-t1-interaction-ux.md §5) on real processes.
 // CPU evidence comes from Windows Job accounting, or from the POSIX supervisor's sampling of the owned group.
@@ -81,10 +82,10 @@ async function withHost(t: TestContext, body: (f: { project: string; run: Execut
 
 function blocks(output: ToolExecutionOutput): Record<string, unknown>[] {
   assert.equal(output.isError, false, JSON.stringify(output));
-  return output.content.filter(item => item.type === "json").map(item => (item as { value: Record<string, unknown> }).value);
+  return decodeProcessToolOutput(output);
 }
-type Completion = { source: string; confidence: string | null; quietMs?: number; cpuDeltaMs?: number; preexistingPort?: true; matched?: string };
-type Slice = { stream: string; text?: string; lines?: string[]; startLine?: number; totalLines?: number; hasMore: boolean; render?: string };
+type Completion = { source: string; confidence?: string; preexistingPort?: true; matched?: string };
+type Slice = { stream: string; text?: string; lines?: string[]; startLine?: number; totalLines?: number; nextLine?: number; hasMore?: boolean };
 type Read = { status: string; exitCode: number | null; cursor: string; slices: Slice[]; completion?: Completion; state?: string };
 /** process.start with until: [snapshot, { read }]. */
 async function startAndWait(f: { invoke: Invoke }, input: Record<string, unknown>): Promise<{ processId: string; read: Read; elapsedMs: number }> {
@@ -129,8 +130,8 @@ for (const [name, script] of [["an unterminated progress line", "busy.mjs"], ["a
 test("A3: an unterminated progress line followed by sleep is input_wait likely, never before idleMs", { timeout: 120_000 }, async t => withHost(t, async f => {
   const { processId, read, elapsedMs } = await startAndWait(f, { command: process.execPath, args: ["sleepy.mjs"], until: { idleMs: 1500 }, waitMs: 20_000 });
   assert.deepEqual([read.completion?.source, read.completion?.confidence], ["input_wait", "likely"], JSON.stringify(read.completion));
+  // The quiet time is a timing input the model is not shown; the call's own duration proves the wait.
   assert.ok(elapsedMs >= 1_500 && elapsedMs < 5_000, `elapsed ${elapsedMs} ms`);
-  assert.ok((read.completion!.quietMs ?? 0) >= 1_500);
   assert.equal(read.status, "running");
   await stop(f, processId);
 }));
@@ -215,12 +216,14 @@ test("A12: plain render collapses a carriage-return progress bar and strips ANSI
     const [value] = blocks(await f.invoke("process.read_output", { processId, stream: "stdout", lines: { start, count } }));
     return (value as unknown as Read).slices[0]!;
   };
-  const first = await page(0, 4), second = await page(4, 4), last = await page(-2, 2);
+  // Line numbers start at 1, as everywhere a model reads them; negative counts from the end.
+  const first = await page(1, 4), second = await page(5, 4), last = await page(-2, 2);
   assert.deepEqual(first.lines, ["[##########] 100%", "color line 1", "color line 2", "color line 3"]);
   assert.deepEqual(second.lines, ["color line 4", "color line 5"]);
   assert.deepEqual(last.lines, ["color line 4", "color line 5"]);
   assert.equal(first.totalLines, 6); assert.equal(second.totalLines, 6);
-  assert.equal(first.hasMore, true); assert.equal(second.hasMore, false);
+  // A page with more after it says where to ask next.
+  assert.equal(first.nextLine, 5); assert.equal(second.nextLine, undefined);
 }));
 
 test("review 6/7: a bad cursor is refused before any input is sent; concurrent turns each get only their own reply", { timeout: 120_000 }, async t => withHost(t, async f => {

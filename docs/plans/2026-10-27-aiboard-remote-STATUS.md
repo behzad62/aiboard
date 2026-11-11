@@ -223,6 +223,40 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
   - Two independent reviews. The first found that a waiting `process_start` near 8 KiB of output lost its identity to the broker's preview, so the job settled `outcome_unknown` with the process left running unbound, and that pages over the bound lost their middle while the cursor moved past it. The second found whitespace patterns matching across lines, `^` and `$` matching where a 1 MiB chunk was cut, non-UTF-8 pages tripling past the bound, and a client `process_run` over 120 s coming back with nothing. All fixed, each with a test; Build's own tools are unchanged apart from hint text.
   - Evidence: Runner, 438 of 440 tests across the 36 affected files. The two failures fail the same way on clean main `25ce24f5`: `final-verification public family cancellation cleans its TERM-ignoring grandchild` (ENOENT in the git fixture) and `process family production graph continues truthfully when private spill setup fails`. Relay, 319 of 319 (the deployment-files test passes only from the repo root). Both typecheck. Removing each fix in turn turned its test red: 16 of 16 mutants in the first round, 23 of 23 in the second. `process family production graph … continues beyond tail and spill bounds` took 24.4 s against its 25 s limit, as on main.
   - Not measured yet: the rerun. It needs these changes released and running: the Runner first (`aiboard update` on the device), then the relay. With a new relay and an old Runner, `search` on a read is refused, `search` on `process_run` is ignored, and `lines` counts from 0 within one page.
+- **2026-11-10: Build and Remote share one set of command tools; PowerShell sessions** (branch `claude/shared-process-tools`, not merged or released).
+  - Owner direction: Build does not use the local MCP, but both must run the same backend tools, so a Remote fix reaches Build too. The `external` switch that gave only MCP clients the improved process tools is gone; only the names differ (`process.run` vs `process_run`), and `runner-v2/test/shared-tool-parity.test.ts` keeps it that way. Build commands now run to their own `timeoutMs` instead of the broker's 120 s.
+  - `process_run` with `shellSession` (a name; `session` is already the conversation code on Remote) runs a PowerShell 5.1 or pwsh script in a shell kept between calls: variables, functions, `$env:` values, modules and the location carry over (`shell-session.ts`, `shell-session-host.ts`). The session is an ordinary managed process in the run's Job under the call's own grant: the launching call reads under its launch's one first operation, a later call sends its input once and reads under one interaction. A command can run up to 90 s, inside the grant's 120 s; at its limit the session stops it like Ctrl+C and keeps its state. Sessions end with their owner, after 15 idle minutes, or by `process_signal`; a later call then starts a fresh one and says `replaced`.
+  - The Microsoft Store pwsh is an app execution alias, which a managed launch cannot pin by real path, so its sessions start through `cmd.exe`. `process_start` with the Store pwsh fails the same way today; not fixed here.
+  - Fixed on the way: a `process_run` with `shell: "pwsh"` that needed approval was refused as an invalid payload, because the approval check listed only powershell, cmd and bash.
+- **2026-11-11: lab check of `shellSession`** (aiboard-tunnel `claude/shell-session`, Haiku, Runner from this branch).
+  - New lab scenario `chain`: a PowerShell helper that takes 8 s to load, then four lookups where each answer names the next. Old relay tools (no `shellSession`): 5 of 5 passed in 51–54 s, with 4 loads each. New tools: 10 of 10 passed. 6 of the 10 runs used a session: 1 load, 27–30 s. The other 4 ran one-shot commands like the old tools (51–55 s).
+  - Negative control: 16 of 16 runs across tests, rename, csv, quiz, slow, noisy, fail and commit; none sent `shellSession`.
+  - Every first session call sent `timeoutMs: 120000` (process_run's usual timeout) and was refused, costing a round trip. A longer `timeoutMs` is now capped at 90 s instead, and the timeout message points to `process_start` for longer jobs. After that change: 6 calls and 1 load per session run, with no refusals.
+- **2026-11-11: Anthropic's text editor in Build** (branch `claude/shared-process-tools`; Build only, never on the MCP surface).
+  - A Claude 4.5+ model (`supportsTextEditor`, per the docs' model list) in a session with `fs.read`, `fs.write` and `fs.patch` is offered `text_editor_20250728` (`str_replace_based_edit_tool`) instead of those three tools. `anthropic-text-editor.ts` maps each call onto one of them, so grants, the fence, revisions and policy paths are unchanged:
+    - `view` → `fs.read` with a line range;
+    - `create` → `fs.write`;
+    - `str_replace` → `fs.patch`;
+    - `insert` → `fs.patch` with an internal `_insert` edit, which is not in the schema.
+  - The call goes back to Claude as it wrote it. Results take the docs' form: `N: line` numbering, "Successfully replaced text at exactly one location.", and `Error: …`. Notices and diagnostics from the `fs` tools are appended. `undo_edit` and malformed input run nothing and say why. `create` over a file the model has not viewed is refused, as `fs.write` refuses it.
+  - Shared changes: `fs.read` of a folder now lists it two levels deep (hidden and build-output entries skipped, policy paths filtered) instead of failing with EISDIR. Remote's `files_read` gets the same listing.
+  - Not done: OpenAI's shell.
+- **2026-11-11: bash shell sessions; Anthropic's bash tool in Build** (branch `claude/shared-process-tools`).
+  - `shellSession` now takes `shell: "bash"` (Git Bash on Windows) as well as PowerShell. `shell-session-bash-host.ts` uses the same markers as the PowerShell host. Its frames are space-separated base64 fields, because bash has no JSON parser.
+    - Each command runs in the shell itself, with stdin from `/dev/null`, so a program reading stdin can't swallow the next command.
+    - `exit`, or a failure under `set -e`, ends the session.
+    - Bash cannot stop one foreground command and keep the shell, so a command past its limit ends the session, and the result says so.
+    - After any session the Runner ended (limit, exit, idle), the next call reports `replaced`.
+  - Claude 4+ in Build, where a bash can run and the session has `process.run`, is offered `bash_20250124` (`bash`) instead of `process.run` (`anthropic-bash-tool.ts`).
+    - `{command}` runs as `process.run` with shell bash in one session per agent (`claude-bash`). The allowlist, grant, Job and output handling stay the same.
+    - `{restart: true}` runs `exit 0` there.
+    - Results read like a terminal: output, then `[exit code N]` and what happened to the shell. A command past 90 s points to `process_start`.
+    - `process_start` and the other process tools stay offered.
+- **2026-11-11: OpenAI's shell tool in Build** (branch `claude/shared-process-tools`; `openai-shell-tool.ts`).
+  - Offered as `{"type": "shell", "environment": {"type": "local"}}` (Responses only) in place of `process.run`, to OpenAI GPT-6 models (their model pages list the shell tool; gpt-5.1's lists only apply_patch), where a bash can run and the session has `process.run`.
+  - Each `shell_call` command runs as its own `process.run` with shell bash, in order, keeping no directory or variables, as the docs' `sh -c` executors do. `timeout_ms` becomes `timeoutMs`.
+  - The answer is one `shell_call_output` per call: one `{stdout, stderr, outcome}` per command, `max_output_length` echoed, each stream cut to it in the middle. A command the Runner did not run reports its reason on stderr with exit code 1.
+  - Not tried against a live GPT-6 model.
 
 ## Open items carried from R0
 
