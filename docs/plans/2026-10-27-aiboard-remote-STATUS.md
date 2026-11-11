@@ -228,6 +228,10 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
   - `process_run` with `shellSession` (a name; `session` is already the conversation code on Remote) runs a PowerShell 5.1 or pwsh script in a shell kept between calls: variables, functions, `$env:` values, modules and the location carry over (`shell-session.ts`, `shell-session-host.ts`). The session is an ordinary managed process in the run's Job under the call's own grant: the launching call reads under its launch's one first operation, a later call sends its input once and reads under one interaction. A command can run up to 90 s, inside the grant's 120 s; at its limit the session stops it like Ctrl+C and keeps its state. Sessions end with their owner, after 15 idle minutes, or by `process_signal`; a later call then starts a fresh one and says `replaced`.
   - The Microsoft Store pwsh is an app execution alias, which a managed launch cannot pin by real path, so its sessions start through `cmd.exe`. `process_start` with the Store pwsh fails the same way today; not fixed here.
   - Fixed on the way: a `process_run` with `shell: "pwsh"` that needed approval was refused as an invalid payload, because the approval check listed only powershell, cmd and bash.
+- **2026-11-11: lab check of `shellSession`** (aiboard-tunnel `claude/shell-session`, Haiku, Runner from this branch).
+  - New lab scenario `chain`: a PowerShell helper that takes 8 s to load, then four lookups where each answer names the next. Old relay tools (no `shellSession`): 5 of 5 passed in 51–54 s, with 4 loads each. New tools: 10 of 10 passed. 6 of the 10 runs used a session: 1 load, 27–30 s. The other 4 ran one-shot commands like the old tools (51–55 s).
+  - Negative control: 16 of 16 runs across tests, rename, csv, quiz, slow, noisy, fail and commit; none sent `shellSession`.
+  - Every first session call sent `timeoutMs: 120000` (process_run's usual timeout) and was refused, costing a round trip. A longer `timeoutMs` is now capped at 90 s instead, and the timeout message points to `process_start` for longer jobs. After that change: 6 calls and 1 load per session run, with no refusals.
 
 ## Open items carried from R0
 

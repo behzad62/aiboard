@@ -126,7 +126,7 @@ export function createProcessTools(
           timeoutMs: { type: "integer", minimum: 1 },
           render: { enum: ["raw", "summary"], description: "summary: for large output, plain text head + tail + diagnostics found in the omitted middle. Default summary." },
           search: MANAGED_OUTPUT_SEARCH_SCHEMA,
-          shellSession: { type: "string", description: `Optional; leave it out unless a later call needs this one's variables, functions or location. Any name, with shell powershell or pwsh and script; the first call starts that shell, and a command in it can run up to ${SESSION_MAX_TIMEOUT_MS / 1000} s.` },
+          shellSession: { type: "string", description: `Optional; leave it out unless a later call needs this one's variables, functions or location. Any name, with shell powershell or pwsh and script; the first call starts that shell, and a command in it runs up to ${SESSION_MAX_TIMEOUT_MS / 1000} s (a longer timeoutMs is capped).` },
         },
         additionalProperties: false,
       },
@@ -203,9 +203,6 @@ function validateInput(input: unknown): ValidationResult<ProcessInput> {
   if (value.shellSession !== undefined) {
     if (typeof value.shellSession !== "string" || !SESSION_NAME_PATTERN.test(value.shellSession)) return { ok: false, issues: ["shellSession is a name of 1-64 letters, digits, '.', '_' or '-'"] };
     if (!(SESSION_SHELLS as readonly unknown[]).includes(line.shell) || line.script === undefined) return { ok: false, issues: ["a shellSession runs PowerShell: send shell powershell or pwsh with script"] };
-    if (line.timeoutMs !== undefined && line.timeoutMs > SESSION_MAX_TIMEOUT_MS) {
-      return { ok: false, issues: [`a shellSession command can run up to ${SESSION_MAX_TIMEOUT_MS} ms; start a longer job with process.start`] };
-    }
   }
   return { ok: true, value: line };
 }
@@ -309,12 +306,13 @@ async function runResult(
 /** A command in a shell session (shell-session.ts). */
 async function executeSession(input: ProcessInput, context: ToolExecutionContext, support: ProcessRunSupport, readTool: string): Promise<ToolExecutionOutput> {
   if (!support.sessions) return processError("session_unavailable", "Shell sessions are not available here, so nothing ran; run the command without shellSession.");
+  // Capped, not refused: models send process.run's usual timeout (lab 2026-11-11: every first session call sent 120000).
   const timeoutMs = Math.min(input.timeoutMs ?? SESSION_MAX_TIMEOUT_MS, SESSION_MAX_TIMEOUT_MS);
   try {
     const outcome = await support.sessions.run({ name: input.shellSession!, shell: input.shell as SessionShell, script: input.script!, timeoutMs,
       ...(input.cwd !== undefined ? { cwd: resolve(context.workspacePath!, input.cwd) } : {}), ...(input.env ? { env: input.env } : {}) }, context);
     const failure = outcome.error ?? (outcome.timedOut
-      ? { code: "process_timeout", message: `Command exceeded ${timeoutMs} ms${outcome.ended ? "." : "; the session stopped it and kept its state."}` }
+      ? { code: "process_timeout", message: `Command exceeded ${timeoutMs} ms${outcome.ended ? "." : "; the session stopped it and kept its state."} A longer job belongs in process.start.` }
       : undefined);
     const moved = outcome.cwd !== undefined && !samePath(outcome.cwd, context.workspacePath!);
     return await presentRun(input, context, {

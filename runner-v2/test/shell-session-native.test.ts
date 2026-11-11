@@ -121,12 +121,12 @@ for (const shell of ["powershell", "pwsh"] as const) {
   });
 }
 
-test("a session takes PowerShell only, a name, and a limit a call can watch", async () => {
+test("a session takes PowerShell only and a name; a longer timeout is capped, not refused", async () => {
   const [tool] = createProcessTools();
   const issues = (input: Record<string, unknown>) => { const result = tool!.validate!(input); return result.ok ? [] : result.issues; };
   assert.deepEqual(issues({ shell: "powershell", script: "1", shellSession: "a.b-c_1" }), []);
   assert.match(issues({ command: "npm test", shellSession: "s" })[0]!, /runs PowerShell/u);
   assert.match(issues({ shell: "cmd", script: "dir", shellSession: "s" })[0]!, /runs PowerShell/u);
   assert.match(issues({ shell: "pwsh", script: "1", shellSession: "has space" })[0]!, /shellSession is a name/u);
-  assert.match(issues({ shell: "pwsh", script: "1", shellSession: "s", timeoutMs: 120_000 })[0]!, /process\.start/u);
+  assert.deepEqual(issues({ shell: "pwsh", script: "1", shellSession: "s", timeoutMs: 120_000 }), []);
 });
