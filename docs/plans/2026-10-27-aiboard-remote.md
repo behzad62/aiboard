@@ -47,6 +47,7 @@ Audience: implementation agents, Architect, Reviewer and Verifier.
 | D16 | 2026-10-15 plan | Superseded except Milestone B (agent mixer, separate future work); its C1 local stdio MCP folds into L1; E1 OpenAI tunnel dropped; P7 charter superseded. |
 | D17 | Remote freedom | Desktop Commander-style freedom by default: shell/process tools on, no per-action approval, audit on, one-time notice. Opt-in per device: per-command approval, read-only, cwd-only, shell off; OS sandbox safe mode (S2) later. File-tool denylist stays as a guardrail, never claimed to bind shell commands. |
 | D18 | Releases | install.ps1/install.sh and the signed release manifest are served from aiboard.me; the six platform bundles are attached to GitHub Releases of behzad62/aiboard. Signing happens in a manual-dispatch release workflow whose key lives in a protected GitHub `release` environment requiring owner approval; an offline encrypted backup of the key is kept by the owner. |
+| D19 | Interaction UX (2026-11-03) | Packet T1 (docs/plans/2026-11-03-remote-t1-interaction-ux.md) lands before the Stage 1 closed beta: a one-call `process_interact`, evidence-based `until` waits (exit / pattern / port / input-wait with CPU evidence) labeled by confidence, plain/lines/summary views. Pipes only; PTY, shell markers, kernels, secret routing and live view stay in X2. Measured against Desktop Commander 0.3.1 on 2026-11-03: it has no PTY and its fixed prompt list misses `[y/N]` and misreads `progress 45% `. |
 
 ## 2. Evidence inventory: DO NOT rebuild what already exists
 
@@ -251,7 +252,7 @@ Security baseline: canonical paths with junction/symlink/ADS protection on every
 
 **Q3 — Staged launch** (gates listed per stage)
 - Stage 0 — owner dogfood (after L1, R1, S1, R2, P1, P2): owner's own device, staging vhost, no billing, Paddle sandbox only.
-- Stage 1 — closed beta (after R3, R4, P4, Q1 in progress): invited users, free entitlement, custom-connector URL setup, metering on.
+- Stage 1 — closed beta (after R3, R4, P4, T1 (D19), Q1 in progress): invited users, free entitlement, custom-connector URL setup, metering on.
 - Stage 2 — paid launch (after P3 live config, Q1, Q2): Paddle live, published pricing/terms/privacy/refunds. Directory submissions (D13) prepared during Stage 1 and submitted after beta; approval does not block Stage 2.
 - Rollback by feature flag/entitlement without deleting jobs; users can export audit and revoke devices. No DNS, Paddle live mode, deploy or push without fresh owner approval.
 
@@ -267,7 +268,7 @@ Security baseline: canonical paths with junction/symlink/ADS protection on every
 
 **X3 — Build-level remote tools** (P2, R2; owner decision D15): a few AIBoard-semantic tools (e.g. build_start, build_status, build_evidence) so a cloud agent can hand a whole Build to the local Runner, which then runs with the user's configured providers; the cloud agent remains the user-facing brain.
 
-**X2 — Optional extras** (each its own gated packet): document plugins (PDF/DOCX/XLSX) via the same catalog; PTY adapter (never label the stdin pipe a PTY); global host process listing/kill behind explicit approval with PID + start-time identity.
+**X2 — Optional extras** (each its own gated packet): document plugins (PDF/DOCX/XLSX) via the same catalog; terminal sessions after T1 (D19): shell-integration markers and Python/Node/PowerShell kernels, ConPTY/PTY terminal mode with a headless screen view, secret-prompt routing to the local user, local live view/takeover (design: docs/superpowers/specs/2026-11-03-runner-v2-interactive-sessions-design.md) — never label the stdin pipe a PTY; global host process listing/kill behind explicit approval with PID + start-time identity.
 
 ## 6. Dependency map and team division
 ~~~

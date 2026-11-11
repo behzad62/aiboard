@@ -64,6 +64,7 @@ const VERIFIER_LIVE_PROCESS_TOOLS = [
   "process.read_output",
   "process.signal",
   "process.start",
+  "process.interact",
   "process.write_stdin",
 ] as const;
 
@@ -93,7 +94,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "fs.delete", "fs.list", "fs.move", "fs.patch", "fs.read", "fs.search", "fs.write",
     "git.diff", "git.log", "git.status", "image.inspect",
     "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
-    "process.start", "process.write_stdin",
+    "process.start", "process.write_stdin", "process.interact",
   ]),
   // Availability is narrower until remote path, browser and job protections exist.
   "remote:remote": surface("remote", "remote", "none", [], [
@@ -102,7 +103,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "fs.delete", "fs.list", "fs.move", "fs.patch", "fs.read", "fs.search", "fs.write",
     "git.diff", "git.log", "git.status", "image.inspect",
     "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
-    "process.start", "process.write_stdin",
+    "process.start", "process.write_stdin", "process.interact",
   ]),
   "architect:inspection": surface("architect", "inspection", "read-only-class", [
     "image.inspect",
@@ -316,6 +317,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "process.read_output",
     "process.signal",
     "process.start",
+    "process.interact",
     "process.write_stdin",
     "promote_project_memory",
     "propose_project_memory",

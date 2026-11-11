@@ -193,7 +193,7 @@ test("finalized spill serves earlier ranges exactly; without it the earlier rang
 test("process tool schemas expose interactive start, write_stdin and read_output without approval flags", () => {
   const tools = createManagedProcessTools({} as ManagedProcessService);
   const names = tools.map(tool => tool.definition.name);
-  assert.deepEqual(names, ["process.start", "process.poll", "process.write_stdin", "process.read_output", "process.list", "process.signal"]);
+  assert.deepEqual(names, ["process.start", "process.poll", "process.write_stdin", "process.read_output", "process.interact", "process.list", "process.signal"]);
   const write = tools.find(tool => tool.definition.name === "process.write_stdin")!;
   assert.equal(write.validate({ processId: "p", writeId: "w", data: "x", userApproved: true }).ok, false);
   assert.equal(write.validate({ processId: "p", writeId: "w", closeInput: true }).ok, true);

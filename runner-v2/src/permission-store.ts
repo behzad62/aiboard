@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import type { ToolAccessRequest } from "./agent-contracts.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -52,7 +53,7 @@ export class SqlitePermissionStore {
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
-    this.database = new DatabaseSync(path);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(path));
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS permission_requests (

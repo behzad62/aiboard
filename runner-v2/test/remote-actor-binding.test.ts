@@ -10,7 +10,7 @@ import { createManagedProcessTools } from "../src/managed-process-tools.js";
 import { readHistoricalManagedProcessObservations } from "../src/managed-process.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { SqlitePermissionStore } from "../src/permission-store.js";
-import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "../src/remote-principal.js";
+import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore, remoteSessionCode } from "../src/remote-principal.js";
 import { RemoteToolRuntime } from "../src/remote-tool-runtime.js";
 import { roleAllowList } from "../src/role-capabilities.js";
 import { createRunnerCapabilityContract } from "../src/runner-capability-contract.js";
@@ -49,6 +49,12 @@ test("durable principals, revocation and device policy stay locally controlled",
     assert.equal(store.getOrCreate(alice).revoked, true);
     assert.equal(store.getOrCreate(alice).principalId, first.principalId);
     assert.equal(store.getOrCreate(bob).revoked, false);
+    assert.deepEqual(store.peers(bob), [], "a revoked principal is nobody's peer");
+    const carol = store.getOrCreate({ ...alice, clientId: "mcp-" + "0".repeat(32) + "-k7m2qa" });
+    assert.deepEqual(store.peers(bob).map((peer) => peer.principalId), [carol.principalId]);
+    assert.deepEqual(store.peers({ ...bob, deviceId: "other-device" }), []);
+    assert.equal(remoteSessionCode(carol.identity.clientId), "k7m2qa");
+    assert.equal(remoteSessionCode("client-a"), undefined);
     store.close();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -195,7 +201,7 @@ test("real broker binds remote grants and preserves exact managed-process owners
     const reconnected = reopened.getOrCreate({ ...alice });
     assert.deepEqual(reconnected, owner); reopened.close();
     assert.equal(json(await runtime.invoke(reconnected.identity, "process.poll", { processId })).processId, processId);
-    const output = json(await runtime.invoke(reconnected.identity, "process.read_output", { processId, stream: "stdout", waitMs: 10_000 }));
+    const output = (await runtime.invoke(reconnected.identity, "process.read_output", { processId, stream: "stdout", waitMs: 10_000 })).content;
     assert.match(JSON.stringify(output), /ready/);
     assert.equal(json(await runtime.invoke(reconnected.identity, "process.write_stdin", { processId, writeId: "own", data: "hello\n" })).status, "acknowledged");
     assert.equal((json(await runtime.invoke(reconnected.identity, "process.list", {})).processes as unknown[]).length, 1);
@@ -208,10 +214,25 @@ test("real broker binds remote grants and preserves exact managed-process owners
     assert.equal(other.identity.deviceId, owner.identity.deviceId);
     assert.notEqual(other.principalId, owner.principalId);
     for (const [name, input] of [
-      ["process.poll", { processId }], ["process.read_output", { processId }],
+      ["process.poll", { processId }],
       ["process.write_stdin", { processId, writeId: "foreign", data: "bad" }],
       ["process.signal", { processId, signal: "SIGTERM" }],
     ] as const) assert.equal((await runtime.invoke(bob, name, input)).error?.code, "process_not_owned", name);
+    // Another conversation of the same account on this device may look, and stop only when it says so.
+    const peerTail = json(await runtime.invoke(bob, "process.read_output", { processId, waitMs: 5_000 }));
+    assert.equal(peerTail.session, "another app");
+    assert.match(String(peerTail.stdout), /ready/);
+    assert.match(String(peerTail.note), /read-only/);
+    assert.deepEqual(json(await runtime.invoke(bob, "process.list", {})).processes, []);
+    const everyone = json(await runtime.invoke(bob, "process.list", { allSessions: true }));
+    assert.deepEqual(everyone.processes, []);
+    assert.deepEqual((everyone.otherSessions as { processId: string; session: string }[]).map((item) => [item.processId, item.session]), [[processId, "another app"]]);
+    assert.equal(json(await runtime.invoke(alice, "process.list", {})).otherSessions, undefined);
+    const spare = json(await runtime.invoke(alice, "process.start", { command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] })).processId as string;
+    const stoppedByPeer = json(await runtime.invoke(bob, "process.signal", { processId: spare, signal: "SIGTERM", otherSession: true }));
+    assert.deepEqual([stoppedByPeer.processId, stoppedByPeer.session, stoppedByPeer.status], [spare, "another app", "stopped"]);
+    assert.equal((await runtime.invoke(bob, "process.signal", { processId: "missing", signal: "SIGTERM", otherSession: true })).error?.code, "process_not_found");
+    assert.equal(json(await runtime.invoke(alice, "process.poll", { processId })).status, "running", "the peer's own process is untouched");
 
     worker = await host.bindRun({ runId: "build-worker-test", permissionProfile: "full",
       capabilityContract: await createRunnerCapabilityContract(config), capabilitiesConfig: config });

@@ -19,6 +19,9 @@ const KEY_SET_CLOCK_SKEW_MS = 5 * 60_000;
 const MAX_KEY_SET_LIFETIME_MS = 7 * 24 * 60 * 60_000;
 /** Live nonces kept per cache; at capacity new ones are refused, never evicted early. */
 const MAX_LIVE_NONCES = 4096;
+/** Separates approval answers from everything else the relay signs with the same key. */
+export const REMOTE_APPROVAL_PURPOSE = "command-approval-answer";
+const MAX_APPROVAL_ANSWER_LIFETIME_MS = 2 * 60_000;
 /** Pairing URL used when no relay transport is configured. */
 export const STUB_REMOTE_PAIRING_URL = "https://mcp.aiboard.me/pair";
 
@@ -344,6 +347,39 @@ export class RemoteAuthenticator {
     if (!(session.authorizedScopes ?? []).includes(request.scopeRef)) {
       fail("Remote request scope is not authorized for this device.");
     }
+  }
+
+  /**
+   * A dashboard answer to one waiting command. It must verify under a pinned session key and name exactly
+   * this device, account and epoch inside a short lifetime. The nonce then binds it to one job, once.
+   */
+  verifyApprovalAnswer(answer: unknown, session: RemoteDeviceSession): { readonly jobId: string; readonly nonce: string; readonly approved: boolean } {
+    const fail = (message: string): never => { throw new RemoteAuthError("unauthorized", message); };
+    const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+    if (!record(answer) || Object.keys(answer).length !== 4 || answer.version !== 1 ||
+      typeof answer.keyId !== "string" || typeof answer.signature !== "string" || !record(answer.claims)) fail("Approval answer is invalid.");
+    const { keyId, signature, claims } = answer as unknown as { keyId: string; signature: string; claims: Record<string, unknown> };
+    const fields = ["purpose", "audience", "accountId", "deviceId", "deviceEpoch", "jobId", "nonce", "issuedAt", "expiresAt"];
+    if (Object.keys(claims).length !== fields.length + 1 || typeof claims.approved !== "boolean" ||
+      fields.some((field) => typeof claims[field] !== "string" || !claims[field])) fail("Approval answer claims are invalid.");
+    const pinned = (session.relayKeys ?? []).find((entry) => entry.keyId === keyId);
+    if (!pinned) fail("Approval answer key is not pinned for this device.");
+    let verified = false;
+    try {
+      const key = createPublicKey({ key: Buffer.from(pinned!.publicKey, "base64url"), type: "spki", format: "der" });
+      verified = cryptoVerify(null, Buffer.from(canonicalJson(claims), "utf8"), key, Buffer.from(signature, "base64url"));
+    } catch { verified = false; }
+    if (!verified) fail("Approval answer signature does not verify.");
+    const identity = this.deviceStore.load();
+    if (claims.purpose !== REMOTE_APPROVAL_PURPOSE || claims.audience !== this.expectedAudience || !identity || identity.revoked ||
+      claims.accountId !== session.accountId || claims.accountId !== identity.accountId ||
+      claims.deviceId !== identity.deviceId || claims.deviceEpoch !== identity.epoch) fail("Approval answer does not match this device.");
+    const now = this.now().getTime();
+    const issuedAt = Date.parse(String(claims.issuedAt));
+    const expiresAt = Date.parse(String(claims.expiresAt));
+    if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || issuedAt > now + CLOCK_SKEW_MS ||
+      expiresAt <= now || expiresAt <= issuedAt || expiresAt - issuedAt > MAX_APPROVAL_ANSWER_LIFETIME_MS) fail("Approval answer has expired.");
+    return { jobId: String(claims.jobId), nonce: String(claims.nonce), approved: claims.approved as boolean };
   }
 
   /** Per-request fence: identity, current epoch, expiry and nonce replay. */

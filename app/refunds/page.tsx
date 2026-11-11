@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { LegalDocument, legalLink, type LegalSection } from "@/components/LegalDocument";
 import {
-  PADDLE_BUYER_TERMS_URL,
   SITE_CONTACT_EMAIL,
   SITE_LEGAL_NAME,
   SITE_NAME,
@@ -18,12 +17,6 @@ export const metadata = pageMetadata({
 const mail = (
   <a href={`mailto:${SITE_CONTACT_EMAIL}`} className={legalLink}>
     {SITE_CONTACT_EMAIL}
-  </a>
-);
-
-const paddleNet = (
-  <a href="https://paddle.net" target="_blank" rel="noopener noreferrer" className={legalLink}>
-    paddle.net
   </a>
 );
 
@@ -55,25 +48,13 @@ const SECTIONS: LegalSection[] = [
     body: (
       <>
         <p>
-          Our order process is conducted by our online reseller Paddle.com.
-          Paddle.com is the Merchant of Record for all our orders. Paddle
-          provides all customer service inquiries and handles returns. So you
-          can ask in either of two ways:
+          Paid plans are not on sale yet, so there is nothing to refund today.
+          Once they are, email {mail} with the email address you paid with or
+          the order number from your receipt.
         </p>
-        <ul className="list-disc space-y-2 pl-6">
-          <li>
-            through Paddle at {paddleNet}, using the email address from your
-            receipt; or
-          </li>
-          <li>
-            by emailing {mail} with the email address you paid with or the
-            order number from your Paddle receipt. We will pass it to Paddle
-            for you.
-          </li>
-        </ul>
         <p>
-          Paddle sends the refund to your original payment method, normally
-          within 14 days of approval. It may take a few more business days for
+          Our payment provider sends the refund to your original payment
+          method, normally within 14 days of approval. It may take a few more business days for
           your bank to show it. Any tax you paid is refunded with it.
         </p>
       </>
@@ -104,8 +85,7 @@ const SECTIONS: LegalSection[] = [
       <>
         <p>
           After 14 days a payment is normally not refundable, but you can
-          cancel at any time from the Remote billing page or at {paddleNet}.
-          Cancelling stops the next renewal and you keep your plan until the
+          cancel at any time from the Remote billing page. Cancelling stops the next renewal and you keep your plan until the
           end of the period you paid for. We will always refund the unused
           part of a paid period if we close your account without a breach on
           your part, discontinue AIBoard Remote, or materially reduce your
@@ -121,17 +101,7 @@ const SECTIONS: LegalSection[] = [
     body: (
       <p>
         If you live in the EU, EEA, UK or Switzerland, you also have a legal
-        right to withdraw from a purchase within 14 days, which Paddle provides
-        under the{" "}
-        <a
-          href={PADDLE_BUYER_TERMS_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={legalLink}
-        >
-          Paddle Buyer Terms
-        </a>
-        . Our 14-day guarantee is at least as generous: we won&apos;t refuse a
+        right to withdraw from a purchase within 14 days. Our 14-day guarantee is at least as generous: we won&apos;t refuse a
         refund within 14 days because you started using the service. Nothing in
         this policy limits rights you have under the consumer law of your
         country.
@@ -143,8 +113,7 @@ const SECTIONS: LegalSection[] = [
     title: "Chargebacks",
     body: (
       <p>
-        Please contact us or Paddle before disputing a charge with your bank. A
-        refund is usually faster. While a chargeback is open, the paid plan is
+        Please contact us before disputing a charge with your bank. A refund is usually faster. While a chargeback is open, the paid plan is
         suspended; it is restored if the dispute is resolved in our favour.
       </p>
     ),
@@ -180,8 +149,8 @@ export default function RefundsPage() {
             questions asked.
           </li>
           <li>
-            Ask at {paddleNet} or email {mail}. Paddle, our Merchant of Record,
-            processes it.
+            Email {mail} to ask. Paid plans are not on sale yet, so there is
+            nothing to refund today.
           </li>
           <li>
             A refund ends that paid period and moves you to Free. Nothing on

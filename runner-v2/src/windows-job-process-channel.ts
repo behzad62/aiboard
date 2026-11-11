@@ -11,7 +11,22 @@ import {
 import type { ProcessBackendBinding, ProcessEffectFence } from "./process-backend.js";
 import type { WindowsJobChannelState, WindowsJobOwnershipKey, WindowsJobProcessHost } from "./windows-job-process-host.js";
 
-type DuplexWindowsJobProcessHost = WindowsJobProcessHost & Required<Pick<WindowsJobProcessHost,
+/**
+ * Slowest background output poll of an idle channel. Each poll is a fenced, authenticated read, so a
+ * fixed fast cadence made idle sessions cost CPU in proportion to their number (three idle sessions
+ * held about half a core and delayed exit observation by seconds). Input still wakes the fast cadence.
+ */
+export const WINDOWS_JOB_IDLE_POLL_MAX_MS = 500;
+
+/**
+ * Longest the terminal wait goes without re-attesting while every read fills the whole replay
+ * window. A full window means more output is queued behind it, and the job cannot report stopped
+ * while retained output is unacknowledged. Re-attesting after each window cost one more fenced
+ * effect per window, about a fifth of bulk-output time (65 MiB: 134 reconciles, 5.3 of 24 s).
+ */
+export const WINDOWS_JOB_DRAIN_REATTEST_MAX_MS = 1_000;
+
+type DuplexWindowsJobProcessHost =WindowsJobProcessHost & Required<Pick<WindowsJobProcessHost,
   "attachOwnedChannel" | "writeOwnedInput" | "closeOwnedInput" | "acknowledgeOwnedOutput" | "claimOwnedFence">>;
 
 export interface WindowsJobChannelAuthority {
@@ -70,7 +85,14 @@ export function createWindowsJobProcessChannelProvider(options: {
 
 class WindowsJobProcessChannel implements InteractiveProcessChannel {
   private detached = false;
-  private timer?: ReturnType<typeof setInterval>;
+  private timer?: ReturnType<typeof setTimeout>;
+  /** The background poll loop is running; pollGeneration retires a stopped loop's in-flight poll. */
+  private polling = false;
+  private pollGeneration = 0;
+  /** Consecutive background polls that found no output; drives the idle back-off. */
+  private idlePolls = 0;
+  /** The background poll's read while it is in flight; waitForTerminal joins it instead of queuing another read behind it. */
+  private backgroundRead?: Promise<boolean>;
   private sink?: (metadata: BackpressuredOutputMetadata, bytes: Uint8Array) => Promise<BackpressuredOutputAcknowledgement>;
   private outputTail = Promise.resolve();
   private outputFailure?: Error;
@@ -117,12 +139,13 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     if (this.inputClosed) throw new Error("Windows Job input is closed.");
     if (input.sequence !== this.nextSequence || input.byteLength !== payload.byteLength || createHash("sha256").update(payload).digest("hex") !== input.digest) throw new Error("Windows Job input metadata is invalid.");
     const result = await this.authority.service.writeOwnedInput(this.authority.processId, this.authority.owner, this.authority.fence, input.sequence, new Uint8Array(payload));
-    this.nextSequence += 1; return result;
+    this.nextSequence += 1; this.wakePolling(); return result;
   }
   async closeInput(): Promise<unknown> {
     this.assertAttached(); await this.authority.reattest();
     if (this.inputClosed) return { acknowledged: true };
     await this.authority.service.closeOwnedInput(this.authority.processId, this.authority.owner, this.authority.fence); this.inputClosed = true;
+    this.wakePolling();
     return { acknowledged: true };
   }
   subscribePrivateOutput(sink: (bytes: Uint8Array) => void): () => void {
@@ -138,11 +161,20 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
   }
   async waitForTerminal(): Promise<unknown> {
     this.assertAttached(); this.startPolling();
+    let attestedAt = this.clock();
     for (;;) {
       this.assertAttached();
-      await this.poll();
+      // A background read already in flight serves as this pass's read: the read before re-attest
+      // only delivers progress, and an observed exit still drains with fresh reads started after it.
+      const filledWindow = await (this.backgroundRead ?? this.poll());
       this.assertAttached();
+      // While reads keep filling the window, drain the next one before re-attesting: each read and
+      // ACK already reloads the durable fence and authenticates supervisor status. A short read,
+      // WINDOWS_JOB_DRAIN_REATTEST_MAX_MS without one, or a clock that stepped back re-attests as before.
+      const sinceAttested = this.clock() - attestedAt;
+      if (filledWindow && sinceAttested >= 0 && sinceAttested < WINDOWS_JOB_DRAIN_REATTEST_MAX_MS) continue;
       const state = await this.authority.reattest();
+      attestedAt = this.clock();
       this.assertAttached();
       if (state === "exited") {
         for (;;) {
@@ -180,7 +212,7 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
   }
   private readonly detachWaiters = new Set<() => void>();
   async detach(): Promise<unknown> {
-    this.detached = true; if (this.timer) clearInterval(this.timer); this.timer = undefined; this.sink = undefined;
+    this.detached = true; this.stopPolling(); this.sink = undefined;
     // PX-2b repair 1 (B3): cancel the in-flight event wait so closeAttachment
     // does not park on it to its timeout; the parked HTTP request still
     // completes on its own and is ignored.
@@ -193,8 +225,7 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     if (this.outputSettlement) return this.outputSettlement;
     if (!Number.isSafeInteger(deadlineAt) || this.detached || !this.sink) return Promise.resolve({ status: "blocked", reason: "outcome_unknown" });
     this.outputSettlementDeadlineAt = deadlineAt;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = undefined;
+    this.stopPolling();
     this.outputSettlementWork = this.observeOutputSettlement();
     let timer: ReturnType<typeof setTimeout>;
     const expired = new Promise<BackpressuredOutputSettlement>((resolve) => {
@@ -270,19 +301,60 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     }
   }
   private startPolling() {
-    if (this.timer || this.outputSettlementDeadlineAt !== undefined) return;
-    this.timer = setInterval(() => { void this.poll().catch((error) => this.rememberOutputFailure(error)); }, this.pollIntervalMs); this.timer.unref?.();
-    void this.poll().catch((error) => this.rememberOutputFailure(error));
+    if (this.polling || this.outputSettlementDeadlineAt !== undefined) return;
+    this.polling = true;
+    this.runBackgroundPoll(++this.pollGeneration);
   }
-  private async poll() {
+  /**
+   * Background output polling is self-scheduled: the next poll is armed only after this one settles,
+   * so slow fenced reads never queue up behind each other. Each empty poll doubles the delay up to
+   * WINDOWS_JOB_IDLE_POLL_MAX_MS; delivered output, input and EOF return it to pollIntervalMs.
+   * Every read still takes the same fenced, authenticated path; only how often an idle channel asks changes.
+   */
+  private runBackgroundPoll(generation: number) {
+    this.timer = undefined;
+    const read = this.poll();
+    this.backgroundRead = read;
+    void read.catch((error) => this.rememberOutputFailure(error)).finally(() => {
+      if (this.backgroundRead === read) this.backgroundRead = undefined;
+      if (generation !== this.pollGeneration || this.detached || this.outputFailure) return;
+      this.armBackgroundPoll(generation, this.idlePollDelay());
+    });
+  }
+  private armBackgroundPoll(generation: number, delayMs: number) {
+    this.timer = setTimeout(() => this.runBackgroundPoll(generation), delayMs);
+    this.timer.unref?.();
+  }
+  private stopPolling() {
+    this.polling = false; this.pollGeneration += 1;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+  private idlePollDelay() {
+    return Math.min(Math.max(this.pollIntervalMs, WINDOWS_JOB_IDLE_POLL_MAX_MS), this.pollIntervalMs * 2 ** this.idlePolls);
+  }
+  /** Input usually causes output: poll at the fast cadence again instead of waiting out an idle back-off. */
+  private wakePolling() {
+    this.idlePolls = 0;
+    // A poll in flight re-arms itself when it settles; only a waiting timer is brought forward.
+    if (!this.polling || !this.timer) return;
+    clearTimeout(this.timer);
+    this.armBackgroundPoll(this.pollGeneration, this.pollIntervalMs);
+  }
+  /** Resolves true only when this poll's own read filled the whole window and all of it was acknowledged. */
+  private async poll(): Promise<boolean> {
     if (this.outputFailure) throw this.outputFailure;
-    if (this.detached || !this.sink) return;
+    if (this.detached || !this.sink) return false;
+    let filledWindow = false;
     this.outputTail = this.outputTail.then(async () => {
       this.assertOutputDeadline();
       const sink = this.sink;
       if (!sink || this.detached) return;
       const unread = await this.authority.service.readOwnedOutput(this.authority.processId, this.authority.owner, this.offsets, this.authority.fence, this.maximumBytes);
       this.assertOutputDeadline();
+      const empty = unread.stdout.byteLength === 0 && unread.stderr.byteLength === 0;
+      this.idlePolls = empty ? Math.min(this.idlePolls + 1, 8) : 0;
+      let acknowledgedBytes = 0;
       for (const stream of ["stdout", "stderr"] as const) {
         if (this.detached || this.sink !== sink) return;
         const bytes = unread[stream].subarray(0, this.maximumBytes);
@@ -299,11 +371,14 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
         });
         this.assertOutputDeadline();
         this.offsets[stream] = endOffset; this.acknowledgedSequences[stream] += 1;
+        acknowledgedBytes += bytes.byteLength;
         if (this.detached || this.sink !== sink) return;
       }
+      filledWindow = acknowledgedBytes >= this.maximumBytes;
     });
     try { await this.outputTail; }
     catch (error) { this.rememberOutputFailure(error); throw this.outputFailure; }
+    return filledWindow;
   }
   private rememberOutputFailure(error: unknown) { this.outputFailure ??= error instanceof Error ? error : new Error(String(error)); }
   private assertAttached() { if (this.detached) throw new Error("Windows Job channel is detached."); }

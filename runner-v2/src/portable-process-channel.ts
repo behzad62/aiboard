@@ -350,6 +350,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       this.assertOutputDeadline();
       if (this.authority.reattestFence) this.authority.reattestFence();
       else this.reattest(false);
+      if (this.outputIsIdle()) return;
       const snapshot = this.outputSnapshot();
       if (snapshot.status === "unavailable" && snapshot.cause === "coordination") return;
       const entries = this.requireSnapshot(snapshot).output;
@@ -417,6 +418,17 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     return [...this.requireSnapshot(this.outputSnapshot()).output];
   }
 
+  // The fenced snapshot is a durable SQLite write transaction with flushes. At this poll rate, taking it with
+  // nothing to read slowed a cold PowerShell inventory about 3x on hosted Windows, and the supervisor needs that
+  // inventory to report this process's exit. So run the same validating read without the lock first, and skip the
+  // lock only when that read is clean and completely empty. Any anomaly, and all delivery, still takes the fenced
+  // path, and the caller has already re-checked the fence for this tick.
+  private outputIsIdle(): boolean {
+    try {
+      const { output, acknowledgements } = this.readOutputSnapshot();
+      return output.length === 0 && acknowledgements.length === 0;
+    } catch { return false; }
+  }
   private outputSnapshot(): PortableFenceSnapshotOutcome<PortableOutputSnapshot> {
     return this.authority.snapshot(() => this.readOutputSnapshot());
   }

@@ -1,5 +1,8 @@
 # RUNNER_RAW_PROCESS_BOUNDARY: audited Win32 CreateProcess/Job Object host for managed and LSP workloads.
 $ErrorActionPreference = "Stop"
+# Load ConvertFrom-Json's module (~50 ms) before the config line arrives: a pre-started spare does it
+# while it waits instead of after its claim; a fresh launch pays the same cost either way.
+$null = '{}' | ConvertFrom-Json
 
 $jobHostCsSource = @'
 using System;
@@ -16,6 +19,9 @@ public static class ManagedProcessJobHost
     private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     private const uint CREATE_NO_WINDOW = 0x08000000;
+    private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+    private const int PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY = 0x00020012;
+    private const int PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE = 0x00000002;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint FILE_APPEND_DATA = 0x00000004;
     private const uint GENERIC_READ = 0x80000000;
@@ -62,6 +68,13 @@ public static class ManagedProcessJobHost
         public IntPtr hStdInput;
         public IntPtr hStdOutput;
         public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct STARTUPINFOEX
+    {
+        public STARTUPINFO StartupInfo;
+        public IntPtr lpAttributeList;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -139,8 +152,21 @@ public static class ManagedProcessJobHost
         uint creationFlags,
         IntPtr environment,
         string currentDirectory,
-        ref STARTUPINFO startupInfo,
+        ref STARTUPINFOEX startupInfo,
         out PROCESS_INFORMATION processInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool InitializeProcThreadAttributeList(
+        IntPtr attributeList, int attributeCount, int flags, ref IntPtr size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UpdateProcThreadAttribute(
+        IntPtr attributeList, uint flags, IntPtr attribute, IntPtr value, IntPtr size,
+        IntPtr previousValue, IntPtr returnSize);
+
+    // No SetLastError: it runs after a failed CreateProcess and must not replace that error.
+    [DllImport("kernel32.dll")]
+    private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
@@ -226,10 +252,8 @@ public static class ManagedProcessJobHost
             StringBuilder commandLine = new StringBuilder(
                 BuildCommandLine(launch.Application, launch.Arguments));
 
-            if (!CreateProcess(launch.Application, commandLine,
-                ref processAttributes, ref threadAttributes,
-                true, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-                environmentBlock, cwd, ref startup, out processInfo))
+            if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
+                environmentBlock, cwd, startup, out processInfo))
                 ThrowWin32("CreateProcess");
             if (!AssignProcessToJobObject(job, processInfo.hProcess))
                 ThrowWin32("AssignProcessToJobObject");
@@ -318,6 +342,74 @@ public static class ManagedProcessJobHost
         }
     }
 
+    // Creates the root suspended (it joins the Job before it runs). A packaged (Microsoft Store) program, such as the
+    // Store's pwsh, has its children created by default outside the desktop app environment, by a broker, so they leave
+    // this Job and outlive a stop. The desktop app policy keeps the root's process tree inside: measured 2026-11-10 with
+    // Store pwsh 7.6.9 starting node, node stayed in the Job and died with it. It does not reach a packaged program a
+    // descendant launches (that one is created outside the Job either way). Without the attribute (Windows before
+    // 10 1703) the launch goes ahead without the policy, as before.
+    private static bool StartSuspended(
+        LaunchSpec launch,
+        StringBuilder commandLine,
+        ref SECURITY_ATTRIBUTES processAttributes,
+        ref SECURITY_ATTRIBUTES threadAttributes,
+        IntPtr environmentBlock,
+        string cwd,
+        STARTUPINFO startup,
+        out PROCESS_INFORMATION processInfo)
+    {
+        IntPtr attributeList = IntPtr.Zero;
+        IntPtr policy = IntPtr.Zero;
+        try
+        {
+            IntPtr size = IntPtr.Zero;
+            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+            if (size != IntPtr.Zero)
+            {
+                attributeList = Marshal.AllocHGlobal(size);
+                if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref size))
+                {
+                    Marshal.FreeHGlobal(attributeList);
+                    attributeList = IntPtr.Zero;
+                }
+            }
+            if (attributeList != IntPtr.Zero)
+            {
+                policy = Marshal.AllocHGlobal(4);
+                Marshal.WriteInt32(policy, PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE);
+                if (!UpdateProcThreadAttribute(attributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY),
+                    policy, new IntPtr(4), IntPtr.Zero, IntPtr.Zero))
+                {
+                    DeleteProcThreadAttributeList(attributeList);
+                    Marshal.FreeHGlobal(attributeList);
+                    attributeList = IntPtr.Zero;
+                }
+            }
+            STARTUPINFOEX extended = new STARTUPINFOEX();
+            extended.StartupInfo = startup;
+            uint creationFlags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+            if (attributeList != IntPtr.Zero)
+            {
+                extended.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
+                extended.lpAttributeList = attributeList;
+                creationFlags |= EXTENDED_STARTUPINFO_PRESENT;
+            }
+            return CreateProcess(launch.Application, commandLine,
+                ref processAttributes, ref threadAttributes,
+                true, creationFlags,
+                environmentBlock, cwd, ref extended, out processInfo);
+        }
+        finally
+        {
+            if (attributeList != IntPtr.Zero)
+            {
+                DeleteProcThreadAttributeList(attributeList);
+                Marshal.FreeHGlobal(attributeList);
+            }
+            if (policy != IntPtr.Zero) Marshal.FreeHGlobal(policy);
+        }
+    }
+
     // The LSP mode keeps its standard streams transparent: the PowerShell host
     // reads one bootstrap line, then the launched server exclusively owns the
     // inherited stdin/stdout/stderr handles. The Job Object remains open until
@@ -365,10 +457,8 @@ public static class ManagedProcessJobHost
             StringBuilder commandLine = new StringBuilder(
                 BuildCommandLine(launch.Application, launch.Arguments));
 
-            if (!CreateProcess(launch.Application, commandLine,
-                ref processAttributes, ref threadAttributes,
-                true, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-                environmentBlock, cwd, ref startup, out processInfo))
+            if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
+                environmentBlock, cwd, startup, out processInfo))
                 ThrowWin32("CreateProcess");
             if (!AssignProcessToJobObject(job, processInfo.hProcess))
                 ThrowWin32("AssignProcessToJobObject");
@@ -381,6 +471,15 @@ public static class ManagedProcessJobHost
             bool rootExited = false;
             bool rootReported = false;
             uint rootExitCode = 0;
+            // T1 CPU evidence (managed sessions only, never on the LSP stderr channel):
+            // whole-Job user+kernel time, at most every 500 ms when it changed, plus a
+            // 5 s heartbeat while unchanged. Evidence only, never a lifecycle fact.
+            bool accounting = !String.IsNullOrWhiteSpace(eventPath);
+            System.Diagnostics.Stopwatch accountingClock = System.Diagnostics.Stopwatch.StartNew();
+            long lastAccountingMs = -1000000;
+            long lastAccountingEmitMs = -1000000;
+            long lastCpu = -1;
+            long accountingBytes = 0;
             while (true)
             {
                 if (!rootExited && WaitForSingleObject(processInfo.hProcess, 50) == WAIT_OBJECT_0)
@@ -388,6 +487,29 @@ public static class ManagedProcessJobHost
                     rootExited = true;
                     if (!GetExitCodeProcess(processInfo.hProcess, out rootExitCode))
                         ThrowWin32("GetExitCodeProcess");
+                }
+                if (accounting)
+                {
+                    // Evidence must never become a lifecycle fact: any accounting failure (a
+                    // transiently locked or full event file, a failed query) or reaching the
+                    // byte budget only turns accounting off; callers then lose CPU evidence.
+                    try
+                    {
+                        long elapsed = accountingClock.ElapsedMilliseconds;
+                        if (elapsed - lastAccountingMs >= 500)
+                        {
+                            lastAccountingMs = elapsed;
+                            long cpu = TotalCpu100ns(job);
+                            if (cpu != lastCpu || elapsed - lastAccountingEmitMs >= 5000)
+                            {
+                                lastCpu = cpu;
+                                lastAccountingEmitMs = elapsed;
+                                accountingBytes += EmitAccounting(eventPath, processInfo.dwProcessId, cpu);
+                                if (accountingBytes >= AccountingByteBudget) accounting = false;
+                            }
+                        }
+                    }
+                    catch (Exception) { accounting = false; }
                 }
                 if (rootExited)
                 {
@@ -459,6 +581,34 @@ public static class ManagedProcessJobHost
             return accounting.ActiveProcesses;
         }
         finally { Marshal.FreeHGlobal(pointer); }
+    }
+
+    private static long TotalCpu100ns(IntPtr job)
+    {
+        int size = Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+        IntPtr pointer = Marshal.AllocHGlobal(size);
+        try
+        {
+            if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation,
+                pointer, (uint)size, IntPtr.Zero)) ThrowWin32("QueryInformationJobObject");
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting =
+                (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)Marshal.PtrToStructure(
+                    pointer, typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+            return accounting.TotalUserTime + accounting.TotalKernelTime;
+        }
+        finally { Marshal.FreeHGlobal(pointer); }
+    }
+
+    /// <summary>T1: accounting events stop after this many bytes so a long busy session cannot grow the event file without bound.</summary>
+    private const long AccountingByteBudget = 16L * 1024 * 1024;
+
+    private static int EmitAccounting(string eventPath, uint pid, long cpu100ns)
+    {
+        string line = "{\"type\":\"accounting\",\"pid\":" + pid +
+            ",\"exitCode\":null,\"activeProcesses\":0,\"error\":null,\"cpu100ns\":" + cpu100ns + "}" +
+            Environment.NewLine;
+        File.AppendAllText(eventPath, line, new UTF8Encoding(false));
+        return line.Length;
     }
 
     private const int DefaultStopDeadlineMs = 60000;
@@ -640,6 +790,12 @@ public static class ManagedProcessJobHost
 
     private static string BuildCommandLine(string command, string[] arguments)
     {
+        // cmd.exe reads no \" escapes: with /s /c it runs everything between the first and the last quote as typed,
+        // so a script keeps its own quotes (git commit -m "fix: tests") only when it is passed that way.
+        string name = Path.GetFileName(command);
+        if (arguments.Length == 4 && arguments[0] == "/d" && arguments[1] == "/s" && arguments[2] == "/c" &&
+            (String.Equals(name, "cmd.exe", StringComparison.OrdinalIgnoreCase) || String.Equals(name, "cmd", StringComparison.OrdinalIgnoreCase)))
+            return Quote(command) + " /d /s /c \"" + arguments[3] + "\"";
         StringBuilder result = new StringBuilder(Quote(command));
         foreach (string argument in arguments)
             result.Append(' ').Append(Quote(argument));

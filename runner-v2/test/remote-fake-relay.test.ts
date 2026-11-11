@@ -321,6 +321,41 @@ test("scenario 4-5: managed process and plugin tool pass; plugin crash degrades,
   await h.waitJob(output);
   assert.match(JSON.stringify(h.results.at(-1)?.content), /managed-hello/);
 
+  // A huge command's output, summarized, and searched afterwards under the same remote owner.
+  const noisy = await h.send(makeRequest(h.device.deviceId, {
+    toolId: "process_run", operationClass: "write",
+    payload: { command: process.execPath, args: ["-e", "for (let n = 1; n <= 5000; n += 1) console.log(n === 3210 ? 'NEEDLE here' : 'filler ' + n + ' ' + 'x'.repeat(30));"] },
+  }, 210));
+  assert.equal(noisy.admitted, true, JSON.stringify(noisy));
+  assert.equal((await h.waitJob(noisy)).state, "completed");
+  const ran = h.results.at(-1)!.content;
+  const ranMetadata = ran.find((block) => block.type === "json");
+  assert.ok(ranMetadata && ranMetadata.type === "json");
+  const runId = (ranMetadata.value as { processId: string }).processId;
+  assert.match(runId, /^run-/);
+  assert.match(JSON.stringify(ran), /lines omitted; find them with process_read_output/);
+  const searched = await h.send(makeRequest(h.device.deviceId, {
+    toolId: "process_read_output", operationClass: "read", payload: { processId: runId, search: { pattern: "needle" } },
+  }, 211));
+  assert.equal(searched.admitted, true, JSON.stringify(searched));
+  await h.waitJob(searched);
+  const hits = h.results.at(-1)!.content.find((block) => block.type === "json");
+  assert.ok(hits && hits.type === "json");
+  assert.deepEqual((hits.value as { search: { matches: { line: number; text: string }[] } }).search.matches.map((match) => [match.line, match.text.trim()]), [[3210, "NEEDLE here"]]);
+
+  // A start that waits through a lot of output still binds its process: the identity cannot become a preview.
+  const loud = await h.send(makeRequest(h.device.deviceId, {
+    toolId: "process_start", operationClass: "write",
+    payload: { command: process.execPath, args: ["-e", "for (let n = 0; n < 2000; n += 1) { console.log('out ' + n + ' ' + 'x'.repeat(30)); console.error('err ' + n + ' ' + 'y'.repeat(30)); }"], until: { exit: true }, waitMs: 20_000 },
+  }, 212));
+  assert.equal(loud.admitted, true, JSON.stringify(loud));
+  assert.equal((await h.waitJob(loud)).state, "completed");
+  const loudOutput = h.results.at(-1)!.content;
+  const loudIdentity = loudOutput[0];
+  assert.ok(loudIdentity && loudIdentity.type === "json");
+  assert.equal(typeof (loudIdentity.value as { processId: unknown }).processId, "string");
+  assert.equal(loudOutput.some((block) => block.type === "artifact"), false);
+
   // Approved plugin tool through the connector.
   const read = await h.send(makeRequest(h.device.deviceId, {
     toolId: plugin.relayToolId, operationClass: "read", payload: {},
@@ -352,6 +387,58 @@ test("scenario 4-5: managed process and plugin tool pass; plugin crash degrades,
   assert.ok(launches.length >= 2, `expected a supervised restart, launches: ${launches.join(",")}`);
   const callsFinal = await readFile(join(plugin.fixtureState, "calls.log"), "utf8");
   assert.equal(callsFinal.match(/ crash/g)?.length, 1, "the crashed call was never replayed");
+});
+
+test("a command that prints and then hangs past its timeoutMs returns what it printed and its processId, with its effect still unknown", { timeout: 180_000 }, async (t) => {
+  const h = await harness(t);
+  h.releaseRecovery();
+  await h.starting;
+  const jobRead = async (toolId: "jobs_result" | "jobs_status", jobId: string, counter: number) => {
+    const request = makeRequest(h.device.deviceId, { toolId, operationClass: "read", payload: { jobId } }, counter);
+    await h.relay.send({ type: "request", request, authorization: h.authority.authorize(request) });
+    const message = await h.relay.nextMessage();
+    if (message.type !== "response") throw new Error("expected response");
+    return message;
+  };
+  const hangAfter = (print: string) => ({ toolId: "process_run", operationClass: "write",
+    payload: { command: process.execPath, args: ["-e", print + " setInterval(() => {}, 1000);"], timeoutMs: 1_500 } });
+  const storedRun = async (counter: number, print: string) => {
+    const admitted = await h.send(makeRequest(h.device.deviceId, hangAfter(print), counter));
+    assert.equal(admitted.admitted, true, JSON.stringify(admitted));
+    assert.equal((await h.waitJob(admitted)).state, "outcome_unknown");
+    const read = await jobRead("jobs_result", admitted.jobId!, counter + 1);
+    assert.equal(read.response.status, "outcome_unknown");
+    assert.equal(read.response.uncertainty, "effect_outcome_unknown");
+    const page = read.data as { state: string; inline?: string };
+    assert.equal(page.state, "outcome_unknown");
+    assert.ok(page.inline, "the unknown job keeps what the command printed: " + JSON.stringify(read.data));
+    const stored = JSON.parse(Buffer.from(page.inline, "base64").toString("utf8")) as ToolResult;
+    assert.equal(stored.error?.code, "process_timeout");
+    const metadata = stored.content.find((block) => block.type === "json");
+    assert.ok(metadata && metadata.type === "json");
+    assert.equal((metadata.value as { timedOut?: boolean }).timedOut, true);
+    return { jobId: admitted.jobId!, stored, metadata: metadata.value as { processId?: string } };
+  };
+
+  // More than a summary shows, so the rest is kept under a processId.
+  const big = await storedRun(301, "for (let n = 1; n <= 400; n += 1) console.log(n === 123 ? 'NEEDLE before the hang' : 'line ' + n + ' ' + 'x'.repeat(30));");
+  assert.match(JSON.stringify(big.stored.content), /line 1 x+/u);
+  const processId = big.metadata.processId!;
+  assert.match(processId, /^run-/u);
+  assert.equal(((await jobRead("jobs_status", big.jobId, 303)).data as { job: { state: string } }).job.state, "outcome_unknown");
+  const searched = await h.send(makeRequest(h.device.deviceId, {
+    toolId: "process_read_output", operationClass: "read", payload: { processId, search: { pattern: "needle" } },
+  }, 304));
+  assert.equal(searched.admitted, true, JSON.stringify(searched));
+  assert.equal((await h.waitJob(searched)).state, "completed");
+  const hits = h.results.at(-1)!.content.find((block) => block.type === "json");
+  assert.ok(hits && hits.type === "json");
+  assert.deepEqual((hits.value as { search: { matches: { line: number; text: string }[] } }).search.matches.map((match) => [match.line, match.text.trim()]),
+    [[123, "NEEDLE before the hang"]]);
+
+  // A few lines come back whole.
+  const small = await storedRun(305, "console.log('started, now waiting');");
+  assert.match(JSON.stringify(small.stored.content), /STDOUT\\nstarted, now waiting/u);
 });
 
 function processExists(pid: number): boolean {

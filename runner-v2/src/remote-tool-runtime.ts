@@ -10,17 +10,19 @@ import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createImageTools } from "./image-tools.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
-import { createProcessTools } from "./process-tools.js";
+import { createProcessTools, processRunSupport } from "./process-tools.js";
 import { roleAllowList } from "./role-capabilities.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
-import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore, type LocalMcpIdentity, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
+import type { ManagedProcessObservation } from "./managed-process-contracts.js";
+import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore, remoteSessionCode, type LocalMcpIdentity, type RemoteDevicePolicy, type RemotePrincipal, type VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteAuditStore } from "./remote-audit-store.js";
 import { APPROVAL_TOOLS, commandApprovalSummary, type CommandApprovalSummary } from "./remote-approval.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
 import { resolveProtectedLocations, type ProtectedLocations } from "./protected-locations.js";
 import { createRemotePathGuard, RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
 import { ToolBroker } from "./tool-broker.js";
+import { findWindowsPathTooLongError } from "./windows-path-limits.mjs";
 
 export interface RemoteToolRuntimeOptions {
   readonly host: ExecutionHost;
@@ -81,10 +83,10 @@ export function remotePathGuardFor(options: Pick<RemoteToolRuntimeOptions, "prot
 }
 
 const ALLOWED_TOOLS = new Set(roleAllowList("remote", "remote"));
-const SHELL_TOOLS = new Set(["process.start", "process.run", "process.write_stdin"]);
+const SHELL_TOOLS = new Set(["process.start", "process.run", "process.write_stdin", "process.interact"]);
 const MUTATING_TOOLS = new Set([
   "fs.write", "fs.patch", "fs.move", "fs.delete", "process.start", "process.run",
-  "process.write_stdin", "process.signal",
+  "process.write_stdin", "process.interact", "process.signal",
 ]);
 const AUTHORITY_ARGUMENTS = new Set([
   "actor", "role", "runId", "sessionId", "workspace", "workspacePath", "scope", "scopeRef",
@@ -215,7 +217,14 @@ export class RemoteToolRuntime {
     if (isMutating(name, args) && !this.options.admitEffect) {
       return failure(callId, name, "effect_admission_required", "Durable remote effect admission is unavailable.");
     }
-    const bound = await this.binding(principal);
+    let bound: BoundRemote;
+    try { bound = await this.binding(principal); }
+    catch (error) {
+      // No tool ran. Say why, rather than leaving the job as a bare outcome_unknown.
+      const tooLong = findWindowsPathTooLongError(error);
+      if (tooLong) return failure(callId, name, tooLong.code, tooLong.message);
+      throw error;
+    }
     // Binding and recovery can await; revocation and narrowing must win before dispatch.
     principal = this.options.principals.find(identity)!;
     if (!principal || principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
@@ -237,6 +246,9 @@ export class RemoteToolRuntime {
       let dispatchArgs: unknown;
       try { dispatchArgs = await constrainArguments(this.pathGuard, this.workspacePath, this.options.principals.policy(identity), name, args, `remote:${principal.principalId}`); }
       catch (error) { if (error instanceof RemotePathDeniedError) { const result = failure(callId, name, error.code, error.message); onDispatch?.(result); return result; } throw error; }
+      const crossSession = await this.crossSession(identity, principal, bound, callId, name, dispatchArgs, onBrokerInvoke);
+      if (crossSession) { onDispatch?.(crossSession); return crossSession; }
+      dispatchArgs = withoutSessionFlags(name, dispatchArgs);
       onBrokerInvoke?.();
       const result = await bound.broker.invoke({ type: "tool_call", callId, name, arguments: dispatchArgs }, {
         runId: principal.runId, sessionId: principal.sessionId,
@@ -250,6 +262,15 @@ export class RemoteToolRuntime {
           catch (cause) { if (cause instanceof RemotePathDeniedError) { const denied = failure(callId, name, cause.code, cause.message); onDispatch?.(denied); return denied; } throw cause; }
         }
       }
+      if (name === "process.list" && (args as { allSessions?: unknown } | undefined)?.allSessions === true && !result.isError) {
+        const others = (await this.peerProcesses(identity)).map(({ peer, item }) => ({ processId: item.processId,
+          session: remoteSessionCode(peer.identity.clientId) ?? "another app", command: [item.command, ...item.args].join(" ").slice(0, 200),
+          status: item.status, ...(item.exitCode !== null ? { exitCode: item.exitCode } : {}), startedAt: item.startedAt }));
+        const listed = { ...result, content: result.content.map((part) => part.type === "json" && part.value && typeof part.value === "object"
+          ? { type: "json" as const, value: { ...(part.value as object), otherSessions: others } } : part) };
+        onDispatch?.(listed);
+        return listed;
+      }
       onDispatch?.(result);
       return result;
     };
@@ -259,6 +280,51 @@ export class RemoteToolRuntime {
         ...(admittedJobId !== undefined ? { admittedJobId } : {}), authorize }, dispatch);
     }
     return await dispatch();
+  }
+
+  /**
+   * Processes other conversations of this account started on this device. Each conversation is its own principal and run,
+   * so this observes their runs through the trusted control plane, and only bindings that are already live: binding a
+   * peer's run would recover it. Their output is read-only here and the owner's grants are never used.
+   */
+  private async peerProcesses(identity: VerifiedRemoteIdentity): Promise<{ peer: RemotePrincipal; bound: BoundRemote; item: ManagedProcessObservation }[]> {
+    const found: { peer: RemotePrincipal; bound: BoundRemote; item: ManagedProcessObservation }[] = [];
+    for (const peer of this.options.principals.peers(identity)) {
+      const pending = this.bindings.get(peer.principalId);
+      if (!pending) continue;
+      let bound: BoundRemote;
+      try { bound = await pending; } catch { continue; }
+      for (const item of await bound.binding.managedProcesses.listRun(peer.runId)) {
+        if (item.sessionId === peer.sessionId && item.actor.role === "remote" && item.actor.id === peer.principalId) found.push({ peer, bound, item });
+      }
+    }
+    return found;
+  }
+
+  /** A read or stop of another conversation's process; undefined lets the call go to this conversation's own broker. */
+  private async crossSession(identity: VerifiedRemoteIdentity, principal: RemotePrincipal, bound: BoundRemote, callId: string,
+    name: string, args: unknown, onStop?: () => void): Promise<ToolResult | undefined> {
+    const input = args && typeof args === "object" ? args as Record<string, unknown> : {};
+    const reading = name === "process.read_output";
+    if ((!reading && !(name === "process.signal" && input.otherSession === true)) || typeof input.processId !== "string") return undefined;
+    const own = (await bound.binding.managedProcesses.listRun(principal.runId)).some((item) => item.processId === input.processId);
+    if (own) return undefined;
+    const match = (await this.peerProcesses(identity)).find(({ item }) => item.processId === input.processId);
+    if (!match) return reading ? undefined : failure(callId, name, "process_not_found", "No other conversation still connected to this device owns that process.");
+    const session = remoteSessionCode(match.peer.identity.clientId) ?? "another app";
+    if (reading) {
+      const limit = Number(input.tailBytes ?? input.maxBytes ?? 8192);
+      const value = { processId: match.item.processId, session, status: match.item.status,
+        ...(match.item.exitCode !== null ? { exitCode: match.item.exitCode } : {}),
+        stdout: match.item.stdout.slice(-limit), stderr: match.item.stderr.slice(-limit),
+        note: "Session " + session + " owns this process, so this is a read-only tail of its latest output; cursor, waitMs, until and lines work only there." };
+      return { callId, toolName: name, content: [{ type: "json", value }], isError: false };
+    }
+    onStop?.();
+    await match.bound.binding.managedProcesses.stopProcesses([match.item.processId]);
+    const after = (await match.bound.binding.managedProcesses.listRun(match.peer.runId)).find((item) => item.processId === match.item.processId);
+    return { callId, toolName: name, content: [{ type: "json", value: { processId: match.item.processId, session, status: after?.status ?? "stopped",
+      ...(after && after.exitCode !== null ? { exitCode: after.exitCode } : {}) } }], isError: false };
   }
 
   private binding(principal: RemotePrincipal): Promise<BoundRemote> {
@@ -324,7 +390,10 @@ async function createGovernedBinding(
       ...(localMcpDepth !== undefined ? { approve: async (request) => !request.outsideWorkspace } : {}) });
     const tools = [
       ...createFilesystemTools({ artifacts: options.host.artifacts, pathGuard }), ...createGitTools(binding.git),
-      ...createProcessTools({ execution: binding.commandExecution }), ...createManagedProcessTools(binding.managedProcesses),
+      // The same process tools Build's workers get (worker-runtime.ts); a client only sees them by its own names.
+      ...createProcessTools({ execution: binding.commandExecution, names: "mcp",
+        support: processRunSupport(binding.managedProcesses, options.host.artifacts) }),
+      ...createManagedProcessTools(binding.managedProcesses, { names: "mcp" }),
       ...createImageTools({ artifacts: options.host.artifacts, pathGuard }),
     ];
     for (const tool of tools) if (allowed.has(tool.definition.name) && tool.definition.lifecycle !== true) broker.register(tool);
@@ -343,10 +412,21 @@ const LOCAL_TOOLS: Readonly<Record<string, string>> = Object.freeze({
   files_read: "fs.read", files_list: "fs.list", files_search: "fs.search", files_write: "fs.write",
   files_patch: "fs.patch", files_move: "fs.move", files_delete: "fs.delete",
   process_start: "process.start", process_run: "process.run", process_read_output: "process.read_output",
-  process_write_stdin: "process.write_stdin", process_signal: "process.signal", process_list: "process.list",
+  process_write_stdin: "process.write_stdin", process_interact: "process.interact", process_signal: "process.signal", process_list: "process.list",
   git_status: "git.status", git_diff: "git.diff", git_log: "git.log", image_inspect: "image.inspect",
 });
 const LOCAL_ALLOWED = new Set(roleAllowList("local_mcp", "local_mcp"));
+/**
+ * Several files in one call, as the relay gives them (batch_files_* in aiboard-tunnel's mcp-tools.ts and mcp-gateway.ts).
+ * Claude Code runs calls that change things one at a time, so a files_patch per file costs the model a whole turn each.
+ * Nothing new reaches the broker: each file is an ordinary files_read or files_patch through invoke, checked and audited
+ * on its own. Reads run BATCH_READ_PARALLEL at a time; patches run in order, each with the batch key plus "-<n>".
+ */
+const LOCAL_BATCH_TOOLS: Readonly<Record<string, string>> = Object.freeze({ batch_files_read: "files_read", batch_files_patch: "files_patch" });
+const MAX_BATCH_FILES = 20;
+const BATCH_READ_PARALLEL = 4;
+/** Leaves room for the "-<n>" each file's key gets, within the 128 a key may have. */
+const BATCH_KEY = /^[A-Za-z0-9._:-]{1,120}$/;
 
 export interface LocalMcpToolDefinition {
   readonly name: string;
@@ -405,11 +485,13 @@ export class LocalMcpToolSession {
     const bound = await this.binding();
     if (this.closed) throw new Error("Local MCP session is revoked.");
     const definitions = new Map(bound.broker.definitions().map((definition) => [definition.name, definition]));
-    return Object.entries(LOCAL_TOOLS).map(([name, internal]) => {
+    const tools: LocalMcpToolDefinition[] = Object.entries(LOCAL_TOOLS).map(([name, internal]) => {
       const definition = definitions.get(internal);
       if (!definition) throw new Error(`Local MCP tool ${name} is unavailable.`);
       const schema = structuredClone(definition.inputSchema) as { type: "object"; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown };
       if (name === "process_read_output") schema.properties = { ...schema.properties, view: { enum: ["output", "snapshot"] } };
+      // The hash has a default, the revision this session last read or wrote, and a missing one is never sent as an empty check.
+      if (name === "files_patch") schema.required = schema.required?.filter((key) => key !== "expectedSha256");
       if (name === "image_inspect") {
         delete schema.properties?.artifactHash;
         schema.required = ["path"];
@@ -424,9 +506,23 @@ export class LocalMcpToolSession {
       return { name, description: description + (mutating ? " The local call completes inline; job APIs are unavailable." : "") + " Artifact retrieval is not available.", inputSchema: schema,
         annotations: { readOnlyHint: readOnly, destructiveHint: mutating, idempotentHint: readOnly, openWorldHint: internal.startsWith("process.") && mutating } };
     });
+    // A batch entry is files_patch's own arguments, less the key: the batch has one, and each file gets it plus "-<n>".
+    const patch = tools.find((tool) => tool.name === "files_patch")!;
+    const { idempotencyKey: _key, ...patchProperties } = (patch.inputSchema.properties ?? {}) as Record<string, unknown>;
+    const patchItem = { ...structuredClone(patch.inputSchema), properties: patchProperties,
+      required: ((patch.inputSchema.required ?? []) as string[]).filter((key) => key !== "idempotencyKey") };
+    return [...tools,
+      { name: "batch_files_read", description: `Read several whole files in one call (2 to ${MAX_BATCH_FILES} paths). Each comes back as files_read gives it, with its sha256, so it can be patched next.`,
+        inputSchema: { type: "object", properties: { paths: { type: "array", items: { type: "string", minLength: 1 }, minItems: 2, maxItems: MAX_BATCH_FILES } }, required: ["paths"], additionalProperties: false },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+      { name: "batch_files_patch", description: `Exact search and replace in several files in one call (2 to ${MAX_BATCH_FILES}), each file applied atomically on its own; the result lists each file. As with files_patch, read a file first; expectedSha256 defaults to the revision you last read or wrote.`,
+        inputSchema: { type: "object", properties: { files: { type: "array", items: patchItem, minItems: 2, maxItems: MAX_BATCH_FILES },
+          idempotencyKey: { type: "string", pattern: BATCH_KEY.source } }, required: ["files", "idempotencyKey"], additionalProperties: false },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } }];
   }
 
   invoke(name: string, input: unknown): Promise<ToolResult> {
+    if (Object.hasOwn(LOCAL_BATCH_TOOLS, name)) return this.invokeBatch(name, input);
     const work = this.pathGuard.withWorkspaceScope(resolve(this.options.workspacePath), () => true, async (scope) => {
       const identity = this.options.policyIdentity?.();
       let result: ToolResult;
@@ -447,6 +543,50 @@ export class LocalMcpToolSession {
     return work;
   }
 
+  private async invokeBatch(name: string, input: unknown): Promise<ToolResult> {
+    const callId = `local-batch-${randomUUID()}`;
+    if (this.closed) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
+    if (!input || typeof input !== "object" || Array.isArray(input)) return failure(callId, name, "invalid_arguments", "Tool arguments must be an object.");
+    const args = withoutNulls(input) as Record<string, unknown>;
+    const reading = name === "batch_files_read";
+    const field = reading ? "paths" : "files";
+    if (Object.keys(args).some((key) => key !== field && (reading || key !== "idempotencyKey"))) return failure(callId, name, "invalid_arguments", "Unknown tool argument.");
+    const list = args[field];
+    if (!Array.isArray(list) || list.length < 2 || list.length > MAX_BATCH_FILES) return failure(callId, name, "invalid_arguments", `${field} takes 2 to ${MAX_BATCH_FILES} entries.`);
+    const key = args.idempotencyKey;
+    if (!reading && (typeof key !== "string" || !BATCH_KEY.test(key))) return failure(callId, name, "invalid_arguments", "A valid idempotencyKey is required.");
+    const items: Array<Record<string, unknown> & { path: string }> = [];
+    for (const [index, entry] of list.entries()) {
+      const item: unknown = reading ? { path: entry } : entry;
+      if (!item || typeof item !== "object" || Array.isArray(item) || typeof (item as { path?: unknown }).path !== "string" ||
+        (item as { path: string }).path.length === 0 || Object.hasOwn(item, "idempotencyKey")) {
+        return failure(callId, name, "invalid_arguments", `${field} entry ${index + 1} is not ${reading ? "a path" : "one file's files_patch arguments, without idempotencyKey"}.`);
+      }
+      const one = item as Record<string, unknown> & { path: string };
+      items.push(reading ? one : { ...one, idempotencyKey: `${key as string}-${index + 1}` });
+    }
+    const single = LOCAL_BATCH_TOOLS[name]!;
+    const results: ToolResult[] = new Array(items.length);
+    if (reading) {
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(BATCH_READ_PARALLEL, items.length) }, async () => {
+        while (next < items.length) { const index = next++; results[index] = await this.invoke(single, items[index]); }
+      }));
+    } else {
+      for (const [index, item] of items.entries()) results[index] = await this.invoke(single, item);
+    }
+    const failed = results.filter((result) => result.isError);
+    const texts = results.map((result) => JSON.stringify(result.content));
+    // A refusal that is not about any one file (a revoked session) comes back once, as a single call gives it.
+    if (failed.length === results.length && texts.every((text) => text === texts[0])) return { ...results[0]!, callId, toolName: name };
+    const isError = reading ? failed.length === results.length : failed.length > 0;
+    return { callId, toolName: name, isError,
+      // The header carries its own line breaks: Claude Code joins a result's text blocks with nothing between them.
+      content: results.flatMap((result, index) => [{ type: "text" as const,
+        text: `${index === 0 ? "" : "\n"}=== ${items[index]!.path}${result.isError ? " (failed)" : ""}\n` }, ...result.content]),
+      ...(isError ? { error: { code: "batch_failed", message: `${failed.length} of ${results.length} files failed.` } } : {}) };
+  }
+
   private async invokeChecked(name: string, input: unknown): Promise<ToolResult> {
     let callId = `local-call-${randomUUID()}`;
     const internal = Object.hasOwn(LOCAL_TOOLS, name) ? LOCAL_TOOLS[name] : undefined;
@@ -454,7 +594,7 @@ export class LocalMcpToolSession {
     if (!internal) return failure(callId, name, "tool_unavailable", "Tool is unavailable to local MCP.");
     if (!input || typeof input !== "object" || Array.isArray(input)) return failure(callId, name, "invalid_arguments", "Tool arguments must be an object.");
     let args: Record<string, unknown>;
-    try { args = structuredClone(input) as Record<string, unknown>; } catch { return failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely."); }
+    try { args = withoutNulls(structuredClone(input)) as Record<string, unknown>; } catch { return failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely."); }
     if (Object.keys(args).some((key) => AUTHORITY_ARGUMENTS.has(key) || ["root", "repoPath", "deviceId"].includes(key))) return failure(callId, name, "invalid_arguments", "Tool arguments cannot supply Runner authority.");
     if (internal === "image.inspect" && Object.hasOwn(args, "artifactHash")) return failure(callId, name, "tool_unavailable", "Artifact-hash inspection is unavailable.");
     if (args.env && typeof args.env === "object" && Object.keys(args.env).some((key) => key.toUpperCase() === "AIBOARD_MCP_DEPTH")) return failure(callId, name, "invalid_arguments", "MCP ancestry is Runner-owned.");
@@ -592,6 +732,25 @@ function freezeArguments(value: unknown, seen = new WeakSet<object>()): unknown 
   return value;
 }
 
+/** allSessions and otherSession are the Runner's own; the managed-process tools take neither. */
+function withoutSessionFlags(name: string, args: unknown): unknown {
+  if ((name !== "process.list" && name !== "process.signal") || !args || typeof args !== "object" || Array.isArray(args)) return args;
+  const { allSessions: _all, otherSession: _other, ...rest } = args as Record<string, unknown>;
+  return rest;
+}
+
 function failure(callId: string, toolName: string, code: string, message: string): ToolResult {
   return { callId, toolName, content: [{ type: "text", text: message }], isError: true, error: { code, message } };
+}
+
+/**
+ * The arguments without their null properties, as the relay does (withoutNulls in aiboard-tunnel's mcp-gateway.ts).
+ * No tool argument takes null, and models fill in every field of an object they use part of (until: {pattern, port: null}),
+ * so null means the field is not set. Not inside env: its keys are variable names, where null could mean unset, which no
+ * tool does, so it stays an error there.
+ */
+function withoutNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutNulls);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null).map(([key, entry]) => [key, key === "env" ? entry : withoutNulls(entry)]));
 }

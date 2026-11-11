@@ -4,9 +4,9 @@ import { submissionSecretNotice } from "./submission-guard.js";
 import { createHash } from "node:crypto";
 import { fencedWrite, fencedPatch, fencedMove, fencedDelete, filesystemMutationFailure,
   FilesystemMutationError, isFilesystemMutation } from "./filesystem-mutation-fence.js";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
-import { isAbsolute, posix, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, posix, relative, resolve, sep } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
@@ -48,6 +48,8 @@ const rangeByteLimit = (context: ToolExecutionContext) =>
   Math.max(MAX_READ_RANGE_BYTES, (Number.isSafeInteger(context.inlineOutputBytes) ? context.inlineOutputBytes! : 0) - 2 * 1024);
 const MAX_READ_INLINE_BYTES = 32 * 1024;
 const MAX_PATCH_EDITS = 50;
+/** fs.read of a folder lists two levels; a bigger tree is cut here and marked truncated. */
+const DIRECTORY_VIEW_MAX_ENTRIES = 400;
 
 /** T10 (M9): model-facing search contract: literal match, skipped outputs. */
 export const FS_SEARCH_DESCRIPTION =
@@ -132,6 +134,29 @@ export function createFilesystemTools(
     }
   };
 
+  // fs.read of a folder lists it two levels deep, skipping hidden and build-output entries, as the
+  // Anthropic text editor's view does; it used to fail with EISDIR. Only entries under the granted
+  // folder are read.
+  const directoryView = async (context: ToolExecutionContext, root: string): Promise<ToolExecutionOutput> => {
+    const deniedList = await guardDeny(context, root, "list");
+    if (deniedList) return deniedList;
+    const entries: Array<{ path: string; type: string }> = [];
+    await walk(root, 1, async (path, type) => {
+      if (entries.length >= DIRECTORY_VIEW_MAX_ENTRIES) return false;
+      entries.push({ path: displayPath(context, path), type });
+      return true;
+    }, context.signal, 0, async (path) => basename(path).startsWith(".") || (guard ? await guard.isDenied(path) : false));
+    const visible = hasPolicyPaths(options.hiddenPaths) ? await filterHiddenListEntries(context, entries, options.hiddenPaths) : entries;
+    return {
+      content: [
+        json({ path: displayPath(context, root), type: "directory", entries: visible.length,
+          ...(entries.length >= DIRECTORY_VIEW_MAX_ENTRIES ? { truncated: true } : {}) }),
+        { type: "text", text: visible.map((entry) => entry.type === "directory" ? `${entry.path}/` : entry.path).join("\n") },
+      ],
+      isError: false,
+    };
+  };
+
   const tools: NativeTool<Input>[] = [
     {
       definition: definition(
@@ -153,6 +178,7 @@ export function createFilesystemTools(
         }
         const deniedRead = await guardDeny(context, path, "read");
         if (deniedRead) return deniedRead;
+        if ((await stat(path).catch(() => undefined))?.isDirectory()) return await directoryView(context, path);
         const bytes = await readFile(path);
         const hash = sha256(bytes);
         rememberRevision(context, path, hash);
@@ -536,6 +562,9 @@ export function createFilesystemTools(
           let noOpEdits: number[] = [];
           const next = fencedPatch(context, path, expectedRevision(input, context, path), (bytes) => {
             const original = decodeText(bytes);
+            if (isObject(input._insert)) {
+              return preserveUtf8Bom(bytes, Buffer.from(insertAfterLine(original, input._insert.afterLine as number, input._insert.text as string)));
+            }
             let nextText = original;
             const edits = patchEdits(input);
             noOpEdits = edits.flatMap((edit, index) => edit.search === edit.replace ? [index + 1] : []);
@@ -956,6 +985,14 @@ function validatePatch(input: unknown): ValidationResult<Input> {
       issues: ["path must be a string"],
     };
   }
+  // Internal: the Anthropic text editor's insert (anthropic-text-editor.ts). Not in the schema.
+  if (input._insert !== undefined) {
+    const insert = input._insert;
+    const alone = input.search === undefined && input.replace === undefined && input.edits === undefined;
+    return alone && isObject(insert) && Number.isSafeInteger(insert.afterLine) && (insert.afterLine as number) >= 0 && typeof insert.text === "string"
+      ? { ok: true, value: input }
+      : { ok: false, issues: ["_insert takes afterLine (0 or more) and text, without search, replace or edits"] };
+  }
   const hasLegacy = input.search !== undefined || input.replace !== undefined;
   const hasEdits = input.edits !== undefined;
   if (hasLegacy === hasEdits) {
@@ -1024,6 +1061,25 @@ function objectWithStrings(...keys: string[]) {
 
 function isObject(input: unknown): input is Input {
   return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+/**
+ * text as whole lines after line afterLine (0: the top), in the file's newline style. Lines are
+ * counted as a reader sees them: a final newline ends the last line rather than starting another.
+ */
+export function insertAfterLine(original: string, afterLine: number, text: string): string {
+  const starts = lineStarts(original);
+  const endsWithNewline = /(\r\n|\r|\n)$/u.test(original);
+  const lines = original === "" ? 0 : endsWithNewline ? starts.length - 1 : starts.length;
+  if (afterLine > lines) {
+    throw new FilesystemMutationError("invalid_line_range",
+      `Cannot insert after line ${afterLine}: the file has ${lines} line${lines === 1 ? "" : "s"}, so use 0 to ${lines}. No changes were written.`);
+  }
+  const newline = preferredNewline(original) ?? "\n";
+  const block = normalizeNewlines(text.replace(/(\r\n|\r|\n)$/u, ""), newline);
+  if (afterLine === lines && original !== "" && !endsWithNewline) return original + newline + block;
+  const offset = afterLine === 0 ? 0 : starts[afterLine]!;
+  return original.slice(0, offset) + block + newline + original.slice(offset);
 }
 
 function lineStarts(source: string): number[] {
@@ -1249,7 +1305,9 @@ async function successRevision(
   diagnostics?: Pick<LanguageIntelligenceProvider, "diagnostics">,
   notice?: string,
 ): Promise<ToolExecutionOutput> {
-  const secretNotice = submissionSecretNotice(displayPath(context, path), bytes.toString("utf8"));
+  // Only Build's own agents submit their work. A remote or local MCP client has no submit_task to warn about.
+  const external = context.actor?.role === "remote" || context.actor?.role === "local_mcp";
+  const secretNotice = external ? undefined : submissionSecretNotice(displayPath(context, path), bytes.toString("utf8"));
   const notices = [notice, secretNotice].filter((value): value is string => value !== undefined);
   const metadata: Record<string, unknown> = {
     path: displayPath(context, path),

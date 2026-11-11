@@ -76,8 +76,10 @@ async function harness(t: test.TestContext, limits: { running?: number; queued?:
   let work: Work = async (name) => ({ result: success(name), brokerInvoked: true });
   let stop: (clientId: string, processId: string) => Promise<boolean> = async () => false;
   const calls: string[] = [];
+  const revoked = new Set<string>();
   const runtime: RemoteRequestRuntime = {
     latestPolicyNarrowing: () => undefined,
+    authorizeJob: (identity) => revoked.has(identity.clientId) ? "unauthorized" : undefined,
     invoke: async (_identity, name) => success(name),
     stopStartedProcess: async (identity, processId) => await stop(identity.clientId, processId),
     invokeAdmitted: async (identity, name, _args, signal, _raw, _jobId, beforeBroker) => {
@@ -165,7 +167,7 @@ async function harness(t: test.TestContext, limits: { running?: number; queued?:
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   return {
-    root, databasePath, device, admission, connector, calls, connect, request, send, response, idFor, waitState,
+    root, databasePath, device, admission, connector, calls, revoked, connect, request, send, response, idFor, waitState,
     transport: () => transport,
     replaceTransport: () => { transport = new FixtureTransport(); },
     setWork: (next: Work) => { work = next; },
@@ -236,12 +238,22 @@ test("job reads and cancellation are principal-scoped and require relay authoriz
   const result = await h.response(h.request({ toolId: "jobs_result", payload: { jobId, maxBytes: 10 } }));
   assert.ok((result.data as { inline?: string }).inline);
   assert.ok((result.data as { nextCursor?: string }).nextCursor);
+  // Another conversation of the same account on this device reads the job as its owner would, but cannot cancel it.
+  const peerStatus = await h.response(h.request({ clientId: "client-b", toolId: "jobs_status", payload: { jobId } }));
+  assert.equal((peerStatus.data as { job: { state: string } }).job.state, "completed");
+  const peerEvents = await h.response(h.request({ clientId: "client-b", toolId: "jobs_events", payload: { jobId, limit: 2 } }));
+  assert.equal((peerEvents.data as { events: unknown[] }).events.length, 2);
+  const peerResult = await h.response(h.request({ clientId: "client-b", toolId: "jobs_result", payload: { jobId, maxBytes: 10 } }));
+  assert.equal((peerResult.data as { inline?: string }).inline, (result.data as { inline?: string }).inline);
+  assert.equal((await h.response(h.request({ clientId: "client-b", toolId: "jobs_cancel", payload: { jobId } }))).response.errorCode, "not_found");
   for (const toolId of ["jobs_status", "jobs_events", "jobs_result", "jobs_cancel"]) {
-    const foreign = await h.response(h.request({ clientId: "client-b", toolId, payload: { jobId } }));
-    assert.equal(foreign.response.errorCode, "not_found");
     const missing = await h.response(h.request({ clientId: "client-b", toolId, payload: { jobId: "missing" } }));
-    assert.equal(missing.response.errorCode, foreign.response.errorCode);
+    assert.equal(missing.response.errorCode, "not_found");
   }
+  h.revoked.add(CLIENT);
+  assert.equal((await h.response(h.request({ clientId: "client-b", toolId: "jobs_status", payload: { jobId } }))).response.errorCode, "not_found",
+    "a revoked conversation's jobs are nobody's to read");
+  h.revoked.delete(CLIENT);
   let reads = 0;
   const view = h.admission.view.bind(h.admission);
   h.admission.view = (...args) => { reads++; return view(...args); };
@@ -324,6 +336,67 @@ test("a managed-start cancellation result alone does not prove a process stopped
   const job = h.admission.view({ accountId: ACCOUNT, clientId: CLIENT, deviceId: h.device.deviceId }, jobId).job;
   assert.equal(job.cancellation?.stop, "unverified");
   assert.equal(job.cancellation?.effect, "effect_outcome_unknown");
+});
+
+/** process.run's result for a command it stopped: what it printed, and the processId that reads the rest. */
+const stoppedRun = (name: string, code: "process_timeout" | "process_cancelled"): ToolResult => ({
+  callId: "fixture", toolName: name, isError: true, error: { code, message: "Process exceeded 50 ms." },
+  content: [{ type: "json", value: { exitCode: null, error: "Process exceeded 50 ms.", timedOut: true, processId: "run-fixture", stdoutBytes: 8192, stderrBytes: 0 } },
+    { type: "text", text: "STDOUT\nprinted before the stop" }],
+});
+
+function storedResult(data: unknown): ToolResult {
+  const page = data as { inline?: string; encoding?: string };
+  assert.equal(page.encoding, "base64", "no stored result: " + JSON.stringify(data));
+  return JSON.parse(Buffer.from(page.inline!, "base64").toString("utf8")) as ToolResult;
+}
+
+test("a command stopped at its timeout keeps what it printed, its effect stays unknown, and its key never runs it again", async (t) => {
+  const h = await harness(t);
+  h.setWork(async (name) => ({ result: stoppedRun(name, "process_timeout"), brokerInvoked: true }));
+  await h.connect();
+  const run = { toolId: "process_run", operationClass: "write", idempotencyKey: "run-once", payload: { command: "fixture", timeoutMs: 50 } };
+  const request = h.request(run);
+  const jobId = (await h.response(request)).response.jobId!;
+  await h.waitState(request, jobId, "outcome_unknown");
+  const read = await h.response(h.request({ toolId: "jobs_result", payload: { jobId } }));
+  assert.equal(read.response.status, "outcome_unknown");
+  assert.equal(read.response.errorCode, "outcome_unknown");
+  assert.equal(read.response.uncertainty, "effect_outcome_unknown");
+  assert.equal((read.data as { state: string }).state, "outcome_unknown");
+  const stored = storedResult(read.data);
+  assert.deepEqual(stored.content, stoppedRun("process.run", "process_timeout").content);
+  assert.equal(stored.error?.code, "process_timeout");
+  const status = await h.response(h.request({ toolId: "jobs_status", payload: { jobId } }));
+  assert.equal((status.data as { job: { state: string } }).job.state, "outcome_unknown");
+  const retry = await h.response(h.request(run));
+  assert.equal(retry.response.jobId, jobId);
+  assert.equal(retry.response.status, "outcome_unknown");
+  assert.equal(h.calls.length, 1);
+});
+
+test("a cancelled command keeps what it printed, and its stop and effect stay unverified", async (t) => {
+  // The grace is long, so only the dispatch's own settlement can settle the job.
+  const h = await harness(t, { grace: 2_000 });
+  const started = deferred();
+  h.setWork(async (name, signal) => {
+    started.resolve();
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    return { result: stoppedRun(name, "process_cancelled"), brokerInvoked: true };
+  });
+  await h.connect();
+  const request = h.request({ toolId: "process_run", operationClass: "write", payload: { command: "fixture" } });
+  const jobId = (await h.response(request)).response.jobId!;
+  await started.promise;
+  await h.response(h.request({ toolId: "jobs_cancel", operationClass: "write", payload: { jobId } }));
+  await h.waitState(request, jobId, "outcome_unknown");
+  const job = h.admission.view({ accountId: ACCOUNT, clientId: CLIENT, deviceId: h.device.deviceId }, jobId).job;
+  assert.equal(job.cancellation?.stop, "unverified");
+  assert.equal(job.cancellation?.effect, "effect_outcome_unknown");
+  const read = await h.response(h.request({ toolId: "jobs_result", payload: { jobId } }));
+  assert.equal(read.response.status, "outcome_unknown");
+  assert.equal(storedResult(read.data).error?.code, "process_cancelled");
+  assert.match(JSON.stringify(storedResult(read.data).content), /printed before the stop/u);
 });
 
 test("plugin failures preserve uncertainty after cancellation and an unknown remote outcome", async (t) => {

@@ -22,9 +22,8 @@ export const metadata = pageMetadata({
   path: "/remote",
 });
 
-// Public on purpose, even while SITE_REMOTE_ENABLED keeps Remote out of the
-// nav: payment-provider review needs the product and its prices visible
-// without signing in. Prices live in components/remote/RemotePricing.tsx.
+// Public on purpose: visitors and payment-provider reviews need the product and
+// its prices visible without signing in. Prices live in components/remote/RemotePricing.tsx.
 const BILLING_URL = `${SITE_REMOTE_URL}billing`;
 
 const FEATURES = [
@@ -46,7 +45,7 @@ const FEATURES = [
   {
     icon: Lock,
     title: "As much access as you allow",
-    body: "Limit the Runner to one folder, make it read-only, or turn off shell commands.",
+    body: "Limit the Runner to one folder, make it read-only, turn off shell commands, or approve each command yourself.",
   },
   {
     icon: ScrollText,
@@ -69,7 +68,7 @@ const FAQ = [
   {
     question: "What happens when I reach my limit?",
     answer:
-      "New tool calls are refused with a clear message until your allowance resets at the start of the next month (UTC), or until you upgrade. Nothing on your computers is changed or deleted.",
+      "New tool calls are refused with a clear message until your allowance resets at the start of the next month (UTC). Nothing on your computers is changed or deleted.",
   },
   {
     question: "Can I switch plans or cancel?",
@@ -89,7 +88,7 @@ const FAQ = [
   {
     question: "Who handles payment?",
     answer:
-      "Paddle.com, our online reseller and Merchant of Record. Paddle processes the payment, issues the invoice, and handles sales tax.",
+      "Paid plans are not on sale yet. Before they are, we will name the payment provider here. It will process the payment, issue the invoice, and handle sales tax.",
   },
 ];
 
@@ -228,8 +227,7 @@ export default function RemotePage() {
             until you cancel.
           </p>
           <p>
-            Our order process is conducted by our online reseller Paddle.com. Paddle.com is the Merchant of Record
-            for all our orders and handles payments, invoices, and sales tax.
+            Paid plans are not on sale yet. The Free plan is available now.
           </p>
         </div>
       </section>

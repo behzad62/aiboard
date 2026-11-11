@@ -1,11 +1,16 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+  type ManagedInteractionState,
+  type ManagedOutputCompletion,
+  type ManagedOutputUntil,
   MANAGED_OUTPUT_READ_DEFAULT_BYTES,
   MANAGED_OUTPUT_READ_MAX_BYTES,
   ManagedProcessError,
   type ManagedOutputEvidence,
   type ManagedOutputStreamEvidence,
 } from "./managed-process-contracts.js";
+import { validateOutputSearch, type ManagedOutputLineWindow, type ManagedOutputSearchRequest, type ManagedOutputSearchResult } from "./managed-process-search.js";
+import { validateUntil } from "./managed-process-wait.js";
 
 /**
  * Incremental process-output reads (N2). Cursor state is caller-held and opaque: one reader's
@@ -33,6 +38,12 @@ export interface ManagedOutputReadRequest {
   readonly tailBytes?: number;
   /** Explicit earlier range of one stream, by absolute byte offset. */
   readonly range?: Readonly<{ stream: ManagedOutputStreamName; startOffset: number }>;
+  /** T1: evidence-based wait condition. Absent: today's any-new-byte wait, unchanged. */
+  readonly until?: ManagedOutputUntil;
+  /** Find lines in everything kept, instead of reading a slice. Waits as a read does. */
+  readonly search?: ManagedOutputSearchRequest;
+  /** Read lines by 1-based number across everything kept, instead of a slice; negative start counts from the end. */
+  readonly lines?: Readonly<{ start: number; count: number }>;
 }
 
 export interface ManagedOutputSlice {
@@ -61,6 +72,13 @@ export interface ManagedOutputReadResult {
   /** True only when the process is terminal, every selected stream was read to its end and nothing was lost. */
   readonly complete: boolean;
   readonly limits: Readonly<{ maxBytesPerStream: number; liveTailBytesPerStream: number; finalSpillBytesPerStream: number }>;
+  /** T1: present only for reads that supplied `until`. */
+  readonly completion?: ManagedOutputCompletion;
+  readonly state?: ManagedInteractionState;
+  /** Present only for reads that supplied `search`; their slices are then empty. */
+  readonly search?: ManagedOutputSearchResult;
+  /** Present only for reads that supplied `lines`; their slices are then empty. */
+  readonly lineWindows?: readonly ManagedOutputLineWindow[];
 }
 
 export const MANAGED_OUTPUT_LIVE_TAIL_BYTES = 128 * 1024;
@@ -97,12 +115,19 @@ export function normalizeOutputRead(request: ManagedOutputReadRequest): Required
   if (!Number.isSafeInteger(waitMs) || waitMs < 0) throw invalid("waitMs must be a non-negative integer");
   const modes = [request.cursor !== undefined, request.tailBytes !== undefined, request.range !== undefined].filter(Boolean).length;
   if (modes > 1) throw invalid("use only one of cursor, tailBytes or range");
+  if (request.search !== undefined && modes > 0) throw invalid("search covers everything kept, so it cannot be combined with cursor, tailBytes or range");
+  if (request.lines !== undefined) {
+    if (modes > 0 || request.search !== undefined) throw invalid("lines reads by number across everything kept, so it cannot be combined with cursor, tailBytes, range or search");
+    if (!Number.isSafeInteger(request.lines.start) || !Number.isSafeInteger(request.lines.count) || request.lines.count < 1 || request.lines.count > 2000) throw invalid("lines needs integer start and count 1..2000");
+  }
   if (request.tailBytes !== undefined && (!Number.isSafeInteger(request.tailBytes) || request.tailBytes < 1 || request.tailBytes > MANAGED_OUTPUT_READ_MAX_BYTES)) throw invalid(`tailBytes must be 1..${MANAGED_OUTPUT_READ_MAX_BYTES}`);
   if (request.range !== undefined) {
     if (!["stdout", "stderr"].includes(request.range.stream) || !Number.isSafeInteger(request.range.startOffset) || request.range.startOffset < 0) throw invalid("range needs stream stdout|stderr and a non-negative startOffset");
     if (waitMs > 0) throw invalid("range reads do not wait");
+    if (request.until !== undefined) throw invalid("range reads do not wait");
   }
-  return { ...request, stream, maxBytes, waitMs };
+  return { ...request, stream, maxBytes, waitMs, ...(request.until !== undefined ? { until: validateUntil(request.until) } : {}),
+    ...(request.search !== undefined ? { search: validateOutputSearch(request.search) } : {}) };
 }
 
 /** Selected streams have output beyond the given offsets, or the process is no longer running. */

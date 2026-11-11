@@ -21,6 +21,7 @@ const aliases: Readonly<Record<string, string>> = {
   "fs.read": "files_read", "fs.list": "files_list", "fs.search": "files_search", "fs.write": "files_write",
   "fs.patch": "files_patch", "fs.move": "files_move", "fs.delete": "files_delete",
   "process.run": "process_run", "process.start": "process_start", "process.write_stdin": "process_write_stdin",
+  "process.interact": "process_interact",
 };
 
 test("device policy narrowing survives broadening, restart, and legacy migration", async () => {
@@ -86,7 +87,7 @@ test("device controls confine remote and local MCP tools and audit refusals", { 
   let sequence = 0;
   const call = async (role: "remote" | "local_mcp", name: string, args: Record<string, unknown>) => role === "remote"
     ? await remote.invoke(identity, name, args)
-    : await local.invoke(aliases[name]!, { ...args, ...(["fs.write", "fs.patch", "fs.move", "fs.delete", "process.run", "process.start", "process.write_stdin"].includes(name) ? { idempotencyKey: `case-${++sequence}` } : {}) });
+    : await local.invoke(aliases[name]!, { ...args, ...(["fs.write", "fs.patch", "fs.move", "fs.delete", "process.run", "process.start", "process.write_stdin", "process.interact"].includes(name) ? { idempotencyKey: `case-${++sequence}` } : {}) });
   let failed = false, primary: unknown;
   try {
     principals.updatePolicy(identity, { onlyHere: true }, "local");
@@ -94,6 +95,13 @@ test("device controls confine remote and local MCP tools and audit refusals", { 
     for (const role of ["remote", "local_mcp"] as const) {
       const inside = await call(role, "fs.read", { path: "inside.txt" });
       assert.equal(inside.isError, false, JSON.stringify(inside));
+      if (role === "local_mcp") {
+        // As on the relay: a null argument counts as one left out (live: until: {pattern, port: null}), except inside env.
+        const nulls = await call(role, "fs.read", { path: "inside.txt", startLine: null, endLine: null });
+        assert.equal(nulls.isError, false, JSON.stringify(nulls));
+        const unset = await call(role, "process.run", { command: process.execPath, args: ["--version"], env: { NODE_ENV: null } });
+        assert.equal(unset.isError, true, "a null env value would ask to unset it, which no tool does");
+      }
       const protectedRead = await call(role, "fs.read", { path: join(home, ".ssh", "key") });
       assert.equal(protectedRead.error?.code, "path_denied");
       assert.equal(principals.auditStore.list(1)[0]?.pathCategory, "ssh");
@@ -146,6 +154,8 @@ test("device controls confine remote and local MCP tools and audit refusals", { 
         ["fs.move", { source: "move.txt", destination: "renamed.txt" }],
         ["fs.delete", { path: "move.txt" }],
         ["process.start", { command: process.execPath }],
+        // T1 A11: one interaction turn is blocked exactly like the write it contains.
+        ["process.interact", { processId: "unowned", data: "no" }],
       ] as const) {
         const result = await call(role, name, args);
         assert.equal(result.error?.code, "permission_denied", JSON.stringify(result));
@@ -163,7 +173,8 @@ test("device controls confine remote and local MCP tools and audit refusals", { 
     assert.throws(() => principals.updatePolicy(identity, { shell: true }, "remote"), /local user/);
     for (const role of ["remote", "local_mcp"] as const) {
       for (const [name, args] of [["process.run", { command: process.execPath }], ["process.start", { command: process.execPath }],
-        ["process.write_stdin", { processId: "unowned", writeId: "input", data: "no" }]] as const) {
+        ["process.write_stdin", { processId: "unowned", writeId: "input", data: "no" }],
+        ["process.interact", { processId: "unowned", data: "no" }]] as const) {
         const result = await call(role, name, args);
         assert.equal(result.error?.code, "permission_denied", JSON.stringify(result));
         assert.equal(principals.auditStore.list(1)[0]?.reasonCode, "permission_denied");

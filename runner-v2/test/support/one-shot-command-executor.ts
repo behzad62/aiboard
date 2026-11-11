@@ -99,7 +99,11 @@ export function createProductionOneShotCommandFixture(
     },
     environments,
     outputs: createBoundedProcessOutputFactory({
-      spillRoot: options.spillFault ? projectBoundary : join(root, "spill"),
+      // The factory gives each output owner its own root, `<spillRoot>-<owner digest>`, next to
+      // spillRoot. Passing the project boundary itself put that root beside the project, so the
+      // fault stopped firing. A root inside the boundary is refused (spill_root_invalid) whatever
+      // the suffix.
+      spillRoot: options.spillFault ? join(projectBoundary, "spill") : join(root, "spill"),
       projectRoot: projectBoundary,
       artifacts,
     }),

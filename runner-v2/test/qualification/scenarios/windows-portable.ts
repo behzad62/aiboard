@@ -46,8 +46,10 @@ async function runDuplexOrdered(): Promise<void> {
           }, payload), { acknowledged: true, sequence });
         }
     let refreshSample = "";
+    // The supervisor retries a slow process inventory at 2, 4 and 8 s and publishes no state in between, so this
+    // must outlast those 14 s. Three failed inventories publish outcome_unknown, which fails this sample at once.
     await boundedConverge({
-      label: "portable duplex live refresh samples", deadlineMs: 5_000,
+      label: "portable duplex live refresh samples", deadlineMs: 20_000,
       sample: () => {
         refreshSample = readFileSync(join(identity.directory, "state.json"), "utf8");
         const state = JSON.parse(refreshSample) as { status?: string; error?: unknown; windowsTreeRefreshCount?: number };

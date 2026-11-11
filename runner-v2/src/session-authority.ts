@@ -152,6 +152,16 @@ export interface SessionOperationRequest extends LaunchOperationAuthorizationReq
   readonly binding: ExecutionGrantBinding;
 }
 
+/** T1: one interaction turn (stdin input, then observation of the reply) of one exact session. */
+export interface SessionInteractionRequest extends Omit<SessionOperationRequest, "operation"> {
+  readonly operation: "write" | "close_input";
+}
+
+export interface SessionInteractionAuthorization {
+  readonly input: SessionOperationAuthorization;
+  readonly observe: SessionOperationAuthorization;
+}
+
 export interface SessionObservationBatchRequest extends Omit<SessionOperationRequest, "sessionId" | "operation"> {
   readonly sessionIds: readonly string[];
 }
@@ -233,6 +243,11 @@ export interface SessionAuthority {
   authorizeLaunchOperation(input: LaunchOperationAuthorizationRequest): SessionOperationAuthorization;
   authorizeOperation(input: SessionOperationRequest): SessionOperationAuthorization;
   authorizeObservationBatch(input: SessionObservationBatchRequest): readonly SessionOperationAuthorization[];
+  /**
+   * T1: like authorizeOperation, the call's grant is consumed exactly once (a second grant for the
+   * call is refused); it yields one input authorization and one observation of the same session.
+   */
+  authorizeInteraction(input: SessionInteractionRequest): Readonly<SessionInteractionAuthorization>;
   assertOperationAuthorization(
     authorization: SessionOperationAuthorization,
     expected: OperationAuthorizationAssertion,
@@ -560,6 +575,38 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       assertOperationAccessWithinClaims(input, claims);
       const authorization = issueAuthorization(authorizations, record, input, claims);
       return authorization;
+    },
+    authorizeInteraction(input: SessionInteractionRequest): Readonly<SessionInteractionAuthorization> {
+      if (input.operation !== "write" && input.operation !== "close_input")
+        throw new SessionAuthorityError("operation_mismatch", "An interaction authorizes only stdin input and its observation.");
+      const record = options.sessions.store.readBySession(input.sessionId);
+      assertSessionOperationAvailable(record, input.operation, clock);
+      assertSessionOperationAvailable(record, "observe", clock);
+      const callKey = executionGrantCallKey(input.binding);
+      if (grantIdsByCall.has(callKey)) {
+        throw new SessionAuthorityError(
+          "second_grant_for_call",
+          "A ToolBroker call cannot mint or reuse a second session grant.",
+        );
+      }
+      const claims = options.grants.consume(input.grant, input.binding);
+      grantIdsByCall.set(callKey, claims.grantId);
+      if (claims.runId !== record.runId ||
+          claims.sessionId !== record.agentSessionId ||
+          claims.actor.role !== (record.actor as { role: string }).role ||
+          claims.actor.id !== (record.actor as { id: string }).id) {
+        throw new SessionAuthorityError("binding_mismatch", "Current grant does not match the streaming session owner.");
+      }
+      assertCurrentClaims(claims);
+      const observe = { ...input, operation: "observe" as const };
+      for (const request of [input, observe]) {
+        assertOperationAccessWithinEnvelope(request, record.envelope);
+        assertOperationAccessWithinClaims(request, claims);
+      }
+      return Object.freeze({
+        input: issueAuthorization(authorizations, record, input, claims),
+        observe: issueAuthorization(authorizations, record, observe, claims),
+      });
     },
     authorizeObservationBatch(input: SessionObservationBatchRequest): readonly SessionOperationAuthorization[] {
       if (!Array.isArray(input.sessionIds) || input.sessionIds.length < 1 || input.sessionIds.length > 128 ||

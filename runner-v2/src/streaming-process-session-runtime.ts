@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import type { ArtifactStore } from "./artifact-store.js";
 import { verifyFinalizedEvidence, createEvidenceContinuation, initialEvidenceContinuation } from "./evidence-continuation.js";
 import { registerConsumedExecutionGrantRevoker, type ConsumedExecutionGrantClaims, type ExecutionGrantBinding, type OpaqueExecutionGrant } from "./execution-grants.js";
-import type { LaunchOperationAuthorizationRequest, OperationAuthorizationAssertion, SessionAuthority, SessionOperationAuthorization, SessionOperationRequest } from "./session-authority.js";
+import type { LaunchOperationAuthorizationRequest, OperationAuthorizationAssertion, SessionAuthority, SessionInteractionRequest, SessionOperationAuthorization, SessionOperationRequest } from "./session-authority.js";
 import type { AdoptedCleanupBlockerCode, AdoptedCleanupEvidenceReference, AdoptedCleanupResourceFact, AdoptedCleanupResourceKind, HostCleanupFailure, HostCleanupFailureCode, HostCleanupResourceFact, HostLaunchRecord, StreamingSessionBackendBinding, StreamingSessionEnvelope, StreamingSessionLease, StreamingSessionRecord, StreamingSessionStoreKernel } from "./streaming-session-store.js";
 import { ADOPTED_CLEANUP_BLOCKER_MESSAGES, HOST_CLEANUP_FAILURE_MESSAGES, HOST_LAUNCH_RECORD_VERSION, StreamingSessionStoreError, getStreamingSessionKernelWriter, validateFinalizedEvidenceObservation } from "./streaming-session-store.js";
 import { BoundedProtocolQueue } from "./bounded-protocol-queue.js";
@@ -1561,9 +1561,14 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
             renewOwnedSessionLease(request.sessionId, undefined, facadeFence);
             return options.sessions.authorizeOperation(operation);
           },
-          /** Renews this owner's lease (same fence check) without authorizing or consuming a grant. */
-          retainOwnership: () => {
+          /** T1: input and its observation for one interaction turn, under the call's single grant. */
+          authorizeInteraction: (operation: SessionInteractionRequest) => {
             renewOwnedSessionLease(request.sessionId, undefined, facadeFence);
+            return options.sessions.authorizeInteraction(operation);
+          },
+          /** Renews this owner's lease (same fence check), through `throughMs` when given, without authorizing or consuming a grant. */
+          retainOwnership: (throughMs?: number) => {
+            renewOwnedSessionLease(request.sessionId, throughMs === undefined ? undefined : clock().getTime() + throughMs, facadeFence);
           },
           write: async (
             authorization: SessionOperationAuthorization,

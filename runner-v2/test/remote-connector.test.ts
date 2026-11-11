@@ -741,6 +741,15 @@ test("the relay hears readiness only after the handshake, never before the proof
   ]);
   assert.equal(calls, 2);
 
+  // The shells arrive later (shell-inventory.ts): refreshStatus sends the status again with them, state unchanged.
+  let shells: readonly string[] | undefined;
+  const later = await stubHarness(t, { statusReport: () => ({ ...report, ...(shells ? { shells } : {}) }) });
+  await handshake(later);
+  shells = ["cmd", "powershell 5.1", "bash"];
+  later.connector.refreshStatus();
+  assert.deepEqual(later.transport.sent.filter((message) => message.type === "status").at(-1),
+    { type: "status", state: "tool-ready", reasonCode: "ready", ...report, shells: ["cmd", "powershell 5.1", "bash"] });
+
   const quiet = await stubHarness(t, { statusReport: () => { throw new Error("policy unreadable"); } });
   await handshake(quiet);
   assert.equal(quiet.connector.state().state, "tool-ready", "a failing report never changes readiness");

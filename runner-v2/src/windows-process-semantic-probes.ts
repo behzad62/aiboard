@@ -188,21 +188,27 @@ async function probeExactTreeBirth(deadlineMs: number, cleanupDeadlineMs: number
   const deadline = Date.now() + deadlineMs;
   remainingProbeDeadlineMs(deadline);
   return await withPortableProbe<"partial" | false>("tree", deadline, cleanupDeadlineMs, creator, async ({ backend, workspace, own, release }) => {
-    const child = "setTimeout(()=>process.exit(0),4000)";
-    const parent = `const{spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'});setTimeout(()=>process.exit(0),4000)`;
+    // Both fixture processes live until the supervisor has recorded them, however long its inventory takes on this
+    // machine, and then exit on their own: a fixed lifetime wasted time on a fast machine and could end before a slow
+    // inventory saw them. The probe deadline is their only cap.
+    const releasePath = join(workspace, "tree-probe-release");
+    const live = `const f=require('node:fs');setInterval(()=>{if(f.existsSync(${JSON.stringify(releasePath)}))process.exit(0)},25);setTimeout(()=>process.exit(0),${remainingProbeDeadlineMs(deadline)})`;
+    const parent = `const{spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(live)}],{stdio:'ignore'});${live}`;
     const launch = parseProcessLaunchResult(await launchProbeWithCustody(backend, workspace, own, request(workspace, process.execPath, ["-e", parent], ambientEnvironment)));
     const binding = own(bindingFor(launch));
     remainingProbeDeadlineMs(deadline);
     const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
-    await waitForWindowsSemanticProbe(() => {
-      try {
-        const state = JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")) as {
-          rootProcess?: { pid: number; birth: string } | null;
-          knownProcesses?: Array<{ pid: number; birth: string }>;
-        };
-        return Boolean(state.rootProcess?.birth) && (state.knownProcesses?.length ?? 0) >= 2 && state.knownProcesses!.every((entry) => entry.pid > 0 && entry.birth.length > 0);
-      } catch { return false; }
-    }, { deadlineMs: remainingProbeDeadlineMs(deadline) });
+    try {
+      await waitForWindowsSemanticProbe(() => {
+        try {
+          const state = JSON.parse(readFileSync(join(identity.directory, "state.json"), "utf8")) as {
+            rootProcess?: { pid: number; birth: string } | null;
+            knownProcesses?: Array<{ pid: number; birth: string }>;
+          };
+          return Boolean(state.rootProcess?.birth) && (state.knownProcesses?.length ?? 0) >= 2 && state.knownProcesses!.every((entry) => entry.pid > 0 && entry.birth.length > 0);
+        } catch { return false; }
+      }, { deadlineMs: remainingProbeDeadlineMs(deadline) });
+    } finally { writeFileSync(releasePath, ""); }
     // This fact attests birth-tagged ownership, not destructive-control
     // throughput. Let the bounded fixture exit normally so the probe measures
     // the independent tree/re-attestation contract without contending on a

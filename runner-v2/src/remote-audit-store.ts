@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import type { RemoteDevicePolicy, VerifiedRemoteIdentity } from "./remote-principal.js";
 
@@ -58,7 +59,7 @@ export class RemoteAuditStore {
     }
     this.now = options.now ?? (() => new Date());
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.database = new DatabaseSync(path);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(path));
     this.database.exec(`PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;
       CREATE TABLE IF NOT EXISTS remote_audit (
         id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at TEXT NOT NULL, kind TEXT NOT NULL,
@@ -74,9 +75,9 @@ export class RemoteAuditStore {
   }
 
   recordApproval(identity: VerifiedRemoteIdentity | undefined, jobId: string,
-    decision: "requested" | "approved" | "denied" | "expired" | "fenced"): void {
-    this.append({ kind: "approval", role: "local", ...(identity ?? {}), jobId,
-      decision, outcomeCode: "recorded", origin: "local", beforeFlags: null, afterFlags: null });
+    decision: "requested" | "approved" | "denied" | "expired" | "fenced", origin: "local" | "remote" = "local"): void {
+    this.append({ kind: "approval", role: origin, ...(identity ?? {}), jobId,
+      decision, outcomeCode: "recorded", origin, beforeFlags: null, afterFlags: null });
   }
 
   recordPolicy(identity: VerifiedRemoteIdentity, origin: "local" | "remote" | "system", before: Readonly<RemoteDevicePolicy>, after: Readonly<RemoteDevicePolicy>): void {

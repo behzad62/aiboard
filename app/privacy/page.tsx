@@ -1,8 +1,6 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
 import { LegalDocument, legalLink, type LegalSection } from "@/components/LegalDocument";
 import {
-  PADDLE_PRIVACY_URL,
   SITE_CONTACT_EMAIL,
   SITE_LEGAL_ADDRESS,
   SITE_LEGAL_NAME,
@@ -23,24 +21,12 @@ const mail = (
   </a>
 );
 
-const external = (href: string, label: string) => (
-  <a href={href} target="_blank" rel="noopener noreferrer" className={legalLink}>
-    {label}
-  </a>
-);
-
 // A stacked list rather than a table: it stays readable at phone width.
-const PROCESSORS: { name: string; where: string; role: ReactNode }[] = [
+const PROCESSORS: { name: string; where: string; role: string }[] = [
   {
-    name: "Paddle.com Market Limited",
-    where: "UK and worldwide",
-    role: (
-      <>
-        Our reseller and Merchant of Record: checkout, payments, tax, invoices
-        and refunds. Paddle is an independent controller of your payment data
-        under its {external(PADDLE_PRIVACY_URL, "Privacy Notice")}.
-      </>
-    ),
+    name: "Our payment provider",
+    where: "Worldwide",
+    role: "Checkout, payments, tax and invoices for paid plans, under its own privacy policy.",
   },
   {
     name: "Cloudflare, Inc.",
@@ -48,9 +34,9 @@ const PROCESSORS: { name: string; where: string; role: ReactNode }[] = [
     role: "Network, TLS and attack protection in front of aiboard.me and mcp.aiboard.me. Sees request data and, for Remote, traffic in transit.",
   },
   {
-    name: "Akamai Technologies (Linode)",
-    where: "London, UK",
-    role: "The virtual server that hosts the website and the Remote relay, its database and backups.",
+    name: "Our hosting and backup providers",
+    where: "UK and EU",
+    role: "Host the website and Remote, including its database and backups.",
   },
   {
     name: "Google and GitHub",
@@ -212,11 +198,9 @@ const SECTIONS: LegalSection[] = [
             took in our service logs.
           </li>
           <li>
-            <strong>Billing</strong> (paid plans only). Paddle&apos;s customer
-            and subscription ids, your plan, the subscription status and
-            renewal dates, and records of refunds or chargebacks. Paddle holds
-            your name, email, address and payment details; we never see your
-            card number.
+            <strong>Billing</strong> (paid plans only). Your plan, its status
+            and renewal dates, refund records, and the customer and subscription
+            ids our payment provider uses. We never see your card number.
           </li>
           <li>
             <strong>Messages you send us.</strong> If you email us, we keep the
@@ -250,14 +234,29 @@ const SECTIONS: LegalSection[] = [
             takes to pass it on.
           </li>
           <li>
+            If you turn on command approvals, a command waiting for your answer
+            is the one exception. Its first 200 characters stay in our
+            relay&apos;s memory so your dashboard can show them, until you
+            answer, the 5-minute wait ends, or the computer disconnects. They
+            are not written to disk or to logs.
+          </li>
+          <li>
             The AI app you connected receives the results and handles them
             under its own privacy policy.
+          </li>
+          <li>
+            An AI model can be misled by what it reads, such as a file or web
+            page containing hidden instructions. We can&apos;t prevent that. A
+            remote request can&apos;t widen the limits you set on the Runner,
+            but with shell commands on, a misled model can run anything your
+            account can.
           </li>
         </ul>
         <p>
           Only expose files and commands you are comfortable sending through
           this path. The Runner lets you restrict Remote to one folder, make it
-          read-only, or turn off shell commands.
+          read-only, turn off shell commands, or require your approval for each
+          command.
         </p>
       </>
     ),
@@ -279,8 +278,8 @@ const SECTIONS: LegalSection[] = [
           interest in running a safe, reliable service.
         </li>
         <li>
-          <strong>To handle payments, tax and accounting</strong>, together
-          with Paddle. Legal basis: contract, and our legal obligations.
+          <strong>To handle payments, tax and accounting</strong>. Legal basis:
+          contract, and our legal obligations.
         </li>
         <li>
           <strong>To answer you</strong> when you contact us, and to tell you
@@ -347,8 +346,7 @@ const SECTIONS: LegalSection[] = [
           </li>
           <li>
             <strong>Connected AI apps</strong>: until you revoke them, or 90
-            days after last use. Access tokens last one hour; refresh tokens at
-            most 90 days.
+            days after last use.
           </li>
           <li>
             <strong>Per-call usage records</strong>: the current and previous
@@ -359,13 +357,12 @@ const SECTIONS: LegalSection[] = [
           </li>
           <li>
             <strong>Server and web logs</strong> (which may include IP
-            addresses at the web-server level, but never tool-call content):
-            up to 30 days.
+            addresses and device ids, but never your email or tool-call
+            content): up to 30 days.
           </li>
           <li>
-            <strong>Billing records</strong>: for as long as your account
-            exists and then as long as tax and accounting law requires.
-            Paddle keeps its own records under its policy.
+            <strong>Billing records</strong>: as needed for tax, accounting and
+            legal purposes.
           </li>
           <li>
             <strong>Backups</strong>: database backups are kept for up to 90
@@ -375,8 +372,9 @@ const SECTIONS: LegalSection[] = [
         <p>
           To delete your Remote account, email {mail} from the address on the
           account. We will delete your account data within 30 days, except
-          billing records we must keep by law. Copies in backups disappear as
-          those backups expire.
+          billing records we need for tax, accounting or legal reasons. Device
+          records, logs and backup copies last a little longer and then expire
+          on their own.
         </p>
       </>
     ),
@@ -395,10 +393,9 @@ const SECTIONS: LegalSection[] = [
           <strong>mcp.aiboard.me</strong> uses three strictly necessary
           cookies: one keeps you signed in (up to 90 days), one protects forms
           against cross-site request forgery, and one secures the sign-in
-          redirect (10 minutes). On the checkout page, Paddle&apos;s payment
-          form loads from Paddle and may set its own cookies to process the
-          payment and prevent fraud. We use no advertising or analytics
-          cookies.
+          redirect (10 minutes). On the checkout page, our payment
+          provider&apos;s form may set its own cookies to process the payment
+          and prevent fraud. We use no advertising or analytics cookies.
         </p>
       </>
     ),
@@ -485,8 +482,7 @@ export default function PrivacyPage() {
             They are encrypted in transit but not end to end.
           </li>
           <li>
-            Paddle handles payments; we never see your card. No ads, no
-            analytics, no selling data.
+            We never see your card. No ads, no analytics, no selling data.
           </li>
         </ul>
       }

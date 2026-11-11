@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_DEADLINE_MS = 2_000;
@@ -220,7 +221,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
     let database;
     let committed = false;
     try {
-      database = new DatabaseSync(path);
+      database = new DatabaseSync(sqliteDatabaseLocation(path));
       assertCoordinationPathIdentity(path, pathIdentity);
       database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
       for (;;) {
@@ -310,7 +311,7 @@ export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {})
   const deadline = Date.now() + deadlineMs;
   let database;
   try {
-    database = new DatabaseSync(path);
+    database = new DatabaseSync(sqliteDatabaseLocation(path));
     assertCoordinationPathIdentity(path, pathIdentity);
     database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
     for (;;) {
@@ -340,7 +341,7 @@ export function retiredOwnedFenceCleanupAvailable(path) {
   try {
     const pathIdentity = assertCoordinationPath(path);
     assertNoProtocolSidecars(path, pathIdentity);
-    database = new DatabaseSync(path, { readOnly: true });
+    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     assertCoordinationPathSnapshot(path, pathIdentity);
     assertRetiredProtocol(database, authorityId);
     return true;
@@ -383,6 +384,14 @@ function acquire(path, options) {
   let proposalInserted = false;
   let claimed = false;
   try {
+    if (tryProposeAndClaimFree(context)) {
+      proposalInserted = true;
+      claimed = true;
+      retainedHolders.delete(path);
+      liveAcquisitions.set(path, acquisitionId);
+      context.afterClaim?.();
+      return context;
+    }
     while (!proposalInserted) {
       try {
         assertCoordinationPathIdentity(path, pathIdentity);
@@ -495,7 +504,7 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
         waitForProtocolRetry(error, deadline, retryDelayMs);
         continue;
       }
-      database = new DatabaseSync(path);
+      database = new DatabaseSync(sqliteDatabaseLocation(path));
       try {
         pathIdentity = assertCoordinationPath(path);
         if (!samePathSnapshot(beforeOpenIdentity, pathIdentity)) {
@@ -700,6 +709,36 @@ function tryClaim(context) {
     return true;
   } catch (error) {
     rollbackQuietly(database);
+    throw error;
+  }
+}
+
+// Uncontended fast path. When no holder row exists, the proposal and the claim commit in one
+// IMMEDIATE transaction. That leaves exactly the rows the two-step path leaves when no writer
+// runs between its proposal and its claim, with one durable commit instead of two. Any holder
+// row (live, stale, or this instance's own unstarted one), any busy result, or anything else
+// unusual rolls back with nothing committed, and the caller takes the two-step path unchanged.
+function tryProposeAndClaimFree(context) {
+  const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, trace } = context;
+  try { database.exec("BEGIN IMMEDIATE"); }
+  catch (error) { if (isBusy(error)) { trace.busy += 1; return false; } throw error; }
+  try {
+    acquisitionTimeRemaining(context);
+    assertCoordinationPathIdentity(path, pathIdentity);
+    assertActiveProtocol(database, authorityId);
+    if (holderProposal(database)) { database.exec("ROLLBACK"); return false; }
+    trace.attempts += 1;
+    trace.holderRead = true;
+    database.prepare("INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES (?, ?, ?)")
+      .run(acquisitionId, holderPid, holderBirth);
+    insertHolder(database, acquisitionId, holderPid, holderBirth);
+    assertCoordinationPathIdentity(path, pathIdentity);
+    acquisitionTimeRemaining(context);
+    database.exec("COMMIT");
+    return true;
+  } catch (error) {
+    rollbackQuietly(database);
+    if (isBusy(error)) { trace.busy += 1; return false; }
     throw error;
   }
 }
@@ -995,7 +1034,7 @@ function preflightExistingProtocol(path, expectedSnapshot, authorityId) {
   let database;
   let validatedSnapshot;
   try {
-    database = new DatabaseSync(path, { readOnly: true });
+    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     assertProtocolObservation(path, expectedSnapshot, "immediately after read-only preflight open");
     assertExistingProtocolPreflight(database, authorityId);
     validatedSnapshot = assertProtocolObservation(path, expectedSnapshot, "after read-only validation");
@@ -1204,7 +1243,7 @@ function captureProtocolRemovalAuthority(path, expectedMainIdentity, authorityId
   assertNoProtocolSidecars(path, preValidationSnapshot);
   let database;
   try {
-    database = new DatabaseSync(path, { readOnly: true });
+    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     assertCoordinationPathIdentity(path, expectedMainIdentity);
     assertRetiredProtocol(database, authorityId);
     assertCoordinationPathIdentity(path, expectedMainIdentity);
@@ -1226,7 +1265,7 @@ function revalidateProtocolRemovalAuthority(path, authority) {
   assertNoProtocolSidecars(path, authority.mainSnapshot);
   let database;
   try {
-    database = new DatabaseSync(path, { readOnly: true });
+    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     assertCoordinationPathSnapshot(path, authority.mainSnapshot);
     assertRetiredProtocol(database, authority.authorityId);
     assertCoordinationPathSnapshot(path, authority.mainSnapshot);

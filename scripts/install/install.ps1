@@ -24,6 +24,9 @@ __AIBOARD_TRUSTED_KEYS_PS__
 __AIBOARD_RECOVERY_KEYS_PS__
   )
   $InstallerProtocol = 2
+  # GitHub's site and REST API, for the bundle download fallback in Get-Bundle.
+  $GithubWeb = 'https://github.com'
+  $GithubApi = 'https://api.github.com'
 
   function Fail([string]$Message) { throw "AIBoard install failed: $Message" }
   # Color only in an interactive console; NO_COLOR turns it off and FORCE_COLOR decides when set (0/false: off).
@@ -56,7 +59,10 @@ __AIBOARD_RECOVERY_KEYS_PS__
 
   # Redirects are followed by hand (at most 5) and every hop is checked before it is contacted, so an
   # HTTPS download can never be redirected to plain HTTP (Windows PowerShell's automatic redirects allow that).
-  function Get-Download([string]$Url, [string]$Path) {
+  # $Accept is sent on every hop. With -Report a failed download returns why instead of stopping the install:
+  # Reason, Message, and Transient for an HTTP 5xx answer, a timeout or a network error, which another route
+  # may avoid. An unsafe redirect always stops the install.
+  function Get-Download([string]$Url, [string]$Path, [string]$Accept = '', [switch]$Report) {
     $next = $Url
     for ($hop = 0; ; $hop++) {
       if (-not (Test-AllowedUrl $next)) { Fail "refusing a non-HTTPS download or redirect: $next" }
@@ -66,25 +72,70 @@ __AIBOARD_RECOVERY_KEYS_PS__
       $request.Timeout = 600000
       $request.ReadWriteTimeout = 600000
       $request.UserAgent = 'AIBoard-Installer'
+      if ($Accept) { $request.Accept = $Accept }
       $response = $null
+      $reason = $null
+      $transient = $true
       try { $response = $request.GetResponse() }
-      catch [Net.WebException] { $response = $_.Exception.Response; if (-not $response) { Fail "could not download $Url ($($_.Exception.Message)). Check your connection and retry; nothing was changed." } }
-      catch { Fail "could not download $Url ($($_.Exception.Message)). Check your connection and retry; nothing was changed." }
+      catch [Net.WebException] { $response = $_.Exception.Response; if (-not $response) { $reason = [string]$_.Exception.Message } }
+      catch { $reason = [string]$_.Exception.Message }
+      if ($response) {
+        try {
+          $status = [int]$response.StatusCode
+          if ($status -ge 300 -and $status -lt 400) {
+            $location = $response.Headers['Location']
+            if (-not $location) { Fail "could not download $Url (redirect without a location)." }
+            $next = (New-Object Uri((New-Object Uri($next)), $location)).AbsoluteUri
+            continue
+          }
+          if ($status -ne 200) { $reason = "HTTP $status"; $transient = $status -ge 500 }
+          else {
+            $stream = $response.GetResponseStream()
+            $file = [IO.File]::Create($Path)
+            try { $stream.CopyTo($file) } catch { $reason = [string]$_.Exception.Message }
+            finally { $file.Dispose(); $stream.Dispose() }
+            if ($null -eq $reason) { return }
+          }
+        } finally { $response.Dispose() }
+      }
+      $message = "could not download $Url ($reason). Check your connection and retry; nothing was changed."
+      if (-not $Report) { Fail $message }
+      return (New-Object PSObject -Property @{ Reason = $reason; Message = $message; Transient = $transient })
+    }
+  }
+
+  # GitHub's releases/download links have answered 504 for many minutes while the same asset kept working
+  # through its REST API. A bundle on such a link that fails with an HTTP 5xx, a timeout or a network error is
+  # fetched once more through the API, without a token: the release by tag gives the asset id, then the asset
+  # itself. Only the numeric id comes from GitHub's answer; the caller checks the bundle against the signed
+  # manifest either way. When both routes fail, the link's own error is reported.
+  function Get-Bundle([string]$Url, [string]$Path) {
+    $failure = Get-Download $Url $Path -Report
+    if (-not $failure) { return }
+    $prefix = "$GithubWeb/"
+    $route = $null
+    if ($failure.Transient -and $Url.StartsWith($prefix, [StringComparison]::Ordinal) -and
+        $Url.Substring($prefix.Length) -cmatch '^([A-Za-z0-9-]+/[A-Za-z0-9._-]+)/releases/download/([^/]+)/([^/]+)$') { $route = $Matches }
+    if (-not $route) { Fail $failure.Message }
+    Say "The GitHub download link failed ($($failure.Reason)); trying the GitHub API..."
+    $api = "$GithubApi/repos/$($route[1])"
+    $name = [Uri]::UnescapeDataString($route[3])
+    $listing = "$Path.release.json"
+    $problem = Get-Download "$api/releases/tags/$($route[2])" $listing 'application/vnd.github+json' -Report
+    if (-not $problem) {
+      $id = $null
       try {
-        $status = [int]$response.StatusCode
-        if ($status -ge 300 -and $status -lt 400) {
-          $location = $response.Headers['Location']
-          if (-not $location) { Fail "could not download $Url (redirect without a location)." }
-          $next = (New-Object Uri((New-Object Uri($next)), $location)).AbsoluteUri
-          continue
+        if ((Get-Item -LiteralPath $listing).Length -le 1048576) {
+          $hits = @(([IO.File]::ReadAllText($listing) | ConvertFrom-Json).assets | Where-Object { $_.name -ceq $name })
+          if ($hits.Count -eq 1 -and ($hits[0].id -is [int] -or $hits[0].id -is [long]) -and $hits[0].id -ge 1) { $id = [long]$hits[0].id }
         }
-        if ($status -ne 200) { Fail "could not download $Url (HTTP $status). Check your connection and retry; nothing was changed." }
-        $stream = $response.GetResponseStream()
-        $file = [IO.File]::Create($Path)
-        try { $stream.CopyTo($file) } catch { Fail "could not download $Url ($($_.Exception.Message)). Check your connection and retry; nothing was changed." }
-        finally { $file.Dispose(); $stream.Dispose() }
-        return
-      } finally { $response.Dispose() }
+      } catch { }
+      if ($id) { $problem = Get-Download "$api/releases/assets/$id" $Path 'application/octet-stream' -Report }
+      else { $problem = New-Object PSObject -Property @{ Reason = "GitHub's API did not list $name in release $([Uri]::UnescapeDataString($route[2]))" } }
+    }
+    if ($problem) {
+      Say "The GitHub API failed too ($($problem.Reason))."
+      Fail $failure.Message
     }
   }
 
@@ -244,7 +295,7 @@ import(pathToFileURL(resolve(verified, 'app/runner-v2/src/self-update.js')).href
       # 3. Bundle: size and SHA-256 must match the signed manifest before extraction.
       $archive = Join-Path $Work "aiboard-$Version-$Target.zip"
       Say "Downloading AI Board Runner $Version for $Target..."
-      Get-Download $url $archive
+      Get-Bundle $url $archive
       if ((Get-Item -LiteralPath $archive).Length -ne [long]$artifact.bytes) { Fail 'the downloaded bundle has the wrong size. Nothing was installed.' }
       $sha256 = [Security.Cryptography.SHA256]::Create()
       $stream = [IO.File]::OpenRead($archive)

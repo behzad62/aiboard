@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -17,7 +17,7 @@ import { createExecutionHost, type ExecutionHost, type ExecutionHostRunBinding }
 import { openLauncherMcpSession } from "../src/launcher-ipc.js";
 import type { LauncherInstance } from "../src/launcher-instance.js";
 import { parseLauncherArguments, runLauncher, runnerSpawnArguments } from "../src/launcher.js";
-import { createLocalMcpProxy, LocalMcpSessions } from "../src/local-stdio-mcp.js";
+import { createLocalMcpProxy, LOCAL_MCP_INSTRUCTIONS, LocalMcpSessions } from "../src/local-stdio-mcp.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunSupervisor } from "../src/run-supervisor.js";
@@ -79,12 +79,50 @@ test("SDK clients use Runner broker grants and exact local managed-process owner
     assert.ok(names.includes("process_start"));
     assert.ok(names.includes("image_inspect"));
     for (const name of ["jobs_status", "jobs_events", "jobs_result", "jobs_cancel", "artifact_read", "git_commit", "browser", "devices_list", "complete_run"]) assert.ok(!names.includes(name), name);
+    const instructions = client.getInstructions() ?? "";
+    assert.equal(instructions, LOCAL_MCP_INSTRUCTIONS);
+    for (const mentioned of instructions.match(/\b[a-z]+_[a-z_]+\b/gu) ?? []) assert.ok(names.includes(mentioned), `${mentioned} is not a local tool`);
     assert.match(resultText(await client.callTool({ name: "files_read", arguments: { path: "fixture.txt" } })), /local fixture/);
     const writeArgs = { path: "written.txt", content: "once", idempotencyKey: "write-once" };
     assert.equal((await client.callTool({ name: "files_write", arguments: writeArgs }) as CallResult).isError, undefined);
     assert.equal((await client.callTool({ name: "files_write", arguments: writeArgs }) as CallResult).isError, undefined);
     assert.equal((await client.callTool({ name: "files_write", arguments: { ...writeArgs, content: "twice" } }) as CallResult).isError, true);
     assert.match(resultText(await client.callTool({ name: "files_read", arguments: { path: "written.txt" } })), /once/);
+    // Several files in one call, as the relay gives them: each file is an ordinary files_read or files_patch.
+    const batchRead = listed.tools.find((tool) => tool.name === "batch_files_read")!, batchPatch = listed.tools.find((tool) => tool.name === "batch_files_patch")!;
+    assert.equal(batchRead.annotations?.readOnlyHint, true);
+    assert.equal(batchPatch.annotations?.destructiveHint, true);
+    assert.deepEqual(batchPatch.inputSchema.required, ["files", "idempotencyKey"]);
+    assert.ok(!((batchPatch.inputSchema.properties!.files as { items: { required?: string[] } }).items.required ?? []).includes("idempotencyKey"), "the batch has the key, not each file");
+    await writeFile(join(project, "a.txt"), "alpha\n"); await writeFile(join(project, "b.txt"), "beta\n");
+    const both = await client.callTool({ name: "batch_files_read", arguments: { paths: ["a.txt", "b.txt"] } }) as CallResult;
+    assert.equal(both.isError, undefined);
+    // As Claude Code shows it: the blocks' text with nothing between them, so the headers carry the line breaks.
+    const bothText = both.content.map((part) => part.text ?? "").join("");
+    assert.match(bothText, /^=== a\.txt\n[^\n=]+[\s\S]*alpha\n\n=== b\.txt\n[^\n=]+[\s\S]*beta\n$/u, "in the order asked, each under its own header line");
+    const partialRead = await client.callTool({ name: "batch_files_read", arguments: { paths: ["a.txt", "missing.txt"] } }) as CallResult;
+    assert.equal(partialRead.isError, undefined, "a read is an error only when no file could be read");
+    assert.match(partialRead.content.map((part) => part.text ?? "").join("\n"), /=== missing\.txt \(failed\)/u);
+    const patchFiles = [{ path: "a.txt", search: "alpha", replace: "ALPHA" }, { path: "b.txt", edits: [{ search: "beta", replace: "BETA" }] }];
+    const patchedBoth = await client.callTool({ name: "batch_files_patch", arguments: { files: patchFiles, idempotencyKey: "rename-both" } }) as CallResult;
+    assert.equal(patchedBoth.isError, undefined, JSON.stringify(patchedBoth));
+    assert.equal(await readFile(join(project, "a.txt"), "utf8"), "ALPHA\n");
+    assert.equal(await readFile(join(project, "b.txt"), "utf8"), "BETA\n");
+    const retried = await client.callTool({ name: "batch_files_patch", arguments: { files: patchFiles, idempotencyKey: "rename-both" } }) as CallResult;
+    assert.equal(retried.isError, undefined, "a retry with the same key repeats each file's own key: " + JSON.stringify(retried));
+    const halfFailed = await client.callTool({ name: "batch_files_patch", arguments: { idempotencyKey: "half",
+      files: [{ path: "a.txt", search: "ALPHA", replace: "alpha" }, { path: "b.txt", search: "not there", replace: "x" }] } }) as CallResult;
+    assert.equal(halfFailed.isError, true, "one failed patch makes the batch an error");
+    assert.match(halfFailed.content.map((part) => part.text ?? "").join("\n"), /=== b\.txt \(failed\)/u);
+    assert.equal(await readFile(join(project, "a.txt"), "utf8"), "alpha\n", "each file is applied on its own");
+    for (const args of [{ paths: ["a.txt"] }, { paths: ["a.txt", "b.txt"], deviceId: "x" }]) {
+      assert.equal((await client.callTool({ name: "batch_files_read", arguments: args }) as CallResult).isError, true, JSON.stringify(args));
+    }
+    for (const args of [{ files: patchFiles }, { files: patchFiles.map((file) => ({ ...file, idempotencyKey: "each" })), idempotencyKey: "k" }]) {
+      assert.equal((await client.callTool({ name: "batch_files_patch", arguments: args }) as CallResult).isError, true, JSON.stringify(args));
+    }
+    assert.equal((await client.callTool({ name: "batch_files_read", arguments: { paths: ["a.txt", join(outside, "secret.txt")] } }) as CallResult).content
+      .some((part) => /outside fixture/u.test(part.text ?? "")), false, "each file keeps the project boundary");
     const routed = await localRoute(sessions, first.token, { operation: "call", name: "files_read", arguments: { path: "fixture.txt" } });
     assert.equal(routed.status, 200);
     assert.match(routed.body, /local fixture/);
@@ -105,7 +143,7 @@ test("SDK clients use Runner broker grants and exact local managed-process owner
     assert.equal(typeof started.processId, "string");
     const processId = started.processId as string;
     const read = await client.callTool({ name: "process_read_output", arguments: { processId, waitMs: 10_000 } });
-    const stdout = (jsonResult(read).slices as Array<{ stream: string; text: string }>).find((slice) => slice.stream === "stdout")!.text;
+    const stdout = (read as CallResult).content.find((item) => item.type === "text" && item.text?.startsWith("STDOUT\n"))!.text!.slice("STDOUT\n".length);
     assert.equal((JSON.parse(stdout) as { depth?: string }).depth, "1", "a Runner-started child of a depth-0 session sees depth 1");
     assert.doesNotMatch(resultText(read), new RegExp(first.token));
     assert.doesNotMatch(resultText(read), new RegExp(second.token));
@@ -206,4 +244,57 @@ test("stdio emits only MCP protocol frames and never the session token", async (
     assert.deepEqual(frames.map((frame) => [frame.jsonrpc, frame.id]), [["2.0", 1], ["2.0", 2]]);
     assert.ok(!`${first}${second}`.includes(token));
   } finally { await server.close(); input.destroy(); output.destroy(); }
+});
+
+/**
+ * The relay's MCP_INSTRUCTIONS (packages/relay/src/mcp-tools.ts in aiboard-tunnel, as of aiboard-tunnel#37), verbatim.
+ * When the relay's text changes, change this copy too; the test below then says what the local text must change.
+ */
+const RELAY_MCP_INSTRUCTIONS = [
+  "AIBoard Remote runs tools on the user's own computer through their AI Board Runner.",
+  "- deviceId may be left out while you use one device and no other is online; otherwise the call is refused.",
+  "- Commands: process_run waits up to 45 s and returns the result; a longer command returns a jobId, and jobs_result has its result once jobs_status says it finished. Large output comes back as head, tail and diagnostics plus a processId. process_read_output with that processId takes search to find lines and lines to read them by number; do not run the command again or pipe it to see more.",
+  "- Servers, long jobs and interactive programs: process_start with until (port, pattern or exit), because process_run stops a command at timeoutMs (default 120 s): what it printed comes back, but its effect is unknown. When a task includes a job that takes a minute or more, start it with process_start before the other steps, even if the task lists it later, and do them while it runs; when nothing else is left, process_read_output with until {exit: true} waits up to 30 s a call. process_interact sends one line and returns that turn's reply.",
+  "- Files: files_read returns the file's sha256, even for a one-line range. files_patch (exact search and replace) and files_write default to the revision you last read or wrote, so read a file before changing it.",
+  "- Git: status, diff and log have their own tools; commit in one process_run call.",
+  "- Every call to a device needs session, this conversation's code from devices_list (keep it in any summary); a change also needs an idempotencyKey, new per action.",
+].join("\n");
+
+/** The relay's wording that fits only the remote path, and what the local text says instead. The rest is shared word for word. */
+const REMOTE_ONLY_WORDING: ReadonlyArray<readonly [relay: string, local: string]> = [
+  ["AIBoard Remote runs tools on the user's own computer through their AI Board Runner.",
+    "AI Board Runner runs these tools on this computer, in the project folder it was started for."],
+  // There is one device, and the local server refuses deviceId.
+  ["\n- deviceId may be left out while you use one device and no other is online; otherwise the call is refused.", ""],
+  // No relay holds the call and there are no jobs: the call lasts as long as the command.
+  ["process_run waits up to 45 s and returns the result; a longer command returns a jobId, and jobs_result has its result once jobs_status says it finished.",
+    "process_run waits for the command to finish and returns the result."],
+  // The relay dropped this to make room for sessions; the local text has room.
+  ["lines to read them by number;", "lines to read them by number (process_run takes search too);"],
+  // One connection is one conversation here, so there is no session code.
+  ["- Every call to a device needs session, this conversation's code from devices_list (keep it in any summary); a change also needs an idempotencyKey, new per action.",
+    "- Every action that changes something needs an idempotencyKey: a new string per action, reused only to retry that same action."],
+];
+
+test("initialize gives a local client the relay's guidance, less what only the remote path has", async () => {
+  const server = createLocalMcpProxy(async () => ({ tools: [] }));
+  const input = new PassThrough(), output = new PassThrough();
+  await server.connect(new StdioServerTransport(input, output));
+  let instructions: string | undefined;
+  try {
+    const reply = once(output, "data");
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fixture", version: "1" } } })}\n`);
+    const [frame] = await reply;
+    instructions = (JSON.parse(String(frame).split("\n")[0]!) as { result: { instructions?: string } }).result.instructions;
+  } finally { await server.close(); input.destroy(); output.destroy(); }
+  assert.equal(instructions, LOCAL_MCP_INSTRUCTIONS);
+  let expected = RELAY_MCP_INSTRUCTIONS;
+  for (const [relay, local] of REMOTE_ONLY_WORDING) {
+    assert.ok(expected.includes(relay), `the relay text no longer says: ${relay.trim()}`);
+    expected = expected.replace(relay, local);
+  }
+  // The Runner's own numbers (the 120 s default, the 30 s wait) are in the local text, so a change to one fails here too.
+  assert.equal(LOCAL_MCP_INSTRUCTIONS, expected, "change the relay's text with this one, or list the difference in REMOTE_ONLY_WORDING");
+  assert.equal(LOCAL_MCP_INSTRUCTIONS.length, 1395);
+  assert.ok(LOCAL_MCP_INSTRUCTIONS.length < 1500, "this text sits in every session's context");
 });

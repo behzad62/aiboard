@@ -10,7 +10,9 @@ import { ToolBroker } from "../src/tool-broker.js";
 import { createManagedProcessTools } from "../src/managed-process-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
-import type { ToolExecutionOutput } from "../src/agent-contracts.js";
+import type { NativeTool, ToolExecutionOutput } from "../src/agent-contracts.js";
+import { ManagedProcessError, type ManagedOutputReadRequest, type ManagedProcessService } from "../src/managed-process.js";
+import { reportedStatus } from "../src/managed-process-wait.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 
 // Line-oriented REPL: echoes each line, reports the count at EOF and exits 0.
@@ -38,7 +40,9 @@ async function withHost(t: TestContext, body: (f: { project: string; run: Execut
   try {
     run = await host.bindRun({ runId: "managed-interactive", permissionProfile: "full", capabilityContract: { digest: "d".repeat(64) } as RunnerCapabilityContract, capabilitiesConfig: emptyRunnerCapabilitiesConfig() });
     const broker = new ToolBroker({ permissionProfile: "full", workspacePath: project, executionGrants: run.executionGrants, artifacts, maxInlineOutputBytes: 512 * 1024 });
-    for (const tool of createManagedProcessTools(run.managedProcesses)) broker.register(tool);
+    // These tests pin the service's byte-exact reads (offsets, gaps, cursors, page sizes), which the read a model sees
+    // leaves out, so process.read_output here returns the service's read whole, on the same broker grant.
+    for (const tool of createManagedProcessTools(run.managedProcesses)) broker.register(tool.definition.name === "process.read_output" ? rawReadOutput(run.managedProcesses, tool) : tool);
     let sequence = 0;
     const invoke: Invoke = (name, input, agent = "agent") => broker.invoke({ type: "tool_call", callId: `call-${++sequence}`, name, arguments: input },
       { runId: run!.runId, sessionId: agent, actor: { role: "worker", id: "worker" }, workspacePath: project });
@@ -51,6 +55,19 @@ async function withHost(t: TestContext, body: (f: { project: string; run: Execut
       removeRoot: async () => { await rm(root, { recursive: true }); } });
   }
 }
+function rawReadOutput(service: ManagedProcessService, tool: NativeTool<unknown>): NativeTool<unknown> {
+  return { ...tool, execute: async (input, context) => {
+    const { processId, ...request } = input as { processId: string } & ManagedOutputReadRequest;
+    try {
+      const read = await service.readOutput(processId, request, context);
+      return { content: [{ type: "json", value: { ...read, status: reportedStatus(read) } }], isError: false };
+    } catch (error) {
+      const code = error instanceof ManagedProcessError ? error.code : "managed_process_failed";
+      return { content: [{ type: "text", text: String(error) }], isError: true, error: { code, message: String(error) } };
+    }
+  } };
+}
+
 function json(output: ToolExecutionOutput): Record<string, unknown> {
   assert.equal(output.isError, false, JSON.stringify(output));
   const block = output.content.find(item => item.type === "json"); assert.ok(block?.type === "json"); return block.value as Record<string, unknown>;

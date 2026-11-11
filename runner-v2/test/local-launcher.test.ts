@@ -109,7 +109,9 @@ class FakeRunner extends EventEmitter {
   healthy = true;
   beforeReady?: () => void;
   /** What the Runner reports about Git in its ready message (absent: Git is usable). */
-  git?: "git_missing" | "git_too_old";
+  git?: "git_missing" | "git_too_old" | "git_unverified";
+  gitReason?: string;
+  buildPathProblem?: string;
 
   send(message: unknown, callback?: (error: Error | null) => void): boolean {
     callback?.(null);
@@ -148,7 +150,7 @@ class FakeRunner extends EventEmitter {
       registerPair: () => undefined, remote: this.remote.control(),
     });
     this.beforeReady?.();
-    this.emit("message", { type: "aiboard-launcher-ready", instance: this.control.instance, ...(this.git ? { git: this.git } : {}) });
+    this.emit("message", { type: "aiboard-launcher-ready", instance: this.control.instance, ...(this.git ? { git: this.git } : {}), ...(this.gitReason ? { gitReason: this.gitReason } : {}), ...(this.buildPathProblem ? { buildPathProblem: this.buildPathProblem } : {}) });
   }
 
   async stop(): Promise<void> {
@@ -312,6 +314,11 @@ test("racing same-project launches reuse one verified Runner and never disclose 
     assert.ok(!JSON.stringify(output).includes(key));
     await runLauncher(["status", "--state-dir", f.state], runtime);
     assert.match(output.at(-1)!, /Runner running[\s\S]*URL: http:\/\/127\.0\.0\.1:/);
+    // Live 2026-11-08: after an update nothing showed which version a running Runner was.
+    const version = children[0]!.handshake!.version;
+    assert.ok(version, "the fake Runner got a version");
+    assert.ok(output.at(-1)!.includes(`\nVersion: ${version}\n`), output.at(-1)!);
+    assert.ok(output.some((line) => line.startsWith("Runner running") && line.includes(`\nVersion: ${version}\n`)), "the start output says it too");
     await runLauncher(["stop", "--state-dir", f.state], runtime);
     await Promise.all([first, second]);
     assert.equal(children[0]!.stops, 1);
@@ -395,7 +402,7 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
       fake.emit("message", { type: "aiboard-remote-pairing", userCode: "BCDF-GHJK", verificationUri: "https://mcp.aiboard.me/pair",
         expiresAt: new Date(Date.now() + 600_000).toISOString(), deviceName: "Desktop" });
       fake.emit("message", { type: "aiboard-remote-open", url: "https://mcp.aiboard.me/pair" });
-      fake.emit("message", { type: "aiboard-remote-session", deviceName: "Desktop", accountId: "account-1" });
+      fake.emit("message", { type: "aiboard-remote-session", deviceName: "Desktop", accountId: "account-1", accountLabel: "you\u001b@example.test" });
       fake.emit("message", { type: "aiboard-remote-state", state: "tool-ready", reasonCode: "ready" });
     };
     return child;
@@ -413,12 +420,18 @@ test("remote pairing prompts and browser opening pass through launcher IPC", asy
     assert.deepEqual(relayFlags, [DEFAULT_REMOTE_RELAY_URL]);
     assert.equal(DEFAULT_REMOTE_RELAY_URL, "wss://mcp.aiboard.me/connect");
     assert.ok(output.some((line) => line.includes("open https://mcp.aiboard.me/pair and enter code BCDF-GHJK")));
-    assert.ok(output.some((line) => line.includes("Desktop; account: account-1") && line.includes("Ctrl+C to disconnect")));
+    assert.ok(output.some((line) => line.includes("Desktop; account: you@example.test") && line.includes("Ctrl+C to disconnect")));
+    assert.ok(output.some((line) => line.includes("Sign in with the account this computer should be on")));
     assert.equal(opened[0], "https://mcp.aiboard.me/pair");
     assert.equal(opened[0]!.includes("BCDF"), false);
-    // The local web UI link is printed for `aiboard remote` but never opened.
+    // The local web UI link is offered for `aiboard remote` but never opened.
     assert.equal(opened.some((url) => url.startsWith("https://aiboard.me/connect")), false);
-    assert.ok(output.some((line) => line.includes("https://aiboard.me/connect#pair=")));
+    await waitUntil(() => output.some((line) => line.includes("https://aiboard.me/connect#pair=")));
+    const printed = output.join("");
+    assert.match(printed, /Optional: to also use AI Board's Build mode in a browser on this computer, open:/);
+    assert.match(printed, /Runner running\nProject: [^\n]+\nVersion: \S+\n/);
+    // The Runner's local address, PID and bare pairing code say nothing to someone working from an AI app.
+    assert.doesNotMatch(printed, /URL: |PID: |Pairing code: |Connect: /);
     // Live: a device revoked while running printed nothing; state changes after ready must still reach the terminal.
     children[0]!.emit("message", { type: "aiboard-remote-state", state: "disconnected", reasonCode: "socket_lost" });
     children[0]!.emit("message", { type: "aiboard-remote-state", state: "revoked", reasonCode: "device_key_revoked" });
@@ -1018,6 +1031,36 @@ test("a Runner without Git starts, and the launcher says how to install Git", as
   }
 });
 
+test("a Runner that could not check Git, or whose Build workspaces do not fit, says why instead of asking to install Git", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  const spawnRunner = (command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    const child = fakeSpawner(children, calls)(command, args, options);
+    children.at(-1)!.git = "git_unverified";
+    children.at(-1)!.gitReason = "The Runner could not start Git to check it. windows_path_too_long: A process working directory is 300 characters long.";
+    children.at(-1)!.buildPathProblem = "windows_path_too_long: Build and ToolBench are off, because their workspaces would be 259 characters long.";
+    return child;
+  };
+  const runtime = { cwd: f.project, spawnRunner, platform: "win32" as const, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["runner", "--state-dir", f.state, "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.join("").includes("Pairing code:"));
+    const text = output.join("");
+    assert.match(text, /Warning: Git could not be checked, so Build and ToolBench are off\. Chat and account providers still work\. The Runner could not start Git to check it\. windows_path_too_long: A process working directory is 300 characters long\./);
+    assert.match(text, /Warning: windows_path_too_long: Build and ToolBench are off, because their workspaces would be 259 characters long\./);
+    assert.doesNotMatch(text, /Install Git/);
+    await runLauncher(["stop", "--state-dir", f.state], runtime);
+    await running;
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
+});
+
 test("a start from the home folder asks for a project folder instead of a state directory", async () => {
   const f = await fixture();
   try {
@@ -1090,6 +1133,35 @@ test("the pairing code is shown in bold green when color is on", async () => {
     const note = output.find((line) => line.includes("pairs as a new device"));
     assert.ok(note?.startsWith("\u001b[33mNote:\u001b[39m This computer was paired with https://mcp-staging.aiboard.me"));
     assert.equal(note!.includes("\u001b[2J"), false);
+  } finally {
+    await Promise.all(children.map((child) => child.stop()));
+    await running.catch(() => undefined);
+    await f.cleanup();
+  }
+});
+
+test("a Remote notice reaches the terminal once, before and after the Runner is ready", async () => {
+  const f = await fixture();
+  const children: FakeRunner[] = [];
+  const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
+  const output: string[] = [];
+  const baseSpawner = fakeSpawner(children, calls);
+  const spawnRunner = (command: string, args: string[], options: SpawnOptions): ChildProcess => {
+    const child = baseSpawner(command, args, options);
+    const fake = children[children.length - 1]!;
+    fake.beforeReady = () => { fake.emit("message", { type: "aiboard-remote-notice", message: "Before ready." }); };
+    return child;
+  };
+  const environment = process.platform === "win32" ? { LOCALAPPDATA: join(f.root, "data") } : { XDG_DATA_HOME: join(f.root, "data") };
+  const runtime = { cwd: f.project, home: f.root, environment, spawnRunner, write: (line: string) => output.push(line), openUrl: neverOpenBrowser };
+  const running = runLauncher(["remote", "--state-dir", f.state, "--acknowledge-remote-access", "--no-open"], runtime);
+  void running.catch(() => undefined);
+  try {
+    await waitUntil(() => output.some((line) => line.includes("Runner running")));
+    children[children.length - 1]!.emit("message", { type: "aiboard-remote-notice", message: "Command D35D94 was approved from the dashboard." });
+    await waitUntil(() => output.some((line) => line.includes("approved from the dashboard")));
+    assert.equal(output.filter((line) => line.includes("Before ready.")).length, 1);
+    assert.equal(output.filter((line) => line.includes("approved from the dashboard")).length, 1);
   } finally {
     await Promise.all(children.map((child) => child.stop()));
     await running.catch(() => undefined);

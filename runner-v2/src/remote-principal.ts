@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 import { RemoteAuditStore } from "./remote-audit-store.js";
 
@@ -58,7 +59,7 @@ export class RemotePrincipalStore {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.auditStore = auditStore ?? new RemoteAuditStore(join(dirname(path), "remote-audit.sqlite"));
     this.ownsAuditStore = auditStore === undefined;
-    this.database = new DatabaseSync(path);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(path));
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS remote_principals (
@@ -78,7 +79,7 @@ export class RemotePrincipalStore {
     this.policyTable = devicePolicyPath ? "remote_device.remote_device_policy" : "remote_device_policy";
     if (devicePolicyPath) {
       mkdirSync(dirname(devicePolicyPath), { recursive: true, mode: 0o700 });
-      this.database.prepare("ATTACH DATABASE ? AS remote_device").run(devicePolicyPath);
+      this.database.prepare("ATTACH DATABASE ? AS remote_device").run(sqliteDatabaseLocation(devicePolicyPath));
       this.database.exec(`CREATE TABLE IF NOT EXISTS remote_device.remote_device_policy (
         account_id TEXT NOT NULL, device_id TEXT NOT NULL, shell INTEGER NOT NULL, approvals INTEGER NOT NULL,
         read_only INTEGER NOT NULL, only_here INTEGER NOT NULL, audit INTEGER NOT NULL, narrowed_at TEXT,
@@ -123,6 +124,18 @@ export class RemotePrincipalStore {
       runId: row.run_id, sessionId: row.session_id, revoked: row.revoked === 1 });
   }
 
+  /**
+   * The other callers of this account on this device: other conversations of the same app (the relay gives each its
+   * own client id, "mcp-<app hash>-<session code>") and other apps. Revoked ones are left out.
+   */
+  peers(identity: VerifiedRemoteIdentity): RemotePrincipal[] {
+    const verified = checkedIdentity(identity);
+    const rows = this.database.prepare(`SELECT client_id FROM remote_principals WHERE account_id = ? AND device_id = ? AND client_id != ?
+      AND revoked = 0 ORDER BY client_id`).all(verified.accountId, verified.deviceId, verified.clientId) as { client_id: string }[];
+    return rows.map((row) => this.find({ accountId: verified.accountId, clientId: row.client_id, deviceId: verified.deviceId }))
+      .filter((principal): principal is RemotePrincipal => principal !== undefined && !principal.revoked);
+  }
+
   revoke(identity: VerifiedRemoteIdentity, origin: PolicyOrigin): void {
     if (origin !== "local") throw new Error("Only the local user can revoke a remote principal.");
     const verified = checkedIdentity(identity);
@@ -158,7 +171,7 @@ export class RemotePrincipalStore {
   static readDevicePolicy(path: string, identity: VerifiedRemoteIdentity): { readonly policy: Readonly<RemoteDevicePolicy>; readonly fromDefaults: boolean } {
     if (!isAbsolute(path)) throw new Error("Remote device policy path must be absolute.");
     const verified = checkedIdentity(identity);
-    const database = new DatabaseSync(path, { readOnly: true });
+    const database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
     try {
       const row = database.prepare(`SELECT shell, approvals, read_only, only_here, audit FROM remote_device_policy
         WHERE account_id = ? AND device_id = ?`).get(verified.accountId, verified.deviceId) as unknown as PolicyRow | undefined;
@@ -263,6 +276,11 @@ function policyFromRow(row: PolicyRow | undefined): { readonly policy: Readonly<
   if (Object.values(row).some((value) => value !== 0 && value !== 1)) throw new Error("Remote device policy is invalid.");
   return { policy: Object.freeze({ shell: row.shell === 1, approvals: row.approvals === 1,
     readOnly: row.read_only === 1, onlyHere: row.only_here === 1, audit: row.audit === 1 }), fromDefaults: false };
+}
+
+/** The session code the relay puts at the end of a conversation's client id ("mcp-<app hash>-<code>"), if there is one. */
+export function remoteSessionCode(clientId: string): string | undefined {
+  return /^mcp-[0-9a-f]{32}-([a-z2-9]{6})$/u.exec(clientId)?.[1];
 }
 
 function checkedIdentity(value: VerifiedRemoteIdentity): VerifiedRemoteIdentity {

@@ -2069,3 +2069,121 @@ function portableCleanupFixture(label: string): { root: string; directory: strin
 function writeOutputCheckpoint(root: string): void {
   writeFileSync(join(root, "channel", "output-checkpoint.json"), JSON.stringify({ nonce: "nonce", stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
 }
+
+async function idleOutputFixture() {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-idle-output-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  const counters = { snapshots: 0, fenceChecks: 0 };
+  let fenceProblem: Error | undefined;
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 5,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence,
+      reattest: () => { counters.fenceChecks += 1; if (fenceProblem) throw fenceProblem; return "live"; },
+      reattestObservation: async () => "live",
+      effect: async (_kind, effect) => effect(),
+      snapshot: (read) => { counters.snapshots += 1; return { status: "applied", value: read() }; },
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  return {
+    root, channel, counters,
+    breakFence: (error: Error) => { fenceProblem = error; },
+    settleFenceChecks: async (count: number) => {
+      const target = counters.fenceChecks + count;
+      await waitFor(() => counters.fenceChecks >= target);
+    },
+    close: async () => { await channel.detach(); rmSync(root, { recursive: true, force: true }); },
+  };
+}
+
+function writeIdleTestChunk(root: string, sequence = 1) {
+  const bytes = Buffer.from("x");
+  const metadata: BackpressuredOutputMetadata = {
+    stream: "stdout", sequence, startOffset: 0, endOffset: 1, byteLength: 1,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  };
+  const name = `stdout-${String(sequence).padStart(12, "0")}.json`;
+  writeFileSync(join(root, "channel/output", name), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  return { name, metadata };
+}
+
+test("an idle output poll checks the fence every tick without taking the durable fence snapshot", async () => {
+  const fixture = await idleOutputFixture();
+  const unsubscribe = fixture.channel.subscribeBackpressuredOutput(async (entry) => entry);
+  try {
+    await fixture.settleFenceChecks(8);
+    assert.equal(fixture.counters.snapshots, 0, "nothing to read must not cost a SQLite write transaction");
+  } finally {
+    unsubscribe();
+    await fixture.close();
+  }
+});
+
+test("a stale fence still fails an idle output poll closed", async () => {
+  const fixture = await idleOutputFixture();
+  const unsubscribe = fixture.channel.subscribeBackpressuredOutput(async (entry) => entry);
+  try {
+    await fixture.settleFenceChecks(2);
+    const waiter = fixture.channel.waitForTerminal();
+    fixture.breakFence(new Error("synthetic stale fence"));
+    assert.deepEqual(await round4Within(waiter), { state: "outcome_unknown" });
+    assert.equal(fixture.counters.snapshots, 0);
+  } finally {
+    unsubscribe();
+    await fixture.close();
+  }
+});
+
+test("output after an idle period is delivered only through the fenced snapshot, then the poll goes idle again", async () => {
+  const fixture = await idleOutputFixture();
+  const delivered: { metadata: BackpressuredOutputMetadata; snapshotsAtDelivery: number }[] = [];
+  const unsubscribe = fixture.channel.subscribeBackpressuredOutput(async (entry) => {
+    delivered.push({ metadata: entry, snapshotsAtDelivery: fixture.counters.snapshots });
+    return entry;
+  });
+  try {
+    await fixture.settleFenceChecks(4);
+    assert.equal(fixture.counters.snapshots, 0);
+    const { name, metadata } = writeIdleTestChunk(fixture.root);
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 1);
+    assert.equal(delivered.length, 1);
+    assert.deepEqual(delivered[0].metadata, metadata);
+    assert.ok(delivered[0].snapshotsAtDelivery >= 1, "delivery must come from a fenced snapshot");
+
+    // Once the supervisor retires the chunk, polling is idle again.
+    retirePortableOutputAcknowledgement({ channelDirectory: join(fixture.root, "channel"), nonce: "nonce", fence, name, metadata });
+    await fixture.settleFenceChecks(4);
+    const afterRetirement = fixture.counters.snapshots;
+    await fixture.settleFenceChecks(8);
+    assert.equal(fixture.counters.snapshots, afterRetirement, "polling must stop taking the lock once output is retired");
+    assert.equal(delivered.length, 1, "retired output must not be delivered twice");
+  } finally {
+    unsubscribe();
+    await fixture.close();
+  }
+});
+
+for (const [name, corrupt] of [
+  ["an unreadable checkpoint", (root: string) => writeFileSync(join(root, "channel/output-checkpoint.json"), "not json")],
+  ["an invalid output filename", (root: string) => writeFileSync(join(root, "channel/output/unexpected.json"), "{}")],
+  ["an invalid output chunk", (root: string) => writeFileSync(join(root, "channel/output/stdout-000000000001.json"), "not json")],
+] as const) {
+  test(`${name} found while idle takes the fenced path and fails closed`, async () => {
+    const fixture = await idleOutputFixture();
+    const unsubscribe = fixture.channel.subscribeBackpressuredOutput(async (entry) => entry);
+    try {
+      await fixture.settleFenceChecks(2);
+      assert.equal(fixture.counters.snapshots, 0);
+      const waiter = fixture.channel.waitForTerminal();
+      corrupt(fixture.root);
+      assert.deepEqual(await round4Within(waiter), { state: "outcome_unknown" });
+      assert.ok(fixture.counters.snapshots >= 1, "an anomaly must reach the fenced snapshot, not be skipped as idle");
+    } finally {
+      unsubscribe();
+      await fixture.close();
+    }
+  });
+}

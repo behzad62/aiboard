@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 import type { Readable, Writable } from "node:stream";
 import { Server, type Tool, type Transport } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
@@ -9,6 +10,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { LOCAL_MCP_DEPTH_LIMIT } from "./child-environment.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionHost } from "./execution-host.js";
+import { MANAGED_OUTPUT_WAIT_MAX_MS } from "./managed-process-contracts.js";
+import { PROCESS_RUN_DEFAULT_TIMEOUT_MS } from "./process-tools.js";
 import { createLocalMcpOwner, LocalMcpToolSession, type LocalMcpOwner, type LocalMcpPolicyOptions } from "./remote-tool-runtime.js";
 import { RemoteDeviceStore } from "./remote-device-store.js";
 import { DEFAULT_REMOTE_DEVICE_POLICY, RemotePrincipalStore } from "./remote-principal.js";
@@ -60,7 +63,7 @@ export class LocalMcpSessions {
     this.options = { ...options, policyIdentity,
       policy: options.policy ?? (() => { const identity = policyIdentity(); return identity && this.principals ? this.principals.policy(identity) : DEFAULT_REMOTE_DEVICE_POLICY; }),
       ...(options.auditStore || this.principals ? { auditStore: options.auditStore ?? this.principals!.auditStore } : {}) };
-    this.database = new DatabaseSync(options.statePath);
+    this.database = new DatabaseSync(sqliteDatabaseLocation(options.statePath));
     this.database.exec(`PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;
       CREATE TABLE IF NOT EXISTS local_mcp_owners (
         run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, principal_id TEXT NOT NULL UNIQUE,
@@ -211,9 +214,25 @@ function parseOwner(row: Record<string, unknown>): LocalMcpOwner {
     runId: row.run_id, sessionId: row.session_id, depth: row.depth as number });
 }
 
+const seconds = (ms: number): string => `${ms / 1000} s`;
+
+/**
+ * Sent once at initialization; clients show it to the model alongside the tool list. It is the relay's
+ * MCP_INSTRUCTIONS (packages/relay/src/mcp-tools.ts in aiboard-tunnel) without what only the remote path
+ * has: devices, jobs and the relay's 45 s wait. local-stdio-mcp.test.ts holds it to a copy of the relay's.
+ */
+export const LOCAL_MCP_INSTRUCTIONS = [
+  "AI Board Runner runs these tools on this computer, in the project folder it was started for.",
+  "- Commands: process_run waits for the command to finish and returns the result. Large output comes back as head, tail and diagnostics plus a processId. process_read_output with that processId takes search to find lines and lines to read them by number (process_run takes search too); do not run the command again or pipe it to see more.",
+  "- Servers, long jobs and interactive programs: process_start with until (port, pattern or exit), because process_run stops a command at timeoutMs (default " + seconds(PROCESS_RUN_DEFAULT_TIMEOUT_MS) + "): what it printed comes back, but its effect is unknown. When a task includes a job that takes a minute or more, start it with process_start before the other steps, even if the task lists it later, and do them while it runs; when nothing else is left, process_read_output with until {exit: true} waits up to " + seconds(MANAGED_OUTPUT_WAIT_MAX_MS) + " a call. process_interact sends one line and returns that turn's reply.",
+  "- Files: files_read returns the file's sha256, even for a one-line range. files_patch (exact search and replace) and files_write default to the revision you last read or wrote, so read a file before changing it.",
+  "- Git: status, diff and log have their own tools; commit in one process_run call.",
+  "- Every action that changes something needs an idempotencyKey: a new string per action, reused only to retry that same action.",
+].join("\n");
+
 /** The proxy implements protocol framing only; all tool operations go to Runner. */
 export function createLocalMcpProxy(dispatch: (body: unknown) => Promise<unknown>): Server {
-  const server = new Server({ name: "aiboard", version: "1.0.0" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "aiboard", version: "1.0.0" }, { capabilities: { tools: {} }, instructions: LOCAL_MCP_INSTRUCTIONS });
   server.setRequestHandler("tools/list", async () => {
     const result = await dispatch({ operation: "list" });
     return result as { tools: Tool[] };

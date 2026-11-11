@@ -26,7 +26,9 @@ const OPTIONAL_IMPORTS: Record<string, readonly string[]> = {
   "lib/account-provider-runner.mjs": ["./local-pair-runner.mjs"],
 };
 
-const SPECIFIER = /(?:^|[^.\w$])(?:import|export)\s+(type\s+)?(?:[\w*${}\s,]+?\s+from\s+)?["']([^"']+)["']|(?:^|[^.\w$])(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/gm;
+// A static import or export starts a statement (a line, or after ";"): a shell script held in a string, such as
+// `do export "${name}=..."` in shell-session-bash-host.ts, is not one (0.3.16 release, run 42992970517).
+const SPECIFIER = /(?:^|;)[ \t]*(?:import|export)\s+(type\s+)?(?:[\w*${}\s,]+?\s+from\s+)?["']([^"']+)["']|(?:^|[^.\w$])(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/gm;
 
 /** Runtime module specifiers of one source file (type-only imports and non-literal dynamic imports are skipped). */
 export function importSpecifiers(source: string): string[] {

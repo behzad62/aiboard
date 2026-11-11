@@ -28,6 +28,7 @@ import {
 } from "./execution-grants.js";
 import { RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
 import { PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES } from "./runner-extension.js";
+import { findWindowsPathTooLongError } from "./windows-path-limits.mjs";
 import {
   ToolRegistry,
   type AgentToolRuntime,
@@ -516,6 +517,12 @@ export class ToolBroker implements AgentToolRuntime {
         // A failed read has a known error result. Keep it durable just like the result the
         // registry would return; side-effecting exceptions still require reconciliation.
         const output = outputFailure("tool_execution_failed", error instanceof Error ? error.message : "Tool execution failed.");
+        this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
+        return output;
+      }
+      const tooLong = findWindowsPathTooLongError(error);
+      if (tooLong?.effectNotStarted) {
+        const output = outputFailure(tooLong.code, tooLong.message);
         this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
         return output;
       }

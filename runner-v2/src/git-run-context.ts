@@ -255,6 +255,14 @@ export function gitWorkingRootsForRun(projectRoot: string, stateDirectory: strin
   ]);
 }
 
+/** The longest working directory a Build run uses on its own, before any folder inside the project. */
+export function deepestBuildWorkingDirectory(projectRoot: string, stateDirectory: string): string {
+  const roots = gitWorkingRootsForRun(projectRoot, stateDirectory, "longest-slug-for-path-check");
+  // A task workspace sits one safeName segment (at most 23 characters) under its run's workspaces root.
+  const taskWorkspace = join(roots[1]!, "t".repeat(23));
+  return [taskWorkspace, ...roots].reduce((longest, path) => path.length > longest.length ? path : longest);
+}
+
 /** Mirrors verification-workspace.ts safeName for a workspace suffix. */
 function suffixSegment(suffix: string): string {
   const readable = suffix.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 12) || "run";

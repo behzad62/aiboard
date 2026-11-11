@@ -29,7 +29,7 @@ import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
-import { createProcessTools } from "./process-tools.js";
+import { createProcessTools, processRunSupport } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
@@ -209,6 +209,7 @@ function spawnSubagentTool(
         ...(options.allowedCommands
           ? { allowedCommands: options.allowedCommands }
           : {}),
+        support: processRunSupport(options.managedProcesses, options.artifacts),
       })) broker.register(tool);
       if (!readOnly && options.managedProcesses) {
         for (const tool of createManagedProcessTools(options.managedProcesses)) {

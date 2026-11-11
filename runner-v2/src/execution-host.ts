@@ -22,7 +22,7 @@ import {
 } from "./execution-host-streaming.js";
 import { ManagedProcessService } from "./managed-process.js";
 import { createExecutionHostManagedRuntime } from "./execution-host-managed-transport.js";
-import { createWindowsJobProcessHost, type WindowsJobProcessHost } from "./windows-job-process-host.js";
+import { createWindowsJobProcessHost, type WindowsJobProcessHost, type WindowsJobSpareOptions } from "./windows-job-process-host.js";
 import {
   createBoundedProcessOutputFactory,
   createRuntimeBackedOneShotCommandExecutor,
@@ -89,6 +89,8 @@ export interface ExecutionHostOptions {
   readonly ambientEnvironment?: Readonly<Record<string, string | undefined>>;
   readonly managedProcesses?: ManagedProcessService;
   readonly windowsJobHost?: WindowsJobProcessHost;
+  /** Pre-started Job-host spares for the default Windows Job host (ignored with an injected windowsJobHost). Absent: none. */
+  readonly windowsJobSpare?: WindowsJobSpareOptions;
   readonly processHostFacts?: ProcessHostSemanticFacts;
   readonly streamingStoreOptions?: SqliteStreamingSessionStoreOptions;
   readonly streamingOutput?: Pick<
@@ -162,6 +164,8 @@ export interface ExecutionHostRunBinding {
   }>;
   readonly isolation: ExecutionIsolationSelector;
   readonly managedProcesses: ManagedProcessService;
+  /** T1 read-only whole-tree CPU evidence for an active owned streaming session. */
+  readonly observeProcessUsage?: ReturnType<typeof createExecutionHostStreamingGraph>["observeUsage"];
   openStreaming(request: ExecutionHostStreamingOpenRequest): ReturnType<
     ReturnType<typeof createExecutionHostStreamingGraph>["open"]
   >;
@@ -186,6 +190,11 @@ export interface ExecutionHost {
   withGitInspection<T>(input: ExecutionHostGitInspectionInput, inspect: (git: GitCommandRunner) => Promise<T>): Promise<T>;
   activeRunIds(): readonly string[];
   filteredEnvironmentSource(): Readonly<Record<string, string>>;
+  /**
+   * Run the one-time host process checks now, so the first bound run does not wait for them (about 9 s on Windows).
+   * The same checks, run once and shared with every binding; never rejects.
+   */
+  prepare?(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -215,6 +224,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
   const windowsJobHost = options.windowsJobHost ?? createWindowsJobProcessHost({
     stateDirectory: join(stateDirectory, "managed-processes-job-host"),
     platform: platform === "windows" ? "win32" : "linux",
+    ...(options.windowsJobSpare ? { spare: options.windowsJobSpare } : {}),
   });
   const internalProcesses = createRunnerInternalProcessKernel({
     stateDirectory: join(stateDirectory, "internal-processes"),
@@ -391,6 +401,13 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
     },
     filteredEnvironmentSource() {
       return Object.freeze({ ...ambientEnvironment });
+    },
+    prepare() {
+      if (closed || platform !== "windows" || options.processHostFacts) return Promise.resolve();
+      const warm = resolveWindowsFacts().then(() => undefined, () => undefined);
+      inspectionOperations.add(warm);
+      void warm.finally(() => inspectionOperations.delete(warm));
+      return warm;
     },
     async close() {
       if (closeComplete) return;
@@ -636,6 +653,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       isolation,
       managedProcesses: input.managedProcesses,
       openStreaming: streamingGraph.open,
+      observeProcessUsage: streamingGraph.observeUsage,
       async recover(recoveryInput: { readonly maxRecords: number; readonly timeoutMs: number }) {
         if (closed) throw new Error("ExecutionHost run binding is closed.");
         if (!Number.isSafeInteger(recoveryInput.maxRecords) || recoveryInput.maxRecords < 1 ||

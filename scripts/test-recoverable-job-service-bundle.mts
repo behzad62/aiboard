@@ -177,9 +177,12 @@ try {
     }
     const extractedLock = join(extraction, "package-lock.json");
     const extractedLockBefore = sha256(await readFile(extractedLock));
-    runNpm(["ci"], extraction);
+    // Phase times show where this test's minutes go in CI (it took about 190 s on Windows).
+    const timed = (label: string, run: () => void) => { const start = Date.now(); run(); console.log(`TIME ${label} ${((Date.now() - start) / 1000).toFixed(1)} s`); };
+    timed("extracted npm ci", () => runNpm(["ci"], extraction));
     assert.equal(sha256(await readFile(extractedLock)), extractedLockBefore, "npm ci leaves the dedicated lock unchanged");
-    runNpm(["run", "setup:browser"], extraction);
+    timed("extracted setup:browser", () => runNpm(["run", "setup:browser"], extraction));
+    const attemptStart = Date.now();
 
     const port = 24_000 + Math.floor(Math.random() * 4_000);
     const token = `rjs-extracted-${Date.now()}`;
@@ -251,6 +254,7 @@ try {
     assert.equal(evaluatorResult.recoverableJobService.contractHash, hashes.contractHash);
     assert.equal(evaluatorResult.recoverableJobService.suiteHash, hashes.suiteHash);
     assert.equal((await request(baseUrl, token, "/bench/cleanup", { attemptId: "extracted_rjs_health" })).status, 200);
+    console.log(`TIME extracted attempt and verifier ${((Date.now() - attemptStart) / 1000).toFixed(1)} s`);
     } catch (error) {
       console.error("Extracted package execution failed:", error);
       await reportStartupEvidence(join(extraction, "test-runs", ".runner-v2-state"));

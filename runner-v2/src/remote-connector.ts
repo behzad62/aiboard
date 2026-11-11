@@ -5,11 +5,12 @@ import type { ToolResult } from "./agent-contracts.js";
 import { RemoteAdmissionError, parseRemoteRequest, remotePayloadDigest, type RemoteAdmissionStore, type RemoteJob, type RemoteRequest } from "./remote-admission-store.js";
 import { RemoteAuthError, type SignedRelayChallenge, type RemoteAuthorization, type RemoteAuthenticator } from "./remote-auth.js";
 import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
-import type { VerifiedRemoteIdentity } from "./remote-principal.js";
+import { remoteSessionCode, type VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
-import type { CommandApprovalRequest, CommandApprovalSummary } from "./remote-approval.js";
+import { COMMAND_APPROVAL_WINDOW_MS, type CommandApprovalNotice, type CommandApprovalRequest, type CommandApprovalSummary } from "./remote-approval.js";
 import { ArtifactTransferError, ArtifactTransferManager, type ArtifactTransferFrame } from "./remote-artifact-transfer.js";
 import { DEFAULT_REMOTE_FRAME_LIMITS, frameByteLength, negotiateFrameLimits, type RemoteFrameLimits } from "./remote-frame-codec.js";
+import { WINDOWS_PATH_TOO_LONG } from "./windows-path-limits.mjs";
 
 export type RemoteConnectionStateName =
   | "disconnected" | "authenticating" | "connected-degraded" | "tool-ready" | "suspended" | "revoked";
@@ -49,6 +50,8 @@ export interface RemoteStatusReport {
   readonly runnerVersion: string;
   readonly platform: "win32" | "darwin" | "linux";
   readonly policy: { readonly shell: boolean; readonly approvals: boolean; readonly readOnly: boolean; readonly onlyHere: boolean; readonly audit: boolean };
+  /** The shells a script can run in, such as "powershell 5.1" or "pwsh 7.6" (shell-inventory.ts), so a client can pick one. */
+  readonly shells?: readonly string[];
 }
 
 export interface RemoteResponseMessage {
@@ -72,6 +75,10 @@ export type RemoteTransportMessage =
   | { readonly type: "heartbeat"; readonly at: string }
   | ({ readonly type: "status"; readonly state: "tool-ready" | "connected-degraded"; readonly reasonCode: RemoteConnectionReason } & RemoteStatusReport)
   | { readonly type: "revoked" }
+  /** The commands waiting right now, sent whenever the list changes. Replaces whatever the relay held. */
+  | { readonly type: "approvals"; readonly pending: readonly CommandApprovalNotice[] }
+  /** A signed dashboard answer; RemoteAuthenticator.verifyApprovalAnswer decides whether it counts. */
+  | { readonly type: "approval_answer"; readonly answer: unknown }
   | ArtifactTransferFrame
   | { readonly type: "chunk_ack"; readonly transferId: string; readonly seq: number }
   | { readonly type: "artifact_abort"; readonly transferId: string }
@@ -143,6 +150,7 @@ export const REMOTE_TOOL_ID_TO_RUNNER: Readonly<Record<string, string>> = Object
   process_read_output: "process.read_output",
   process_list: "process.list",
   process_write_stdin: "process.write_stdin",
+  process_interact: "process.interact",
   process_signal: "process.signal",
   git_status: "git.status",
   git_diff: "git.diff",
@@ -158,7 +166,7 @@ const MAX_STUB_ARTIFACTS = 256;
 const MAX_INDEX_ARTIFACTS = 100_000;
 const MAX_INDEX_BYTES = MAX_INDEX_ARTIFACTS * 67 + 2;
 const EFFECT_TOOL_IDS: ReadonlySet<string> = new Set(["files_write", "files_patch", "files_move", "files_delete",
-  "process_start", "process_run", "process_write_stdin", "process_signal"]);
+  "process_start", "process_run", "process_write_stdin", "process_interact", "process_signal"]);
 
 export interface RemoteConnectorOptions {
   readonly deviceStore: RemoteDeviceStore;
@@ -192,7 +200,9 @@ export interface RemoteConnectorOptions {
   /** Admitted extension tools for the current generation/policy (R1c), when composed. */
   readonly pluginTools?: RemotePluginToolProvider;
   readonly auditApproval?: (identity: VerifiedRemoteIdentity | undefined, jobId: string,
-    decision: "requested" | "approved" | "denied" | "expired" | "fenced") => void;
+    decision: "requested" | "approved" | "denied" | "expired" | "fenced", origin?: "local" | "remote") => void;
+  /** A dashboard answer was applied, so the person at the computer can see what happened. */
+  readonly onDashboardApproval?: (summary: CommandApprovalSummary, approved: boolean) => void;
   /** Artifact store for large results and the R3 artifact data plane. */
   readonly artifacts?: RemoteArtifactSource;
   /** Metadata-only audit of artifact reads (job id and outcome; never the hash or bytes). */
@@ -235,6 +245,8 @@ export class RemoteConnector {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
   private session: RemoteDeviceSession;
+  /** Nonces of the waiting commands last sent to the relay on this connection. */
+  private approvalsSent = "";
   private transport: RemoteTransport | undefined;
   private current: RemoteConnectionState;
   private admitting = false;
@@ -575,6 +587,15 @@ export class RemoteConnector {
         await this.onRequest(request, message.authorization);
         return;
       }
+      case "approval_answer": {
+        if (this.pendingEpoch !== undefined) return;
+        let verified: { readonly jobId: string; readonly nonce: string; readonly approved: boolean };
+        // A bad answer changes nothing: the command keeps waiting for a real one or for its deadline.
+        try { verified = this.options.authenticator.verifyApprovalAnswer(message.answer, this.session); }
+        catch { return; }
+        this.answerCommandApproval(verified.jobId, verified.nonce, verified.approved, "remote");
+        return;
+      }
       case "chunk_ack":
         this.transfers.ack(message.transferId, message.seq);
         return;
@@ -597,6 +618,7 @@ export class RemoteConnector {
     this.authWaiter = undefined;
     this.admitting = false;
     this.transfers.abortAll();
+    this.approvalsSent = "";
     if (this.current.state === "revoked" || this.current.state === "suspended") return;
     // Another connection for this device id took over; reconnecting would only knock it off in turn.
     if (code === SUPERSEDED_CLOSE_CODE) { this.transition("suspended", "superseded"); return; }
@@ -642,7 +664,7 @@ export class RemoteConnector {
         if (beforeSend && !beforeSend()) {
           try {
             if (request.toolId === "jobs_status") {
-              const refreshed = this.jobTool({ accountId: request.accountId, clientId: request.clientId, deviceId: request.deviceId }, request);
+              const refreshed = this.jobTool(this.jobReader({ accountId: request.accountId, clientId: request.clientId, deviceId: request.deviceId }, request), request);
               await transport?.send({ type: "response", response: refreshed.response, data: refreshed.data });
             } else await transport?.send({ type: "response", response: rejected(request, "result_withheld_by_policy") });
           } catch { /* socket loss */ }
@@ -686,13 +708,14 @@ export class RemoteConnector {
       const refusal = this.options.runtime.authorizeJob?.(identity);
       if (refusal) { await respond(rejected(request, "unauthorized")); return; }
       if (JOB_TOOL_IDS.has(request.toolId)) {
-        const answer = this.jobTool(identity, request);
+        const reader = this.jobReader(identity, request);
+        const answer = this.jobTool(reader, request);
         const jobId = request.toolId === "jobs_result" || (request.toolId === "jobs_status" &&
           (answer.data as { job?: RemoteJob }).job?.outputRef) ? jobArguments(request).jobId : undefined;
         await respond(answer.response, answer.data, jobId ? () => {
           try {
-            const job = this.options.admission.getJob(identity, jobId);
-            return !!job && !this.resultWithheld(identity, job);
+            const job = this.options.admission.getJob(reader, jobId);
+            return !!job && !this.resultWithheld(reader, job);
           } catch { return false; }
         } : undefined);
         return;
@@ -855,6 +878,20 @@ export class RemoteConnector {
     });
   }
 
+  /**
+   * Whose job a job tool reads. Each conversation is its own caller (the relay's client id carries its session code),
+   * so a job another conversation of this account on this device started is read as its owner: status, events and
+   * result only. A cancel always acts as the caller, so only the owner can cancel.
+   */
+  private jobReader(identity: VerifiedRemoteIdentity, request: RemoteRequest): VerifiedRemoteIdentity {
+    if (request.toolId === "jobs_cancel") return identity;
+    let jobId: string;
+    try { jobId = jobArguments(request).jobId; } catch { return identity; }
+    if (this.options.admission.getJob(identity, jobId)) return identity;
+    const owner = this.options.admission.jobOwner(identity, jobId);
+    return owner && !this.options.runtime.authorizeJob?.(owner) ? owner : identity;
+  }
+
   private jobTool(identity: VerifiedRemoteIdentity, request: RemoteRequest): { response: RemoteResponseMessage; data: unknown } {
     const args = jobArguments(request);
     const admission = this.options.admission;
@@ -914,10 +951,10 @@ export class RemoteConnector {
     return this.queue.find((entry) => !entry.settled && entry.approval)?.approval;
   }
 
-  answerCommandApproval(jobId: string, nonce: string, approved: boolean): boolean {
+  answerCommandApproval(jobId: string, nonce: string, approved: boolean, origin: "local" | "remote" = "local"): boolean {
     const entry = [...this.inFlight].find((item) => item.jobId === jobId);
     const record = (decision: "approved" | "denied" | "fenced") =>
-      this.options.auditApproval?.(entry?.identity, jobId, decision);
+      this.options.auditApproval?.(entry?.identity, jobId, decision, origin);
     if (!entry || entry.settled || !entry.approval || typeof approved !== "boolean" ||
       entry.approval.nonce !== nonce || entry.approvalDeadline === undefined) {
       record("fenced");
@@ -935,7 +972,11 @@ export class RemoteConnector {
       return false;
     }
     record(approved ? "approved" : "denied");
+    const summary = entry.approval.summary;
     entry.approval = undefined;
+    if (origin === "remote") {
+      try { this.options.onDashboardApproval?.(summary, approved); } catch { /* a notice can never alter the decision */ }
+    }
     if (approved) {
       this.options.admission.approve(entry.identity, jobId);
       entry.approvalGranted = true;
@@ -946,8 +987,27 @@ export class RemoteConnector {
       this.finish(entry, this.options.admission.denyApproval(entry.identity, jobId, "approval_denied"));
       this.inFlight.delete(entry);
     }
+    this.reportApprovals();
     this.pump();
     return true;
+  }
+
+  /** Tell the relay what is waiting. Nothing is sent on a connection that has never had anything to report. */
+  private reportApprovals(): void {
+    const transport = this.transport;
+    if (!transport || this.pendingEpoch !== undefined) return;
+    const pending: CommandApprovalNotice[] = [];
+    for (const entry of this.queue) {
+      if (entry.settled || !entry.approval || entry.approvalDeadline === undefined) continue;
+      pending.push({ ...entry.approval.summary, nonce: entry.approval.nonce, expiresAt: new Date(entry.approvalDeadline).toISOString() });
+      if (pending.length === 32) break;
+    }
+    const key = pending.map((item) => item.nonce).join(",");
+    if (key === this.approvalsSent) return;
+    this.approvalsSent = key;
+    try {
+      void Promise.resolve(transport.send({ type: "approvals", pending })).catch(() => { this.approvalsSent = ""; });
+    } catch { this.approvalsSent = ""; }
   }
 
   private prepareApproval(entry: InFlight): void {
@@ -956,9 +1016,10 @@ export class RemoteConnector {
       const code = randomBytes(3).toString("hex").toUpperCase();
       const summary = this.options.runtime.summarizeCommandApproval(entry.identity, entry.jobId, code, entry.runnerName, entry.request.payload);
       const job = this.options.admission.markAwaitingApproval(entry.identity, entry.jobId);
-      const deadline = Math.min(Date.parse(entry.request.expiresAt), Date.parse(job.createdAt) + 120_000);
+      const deadline = Math.min(Date.parse(entry.request.expiresAt), Date.parse(job.createdAt) + COMMAND_APPROVAL_WINDOW_MS);
       entry.approvalDeadline = deadline;
-      entry.approval = Object.freeze({ summary, nonce: randomBytes(32).toString("hex") });
+      const session = remoteSessionCode(entry.identity.clientId);
+      entry.approval = Object.freeze({ summary, nonce: randomBytes(32).toString("hex"), ...(session ? { session } : {}) });
       this.options.auditApproval?.(entry.identity, entry.jobId, "requested");
       if (this.now().getTime() >= deadline) { this.expireApproval(entry); return; }
       entry.approvalTimer = setTimeout(() => {
@@ -966,6 +1027,7 @@ export class RemoteConnector {
         this.pump();
       }, Math.max(1, deadline - this.now().getTime()));
       entry.approvalTimer.unref();
+      this.reportApprovals();
     } catch {
       const job = this.options.admission.getJob(entry.identity, entry.jobId);
       if (!job || entry.settled) return;
@@ -993,6 +1055,7 @@ export class RemoteConnector {
     finally {
       this.finish(entry, blocked);
       this.inFlight.delete(entry);
+      this.reportApprovals();
     }
   }
 
@@ -1129,14 +1192,17 @@ export class RemoteConnector {
           stopEvidence?.effect ?? "no_effect"));
       } else if (!brokerInvoked && result.isError) {
         this.finish(entry, admission.settle(identity, jobId, "failed",
-          { inline: Buffer.from(JSON.stringify({ reason: result.error?.code ?? "dispatch_refused" }), "utf8") }));
+          { inline: Buffer.from(JSON.stringify({ reason: result.error?.code ?? "dispatch_refused",
+            ...(result.error?.code === WINDOWS_PATH_TOO_LONG ? { message: result.error.message } : {}) }), "utf8") }));
       } else if (entry.controller.signal.aborted && unknown) {
         admission.recordStop(identity, jobId, "unverified");
-        this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown"));
+        this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown", await this.storedResult(result)));
       } else {
         if (entry.controller.signal.aborted) admission.recordStop(identity, jobId, "unverified");
         const state = unknown ? "outcome_unknown" : result.isError ? "failed" : "completed";
-        this.finish(entry, admission.settle(identity, jobId, state, unknown ? undefined : await this.storedResult(result)));
+        // An unknown outcome keeps what the tool returned, such as what a timed-out command printed and its processId.
+        // It is evidence, not a resolution: the job stays outcome_unknown, and its key returns it and never runs it again.
+        this.finish(entry, admission.settle(identity, jobId, state, await this.storedResult(result)));
       }
     } catch {
       if (!entry.settled) {
@@ -1224,6 +1290,7 @@ export class RemoteConnector {
       if (index >= 0) this.queue.splice(index, 1);
       this.finish(entry, this.options.admission.view(entry.identity, entry.jobId).job);
       this.inFlight.delete(entry);
+      this.reportApprovals();
       this.pump();
       return;
     }
@@ -1253,15 +1320,23 @@ export class RemoteConnector {
     if (needsEpoch) this.reportStatus(state as "tool-ready" | "connected-degraded", reasonCode);
   }
 
+  /** Sends the status again, as when something in it changed (the shells, once the Runner has learned them). */
+  refreshStatus(): void {
+    const { state, reasonCode } = this.current;
+    if (state === "tool-ready" || state === "connected-degraded") this.reportStatus(state, reasonCode);
+  }
+
   private reportStatus(state: "tool-ready" | "connected-degraded", reasonCode: RemoteConnectionReason): void {
     const transport = this.transport;
     if (!transport || this.pendingEpoch !== undefined) return;
+    // A reconnect starts with an empty list on the relay, and waiting commands outlive the socket.
+    this.reportApprovals();
     let report: RemoteStatusReport | undefined;
     try { report = this.options.statusReport?.(); } catch { return; }
     if (!report) return;
     try {
       void Promise.resolve(transport.send({ type: "status", state, reasonCode, runnerVersion: report.runnerVersion,
-        platform: report.platform, policy: { ...report.policy } })).catch(() => { /* readiness is advisory; socket loss is handled elsewhere */ });
+        platform: report.platform, policy: { ...report.policy }, ...(report.shells ? { shells: [...report.shells] } : {}) })).catch(() => { /* readiness is advisory; socket loss is handled elsewhere */ });
     } catch { /* same */ }
   }
 }
