@@ -19,7 +19,14 @@ assert.deepEqual(importSpecifiers([
   '// import "./commented-out.js";',
   '/* import "./block-comment.js"; */',
   'x.import("./member-call.js");',
-].join("\n")).sort(), ["./a.js", "./d.js", "./e.mjs", "./side-effect.js", "f-package"]);
+  'import { h } from "./h.js"; export { i } from "./i.js";',
+  "export {",
+  "  j,",
+  '} from "./j.js";',
+  // A shell script in a string is not an import (0.3.16 release).
+  `const script = '  for p in $list; do export "\${p%%:*}=$(decode "\${p#*:}")"; done';`,
+  '"import x from \\"./in-a-string.js\\""',
+].join("\n")).sort(), ["./a.js", "./d.js", "./e.mjs", "./h.js", "./i.js", "./j.js", "./side-effect.js", "f-package"]);
 
 assert.deepEqual(importClosureGaps(root), [], "the release bundle ships every module its files import");
 
