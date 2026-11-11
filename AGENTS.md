@@ -9,7 +9,8 @@ npm run dev
 npm run build
 npm run lint
 npm run runner:v2 -- --project C:\project --state-dir C:\runner-state --port 8787
-npm run test:runner-v2
+npm run typecheck:runner-v2
+npx tsx --test --test-concurrency=1 runner-v2/test/<file>.test.ts
 
 npx tsx scripts/test-parse-action.mts
 npx tsx scripts/test-edits.mts
@@ -17,11 +18,13 @@ npx tsx scripts/test-extract.ts
 npx tsx scripts/test-project-fs.ts
 ```
 
+For a Runner V2 change, run the affected test files and `npm run typecheck:runner-v2`. `npm run test:runner-v2` is the full suite and takes hours: CI or the owner runs it, never as a routine check.
+
 Development is on Windows/PowerShell. Running `npm run build` while the dev server is active can corrupt `.next`; restart the dev server afterward.
 
-## Runner V2 Task 12 mandate
+## Runner V2 standing rules
 
-When working on Runner V2 Task 12 / P6 acceptance, **read and follow `docs/runner-v2/task-12-bounded-gates.md` before editing or running broad gates**. Continue from `docs/runner-v2/task-12-status.md`; update that durable state as gates advance. Do not substitute ad-hoc CI repair, skip affected portable coverage, weaken fail-closed ownership semantics, or inflate timeouts to obtain green CI. Gates must be completed in the documented order with targeted evidence and independent review before the final integrated matrix.
+Task 12 / P6 acceptance is closed: T8 and Gate G were accepted on 2026-10-15. `docs/runner-v2/task-12-status.md`, `docs/runner-v2/task-12-bounded-gates.md` and `docs/runner-v2/t8-handoff.md` are history; do not resume them or follow their gate order. Their standing rules still apply to every Runner V2 change: never inflate timeouts to get green CI, never weaken fail-closed process ownership or fencing semantics, keep the affected portable coverage, verify with targeted tests plus `npm run typecheck:runner-v2`, and leave the full suite to CI or the owner. A change to process ownership or fencing also gets an independent review.
 
 ## Architecture
 
@@ -39,7 +42,7 @@ AI Board is a static-export Next.js app (App Router, React 19, strict TypeScript
 - `lib/client/legacy-build-engine.benchmark.ts` exists only for certified WorkBench benchmark compatibility. Product Build mode must never import it.
 - `lib/orchestrator/engine.ts` is otherwise legacy server code, but its `OrchestratorEvent` type remains live.
 
-Runner V2 requires the certified Node.js 24.x LTS release line and Git. Git absence stops before model calls. Verifiers record mechanical facts and never decide completeness. The Architect is semantic authority. Final project handoff always pauses for a user choice, including under Full access.
+Runner V2 requires the certified Node.js 24.x LTS release line and Git. Git absence stops before model calls. Verifiers record mechanical facts and never decide completeness. The Architect is semantic authority. A Build's final project handoff pauses for a user choice unless the run's policy is `finish` or `budgeted`, a project handoff was requested, and no known defects are recorded; a failed automatic apply pauses for the user.
 
 ### Providers
 
