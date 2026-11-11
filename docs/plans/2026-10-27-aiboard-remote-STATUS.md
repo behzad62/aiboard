@@ -252,6 +252,11 @@ NOT STARTED · ACTIVE · BLOCKED · REVIEWED · ACCEPTED
     - `{restart: true}` runs `exit 0` there.
     - Results read like a terminal: output, then `[exit code N]` and what happened to the shell. A command past 90 s points to `process_start`.
     - `process_start` and the other process tools stay offered.
+- **2026-11-11: OpenAI's shell tool in Build** (branch `claude/shared-process-tools`; `openai-shell-tool.ts`).
+  - Offered as `{"type": "shell", "environment": {"type": "local"}}` (Responses only) in place of `process.run`, to OpenAI GPT-6 models (their model pages list the shell tool; gpt-5.1's lists only apply_patch), where a bash can run and the session has `process.run`.
+  - Each `shell_call` command runs as its own `process.run` with shell bash, in order, keeping no directory or variables, as the docs' `sh -c` executors do. `timeout_ms` becomes `timeoutMs`.
+  - The answer is one `shell_call_output` per call: one `{stdout, stderr, outcome}` per command, `max_output_length` echoed, each stream cut to it in the middle. A command the Runner did not run reports its reason on stderr with exit code 1.
+  - Not tried against a live GPT-6 model.
 
 ## Open items carried from R0
 

@@ -33,6 +33,8 @@ export interface ProviderProtocolProfile {
      * that can edit (it sees `fs.patch`).
      */
     readonly nativeTools?: ReadonlyArray<{ readonly wire: Readonly<Record<string, unknown>>; readonly replaces: readonly string[] }>;
+    /** The shell tool with a local environment in place of process.run, for the models that list it (openai-shell-tool.ts). */
+    readonly shell?: boolean;
   };
   readonly messages?: {
     /**
@@ -91,10 +93,13 @@ export const PROVIDER_PROTOCOL_PROFILES: Readonly<Record<string, ProviderProtoco
   }),
   // apply_patch on Responses (also Chat Completions and Assistants), listed for GPT-5.1 to 5.5. It
   // returns apply_patch_call { operation: create_file | update_file (V4A diff) | delete_file } and
-  // takes apply_patch_call_output { status: completed | failed, output }.
+  // takes apply_patch_call_output { status: completed | failed, output }. shell with environment local (Responses only,
+  // developers.openai.com/api/docs/guides/tools-shell, read 2026-11-11): shell_call { action: { commands[], timeout_ms,
+  // max_output_length } }, answered by shell_call_output { output: [{ stdout, stderr, outcome }] }.
   openai: Object.freeze({
     preferredProtocol: "responses",
     responses: Object.freeze({
+      shell: true,
       nativeTools: Object.freeze([Object.freeze({
         wire: Object.freeze({ type: "apply_patch" }),
         replaces: Object.freeze(["fs.patch", "fs.write"]),

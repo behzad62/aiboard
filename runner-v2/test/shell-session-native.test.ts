@@ -14,6 +14,8 @@ import type { RunnerCapabilityContract } from "../src/runner-capability-contract
 import type { ToolExecutionOutput } from "../src/agent-contracts.js";
 import { bashExecutable, pwshExecutable } from "../src/shell-inventory.js";
 import { bashCall, bashResult } from "../src/anthropic-bash-tool.js";
+import { shellCallBlocks, shellCallOutput } from "../src/openai-shell-tool.js";
+import type { ToolResult } from "../src/agent-contracts.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 
 // process.run with shellSession on real PowerShell processes, owned by the run's Job like any managed process.
@@ -30,7 +32,7 @@ async function withHost(t: TestContext, body: (f: { project: string; invoke: Inv
   try {
     run = await host.bindRun({ runId: "shell-session", permissionProfile: "full", capabilityContract: { digest: "d".repeat(64) } as RunnerCapabilityContract, capabilitiesConfig: emptyRunnerCapabilitiesConfig() });
     const broker = new ToolBroker({ permissionProfile: "full", workspacePath: project, executionGrants: run.executionGrants, artifacts, maxInlineOutputBytes: 512 * 1024 });
-    for (const tool of createProcessTools({ support: processRunSupport(run.managedProcesses, artifacts) })) broker.register(tool);
+    for (const tool of createProcessTools({ execution: run.commandExecution, support: processRunSupport(run.managedProcesses, artifacts) })) broker.register(tool);
     for (const tool of createManagedProcessTools(run.managedProcesses)) broker.register(tool);
     let sequence = 0;
     const invoke: Invoke = (name, input, actorId = "worker") => broker.invoke({ type: "tool_call", callId: `call-${++sequence}`, name, arguments: input },
@@ -185,6 +187,22 @@ test("Anthropic's bash tool runs in one kept bash through process.run: state, ex
     const fresh = await bash({ command: "echo \"[$x]\"" });
     assert.equal(fresh.isError, false);
     assert.match(fresh.text, /^\[\]\n\[A new shell started/u);
+  });
+});
+
+test("OpenAI's shell runs each command as its own bash through process.run, in order, as the docs' fresh shells", { skip: bashSkip }, async (t) => {
+  await withHost(t, async ({ invoke }) => {
+    const action = { commands: ["mkdir made && cd made && x=5 && echo in $(basename \"$PWD\")", "echo \"[$x]\" $(basename \"$PWD\"); ls -d made", "echo oops >&2; exit 3"], max_output_length: 4096 };
+    const calls = shellCallBlocks("call_s", action);
+    const results: ToolResult[] = [];
+    for (const call of calls) results.push({ ...(await invoke(call.name, call.arguments as Record<string, unknown>)), callId: call.callId, toolName: call.name });
+    const output = shellCallOutput("call_s", calls[0]!.nativeCall!.input, results) as { output: Array<{ stdout: string; stderr: string; outcome: unknown }> };
+    assert.deepEqual(output.output.map((entry) => [lines(entry.stdout), lines(entry.stderr), entry.outcome]), [
+      [["in made"], [], { type: "exit", exit_code: 0 }],
+      // The second command starts where the workspace is, with no x: the docs' executors keep no state.
+      [["[] project", "made"], [], { type: "exit", exit_code: 0 }],
+      [[], ["oops"], { type: "exit", exit_code: 3 }],
+    ]);
   });
 });
 
