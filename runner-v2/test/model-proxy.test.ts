@@ -496,17 +496,34 @@ test("the proxy uses the home's key at call time: a removed key gets home_key_mi
   }
 });
 
-test("the proxy sends a key over plain http only to this computer", async () => {
+test("a key goes over plain http only to this computer; a keyless custom model may use plain http on the LAN", async () => {
+  // 192.0.2.10 is TEST-NET-1: never reached. The hook records each upstream request and stops it.
+  const made: Array<{ host: string; authorization: unknown }> = [];
   const fx = await fixture({
     homeOps: () => [
       { path: "providers.openai", op: "set", value: { enabled: true, baseUrl: "http://gateway.example.test/v1" } },
       { path: "credentials.providers.openai", op: "set", value: { secret: OPENAI_KEY } },
+      { path: "customModels.nas", op: "set", value: { label: "NAS", baseURL: "http://192.0.2.10:11434/v1", model: "gemma", createdAt: "2026-11-12T00:00:00.000Z" } },
+      { path: "customModels.nas-keyed", op: "set", value: { label: "NAS keyed", baseURL: "http://192.0.2.10:11434/v1", model: "gemma", createdAt: "2026-11-12T00:00:00.000Z" } },
+      { path: "credentials.customModels.nas-keyed", op: "set", value: { secret: CUSTOM_KEY } },
     ],
+    onUpstreamRequest: (outgoing) => {
+      made.push({ host: outgoing.host, authorization: outgoing.getHeader("authorization") });
+      outgoing.destroy();
+    },
   });
   try {
-    const reply = await send(fx.port, { method: "POST", path: "/v2/model-proxy/openai/chat/completions", body: "{}", headers: { ...json, authorization: `Bearer ${fx.token}` } });
-    assert.equal(reply.status, 502);
-    assert.equal(JSON.parse(reply.body).code, "proxy_upstream_insecure");
+    const auth = { ...json, authorization: `Bearer ${fx.token}` };
+    const provider = await send(fx.port, { method: "POST", path: "/v2/model-proxy/openai/chat/completions", body: "{}", headers: auth });
+    assert.equal(provider.status, 502);
+    assert.equal(JSON.parse(provider.body).code, "proxy_upstream_insecure");
+    const keyed = await send(fx.port, { method: "POST", path: "/v2/model-proxy/custom/nas-keyed/chat/completions", body: "{}", headers: auth });
+    assert.equal(keyed.status, 502);
+    assert.equal(JSON.parse(keyed.body).code, "proxy_upstream_insecure");
+    assert.deepEqual(made, [], "a keyed upstream over plain http off this computer is refused before any upstream call");
+    const keyless = await send(fx.port, { method: "POST", path: "/v2/model-proxy/custom/nas/chat/completions", body: "{}", headers: auth });
+    assert.deepEqual(made, [{ host: "192.0.2.10", authorization: undefined }], "a keyless custom model is forwarded over plain http, with no Authorization header");
+    assert.equal(JSON.parse(keyless.body).code, "proxy_upstream_unreachable", "the test stopped it before it left");
   } finally {
     await fx.close();
   }

@@ -63,7 +63,7 @@ import { buildAllowedOriginSet, isAllowedBrowserOrigin, normalizeOrigin } from "
 import { catalogVersion } from "./generated/model-catalog.js";
 import { snapshotProvider } from "./home-model-policy.js";
 import { loadStoredProviderConfigs, PushedConfigError, resolvePushedConfig, takesKeyFromHome } from "./home-provider-configs.js";
-import type { ModelProxy } from "./model-proxy.js";
+import { MANUAL_PROXY_PRINCIPAL, type ModelProxy } from "./model-proxy.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -1453,6 +1453,11 @@ export class ControlServer {
       const body = await readJson<unknown>(request);
       assertExactBodyKeys(body, ["baseRevision", "ops"]);
       if (!Number.isSafeInteger(body.baseRevision) || (body.baseRevision as number) < 0 || !Array.isArray(body.ops)) invalidBody();
+      // Checked for the whole batch before anything is written: a refused op refuses the batch.
+      for (const op of body.ops as unknown[]) {
+        const path = op && typeof op === "object" ? (op as { path?: unknown }).path : undefined;
+        if (typeof path === "string" && path.startsWith("credentials.providers.")) assertProviderTakesHomeKey(path.slice("credentials.providers.".length));
+      }
       try {
         const result = await applyHomeBatch(home, { baseRevision: body.baseRevision as number, ops: body.ops as HomeOp[] });
         sendJson(response, 200, { revision: result.revision, touched: result.touched, removedCredentials: result.removedCredentials });
@@ -1472,7 +1477,7 @@ export class ControlServer {
       // The Runner token is a manual connection, whose proxy token lives as long as the Runner;
       // a paired session's token expires after 12 h and dies with the session.
       if (hasBearerToken(request.headers.authorization, this.token)) {
-        sendJson(response, 200, proxy.issue("manual", { expires: false }));
+        sendJson(response, 200, proxy.issue(MANUAL_PROXY_PRINCIPAL, { expires: false }));
         return;
       }
       const sessionId = this.localPairing?.sessionId(bearerToken(request.headers.authorization) ?? "");
@@ -1487,9 +1492,7 @@ export class ControlServer {
       else if (segments.length === 5 && segments[3] === "custom") path = `credentials.customModels.${segments[4]}`;
       else if (segments.length === 4) {
         providerId = segments[3]!;
-        const provider = snapshotProvider(providerId);
-        if (!provider) throw new HttpError(422, "unknown_provider", "That is not a provider AI Board knows.");
-        if (provider.accountBacked) throw new HttpError(422, "home_invalid_op", `${provider.name} takes no key: it signs in through the account runner.`);
+        assertProviderTakesHomeKey(providerId);
         path = `credentials.providers.${providerId}`;
       } else {
         throw new HttpError(404, "not_found", "Route not found.");
@@ -2096,6 +2099,17 @@ function describeInternalError(error: unknown, depth = 0): string {
     ? error.errors
     : error instanceof Error && error.cause !== undefined ? [error.cause] : [];
   return [head, ...causes.map((cause) => `  ${"  ".repeat(depth)}- ${describeInternalError(cause, depth + 1)}`)].join("\n");
+}
+
+/**
+ * Only a provider AI Board knows, and one that is not account-backed, takes a key in the home. ChatGPT
+ * and Copilot sign in through the account runner, whose token never belongs in the home (OD-32). Both
+ * the credential routes and `POST /v2/home` batches call this.
+ */
+function assertProviderTakesHomeKey(providerId: string): void {
+  const provider = snapshotProvider(providerId);
+  if (!provider) throw new HttpError(422, "unknown_provider", "That is not a provider AI Board knows.");
+  if (provider.accountBacked) throw new HttpError(422, "home_invalid_op", `${provider.name} takes no key: it signs in through the account runner.`);
 }
 
 /** A home error's own message, without the `code: ` prefix AiboardHomeError adds. */

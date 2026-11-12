@@ -11,7 +11,7 @@ import { ControlServer } from "../src/control-server.js";
 import { HomeBackedProviderConfigStore } from "../src/home-provider-configs.js";
 import { CachedHomeReader } from "../src/home-reader.js";
 import { createLocalPairTicket, LocalPairing } from "../src/local-pairing.js";
-import { ModelProxy, PROXY_TOKEN_LIFETIME_MS, PROXY_TOKEN_REPLACEMENT_GRACE_MS } from "../src/model-proxy.js";
+import { MAX_MANUAL_PROXY_TOKENS, ModelProxy, PROXY_TOKEN_LIFETIME_MS, PROXY_TOKEN_REPLACEMENT_GRACE_MS } from "../src/model-proxy.js";
 import { validateProviderConfigs, type ProviderConfigStore, type RunnerProviderConfig } from "../src/provider-config-store.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
@@ -176,6 +176,27 @@ test("POST /v2/home batches apply all or nothing", async () => {
   }
 });
 
+test("a batch cannot save a key the credential route refuses: an account-backed or unknown provider refuses the whole batch", async () => {
+  const fx = await fixture();
+  try {
+    const before = await fx.call("/v2/home");
+    for (const [id, code] of [["chatgpt", "home_invalid_op"], ["github-copilot", "home_invalid_op"], ["not-a-provider", "unknown_provider"]] as const) {
+      const refused = await fx.call("/v2/home", { method: "POST", body: { baseRevision: before.body.revision, ops: [
+        { path: "settings.defaultReasoningEffort", op: "set", value: "high" },
+        { path: `credentials.providers.${id}`, op: "set", value: { secret: CANARY } },
+      ] } });
+      assert.equal(refused.status, 422, id);
+      assert.equal(refused.body.code, code, id);
+    }
+    const after = await fx.call("/v2/home");
+    assert.equal(after.body.revision, before.body.revision, "nothing was written");
+    assert.equal((after.body.config as { settings: Record<string, unknown> }).settings.defaultReasoningEffort, undefined);
+    assert.deepEqual((after.body.credentials as { providers: object }).providers, {});
+  } finally {
+    await fx.close();
+  }
+});
+
 test("two clients editing different entries of one map both land; a stale baseRevision on one section gets 409 with the current values", async () => {
   const fx = await fixture();
   try {
@@ -273,13 +294,38 @@ test("a proxy token stops working 60 s after it is replaced", async () => {
     fx.now.value += 1;
     assert.equal(await proxyCall(fx, first), 401, "the replaced token stops 60 s after its replacement");
     assert.equal(await proxyCall(fx, second), 200);
-    // A manual connection's token is replaced the same way.
-    const manualA = (await fx.call("/v2/home/proxy-session", { method: "POST" })).body.token as string;
-    const manualB = (await fx.call("/v2/home/proxy-session", { method: "POST" })).body.token as string;
+    // A paired session's new token never retires a manual connection's, nor the reverse.
+    const manual = (await fx.call("/v2/home/proxy-session", { method: "POST" })).body.token as string;
+    const third = (await fx.call("/v2/home/proxy-session", { method: "POST", bearer: session })).body.token as string;
     fx.now.value += PROXY_TOKEN_REPLACEMENT_GRACE_MS;
-    assert.equal(await proxyCall(fx, manualA), 401);
-    assert.equal(await proxyCall(fx, manualB), 200);
-    assert.equal(await proxyCall(fx, second), 200, "one principal's new token never retires another's");
+    assert.equal(await proxyCall(fx, manual), 200);
+    assert.equal(await proxyCall(fx, second), 401, "the paired session's own replacement retired it");
+    assert.equal(await proxyCall(fx, third), 200);
+  } finally {
+    await fx.close();
+  }
+});
+
+test("manual connections share the Runner token, so their proxy tokens never retire each other; past 16 the oldest retires after the grace", async () => {
+  const fx = await fixture();
+  try {
+    await seedOpenAi(fx);
+    // Two tabs on the saved Runner token, each asking for its own proxy token.
+    const tabA = (await fx.call("/v2/home/proxy-session", { method: "POST" })).body.token as string;
+    const tabB = (await fx.call("/v2/home/proxy-session", { method: "POST" })).body.token as string;
+    fx.now.value += PROXY_TOKEN_REPLACEMENT_GRACE_MS + 1_000;
+    assert.equal(await proxyCall(fx, tabA), 200, "a second manual token does not retire the first");
+    assert.equal(await proxyCall(fx, tabB), 200);
+    const more: string[] = [];
+    for (let index = 0; index < MAX_MANUAL_PROXY_TOKENS - 2; index += 1) more.push((await fx.call("/v2/home/proxy-session", { method: "POST" })).body.token as string);
+    fx.now.value += PROXY_TOKEN_REPLACEMENT_GRACE_MS;
+    assert.equal(await proxyCall(fx, tabA), 200, "16 live manual tokens fit");
+    const seventeenth = (await fx.call("/v2/home/proxy-session", { method: "POST" })).body.token as string;
+    fx.now.value += PROXY_TOKEN_REPLACEMENT_GRACE_MS - 1;
+    assert.equal(await proxyCall(fx, tabA), 200, "the oldest keeps its 60 s grace");
+    fx.now.value += 1;
+    assert.equal(await proxyCall(fx, tabA), 401, "the 17th issue retired the oldest after the grace");
+    for (const live of [tabB, ...more, seventeenth]) assert.equal(await proxyCall(fx, live), 200);
   } finally {
     await fx.close();
   }

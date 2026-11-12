@@ -43,6 +43,10 @@ export const MODEL_PROXY_PATH_PREFIX = "/v2/model-proxy/";
 export const PROXY_TOKEN_LIFETIME_MS = 12 * 60 * 60 * 1000;
 /** A replaced token keeps working this long, so streams in flight can finish. */
 export const PROXY_TOKEN_REPLACEMENT_GRACE_MS = 60_000;
+/** The principal of every Runner-token (manual) connection; it is shared by every tab using that token. */
+export const MANUAL_PROXY_PRINCIPAL = "manual";
+/** Live manual tokens kept at once; issuing one more retires the oldest, with the usual grace. */
+export const MAX_MANUAL_PROXY_TOKENS = 16;
 /**
  * The request cap: lib/attachments/types.ts allows 8 attachments (MAX_ATTACHMENTS) of 15 MiB
  * (MAX_ATTACHMENT_BYTES), sent base64 (4/3), plus 8 MiB for the rest of the request. HM4a shares this
@@ -328,18 +332,27 @@ export class ModelProxy {
   }
 
   /**
-   * A proxy token for one principal: a paired session's id, or the manual connection's key. A new
-   * token replaces the principal's current one, which stops working 60 s later. A paired session's
-   * token expires after 12 h; a manual connection's lives as long as the Runner.
+   * A proxy token for one principal: a paired session's id, or `MANUAL_PROXY_PRINCIPAL`. A paired
+   * session's new token replaces its current one, which stops working 60 s later, and it expires after
+   * 12 h. Manual tokens live as long as the Runner and never retire each other; past
+   * `MAX_MANUAL_PROXY_TOKENS` the oldest live one is retired with the same 60 s grace.
    */
   issue(sessionKey: string, options: { expires: boolean }): ProxySessionGrant {
     if (!this.baseUrl) throw new Error("Model proxy is not running.");
     const now = this.clock();
     this.prune(now);
-    for (const record of this.tokens) {
-      if (record.sessionKey !== sessionKey) continue;
-      const retire = now + PROXY_TOKEN_REPLACEMENT_GRACE_MS;
-      record.retiresAt = record.retiresAt === null ? retire : Math.min(record.retiresAt, retire);
+    const retire = (record: TokenRecord): void => {
+      const at = now + PROXY_TOKEN_REPLACEMENT_GRACE_MS;
+      record.retiresAt = record.retiresAt === null ? at : Math.min(record.retiresAt, at);
+    };
+    if (sessionKey === MANUAL_PROXY_PRINCIPAL) {
+      // Every tab using the saved Runner token shares this principal, so a new manual token never
+      // retires another: each lives as long as the Runner. Only past the cap is the oldest retired.
+      const live = this.tokens.filter((record) => record.sessionKey === sessionKey && record.retiresAt === null);
+      for (const record of live.slice(0, Math.max(0, live.length - (MAX_MANUAL_PROXY_TOKENS - 1)))) retire(record);
+    } else {
+      // A paired session is one tab: its new token replaces the old one.
+      for (const record of this.tokens) if (record.sessionKey === sessionKey) retire(record);
     }
     const token = `proxy_${randomBytes(32).toString("base64url")}`;
     const expiresAt = options.expires ? now + PROXY_TOKEN_LIFETIME_MS : null;
@@ -484,8 +497,9 @@ export class ModelProxy {
     if ((baseUrl.protocol !== "https:" && baseUrl.protocol !== "http:") || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) {
       throw new ProxyRefusal(422, "proxy_upstream_invalid", "The saved base URL must be a plain http or https URL.");
     }
-    // A key never crosses the network in clear text: plain http only to this machine.
-    if (baseUrl.protocol === "http:" && !LOOPBACK_HOSTS.has(baseUrl.hostname)) {
+    // A key never crosses the network in clear text: with a key, plain http only to this machine. A
+    // keyless custom model (an Ollama on the LAN) sends nothing secret, so it may use plain http anywhere.
+    if (baseUrl.protocol === "http:" && !LOOPBACK_HOSTS.has(baseUrl.hostname) && secret !== undefined) {
       throw new ProxyRefusal(502, "proxy_upstream_insecure", "The model proxy sends keys over plain http only to this computer; use an https base URL.");
     }
     const prefix = baseUrl.pathname.replace(/\/+$/, "");
