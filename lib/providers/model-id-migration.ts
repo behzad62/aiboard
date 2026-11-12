@@ -1,4 +1,5 @@
-const OPENAI_LEGACY_MODEL_IDS: Readonly<Record<string, string>> = {
+/** Renamed OpenAI model ids, old → new. Exported for the Runner's catalog snapshot. */
+export const OPENAI_LEGACY_MODEL_IDS: Readonly<Record<string, string>> = {
   "gpt-5.6": "gpt-5.6-terra",
   "gpt-5.6-pro": "gpt-5.6-sol",
   "gpt-5.6-mini": "gpt-5.6-luna",

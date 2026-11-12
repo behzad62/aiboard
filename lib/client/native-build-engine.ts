@@ -4,7 +4,7 @@ import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 import { parseModelId } from "@/lib/providers/base";
 import { MODEL_CATALOG } from "@/lib/providers/catalog";
 import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
-import { getProviderDefinition } from "@/lib/providers/provider-registry";
+import { getProviderDefinition, providerConnection } from "@/lib/providers/provider-registry";
 import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-resolution";
 import {
   getDiscoveredModelMetadata,
@@ -760,11 +760,13 @@ export function nativeProviderProtocol(
   providerId: string,
   _modelId: string
 ): "chat-completions" | "responses" {
-  return providerId === "openai" || providerId === "openrouter"
-    ? "responses"
-    : "chat-completions";
+  return providerConnection(providerId)?.protocol ?? "chat-completions";
 }
 
+/**
+ * The transport and base URL of a native runtime. The defaults are provider-registry data, which the
+ * Runner's catalog snapshot carries too (runner-v2/src/generated/model-catalog.ts).
+ */
 export function resolveNativeProviderTransport(
   providerId: string,
   baseUrl?: string,
@@ -775,18 +777,13 @@ export function resolveNativeProviderTransport(
     if (!baseUrl) throw new Error(`Provider ${providerId} has no account-runner URL.`);
     return { transport: "account-runner", baseUrl };
   }
-  if (providerId === "anthropic" || providerId === "foundry") {
-    return { transport: "anthropic", ...(baseUrl ? { baseUrl } : {}) };
+  const connection = providerConnection(providerId);
+  if (connection?.transport === "anthropic" || connection?.transport === "google") {
+    return { transport: connection.transport, ...(baseUrl ? { baseUrl } : {}) };
   }
-  if (providerId === "google") {
-    return { transport: "google", ...(baseUrl ? { baseUrl } : {}) };
-  }
-  const resolvedBaseUrl = baseUrl ?? ({
-    openai: "https://api.openai.com/v1",
-    deepseek: "https://api.deepseek.com",
-    openrouter: "https://openrouter.ai/api/v1",
-    xai: "https://api.x.ai/v1",
-  } as Record<string, string>)[providerId];
+  const resolvedBaseUrl = baseUrl ?? (connection?.transport === "openai-compatible"
+    ? connection.defaultBaseUrl ?? undefined
+    : undefined);
   if (!resolvedBaseUrl) {
     throw new Error(`Provider ${providerId} needs an OpenAI-compatible base URL.`);
   }

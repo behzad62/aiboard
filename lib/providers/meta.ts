@@ -16,8 +16,9 @@ import {
   type ProviderToolEvent,
 } from "./provider-events";
 import type { ToolCapabilityId } from "./tool-capabilities";
+import { providerDefaultBaseUrl } from "./provider-registry";
 
-export const META_MODEL_API_BASE_URL = "https://api.meta.ai/v1";
+export const META_MODEL_API_BASE_URL = providerDefaultBaseUrl("meta");
 
 function createMetaClient(apiKey: string): OpenAI {
   return new OpenAI({

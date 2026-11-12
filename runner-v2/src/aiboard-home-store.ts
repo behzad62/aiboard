@@ -16,6 +16,7 @@ import { dirname } from "node:path";
 
 import { AiboardHomeError, type AiboardHomeLocation } from "./aiboard-home-paths.js";
 import { openEncryptedJson } from "./encrypted-provider-config-store.js";
+import { migrateHomeConfigModelIds } from "./home-model-policy.js";
 import { acquireLockFile } from "./launcher-instance.js";
 import { FileStorageKeyProvider } from "./storage-key.js";
 
@@ -302,7 +303,13 @@ export function normalizeUpstream(value: string): string {
   return `${url.protocol}//${url.host}${path}${url.search}`;
 }
 
-/** A provider with no base URL uses its default upstream, which HM2 knows; the binding names it. */
+/**
+ * A provider with no base URL uses its default upstream, and its key is bound to the sentinel
+ * `default:<providerId>`. HM2 keeps the sentinel rather than binding to the default URL itself: the
+ * default comes from the catalog snapshot of the AI Board release (home-runtime.ts
+ * `homeProviderUpstream`), so a key the user saved for "the provider's own API" follows a default that a
+ * signed release changes, while any base URL the user saves still rebinds and removes the key.
+ */
 export function providerUpstream(config: AiboardHomeConfigV1, providerId: string): string {
   const baseUrl = config.providers[providerId]?.baseUrl;
   return typeof baseUrl === "string" && baseUrl ? normalizeUpstream(baseUrl) : `default:${providerId}`;
@@ -510,6 +517,8 @@ async function readConfig(location: AiboardHomeLocation, now: string): Promise<C
     return parseConfig(bytes);
   }, "config.json", configAdvice(location.configPath));
   if (!read) return { config: defaultConfig(now), exists: false, newer: false };
+  // §5.8 "Model ids": every read sees renamed model ids migrated, so the next write saves them (HM2).
+  migrateHomeConfigModelIds(read.config);
   return { config: read.config, exists: true, newer: read.newer };
 }
 

@@ -21,6 +21,13 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/runner-bundle-closure.yml"
+      # The Runner's model catalog snapshot (runner-v2/src/generated/model-catalog.ts) is generated from
+      # these web files, so a change to any of them must regenerate it (packet HM2).
+      - "lib/providers/**"
+      - "lib/client/native-build-engine.ts"
+      - "lib/client/providers.ts"
+      - "scripts/generate-runner-model-catalog.mts"
+      - "scripts/test-runner-model-catalog-parity.mts"
   workflow_dispatch:
 
 permissions:
@@ -43,3 +50,7 @@ jobs:
         run: npm ci
       - name: Every shipped import is shipped
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-bundle-closure.mts
+      - name: The Runner's model catalog snapshot is current
+        run: node node_modules/tsx/dist/cli.mjs scripts/generate-runner-model-catalog.mts --check
+      - name: The Runner's model rules equal the web's
+        run: node node_modules/tsx/dist/cli.mjs scripts/test-runner-model-catalog-parity.mts
