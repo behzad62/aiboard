@@ -7,7 +7,7 @@ import {
   resolveHomeRuntime,
   type HomeModelSource,
 } from "./home-runtime.js";
-import type { ProviderConfigStore, RunnerProviderConfig } from "./provider-config-store.js";
+import { HOME_SECRET_PLACEHOLDER, type ProviderConfigStore, type RunnerProviderConfig } from "./provider-config-store.js";
 
 /**
  * Pushed configs without secrets (Simple Build plan §9, packet HM3).
@@ -15,7 +15,8 @@ import type { ProviderConfigStore, RunnerProviderConfig } from "./provider-confi
  * The web pushes provider configs with no `secret`; the Runner resolves each from the AIBoard home.
  * The home decides where a home key goes: the base URL, transport and protocol come from the home and
  * the pushed ones are ignored, and a pushed base URL that differs from the home's is refused with
- * `upstream_mismatch`. A resolved config is stored with `secretSource: "home"` and no secret, and
+ * `upstream_mismatch`. A resolved config is stored with `secretSource: "home"` and no key (its `secret`
+ * is HOME_SECRET_PLACEHOLDER, so a Runner from before HM3 can still load the store after a rollback), and
  * `HomeBackedProviderConfigStore` reads the key from the home each time a runtime is built, so a key
  * removed with `aiboard keys remove`, or replaced, takes effect at once.
  *
@@ -71,7 +72,8 @@ function withoutConnection(config: RunnerProviderConfig): Omit<RunnerProviderCon
 
 /**
  * Resolves one pushed config from the home into the form the Runner stores: `secretSource: "home"`,
- * no secret, and the home's transport, base URL and protocol. Throws `PushedConfigError`.
+ * HOME_SECRET_PLACEHOLDER in place of a key, and the home's transport, base URL and protocol. Throws
+ * `PushedConfigError`.
  */
 export function resolvePushedConfig(home: HomeModelSource, pushed: RunnerProviderConfig): RunnerProviderConfig {
   if (typeof pushed.runtimeId !== "string" || !pushed.runtimeId) throw new PushedConfigError(400, "invalid_request", "A provider config needs a runtimeId.");
@@ -87,7 +89,7 @@ export function resolvePushedConfig(home: HomeModelSource, pushed: RunnerProvide
     }
     const resolved = resolveHomeRuntime(home, pushed.runtimeId, { priority: pushed.priority, reasoningEffort: pushed.reasoningEffort ?? null }).config;
     const connection = connectionFields(resolved);
-    return { ...withoutConnection(pushed), ...connection, secret: "", secretSource: "home" };
+    return { ...withoutConnection(pushed), ...connection, secret: HOME_SECRET_PLACEHOLDER, secretSource: "home" };
   } catch (error) {
     if (error instanceof HomeModelError) throw new PushedConfigError(422, error.code, error.message.replace(/^[a-z_]+: /, ""));
     throw error;

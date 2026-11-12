@@ -20,11 +20,11 @@ export interface RunnerProviderConfig {
   transport: ProviderTransport;
   baseUrl?: string;
   /**
-   * The key sent upstream. Empty in a stored `secretSource: "home"` config: the Runner reads the key
-   * from the AIBoard home each time it builds a runtime (home-provider-configs.ts, HM3).
+   * The key sent upstream. A stored `secretSource: "home"` config holds HOME_SECRET_PLACEHOLDER instead:
+   * the Runner reads the key from the AIBoard home each time it builds a runtime (home-provider-configs.ts, HM3).
    */
   secret: string;
-  /** "home": stored with no secret; the key, base URL, transport and protocol come from the AIBoard home. */
+  /** "home": stored with no key; the key, base URL, transport and protocol come from the AIBoard home. */
   secretSource?: "home";
   runnerToken?: string;
   capabilities: string[];
@@ -93,6 +93,16 @@ export function providerUsageConfig(
   };
 }
 
+/**
+ * The `secret` of a stored `secretSource: "home"` config. It is not a key and is never sent by a Runner
+ * that knows the home, which fills the real key at use. It is not empty because a Runner from before
+ * HM3 (0.3.16 and older) refuses to load a store holding a config with no secret ("Could not decrypt
+ * provider configuration"), so `aiboard update --rollback` would leave it unable to start any Build.
+ * With the placeholder an older Runner loads the store, and only these models fail, with the provider's
+ * 401. Never change this value: each released Runner validates stored configs against it.
+ */
+export const HOME_SECRET_PLACEHOLDER = "aiboard-home-key";
+
 export function validateProviderConfigs(
   configs: readonly RunnerProviderConfig[]
 ): void {
@@ -102,7 +112,7 @@ export function validateProviderConfigs(
       !config.runtimeId ||
       !config.providerId ||
       !config.modelId ||
-      (config.secretSource === undefined ? !config.secret : config.secret !== "")
+      (config.secretSource === undefined ? !config.secret : config.secret !== HOME_SECRET_PLACEHOLDER)
     ) {
       throw new Error("Provider runtime identity and secret are required.");
     }
