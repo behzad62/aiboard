@@ -16,7 +16,7 @@ import { dirname } from "node:path";
 
 import { AiboardHomeError, type AiboardHomeLocation } from "./aiboard-home-paths.js";
 import { openEncryptedJson } from "./encrypted-provider-config-store.js";
-import { migrateHomeConfigModelIds } from "./home-model-policy.js";
+import { migrateHomeConfigModelIds, snapshotProvider } from "./home-model-policy.js";
 import { acquireLockFile } from "./launcher-instance.js";
 import { FileStorageKeyProvider } from "./storage-key.js";
 
@@ -1244,7 +1244,8 @@ export interface WebSettingsInput {
 /**
  * The ops that save the web's UserSettings, ProviderKey and CustomModel records to the home: only the
  * allow-listed fields go to config.json, every secret goes to a credential path, and the browser-only
- * and not-stored fields go nowhere.
+ * and not-stored fields go nowhere. An account-backed provider's apiKey (the account peer's token) is
+ * not a key and goes nowhere.
  */
 export function homeOpsFromWebState(input: WebSettingsInput): HomeOp[] {
   const ops: HomeOp[] = [];
@@ -1279,6 +1280,9 @@ export function homeOpsFromWebState(input: WebSettingsInput): HomeOp[] {
       if (key[webField] !== undefined) value[homeField] = key[webField];
     }
     ops.push({ path: `providers.${id}`, op: "set", value });
+    // An account-backed provider (ChatGPT, Copilot) takes no key in the home: what the web may hold in
+    // its apiKey is the account peer's token, which is never saved as a credential (OD-32).
+    if (snapshotProvider(id)?.accountBacked) continue;
     if (typeof key.apiKey === "string" && key.apiKey) ops.push({ path: `credentials.providers.${id}`, op: "set", value: { secret: key.apiKey } });
   }
   for (const model of input.customModels ?? []) {

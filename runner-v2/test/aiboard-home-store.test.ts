@@ -444,6 +444,27 @@ test("every UserSettings, ProviderKey and CustomModel field is in exactly one ho
   check("CustomModel", { home: CUSTOM_MODEL_HOME_FIELDS, secret: CUSTOM_MODEL_SECRET_FIELDS, notStored: CUSTOM_MODEL_NOT_STORED_FIELDS });
 });
 
+test("an account-backed provider's peer token is never saved as a credential", async () => {
+  const fx = fixture();
+  try {
+    const peerToken = "account-peer-canary-token-0001";
+    const ops = homeOpsFromWebState({ providerKeys: [
+      { providerId: "chatgpt", apiKey: peerToken, runnerToken: peerToken, enabled: true },
+      { providerId: "github-copilot", apiKey: peerToken, enabled: true },
+      { providerId: "openai", apiKey: "sk-test-openai-key-0002", enabled: true },
+    ] });
+    assert.deepEqual(ops.filter((op) => op.path.startsWith("credentials.")).map((op) => op.path), ["credentials.providers.openai"]);
+    assert.ok(!JSON.stringify(ops).includes(peerToken), "the peer token is in no op");
+    await applyHomeBatch(fx.location, { baseRevision: 0, ops });
+    const snapshot = await readAiboardHome(fx.location);
+    assert.equal(snapshot.config.providers.chatgpt?.enabled, true, "the account rows are still saved");
+    assert.equal(snapshot.config.providers["github-copilot"]?.enabled, true);
+    assert.deepEqual(Object.keys(snapshot.credentials?.providers ?? {}), ["openai"]);
+  } finally {
+    cleanup(fx);
+  }
+});
+
 test("a canary secret in every string field of UserSettings, ProviderKey and CustomModel never reaches config.json", async () => {
   const fx = fixture();
   try {
