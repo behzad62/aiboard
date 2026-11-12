@@ -15,12 +15,15 @@ export interface StorageKeyProvider {
   getKey(options: { createIfMissing: boolean }): Buffer;
 }
 
-/** A per-state-directory key; other custody providers can implement the same interface. */
+/**
+ * A per-state-directory key; other custody providers can implement the same interface.
+ * The AIBoard home key (`<user data root>/home-key`) is created the same way, with its own file name.
+ */
 export class FileStorageKeyProvider implements StorageKeyProvider {
   readonly path: string;
 
-  constructor(stateDirectory: string) {
-    this.path = join(stateDirectory, "storage-key");
+  constructor(directory: string, fileName: "storage-key" | "home-key" = "storage-key") {
+    this.path = join(directory, fileName);
   }
 
   getKey({ createIfMissing }: { createIfMissing: boolean }): Buffer {

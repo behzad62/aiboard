@@ -11,6 +11,12 @@ const mutationNames = new Set(["writeFile", "appendFile", "write", "writev", "re
 // modules own Runner-private state/SQLite/artifacts/protocol files or existing
 // run-owned verification/Git-worktree lifecycle, never native fs.* tool targets.
 const privateOwners = new Set([
+  // Reviewed 2026-11-12 (docs/runner-v2/filesystem-owner-review-2026-11-12-hm1.md): the AIBoard home store.
+  // It creates <home> and the user data root when missing (0700), replaces <home>/config.json and
+  // <home>/credentials.json through exclusive random temporaries and rename, and creates the home key
+  // through FileStorageKeyProvider (unlinking it only in resetHomeCredentials when it is corrupt).
+  // Targets are fixed names under AIBOARD_HOME or ~/.aiboard and the data root, never model-selected paths.
+  "aiboard-home-store.ts",
   "artifact-store.ts", "bounded-output-spool.ts", "browser-tools.ts", "cli.ts", "command-evidence-identity.ts", // private GIT_INDEX_FILE snapshots under attested run root outside cwd; separate index per capture, cleans only created tmp.
   "durable-process-store.ts",
   "encrypted-provider-config-store.ts", "execution-host.ts", "execution-isolation-provider.ts",

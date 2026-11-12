@@ -9,7 +9,8 @@ import { createExecutionHost, type ExecutionHost } from "../src/execution-host.j
 import { createFilesystemTools } from "../src/filesystem-tools.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { resolveProtectedLocations, type ProtectedLocations } from "../src/protected-locations.js";
-import { createRemotePathGuard, RemotePathDeniedError, type RemotePathGuard } from "../src/remote-path-guard.js";
+import { aiboardHomeDenyEntries } from "../src/aiboard-home-paths.js";
+import { createRemotePathGuard, FixedPathDeny, RemotePathDeniedError, type RemotePathGuard } from "../src/remote-path-guard.js";
 import { RemotePrincipalStore } from "../src/remote-principal.js";
 import { createLocalMcpOwner, LocalMcpToolSession, RemoteToolRuntime } from "../src/remote-tool-runtime.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -325,3 +326,68 @@ test("local MCP session denies protected paths inside the project while allowed 
   }
 });
 
+
+async function homeFixture(): Promise<{ root: string; home: string; data: string; deny: FixedPathDeny; elsewhere: string }> {
+  const root = await mkdtemp(join(process.cwd(), "runner-v2", "test", ".home-deny-"));
+  const home = join(root, "aiboard-home"), data = join(root, "local", "AIBoard"), elsewhere = join(root, "elsewhere");
+  for (const dir of [home, data, elsewhere]) await mkdir(dir, { recursive: true });
+  for (const name of ["config.json", "credentials.json", "home-lock.sqlite", "notes.txt"]) await writeFile(join(home, name), "{}");
+  await writeFile(join(data, "home-key"), Buffer.alloc(32, 7));
+  const environment = { AIBOARD_HOME: home, LOCALAPPDATA: join(root, "local"), XDG_DATA_HOME: join(root, "local") };
+  const userHome = join(root, "user");
+  const entries = aiboardHomeDenyEntries({ platform: process.platform, environment, home: userHome });
+  // On macOS the data root is under the user's home, not XDG_DATA_HOME: point the key entry at the fixture.
+  const fixed = entries.map((entry) => entry.category === "aiboard_home_key" ? { ...entry, path: join(data, "home-key") } : entry);
+  return { root, home, data, elsewhere, deny: new FixedPathDeny(fixed) };
+}
+
+test("the AIBoard home's fixed deny refuses credentials, lock and key at every mode, and config writes", async () => {
+  const fx = await homeFixture();
+  try {
+    for (const name of ["credentials.json", "home-lock.sqlite", "home-lock.sqlite.identity", "credentials.json.tmp-0123"]) {
+      for (const access of ["read", "write", "delete"] as const) assert.ok(await fx.deny.check(join(fx.home, name), access), `${name} ${access}`);
+    }
+    for (const access of ["read", "write", "delete"] as const) {
+      assert.equal((await fx.deny.check(join(fx.data, "home-key"), access))?.category, "aiboard_home_key");
+      assert.ok(await fx.deny.check(join(fx.data, "home-key.tmp-abcd"), access), "the key's temporary file");
+    }
+    assert.equal(await fx.deny.check(join(fx.home, "config.json"), "read"), undefined, "config.json is readable");
+    assert.equal((await fx.deny.check(join(fx.home, "config.json"), "write"))?.category, "aiboard_home_config");
+    assert.ok(await fx.deny.check(join(fx.home, "config.json"), "delete"));
+    assert.equal(await fx.deny.check(join(fx.home, "notes.txt"), "write"), undefined, "other files in the home are not denied");
+    // A folder that holds a denied file: delete and search are refused, a plain read of the folder is not.
+    assert.ok(await fx.deny.check(fx.home, "delete"));
+    assert.ok(await fx.deny.check(fx.root, "read", { tree: true }));
+    assert.equal(await fx.deny.check(fx.root, "read"), undefined);
+    assert.equal(await fx.deny.check(fx.elsewhere, "delete"), undefined);
+    assert.ok(await fx.deny.check(join(fx.home, "sub", "..", "credentials.json"), "read"), "dot segments");
+    if (process.platform === "win32" || process.platform === "darwin") assert.ok(await fx.deny.check(join(fx.home, "CREDENTIALS.JSON"), "read"), "case");
+    if (process.platform === "win32") {
+      assert.ok(await fx.deny.check(`${join(fx.home, "credentials.json")}::$DATA`, "read"), "alternate data stream");
+      assert.ok(await fx.deny.check(`${join(fx.home, "credentials.json")}. `, "read"), "trailing dot and space");
+      assert.ok(await fx.deny.check(`${join(fx.home, "config.json")}:extra`, "write"), "a stream of config.json");
+    }
+  } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test("the AIBoard home's fixed deny resolves symlinks, junctions and hard links", async () => {
+  const fx = await homeFixture();
+  try {
+    const linkType = process.platform === "win32" ? "junction" as const : "dir" as const;
+    await symlink(fx.home, join(fx.elsewhere, "home-link"), linkType);
+    assert.ok(await fx.deny.check(join(fx.elsewhere, "home-link", "credentials.json"), "read"), "through a junction to the home");
+    assert.ok(await fx.deny.check(join(fx.elsewhere, "home-link", "config.json"), "write"));
+    assert.ok(await fx.deny.check(join(fx.elsewhere, "home-link"), "read", { tree: true }), "a search through the junction");
+    await symlink(fx.data, join(fx.elsewhere, "data-link"), linkType);
+    assert.ok(await fx.deny.check(join(fx.elsewhere, "data-link", "home-key"), "read"), "through a junction to the data root");
+    await link(join(fx.home, "credentials.json"), join(fx.elsewhere, "copy.json"));
+    assert.ok(await fx.deny.check(join(fx.elsewhere, "copy.json"), "read"), "a hard link to credentials.json");
+    await link(join(fx.data, "home-key"), join(fx.elsewhere, "key-copy"));
+    assert.ok(await fx.deny.check(join(fx.elsewhere, "key-copy"), "read"), "a hard link to the home key");
+    let fileLink = false;
+    try { await symlink(join(fx.home, "credentials.json"), join(fx.elsewhere, "file-link.json"), "file"); fileLink = true; } catch { /* Windows may deny file-symlink privilege. */ }
+    if (fileLink) assert.ok(await fx.deny.check(join(fx.elsewhere, "file-link.json"), "read"), "a file symlink");
+    await writeFile(join(fx.elsewhere, "plain.txt"), "plain");
+    assert.equal(await fx.deny.check(join(fx.elsewhere, "plain.txt"), "write"), undefined);
+  } finally { await rm(fx.root, { recursive: true, force: true }); }
+});

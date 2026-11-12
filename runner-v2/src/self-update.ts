@@ -19,6 +19,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
+import { aiboardHomeStatePaths } from "./aiboard-home-paths.js";
 import { extractFiles, readArchive } from "./release-archive.js";
 import {
   isReleaseVersion, parseReleaseChannelConfig, releaseAnchorDigest, RELEASE_PRODUCT, RELEASE_TARGETS, verifyReleaseEpochOpening, verifyReleaseManifest,
@@ -654,14 +655,19 @@ function parseUninstallArguments(raw: string[]): UninstallArguments {
   return result;
 }
 
-/** AIBoard data that `--remove-state` deletes, never touched otherwise. Project folders are never included. */
+/**
+ * AIBoard data that `--remove-state` deletes, never touched otherwise. Project folders are never included.
+ * The AIBoard home's files (settings, keys, the write lock and the home key) are listed by name, so the
+ * rest of `~/.aiboard` or an `AIBOARD_HOME` folder is left alone.
+ */
 export function userStatePaths(options: { platform: NodeJS.Platform; environment: NodeJS.ProcessEnv; home: string; root: string }): string[] {
-  if (options.platform === "win32") return [join(options.root, "projects"), join(options.root, "remote"), join(options.home, ".aiboard", "runner-extensions")];
+  const homeFiles = aiboardHomeStatePaths({ platform: options.platform, environment: options.environment, home: options.home });
+  if (options.platform === "win32") return [join(options.root, "projects"), join(options.root, "remote"), join(options.home, ".aiboard", "runner-extensions"), ...homeFiles];
   const xdg = options.environment.XDG_DATA_HOME;
   const data = options.platform === "darwin"
     ? join(options.home, "Library", "Application Support", "AIBoard")
     : join(xdg && xdg.startsWith("/") ? xdg : join(options.home, ".local", "share"), "aiboard");
-  return [data, join(options.home, ".aiboard", "runner-extensions")];
+  return [data, join(options.home, ".aiboard", "runner-extensions"), ...homeFiles];
 }
 
 export function stripProfileBlock(content: string): string {
@@ -808,7 +814,7 @@ export async function runUninstallCommand(raw: string[], runtime: SelfUpdateRunt
   let removeState = args.removeState;
   if (removeState === undefined) {
     removeState = interactive && !args.yes
-      ? await confirm("Also delete your AIBoard data (project state, remote device key, extensions)? Your project folders are never touched. [y/N] ")
+      ? await confirm("Also delete your AIBoard data (project state, remote device key, extensions, and your AIBoard settings and API keys in ~/.aiboard)? Your project folders are never touched. [y/N] ")
       : false;
   }
   const release = await acquireInstallLock(layout.root);
