@@ -18,7 +18,8 @@ import {
   type DeliveryTestReport,
 } from "./delivery-acceptance.js";
 import type { EvidenceStore, CommandEvidenceFact } from "./evidence-store.js";
-import type { FinalVerificationCategory, FinalVerificationPlan } from "./final-verification-contracts.js";
+import type { FinalVerificationCategory, FinalVerificationPlan, VerificationNotRun } from "./final-verification-contracts.js";
+import type { CheckToolLookup } from "./check-tool-lookup.js";
 import {
   deriveSelectedTestsCommand,
   inspectFinalVerificationExecutionProfile,
@@ -264,6 +265,8 @@ export interface DeliveryCommandRun {
   reason?: string;
   /** `tests` only: this run's own machine-readable report reading. */
   report?: DeliveryTestReport;
+  /** VF2: the Runner did not run the command because its tool is missing. */
+  notRun?: VerificationNotRun;
 }
 
 /**
@@ -977,6 +980,8 @@ export async function runDeliveryCategory(input: {
   forceFullSuite?: boolean;
   tierCommands?: ProjectValidationTierCommand[];
   validationTier?: ValidationTier;
+  /** VF2: the Runner's lookup of the command's tool before it launches. */
+  toolLookup?: CheckToolLookup;
 }): Promise<DeliveryCommandRun> {
   // R2-F1: explicit structured forceFullSuite ALWAYS runs the detected full_test_script.
   // No tier override and no selected narrowing.
@@ -999,6 +1004,7 @@ export async function runDeliveryCategory(input: {
     checkCategory: input.category,
     execution: input.execution,
     ...(input.activity ? { activity: input.activity } : {}),
+    ...(input.toolLookup ? { toolLookup: input.toolLookup } : {}),
   });
   const profile: FinalVerificationExecutionProfile = { ...input.profile, commands: { ...input.profile.commands } };
   delete profile.runtimeSmoke;
@@ -1098,6 +1104,25 @@ export async function runDeliveryCategory(input: {
     },
     ...(input.signal ? { signal: input.signal } : {}),
   }, input.category);
+  if (run.check.notRun) {
+    // VF2: the Runner found the tool missing and launched nothing. Nothing was
+    // narrowed either, so the record makes no selection or tier claim.
+    const notRun = { ...run.check.notRun };
+    const planned = input.category === "tests" ? profile.commands.tests!.at(-1)! : first;
+    return {
+      command: planned.executable,
+      args: [...planned.args],
+      evidenceIds: [],
+      exitCode: null,
+      ran: false,
+      executedScope: "full_test_script",
+      reason: notRun.detail,
+      ...(input.category === "tests"
+        ? { report: { status: "unknown" as const, runner: reportPlan?.runner ?? "none", reason: notRun.detail } }
+        : {}),
+      notRun,
+    };
+  }
   const evidenceIds = [...run.check.evidenceIds];
   const records = evidenceIds.length > 0
     ? input.evidenceStore.getByIds({ runId: input.runId, ids: evidenceIds })
@@ -1153,6 +1178,8 @@ export interface DeliveryExecutionOptions {
   /** IV-2: explicit structured validation mandates (default: none). */
   validationMandates?: TaskValidationMandates;
   activity?: RunActivityTracker;
+  /** VF2: the Runner's lookup of each check's tool before it launches. */
+  toolLookup?: CheckToolLookup;
 }
 
 /**
@@ -1190,6 +1217,7 @@ export function createDeliveryDepthRunner(options: DeliveryExecutionOptions): De
         : undefined;
       const tests = await runDeliveryCategory({
         ...(options.activity ? { activity: options.activity } : {}),
+        ...(options.toolLookup ? { toolLookup: options.toolLookup } : {}),
         ...(depthTier && input.changeRisk ? { tierCommands: depthTier, validationTier: selectValidationTier({ changeRisk: input.changeRisk, isMilestoneGate: false, isFinalCandidate: false }) } : {}),
         ...(ambientNodeOptions !== undefined ? { ambientNodeOptions } : {}),
         category: "tests",
@@ -1367,6 +1395,8 @@ export function createDeliveryBoundaryDriver(options: {
   changedFilesFor(taskId: string): Promise<string[]>;
   validationAccounting?: { ledger: BudgetLedger; clock?: () => string };
   ambientNodeOptions?: () => string | undefined;
+  /** VF2: the Runner's lookup of each check's tool before it launches. */
+  toolLookup?: CheckToolLookup;
   testIntegrity?: {
     projection(): SchedulerProjection;
     baselineWorkspace: DeliveryWorkspaceSlot;
@@ -1404,7 +1434,13 @@ export function createDeliveryBoundaryDriver(options: {
             runId: options.runId, evidenceTaskId: `delivery:${taskId}`,
             generationId: `test-integrity:${taskId}:initial-tests:${randomUUID()}`, git: options.git,
             artifacts: options.artifacts, evidenceStore: options.evidenceStore, execution: options.execution,
+            ...(options.toolLookup ? { toolLookup: options.toolLookup } : {}),
             ...(ambientNodeOptions !== undefined ? { ambientNodeOptions } : {}), ...(signal ? { signal } : {}) });
+          if (run.notRun) {
+            // VF2: the initial tests' tool is missing; the baseline records that, with no counts.
+            options.testIntegrity!.recordBaseline(taskId, { kind: "tool_missing", pin, pinDigest: testIntegrityPinDigest(pin), notRun: run.notRun, evidenceIds: [] });
+            return;
+          }
           const executed = executedTestCount(run.report?.counts);
           if (!run.report || run.report.status === "unknown" || executed === undefined) throw new Error("Trusted initial test baseline has no usable executed-test report.");
           options.testIntegrity!.recordBaseline(taskId, { kind: "executed_report", pin, pinDigest: testIntegrityPinDigest(pin), executed, report: run.report, evidenceIds: run.evidenceIds });
@@ -1476,6 +1512,7 @@ export function createDeliveryBoundaryDriver(options: {
           const run = await runDeliveryCategory({
             ...(ambientNodeOptions !== undefined ? { ambientNodeOptions } : {}),
             ...(options.activity ? { activity: options.activity } : {}),
+            ...(options.toolLookup ? { toolLookup: options.toolLookup } : {}),
             category,
             profile,
             manager: workspace.manager,
@@ -1498,7 +1535,8 @@ export function createDeliveryBoundaryDriver(options: {
           const report = category === "tests"
             ? run.report ?? { status: "unknown" as const, runner: "none", reason: run.reason ?? "No project test command was detected." }
             : undefined;
-          const outcome = !run.ran ? "unknown" : report ? testsOutcome(run.exitCode, report) : outcomeFor(run.exitCode);
+          // VF2: a missing tool is recorded as not run, never as a failed or unknown check.
+          const outcome = run.notRun ? "not_run" : !run.ran ? "unknown" : report ? testsOutcome(run.exitCode, report) : outcomeFor(run.exitCode);
           // Real counts: say which runner ran and what report is missing.
           const reason = outcome === "passed"
             ? undefined
@@ -1513,6 +1551,7 @@ export function createDeliveryBoundaryDriver(options: {
             outcome,
             ...(reason ? { reason } : {}),
             ...(report ? { report } : {}),
+            ...(run.notRun ? { notRun: { ...run.notRun } } : {}),
           });
         }
         if (testIntegrity && trustedProjection?.testIntegrity?.baseline) {

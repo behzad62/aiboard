@@ -166,7 +166,7 @@ export interface DeliverableReviewInputs {
   contractRef?: TaskContractRef;
   testIntegrityReference?: {
     planRevisionId: string; planDigest: string; baselinePinDigest: string; candidatePinDigest: string;
-    baselineKind: "executed_report" | "no_configured_test_suite"; baselineExecuted?: number; baselineRevision: string;
+    baselineKind: "executed_report" | "no_configured_test_suite" | "tool_missing"; baselineExecuted?: number; baselineRevision: string;
     findings: readonly import("./test-integrity.js").TestIntegrityFinding[];
   };
 }

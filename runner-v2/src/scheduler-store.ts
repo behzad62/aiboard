@@ -73,8 +73,10 @@ import { validateReviewSignals } from "./review-integrity.js";
 import { validateEncodingSubmission, encodingFindingFacts } from "./encoding-safety.js";
 import type { ExecutionPlanRevision, ExecutionTaskContract, PlanningFinding } from "./planning-contracts.js";
 import {
+  parseVerificationNotRun,
   planFinalVerification,
   validateFinalVerificationPlan,
+  verificationCheckFailed,
   type FinalVerificationCategory,
   type FinalVerificationPlan,
 } from "./final-verification-contracts.js";
@@ -619,7 +621,8 @@ export function deriveFinalVerificationFailure(
   generation: FinalVerificationGenerationProjection,
   attempt: number,
 ): Omit<FinalVerificationFailureProjection, "reportedAt"> {
-  const failed = (generation.completedChecks ?? []).filter((check) => !check.green);
+  // VF2: a check the Runner did not run (tool missing) is not a failure.
+  const failed = (generation.completedChecks ?? []).filter(verificationCheckFailed);
   const failedCategories = failed.map((check) => check.category);
   const issueIds = failed.flatMap((check) => {
     const issues = check.issues.length > 0
@@ -2593,6 +2596,16 @@ export function buildCompletionReadiness(
       issues.push(`Completed final-verification category ${planned.category} is missing or conflicts with the plan.`);
       continue;
     }
+    // VF2: a check the Runner did not run (tool missing) is not a failure and carries no result.
+    if (check.notRun) {
+      if (
+        planned.status !== "required" || check.green !== false || check.issues.length > 0 ||
+        check.evidenceIds.length > 0 || check.facts.length > 0
+      ) {
+        issues.push(`Not-run final-verification category ${planned.category} carries a result.`);
+      }
+      continue;
+    }
     if (check.green !== true || check.issues.length > 0) {
       issues.push(`Completed final-verification category ${planned.category} is not mechanically green.`);
     }
@@ -2634,7 +2647,9 @@ export function buildCompletionReadiness(
       const submitted = result.checks.find((check) => check.category === planned.category);
       const checkpoint = completed.find((check) => check.category === planned.category);
       if (
-        !submitted || submitted.green !== true ||
+        // VF2: a submitted check is green unless the Runner recorded it as not run.
+        !submitted || submitted.green !== (checkpoint?.notRun === undefined) ||
+        !sameValue(submitted.notRun, checkpoint?.notRun) ||
         !sameValue({
           category: submitted.category,
           status: submitted.status,
@@ -2900,6 +2915,13 @@ export function validateSchedulerEvidenceEvent(
     const taskId = requiredString(event.payload, "taskId");
     const revision = projection.testIntegrity?.initialRevision;
     const pin = parseTestIntegrityPin(event.payload.pin);
+    if (event.payload.kind === "tool_missing") {
+      // VF2: nothing ran, so the baseline cites no evidence (the reducer checks the rest).
+      if (!revision || pin.revision !== revision || evidenceIds.length > 0) {
+        throw new Error("A tool-missing initial test baseline cites no evidence and binds the immutable baseline revision.");
+      }
+      return;
+    }
     if (!revision || pin.revision !== revision || evidenceIds.length === 0 || records.length !== evidenceIds.length || records.some((record) =>
       record.fact.kind !== "command" || record.fact.repositoryRevision !== revision ||
       record.fact.exitCode === null || record.fact.timedOut || record.fact.cancelled ||
@@ -2989,7 +3011,7 @@ export function validateSchedulerEvidenceEvent(
       );
       if (
         !submitted ||
-        !submitted.green ||
+        verificationCheckFailed(submitted) ||
         !sameValue([...submitted.evidenceIds].sort(), [...new Set(cited)].sort())
       ) {
         throw new Error(
@@ -7110,6 +7132,15 @@ function reduceTestIntegrityEvent(current: SchedulerProjection, next: SchedulerP
     const pin = parseTestIntegrityPin(event.payload.pin);
     if (!state.initialRevision || pin.revision !== state.initialRevision || state.baseline) throw new Error("Initial test baseline must reference the immutable run baseline once.");
     const evidenceIds = stringArray(event.payload, "evidenceIds");
+    if (event.payload.kind === "tool_missing") {
+      // VF2: the Runner found the initial tests' tool missing; nothing ran, so nothing is counted.
+      const notRun = parseVerificationNotRun(event.payload.notRun, "Initial test baseline");
+      if (evidenceIds.length > 0 || event.payload.report !== undefined || event.payload.executed !== undefined || event.payload.inventory !== undefined) {
+        throw new Error("A tool-missing baseline cannot carry evidence, counts, a report or an inventory.");
+      }
+      state.baseline = { kind: "tool_missing", pin, pinDigest: testIntegrityPinDigest(pin), notRun, evidenceIds: [], sequence: event.sequence };
+      return;
+    }
     if (evidenceIds.length === 0) throw new Error("Initial test baseline requires command evidence.");
     if (event.payload.kind === "no_configured_test_suite") {
       const inventory = typeof event.payload.inventory === "string" ? event.payload.inventory : undefined;
@@ -7202,8 +7233,11 @@ function reduceDeliveryEvent(
         const boundary = latestBoundary(state, requiredString(event.payload, "taskId"))!;
         const integrity = boundary.testIntegrity;
         const tests = boundary.checks.find((check) => check.checkId === "tests");
-        if (!integrity || !tests?.report || integrity.candidateExecuted === undefined) throw new Error("Accepted task must carry complete test-integrity evidence.");
-        next.testIntegrity.baseline = boundary.executedScope === "full_test_script" ? { kind: "executed_report", pin: integrity.candidatePin, pinDigest: integrity.candidatePinDigest,
+        // VF2: a tests check the Runner did not run (tool missing) counts nothing, so the
+        // trusted baseline stays as it was instead of ratcheting.
+        const testsNotRun = tests?.outcome === "not_run";
+        if (!integrity || !tests?.report || (integrity.candidateExecuted === undefined && !testsNotRun)) throw new Error("Accepted task must carry complete test-integrity evidence.");
+        next.testIntegrity.baseline = boundary.executedScope === "full_test_script" && !testsNotRun && integrity.candidateExecuted !== undefined ? { kind: "executed_report", pin: integrity.candidatePin, pinDigest: integrity.candidatePinDigest,
           executed: integrity.candidateExecuted, report: tests.report, evidenceIds: tests.evidenceIds,
           sequence: event.sequence, acceptedTaskId: boundary.taskId } : next.testIntegrity.baseline;
       }
@@ -8236,18 +8270,33 @@ function deliveryBoundaryChecked(
     const exitCode = candidate.exitCode;
     if (exitCode !== null && !Number.isSafeInteger(exitCode)) throw new Error("Boundary check exit code is invalid.");
     const outcome = candidate.outcome;
-    if (outcome !== "passed" && outcome !== "failed" && outcome !== "unknown") {
+    if (outcome !== "passed" && outcome !== "failed" && outcome !== "unknown" && outcome !== "not_run") {
       throw new Error("Boundary check outcome is invalid.");
     }
     const evidenceIds = stringArray(candidate, "evidenceIds");
-    if (outcome === "passed" && (exitCode !== 0 || evidenceIds.length === 0)) {
+    // VF2: over a tool-missing baseline the guard may have nothing to cite; the guarded block below
+    // allows that only while this boundary's tests check was not run either.
+    const guardEvidenceDeferred = checkId === "test_integrity" && current.testIntegrity?.baseline?.kind === "tool_missing";
+    if (outcome === "passed" && (exitCode !== 0 || (evidenceIds.length === 0 && !guardEvidenceDeferred))) {
       throw new Error("A passed boundary check requires exit code 0 and its evidence.");
+    }
+    // VF2: only the Runner appends a boundary, so only it records a tool as missing.
+    const notRun = candidate.notRun === undefined ? undefined : parseVerificationNotRun(candidate.notRun, `Boundary check ${checkId}`);
+    if ((outcome === "not_run") !== (notRun !== undefined)) {
+      throw new Error("A not-run boundary check requires its tool-missing record, and only a not-run check carries one.");
+    }
+    if (outcome === "not_run" && ((checkId !== "build" && checkId !== "tests") || exitCode !== null || evidenceIds.length > 0)) {
+      throw new Error("A not-run boundary check is a build or tests check with no exit code and no evidence.");
     }
     const report = candidate.report === undefined ? undefined : parseDeliveryTestReport(candidate.report, "Boundary test report");
     if (checkId === "tests") {
       // Owner decision "real counts": tests pass only on this run's report.
       if (!report) throw new Error("The boundary tests check requires this run's test report reading.");
-      assertTestsOutcome("Boundary tests", exitCode as number | null, outcome, report);
+      if (outcome === "not_run") {
+        if (report.status !== "unknown" || report.counts !== undefined) throw new Error("A not-run boundary tests check cannot carry a test report result.");
+      } else {
+        assertTestsOutcome("Boundary tests", exitCode as number | null, outcome, report);
+      }
     }
     if (outcome === "failed" && evidenceIds.length === 0 && typeof candidate.reason !== "string") {
       throw new Error("A failed boundary check requires its evidence or reason.");
@@ -8261,11 +8310,13 @@ function deliveryBoundaryChecked(
       outcome,
       ...(typeof candidate.reason === "string" ? { reason: candidate.reason } : {}),
       ...(report ? { report } : {}),
+      ...(notRun ? { notRun } : {}),
     };
   });
   const passed = event.payload.passed;
-  if (typeof passed !== "boolean" || passed !== checks.every((check) => check.outcome === "passed")) {
-    throw new Error("Boundary passed must equal every check passing.");
+  // VF2: a not-run check does not fail the boundary.
+  if (typeof passed !== "boolean" || passed !== checks.every((check) => check.outcome === "passed" || check.outcome === "not_run")) {
+    throw new Error("Boundary passed must equal every check passing or not run.");
   }
   const selection = event.payload.selection;
   if (!isRecord(selection)) throw new Error("Boundary checks require the affected-test selection.");
@@ -8309,6 +8360,9 @@ function deliveryBoundaryChecked(
     const guard = checks.find((check) => check.checkId === "test_integrity");
     if (!guard || guard.outcome !== (unresolved.length ? "failed" : "passed") ||
       (unresolved.length === 0 && guard.exitCode !== 0) || (unresolved.length > 0 && guard.exitCode !== 1)) throw new Error("Test-integrity outcome must match kernel recomputation.");
+    if (guard.outcome === "passed" && guard.evidenceIds.length === 0 && tests?.outcome !== "not_run") {
+      throw new Error("A passed test-integrity guard cites the baseline or this run's test evidence.");
+    }
   } else if (event.payload.testIntegrity !== undefined || checks.some((check) => check.checkId === "test_integrity")) {
     throw new Error("Historical delivery policy cannot invent test-integrity records.");
   }
@@ -8497,7 +8551,12 @@ function deliveryTaskAccepted(
       }
       return { kind: "criterion", refId: criterionId, outcome: "passed" as const };
     }),
-    ...boundary.checks.map((check) => ({ kind: "integration_check", refId: check.checkId, outcome: "passed" as const })),
+    ...boundary.checks.map((check) => ({
+      kind: "integration_check",
+      refId: check.checkId,
+      // VF2: a check the Runner did not run is recorded as not run, never as passed.
+      outcome: check.outcome === "not_run" ? "not_run" as const : "passed" as const,
+    })),
   ];
   state.taskAcceptances[taskId] = {
     taskId,
@@ -8811,12 +8870,18 @@ function parseFinalVerificationReviewDecision(
     );
     if (
       !submitted ||
-      !submitted.green ||
-      (submitted.status === "required" && submitted.evidenceIds.length === 0) ||
+      verificationCheckFailed(submitted) ||
+      (submitted.status === "required" && !submitted.notRun && submitted.evidenceIds.length === 0) ||
       !sameValue([...submitted.evidenceIds].sort(), [...new Set(review.evidenceIds)].sort())
     ) {
       throw new Error(
         `Final verification category ${review.category} review conflicts with submitted evidence.`,
+      );
+    }
+    // VF2: a missing tool is not repaired by a task.
+    if (submitted.notRun && review.verdict === "repair_required") {
+      throw new Error(
+        `Final verification category ${review.category} was not run because ${submitted.notRun.tool} is missing; it needs no repair.`,
       );
     }
   }
@@ -8973,6 +9038,10 @@ function parseFinalVerificationCompletedCheck(
     evidenceIds,
     facts: result.facts as FinalVerificationFact[],
     issues,
+    // VF2: only the Runner appends a completed check, so only it records not run.
+    ...(result.notRun !== undefined
+      ? { notRun: parseVerificationNotRun(result.notRun, `Final verification check ${category}`) }
+      : {}),
   };
 }
 
@@ -9010,7 +9079,7 @@ function assertFinalVerificationSubmissionResult(
   }
   for (const check of result.checks) {
     const durable = completed.find((entry) => entry.category === check.category);
-    if (!durable || !durable.green || durable.issues.length > 0) {
+    if (!durable || verificationCheckFailed(durable) || durable.issues.length > 0) {
       throw new Error(`Final verification submission check ${check.category} is not durably green.`);
     }
     assertFinalVerificationCheckSemantics({
@@ -9139,13 +9208,15 @@ function projectFinalVerificationSubmissionCheck(
   return {
     category: check.category,
     status: check.status,
-    green: true,
+    // Every durable check reaching here is green, or not run (VF2).
+    green: check.notRun === undefined,
     ...(check.rationale !== undefined ? { rationale: check.rationale } : {}),
     ...(check.repositoryInspection
       ? { repositoryInspection: cloneJson(check.repositoryInspection) }
       : {}),
     evidenceIds: [...check.evidenceIds],
     facts: cloneJson(check.facts),
+    ...(check.notRun ? { notRun: { ...check.notRun } } : {}),
   };
 }
 

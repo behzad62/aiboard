@@ -1946,7 +1946,8 @@ export function assertRepairApproachDecision(decision: RepairApproachDecision): 
 export interface RequiredCheckRef {
   readonly kind: string;
   readonly refId: string;
-  readonly outcome: "passed" | "reused" | "pending";
+  /** `not_run` (VF2): the Runner did not run the check because its tool is missing. */
+  readonly outcome: "passed" | "reused" | "pending" | "not_run";
 }
 
 export type AcceptanceStatus = "pending" | "accepted" | "reopened";

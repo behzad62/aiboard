@@ -22,6 +22,7 @@ import { VerificationWorkspaceManager } from "./support/git-fixture.js";
 import { RunActivityBoard } from "../src/run-activity.js";
 import { createProductionOneShotCommandFixture, createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
+import { createCheckToolLookup } from "../src/check-tool-lookup.js";
 
 test("final verification ingests runtime spill output and log volume alone stays green", async () => {
   const fixture = await createFixture("spill-output");
@@ -792,6 +793,174 @@ test("a verification category reports its checkout, install and check steps whil
       ["final-verification-task: Running the build check", "final-verification-task: Installing dependencies (npm)"],
     ]);
     assert.deepEqual(board.list(), [], "finished steps leave the board");
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+// VF2: a check whose tool the Runner cannot find on PATH is recorded as not run
+// (tool_missing), never as a failure. Any other launch failure stays a failure.
+test("VF2: a check whose tool is missing on PATH is not run and nothing is launched", async () => {
+  const fixture = await createFixture("tool-missing");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const emptyPath = join(fixture.root, "empty path");
+  mkdirSync(emptyPath, { recursive: true });
+  let launches = 0;
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+    integrationRevision: () => fixture.integration.revision,
+    execution: { execute: async () => { launches += 1; throw new Error("nothing may launch"); } },
+    // The real lookup over a PATH that holds nothing.
+    toolLookup: createCheckToolLookup({ environment: () => ({ PATH: emptyPath, PATHEXT: ".COM;.EXE;.BAT;.CMD" }) }),
+  });
+  try {
+    const commands = { build: [{ label: "build", executable: "aiboard-vf2-missing-tool", args: ["run", "build"] }] };
+    const run = await runtime.run({
+      plan: buildOnlyPlan(),
+      executionProfile: commandProfile(fixture.integration.revision, commands),
+      commands,
+    });
+    const check = run.checks.find((entry) => entry.category === "build")!;
+    assert.equal(run.green, true, "a not-run check is not a failure");
+    assert.equal(check.green, false, "a not-run check is not verified either");
+    assert.deepEqual(check.notRun, {
+      reason: "tool_missing",
+      tool: "aiboard-vf2-missing-tool",
+      detail: "aiboard-vf2-missing-tool was not found on PATH, so the check was not run.",
+    });
+    assert.deepEqual(check.issues, []);
+    assert.deepEqual(check.facts, []);
+    assert.deepEqual(check.evidenceIds, []);
+    assert.equal(launches, 0);
+    assert.equal(evidence.list({ runId: fixture.runId }).length, 0);
+    assert.equal(Object.isFrozen(check.notRun), true);
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("VF2: a missing install tool stops the check before provisioning, naming that tool", async () => {
+  const fixture = await createFixture("provisioning-tool-missing");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const looked: string[] = [];
+  let launches = 0;
+  const runtime = new FinalVerificationRuntime({
+    workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+    integrationRevision: () => fixture.integration.revision,
+    execution: { execute: async () => { launches += 1; throw new Error("nothing may launch"); } },
+    toolLookup: async (executable) => {
+      looked.push(executable);
+      return executable === "pnpm" ? { status: "missing" } : { status: "found", path: `/bin/${executable}` };
+    },
+  });
+  try {
+    const build = { label: "build", executable: "node", args: ["build.js"] };
+    const provisioning = {
+      manager: "pnpm" as const,
+      lockfile: "pnpm-lock.yaml",
+      command: { label: "install dependencies", executable: "pnpm", args: ["install", "--frozen-lockfile"] },
+    };
+    const run = await runtime.run({
+      plan: buildOnlyPlan(),
+      executionProfile: { ...commandProfile(fixture.integration.revision, { build: [build] }), provisioning },
+      commands: { build: [build] },
+    });
+    const check = run.checks.find((entry) => entry.category === "build")!;
+    assert.equal(run.green, true);
+    assert.equal(check.notRun?.tool, "pnpm");
+    assert.deepEqual(looked, ["pnpm", "node"], "every tool is looked up before anything launches");
+    assert.equal(launches, 0);
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("VF2: a launch failure with the tool present stays a failure", async () => {
+  const fixture = await createFixture("tool-present-launch-failure");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  try {
+    for (const lookup of [
+      async () => ({ status: "found" as const, path: "/bin/fixture" }),
+      async () => ({ status: "unknown" as const, reason: "fixture could not be inspected." }),
+      async () => { throw new Error("lookup crashed"); },
+    ]) {
+      let launches = 0;
+      const runtime = new FinalVerificationRuntime({
+        workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+        integrationRevision: () => fixture.integration.revision,
+        execution: { execute: async () => { launches += 1; throw Object.assign(new Error("spawn fixture EACCES"), { code: "EACCES" }); } },
+        toolLookup: lookup,
+      });
+      const commands = { build: [{ label: "build", executable: "fixture", args: [] }] };
+      const run = await runtime.run({ plan: buildOnlyPlan(), executionProfile: commandProfile(fixture.integration.revision, commands), commands });
+      const check = run.checks.find((entry) => entry.category === "build")!;
+      assert.equal(launches, 1, "a found or undecided tool launches as before");
+      assert.equal(run.green, false);
+      assert.equal(check.notRun, undefined);
+      assert.ok(check.issues.length > 0);
+    }
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+test("VF2: a command that names a path or sets its own PATH is launched, not judged missing", async (t) => {
+  const fixture = await createFixture("tool-path-command");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId,
+    targetRevision: fixture.integration.revision,
+  });
+  const emptyPath = join(fixture.root, "empty path");
+  mkdirSync(emptyPath, { recursive: true });
+  const lookup = createCheckToolLookup({ environment: () => ({ PATH: emptyPath }) });
+  try {
+    const absolute = { build: [{ label: "build", executable: process.execPath, args: ["-e", "process.stdout.write('built')"] }] };
+    const runtime = new FinalVerificationRuntime({
+      workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+      integrationRevision: () => fixture.integration.revision,
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
+      toolLookup: lookup,
+    });
+    const run = await runtime.run({ plan: buildOnlyPlan(), executionProfile: commandProfile(fixture.integration.revision, absolute), commands: absolute });
+    assert.equal(run.green, true, run.checks[0]?.issues.join("\n"));
+    assert.equal(run.checks[0]?.notRun, undefined, "a path is the project's to get right; it is never looked up on PATH");
+    const ownPath = { build: [{ label: "build", executable: "aiboard-vf2-missing-tool", args: [], environment: { PATH: emptyPath } }] };
+    let launched = 0;
+    const own = new FinalVerificationRuntime({
+      workspaceManager: workspace, artifacts, evidenceStore: evidence, runId: fixture.runId,
+      integrationRevision: () => fixture.integration.revision,
+      execution: { execute: async () => { launched += 1; throw new Error("spawn aiboard-vf2-missing-tool ENOENT"); } },
+      toolLookup: async () => { throw new Error("a command with its own PATH is never looked up"); },
+    });
+    const ownRun = await own.run({ plan: buildOnlyPlan(), executionProfile: commandProfile(fixture.integration.revision, ownPath), commands: ownPath });
+    assert.equal(launched, 1);
+    assert.equal(ownRun.green, false, "its launch failure stays a failure");
+    assert.equal(ownRun.checks[0]?.notRun, undefined);
   } finally {
     evidence.close();
     await workspace.cleanup().catch(() => undefined);

@@ -1777,15 +1777,22 @@ function reviewFinalVerificationTool(
       );
       for (const review of input.categoryReviews) {
         const check = checks.get(review.category);
-        if (!check || !check.green) {
+        if (!check || (!check.green && !check.notRun)) {
           return errorOutput(
             "final_verification_check_not_green",
             `Final verification category ${review.category} is not mechanically green.`,
           );
         }
+        // VF2: the Runner recorded the check as not run because its tool is missing.
+        if (check.notRun && review.verdict === "repair_required") {
+          return errorOutput(
+            "final_verification_check_not_run",
+            `Final verification category ${review.category} was not run because ${check.notRun.tool} is missing; a task cannot repair a missing tool. Approve it and say what was not verified.`,
+          );
+        }
         const expected = [...check.evidenceIds].sort();
         const cited = [...new Set(review.evidenceIds)].sort();
-        if (check.status === "required" && expected.length === 0) {
+        if (check.status === "required" && !check.notRun && expected.length === 0) {
           return errorOutput(
             "missing_final_verification_evidence",
             `Required final verification category ${review.category} has no persisted evidence.`,

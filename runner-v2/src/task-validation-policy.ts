@@ -104,7 +104,9 @@ export function packetCriteriaForTask(input: {
   readonly boundary: DeliveryBoundaryScope;
   readonly finalVerified: boolean;
 }): PacketCriterion[] {
-  const criteria: PacketCriterion[] = input.boundary.checks.map((check) => ({
+  // VF2: a check the Runner could not run (tool missing) is no packet criterion;
+  // the boundary and the task acceptance record it as not run.
+  const criteria: PacketCriterion[] = input.boundary.checks.filter((check) => check.outcome !== "not_run").map((check) => ({
     id: `boundary:${check.checkId}`,
     gate: "packet" as const,
     status: check.outcome === "passed" ? "passed" as const : check.outcome === "failed" ? "failed" as const : "pending" as const,

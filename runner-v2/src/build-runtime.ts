@@ -140,10 +140,11 @@ import type {
   ProjectDocCommitRequest,
   ProjectDocCommitResult,
 } from "./project-docs.js";
-import type {
-  FinalVerificationCategory,
-  FinalVerificationPlan,
-  FinalVerificationPlanPrefill,
+import {
+  verificationCheckFailed,
+  type FinalVerificationCategory,
+  type FinalVerificationPlan,
+  type FinalVerificationPlanPrefill,
 } from "./final-verification-contracts.js";
 import type {
   FinalVerificationCheckResult,
@@ -2316,7 +2317,8 @@ export class BuildRuntime {
       }
       return this.afterArchitect("final_verification_review_required");
     }
-    if (generation.completedChecks?.some((check) => !check.green)) {
+    // VF2: a check the Runner did not run (tool missing) is no failure and asks for no repair.
+    if (generation.completedChecks?.some(verificationCheckFailed)) {
       if (!generation.failure) {
         const failure = deriveFinalVerificationFailure(generation, 1);
         this.store.append({
@@ -2438,19 +2440,22 @@ export class BuildRuntime {
         },
       });
       const status = this.projection().status === "paused" ? "paused" : "progressed";
+      const charged = await this.applyFailingCheckRepairCharge(result.check, {
+        generationId: generation.generationId,
+        taskId: generation.taskId,
+        targetRevision: generation.targetRevision,
+        plan: generation.plan,
+        executionProfile: generation.executionProfile,
+        attempt: 1,
+        signal,
+      });
       return {
         status,
-        action: (await this.applyFailingCheckRepairCharge(result.check, {
-          generationId: generation.generationId,
-          taskId: generation.taskId,
-          targetRevision: generation.targetRevision,
-          plan: generation.plan,
-          executionProfile: generation.executionProfile,
-          attempt: 1,
-          signal,
-        })).green
+        action: charged.green
           ? "final_verification_check_completed"
-          : "final_verification_check_non_green",
+          : result.check.notRun
+            ? "final_verification_check_not_run"
+            : "final_verification_check_non_green",
       };
     }
     if (!this.evidenceStore) {
@@ -4720,7 +4725,8 @@ export class BuildRuntime {
           selection: { rung: outcome.selection.rung, selectedTests: [...outcome.selection.selectedTests], ...(outcome.selection.widened !== undefined ? { widened: outcome.selection.widened } : {}), ...(outcome.selection.wideningReasons !== undefined ? { wideningReasons: [...outcome.selection.wideningReasons] } : {}) },
           checks: outcome.checks.map((check) => ({ ...check, evidenceIds: [...check.evidenceIds] })),
           ...(outcome.testIntegrity ? { testIntegrity: outcome.testIntegrity } : {}),
-          passed: outcome.checks.every((check) => check.outcome === "passed"),
+          // VF2: a check the Runner did not run (tool missing) does not fail the boundary.
+          passed: outcome.checks.every((check) => check.outcome === "passed" || check.outcome === "not_run"),
         },
       });
       // T6b repair (R2-B6): the OA-17 cleanup search also runs after this
@@ -5660,6 +5666,11 @@ export class BuildRuntime {
     if (check.green) {
       await this.recordCleanupSearch("verification");
       return { green: true };
+    }
+    // VF2: a missing tool opens no repair issue and is charged nothing.
+    if (check.notRun) {
+      await this.recordCleanupSearch("verification");
+      return { green: false };
     }
     const failingTestIds = [...new Set(check.facts.flatMap((fact) => fact.kind === "command" ? fact.report?.failingTestIds ?? [] : []))];
     const [member] = this.repairMembers([`final-verification:${check.category}`], new Map([[check.category, failingTestIds]]));

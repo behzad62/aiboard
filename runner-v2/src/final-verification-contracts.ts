@@ -31,6 +31,42 @@ export const FINAL_VERIFICATION_STATUSES = [
 export type FinalVerificationStatus =
   (typeof FINAL_VERIFICATION_STATUSES)[number];
 
+/**
+ * VF2: a check the Runner could not run because a tool it needs is missing on
+ * this machine: a bare executable its own PATH lookup did not find, or, for
+ * the v1 built-in browser check, a browser Playwright reports it cannot find.
+ * Only the Runner records it. It is a fact, neither green nor a failure: it
+ * never asks for repairs and never spends a repair cycle.
+ */
+export interface VerificationNotRun {
+  reason: "tool_missing";
+  /** The executable that was not found, or "browser". */
+  tool: string;
+  /** What the Runner observed, in one line. */
+  detail: string;
+}
+
+const NOT_RUN_KEYS = new Set(["reason", "tool", "detail"]);
+
+/** Validate and clone a not-run record at a durable boundary. */
+export function parseVerificationNotRun(value: unknown, label: string): VerificationNotRun {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => !NOT_RUN_KEYS.has(key)) ||
+    value.reason !== "tool_missing" ||
+    !nonEmpty(value.tool) || value.tool.length > 256 ||
+    !nonEmpty(value.detail) || value.detail.length > 1_024
+  ) {
+    throw new Error(`${label} not-run record is invalid.`);
+  }
+  return { reason: "tool_missing", tool: value.tool, detail: value.detail };
+}
+
+/** A check that ran and is not green. A not-run check is not a failure. */
+export function verificationCheckFailed(check: { green: boolean; notRun?: unknown }): boolean {
+  return !check.green && check.notRun === undefined;
+}
+
 /** A repository fact that can make a verification category applicable. */
 export interface FinalVerificationDetectedSignal {
   category: FinalVerificationCategory;

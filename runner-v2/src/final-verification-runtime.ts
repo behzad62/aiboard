@@ -15,12 +15,15 @@ import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionGrantAuthority } from "./execution-grants.js";
 import {
   planFinalVerification,
+  verificationCheckFailed,
   type FinalVerificationCategory,
   type FinalVerificationCheck,
   type FinalVerificationPlan,
   type FinalVerificationRepositoryInspection,
   type FinalVerificationStatus,
+  type VerificationNotRun,
 } from "./final-verification-contracts.js";
+import type { CheckToolLookup } from "./check-tool-lookup.js";
 import type {
   BrowserEventsEvidenceFact,
   BrowserScreenshotEvidenceFact,
@@ -216,6 +219,13 @@ export interface FinalVerificationRuntimeOptions {
   tempRecorders?: Pick<TempRecordSink, "recorded">;
   /** Reports the checkout, install and check steps to the owner's live view. */
   activity?: RunActivityTracker;
+  /**
+   * VF2: the Runner's PATH lookup of each executable a check needs, made
+   * before anything launches. A tool it does not find makes the check
+   * `not_run: tool_missing`. Absent, nothing is looked up and every check
+   * launches as before.
+   */
+  toolLookup?: CheckToolLookup;
 }
 
 export interface FinalVerificationRunInput {
@@ -317,6 +327,12 @@ export interface FinalVerificationCheckResult {
   evidenceIds: string[];
   facts: readonly FinalVerificationFact[];
   issues: string[];
+  /**
+   * VF2: set by the Runner when a tool the check needs is missing. The check
+   * then has `green: false`, no facts, no evidence and no issues: it is not a
+   * failure and asks for no repair.
+   */
+  notRun?: VerificationNotRun;
 }
 
 export interface FinalVerificationRun {
@@ -405,6 +421,7 @@ export class FinalVerificationRuntime {
   private readonly testNamePattern?: string;
   private readonly tempRecorders?: Pick<TempRecordSink, "recorded">;
   private readonly activity?: RunActivityTracker;
+  private readonly toolLookup?: CheckToolLookup;
   // Restarted at 0 in every runner process, a re-run after a restart reused the previous process's
   // call ids and failed with "Process idempotency conflict" (tunnel run).
   private runOrdinal: number;
@@ -421,6 +438,7 @@ export class FinalVerificationRuntime {
     this.testNamePattern = options.testNamePattern;
     this.tempRecorders = options.tempRecorders;
     this.activity = options.activity;
+    this.toolLookup = options.toolLookup;
     this.workspaceManager = options.workspaceManager;
     this.artifacts = options.artifacts;
     this.evidenceStore = options.evidenceStore;
@@ -529,7 +547,8 @@ export class FinalVerificationRuntime {
       startedAt,
       finishedAt,
       checks: checks.map((check) => freezeCheck(check)),
-      green: checks.every((check) => check.green),
+      // A not-run check is not a failure (VF2).
+      green: !checks.some(verificationCheckFailed),
     };
   }
 
@@ -654,6 +673,13 @@ export class FinalVerificationRuntime {
       }
       return { ...base, green: true };
     }
+    // VF2: every tool this check needs is looked up before any of it launches.
+    // A missing one is recorded as not run, never as a failure.
+    const notRun = await this.missingTool([
+      ...(input.provisioning ? [input.provisioning.command] : []),
+      ...checkCommands(check.category, input),
+    ], input.workspace.path);
+    if (notRun) return { ...base, green: false, notRun };
     if (input.provisioning) {
       const provisioning = input.provisioning;
       const issue = await this.tracked(`Installing dependencies (${provisioning.manager})`, () => this.provisionDependencies(
@@ -981,6 +1007,34 @@ export class FinalVerificationRuntime {
     return {
       ...base,
       green: base.issues.length === 0 && base.evidenceIds.length === base.facts.length,
+    };
+  }
+
+  private async missingTool(
+    commands: readonly { executable: string; environment?: Readonly<Record<string, string | undefined>> }[],
+    cwd: string,
+  ): Promise<VerificationNotRun | undefined> {
+    if (!this.toolLookup) return undefined;
+    const missing: string[] = [];
+    const seen = new Set<string>();
+    for (const command of commands) {
+      // A command that sets its own PATH searches directories the Runner did not look in.
+      if (Object.keys(command.environment ?? {}).some((name) => name.toUpperCase() === "PATH")) continue;
+      if (seen.has(command.executable)) continue;
+      seen.add(command.executable);
+      let found;
+      try {
+        found = await this.toolLookup(command.executable, { cwd });
+      } catch {
+        continue; // An undecided lookup launches as before.
+      }
+      if (found.status === "missing") missing.push(command.executable);
+    }
+    if (missing.length === 0) return undefined;
+    return {
+      reason: "tool_missing",
+      tool: missing[0]!,
+      detail: `${missing.join(", ")} ${missing.length === 1 ? "was" : "were"} not found on PATH, so the check was not run.`.slice(0, 1_024),
     };
   }
 
@@ -1361,6 +1415,7 @@ export class FinalVerificationRuntime {
     let eventsArtifact: { hash: string } | undefined;
     let policyViolations: string[] = [];
     let policyEvaluation: FinalVerificationBrowserPolicyEvaluation | undefined;
+    let browserMissing: string | undefined;
 
     const operation = async <T>(
       label: string,
@@ -1392,7 +1447,9 @@ export class FinalVerificationRuntime {
         return undefined;
       }
       if (result.kind === "error") {
-        input.base.issues.push(`browser ${browserInput.label} ${label} failed: ${asError(result.error).message}.`);
+        const missing = label === "navigation" ? browserExecutableMissing(result.error) : undefined;
+        if (missing) browserMissing = missing;
+        else input.base.issues.push(`browser ${browserInput.label} ${label} failed: ${asError(result.error).message}.`);
         return undefined;
       }
       return result.value;
@@ -1607,6 +1664,13 @@ export class FinalVerificationRuntime {
       if (evidenceId) input.base.evidenceIds.push(evidenceId);
       else input.base.issues.push(`browser ${browserInput.label} evidence ${fact.kind} has no durable record.`);
     }
+    if (browserMissing) {
+      // VF2: no browser to launch is a missing tool, unless something else also went wrong.
+      if (input.base.issues.length === 0 && facts.length === 0) {
+        return { ...input.base, green: false, notRun: { reason: "tool_missing", tool: "browser", detail: browserMissing } };
+      }
+      input.base.issues.push(`browser ${browserInput.label} navigation failed: ${browserMissing}.`);
+    }
     if (facts.length !== 3) {
       input.base.issues.push(`browser ${browserInput.label} is missing required evidence artifacts.`);
     }
@@ -1728,6 +1792,32 @@ export class FinalVerificationRuntime {
     });
     return record.id;
   }
+}
+
+/** VF2: the commands a check launches, in order, for the Runner's tool lookup. */
+function checkCommands(
+  category: FinalVerificationCategory,
+  input: {
+    commands: readonly FinalVerificationCommand[] | undefined;
+    runtimeSmoke: FinalVerificationRuntimeSmokeInput | undefined;
+    browser: FinalVerificationBrowserInput | undefined;
+  },
+): Array<{ executable: string; environment?: Readonly<Record<string, string | undefined>> }> {
+  if (category === "build" || category === "tests") return [...(input.commands ?? [])];
+  const program = category === "runtime_smoke" ? input.runtimeSmoke : input.browser?.server;
+  return program ? [program, ...(program.steps ?? [])] : [];
+}
+
+/**
+ * VF2: Playwright's own report that the browser it launches is not installed
+ * (its install hint starts "Executable doesn't exist at"). Any other browser
+ * error stays an issue of the check.
+ */
+export function browserExecutableMissing(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!message.includes("Executable doesn't exist")) return undefined;
+  const line = message.split(/\r?\n/).find((entry) => entry.includes("Executable doesn't exist")) ?? message;
+  return line.trim().slice(0, 1_024);
 }
 
 function authoritativeExecutionInput(
@@ -2209,6 +2299,7 @@ function freezeCheck(check: FinalVerificationCheckResult): FinalVerificationChec
         }
       : {}),
     issues: Object.freeze([...check.issues]),
+    ...(check.notRun ? { notRun: Object.freeze({ ...check.notRun }) } : {}),
   }) as unknown as FinalVerificationCheckResult;
 }
 
