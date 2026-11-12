@@ -104,7 +104,8 @@ const SECTIONS: LegalSection[] = [
         </p>
         <p>
           The {SITE_NAME} app and the Runner don&apos;t need an account. Your
-          app data stays in your browser or in a folder you pick.
+          settings and keys stay on your computer, in the AIBoard home folder,
+          and your sessions stay in your browser or in a folder you pick.
         </p>
       </>
     ),

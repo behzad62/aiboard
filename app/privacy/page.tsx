@@ -79,19 +79,22 @@ const SECTIONS: LegalSection[] = [
     body: (
       <>
         <p>
-          The {SITE_NAME} app has no backend. It is a static website that runs
-          entirely in your browser:
+          The {SITE_NAME} app has no backend. It is a static website that works
+          with the AI Board Runner on your computer:
         </p>
         <ul className="list-disc space-y-2 pl-6">
           <li>
-            Your provider API keys, chats, builds, settings and attachments are
-            stored in your browser (IndexedDB and local storage) or in a folder
-            on your computer that you choose, optionally encrypted with your
-            passphrase. We never receive them.
+            Your provider API keys and settings are saved on your computer, in
+            the AIBoard home folder (<code>~/.aiboard</code>). The keys are
+            encrypted with a key kept outside that folder. Your chats, builds
+            and attachments stay in your browser (IndexedDB and local storage)
+            or in a folder on your computer that you choose. We never receive
+            any of them.
           </li>
           <li>
-            When you chat or build, your browser sends your prompts and any
-            files you include <strong>directly</strong> to the AI providers you
+            When you chat or build, your prompts and any files you include go
+            from your browser to the AI Board Runner on your computer. The
+            Runner adds your key and sends them to the AI providers you
             selected (for example OpenAI, Anthropic, Google or OpenRouter), or
             to a local model. Those providers handle that data under their own
             privacy policies.
@@ -386,8 +389,9 @@ const SECTIONS: LegalSection[] = [
       <>
         <p>
           <strong>aiboard.me</strong> sets no cookies. It uses your
-          browser&apos;s local storage and IndexedDB to keep your own settings
-          and data on your device.
+          browser&apos;s local storage and IndexedDB to keep your chats, builds
+          and display preferences on your device. Your settings and keys are
+          kept by the AI Board Runner on your computer, not by the browser.
         </p>
         <p>
           <strong>mcp.aiboard.me</strong> uses three strictly necessary

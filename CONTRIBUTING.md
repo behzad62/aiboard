@@ -28,7 +28,7 @@ npm install
 npm run dev
 ```
 
-The app is fully client-side. Provider keys are entered at runtime in Settings; no app runtime environment variables are required.
+The web app is a static export with no backend. Provider keys and settings live in the AIBoard home and are saved through the local Runner (`aiboard`), so model calls need a connected Runner; no app runtime environment variables are required.
 
 ## Useful checks
 
@@ -51,6 +51,6 @@ Repo operations in Build mode are **app-led and approval-gated**, not raw shell 
 ## Pull requests
 
 - Keep changes scoped.
-- Follow the existing architecture and client-side boundaries.
+- Follow the existing architecture: the browser holds no provider key, and every model call goes through the Runner.
 - Add or update focused tests when changing parsing, runner behavior, provider routing, storage, or build-mode orchestration.
 - Update public docs when user-visible behavior changes.

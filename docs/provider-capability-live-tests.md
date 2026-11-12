@@ -27,7 +27,7 @@ The harness runs only live probes that already have usable credentials/account s
 
 Current live probe groups:
 
-- **OpenRouter** — uses `OPENROUTER_API_KEY`, or the existing `AIBOARD_STORE_PATH` lookup supported by `test-openrouter-structured-output-live.mts`. `OPENROUTER_LIVE_MODELS` can override the small default model list.
+- **OpenRouter** — uses `OPENROUTER_API_KEY`, or else the OpenRouter key saved in the AIBoard home (`~/.aiboard`, or `AIBOARD_HOME`; save it with `aiboard keys set openrouter` or in Settings), with the home's OpenRouter base URL. Keys are no longer read from a browser store. `OPENROUTER_LIVE_MODELS` can override the small default model list. `npx tsx scripts/test-openrouter-structured-output-live.mts --dry-run` reports where the key was found and calls nothing; `AIBOARD_PROVIDER_RUNTIME_LIVE_DRY_RUN=1` does the same for the whole harness.
 - **GitHub Copilot account runner** — uses the existing local account-runner login in `~/.aiboard-account-provider-runner.json`. If no Copilot token is present, the probe skips.
 
 The Copilot live requests use the same canonical `toolIntents` wire contract as the current runner; they do not rely on removed legacy `webSearch` flags.

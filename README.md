@@ -1,12 +1,13 @@
 # AI Board
 
-[AI Board](https://aiboard.me) is a local-first multi-model discussion app with a native coding-agent Build mode. Discussion modes run in the browser; Build mode runs through Runner V2, a durable local agent kernel.
+[AI Board](https://aiboard.me) is a local-first multi-model discussion app with a native coding-agent Build mode. It runs on your computer: Runner V2, a durable local agent kernel, keeps your settings and keys in the AIBoard home, makes every model call, and runs Build mode; the browser is its window, where discussions run and are kept.
 
 ## Features
 
 - Multi-model panels, debates, specialist review, and synthesized answers.
-- Browser-side IndexedDB or user-picked-folder storage with optional encryption.
-- Runtime provider configuration for hosted and OpenAI-compatible models.
+- Settings and keys in the AIBoard home (`~/.aiboard`), shared by Settings in the browser and the `aiboard config`, `aiboard keys` and `aiboard models` commands.
+- Discussion history in the browser's IndexedDB or a folder you pick.
+- Provider configuration for hosted and OpenAI-compatible models, in Settings or from the terminal.
 - Native Build orchestration with an Architect, parallel workers, isolated Git worktrees, task commits, tools, skills, project memory, evidence, budgets, and provider failover.
 - Durable checkpoints that survive browser and runner restarts.
 - Guarded, Project and Full permission profiles.
@@ -30,9 +31,9 @@ rights; this license change does not revoke them.
 
 ## Privacy model
 
-The static web app has no backend or account system. Discussion data and provider settings stay in browser storage or the local storage folder you choose. Provider requests go directly to the configured provider.
+The static web app has no backend or account system. Discussion data stays in browser storage or the local storage folder you choose. Provider settings and keys live in the AIBoard home on your computer, never in the browser. Model calls from the page go through Runner V2's model proxy on `127.0.0.1`, which adds the key from the home and forwards the call to the configured provider; ChatGPT and GitHub Copilot go through the local account runner.
 
-Runner V2 runs on your machine, binds to `127.0.0.1`, and requires a control token. It is mandatory only for Build mode. Provider and extension credentials stored by the runner are encrypted under a per-state storage key (`state/storage-key`, from which each store's key is derived), not the control token.
+Runner V2 runs on your machine, binds to `127.0.0.1`, and requires a control token. Every model call needs it: Chat, Build and account providers. The AIBoard home is `~/.aiboard` (or `AIBOARD_HOME`): `config.json` holds settings and no secret, and `credentials.json` holds the keys, encrypted with a per-user home key kept in the user data folder, outside the home, so a copied or synced home carries no usable keys. Any program running as your user can read them, as with other command-line tools that keep keys in your user folder; there is no passphrase. Extension credentials stored by the runner are encrypted under a per-state storage key (`state/storage-key`, from which each store's key is derived), not the control token.
 
 ## Requirements
 
@@ -47,7 +48,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), then configure providers in Settings.
+Open [http://localhost:3000](http://localhost:3000). Model calls need a connected Runner (below); configure providers in Settings or with `aiboard keys set <provider>`.
 
 ## Runner V2
 
@@ -61,7 +62,7 @@ irm https://aiboard.me/install.ps1 | iex          # Windows (PowerShell)
 curl -fsSL https://aiboard.me/install.sh | sh     # macOS / Linux
 ```
 
-Then open a new terminal in your project folder and run `aiboard`. It opens AI Board in the browser already connected, and also starts the account runner for ChatGPT, GitHub Copilot and NVIDIA. `aiboard remote` lets ChatGPT or Claude use this computer, `aiboard update` installs the newest signed release, and `aiboard --help` lists every option.
+Then open a new terminal in your project folder and run `aiboard`. It opens AI Board in the browser already connected, and also starts the account runner for ChatGPT and GitHub Copilot. `aiboard config`, `aiboard keys` and `aiboard models` show and edit your settings, keys and enabled models in the AIBoard home without starting a Runner (`aiboard keys set` asks for the key with your typing hidden, or reads it from a pipe with `--stdin`). `aiboard remote` lets ChatGPT or Claude use this computer, `aiboard update` installs the newest signed release, and `aiboard --help` lists every option.
 
 From a repository checkout, contributors can run the source copy instead: `npm run runner:v2 -- --project C:\path\to\project --state-dir C:\path\to\aiboard-state --port 8787` prints a local URL and a new control token to paste into Build setup (`--allow-origin https://aiboard.me` permits a hosted UI; `npm run runner:v2 -- --help` lists the arguments).
 
@@ -71,7 +72,7 @@ Execution safety, capability selection, cleanup, OCI configuration, and platform
 
 The proposed [Unified Cloud↔Desktop and Agent-Harness implementation plan](docs/plans/aiboard-unified-cloud-desktop-agent-platform-2026-10-15.md) covers simplified installation, pluggable coding harnesses, bidirectional MCP, remote device access, and optional GUI control. It is a roadmap, not implemented functionality.
 
-Guarded access asks for approval before any action with an effect, such as a file write or a command. Project access runs work inside the project without prompts, but asks before writes outside the project and before destructive, network, credential-changing or other external actions. Full access allows configured agents to perform destructive operations, writes outside the project, credential changes, pushes/PRs, deployments, and other external actions without per-action approval. A Build's final project handoff pauses for a user choice unless the run's policy is `finish` or `budgeted`, a project handoff was requested, and no known defects are recorded; a failed automatic apply pauses for the user. This holds in every profile, Full included.
+Guarded access asks for approval before any action with an effect, such as a file write or a command. Project access runs work inside the project without prompts, but asks before writes outside the project and before destructive, network, credential-changing or other external actions. Full access allows configured agents to perform destructive operations, writes outside the project, credential changes, pushes/PRs, deployments, and other external actions without per-action approval. A Build's final project handoff pauses for a user choice unless the run's policy is `finish` or `budgeted`, a project handoff was requested, and no known defects are recorded; a failed automatic apply pauses for the user. This holds in every profile, Full included. In every profile the Runner's tools are refused the AIBoard home's keys and cannot change its settings; a command that runs unconfined, as Full's do, runs as your user and can read them.
 
 If the project is not a Git repository, Runner V2 creates a safe local repository and baseline without requiring a global Git identity. When the Architect finishes and the handoff pauses for you, choose either:
 

@@ -4,11 +4,15 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 
+import { liveProviderKey } from "./live-home-key.mts";
+
 if (process.env.AIBOARD_PROVIDER_RUNTIME_LIVE !== "1") {
   console.log("SKIP provider runtime live suite — set AIBOARD_PROVIDER_RUNTIME_LIVE=1 to opt in");
   process.exit(0);
 }
 
+/** Token-free: report which probe groups would run, and run none (scripts/test-provider-runtime-live-harness.mts). */
+const dryRun = process.env.AIBOARD_PROVIDER_RUNTIME_LIVE_DRY_RUN === "1";
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
 const openRouterModels = (process.env.OPENROUTER_LIVE_MODELS ?? "z-ai/glm-5.2,minimax/minimax-m3")
@@ -29,13 +33,16 @@ function hasCopilotAccountToken(): boolean {
   }
 }
 
+const openRouterKey = liveProviderKey("openrouter", "OPENROUTER_API_KEY");
+
 const liveChecks = [
   {
     provider: "openrouter",
     transport: "responses",
     models: openRouterModels,
-    configured: Boolean(process.env.OPENROUTER_API_KEY?.trim() || process.env.AIBOARD_STORE_PATH?.trim()),
-    missingReason: "no OPENROUTER_API_KEY or AIBOARD_STORE_PATH",
+    // The key itself stays in the probe script, which reads it again; only whether one exists is used here.
+    configured: openRouterKey.found,
+    missingReason: openRouterKey.found ? "" : openRouterKey.reason,
     name: "OpenRouter structured-output/provider drift smoke",
     script: "scripts/test-openrouter-structured-output-live.mts",
   },
@@ -60,6 +67,11 @@ for (const check of liveChecks) {
 
   console.log(`\n===== LIVE provider=${check.provider} transport=${check.transport} model=${modelLabel} =====`);
   console.log(check.name);
+  if (dryRun) {
+    console.log(`DRY-RUN provider=${check.provider} would run ${check.script}`);
+    ran += 1;
+    continue;
+  }
   const result = spawnSync(process.execPath, [tsxCli, check.script], {
     cwd: process.cwd(),
     env: process.env,
