@@ -7,7 +7,9 @@ import test from "node:test";
 import type { AgentMessage, AgentModelRequest, ToolResult } from "../src/agent-contracts.js";
 import { AnthropicModel } from "../src/anthropic-model.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import { createEvidenceTools } from "../src/evidence-tools.js";
 import { GoogleModel } from "../src/google-model.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { IMAGE_LIMITS, ImageInspectionError, decodePng, detectImageType, encodePng, prepareImageForModel, probeImage } from "../src/image-inspection.js";
 import { createImageTools } from "../src/image-tools.js";
 import { OpenAICompatibleModel } from "../src/openai-compatible-model.js";
@@ -205,6 +207,60 @@ test("controls: a text-only model and a non-visual artifact never send image byt
     await capable.complete({ sessionId: "s", messages: opaque, tools: [] });
     assert.doesNotMatch(body, /"type":"image"/, "an opaque artifact hash is not image input");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("VF6: a command's screenshot output reaches a vision reviewer's request and never a text-only reviewer's", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "visual-outputs-")));
+  const store = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  try {
+    const artifacts = new ArtifactStore(join(root, "artifacts"));
+    const shot = checkerboard(6, 4);
+    const stored = await artifacts.put(shot, "image/png", "worker output");
+    const report = await artifacts.put(Buffer.from("<testsuite/>"), "application/xml", "worker report");
+    const record = store.record({
+      runId: "run", taskId: "task_ui", actor: { role: "worker", id: "w" }, createdAt: "2026-11-13T00:00:00.000Z", idempotencyKey: "ui-test",
+      fact: {
+        kind: "command", label: "desktop ui test", command: "dotnet", args: ["test"], cwd: root,
+        startedAt: "2026-11-13T00:00:00.000Z", finishedAt: "2026-11-13T00:00:01.000Z",
+        exitCode: 0, signal: null, timedOut: false, cancelled: false, outputTruncated: false,
+        stdoutArtifactHash: report.hash, stderrArtifactHash: report.hash,
+        outputs: { requested: ["TestResults/**"], missing: [], files: [
+          { path: "TestResults/main-window.png", artifactHash: stored.hash, mediaType: "image/png", byteLength: shot.byteLength },
+          { path: "TestResults/results.trx", artifactHash: report.hash, mediaType: "application/xml", byteLength: 12 },
+        ] },
+      },
+    });
+    const broker = new ToolBroker({ permissionProfile: "full", workspacePath: root, artifacts });
+    for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_ui" })) broker.register(tool);
+    const base64 = shot.toString("base64");
+    const reviewerRequest = async (imageInput: boolean) => {
+      const result = await broker.invoke({ type: "tool_call", callId: "inspect-1", name: "inspect_evidence", arguments: { taskId: "task_ui", evidenceId: record.id } },
+        { runId: "run", sessionId: "review", actor: { role: "verifier", id: "reviewer" }, workspacePath: root, imageInput });
+      assert.equal(result.isError, false, JSON.stringify(result.error));
+      const messages: AgentMessage[] = [
+        { id: "u", role: "user", content: "Review the task." },
+        { id: "a", role: "assistant", content: [{ type: "tool_call", callId: "inspect-1", name: "inspect_evidence", arguments: { evidenceId: record.id } }] },
+        { id: "t", role: "tool", content: { callId: "inspect-1", toolName: "inspect_evidence", isError: false, content: result.content } as ToolResult },
+      ];
+      let body = "";
+      const model = wrapModelWithToolVisuals(new AnthropicModel({ apiKey: "k", modelId: "m", fetch: async (_i, init) => { body = String(init?.body); return Response.json({ content: [], usage: {} }); } }),
+        { image: imageInput, readArtifact: (hash) => artifacts.get(hash) });
+      await model.complete({ sessionId: "review", messages, tools: [] });
+      return { result, body };
+    };
+    const vision = await reviewerRequest(true);
+    const sent = JSON.parse(vision.body).messages.at(-1).content[0];
+    assert.equal(sent.type, "tool_result");
+    assert.deepEqual(sent.content.find((part: { type: string }) => part.type === "image"), { type: "image", source: { type: "base64", media_type: "image/png", data: base64 } });
+    assert.equal(JSON.stringify(sent).split(base64).length - 1, 1, "the screenshot is sent once, and the XML report is not an image");
+    const textOnly = await reviewerRequest(false);
+    assert.doesNotMatch(textOnly.body, new RegExp(base64.slice(0, 24)), "a text-only reviewer never receives image bytes");
+    assert.doesNotMatch(textOnly.body, /"type":"image"/);
+    assert.match(textOnly.body, new RegExp(stored.hash), "it keeps the file reference");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("delivery limits are explicit", () => {

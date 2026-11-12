@@ -19,6 +19,17 @@ import {
 } from "./one-shot-command-executor.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { recordValidationEvidenceSegment } from "./validation-budget.js";
+import {
+  captureCommandOutputs,
+  COMMAND_OUTPUT_LIMITS,
+  commandOutputSummary,
+  commandOutputVisualBlocks,
+  normalizeOutputPatterns,
+  outputCaptureBlocker,
+  outputsNotCaptured,
+  type CommandOutputCapture,
+} from "./command-output-files.js";
+import { isHiddenWorkspacePath } from "./filesystem-tools.js";
 
 interface RunEvidenceInput {
   label: string;
@@ -26,6 +37,8 @@ interface RunEvidenceInput {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  /** VF6: workspace-relative paths or globs whose files are kept as evidence after the command exits. */
+  outputs?: string[];
 }
 
 export interface EvidenceValidationAccounting {
@@ -45,6 +58,8 @@ export interface EvidenceToolsOptions {
   attempt?: number;
   execution?: OneShotCommandExecutor;
   validationAccounting?: EvidenceValidationAccounting;
+  /** Hidden-path policy (benchmark hidden tests): output files there are refused, never read. */
+  hiddenPaths?: readonly string[];
 }
 
 export function createEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
@@ -130,7 +145,7 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
   return {
     definition: {
       name: "run_evidence_command",
-      description: "Run one executable without a shell and record its exit code and output as durable evidence (no verdict). `command` is the executable (e.g. `dotnet`, `python`, `cmake`, `cargo`, `npm`); `args` is the argument list; pipes, `&&` and redirection are not interpreted. `cwd` is relative to the workspace. The result shows the exit code and the tail of stdout and stderr; the full output is stored as artifacts (artifact.read with the hash) when the tail is not enough. Cite the returned evidence ID.",
+      description: "Run one executable without a shell and record its exit code and output as durable evidence (no verdict). `command` is the executable (e.g. `dotnet`, `python`, `cmake`, `cargo`, `npm`); `args` is the argument list; pipes, `&&` and redirection are not interpreted. `cwd` is relative to the workspace. The result shows the exit code and the tail of stdout and stderr; the full output is stored as artifacts (artifact.read with the hash) when the tail is not enough. `outputs` keeps files the command writes (screenshots, test reports, logs) as evidence: after it exits they are stored as artifacts on the same record, PNG/JPEG/WebP images are shown to an image-capable model, and a path that matched nothing is listed as missing. Cite the returned evidence ID.",
       inputSchema: {
         type: "object",
         properties: {
@@ -139,6 +154,12 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           args: { type: "array", items: { type: "string" }, description: "Argument list passed verbatim; pipes and redirection are not interpreted." },
           cwd: { type: "string", description: "Working directory relative to the workspace." },
           timeoutMs: { type: "integer", minimum: 1, maximum: maximumTimeoutMs, description: "Timeout in milliseconds." },
+          outputs: {
+            type: "array",
+            maxItems: COMMAND_OUTPUT_LIMITS.maxPatterns,
+            items: { type: "string", minLength: 1, maxLength: COMMAND_OUTPUT_LIMITS.maxPatternLength },
+            description: `Files to keep as evidence, relative to the workspace root (not cwd): paths or globs with *, ** and ?, e.g. "test-results/**/*.png". At most ${COMMAND_OUTPUT_LIMITS.maxFiles} files, ${COMMAND_OUTPUT_LIMITS.maxFileBytes / (1024 * 1024)} MiB each, ${COMMAND_OUTPUT_LIMITS.maxTotalBytes / (1024 * 1024)} MiB in all.`,
+          },
         },
         required: ["label", "command", "args"],
         additionalProperties: false,
@@ -185,6 +206,8 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           arguments: input.args,
           workingDirectory: cwd,
           timeoutMs: input.timeoutMs,
+          // Kept files must come from this execution, never from a reused earlier result.
+          ...(input.outputs ? { freshExecution: true as const } : {}),
           context: {
             runId: context.runId,
             sessionId: context.sessionId,
@@ -213,6 +236,10 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
         }
         const postTree = await options.git?.workingTreeForCall?.(context, treeRoot) ?? unknownWorkingTree();
         const workingTreeIdentity = settleWorkingTreeIdentity(commandTree, postTree);
+        // Output files are read only now, after the command exited and its process tree was verified gone.
+        const outputs = input.outputs
+          ? await commandOutputs(options, input.label, input.outputs, treeRoot, execution, context)
+          : undefined;
         const finishedAt = clock();
         const stdoutOutput = outputFor(execution.process, "stdout");
         const stderrOutput = outputFor(execution.process, "stderr");
@@ -246,6 +273,7 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           stderrArtifactHash: stderr.hash,
           ...(revision ? { repositoryRevision: revision } : {}),
           ...commandReuseMetadata(execution),
+          ...(outputs ? { outputs } : {}),
         };
         const record = options.store.record({
           runId: context.runId,
@@ -256,11 +284,17 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
         ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
       });
+        const recordedOutputs = record.fact.kind === "command" ? record.fact.outputs : undefined;
+        const visuals = await commandOutputVisualBlocks(options.artifacts, recordedOutputs, context.imageInput === true);
         return {
           content: [
             { type: "json", value: commandResultView(record) },
             ...outputBlock("stdout", stdoutOutput, stdout.hash, 6 * 1024),
             ...outputBlock("stderr", stderrOutput, stderr.hash, 3 * 1024),
+            ...(recordedOutputs
+              ? [{ type: "text" as const, text: commandOutputSummary(recordedOutputs, visuals.shown, context.imageInput === true) }]
+              : []),
+            ...visuals.blocks,
           ],
           isError: false,
         };
@@ -272,6 +306,30 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
       }
     },
   };
+}
+
+/**
+ * The files a finished command was asked to keep. Nothing is read unless its process tree was
+ * verified gone and the result is not a reuse of earlier evidence (nothing ran, so no file is its own).
+ */
+async function commandOutputs(
+  options: EvidenceToolsOptions,
+  label: string,
+  patterns: readonly string[],
+  workspace: string,
+  execution: Awaited<ReturnType<OneShotCommandExecutor["execute"]>>,
+  context: Parameters<NativeTool<RunEvidenceInput>["execute"]>[1],
+): Promise<CommandOutputCapture> {
+  const blocker = outputCaptureBlocker({ ...execution.process, reused: execution.reuseSource !== undefined });
+  if (blocker) return outputsNotCaptured(patterns, blocker);
+  const hiddenPaths = options.hiddenPaths;
+  return await captureCommandOutputs({
+    workspace,
+    patterns,
+    artifacts: options.artifacts,
+    label,
+    ...(hiddenPaths?.length ? { isHidden: (path: string) => isHiddenWorkspacePath(context, path, hiddenPaths) } : {}),
+  });
 }
 
 function stableExecutionErrorCode(error: unknown): string | undefined {
@@ -369,8 +427,18 @@ function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId
             : `Task ${taskId} has no recorded evidence.`}`,
         );
       }
+      // A reviewer whose model takes images sees the record's image outputs (screenshots of any kind of
+      // app) as image input; any other reviewer gets the file references in the record only.
+      const outputs = record.fact.kind === "command" ? record.fact.outputs : undefined;
+      const visuals = await commandOutputVisualBlocks(options.artifacts, outputs, context.imageInput === true);
       return {
-        content: [{ type: "json", value: [singleEvidenceView(record)] }],
+        content: [
+          { type: "json", value: [singleEvidenceView(record)] },
+          ...(outputs && !outputs.notCaptured && outputs.files.length
+            ? [{ type: "text" as const, text: commandOutputSummary(outputs, visuals.shown, context.imageInput === true) }]
+            : []),
+          ...visuals.blocks,
+        ],
         isError: false,
       };
     },
@@ -397,6 +465,9 @@ function validateRun(
     (value.timeoutMs !== undefined &&
       (!Number.isSafeInteger(value.timeoutMs) || (value.timeoutMs as number) < 1))
   ) return { ok: false, issues: ["label, command, string args, cwd, and timeoutMs are invalid"] };
+  // Refused before anything runs: `..`, absolute paths and over-long lists never reach the command.
+  const outputs = value.outputs === undefined ? undefined : normalizeOutputPatterns(value.outputs);
+  if (outputs && !outputs.ok) return { ok: false, issues: outputs.issues };
   return {
     ok: true,
     value: {
@@ -405,6 +476,7 @@ function validateRun(
       args: value.args as string[],
       cwd: (value.cwd as string | undefined) ?? ".",
       timeoutMs: Math.min((value.timeoutMs as number | undefined) ?? defaultTimeoutMs, maximumTimeoutMs),
+      ...(outputs?.ok && outputs.patterns.length ? { outputs: outputs.patterns } : {}),
     },
   };
 }

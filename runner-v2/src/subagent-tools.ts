@@ -254,6 +254,7 @@ function spawnSubagentTool(
           ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
           clock,
           ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
+          ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
         })) broker.register(tool);
       }
       if (options.skillCatalog) {

@@ -3305,18 +3305,8 @@ function assertReviewArtifactHashes(
   label: string,
 ): void {
   if (!Array.isArray(value)) return;
-  const available = new Set(records.flatMap((record) => {
-    switch (record.fact.kind) {
-      case "command":
-        return [record.fact.stdoutArtifactHash, record.fact.stderrArtifactHash];
-      case "browser_snapshot":
-        return [record.fact.htmlArtifactHash];
-      case "browser_screenshot":
-        return [record.fact.screenshotArtifactHash];
-      case "browser_events":
-        return [record.fact.eventsArtifactHash];
-    }
-  }));
+  // Command output files (VF6) are citable like stdout and stderr: the same list criterion links use.
+  const available = new Set(records.flatMap((record) => evidenceFactArtifactHashes(record.fact)));
   const invalid = value.filter(
     (hash): hash is string => typeof hash !== "string" || !available.has(hash)
   );

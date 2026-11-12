@@ -4,10 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
+import type { AgentMessage, ToolResult } from "../src/agent-contracts.js";
+import { validateCriterionEvidenceLinks } from "../src/acceptance-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import type { CommandOutputCapture } from "../src/command-output-files.js";
+import { evidenceFactArtifactHashes, evidenceFactSummary, type CommandEvidenceFact } from "../src/evidence-store.js";
 import { createEvidenceTools } from "../src/evidence-tools.js";
-import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
+import type { GenericProcessResult } from "../src/execution-safety-contracts.js";
+import { encodePng } from "../src/image-inspection.js";
+import type { OneShotCommandExecutor, OneShotCommandRequest } from "../src/one-shot-command-executor.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import { pendingVisualArtifacts } from "../src/tool-visual-input.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 import { ToolBroker } from "../src/tool-broker.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
@@ -472,6 +479,229 @@ test("exact evidence lookup resolves records beyond the oldest 1000 and omits mi
     store.close();
   }
 });
+
+test("evidence command keeps the files a real command writes as artifacts on its record", async (t) => {
+  const fixture = evidenceFixture();
+  let store = new SqliteEvidenceStore(fixture.database);
+  const artifacts = new ArtifactStore(fixture.artifacts);
+  const image = encodePng({ width: 3, height: 2, data: new Uint8Array(3 * 2 * 4).fill(90) });
+  try {
+    const result = await tools(store, artifacts, t).invoke({
+      type: "tool_call", callId: "outputs_real", name: "run_evidence_command",
+      arguments: {
+        label: "ui test",
+        command: process.execPath,
+        args: ["-e", "const fs=require('fs');fs.mkdirSync('out',{recursive:true});fs.writeFileSync('out/shot.png',Buffer.from(process.argv[1],'base64'));fs.writeFileSync('out/report.xml','<testsuite tests=\"1\"/>');process.exit(1)", image.toString("base64")],
+        outputs: ["out/*.png", "out\\report.xml", "logs/*.log"],
+      },
+    }, workerContext(fixture.workspace));
+    assert.equal(result.isError, false, JSON.stringify(result.error));
+    const record = jsonValue(result) as { id: string; fact: CommandEvidenceFact };
+    assert.equal(record.fact.exitCode, 1, "a failing command's files are still evidence");
+    const outputs = record.fact.outputs!;
+    assert.deepEqual(outputs.requested, ["out/*.png", "out/report.xml", "logs/*.log"]);
+    assert.deepEqual(outputs.files.map((file) => [file.path, file.mediaType, file.byteLength]), [
+      ["out/shot.png", "image/png", image.byteLength],
+      ["out/report.xml", "application/xml", Buffer.byteLength("<testsuite tests=\"1\"/>")],
+    ]);
+    assert.deepEqual(outputs.missing, ["logs/*.log"]);
+    assert.deepEqual(await artifacts.get(outputs.files[0]!.artifactHash), image);
+    const texts = result.content.flatMap((block) => block.type === "text" ? [block.text] : []);
+    assert.match(texts.at(-1) ?? "", /outputs: 2 files stored as artifacts \(1 image\); matched nothing: logs\/\*\.log\. This model cannot take image input/);
+    store.close();
+
+    // The record replays with its outputs, and their hashes are the record's artifacts.
+    store = new SqliteEvidenceStore(fixture.database);
+    const [stored] = store.list({ runId: "run_1", taskId: "task_a" });
+    assert.ok(stored && stored.fact.kind === "command");
+    assert.deepEqual(stored.fact.outputs, outputs);
+    const hashes = evidenceFactArtifactHashes(stored.fact);
+    for (const file of outputs.files) assert.ok(hashes.includes(file.artifactHash));
+    assert.match(evidenceFactSummary(stored.fact), /exit 1; 2 output files \(1 image\), 1 missing$/);
+    // A criterion may cite a screenshot as its evidence artifact.
+    const criteria = [{ id: "c1", text: "the screen renders" }];
+    const links = [{ criterionId: "c1", evidenceId: stored.id, artifactHashes: [outputs.files[0]!.artifactHash] }];
+    assert.equal(validateCriterionEvidenceLinks(criteria, links, { evidenceRecords: [stored] }).valid, true);
+    const stray = validateCriterionEvidenceLinks(criteria, [{ ...links[0]!, artifactHashes: ["f".repeat(64)] }], { evidenceRecords: [stored] });
+    assert.equal(stray.valid, false);
+  } finally {
+    store.close();
+    fixture.cleanup();
+  }
+});
+
+test("evidence command refuses output paths that leave the workspace before running anything", async () => {
+  const fixture = evidenceFixture();
+  const store = new SqliteEvidenceStore(fixture.database);
+  const artifacts = new ArtifactStore(fixture.artifacts);
+  try {
+    const fake = fakeExecution();
+    const registry = new ToolRegistry();
+    for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_a", execution: fake.execution })) registry.register(tool);
+    for (const [index, outputs] of [["../outside.txt"], [join(fixture.workspace, "abs.txt")], ["C:/x.txt"], ["a/../../b"], "shot.png", Array.from({ length: 17 }, (_, i) => `f${i}`)].entries()) {
+      const result = await registry.invoke({
+        type: "tool_call", callId: `refuse-${index}`, name: "run_evidence_command",
+        arguments: { label: "refused", command: "fixture", args: [], outputs },
+      }, { ...workerContext(fixture.workspace), executionGrant: {} as never });
+      assert.equal(result.isError, true, JSON.stringify(outputs));
+    }
+    assert.equal(fake.requests.length, 0, "nothing ran");
+    assert.deepEqual(store.list({ runId: "run_1", taskId: "task_a" }), []);
+  } finally {
+    store.close();
+    fixture.cleanup();
+  }
+});
+
+test("output files are read after the command exits, from a fresh execution, and only once its tree is gone", async (t) => {
+  for (const scenario of ["exited", "cleanup_pending", "reused", "no_outputs"] as const) {
+    await t.test(scenario, async () => {
+      const fixture = evidenceFixture();
+      const store = new SqliteEvidenceStore(fixture.database);
+      const artifacts = new ArtifactStore(fixture.artifacts);
+      try {
+        // The file exists before the call; the command rewrites it as its last act.
+        writeFileSync(join(fixture.workspace, "report.txt"), "stale");
+        const reuseSource = scenario === "reused"
+          ? store.record({ runId: "run_1", taskId: "task_a", actor: { role: "worker", id: "worker_1" }, fact: commandFact(), createdAt: "2026-11-13T00:00:00.000Z", idempotencyKey: "earlier" })
+          : undefined;
+        const fake = fakeExecution({
+          onExecute: () => writeFileSync(join(fixture.workspace, "report.txt"), "final"),
+          ...(scenario === "cleanup_pending" ? { process: { cleanup: { state: "pending" } } } : {}),
+          ...(reuseSource ? { reuseSource } : {}),
+        });
+        const registry = new ToolRegistry();
+        for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_a", execution: fake.execution })) registry.register(tool);
+        const result = await registry.invoke({
+          type: "tool_call", callId: `order-${scenario}`, name: "run_evidence_command",
+          arguments: { label: "report", command: "fixture", args: [], ...(scenario === "no_outputs" ? {} : { outputs: ["report.txt"] }) },
+        }, { ...workerContext(fixture.workspace), executionGrant: {} as never });
+        assert.equal(result.isError, false, JSON.stringify(result.error));
+        assert.equal(fake.requests.length, 1);
+        const outputs = (jsonValue(result) as { fact: CommandEvidenceFact }).fact.outputs;
+        if (scenario === "no_outputs") {
+          assert.equal(outputs, undefined, "a command without outputs keeps the old record shape");
+          assert.equal(fake.requests[0]!.freshExecution, undefined, "evidence reuse stays available");
+          return;
+        }
+        assert.equal(fake.requests[0]!.freshExecution, true, "a command with outputs is never answered from earlier evidence");
+        if (scenario === "exited") {
+          assert.deepEqual(outputs!.files.map((file) => file.path), ["report.txt"]);
+          assert.equal((await artifacts.get(outputs!.files[0]!.artifactHash)).toString(), "final");
+        } else {
+          assert.deepEqual(outputs, {
+            requested: ["report.txt"], files: [], missing: [],
+            notCaptured: scenario === "reused" ? "reused_execution" : "process_not_proven_ended",
+          });
+        }
+      } finally {
+        store.close();
+        fixture.cleanup();
+      }
+    });
+  }
+});
+
+test("image outputs reach an image-capable model as image input and reach others as references only", async () => {
+  const fixture = evidenceFixture();
+  const store = new SqliteEvidenceStore(fixture.database);
+  const artifacts = new ArtifactStore(fixture.artifacts);
+  const image = encodePng({ width: 4, height: 4, data: new Uint8Array(4 * 4 * 4).fill(30) });
+  try {
+    const fake = fakeExecution({
+      onExecute: () => {
+        mkdirSync(join(fixture.workspace, "screens"), { recursive: true });
+        writeFileSync(join(fixture.workspace, "screens", "main.png"), image);
+        writeFileSync(join(fixture.workspace, "screens", "log.txt"), "rendered");
+      },
+    });
+    const broker = new ToolBroker({ permissionProfile: "full", workspacePath: fixture.workspace, artifacts });
+    for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_a", execution: fake.execution })) broker.register(tool);
+    const run = (callId: string, imageInput: boolean) => broker.invoke({
+      type: "tool_call", callId, name: "run_evidence_command",
+      arguments: { label: "desktop ui test", command: "fixture", args: [], outputs: ["screens/*"] },
+    }, { ...workerContext(fixture.workspace), imageInput });
+    const visualBlocks = (result: Awaited<ReturnType<typeof run>>) =>
+      result.content.filter((block) => block.type === "artifact" && block.visual !== undefined);
+
+    const vision = await run("vision", true);
+    assert.equal(vision.isError, false, JSON.stringify(vision.error));
+    const shown = visualBlocks(vision);
+    assert.equal(shown.length, 1, "only the PNG is offered as an image");
+    assert.ok(shown[0]!.type === "artifact" && shown[0]!.mediaType === "image/png");
+    assert.match(vision.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n"), /Shown to you as image input: screens\/main\.png\./);
+    const messages: AgentMessage[] = [
+      { id: "a", role: "assistant", content: [{ type: "tool_call", callId: "vision", name: "run_evidence_command", arguments: {} }] },
+      { id: "t", role: "tool", content: { callId: "vision", toolName: "run_evidence_command", isError: false, content: vision.content } as ToolResult },
+    ];
+    assert.equal(pendingVisualArtifacts(messages).length, 1, "the next request carries the screenshot");
+
+    const textOnly = await run("text-only", false);
+    assert.equal(textOnly.isError, false);
+    assert.equal(visualBlocks(textOnly).length, 0, "a text-only model is never offered image input");
+    const record = jsonValue(textOnly) as { id: string; fact: { outputs: CommandOutputCapture } };
+    assert.deepEqual(record.fact.outputs.files.map((file) => file.path), ["screens/log.txt", "screens/main.png"]);
+
+    // A reviewer inspecting the worker's record: images for a vision model, references for the rest.
+    const inspect = (callId: string, imageInput: boolean) => broker.invoke({
+      type: "tool_call", callId, name: "inspect_evidence", arguments: { taskId: "task_a", evidenceId: record.id },
+    }, { runId: "run_1", sessionId: "reviewer_session", actor: { role: "verifier", id: "reviewer_1" }, workspacePath: fixture.workspace, imageInput });
+    const reviewerVision = await inspect("inspect-vision", true);
+    assert.equal(reviewerVision.isError, false, JSON.stringify(reviewerVision.error));
+    assert.equal(visualBlocks(reviewerVision).length, 1);
+    const reviewerText = await inspect("inspect-text", false);
+    assert.equal(visualBlocks(reviewerText).length, 0);
+    assert.equal(reviewerText.content.some((block) => block.type === "artifact"), false);
+    const [inspected] = jsonValue(reviewerText) as Array<{ fact: { outputs: CommandOutputCapture } }>;
+    assert.equal(inspected!.fact.outputs.files.find((file) => file.path === "screens/main.png")?.artifactHash, shown[0]!.type === "artifact" ? shown[0]!.hash : "");
+  } finally {
+    store.close();
+    fixture.cleanup();
+  }
+});
+
+function commandFact(): CommandEvidenceFact {
+  return {
+    kind: "command", label: "earlier", command: "fixture", args: [], cwd: ".",
+    startedAt: "2026-11-13T00:00:00.000Z", finishedAt: "2026-11-13T00:00:01.000Z",
+    exitCode: 0, signal: null, timedOut: false, cancelled: false, outputTruncated: false,
+    stdoutArtifactHash: "a".repeat(64), stderrArtifactHash: "b".repeat(64),
+  };
+}
+
+function fakeExecution(options: {
+  onExecute?: () => void;
+  process?: Partial<GenericProcessResult>;
+  reuseSource?: Awaited<ReturnType<OneShotCommandExecutor["execute"]>>["reuseSource"];
+} = {}): { execution: OneShotCommandExecutor; requests: OneShotCommandRequest[] } {
+  const requests: OneShotCommandRequest[] = [];
+  return {
+    requests,
+    execution: {
+      execute: async (request) => {
+        requests.push(request);
+        options.onExecute?.();
+        return {
+          process: {
+            logicalProcessId: "outputs-process",
+            outcome: "exited",
+            exitCode: 0,
+            finishedAt: new Date().toISOString(),
+            output: [
+              { stream: "stdout", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+              { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+            ],
+            cleanup: { state: "verified_empty", verifiedAt: new Date().toISOString() },
+            ...options.process,
+          } as GenericProcessResult,
+          enforcement: "unconfined_explicit_full",
+          disclosure: "unconfined_explicit_full",
+          ...(options.reuseSource ? { reuseSource: options.reuseSource } : {}),
+        };
+      },
+    },
+  };
+}
 
 function tools(store: SqliteEvidenceStore, artifacts: ArtifactStore, t: TestContext) {
   const registry = new ToolRegistry();

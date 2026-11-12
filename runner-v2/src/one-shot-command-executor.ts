@@ -45,6 +45,11 @@ export interface OneShotCommandRequest {
   readonly timeoutMs: number;
   /** Trusted lifecycle requirements; never inferred from argv or model text. */
   readonly lifecycleRequirements?: ExecutionLifecycleRequirements;
+  /**
+   * Always launch; never answer from earlier same-run evidence. Set when the caller keeps the files
+   * the command writes (VF6 outputs): a reused result ran nothing, so its files would not be its own.
+   */
+  readonly freshExecution?: true;
   readonly context: Pick<ToolExecutionContext, "runId" | "sessionId" | "signal"> & {
     readonly actor: ExecutionGrantBinding["actor"];
     readonly callId: string;
@@ -232,7 +237,7 @@ export function createRuntimeBackedOneShotCommandExecutor(
         let childEnvironmentIdentity = selection.enforcement === "write_confinement_exact_grant" ? await fingerprintChildEnvironment({ environment: effectiveEnvironment, executable: request.executable, cwd: request.workingDirectory,
           ...(selection.enforcement === "write_confinement_exact_grant" ? {provider: {providerId: selection.providerId, implementationDigest: selection.implementationDigest, ...(selection.lease.immutableImageId ? {immutableImageId: selection.lease.immutableImageId} : {})}} : {}) }) : unknownChildEnvironment();
         process = await options.runtime.invoke({
-          ...(selection.enforcement === "unconfined_explicit_full" && evidenceReuse && request.captureOutputBytes === undefined && ["run_evidence_command", "final-verification.command"].includes(request.context.toolName) ? {
+          ...(selection.enforcement === "unconfined_explicit_full" && evidenceReuse && request.captureOutputBytes === undefined && request.freshExecution !== true && ["run_evidence_command", "final-verification.command"].includes(request.context.toolName) ? {
             assertReuseAuthority: () => assertCurrentConsumedExecutionGrantClaims(claims),
             reusePreparedEnvironment: async (environment: Readonly<Record<string, string>>, executionContext: {requiredLifecycleScope: string; implementationDigest: string; configDigest: string}) => {
               assertCurrentConsumedExecutionGrantClaims(claims);

@@ -386,6 +386,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
             ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
             ...(this.options.execution ? { execution: this.options.execution } : {}),
             ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
+            ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
           },
         )),
         () => rebuildSchedulerProjection(
@@ -1153,6 +1154,8 @@ export interface ArchitectCommandBrokerInput {
   permissions?: SqlitePermissionStore;
   execution?: OneShotCommandExecutor;
   allowedCommands?: readonly string[];
+  /** Benchmark hidden paths: output files there are refused, never read (VF6). */
+  hiddenPaths?: readonly string[];
   /** Test double. Production uses `run_evidence_command` from `createEvidenceTools`. */
   commandTool?: NativeTool<unknown>;
 }
@@ -1179,6 +1182,7 @@ export function createArchitectCommandBroker(input: ArchitectCommandBrokerInput)
     clock: input.clock,
     ...(input.execution ? { execution: input.execution } : {}),
     ...(input.allowedCommands ? { allowedCommands: input.allowedCommands } : {}),
+    ...(input.hiddenPaths ? { hiddenPaths: input.hiddenPaths } : {}),
   }));
   if (tool.definition.name !== "run_evidence_command") {
     throw new Error("Architect command broker only registers run_evidence_command.");
@@ -1208,6 +1212,7 @@ class LazyArchitectCommandRuntime implements AgentToolRuntime {
       clock: input.clock,
       ...(input.execution ? { execution: input.execution } : {}),
       ...(input.allowedCommands ? { allowedCommands: input.allowedCommands } : {}),
+      ...(input.hiddenPaths ? { hiddenPaths: input.hiddenPaths } : {}),
     }));
     this.input = { ...input, commandTool: tool };
     this.listing.register(tool);
