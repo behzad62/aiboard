@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -10,7 +10,7 @@ import { createFilesystemTools } from "../src/filesystem-tools.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { resolveProtectedLocations, type ProtectedLocations } from "../src/protected-locations.js";
 import { aiboardHomeDenyEntries } from "../src/aiboard-home-paths.js";
-import { createRemotePathGuard, FixedPathDeny, RemotePathDeniedError, type RemotePathGuard } from "../src/remote-path-guard.js";
+import { createRemotePathGuard, FixedPathDeny, parseMountInfo, RemotePathDeniedError, type RemotePathGuard } from "../src/remote-path-guard.js";
 import { RemotePrincipalStore } from "../src/remote-principal.js";
 import { createLocalMcpOwner, LocalMcpToolSession, RemoteToolRuntime } from "../src/remote-tool-runtime.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -172,14 +172,83 @@ test("guard follows symlinks and junctions only to allowed targets", async () =>
   } finally { await rm(fx.root, { recursive: true, force: true }); }
 });
 
+/**
+ * A guard over only the fixture's own protected roots (plus any `extra` host roots). The host's real
+ * system roots decide the hard-link result on their own: a non-root Linux user cannot list
+ * /etc/ssl/private, which correctly leaves every multi-link file on that filesystem unprovable.
+ */
+function hermeticGuard(fx: Fixture, extra: (location: ProtectedLocations["locations"][number]) => boolean = () => false): RemotePathGuard {
+  const inside = (path: string) => path === fx.root || path.startsWith(`${fx.root}${sep}`);
+  return createRemotePathGuard({ ...fx.locations, locations: fx.locations.locations.filter((location) => inside(location.path) || extra(location)) });
+}
+
+const canDropPermissions = process.platform !== "win32" && process.getuid?.() !== 0;
+
 test("guard refuses hard links to protected files but allows provably benign links", async () => {
   const fx = await fixture();
   try {
+    const guard = hermeticGuard(fx);
     await link(join(fx.home, ".ssh", "id_rsa"), join(fx.allowed, "copy.txt"));
-    assert.equal((await denied(fx.guard.assertAllowed(join(fx.allowed, "copy.txt"), "read"))).reason, "hardlink_alias");
+    assert.equal((await denied(guard.assertAllowed(join(fx.allowed, "copy.txt"), "read"))).reason, "hardlink_alias");
     await link(join(fx.allowed, "file.txt"), join(fx.allowed, "benign-copy.txt"));
-    await fx.guard.assertAllowed(join(fx.allowed, "benign-copy.txt"), "read");
+    await guard.assertAllowed(join(fx.allowed, "benign-copy.txt"), "read");
   } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test("on Linux the pseudo filesystems do not make a benign hard link unprovable", { skip: process.platform !== "linux" }, async () => {
+  const fx = await fixture();
+  try {
+    // /proc cannot be listed in full by anyone and /sys exceeds the scan cap; neither can hold the target's device.
+    const guard = hermeticGuard(fx, (location) => location.category === "pseudo_filesystem");
+    assert.deepEqual(guard.locations.locations.filter((location) => location.category === "pseudo_filesystem").map((location) => location.path).sort(), ["/dev", "/proc", "/sys"]);
+    await link(join(fx.home, ".ssh", "id_rsa"), join(fx.allowed, "copy.txt"));
+    assert.equal((await denied(guard.assertAllowed(join(fx.allowed, "copy.txt"), "read"))).reason, "hardlink_alias");
+    await link(join(fx.allowed, "file.txt"), join(fx.allowed, "benign-copy.txt"));
+    await guard.assertAllowed(join(fx.allowed, "benign-copy.txt"), "read");
+    await denied(guard.assertAllowed("/proc/self/environ", "read"), "protected_location");
+  } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test("a protected folder the guard cannot fully enumerate keeps multi-link files unprovable", { skip: !canDropPermissions }, async () => {
+  const fx = await fixture();
+  const secrets = join(fx.root, "ext-secrets");
+  try {
+    await writeFile(join(secrets, "api.key"), "KEY\n");
+    await link(join(secrets, "api.key"), join(fx.allowed, "key-alias.txt"));
+    await link(join(fx.allowed, "file.txt"), join(fx.allowed, "benign-copy.txt"));
+    // Listable but not searchable: the names are visible, the objects behind them are not.
+    await chmod(secrets, 0o444);
+    let guard = hermeticGuard(fx);
+    await denied(guard.assertAllowed(join(fx.allowed, "key-alias.txt"), "read"), "hardlink_confinement_unprovable");
+    await denied(guard.assertAllowed(join(fx.allowed, "benign-copy.txt"), "read"), "hardlink_confinement_unprovable");
+    // Not listable at all.
+    await chmod(secrets, 0o000);
+    guard = hermeticGuard(fx);
+    await denied(guard.assertAllowed(join(fx.allowed, "key-alias.txt"), "read"), "hardlink_confinement_unprovable");
+    await denied(guard.assertAllowed(join(fx.allowed, "benign-copy.txt"), "read"), "hardlink_confinement_unprovable");
+  } finally {
+    await chmod(secrets, 0o755).catch(() => undefined);
+    await rm(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("mountinfo parsing decodes escapes and the type after the optional fields, and refuses malformed rows", () => {
+  const table = parseMountInfo([
+    "22 1 0:21 / /proc rw,nosuid shared:12 - proc proc rw",
+    "35 22 0:32 / /proc/sys/fs/binfmt_misc rw - autofs systemd-1 rw,fd=29",
+    "40 1 8:1 /data /mnt/with\\040space rw,relatime shared:1 master:2 - ext4 /dev/sda1 rw",
+    "41 1 259:65536 / /big rw - xfs /dev/nvme0n1p1 rw",
+    "",
+  ].join("\n"));
+  assert.deepEqual(table, [
+    { mountPoint: "/proc", device: 21n, fsType: "proc" },
+    { mountPoint: "/proc/sys/fs/binfmt_misc", device: 32n, fsType: "autofs" },
+    { mountPoint: "/mnt/with space", device: (8n << 8n) | 1n, fsType: "ext4" },
+    { mountPoint: "/big", device: (259n << 8n) | (65536n & 0xffn) | ((65536n & 0xffffff00n) << 12n), fsType: "xfs" },
+  ]);
+  assert.equal(parseMountInfo("22 1 0:21 / /proc rw shared:12 proc proc rw"), undefined, "no separator");
+  assert.equal(parseMountInfo("22 1 zero / /proc rw - proc proc rw"), undefined, "bad device");
+  assert.equal(parseMountInfo(""), undefined, "empty table");
 });
 
 test("broker guard binds remote and local_mcp actors only; an unguarded worker broker is unaffected", async () => {
