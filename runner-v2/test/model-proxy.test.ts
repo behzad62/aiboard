@@ -197,6 +197,32 @@ test("the proxy sets each provider's key in its own header, strips the proxy tok
   }
 });
 
+test("xAI's language-models catalog is on xAI's list only (HM4a: the web's catalog call)", async () => {
+  const XAI_KEY = "xai-stub-0123456789abcdefghijklmn";
+  const fx = await fixture({
+    homeOps: (upstream) => [
+      { path: "providers.xai", op: "set", value: { enabled: true, baseUrl: `${upstream.base}/xai/v1` } },
+      { path: "credentials.providers.xai", op: "set", value: { secret: XAI_KEY } },
+      { path: "providers.openai", op: "set", value: { enabled: true, baseUrl: `${upstream.base}/v1` } },
+      { path: "credentials.providers.openai", op: "set", value: { secret: OPENAI_KEY } },
+    ],
+  });
+  try {
+    const auth = { authorization: `Bearer ${fx.token}` };
+    const xai = await send(fx.port, { method: "GET", path: "/v2/model-proxy/xai/language-models", headers: auth });
+    assert.equal(xai.status, 200);
+    assert.equal(fx.upstream.requests[0]!.url, "/xai/v1/language-models");
+    assert.equal(fx.upstream.requests[0]!.headers.authorization, `Bearer ${XAI_KEY}`);
+    const openai = await send(fx.port, { method: "GET", path: "/v2/model-proxy/openai/language-models", headers: auth });
+    assert.equal(openai.status, 404, "another OpenAI-compatible provider does not get xAI's path");
+    const post = await send(fx.port, { method: "POST", path: "/v2/model-proxy/xai/language-models", body: "{}", headers: { ...json, ...auth } });
+    assert.equal(post.status, 404, "only GET");
+    assert.equal(fx.upstream.requests.length, 1);
+  } finally {
+    await fx.close();
+  }
+});
+
 test("a missing, wrong or expired token gets 401 and nothing is forwarded; a token in a query parameter is refused", async () => {
   const fx = await fixture();
   try {
