@@ -38,7 +38,7 @@ AI Board is a static-export Next.js app (App Router, React 19, strict TypeScript
 
 - `lib/client/engine.ts` runs panel, debate, and specialist discussions.
 - `lib/client/native-build-engine.ts` is the only live Build adapter. It provisions and observes Runner V2 and maps durable events into the UI.
-- `runner-v2/src/` owns Build scheduling, Architect and worker loops, native tools, isolated Git worktrees, task commits, evidence, skills, project memory, budgets, provider routing, integration, recovery, and explicit handoff.
+- `runner-v2/src/` owns Build scheduling, Architect and worker loops, native tools, isolated Git worktrees, task commits, evidence, skills, project memory, budgets, provider routing, integration, recovery, and project handoff.
 - `lib/client/legacy-build-engine.benchmark.ts` exists only for certified WorkBench benchmark compatibility. Product Build mode must never import it.
 - `lib/orchestrator/engine.ts` is otherwise legacy server code, but its `OrchestratorEvent` type remains live.
 

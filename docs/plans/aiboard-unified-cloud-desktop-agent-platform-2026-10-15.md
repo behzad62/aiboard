@@ -2,6 +2,8 @@
 
 > **SUPERSEDED IN PART (2026-10-27, owner decision D16):** Milestones A (A1–A3), C2, D (D1–D4) and E (E1–E3) and the P7 charter are superseded by [2026-10-27-aiboard-remote.md](./2026-10-27-aiboard-remote.md). C1 (local stdio MCP) is adopted there as part of L1; E1 (OpenAI Secure MCP Tunnel) is dropped. **Milestone B (agent-harness mixer) remains valid here as separate future work.**
 
+> **SUPERSEDED IN PART (2026-11-11):** C1's MCP Build tools and delegation depth are replaced by [2026-11-03-simple-build-and-delegate.md](./2026-11-03-simple-build-and-delegate.md): external CLIs delegate through the one-shot `aiboard exec`, with no MCP task tools in v1 and a delegation depth of 1.
+
 **Date:** 2026-10-15  
 **Status:** Proposed implementation specification; not yet implemented or accepted.  
 **Repository:** D:\repos\ai-discussion-board  
@@ -9,7 +11,7 @@
 **Decision:** Preserve existing Runner V2 authority and existing static aiboard.me UI. Make the VPS relay the independent default remote route; OpenAI Secure MCP Tunnel is an optional OpenAI-specific transport, not a dependency.
 
 ## 0. Instructions to the implementation agent
-1. Read this entire specification, README.md, AGENTS.md, docs/runner-v2/architecture.md, guide.md, security.md, docs/runner-v2/task-12-status.md, docs/plans/runner-v2-p6-6-EXECUTION.md, and current release runbook BEFORE work.
+1. Read this entire specification, README.md, AGENTS.md, docs/runner-v2/architecture.md, guide.md, security.md, docs/plans/runner-v2-p6-6-EXECUTION.md, and current release runbook BEFORE work. (docs/runner-v2/task-12-status.md is history: Task 12/P6 was accepted on 2026-10-15; do not resume it.)
 2. Check current branch/worktree, uncommitted changes, tests, shipped ZIPs, deployment behavior, and any newer owner instructions. Source code/current behavior takes precedence over path guesses in this plan.
 3. Work in an isolated, named Git worktree/branch. This plan may initially exist as an UNTRACKED file in the owner's main checkout: read it from the absolute path first and copy it into the new worktree's docs/plans before executing packets, or incorporate it through an owner-approved docs-only commit. Do not assume an untracked file appears automatically in Git worktrees. Never overwrite another agent's files, delete unrelated worktrees, edit the owner's untracked files, or blindly merge. Do not push or deploy without explicit owner authorization; a push to main can deploy aiboard.me.
 4. Record baseline and requirement IDs, task status, decisions, hazards, acceptance evidence, and unresolved problems in a durable implementation ledger under docs/plans. Do not claim test or deployment success without executed evidence.
@@ -27,7 +29,7 @@
 | G-04 | AIBoard retains authoritative requirement → plan → task DAG → DoD → evidence → independent review → integration → handoff state even when provider sessions disappear. |
 | G-05 | Planner, Worker, Reviewer are roles distinct from execution providers; one provider can fill any compatible role under policy. |
 | G-06 | First-class direct-model, Codex CLI, Claude Code CLI adapters; capability discovery, sessions, resume/cancel, streaming, usage provenance, bounded timeouts, normalized results. |
-| G-07 | External Codex/Claude/other tools can invoke AIBoard over inbound MCP (stdio locally; authenticated remote HTTP through a bridge). |
+| G-07 | External Codex/Claude/other tools can invoke AIBoard over inbound MCP (stdio locally; authenticated remote HTTP through a bridge). Superseded for delegation (2026-11-11): they run the one-shot `aiboard exec` ([2026-11-03-simple-build-and-delegate.md](./2026-11-03-simple-build-and-delegate.md) OD-19, §6.4). |
 | G-08 | AIBoard can invoke external harnesses via outbound provider adapters. Recursion/cycle and authority-confusion prevention required. |
 | G-09 | User can access paired Windows workstation from a cloud AI assistant with remote project/build/status/evidence operations through outbound-only desktop connection. |
 | G-10 | Optional desktop tooling exposes scoped files/terminal and, later, guarded GUI screenshot/click/type/scroll/keyboard actions, comparable in function to Desktop Commander and computer-use assistants. |
@@ -43,7 +45,7 @@
 - runner-v2/src/cli.ts is Runner V2's composition root; local control server, state and project paths, port and token already exist. Port 0 is supported. Current CLI REQUIRES explicit --project and --state-dir.
 - runner-v2/bin/aiboard-runner-v2.mjs imports the TS CLI via tsx; runner-v2/package.json declares a bin entry, but normal users currently receive source distribution.
 - scripts/publish-downloads.mjs produces public/aiboard-runner-v2.zip with TypeScript, runtime packages and instructions: npm install; npm run setup:browser; npm start with project/state/port flags.
-- components/RunnerSetup.tsx asks for localhost URL/control token manually. lib/client/native-build-engine.ts calls the local runner. Runner V2's token is also used to derive encryption key for provider-configs.enc; regenerating it for the same state makes saved configurations unreadable.
+- components/RunnerSetup.tsx asks for localhost URL/control token manually. lib/client/native-build-engine.ts calls the local runner. Runner V2's token is also used to derive encryption key for provider-configs.enc; regenerating it for the same state makes saved configurations unreadable. (As built, this is no longer so: the stores live in `state/credential-stores-v2/<generation>/` (`provider-configs.enc` and `extension-credentials.enc`, credential-migration.ts), migrated from the legacy files of the same names at the state root, and each store's key is an HKDF-sha256 subkey of `state/storage-key` (storage-key.ts), then scrypt (encrypted-provider-config-store.ts); regenerating the control token no longer affects them.)
 - ControlServer recognizes aiboard.me / www.aiboard.me as allowed remote browser origins. Never interpret CORS approval as authentication.
 - docs/runner-v2/architecture.md: CLI owns runtime/managed-process execution, grants, isolation and resource cleanup. Preserve exact preflight/recovery, do not create alternate process authority.
 - docs/plans/runner-v2-p6-6-EXECUTION.md (as inspected) says T8 locally merged/accepted; REL-1 prepared but NOT started, and main push triggers production deployment. Reconfirm current facts at implementation start.
@@ -122,7 +124,7 @@ References:
 - WorkResultV1: taskId, base revision, changed paths, actual commits, test commands/results, referenced evidence, unresolvedIssues. Validate against observed Git/evidence: provider self-report is not proof.
 - ReviewResultV1: subject revision, verdict (pass/rework/block), requirement coverage, findings/severity, evidence refs, requested rework and independent reviewer identity. A reviewer cannot silently resolve its own findings.
 - Persist provider-session mapping, attempt IDs and agent event projections. AIBoard remains source of truth across provider session expiration/disconnect and context loss.
-- Cycle prevention: request ancestry (instanceId, workflowId, providerInvocationId), max delegation depth (default 3), duplicate-instance rejection, maximum tool/harness recursion, budgets and cancellation propagation.
+- Cycle prevention: request ancestry (instanceId, workflowId, providerInvocationId), max delegation depth (default 3; superseded: 1, per [2026-11-03-simple-build-and-delegate.md](./2026-11-03-simple-build-and-delegate.md) OD-12), duplicate-instance rejection, maximum tool/harness recursion, budgets and cancellation propagation.
 - Avoid infinite loops where Codex → AIBoard MCP → Codex provider → AIBoard MCP.
 
 ### 4.3 Remote typed command envelope
@@ -177,7 +179,7 @@ RemoteResponseV1: request id, accepted/rejected, durable jobId OR bounded result
 ### Milestone C: Bidirectional MCP gateway and remote-safe commands
 **C1 — Local inbound MCP server** (B1; A2 preferred)
 - Implement a separate MCP ingress adapter (stdio first, HTTP loopback optional), backed by the existing control plane and authenticated scoped API. Tool names should be stable, versioned, small and discoverable.
-- MVP: list_projects, select_project, inspect_project, list_workflows, create_plan, start_build, get_job_status, get_job_events, list_tasks, get_task_evidence, request_review, resume_build, cancel_build, get_pending_approvals. Mutating commands carry explicit grant/approval intent.
+- MVP (superseded 2026-11-11: no MCP Build or task tools in v1; delegation is `aiboard exec`, and MCP task tools are later work, NX3 in [2026-11-03-simple-build-and-delegate.md](./2026-11-03-simple-build-and-delegate.md)): list_projects, select_project, inspect_project, list_workflows, create_plan, start_build, get_job_status, get_job_events, list_tasks, get_task_evidence, request_review, resume_build, cancel_build, get_pending_approvals. Mutating commands carry explicit grant/approval intent.
 - DoD: works from local Codex/Claude MCP client; unauthorized/unknown project refused; legacy Runner endpoint still works; MCP cannot bypass existing grant rules; recursion checks pass.
 
 **C2 — Optional scoped developer/device tools** (C1)

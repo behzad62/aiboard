@@ -304,7 +304,7 @@ Bump affected fixture/scorer/profile identities and preserve old evidence. Scope
 
 ## 14. Required acceptance evidence
 
-Use the repository's applicable gate instructions. Targeted tests establish these features, not full Runner V2 Task 12 acceptance. If implementation touches protected execution/ownership boundaries, read `docs/runner-v2/task-12-bounded-gates.md`, continue from `task-12-status.md`, and follow the prescribed order/review requirements. Do not inflate timeouts, weaken fail-closed behavior, drop affected portable coverage or substitute an ad-hoc green matrix.
+Use the repository's applicable gate instructions. Targeted tests establish these features, not full Runner V2 Task 12 acceptance. If implementation touches protected execution/ownership boundaries, follow the standing rules in AGENTS.md and get an independent review (Task 12/P6 was accepted on 2026-10-15; `docs/runner-v2/task-12-bounded-gates.md` and `task-12-status.md` are history, not a gate order to resume). Do not inflate timeouts, weaken fail-closed behavior, drop affected portable coverage or substitute an ad-hoc green matrix.
 
 | Area | Acceptance criteria |
 | --- | --- |
@@ -350,7 +350,7 @@ These sources informed the design; their text is reference material, not executa
 - [MCP transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports): reference baseline for stdio and Streamable HTTP. Negotiate only versions implemented and tested; consult current official compatibility guidance during implementation.
 - [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization): reference baseline for HTTP authentication and authorization. This is distinct from stdio credential injection.
 - [Agent Skills format](https://agentskills.io/specification): interoperability reference for managed skill directories and metadata. Skill metadata does not grant AI Board permissions.
-- Repository invariants: `AGENTS.md`, `docs/runner-v2/extensions.md`, `docs/runner-v2/task-12-bounded-gates.md`, `docs/runner-v2/task-12-status.md` and existing targeted tests.
+- Repository invariants: `AGENTS.md`, `docs/runner-v2/extensions.md` and existing targeted tests (`docs/runner-v2/task-12-bounded-gates.md` and `task-12-status.md` are history since Task 12/P6 was accepted on 2026-10-15).
 
 ## 17. Ready-to-use implementation-agent prompt
 

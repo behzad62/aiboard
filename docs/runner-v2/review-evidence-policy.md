@@ -12,4 +12,4 @@ Before recording a verdict, the native runtime verifies the current review and a
 
 These checks establish mechanical provenance. Semantic completeness remains the reviewer's and Architect's responsibility. A rejected verdict can be retried after the reviewer reads the necessary content or records a supported finding disposition. Captures and verdicts replay from durable scheduler and tool-ledger records.
 
-E5 validation is limited to its own core and authenticated native factory/runtime journeys, with real SQLite and Git and mocked model responses. Prior packet, importer, integration, platform, package, build and full-suite gates remain deferred to T8 under the owner continuation amendment.
+E5 validation is limited to its own core and authenticated native factory/runtime journeys, with real SQLite and Git and mocked model responses. Prior packet, importer, integration, platform, package, build and full-suite gates were deferred to T8 under the owner continuation amendment; T8 and P6.6 were accepted on 2026-10-15, and the full suite now runs in CI or by the owner.

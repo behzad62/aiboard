@@ -1,6 +1,6 @@
 # Runner V2 extensions and language servers
 
-Runner V2 can load trusted, local extensions and configured language servers. They add capabilities to a single Runner process; they do not replace the scheduler, worktree isolation, integration, verification, permission checks, budgets, evidence, or user handoff.
+Runner V2 can load trusted, local extensions and configured language servers. They add capabilities to a single Runner process; they do not replace the scheduler, worktree isolation, integration, verification, permission checks, budgets, evidence, or project handoff.
 
 ## Enable trusted capabilities
 

@@ -48,7 +48,7 @@ The existing deployment workflow supplies the remaining exact-release layer-4 bu
    ```
 
 4. Select the `Deploy AI Board` workflow run whose `head_sha` equals the sealed release SHA. Retain its URL and actual conclusion. Check its build, artifact verification, upload, `nginx -t` and reload steps; a queued/running workflow is not a completed release.
-5. After success, verify the deployed dashboard/settings/discussion load, Build still uses the separate localhost Runner, current download ZIPs match the recorded manifest, and project handoff still requires the user's choice. Do not make paid model calls or mutate a real project merely for a smoke check without authorization.
+5. After success, verify the deployed dashboard/settings/discussion load, Build still uses the separate localhost Runner, current download ZIPs match the recorded manifest, and a Build's project handoff still pauses for the user's choice unless the run's policy is `finish` or `budgeted`, a project handoff was requested, and no known defects are recorded. Do not make paid model calls or mutate a real project merely for a smoke check without authorization.
 6. Record the exact SHA, run URL, observed smoke outcomes and rollback target. Only then mark REL-1 complete in the execution ledger. Do not mark the old T8 evidence as fresh release-head CI.
 
 ## Rollback if the authorized release fails
