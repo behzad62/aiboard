@@ -53,8 +53,8 @@ type StaticModelContextProfile = Omit<
 
 export const MIN_CONTEXT_WINDOW_TOKENS = 4_096;
 export const MAX_CONTEXT_WINDOW_TOKENS = 2_000_000;
-const MIN_OUTPUT_TOKENS = 256;
-const MAX_OUTPUT_TOKENS = 128_000;
+export const MIN_OUTPUT_TOKENS = 256;
+export const MAX_OUTPUT_TOKENS = 128_000;
 
 const ALL_BUILD_ROLES: ModelBuildRole[] = [
   "architect",

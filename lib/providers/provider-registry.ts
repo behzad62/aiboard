@@ -53,10 +53,32 @@ export interface ModelRuntimeBehavior {
   concurrencyNote?: string;
 }
 
+/** How AIBoard's native Runner calls a provider (runner-v2/src/provider-config-store.ts `ProviderTransport`). */
+export type ProviderRuntimeTransport = "openai-compatible" | "anthropic" | "google" | "account-runner";
+
+/**
+ * Where a provider's API lives and how the Runner reaches it. This is data, not code, so the web and the
+ * Runner's generated catalog snapshot (scripts/generate-runner-model-catalog.mts) read one source.
+ */
+export interface ProviderConnection {
+  transport: ProviderRuntimeTransport;
+  /**
+   * The provider's API base when the user saves none, in the form its SDK takes as `baseURL`
+   * (OpenAI-compatible bases include their version path; Anthropic's and Google's are the host).
+   * Null when the user must supply it (Azure AI Foundry) or a launcher supplies it (account peer).
+   * Runtime configs for the `anthropic` and `google` transports carry a base URL only when the user
+   * saved one: the Runner's adapters default to these hosts themselves.
+   */
+  defaultBaseUrl: string | null;
+  /** The OpenAI-compatible wire protocol the Runner speaks (openai-compatible transport only). */
+  protocol?: "chat-completions" | "responses";
+}
+
 export interface ProviderDefinition {
   id: ProviderId;
   name: string;
   modelSource: "catalog" | "user-defined";
+  connection: ProviderConnection;
   credentialLabel?: string;
   credentialPlaceholder?: string;
   savedCredentialPlaceholder?: string;
@@ -97,6 +119,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "openai",
     name: "OpenAI",
     modelSource: "catalog",
+    connection: { transport: "openai-compatible", defaultBaseUrl: "https://api.openai.com/v1", protocol: "responses" },
     modelDiscovery: { source: "provider-api" },
     modelIdsField: {
       label: "Additional model ids (optional)",
@@ -119,6 +142,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "deepseek",
     name: "DeepSeek",
     modelSource: "catalog",
+    connection: { transport: "openai-compatible", defaultBaseUrl: "https://api.deepseek.com", protocol: "chat-completions" },
     modelDiscovery: { source: "provider-api" },
     modelIdsField: {
       label: "Additional model ids (optional)",
@@ -141,6 +165,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "anthropic",
     name: "Anthropic",
     modelSource: "catalog",
+    connection: { transport: "anthropic", defaultBaseUrl: "https://api.anthropic.com" },
     modelDiscovery: { source: "provider-api" },
     modelIdsField: {
       label: "Additional model ids (optional)",
@@ -164,6 +189,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "foundry",
     name: "Anthropic (Azure Foundry)",
     modelSource: "user-defined",
+    connection: { transport: "anthropic", defaultBaseUrl: null },
     baseURLField: {
       label: "Foundry endpoint (base URL)",
       placeholder: "https://<resource>.services.ai.azure.com/anthropic/",
@@ -191,6 +217,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "google",
     name: "Google Gemini",
     modelSource: "catalog",
+    connection: { transport: "google", defaultBaseUrl: "https://generativelanguage.googleapis.com" },
     modelDiscovery: { source: "provider-api" },
     modelIdsField: {
       label: "Additional model ids (optional)",
@@ -213,6 +240,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "openrouter",
     name: "OpenRouter",
     modelSource: "catalog",
+    connection: { transport: "openai-compatible", defaultBaseUrl: "https://openrouter.ai/api/v1", protocol: "responses" },
     modelDiscovery: { source: "public-api" },
     modelIdsField: {
       label: "Additional model ids (optional)",
@@ -237,6 +265,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "xai",
     name: "xAI",
     modelSource: "catalog",
+    connection: { transport: "openai-compatible", defaultBaseUrl: "https://api.x.ai/v1", protocol: "chat-completions" },
     modelDiscovery: { source: "provider-api" },
     modelIdsField: {
       label: "Additional model ids (optional)",
@@ -259,6 +288,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "meta",
     name: "Meta Model API",
     modelSource: "catalog",
+    connection: { transport: "openai-compatible", defaultBaseUrl: "https://api.meta.ai/v1", protocol: "chat-completions" },
     modelDiscovery: { source: "provider-api" },
     modelIdsField: {
       label: "Additional model ids (optional)",
@@ -279,6 +309,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "chatgpt",
     name: "ChatGPT Plus/Pro",
     modelSource: "catalog",
+    connection: { transport: "account-runner", defaultBaseUrl: null },
     modelDiscovery: { source: "runner" },
     modelIdsField: {
       label: "Additional model ids (optional)",
@@ -329,6 +360,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "github-copilot",
     name: "GitHub Copilot",
     modelSource: "catalog",
+    connection: { transport: "account-runner", defaultBaseUrl: null },
     modelDiscovery: { source: "runner" },
     modelIdsField: {
       label: "Additional model ids (optional)",
@@ -382,6 +414,8 @@ export const PROVIDER_DEFINITIONS = {
     id: "nvidia",
     name: "NVIDIA NIM",
     modelSource: "user-defined",
+    // OD-32: the home calls NVIDIA directly. Until HM4a the web still reaches it through the account peer.
+    connection: { transport: "openai-compatible", defaultBaseUrl: "https://integrate.api.nvidia.com/v1", protocol: "chat-completions" },
     modelDiscovery: { source: "runner" },
     credentialLabel: "NVIDIA API key",
     credentialPlaceholder: "nvapi-...",
@@ -436,6 +470,17 @@ export function getProviderDefinition(
   providerId: string
 ): ProviderDefinition | undefined {
   return PROVIDER_DEFINITIONS[providerId as ProviderId];
+}
+
+export function providerConnection(providerId: string): ProviderConnection | undefined {
+  return getProviderDefinition(providerId)?.connection;
+}
+
+/** The provider's default API base (see `ProviderConnection.defaultBaseUrl`); throws when it has none. */
+export function providerDefaultBaseUrl(providerId: ProviderId): string {
+  const baseUrl = PROVIDER_DEFINITIONS[providerId].connection.defaultBaseUrl;
+  if (!baseUrl) throw new Error(`Provider ${providerId} has no default base URL.`);
+  return baseUrl;
 }
 
 export function providerUsesCatalogModels(providerId: string): boolean {

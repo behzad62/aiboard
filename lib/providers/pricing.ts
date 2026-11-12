@@ -28,7 +28,8 @@ export interface DiscoveredModelPricingMetadata extends ModelMetadataDetails {
 
 const VERIFIED_AT = "2026-06-10";
 
-const MODEL_PRICING: Record<string, ModelPricing> = {
+/** Built-in list rates. Exported for the Runner's catalog snapshot (scripts/generate-runner-model-catalog.mts). */
+export const MODEL_PRICING: Readonly<Record<string, ModelPricing>> = {
   [formatModelId("openai", "gpt-6.1-sol")]: {
     inputUsdPer1M: 2,
     cachedInputUsdPer1M: 0.1,

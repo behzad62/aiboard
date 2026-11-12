@@ -17,8 +17,9 @@ import {
 import { xAIReasoningEffort } from "./reasoning";
 import { openAIResponsesTextFormatField } from "./structured-output";
 import type { ToolCapabilityId } from "./tool-capabilities";
+import { providerDefaultBaseUrl } from "./provider-registry";
 
-const XAI_BASE_URL = "https://api.x.ai/v1";
+const XAI_BASE_URL = providerDefaultBaseUrl("xai");
 
 function createXAIClient(apiKey: string, disableAutomaticRetries = false) {
   return new OpenAI({

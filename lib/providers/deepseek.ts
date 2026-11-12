@@ -2,8 +2,9 @@ import OpenAI from "openai";
 import type { AIProvider, ChatParams } from "./base";
 import { getCatalogModelsForProvider } from "./catalog";
 import { streamOpenAICompatibleChat } from "./openai-compat";
+import { providerDefaultBaseUrl } from "./provider-registry";
 
-export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+export const DEEPSEEK_BASE_URL = providerDefaultBaseUrl("deepseek");
 
 function createDeepSeekClient(
   apiKey: string,

@@ -229,6 +229,7 @@ jobs:
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/aiboard-home-store.test.ts
+          runner-v2/test/home-runtime.test.ts
           runner-v2/test/execution-grants.test.ts
           runner-v2/test/filesystem-mutation-fence.test.ts
           runner-v2/test/filesystem-mutation-routing.test.ts
