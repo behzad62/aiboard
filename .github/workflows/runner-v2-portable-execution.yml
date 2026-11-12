@@ -235,6 +235,7 @@ jobs:
           runner-v2/test/filesystem-tools.test.ts
           runner-v2/test/openrouter-apply-patch-tool.test.ts
           runner-v2/test/tool-broker.test.ts
+          runner-v2/test/remote-path-guard.test.ts
           runner-v2/test/git-fixture-canonical-root.test.ts
           runner-v2/test/npm-installed-profile.test.ts
       # Off on Windows by owner decision (2026-11-05): this test intermittently hangs on hosted Windows runners

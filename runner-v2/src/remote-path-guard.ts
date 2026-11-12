@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { lstat, readdir, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { posix, win32 } from "node:path";
 
 import { resolveProtectedLocations, type ProtectedLocation, type ProtectedLocations } from "./protected-locations.js";
@@ -83,7 +83,7 @@ export class RemotePathGuard {
   private readonly maxProtectedScanEntries: number;
   private readonly maxTreeEntries: number;
   private protectedCanonicals?: Promise<readonly ProtectedCanonical[]>;
-  private protectedFileIdentities?: Promise<{ readonly identities: ReadonlyMap<string, string>; readonly complete: boolean }>;
+  private readonly protectedFileIdentities = new Map<bigint, Promise<{ readonly identities: ReadonlyMap<string, string>; readonly complete: boolean }>>();
   private readonly scopes = new AsyncLocalStorage<RemotePathScope>();
 
   constructor(locations: ProtectedLocations, options: RemotePathGuardOptions = {}) {
@@ -338,8 +338,13 @@ export class RemotePathGuard {
   }
 
   private async checkHardLink(canonical: string, identity: ObjectIdentity): Promise<void> {
-    this.protectedFileIdentities ??= this.scanProtectedFileIdentities();
-    const { identities, complete } = await this.protectedFileIdentities;
+    // Object identity is (device, inode), so only protected files on the target's device can alias it.
+    let scan = this.protectedFileIdentities.get(identity.dev);
+    if (!scan) {
+      scan = this.scanProtectedFileIdentities(identity.dev);
+      this.protectedFileIdentities.set(identity.dev, scan);
+    }
+    const { identities, complete } = await scan;
     const category = identities.get(`${identity.dev}:${identity.ino}`);
     if (category) {
       throw new RemotePathDeniedError("hardlink_alias", category, "The file is a hard link to a protected file.");
@@ -350,32 +355,129 @@ export class RemotePathGuard {
     }
   }
 
-  private async scanProtectedFileIdentities(): Promise<{ identities: ReadonlyMap<string, string>; complete: boolean }> {
+  /**
+   * Collects the identities of protected files that could share `targetDevice`. `complete` is false
+   * whenever part of a protected tree could not be enumerated: an unreadable folder, an entry that
+   * cannot be stat'ed, or the entry cap. On Linux a subtree is skipped only when the kernel mount
+   * table proves it holds nothing on the target's device (see `skippableSubtree`); /proc and /sys
+   * can never be enumerated, so without that proof no multi-link file could ever be allowed there.
+   */
+  private async scanProtectedFileIdentities(targetDevice: bigint): Promise<{ identities: ReadonlyMap<string, string>; complete: boolean }> {
     const identities = new Map<string, string>();
+    const mounts = this.locations.platform === "linux" && process.platform === "linux" ? await readMountTable() : undefined;
     let seen = 0;
     let complete = true;
     const visit = async (candidate: string, category: string, depth: number): Promise<void> => {
       if (!complete || depth > 32) { if (depth > 32) complete = false; return; }
       let info;
-      try { info = await lstat(candidate, { bigint: true }); } catch { return; }
+      try { info = await lstat(candidate, { bigint: true }); } catch (error) {
+        // Only a missing entry is benign; anything else hides an object the scan cannot identify.
+        if (!isMissing(error)) complete = false;
+        return;
+      }
       seen += 1;
       if (seen > this.maxProtectedScanEntries) { complete = false; return; }
       if (info.isFile()) { identities.set(`${info.dev}:${info.ino}`, category); return; }
       if (!info.isDirectory() || info.isSymbolicLink()) return;
+      if (mounts && info.dev !== targetDevice && skippableSubtree(mounts, candidate, info.dev)) {
+        // Nothing on this filesystem can share the target's identity; filesystems mounted below it still can.
+        for (const mountPoint of topSubmounts(mounts, candidate)) await visit(mountPoint, category, depth + 1);
+        return;
+      }
       let names: string[];
       try { names = await readdir(candidate); } catch { complete = false; return; }
       for (const name of names) await visit(this.paths.join(candidate, name), category, depth + 1);
     };
     for (const root of await this.canonicalProtectedRoots()) {
       if (root.location.kind === "file") {
-        const identity = await identityOf(root.canonical);
-        if (identity) identities.set(`${identity.dev}:${identity.ino}`, root.location.category);
+        try {
+          const info = await stat(root.canonical, { bigint: true });
+          if (info.ino === 0n) complete = false;
+          else identities.set(`${info.dev}:${info.ino}`, root.location.category);
+        } catch (error) {
+          if (!isMissing(error)) complete = false;
+        }
       } else {
         await visit(root.canonical, root.location.category, 0);
       }
     }
     return { identities, complete };
   }
+}
+
+function isMissing(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** One row of /proc/self/mountinfo: where a filesystem is mounted, its device and its type. */
+export interface MountEntry {
+  readonly mountPoint: string;
+  readonly device: bigint;
+  readonly fsType: string;
+}
+
+/**
+ * Filesystems on which every object reports the superblock's own device number. Overlayfs (whose
+ * non-directories can report a lower layer's device), btrfs (whose subvolumes have their own device
+ * numbers without a mount), network, FUSE and automount filesystems are deliberately absent: a
+ * subtree on them is always scanned.
+ */
+const UNIFORM_DEVICE_FILESYSTEMS = new Set([
+  "ext2", "ext3", "ext4", "xfs", "tmpfs", "ramfs", "devtmpfs", "proc", "sysfs", "devpts", "mqueue",
+  "cgroup", "cgroup2", "securityfs", "debugfs", "tracefs", "pstore", "bpf", "configfs", "binfmt_misc",
+  "hugetlbfs", "efivarfs", "fusectl", "nsfs", "rpc_pipefs",
+]);
+
+async function readMountTable(): Promise<readonly MountEntry[] | undefined> {
+  try { return parseMountInfo(await readFile("/proc/self/mountinfo", "utf8")); } catch { return undefined; }
+}
+
+/** Parses /proc/self/mountinfo; any malformed row makes the whole table unusable (undefined). */
+export function parseMountInfo(text: string): MountEntry[] | undefined {
+  const entries: MountEntry[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    const fields = line.split(" ");
+    const separator = fields.indexOf("-", 6);
+    const numbers = /^(\d+):(\d+)$/.exec(fields[2] ?? "");
+    if (separator < 0 || !numbers || fields.length < separator + 2) return undefined;
+    const mountPoint = fields[4]!.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+    if (!mountPoint.startsWith("/")) return undefined;
+    entries.push({ mountPoint, device: linuxDeviceNumber(BigInt(numbers[1]!), BigInt(numbers[2]!)), fsType: fields[separator + 1]! });
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
+/** glibc/musl `makedev`, which libuv uses for `st_dev`; every use is cross-checked against lstat. */
+function linuxDeviceNumber(major: bigint, minor: bigint): bigint {
+  return ((major & 0xfffff000n) << 32n) | ((major & 0xfffn) << 8n) | ((minor & 0xffffff00n) << 12n) | (minor & 0xffn);
+}
+
+function mountWithin(child: string, parent: string): boolean {
+  return parent === "/" ? child !== "/" && child.startsWith("/") : child.startsWith(`${parent}/`);
+}
+
+/**
+ * A directory's subtree holds only its own filesystem plus whatever is mounted below it. The subtree
+ * can be skipped (apart from those mounts) only when the mount that holds the directory is a
+ * uniform-device filesystem whose table device matches what lstat reports. A mismatch means the
+ * table cannot be trusted for this path, so the subtree is scanned.
+ */
+function skippableSubtree(mounts: readonly MountEntry[], directory: string, device: bigint): boolean {
+  let holder: MountEntry | undefined;
+  for (const mount of mounts) {
+    if (mount.mountPoint !== directory && !mountWithin(directory, mount.mountPoint)) continue;
+    // The deepest mount point wins; of several at one point, the last listed is the visible one.
+    if (!holder || mount.mountPoint.length >= holder.mountPoint.length) holder = mount;
+  }
+  return holder !== undefined && holder.device === device && UNIFORM_DEVICE_FILESYSTEMS.has(holder.fsType);
+}
+
+/** Mount points strictly below `directory` that are not themselves below another such mount point. */
+function topSubmounts(mounts: readonly MountEntry[], directory: string): string[] {
+  const below = [...new Set(mounts.map((mount) => mount.mountPoint).filter((point) => mountWithin(point, directory)))];
+  return below.filter((point) => !below.some((other) => other !== point && mountWithin(point, other)));
 }
 
 function denied(location: ProtectedLocation): RemotePathDeniedError {
