@@ -56,7 +56,7 @@ import {
 } from "../runner-v2/src/home-model-policy";
 import { listHomeEnabledModels, resolveHomeRuntime, type AccountPeerConnection } from "../runner-v2/src/home-runtime";
 import { resolvePushedConfig } from "../runner-v2/src/home-provider-configs";
-import type { RunnerProviderConfig } from "../runner-v2/src/provider-config-store";
+import { HOME_SECRET_PLACEHOLDER, type RunnerProviderConfig } from "../runner-v2/src/provider-config-store";
 
 const TSX_CLI = createRequire(import.meta.url).resolve("tsx/cli");
 
@@ -324,7 +324,7 @@ try {
     assert.equal(pushed.baseUrl, undefined, `${runtimeId}: the push leaves the base URL to the home`);
     assert.equal(pushed.secretSource, "home", `${runtimeId}: the push names the home as its key source`);
     const filled = { ...resolvePushedConfig(home, pushed) } as Record<string, unknown>;
-    assert.equal(filled.secret, "");
+    assert.equal(filled.secret, HOME_SECRET_PLACEHOLDER, `${runtimeId}: the stored config holds the home placeholder, never a key (#181)`);
     assert.equal(filled.secretSource, "home");
     delete filled.secret; delete filled.secretSource;
     assert.deepEqual(filled, runner, `resolvePushedConfig(${runtimeId})`);
