@@ -1,6 +1,6 @@
 import { seedCompletedDeliveryReview } from "./support/delivery-seed.js";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,10 +25,9 @@ import {
 } from "../src/build-runtime.js";
 import {
   NativeArchitectRuntime,
-  PlanningStateCommandGuard,
-  PlanningStateInspectionRuntime,
   type ArchitectCommandWorkspaceProvider,
 } from "../src/native-architect-runtime.js";
+import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
 import {
   KERNEL_STAMPED_REVISION_FIELDS,
   requiredBaseForRevision,
@@ -1031,58 +1030,6 @@ test("T3a planning-state predicate: legacy never, new-policy until ready or tria
   }
 });
 
-test("T3a planning-state inspection runtime refuses commands and keeps inspection", async () => {
-  const registry = new ToolRegistry();
-  const probe: NativeTool<unknown> = {
-    definition: {
-      name: "run_evidence_command",
-      description: "probe",
-      inputSchema: { type: "object", additionalProperties: false },
-      readOnly: false,
-      effect: "none",
-    },
-    validate: () => ({ ok: true, value: {} }),
-    execute: async () => ({ content: [], isError: false }),
-  };
-  const reader: NativeTool<unknown> = {
-    definition: {
-      name: "fs.read",
-      description: "probe reader",
-      inputSchema: { type: "object", additionalProperties: false },
-      readOnly: true,
-      effect: "none",
-    },
-    validate: () => ({ ok: true, value: {} }),
-    execute: async () => ({ content: [{ type: "text", text: "content" }], isError: false }),
-  };
-  registry.register(probe);
-  registry.register(reader);
-  const runtime = new PlanningStateInspectionRuntime(registry);
-  const names = runtime.definitions().map((definition) => definition.name);
-  assert.equal(names.includes("run_evidence_command"), false);
-  assert.equal(names.includes("fs.read"), true);
-  const context = {
-    runId: "run_t3a_refusal",
-    sessionId: "architect:run_t3a_refusal",
-    actor: { role: "architect" as const, id: "architect" },
-  };
-  const refused = await runtime.invoke({
-    type: "tool_call",
-    callId: "forged",
-    name: "run_evidence_command",
-    arguments: {},
-  }, context);
-  assert.equal(refused.isError, true);
-  assert.equal(refused.error?.code, "planning_state_command_refused");
-  const allowed = await runtime.invoke({
-    type: "tool_call",
-    callId: "read",
-    name: "fs.read",
-    arguments: {},
-  }, context);
-  assert.equal(allowed.isError, false);
-});
-
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   constructor(private readonly turns: Array<ModelTurn | Error>) {}
@@ -1103,10 +1050,43 @@ function toolResults(model: ScriptedModel, requestIndex: number): ToolResult[] {
   );
 }
 
+/** VF5: a command executor that records where it ran and leaves a marker there. */
+function markerExecutor(directories: string[]): OneShotCommandExecutor {
+  return {
+    execute: async (request) => {
+      directories.push(request.workingDirectory);
+      writeFileSync(join(request.workingDirectory, `${request.context.callId}.txt`), "ran\n");
+      return {
+        process: {
+          logicalProcessId: request.context.callId ?? "vf5",
+          outcome: "exited",
+          exitCode: 0,
+          finishedAt: CLOCK,
+          output: [],
+          cleanup: { state: "not_required" },
+        },
+        enforcement: "write_confinement_exact_grant",
+        disclosure: "provider_specific_not_universal_boundary",
+      };
+    },
+  };
+}
+
 async function driveArchitectPlanningStateTurn(input: {
   label: string;
   seed: (store: SqliteSchedulerStore, runId: string) => void;
-}): Promise<{ model: ScriptedModel; creates: number; cleanups: number }> {
+  /** VF5: null records no integration, so the copy is the baseline. */
+  integrationRevision?: string | null;
+  baselineCommandRevision?: string;
+}): Promise<{
+  model: ScriptedModel;
+  creates: number;
+  cleanups: number;
+  revisions: string[];
+  directories: string[];
+  copy: string;
+  projectEntries: string[];
+}> {
   const root = mkdtempSync(join(tmpdir(), `aiboard-t3a-${input.label}-`));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -1119,7 +1099,9 @@ async function driveArchitectPlanningStateTurn(input: {
   const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
   const runId = `run-${input.label}`;
   const objective = "Build the feature.";
-  const seen = { creates: 0, cleanups: 0 };
+  const copy = join(root, "copy");
+  const seen = { creates: 0, cleanups: 0, revisions: [] as string[] };
+  const directories: string[] = [];
   try {
     scheduler.append({
       runId,
@@ -1130,17 +1112,17 @@ async function driveArchitectPlanningStateTurn(input: {
       payload: { objective },
     });
     input.seed(scheduler, runId);
-    // A valid integration revision, so the command tool WOULD be composed for
-    // a run outside planning state — its absence below is the guard, not a
-    // missing revision.
-    scheduler.append({
-      runId,
-      type: "integration.revision_advanced",
-      occurredAt: CLOCK,
-      actor: { role: "runner", id: "test" },
-      idempotencyKey: "integration",
-      payload: { integrationRevision: "a".repeat(40) },
-    });
+    const integrationRevision = input.integrationRevision === undefined ? "a".repeat(40) : input.integrationRevision;
+    if (integrationRevision !== null) {
+      scheduler.append({
+        runId,
+        type: "integration.revision_advanced",
+        occurredAt: CLOCK,
+        actor: { role: "runner", id: "test" },
+        idempotencyKey: "integration",
+        payload: { integrationRevision },
+      });
+    }
     const candidate: AgentRuntimeCandidate = {
       runtimeId: "test:architect",
       providerId: "test",
@@ -1176,11 +1158,16 @@ async function driveArchitectPlanningStateTurn(input: {
       projectId: `project-${input.label}`,
       projectRoot: project,
       objective,
+      permissionProfile: "full",
+      execution: markerExecutor(directories),
+      ...(input.baselineCommandRevision ? { baselineCommandRevision: input.baselineCommandRevision } : {}),
       commandWorkspace: {
         workspaceKind: "independent-verifier",
-        create: async () => {
+        create: async (revision) => {
           seen.creates += 1;
-          return { path: join(root, "copy") };
+          seen.revisions.push(revision);
+          mkdirSync(copy, { recursive: true });
+          return { path: copy };
         },
         cleanup: async () => {
           seen.cleanups += 1;
@@ -1198,7 +1185,15 @@ async function driveArchitectPlanningStateTurn(input: {
         actor: { role: "architect", id: "architect" },
       },
     });
-    return { model, creates: seen.creates, cleanups: seen.cleanups };
+    return {
+      model,
+      creates: seen.creates,
+      cleanups: seen.cleanups,
+      revisions: seen.revisions,
+      directories,
+      copy,
+      projectEntries: readdirSync(project),
+    };
   } finally {
     sessions.close();
     scheduler.close();
@@ -1208,23 +1203,41 @@ async function driveArchitectPlanningStateTurn(input: {
   }
 }
 
-test("T3a architect turn in planning state is refused command execution before triage", async () => {
+// VF5 replaced the T3a planning-state refusal: the Architect may run commands
+// while planning, in a disposable copy, never in the project.
+test("VF5 an Architect turn in planning state before triage runs its command in a copy of the baseline", async () => {
   const { manifest } = buildTrackSource();
-  const { model, creates, cleanups } = await driveArchitectPlanningStateTurn({
-    label: "t3a-planning-state",
+  const baseline = "c".repeat(40);
+  const turn = await driveArchitectPlanningStateTurn({
+    label: "vf5-planning-state",
     seed: (scheduler, runId) => seedNewPolicySource(scheduler, runId, manifest),
+    integrationRevision: null,
+    baselineCommandRevision: baseline,
   });
-  const listed = (model.requests[0]?.tools ?? []).map((tool) => tool.name);
-  assert.equal(listed.includes("run_evidence_command"), false);
+  const listed = (turn.model.requests[0]?.tools ?? []).map((tool) => tool.name);
+  assert.equal(listed.includes("run_evidence_command"), true);
   assert.equal(listed.includes("fs.read"), true);
-  // The command layer is never composed, so the forged call is not registered
-  // at all; no disposable copy is created.
-  const results = toolResults(model, 1);
+  const results = toolResults(turn.model, 1);
   assert.equal(results.length, 1);
-  assert.equal(results[0]!.isError, true);
-  assert.equal(results[0]!.error?.code, "unknown_tool");
-  assert.equal(creates, 0);
-  assert.equal(cleanups, 0);
+  assert.equal(results[0]!.isError, false, JSON.stringify(results[0]));
+  assert.equal(turn.creates, 1);
+  assert.deepEqual(turn.revisions, [baseline]);
+  assert.deepEqual(turn.directories, [turn.copy]);
+  assert.deepEqual(turn.projectEntries, [], "nothing ran in the project");
+  assert.equal(turn.cleanups, 1);
+});
+
+test("VF5 a planning-state turn with no baseline wired lists no command tool", async () => {
+  const { manifest } = buildTrackSource();
+  const turn = await driveArchitectPlanningStateTurn({
+    label: "vf5-no-baseline",
+    seed: (scheduler, runId) => seedNewPolicySource(scheduler, runId, manifest),
+    integrationRevision: null,
+  });
+  const listed = (turn.model.requests[0]?.tools ?? []).map((tool) => tool.name);
+  assert.equal(listed.includes("run_evidence_command"), false);
+  assert.equal(toolResults(turn.model, 1)[0]?.error?.code, "unknown_tool");
+  assert.equal(turn.creates, 0);
 });
 
 test("T3a legacy architect turn still lists the command tool", async () => {
@@ -2478,58 +2491,6 @@ test("T3a repair N3: a source change during workspace allocation cannot dispatch
   }
 });
 
-test("T3a repair N4: command refusal is evaluated on every invoke", async () => {
-  const fixture = scopedFixture();
-  const store = new MemorySchedulerStore();
-  const runId = "run_t3a_n4";
-  seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
-  seedReadyPlan(store, runId, fixture);
-  assert.equal(isPlanningState(projectionOf(store, runId)), false);
-  try {
-    const inner = new ToolRegistry();
-    let commandInvokes = 0;
-    inner.register({
-      definition: {
-        name: "run_evidence_command",
-        description: "Probe command tool.",
-        inputSchema: { type: "object", additionalProperties: false },
-        readOnly: false,
-        effect: "none",
-      },
-      validate: () => ({ ok: true, value: {} }),
-      execute: async () => {
-        commandInvokes += 1;
-        return { content: [{ type: "text", text: "ok" }], isError: false };
-      },
-    });
-    const guard = new PlanningStateCommandGuard(inner, () => projectionOf(store, runId));
-    // Ready: the command passes through.
-    const allowed = await guard.invoke(
-      { type: "tool_call", callId: "cmd-1", name: "run_evidence_command", arguments: {} },
-      { runId, sessionId: `architect:${runId}`, actor: { role: "architect", id: "architect_1" } },
-    );
-    assert.equal(allowed.isError, false);
-    assert.equal(commandInvokes, 1);
-    // Readiness lost mid-turn: the same guard refuses from that point on,
-    // while the tool stays listed.
-    appendSourceAmendment(store, runId, "source:amend-n4", "s9");
-    assert.equal(isPlanningState(projectionOf(store, runId)), true);
-    assert.equal(
-      guard.definitions().some((definition) => definition.name === "run_evidence_command"),
-      true,
-    );
-    const refused = await guard.invoke(
-      { type: "tool_call", callId: "cmd-2", name: "run_evidence_command", arguments: {} },
-      { runId, sessionId: `architect:${runId}`, actor: { role: "architect", id: "architect_1" } },
-    );
-    assert.equal(refused.isError, true);
-    assert.equal(refused.error?.code, "planning_state_command_refused");
-    assert.equal(commandInvokes, 1);
-  } finally {
-    store.close();
-  }
-});
-
 // Tunnel run: re-readiness kept v1 criteria on unstarted tasks and dispatch failed with
 // scheduler_contract_mismatch once a revision changed a criterion.
 test("re-readiness refreshes an unstarted task's objective and criteria from the new contract", async () => {
@@ -3342,7 +3303,9 @@ test("T3a repair B3: final-verification repair tasks are bound to the ready plan
   }
 });
 
-test("T3a repair N-B: mid-turn readiness loss refuses later commands through the real runtime wiring", async () => {
+// VF5 replaced the T3a N-B refusal: a run that falls back into planning state
+// mid-turn keeps running the Architect's commands in that turn's copy.
+test("VF5 mid-turn readiness loss keeps later commands in the turn's copy through the real runtime wiring", async () => {
   const fixture = scopedFixture();
   const root = mkdtempSync(join(tmpdir(), "aiboard-t3a-nb-"));
   const project = join(root, "project");
@@ -3357,6 +3320,8 @@ test("T3a repair N-B: mid-turn readiness loss refuses later commands through the
   const runId = "run-t3a-nb";
   const objective = "Build the feature.";
   const seen = { creates: 0, cleanups: 0 };
+  const copy = join(root, "copy");
+  const directories: string[] = [];
   try {
     scheduler.append({
       runId,
@@ -3366,8 +3331,8 @@ test("T3a repair N-B: mid-turn readiness loss refuses later commands through the
       idempotencyKey: "init",
       payload: { objective },
     });
-    // The turn starts READY, so the command layer is composed behind the
-    // per-invoke guard (not the turn-start planning-state path).
+    // The turn starts READY with an integration revision; a source
+    // amendment then drops readiness mid-turn.
     seedNewPolicySource(scheduler, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
     seedReadyPlan(scheduler, runId, fixture);
     scheduler.append({
@@ -3440,11 +3405,15 @@ test("T3a repair N-B: mid-turn readiness loss refuses later commands through the
       projectId: "project-t3a-nb",
       projectRoot: project,
       objective,
+      permissionProfile: "full",
+      execution: markerExecutor(directories),
       commandWorkspace: {
         workspaceKind: "independent-verifier",
-        create: async () => {
+        create: async (revision) => {
+          assert.equal(revision, "a".repeat(40), "the copy is the turn's integration revision");
           seen.creates += 1;
-          return { path: join(root, "copy") };
+          mkdirSync(copy, { recursive: true });
+          return { path: copy };
         },
         cleanup: async () => {
           seen.cleanups += 1;
@@ -3471,16 +3440,19 @@ test("T3a repair N-B: mid-turn readiness loss refuses later commands through the
     // The command tool was listed at turn start (ready) ...
     const listed = (model.requests[0]?.tools ?? []).map((tool) => tool.name);
     assert.equal(listed.includes("run_evidence_command"), true);
-    // ... but the post-amendment invoke is refused through the composed
-    // guard, and no disposable copy is ever created. (Request 2 carries
-    // the cumulative history: the amend result plus the command refusal.)
+    // ... and the post-amendment invoke still runs, in the one copy, never
+    // in the project. (Request 2 carries the cumulative history: the amend
+    // result plus the command result.)
     const results = toolResults(model, 2);
     assert.equal(results.length, 2);
-    const refused = results.find((result) => result.callId === "cmd-1");
-    assert.ok(refused);
-    assert.equal(refused.isError, true);
-    assert.equal(refused.error?.code, "planning_state_command_refused");
-    assert.equal(seen.creates, 0);
+    const ran = results.find((result) => result.callId === "cmd-1");
+    assert.ok(ran);
+    assert.equal(ran.isError, false, JSON.stringify(ran));
+    assert.equal(seen.creates, 1);
+    assert.equal(seen.cleanups, 1);
+    assert.deepEqual(directories, [copy]);
+    assert.equal(existsSync(join(copy, "cmd-1.txt")), true);
+    assert.equal(existsSync(join(project, "cmd-1.txt")), false);
   } finally {
     sessions.close();
     scheduler.close();

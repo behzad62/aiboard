@@ -1332,10 +1332,13 @@ export class NativeBuildFactory {
         create: (targetRevision: string) => architectCommandWorkspace.create(targetRevision),
         cleanup: () => architectCommandWorkspace.cleanup(),
       },
-      // T9 (EP41): answer-path command base revision — the integration
-      // baseline, since answered runs have no integration revision yet.
-      answerCommandRevision: integrationManager.revision,
+      // T9 (EP41), VF5: command base revision before any integration (the
+      // planning state and the answer path) — the integration baseline.
+      baselineCommandRevision: integrationManager.revision,
       execution: commandExecution,
+      // VF5: the verifiers' live process tools, bound to the Architect's copy
+      // and stopped before that copy is removed.
+      managedProcesses,
       // C4 (AR-R11): live base-snapshot read for docs-v2 triage/planning
       // turns. The revision is captured HERE, at each eligible context —
       // never at factory construction — through the audited Git read path

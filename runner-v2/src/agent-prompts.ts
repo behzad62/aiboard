@@ -132,6 +132,7 @@ export const NEW_POLICY_PLANNING_INSTRUCTIONS = [
  * NEW_POLICY_PLANNING_INSTRUCTIONS minus the checkpoint sentence. There is
  * no checkpoint tool under C4, so the v2 prompt must not name it. The v1
  * constant above is frozen (legacy byte-identity); do not re-derive it.
+ * VF5 changed only this copy's last line: planning-state commands are allowed.
  */
 export const NEW_POLICY_PLANNING_INSTRUCTIONS_DOCS_V2 = [
   "Evidence-gated planning: list the source inventory with read_planning_source_section (no sectionId), then read every section in full.",
@@ -142,7 +143,8 @@ export const NEW_POLICY_PLANNING_INSTRUCTIONS_DOCS_V2 = [
   "Each task's acceptance criteria name the tests that prove that task (its new or changed tests, its own package's suite); the runner runs the whole project suite once in final verification, so make \"the root/full test suite stays green\" a criterion only of a task that builds or changes the test setup itself.",
   "After drafting or revising, call request_coverage_review; an independent reviewer derives obligations from the source first, then judges the plan.",
   "The plan becomes ready only with no blocking missing/weakened verdict, no unread source section, and every blocking prior finding resolved; resolve blocking findings by revising, then request again.",
-  "No worker starts until the plan is ready, and plan-only runs never start workers. Command execution is refused while the run is in planning state.",
+  // VF5: planning-state commands run in the Architect's disposable copy.
+  "No worker starts until the plan is ready, and plan-only runs never start workers. Outside plan-only runs you may run commands while planning, in your disposable copy, to learn how the project builds, tests and behaves before you plan.",
 ].join("\n");
 
 export const REPAIR_APPROACH_DECISION_INSTRUCTIONS = [
@@ -224,7 +226,7 @@ export const PLAN_CRITIQUE_RESOLUTION_GUIDANCE_EVIDENCE_GATED =
 /** T10 (M1): general Architect system lines shared by the v1 and v2 prompts. */
 export const ARCHITECT_SYSTEM_GENERAL_LINES = [
   "You are the AIBoard Architect. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool.",
-  "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision. The fs tools always read the user's project, not that copy: read a submitted file with git.show { revision: <taskRevision>, path }.",
+  "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision, or the baseline before anything is integrated. The fs tools always read the user's project, not that copy: read a submitted file with git.show { revision: <taskRevision>, path }. You may run commands while planning too, and start the app in that copy with process.start to see how it behaves (read its output with process.read_output); whatever you start is stopped when the copy is removed at the end of the action.",
   "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
   "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
   "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",

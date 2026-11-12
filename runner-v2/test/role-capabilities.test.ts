@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import test from "node:test";
 
 import type { AgentModel, NativeTool, ToolCallBlock, ToolExecutionContext } from "../src/agent-contracts.js";
@@ -60,6 +60,7 @@ import { runWorkerTask } from "../src/worker-runtime.js";
 import type { TaskWorkspace, WorkspaceManager } from "../src/workspace-manager.js";
 import { captureGitBaseline, VerificationWorkspaceManager } from "./support/git-fixture.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
+import { fakeManagedProcesses } from "./support/fake-managed-processes.js";
 
 const ARCHITECT_INSPECTION_REQUIRED = [
   "archive_project_memory",
@@ -126,6 +127,14 @@ const ARCHITECT_INSPECTION_FULL = [
   "inspect_evidence",
   "list_memory_proposals",
   "list_skills",
+  // VF5: the verifiers' live process tools, bound to the Architect's copy.
+  "process.interact",
+  "process.list",
+  "process.poll",
+  "process.read_output",
+  "process.signal",
+  "process.start",
+  "process.write_stdin",
   "promote_project_memory",
   "propose_project_memory",
   "read_skill",
@@ -592,9 +601,11 @@ test("constructed brokers match the derived surfaces and an unlisted probe fails
     const withBrowser = createArchitectInspectionBroker({ ...base, browserBackend: browserStub() });
     assert.deepEqual(
       names(withBrowser),
-      [...ARCHITECT_INSPECTION_FULL].filter((name) => name !== "run_evidence_command" && name !== "record_external_blocker" && name !== "record_repair_approach_decision" && !name.startsWith("extensions.")),
+      [...ARCHITECT_INSPECTION_FULL].filter((name) => name !== "run_evidence_command" && name !== "record_external_blocker" && name !== "record_repair_approach_decision" && !name.startsWith("extensions.") && !name.startsWith("process.")),
     );
     assert.equal(names(withBrowser).includes("run_evidence_command"), false);
+    // VF5: process tools live only on the copy-bound command broker, never on the read broker.
+    assert.equal(names(withBrowser).some((name) => name.startsWith("process.")), false);
     // Management tools reach only the user-facing coordinator, and only the plan-only view hides them.
     const managing = createArchitectInspectionBroker({ ...base, extensionTools: createExtensionManagementTools({ service: {} as never, conversationId: () => undefined, canMutate: () => true }) });
     assert.deepEqual(names(managing).filter((name) => name.startsWith("extensions.")), [...ARCHITECT_INSPECTION_FULL].filter((name) => name.startsWith("extensions.")));
@@ -1069,6 +1080,92 @@ test("architect and verifier commands require approval unless the profile is ful
       }
     }
   } finally {
+    evidence.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+// VF5: the Architect's live process tools sit on its copy-bound command broker
+// and ask for exactly the approvals the verifiers' do, at every access level.
+test("VF5 Architect process tools run in its copy and take the verifiers' approvals at every access level", async () => {
+  const root = mkdtempSync(join(tmpdir(), "vf5-process-approval-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const services: ManagedProcessService[] = [];
+  try {
+    for (const profile of ["guarded", "project", "full"] as const) {
+      const approvalsByRole: Record<"architect" | "verifier", string[]> = { architect: [], verifier: [] };
+      for (const role of ["architect", "verifier"] as const) {
+        const project = join(root, `${role}-${profile}-project`);
+        const copy = join(root, `${role}-${profile}-copy`);
+        mkdirSync(project);
+        mkdirSync(copy);
+        const approvals = approvalsByRole[role];
+        const permissions = {
+          requestTool: async (request: { toolName: string }) => {
+            approvals.push(request.toolName);
+            return true;
+          },
+        } as unknown as SqlitePermissionStore;
+        const processes = fakeManagedProcesses({ stateDirectory: join(root, `${role}-${profile}-managed`), runId: "run" });
+        services.push(processes.service);
+        const runtime = role === "architect"
+          ? composeArchitectInspection(
+              createArchitectInspectionBroker({
+                ...architectInput(project, artifacts),
+                evidenceStore: evidence,
+                permissionProfile: profile,
+                permissions,
+              }),
+              createArchitectCommandBroker({
+                disposablePath: copy,
+                projectRoot: project,
+                permissionProfile: profile,
+                artifacts,
+                evidenceStore: evidence,
+                clock: () => "2026-09-23T00:00:00.000Z",
+                permissions,
+                commandTool: uncontainedCommandDouble("approved.txt"),
+                managedProcesses: processes.service,
+              }),
+            )
+          : createVerifierReviewBroker({
+              ...inspectionInput(copy, artifacts),
+              evidenceStore: evidence,
+              projectRoot: project,
+              permissionProfile: profile,
+              permissions,
+              commandTool: uncontainedCommandDouble("approved.txt"),
+              managedProcesses: processes.service,
+            });
+        if (role === "architect") {
+          for (const name of VERIFIER_LIVE_PROCESS) assert.equal(names(runtime).includes(name), true, name);
+          assert.equal(names(new PlanOnlyInspectionRuntime(runtime)).some((name) => name.startsWith("process.")), false);
+        }
+        const call = (name: string, args: Record<string, unknown>): ToolCallBlock => ({
+          type: "tool_call", callId: `${role}-${profile}-${name}`, name, arguments: args,
+        });
+        // The model's context names the project; the broker binds the call to the copy.
+        const started = await runtime.invoke(call("process.start", { command: "node", args: ["server.js"], cwd: "." }), toolContext(project, role));
+        assert.equal(started.isError, false, `${role} ${profile} ${JSON.stringify(started)}`);
+        const polled = await runtime.invoke(call("process.poll", { processId: "p1" }), toolContext(project, role));
+        assert.equal(polled.isError, false, `${role} ${profile} ${JSON.stringify(polled)}`);
+        const read = await runtime.invoke(call("process.read_output", { processId: "p1" }), toolContext(project, role));
+        assert.match(JSON.stringify(read.content), /listening/);
+        const stopped = await runtime.invoke(call("process.signal", { processId: "p1", signal: "SIGTERM" }), toolContext(project, role));
+        assert.equal(stopped.isError, false, `${role} ${profile} ${JSON.stringify(stopped)}`);
+        assert.deepEqual(processes.log, [`start:${resolve(copy)}`, "stop:p1"], `${role} ${profile}`);
+        assert.deepEqual(readdirSync(project), [], `${role} ${profile}: nothing ran in the project`);
+      }
+      assert.deepEqual(approvalsByRole.architect, approvalsByRole.verifier, profile);
+      assert.deepEqual(
+        approvalsByRole.architect,
+        profile === "full" ? [] : ["process.start", "process.signal"],
+        profile,
+      );
+    }
+  } finally {
+    for (const service of services) await service.close().catch(() => undefined);
     evidence.close();
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }

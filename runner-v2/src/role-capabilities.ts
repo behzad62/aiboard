@@ -7,7 +7,9 @@ import type { ToolEffect } from "./agent-contracts.js";
  * `mcpPolicy` admits that dynamic group. A2 limits the Architect to the
  * read-only MCP class. A3 adds `run_evidence_command` for the Architect
  * inspection surface and the verifier verdict surface. The Architect tool is
- * optional: it is registered only when a disposable copy exists.
+ * optional: it is registered only when a disposable copy exists. VF5 adds the
+ * verifiers' live process tools to the Architect inspection surface, on the
+ * same terms: optional, and bound to that copy.
  */
 export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker" | "remote" | "local_mcp";
 
@@ -53,12 +55,13 @@ export const ROLE_CAPABILITY_BROKERS = [
 ] as const satisfies readonly { role: RoleCapabilityRole; broker: RoleCapabilityBroker }[];
 
 /**
- * Background processes for the verifiers that may run commands: they start the built product in
- * their own checkout and exercise it live. Tunnel run: a verifier limited to run-to-exit commands
- * could not start the relay, so the documented pair/connect/call workflow was never run end to end.
- * Registered only when the runner wires a managed-process service.
+ * Background processes for the roles that may run commands in a disposable copy: the verifiers and
+ * the Architect start the built product there and exercise it live. Tunnel run: a verifier limited
+ * to run-to-exit commands could not start the relay, so the documented pair/connect/call workflow
+ * was never run end to end. Registered only when the runner wires a managed-process service, and
+ * always beside `run_evidence_command`, bound to the same copy.
  */
-const VERIFIER_LIVE_PROCESS_TOOLS = [
+const LIVE_PROCESS_TOOLS = [
   "process.list",
   "process.poll",
   "process.read_output",
@@ -133,7 +136,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "repo.map",
     "research.fetch",
     "search_session_history",
-  ], [...ARCHITECT_INSPECTION_BROWSER_TOOLS, ...EXTENSION_MANAGEMENT_TOOL_NAMES, "record_external_blocker", "record_repair_approach_decision", "run_evidence_command"]),
+  ], [...ARCHITECT_INSPECTION_BROWSER_TOOLS, ...EXTENSION_MANAGEMENT_TOOL_NAMES, ...LIVE_PROCESS_TOOLS, "record_external_blocker", "record_repair_approach_decision", "run_evidence_command"]),
   "architect:planOnly": surface("architect", "planOnly", "read-only-class", [
     "image.inspect",
     "artifact.read",
@@ -172,7 +175,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "git.status",
     "inspect_evidence",
     "run_evidence_command",
-  ], [...VERIFIER_LIVE_PROCESS_TOOLS, "submit_verifier_verdict"]),
+  ], [...LIVE_PROCESS_TOOLS, "submit_verifier_verdict"]),
   "verifier:expectations": surface("verifier", "expectations", "none", [
     "artifact.read",
     "fs.list",
@@ -252,7 +255,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "git.status",
     "inspect_evidence",
     "run_evidence_command",
-  ], [...VERIFIER_LIVE_PROCESS_TOOLS, "record_deliverable_findings"]),
+  ], [...LIVE_PROCESS_TOOLS, "record_deliverable_findings"]),
   "plan-critic:inspection": surface("plan-critic", "inspection", "none", [
     "artifact.read",
     "fs.list",
