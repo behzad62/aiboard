@@ -1350,7 +1350,8 @@ export const UNSAVED_CUSTOM_MODEL_TEST_MESSAGE =
 /**
  * Tests a custom model through the model proxy's `custom/<id>` route (HM4a).
  * The proxy uses only what the AIBoard home saved for that id, so a model that
- * has no id yet cannot be tested before it is saved (HM4b adds test-saves-first).
+ * has no id yet cannot be tested before it is saved: CustomModelsManager saves
+ * a new or edited model first, then tests it (HM4b, test-saves-first).
  */
 export async function testCustomModel(input: {
   /** The saved model's id; without it the test refuses before any call. */

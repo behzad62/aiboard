@@ -41,7 +41,7 @@
     "test:certified": "npm run test:benchmark:unit && npm run test:benchmark:tracks && npm run test:benchmark:workbench && npm run test:benchmark:e2e",
     "test:openrouter-live": "tsx scripts/test-openrouter-structured-output-live.mts",
     "test:chat": "tsx scripts/test-chat-mode.mts",
-    "test:home": "tsx scripts/test-model-proxy-client.mts && tsx scripts/test-no-direct-provider-calls.mts && tsx scripts/test-nvidia-provider-settings.mts && tsx scripts/test-settings-home.mts && tsx scripts/test-storage-settings-import.mts",
+    "test:home": "tsx scripts/test-model-proxy-client.mts && tsx scripts/test-no-direct-provider-calls.mts && tsx scripts/test-nvidia-provider-settings.mts && tsx scripts/test-settings-home.mts && tsx scripts/test-storage-settings-import.mts && tsx scripts/test-unsaved-store-notice.mts",
     "test:e2e": "playwright test",
     "test:provider-runtime": "tsx scripts/test-provider-runtime.mts",
     "test:provider-runtime:live": "tsx scripts/test-provider-runtime-live.mts",

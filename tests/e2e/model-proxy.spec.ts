@@ -10,28 +10,14 @@
  *
  * Stub keys and a stub upstream only; no live provider call.
  */
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { expect, test, type Page } from "@playwright/test";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
-import { resolveAiboardHome } from "../../runner-v2/src/aiboard-home-paths.js";
-import { applyHomeBatch, readAiboardHomeSync } from "../../runner-v2/src/aiboard-home-store.js";
-import { ControlServer } from "../../runner-v2/src/control-server.js";
-import { HomeBackedProviderConfigStore } from "../../runner-v2/src/home-provider-configs.js";
-import { createLocalPairTicket, LocalPairing } from "../../runner-v2/src/local-pairing.js";
-import { ModelProxy } from "../../runner-v2/src/model-proxy.js";
-import { SqlitePermissionStore } from "../../runner-v2/src/permission-store.js";
-import { validateProviderConfigs, type ProviderConfigStore, type RunnerProviderConfig } from "../../runner-v2/src/provider-config-store.js";
-import { RunSupervisor } from "../../runner-v2/src/run-supervisor.js";
-import { SqliteEventStore } from "../../runner-v2/src/sqlite-event-store.js";
+import { pairContext, readAiboardHomeSync, startRunnerHome, type ToolBench } from "./runner-home.js";
 
 const OPENAI_KEY = "sk-e2e-stub-openai-0123456789abcdef";
 const ANTHROPIC_KEY = "sk-ant-e2e-stub-0123456789abcdef";
 const GOOGLE_KEY = "AIzaE2EStub0123456789abcdefghijk";
-const CONTROL_TOKEN = "model-proxy-e2e-control-token";
-const INSTANCE = "model-proxy-e2e";
 const NOW = "2026-11-12T00:00:00.000Z";
 
 interface UpstreamRequest { method: string; url: string; headers: IncomingMessage["headers"]; body: string; closed: boolean }
@@ -154,29 +140,14 @@ async function seedStore(page: Page): Promise<void> {
   }, store);
 }
 
-/** Every tab gets the launcher's session in its own sessionStorage, as the pairing link would leave it. */
-async function launcherSession(context: BrowserContext, port: number, sessionToken: string): Promise<void> {
-  await context.addInitScript((session) => {
-    sessionStorage.setItem("aiboard:local-runner-session:v1", JSON.stringify(session));
-  }, { port, instanceId: INSTANCE, kind: "runner", sessionToken });
-}
-
 test.describe("HM4a/HM4b: browser model calls through the model proxy, settings on the home", () => {
   test.setTimeout(240_000);
 
   test("each provider SDK streams through the proxy; an approval and a cancel go through while six streams are held; a settings save lands in the home", async ({ browser }) => {
-    const root = mkdtempSync(join(tmpdir(), "aiboard-model-proxy-e2e-"));
-    const userHome = join(root, "user");
-    mkdirSync(userHome, { recursive: true });
-    const location = resolveAiboardHome({
-      platform: process.platform,
-      environment: { AIBOARD_HOME: join(root, "home"), LOCALAPPDATA: join(root, "local"), XDG_DATA_HOME: join(root, "data") },
-      home: userHome,
-    });
     const upstream = new StubUpstream();
     await upstream.start();
-    await applyHomeBatch(location, {
-      baseRevision: 0,
+    const stopped: string[] = [];
+    const runner = await startRunnerHome({
       ops: [
         // Since HM4b the page shows the home's provider rows, so the enabled models are the home's.
         { path: "providers.openai", op: "set", value: { enabled: true, baseUrl: `${upstream.base}/v1`, enabledModelIds: ["gpt-5.5", ...HOLD_MODELS], defaultModel: "gpt-5.5" } },
@@ -186,45 +157,20 @@ test.describe("HM4a/HM4b: browser model calls through the model proxy, settings 
         { path: "providers.google", op: "set", value: { enabled: true, baseUrl: upstream.base, enabledModelIds: ["gemini-2.5-flash"], defaultModel: "gemini-2.5-flash" } },
         { path: "credentials.providers.google", op: "set", value: { secret: GOOGLE_KEY } },
       ],
-    });
-    const proxy = new ModelProxy({ home: location });
-    await proxy.start(0);
-    const pairing = new LocalPairing(INSTANCE);
-    const permissions = new SqlitePermissionStore(join(root, "permissions.sqlite"));
-    const stopped: string[] = [];
-    const configs = { current: [] as RunnerProviderConfig[] };
-    const inner: ProviderConfigStore = {
-      load: () => configs.current.map((config) => ({ ...config })),
-      save: (next) => { validateProviderConfigs(next); configs.current = next.map((config) => ({ ...config })); },
-      close: () => undefined,
-    };
-    const supervisor = new RunSupervisor(new SqliteEventStore(join(root, "events.sqlite")));
-    const server = new ControlServer({
-      supervisor,
-      token: CONTROL_TOKEN,
-      bootstrapRun: async () => ({ baselineRevision: "a".repeat(40), baselineRef: "refs/aiboard/e2e" }),
-      runnerInfo: { projectPath: root, nodeVersion: process.versions.node },
-      providerConfigs: new HomeBackedProviderConfigStore(inner, () => readAiboardHomeSync(location)),
-      localPairing: pairing,
-      home: location,
-      modelProxy: proxy,
-      permissions,
       // The cancel this test sends: a ToolBench stop on the control port.
       toolBench: {
         start: async () => { throw new Error("unused"); },
         get: async () => { throw new Error("unused"); },
         stop: async (sessionId: string) => { stopped.push(sessionId); return { sessionId, status: "cancelled" }; },
         close: async () => {},
-      } as unknown as ConstructorParameters<typeof ControlServer>[0]["toolBench"],
+      } as unknown as ToolBench,
     });
-    const address = await server.start(0);
-    const ticket = createLocalPairTicket(INSTANCE);
-    pairing.register(ticket.digest);
-    const sessionToken = pairing.consume(ticket.code)!;
+    const { location, sessionToken, permissions } = runner;
+    const address = { url: runner.url, port: runner.port };
 
     const context = await browser.newContext();
     try {
-      await launcherSession(context, address.port, sessionToken);
+      await pairContext(context, runner);
       const tabA = await context.newPage();
       await tabA.goto("/");
       await seedStore(tabA);
@@ -338,11 +284,8 @@ test.describe("HM4a/HM4b: browser model calls through the model proxy, settings 
       for (const key of [OPENAI_KEY, ANTHROPIC_KEY, GOOGLE_KEY]) expect(persisted).not.toContain(key);
     } finally {
       await context.close();
-      await server.close();
+      await runner.close();
       await upstream.close();
-      permissions.close();
-      supervisor.close();
-      rmSync(root, { recursive: true, force: true });
     }
   });
 });

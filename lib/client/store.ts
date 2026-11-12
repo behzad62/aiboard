@@ -534,6 +534,7 @@ async function commitLoadedStore(
   adoptLoadedStoreUnderMirror(memory, true);
   await runBenchmarkResultSetDeletionRecovery();
   notifyReady();
+  notifyEncryptedStoreChange();
   if (migration.changed) schedulePersist();
 }
 
@@ -931,7 +932,9 @@ function serializeAdapterWrite<T>(op: () => Promise<T>): Promise<T> {
 }
 
 function schedulePersist(): void {
+  const wasDirty = persistDirty;
   persistDirty = true;
+  if (!wasDirty && config.encryptionEnabled) notifyEncryptedStoreChange();
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => void flush(), 150);
 }
@@ -2124,6 +2127,7 @@ export async function __loadClientStoreFromAdapterForTests(
   memory = migration.store;
   await runBenchmarkResultSetDeletionRecovery();
   notifyReady();
+  notifyEncryptedStoreChange();
   if (migration.changed) schedulePersist();
   return { needsPassphrase: false };
 }
@@ -2169,6 +2173,32 @@ export function isEncryptedStorePendingPlainSave(): boolean {
 }
 
 /**
+ * True when that open encrypted store holds changes nothing has written: they are
+ * lost when the tab closes unless the user saves the store without encryption.
+ */
+export function hasUnsavedEncryptedStoreChanges(): boolean {
+  return isEncryptedStorePendingPlainSave() && persistDirty;
+}
+
+const encryptedStoreListeners = new Set<() => void>();
+
+function notifyEncryptedStoreChange(): void {
+  for (const listener of [...encryptedStoreListeners]) {
+    try {
+      listener();
+    } catch {
+      // A listener's failure never blocks the store.
+    }
+  }
+}
+
+/** Called when the open encrypted store's pending or unsaved state may have changed. */
+export function onEncryptedStoreChange(listener: () => void): () => void {
+  encryptedStoreListeners.add(listener);
+  return () => encryptedStoreListeners.delete(listener);
+}
+
+/**
  * The user confirmed: the unlocked store is saved without encryption, in the
  * same place (this browser or the picked folder), so its history survives (OD-28).
  */
@@ -2182,6 +2212,7 @@ export async function saveStoreWithoutEncryption(): Promise<void> {
   persistDirty = true;
   await flush();
   lockCrypto();
+  notifyEncryptedStoreChange();
 }
 
 /**
@@ -2199,12 +2230,14 @@ export async function declineEncryptedStore(): Promise<{ startedNewBrowserStore:
   if (config.kind !== "filesystem") {
     initGeneration++;
     memory = null;
+    notifyEncryptedStoreChange();
     return { startedNewBrowserStore: false };
   }
   memory = hydrateStore();
   const next: StorageConfig = { kind: "indexeddb", encryptionEnabled: false };
   const nextAdapter = await createAdapter(next);
   await switchClientStoreAdapter(nextAdapter, next, true);
+  notifyEncryptedStoreChange();
   return { startedNewBrowserStore: true };
 }
 
