@@ -1173,4 +1173,41 @@ assert.equal(
   "the request is approved as exact trimmed UTF-8 bytes"
 );
 assert.throws(() => requestSpecificationSource("   "), /empty/);
+// HM4a: a push carries no secret, so a Runner without `secretlessProviderConfigs` is refused before the PUT.
+{
+  const secretless = {
+    runtimeId: "openai:gpt-5.5",
+    providerId: "openai",
+    modelId: "gpt-5.5",
+    billingBasis: "api_priced" as const,
+    transport: "openai-compatible" as const,
+    secretSource: "home" as const,
+    capabilities: ["*"],
+    priority: 0,
+  };
+  const pushes: string[] = [];
+  const pushFetch = (capabilities: Record<string, boolean>): typeof fetch => (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/v2/health")) return Response.json({ ok: true, protocolVersion: 2, projectPath: "C:/project", nodeVersion: "v24", capabilities });
+    if (url.endsWith("/v2/provider-configs") && init?.method === "PUT") {
+      pushes.push(String(init.body));
+      return Response.json({ configs: [] });
+    }
+    return Response.json({ error: "unexpected" }, { status: 500 });
+  }) as typeof fetch;
+
+  await assert.rejects(
+    configureNativeProviders(connection, [secretless], pushFetch({ soloToolBench: true })),
+    (error: unknown) => error instanceof Error && error.message === "Update AI Board: run `aiboard update`" && (error as { code?: string }).code === "update_required",
+  );
+  assert.equal(pushes.length, 0, "an old Runner gets no secretless push");
+
+  await configureNativeProviders(connection, [secretless], pushFetch({ home: true, modelProxy: true, secretlessProviderConfigs: true }));
+  assert.equal(pushes.length, 1);
+  const pushed = JSON.parse(pushes[0]!) as { configs: Array<Record<string, unknown>> };
+  assert.equal(pushed.configs[0]?.secretSource, "home");
+  assert.equal("secret" in pushed.configs[0]!, false, "the push carries no secret");
+  assert.equal("baseUrl" in pushed.configs[0]!, false, "the home decides the base URL");
+}
+
 console.log("PASS runner-v2 client");

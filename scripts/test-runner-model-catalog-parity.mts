@@ -8,10 +8,13 @@
  * 2. every ported rule in runner-v2/src/home-model-policy.ts equals its web original: reasoning-effort
  *    and max-token support, the model-id migration, pricing (with the account API-equivalent rule) and
  *    context profiles;
- * 3. `resolveHomeRuntime` equals `createNativeProviderConfig` for every catalog model, custom models and
+ * 3. `resolveHomeRuntime` equals `describeNativeProviderConfig` for every catalog model, custom models and
  *    `model#effort` runtimes, secrets aside, pricing and context included, from one fixture saved to a
- *    real home (homeOpsFromWebState + applyHomeBatch) and to the browser store;
- * 4. `listHomeEnabledModels` equals `getEnabledModels` on fixtures.
+ *    real home (homeOpsFromWebState + applyHomeBatch) and to the browser store; and the secretless
+ *    push the web sends since HM4a (`createNativeProviderConfig`) resolves, through the Runner's
+ *    `resolvePushedConfig`, to that same runtime;
+ * 4. `listHomeEnabledModels` equals `getEnabledModels` on fixtures, for providers whose key the home
+ *    holds (since HM4a the web lists an enabled row without a browser key; HM4b mirrors the home).
  *
  * Stub keys only: no live provider call is made and no real key appears here.
  *
@@ -25,7 +28,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { CustomModel, ProviderKey, UserSettings } from "../lib/db/schema";
-import { createNativeProviderConfig } from "../lib/client/native-build-engine";
+import { createNativeProviderConfig, describeNativeProviderConfig } from "../lib/client/native-build-engine";
 import { getEnabledModels } from "../lib/client/providers";
 import { __clearClientStoreForTests, __resetClientStoreForTests } from "../lib/client/store";
 import { MODEL_CATALOG } from "../lib/providers/catalog";
@@ -52,6 +55,8 @@ import {
   type DiscoveredMetadataMap,
 } from "../runner-v2/src/home-model-policy";
 import { listHomeEnabledModels, resolveHomeRuntime, type AccountPeerConnection } from "../runner-v2/src/home-runtime";
+import { resolvePushedConfig } from "../runner-v2/src/home-provider-configs";
+import type { RunnerProviderConfig } from "../runner-v2/src/provider-config-store";
 
 const TSX_CLI = createRequire(import.meta.url).resolve("tsx/cli");
 
@@ -263,9 +268,21 @@ try {
   for (const scenario of scenarios) {
     __resetClientStoreForTests({ providerKeys: scenario.providerKeys, customModels: scenario.customModels, userSettings: settings as never });
     const home = await saveToHome(scenario);
-    assert.deepEqual(listHomeEnabledModels(home).map((model) => model.id), getEnabledModels().map((model) => `${model.providerId}:${model.id}`), `enabled models: ${scenario.name}`);
+    // The home lists a provider only with a key in the home; the web (HM4a) holds no key and lists
+    // every enabled row. Account-backed providers need no key in either.
+    const homeKeyed = (providerId: string) => providerId === "custom" ||
+      Boolean((PROVIDER_DEFINITIONS[providerId as keyof typeof PROVIDER_DEFINITIONS] as { accountRunner?: unknown }).accountRunner) ||
+      Boolean(scenario.providerKeys.find((key) => key.providerId === providerId)?.apiKey);
+    const web = getEnabledModels().filter((model) => homeKeyed(model.providerId)).map((model) => `${model.providerId}:${model.id}`);
+    assert.deepEqual(listHomeEnabledModels(home).map((model) => model.id), web, `enabled models: ${scenario.name}`);
   }
-  pass(`listHomeEnabledModels equals getEnabledModels on ${scenarios.length} fixtures`);
+  pass(`listHomeEnabledModels equals getEnabledModels on ${scenarios.length} fixtures, for providers keyed in the home`);
+  {
+    const keyless = scenarios[1]!;
+    __resetClientStoreForTests({ providerKeys: keyless.providerKeys, customModels: keyless.customModels, userSettings: settings as never });
+    assert.ok(getEnabledModels().some((model) => model.providerId === "anthropic"), "an enabled row lists its models with no key in the browser (HM4a)");
+    pass("the web lists an enabled provider with no browser key (the key lives in the home)");
+  }
 
   const main = scenarios[0]!;
   __resetClientStoreForTests({ providerKeys: main.providerKeys, customModels: main.customModels, userSettings: settings as never });
@@ -279,24 +296,50 @@ try {
     "openrouter:qwen/qwen3-coder#xhigh", "chatgpt:gpt-5.5#max",
   ];
   const nowMs = Date.now();
+  const accountPeer = { url: PEER.baseUrl, token: PEER.token };
   for (const [index, runtimeId] of runtimeIds.entries()) {
     const effort = /#([a-z]+)$/.exec(runtimeId)?.[1];
-    const web = { ...createNativeProviderConfig(runtimeId, index, effort) } as Record<string, unknown>;
+    const web = { ...describeNativeProviderConfig(runtimeId, index, effort, { accountPeer }) } as Record<string, unknown>;
     const resolved = resolveHomeRuntime(home, runtimeId, { priority: index, accountPeer: PEER, nowMs });
     const runner = { ...resolved.config } as Record<string, unknown>;
-    assert.ok(web.secret === runner.secret, `the secret of ${runtimeId} differs (values not printed)`);
-    assert.ok(web.runnerToken === runner.runnerToken, `the runner token of ${runtimeId} differs (values not printed)`);
+    // Account-backed runtimes carry the launcher peer's token on both sides; the web holds no other key.
+    if (web.transport === "account-runner") {
+      assert.ok(web.secret === runner.secret && web.secret === PEER.token, `the peer token of ${runtimeId} differs (values not printed)`);
+      assert.ok(web.runnerToken === runner.runnerToken, `the runner token of ${runtimeId} differs (values not printed)`);
+    } else {
+      assert.equal(web.secret, undefined, `${runtimeId}: the web describes no key`);
+      assert.equal(web.runnerToken, undefined, `${runtimeId}: the web describes no runner token`);
+    }
     delete web.secret; delete runner.secret; delete web.runnerToken; delete runner.runnerToken;
     assert.deepEqual(runner, web, `resolveHomeRuntime(${runtimeId})`);
-  }
-  pass(`resolveHomeRuntime equals createNativeProviderConfig for ${runtimeIds.length} runtimes (every catalog model, custom models, model#effort), secrets aside`);
 
-  // The one intended difference: the web still reaches NVIDIA through the account peer when a runner
-  // token is saved (until HM4a); the home calls NVIDIA's API directly (OD-32).
+    // The push itself (HM4a): no key, and the Runner resolves it to the same runtime.
+    const pushed = createNativeProviderConfig(runtimeId, index, effort, { accountPeer }) as unknown as RunnerProviderConfig;
+    if (pushed.transport === "account-runner") {
+      assert.ok(pushed.secret === PEER.token && pushed.baseUrl === PEER.baseUrl, `${runtimeId}: an account push carries only the launcher peer`);
+      continue;
+    }
+    assert.equal(pushed.secret, undefined, `${runtimeId}: the push carries no secret`);
+    assert.equal(pushed.runnerToken, undefined, `${runtimeId}: the push carries no runner token`);
+    assert.equal(pushed.baseUrl, undefined, `${runtimeId}: the push leaves the base URL to the home`);
+    assert.equal(pushed.secretSource, "home", `${runtimeId}: the push names the home as its key source`);
+    const filled = { ...resolvePushedConfig(home, pushed) } as Record<string, unknown>;
+    assert.equal(filled.secret, "");
+    assert.equal(filled.secretSource, "home");
+    delete filled.secret; delete filled.secretSource;
+    assert.deepEqual(filled, runner, `resolvePushedConfig(${runtimeId})`);
+  }
+  pass(`resolveHomeRuntime equals describeNativeProviderConfig for ${runtimeIds.length} runtimes (every catalog model, custom models, model#effort), secrets aside, and each secretless push resolves to it`);
+
+  // NVIDIA (OD-32): the web, like the home, calls NVIDIA's API directly; a saved peer URL and runner token
+  // from before HM4a are ignored.
   __resetClientStoreForTests({ providerKeys: [row("nvidia", { baseURL: PEER.baseUrl, runnerToken: "stub-runner-token", models: ["z-ai/glm-5.2"] })], userSettings: settings as never });
-  assert.equal(createNativeProviderConfig("nvidia:z-ai/glm-5.2", 0).transport, "account-runner");
+  const nvidia = describeNativeProviderConfig("nvidia:z-ai/glm-5.2", 0);
+  assert.equal(nvidia.transport, "openai-compatible");
+  assert.equal(nvidia.secret, undefined);
+  assert.equal(createNativeProviderConfig("nvidia:z-ai/glm-5.2", 0).runnerToken, undefined);
   assert.equal(resolveHomeRuntime(home, "nvidia:z-ai/glm-5.2").config.baseUrl, PROVIDER_DEFINITIONS.nvidia.connection.defaultBaseUrl);
-  pass("NVIDIA: the home calls the provider directly (OD-32); the web keeps the peer until HM4a");
+  pass("NVIDIA: the web and the home both call the provider directly (OD-32); no account peer");
 } finally {
   __clearClientStoreForTests();
   rmSync(scratch, { recursive: true, force: true });

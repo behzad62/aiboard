@@ -1,4 +1,5 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import { createOpenAIClient } from "./connection";
 import type {
   AIProvider,
   ChatParams,
@@ -666,9 +667,9 @@ export const openaiProvider: AIProvider = {
     );
   },
 
-  async validateApiKey(apiKey: string) {
+  async validateConnection(connection) {
     try {
-      const client = new OpenAI({ apiKey, dangerouslyAllowBrowser: true });
+      const client = createOpenAIClient(connection, "OpenAI");
       await client.models.list();
       return true;
     } catch {
@@ -677,10 +678,8 @@ export const openaiProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams) {
-    const client = new OpenAI({
-      apiKey: params.apiKey,
-      dangerouslyAllowBrowser: true,
-      ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
+    const client = createOpenAIClient(params, "OpenAI", {
+      disableAutomaticRetries: params.disableAutomaticRetries,
     });
     yield* streamOpenAIByPlan(client, params);
   },

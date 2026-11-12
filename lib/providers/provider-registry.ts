@@ -414,35 +414,14 @@ export const PROVIDER_DEFINITIONS = {
     id: "nvidia",
     name: "NVIDIA NIM",
     modelSource: "user-defined",
-    // OD-32: the home calls NVIDIA directly. Until HM4a the web still reaches it through the account peer.
+    // OD-32: an OpenAI-compatible provider behind the model proxy (HM4a); the account peer is not involved.
     connection: { transport: "openai-compatible", defaultBaseUrl: "https://integrate.api.nvidia.com/v1", protocol: "chat-completions" },
-    modelDiscovery: { source: "runner" },
+    modelDiscovery: { source: "provider-api" },
     credentialLabel: "NVIDIA API key",
     credentialPlaceholder: "nvapi-...",
     savedCredentialPlaceholder: "Leave blank to keep existing NVIDIA API key",
     missingCredentialMessage:
-      "Save the NVIDIA API key, local provider runner URL/token, and at least one model id before enabling this provider",
-    baseURLField: {
-      label: "Local provider runner URL",
-      placeholder: "http://127.0.0.1:1455",
-      suggestedValue: "http://127.0.0.1:1455",
-      hint: `${ACCOUNT_RUNNER_URL_HINT} NVIDIA requests are proxied through the runner because browsers cannot call its API directly.`,
-    },
-    baseURLRequiredMessage: "This provider needs the local provider runner URL",
-    runnerDownload: {
-      command: ACCOUNT_RUNNER_COMMAND,
-      downloadHref: ACCOUNT_RUNNER_DOWNLOAD_HREF,
-      hint:
-        ACCOUNT_RUNNER_SETUP_HINT,
-      standaloneCommand: ACCOUNT_RUNNER_STANDALONE_COMMAND,
-      standaloneHint: ACCOUNT_RUNNER_STANDALONE_HINT,
-    },
-    runnerTokenField: {
-      label: "Local runner token",
-      placeholder: "Paste the current token printed by the account runner",
-      hint: "This authorizes calls to your local runner only. It is separate from the NVIDIA API key.",
-    },
-    runnerTokenRequiredMessage: "This provider needs the local runner token",
+      "Save at least one NVIDIA model id before enabling this provider. The key lives in the AIBoard home: run `aiboard keys set nvidia`.",
     modelIdsField: {
       label: "NVIDIA model ids (one per line)",
       placeholder:
@@ -456,12 +435,12 @@ export const PROVIDER_DEFINITIONS = {
     runtimeBehavior: {
       temperatureLabel: "Temperature is sent",
       temperatureNote:
-        "The effort-level temperature is forwarded through the local provider runner to NVIDIA's OpenAI-compatible chat-completions endpoint.",
+        "The effort-level temperature is sent to NVIDIA's OpenAI-compatible chat-completions endpoint.",
       promptCachingLabel: "Provider-dependent",
       promptCachingNote:
         "Prompt caching, rate limits, and context behavior are controlled by NVIDIA NIM for the selected model.",
       concurrencyNote:
-        "The app sends NVIDIA requests through the local provider runner to avoid browser CORS limits; NVIDIA account and endpoint limits still apply.",
+        "The app sends NVIDIA requests through AI Board's model proxy, which adds the key from the AIBoard home; NVIDIA account and endpoint limits still apply.",
     },
   },
 } satisfies Record<ProviderId, ProviderDefinition>;

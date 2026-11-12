@@ -344,6 +344,7 @@ try {
   };
   const chunks = await collect(openrouterProvider.streamChat({
     apiKey: "test-key",
+    baseURL: "https://openrouter.ai/api/v1",
     model: "xiaomi/mimo-v2.6-pro",
     messages: [{ role: "user", content: "Analyze the media." }],
     attachments,
@@ -361,6 +362,7 @@ try {
   requestBody = undefined;
   await collect(openrouterProvider.streamChat({
     apiKey: "test-key",
+    baseURL: "https://openrouter.ai/api/v1",
     model: "xiaomi/mimo-v2.6-pro",
     messages: [{ role: "user", content: "Search while analyzing audio." }],
     attachments: [attachments[0]],
@@ -401,6 +403,7 @@ try {
   };
   await collect(openrouterProvider.streamChat({
     apiKey: "test-key",
+    baseURL: "https://openrouter.ai/api/v1",
     model: "xiaomi/mimo-v2.6-pro",
     messages: [{ role: "user", content: "Search the web." }],
     capabilities: { image: false, document: false, audio: false, video: false },

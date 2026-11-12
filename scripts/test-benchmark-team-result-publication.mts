@@ -15,6 +15,7 @@ import { rebuildCertifiedDashboardData } from "../lib/benchmark/certified/run-pe
 import { upsertProviderKey } from "../lib/client/store";
 import { openaiProvider } from "../lib/providers/openai";
 import type { SelectedModel, StreamChunk } from "../lib/providers/base";
+import { installStubRunner } from "./model-proxy-test-support.mts";
 
 const now = "2026-07-29T10:00:00.000Z";
 const models: SelectedModel[] = [
@@ -56,6 +57,8 @@ openaiProvider.streamChat = async function* (params): AsyncIterable<StreamChunk>
   yield { type: "token", content: "{}" };
   yield { type: "done" };
 };
+// Since HM4a every model call resolves a proxy connection first; a stub Runner provides it.
+const stubRunner = installStubRunner();
 try {
   await runSelected({
     selectedTrack: "teamiq",
@@ -85,6 +88,7 @@ try {
   });
 } finally {
   openaiProvider.streamChat = originalStreamChat;
+  stubRunner.restore();
 }
 
 const resultSets = await listBenchmarkResultSets();

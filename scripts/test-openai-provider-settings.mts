@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { getProviderDefinition } from "../lib/providers/provider-registry";
 import { initialOpenAIConnectionMode } from "../components/OpenAIProviderSettings";
 import { fetchProviderModelCatalog } from "../lib/client/settings-api";
+import { installStubRunner, STUB_ACCOUNTS_URL, STUB_PEER_TOKEN } from "./model-proxy-test-support.mts";
 
 const chatgpt = getProviderDefinition("chatgpt");
 const apiFixture = { providerId: "openai", name: "OpenAI", models: [], hasKey: true, enabled: true } as const;
@@ -23,27 +24,25 @@ assert.match(apiKeyFormSource, /accountRunner \? "Saved runner token" : "Saved k
 const settingsApiSource = await readFile(new URL("../lib/client/settings-api.ts", import.meta.url), "utf8");
 assert.match(settingsApiSource, /account runner is too old for ChatGPT live model discovery/);
 assert.equal(chatgpt?.accountRunner?.loginLabel, "Continue with ChatGPT");
-const realFetch = globalThis.fetch;
-const calls: Array<{ url: string; init?: RequestInit }> = [];
 let version = 26;
 let connected = true;
-globalThis.fetch = (async (input, init) => {
-  const url = String(input);
-  calls.push({ url, init });
-  if (url.endsWith("/status")) return new Response(JSON.stringify({ runnerVersion: version, connected, accounts: [], message: "Continue with ChatGPT" }));
-  assert.equal(url, "http://127.0.0.1:1455/providers/chatgpt/models");
+// The account peer's address and token come from the launcher at call time (OD-32, HM4a).
+const stub = installStubRunner({ withAccountPeer: true, upstream: (request) => {
+  if (request.url.endsWith("/status")) return new Response(JSON.stringify({ runnerVersion: version, connected, accounts: [], message: "Continue with ChatGPT" }));
+  assert.equal(request.url, `${STUB_ACCOUNTS_URL}/providers/chatgpt/models`);
   return new Response(JSON.stringify({ data: [{ id: "gpt-6.1-sol", name: "GPT-6.1 Sol", capabilities: { supports: { vision: true } } }] }));
-}) as typeof fetch;
+} });
+const calls = stub.requests;
 try {
-  const input = { providerId: "chatgpt", apiKey: "local-runner-token", baseURL: "http://127.0.0.1:1455" };
+  const input = { providerId: "chatgpt" };
   const models = await fetchProviderModelCatalog(input);
   assert.equal(models[0].id, "gpt-6.1-sol");
   assert.equal(calls.length, 2);
   for (const call of calls) {
-    assert.equal(new Headers(call.init?.headers).get("x-runner-token"), "local-runner-token");
-    assert.equal(new Headers(call.init?.headers).has("authorization"), false);
+    assert.equal(call.headers.get("x-runner-token"), STUB_PEER_TOKEN);
+    assert.equal(call.headers.has("authorization"), false);
   }
-  assert.equal(calls[1].init?.body, "{}", "no API key is used to discover subscription models");
+  assert.equal(calls[1].body, "{}", "no API key is used to discover subscription models");
   calls.length = 0;
   version = 25;
   await assert.rejects(fetchProviderModelCatalog(input), /v26 or newer/);
@@ -56,5 +55,5 @@ try {
   version = 25; connected = false;
   await assert.rejects(fetchProviderModelCatalog(input), /Continue with ChatGPT/);
   assert.equal(calls.length, 1, "require plan consent before loading models");
-} finally { globalThis.fetch = realFetch; }
+} finally { stub.restore(); }
 console.log("PASS OpenAI settings merge API and ChatGPT subscription modes while preserving internal provider ids");

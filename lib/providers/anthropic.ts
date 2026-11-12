@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { createAnthropicClient } from "./connection";
 import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import type {
@@ -772,11 +772,8 @@ export async function* streamAnthropicChat(
   providerId: string,
   errorLabel: string,
 ): AsyncIterable<StreamChunk> {
-  const client = new Anthropic({
-    apiKey: params.apiKey,
-    ...(params.baseURL ? { baseURL: params.baseURL } : {}),
-    dangerouslyAllowBrowser: true,
-    ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
+  const client = createAnthropicClient(params, errorLabel, {
+    disableAutomaticRetries: params.disableAutomaticRetries,
   });
   yield* streamAnthropicWithClient(
     client as unknown as AnthropicStreamingClient,
@@ -796,9 +793,9 @@ export const anthropicProvider: AIProvider = {
     );
   },
 
-  async validateApiKey(apiKey: string) {
+  async validateConnection(connection) {
     try {
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = createAnthropicClient(connection, "Anthropic");
       await client.messages.create({
         model: getValidationModelId("anthropic"),
         max_tokens: 16,
@@ -806,7 +803,7 @@ export const anthropicProvider: AIProvider = {
       });
       return true;
     } catch (err) {
-      if (err instanceof Anthropic.APIError && err.status === 401) {
+      if ((err as { status?: unknown } | null)?.status === 401) {
         return false;
       }
       return true;

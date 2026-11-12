@@ -109,6 +109,11 @@ const FAMILY_RULES: Readonly<Record<Family, FamilyRules>> = {
   },
 };
 
+/** Paths one provider adds to its family's list: xAI's model catalog with modalities (lib/client/settings-api.ts, HM4a). */
+const PROVIDER_EXTRA_PATHS: Readonly<Record<string, readonly PathRule[]>> = {
+  xai: [{ method: "GET", pattern: /^language-models$/ }],
+};
+
 /** OpenRouter's attribution headers (lib/providers/openrouter.ts). */
 const PROVIDER_EXTRA_HEADERS: Readonly<Record<string, readonly string[]>> = {
   openrouter: ["http-referer", "x-title"],
@@ -453,7 +458,8 @@ export class ModelProxy {
       if (request.method === "OPTIONS") { this.preflight(request, response, target, family); return; }
       response.setHeader("Access-Control-Expose-Headers", MODEL_PROXY_RESPONSE_HEADERS.join(", "));
       const method = request.method;
-      if ((method !== "GET" && method !== "POST") || !FAMILY_RULES[family].paths.some((rule) => rule.method === method && rule.pattern.test(target.suffix))) {
+      const pathRules = [...FAMILY_RULES[family].paths, ...(target.kind === "provider" ? PROVIDER_EXTRA_PATHS[target.id] ?? [] : [])];
+      if ((method !== "GET" && method !== "POST") || !pathRules.some((rule) => rule.method === method && rule.pattern.test(target.suffix))) {
         throw new ProxyRefusal(404, "proxy_path_refused", "That path is not on the model proxy's allow-list.");
       }
       assertNoKeyInQuery(target.query);

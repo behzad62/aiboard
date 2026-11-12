@@ -6,15 +6,20 @@
  */
 
 import { v4 as uuidv4 } from "uuid";
-import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
-import { GoogleGenAI, type Model as GoogleModel } from "@google/genai";
+import type { Model as GoogleModel } from "@google/genai";
 import type { CustomModel, UserSettings, ReasoningEffort } from "@/lib/db/schema";
 import type { ModelInfo, StreamChunk } from "@/lib/providers/base";
 import { extractModelMetadata, validateModelMetadataOverrides, type ModelMetadataDetails, type ModelMetadataValues } from "@/lib/providers/model-metadata";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import { streamOpenAICompatibleChat, isLoopbackOllamaEndpoint } from "@/lib/providers/openai-compat";
-import { META_MODEL_API_BASE_URL } from "@/lib/providers/meta";
+import {
+  connectionParams,
+  createAnthropicClient,
+  createGoogleClient,
+  createOpenAIClient,
+  providerFetch,
+  type ProviderConnection,
+} from "@/lib/providers/connection";
 import {
   resolveModelContextProfile,
   type ModelContextProfileOverride,
@@ -54,10 +59,10 @@ import {
   normalizeProviderModelId,
   normalizeOpenRouterModelId,
   resolveModelCapabilities,
+  resolveProviderConnection,
 } from "./providers";
 import { formatModelId } from "@/lib/providers/base";
 import { getPeerConnection } from "./local-runner-handoff";
-import { DEEPSEEK_BASE_URL } from "@/lib/providers/deepseek";
 import type { ProviderId } from "@/lib/providers/provider-registry";
 import type {
   CapabilityEvidence,
@@ -488,21 +493,17 @@ export async function collectGoogleModelCatalog(
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function fetchGoogleModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
-  const pager = await new GoogleGenAI({ apiKey }).models.list({
+async function fetchGoogleModelCatalog(connection: ProviderConnection): Promise<ProviderCatalogModel[]> {
+  const pager = await createGoogleClient(connectionParams(connection)).models.list({
     config: { pageSize: 1000, queryBase: true },
   });
   return collectGoogleModelCatalog(pager);
 }
 async function fetchOpenAICompatibleModelCatalog(
-  apiKey: string,
-  baseURL?: string
+  connection: ProviderConnection,
+  label: string,
 ): Promise<ProviderCatalogModel[]> {
-  const page = await new OpenAI({
-    apiKey,
-    ...(baseURL ? { baseURL } : {}),
-    dangerouslyAllowBrowser: true,
-  }).models.list();
+  const page = await createOpenAIClient(connectionParams(connection), label).models.list();
   return page.data
     .filter((model) => typeof model.id === "string" && model.id.length > 0)
     .map((model) => {
@@ -515,9 +516,9 @@ async function fetchOpenAICompatibleModelCatalog(
 }
 
 async function fetchAnthropicModelCatalog(
-  apiKey: string
+  connection: ProviderConnection
 ): Promise<ProviderCatalogModel[]> {
-  const page = await new Anthropic({ apiKey, dangerouslyAllowBrowser: true }).models.list({
+  const page = await createAnthropicClient(connectionParams(connection), "Anthropic").models.list({
     limit: 1000,
   });
   const models: ProviderCatalogModel[] = [];
@@ -531,10 +532,8 @@ async function fetchAnthropicModelCatalog(
   return models.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function fetchMetaModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
-  const response = await fetch(`${META_MODEL_API_BASE_URL}/models`, {
-    headers: { authorization: `Bearer ${apiKey}` },
-  });
+async function fetchMetaModelCatalog(connection: ProviderConnection): Promise<ProviderCatalogModel[]> {
+  const response = await providerFetch(connectionParams(connection), "Meta Model API", "models");
   const payload = (await response.json().catch(() => ({}))) as {
     data?: Array<{ id?: string; name?: string; display_name?: string }>;
     error?: { message?: string } | string;
@@ -558,10 +557,8 @@ async function fetchMetaModelCatalog(apiKey: string): Promise<ProviderCatalogMod
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function fetchXaiLanguageModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
-  const response = await fetch("https://api.x.ai/v1/language-models", {
-    headers: { authorization: `Bearer ${apiKey}` },
-  });
+async function fetchXaiLanguageModelCatalog(connection: ProviderConnection): Promise<ProviderCatalogModel[]> {
+  const response = await providerFetch(connectionParams(connection), "xAI", "language-models");
   const payload = (await response.json().catch(() => ({}))) as {
     models?: Array<{ id?: string; input_modalities?: string[] }>;
     error?: { message?: string } | string;
@@ -622,8 +619,7 @@ export async function fetchChatGPTAccountStatus(baseURL: string, runnerToken: st
 }
 
 async function fetchRunnerModelCatalog(input: {
-  providerId: "chatgpt" | "github-copilot" | "nvidia";
-  apiKey: string;
+  providerId: "chatgpt" | "github-copilot";
   baseURL: string;
   runnerToken: string;
 }): Promise<ProviderCatalogModel[]> {
@@ -642,9 +638,7 @@ async function fetchRunnerModelCatalog(input: {
         "content-type": "application/json",
         "x-runner-token": input.runnerToken,
       },
-      body: JSON.stringify(
-        input.providerId === "nvidia" ? { apiKey: input.apiKey } : {}
-      ),
+      body: "{}",
     }
   );
   const payload = (await response.json().catch(() => ({}))) as {
@@ -675,68 +669,53 @@ async function fetchRunnerModelCatalog(input: {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/**
+ * A provider's live model catalog, through the connection the resolver gives
+ * (HM4a): the model proxy, with the key saved in the AIBoard home, or the
+ * account peer for ChatGPT and Copilot. A typed but unsaved key, URL or
+ * token is not used; HM4b saves a key before testing it (plan §9 "Testing a
+ * key"). The keyless OpenRouter public catalog stays a direct call.
+ */
 export async function fetchProviderModelCatalog(input: {
   providerId: string;
+  /** Ignored since HM4a: calls use what the AIBoard home holds. */
   apiKey?: string;
+  /** Ignored since HM4a. */
   baseURL?: string;
+  /** Ignored since HM4a. */
   runnerToken?: string;
 }): Promise<ProviderCatalogModel[]> {
   if (input.providerId === OPENROUTER_PROVIDER_ID) {
     return fetchOpenRouterModelCatalog();
   }
-  const explicitApiKey = input.apiKey?.trim() || "";
-  const explicitBaseURL = input.baseURL?.trim() || "";
-  const explicitRunnerToken = input.runnerToken?.trim() || "";
-  const isChatGPT = input.providerId === "chatgpt";
-  const isGitHubCopilot = input.providerId === "github-copilot";
-  const isNvidia = input.providerId === NVIDIA_PROVIDER_ID;
-  const needsSavedRunnerSettings =
-    ((isChatGPT || isGitHubCopilot) && !explicitBaseURL) ||
-    (isNvidia && (!explicitBaseURL || !explicitRunnerToken));
-  const saved = !explicitApiKey || needsSavedRunnerSettings
-    ? getProviderKey(input.providerId)
-    : undefined;
-  const apiKey = explicitApiKey || saved?.apiKey?.trim() || "";
-  if (!apiKey) throw new Error("Save or enter the provider credential first");
-
-  if (input.providerId === "anthropic") {
-    return fetchAnthropicModelCatalog(apiKey);
-  }
-  if (input.providerId === "meta") {
-    return fetchMetaModelCatalog(apiKey);
-  }
-  if (input.providerId === "xai") {
-    return fetchXaiLanguageModelCatalog(apiKey);
-  }
-  if (isChatGPT || isGitHubCopilot || input.providerId === NVIDIA_PROVIDER_ID) {
-    const baseURL = input.baseURL?.trim() || saved?.baseURL?.trim() || "";
-    const runnerToken =
-      isChatGPT || isGitHubCopilot
-        ? apiKey
-        : input.runnerToken?.trim() || saved?.runnerToken?.trim() || "";
-    if (!baseURL || !runnerToken) {
-      throw new Error("Save the local runner URL and token before browsing models");
-    }
-    const runnerProviderId = isChatGPT
-      ? "chatgpt"
-      : isGitHubCopilot
-        ? "github-copilot"
-        : NVIDIA_PROVIDER_ID;
+  const connection = await resolveProviderConnection(input.providerId);
+  if (input.providerId === "chatgpt" || input.providerId === "github-copilot") {
     return fetchRunnerModelCatalog({
-      providerId: runnerProviderId,
-      apiKey,
-      baseURL,
-      runnerToken,
+      providerId: input.providerId,
+      baseURL: connection.baseURL,
+      runnerToken: connection.apiKey,
     });
   }
+  if (input.providerId === "anthropic") {
+    return fetchAnthropicModelCatalog(connection);
+  }
+  if (input.providerId === "meta") {
+    return fetchMetaModelCatalog(connection);
+  }
+  if (input.providerId === "xai") {
+    return fetchXaiLanguageModelCatalog(connection);
+  }
   if (input.providerId === "google") {
-    return fetchGoogleModelCatalog(apiKey);
+    return fetchGoogleModelCatalog(connection);
   }
   if (input.providerId === "openai") {
-    return fetchOpenAICompatibleModelCatalog(apiKey);
+    return fetchOpenAICompatibleModelCatalog(connection, "OpenAI");
   }
   if (input.providerId === DEEPSEEK_PROVIDER_ID) {
-    return fetchOpenAICompatibleModelCatalog(apiKey, DEEPSEEK_BASE_URL);
+    return fetchOpenAICompatibleModelCatalog(connection, "DeepSeek");
+  }
+  if (input.providerId === NVIDIA_PROVIDER_ID) {
+    return fetchOpenAICompatibleModelCatalog(connection, "NVIDIA NIM");
   }
   throw new Error(`Live model discovery is not supported for ${input.providerId}`);
 }
@@ -1079,10 +1058,18 @@ async function runModelTest(
   };
 }
 
+/**
+ * A model test through the resolved connection (HM4a). It tests the key saved
+ * in the AIBoard home; a typed but unsaved key, URL or token is not used (HM4b
+ * saves a key before testing it, plan §9 "Testing a key").
+ */
 export async function validateProvider(input: {
   providerId: string;
+  /** Ignored since HM4a: the test uses the key saved in the AIBoard home. */
   apiKey?: string;
+  /** Ignored since HM4a. */
   baseURL?: string;
+  /** Ignored since HM4a. */
   runnerToken?: string;
   modelId?: string;
 }, options?: { timeoutMs?: number }): Promise<ModelTestResult & { modelId?: string }> {
@@ -1090,12 +1077,6 @@ export async function validateProvider(input: {
   if (!provider) return { valid: false, usedImage: false, error: "Unknown provider" };
 
   const saved = getProviderKey(input.providerId);
-  const usingSaved = !input.apiKey;
-  const apiKey = input.apiKey ?? saved?.apiKey ?? null;
-  if (!apiKey) return { valid: false, usedImage: false, error: "No API key available" };
-  const baseURL = input.baseURL?.trim() || saved?.baseURL || undefined;
-  const runnerToken =
-    input.runnerToken?.trim() || saved?.runnerToken || undefined;
 
   const modelId =
     input.modelId ??
@@ -1115,13 +1096,17 @@ export async function validateProvider(input: {
             : "No model available",
     };
 
+  let connection: ProviderConnection;
+  try {
+    connection = await resolveProviderConnection(input.providerId);
+  } catch (error) {
+    return { valid: false, usedImage: false, error: error instanceof Error ? error.message : String(error), modelId };
+  }
   const capabilities = resolveModelCapabilities(formatModelId(input.providerId, modelId));
   const result = await runModelTest(
     (prompt, attachments, signal) =>
       provider.streamChat({
-        apiKey,
-        baseURL,
-        runnerToken,
+        ...connectionParams(connection),
         model: modelId,
         messages: [
           { role: "system", content: TEST_SYSTEM },
@@ -1135,7 +1120,7 @@ export async function validateProvider(input: {
     { allowImage: capabilities?.image !== false, timeoutMs: options?.timeoutMs }
   );
 
-  if (usingSaved && saved) {
+  if (saved) {
     updateProviderKey(input.providerId, {
       lastValidationSucceeded: result.valid,
       lastValidatedAt: new Date().toISOString(),
@@ -1335,26 +1320,40 @@ export function deleteCustomModel(id: string): void {
   storeDeleteCustomModel(id);
 }
 
+export const UNSAVED_CUSTOM_MODEL_TEST_MESSAGE =
+  "Save the custom model first: AI Board tests it through the Runner, with the endpoint and key saved in the AIBoard home.";
+
+/**
+ * Tests a custom model through the model proxy's `custom/<id>` route (HM4a).
+ * The proxy uses only what the AIBoard home saved for that id, so a model that
+ * has no id yet cannot be tested before it is saved (HM4b adds test-saves-first).
+ */
 export async function testCustomModel(input: {
+  /** The saved model's id; without it the test refuses before any call. */
+  id?: string;
   baseURL: string;
   model: string;
+  /** Ignored since HM4a: the proxy uses the key saved in the AIBoard home. */
   apiKey?: string;
   capabilities?: { image?: boolean };
   reasoningEffort?: ReasoningEffort;
 }): Promise<ModelTestResult> {
+  if (!input.id) return { valid: false, usedImage: false, error: UNSAVED_CUSTOM_MODEL_TEST_MESSAGE };
   const localOllama = isLoopbackOllamaEndpoint(input.baseURL);
-  const client = new OpenAI({
-    apiKey: input.apiKey || "not-needed",
-    baseURL: input.baseURL,
-    dangerouslyAllowBrowser: true,
-  });
+  let connection: ProviderConnection;
+  try {
+    connection = await resolveProviderConnection(formatModelId(CUSTOM_PROVIDER_ID, input.id));
+  } catch (error) {
+    return { valid: false, usedImage: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  const client = createOpenAIClient(connectionParams(connection), input.model);
   // A text-only model must not waste its first probe on an unsupported image.
   // Cold-starting Ollama on a 10 GB GPU may exceed the cloud-model timeout.
   const result = await runModelTest((prompt, attachments, signal) =>
     streamOpenAICompatibleChat(
       client,
       {
-        apiKey: input.apiKey ?? "",
+        ...connectionParams(connection),
         model: input.model,
         messages: [
           { role: "system", content: TEST_SYSTEM },
@@ -1387,6 +1386,7 @@ export async function testSavedCustomModel(id: string): Promise<ModelTestResult>
   const model = getCustomModelById(id);
   if (!model) return { valid: false, usedImage: false, error: "Model not found" };
   const result = await testCustomModel({
+    id: model.id,
     baseURL: model.baseURL,
     model: model.model,
     apiKey: model.apiKey,

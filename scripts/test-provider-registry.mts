@@ -157,11 +157,11 @@ check(
 );
 const nvidiaDefinition = getProviderDefinition("nvidia");
 check(
-  "NVIDIA runs with aiboard, or the shared standalone account runner package",
-  nvidiaDefinition?.runnerDownload?.downloadHref === "/aiboard-account-provider-runner.zip" &&
-    nvidiaDefinition.runnerDownload.command === "aiboard" &&
-    nvidiaDefinition.runnerDownload.standaloneCommand === "npm install\nnpm start",
-  nvidiaDefinition?.runnerDownload
+  "NVIDIA is OpenAI-compatible behind the model proxy, with no account runner (OD-32, HM4a)",
+  !nvidiaDefinition?.runnerDownload && !nvidiaDefinition?.accountRunner && !nvidiaDefinition?.baseURLField &&
+    !nvidiaDefinition?.runnerTokenField && nvidiaDefinition?.connection.transport === "openai-compatible" &&
+    nvidiaDefinition.connection.defaultBaseUrl === "https://integrate.api.nvidia.com/v1",
+  nvidiaDefinition
 );
 check(
   "NVIDIA NIM provider supports max-token request caps",

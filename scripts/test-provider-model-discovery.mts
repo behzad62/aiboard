@@ -64,7 +64,7 @@ const googleDispatch = settingsApiSource.match(
 )?.[1] ?? "";
 check(
   "Google live discovery uses the native Gemini model-list path instead of the OpenAI compatibility endpoint",
-  googleDispatch.includes("fetchGoogleModelCatalog(apiKey)") &&
+  googleDispatch.includes("fetchGoogleModelCatalog(connection)") &&
     !googleDispatch.includes("fetchOpenAICompatibleModelCatalog"),
   googleDispatch,
 );

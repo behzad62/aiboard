@@ -15,7 +15,11 @@ import type {
   UserSettings,
   Verbosity,
 } from "@/lib/db/schema";
-import type { AttachmentSummary } from "@/lib/attachments/types";
+import {
+  modelRequestBytes,
+  modelRequestTooLargeMessage,
+  type AttachmentSummary,
+} from "@/lib/attachments/types";
 import type { ModelInfo } from "@/lib/providers/base";
 import {
   clearDiscussionRun,
@@ -236,6 +240,7 @@ export function addDiscussionAttachments(
     const missing = candidateIds.filter((id) => !found.has(id));
     throw new Error(`Attachment not found: ${missing.join(", ")}`);
   }
+  assertModelRequestFits(discussion.topic, [...existingIds, ...candidateIds]);
 
   updateDiscussion(discussionId, {
     attachmentIds: JSON.stringify([...existingIds, ...candidateIds]),
@@ -397,6 +402,13 @@ export function minimumParticipatingModelsForMode(mode: DiscussionMode): number 
  * Adds the user's next message to a single-model chat and re-queues it; the
  * page then runs the engine, which answers the newest unanswered turn.
  */
+/** Refuses before sending a message the model proxy would refuse with 413 (plan §9 "Size"). */
+function assertModelRequestFits(text: string, attachmentIds: readonly string[]): void {
+  const sizes = getAttachments([...attachmentIds]).map((record) => record.size);
+  const refusal = modelRequestTooLargeMessage(modelRequestBytes(text, sizes));
+  if (refusal) throw new Error(refusal);
+}
+
 export function sendChatMessage(id: string, content: string): Discussion | undefined {
   const text = content.trim();
   if (!text) throw new Error("Type a message first.");
@@ -408,6 +420,7 @@ export function sendChatMessage(id: string, content: string): Discussion | undef
   if (discussion.mode !== "chat") {
     throw new Error("Follow-up messages are only available in single-model chats.");
   }
+  assertModelRequestFits(text, parseDiscussionAttachmentIds(discussion.attachmentIds));
   const modelIds = JSON.parse(discussion.modelIds) as string[];
   const turns = chatTurns(discussion.topic, getMessagesForDiscussion(id));
   const now = new Date().toISOString();
@@ -594,6 +607,7 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
   if (!hasEnoughParticipatingModels(input.mode, input.modelIds.length)) {
     throw new Error(participatingModelRequirementMessage(input.mode));
   }
+  assertModelRequestFits(input.topic, input.attachmentIds ?? []);
   const settings = getUserSettings();
   const buildSettings = normalizeBuildSettings({
     buildRunPolicy: input.buildRunPolicy ?? settings.defaultBuildRunPolicy,

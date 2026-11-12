@@ -48,7 +48,7 @@ import {
   type ModelCapabilityProbeProfile,
   type ToolCapabilityProbeDefinition,
 } from "@/lib/providers/capability-probes";
-import { getProviderKey, getUserSettings, updateUserSettings } from "./store";
+import { getUserSettings, updateUserSettings } from "./store";
 import {
   configuredOpenAIFileSearchIntent,
   configuredRemoteMcpIntent,
@@ -70,8 +70,11 @@ import {
   listFoundryModelInfos,
   listOpenRouterModelInfos,
   listNvidiaModelInfos,
+  isProviderEnabled,
+  resolveProviderConnection,
   streamCustomChat,
 } from "./providers";
+import { connectionParams } from "@/lib/providers/connection";
 
 interface CapabilitySettingsExtension {
   modelCapabilityProfiles?: Record<string, ModelCapabilityProbeProfile>;
@@ -385,12 +388,23 @@ async function runProbeCall(input: {
   artifactSink?: ProviderArtifactSink;
 }): Promise<CollectedProbeOutput> {
   const { target } = input;
+  const refused = (error: string): CollectedProbeOutput => ({ text: "", chunks: 0, toolCalls: [], providerToolEvents: [], error });
+  // The one way to a provider (HM4a); with no Runner it refuses before any call.
+  const connect = async (id: string) => {
+    try {
+      return connectionParams(await resolveProviderConnection(id));
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
   if (target.providerId === CUSTOM_PROVIDER_ID) {
     const custom = getCustomModelByFullId(target.fullModelId);
-    if (!custom) return { text: "", chunks: 0, toolCalls: [], providerToolEvents: [], error: "Custom model not found" };
+    if (!custom) return refused("Custom model not found");
+    const connection = await connect(target.fullModelId);
+    if (typeof connection === "string") return refused(connection);
     return collectStream(
       streamCustomChat(custom, {
-        apiKey: "",
+        ...connection,
         model: custom.model,
         messages: input.messages,
         attachments: input.attachments ?? [],
@@ -407,13 +421,12 @@ async function runProbeCall(input: {
   }
 
   const provider = getProvider(target.providerId);
-  const key = getProviderKey(target.providerId);
-  if (!provider || !key?.apiKey) return { text: "", chunks: 0, toolCalls: [], providerToolEvents: [], error: "Provider is not configured" };
+  if (!provider || !isProviderEnabled(target.providerId)) return refused("Provider is not configured");
+  const connection = await connect(target.providerId);
+  if (typeof connection === "string") return refused(connection);
   return collectStream(
     provider.streamChat({
-      apiKey: key.apiKey,
-      baseURL: key.baseURL ?? undefined,
-      runnerToken: key.runnerToken ?? undefined,
+      ...connection,
       model: target.modelId,
       messages: input.messages,
       attachments: input.attachments ?? [],

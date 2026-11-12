@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import type { AttachmentPayload } from "../attachments/types";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import type { ChatParams } from "./base";

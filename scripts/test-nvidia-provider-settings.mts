@@ -1,228 +1,165 @@
-/* NVIDIA provider settings regression (run: npx tsx scripts/test-nvidia-provider-settings.mts) */
-import { once } from "node:events";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createRequire } from "node:module";
+/*
+ * NVIDIA NIM behind the model proxy (HM4a, OD-32). Run: npx tsx scripts/test-nvidia-provider-settings.mts
+ *
+ * NVIDIA used to go through the account peer with its key in each request body; this script pinned that.
+ * Since HM4a it is an OpenAI-compatible provider behind the Runner's model proxy, which adds the key
+ * from the AIBoard home, so chat, the catalog and validation work with no key in the browser.
+ * A stub Runner and a stub upstream answer; no real key or provider is involved.
+ */
 import type { ProviderKey } from "../lib/db/schema";
+import { fetchProviderModelCatalog, validateProvider } from "../lib/client/settings-api";
 import {
-  type loadProviders,
-  type saveProviderKey,
-  type validateProvider,
-} from "../lib/client/settings-api";
-import {
-  type listNvidiaModelInfos,
-  type normalizeNvidiaModelId,
-} from "../lib/client/providers";
-
-let failures = 0;
-
-const require = createRequire(import.meta.url);
-const settingsApi = require("../lib/client/settings-api") as {
-  loadProviders: typeof loadProviders;
-  saveProviderKey: typeof saveProviderKey;
-  validateProvider: typeof validateProvider;
-};
-const providerApi = require("../lib/client/providers") as {
-  NVIDIA_PROVIDER_ID: string;
-  listNvidiaModelInfos: typeof listNvidiaModelInfos;
-  normalizeNvidiaModelId: typeof normalizeNvidiaModelId;
-};
-const storeApi = require("../lib/client/store") as {
-  __resetClientStoreForTests: () => void;
-  getProviderKey: (providerId: string) => ProviderKey | undefined;
-};
-
-const {
-  NVIDIA_PROVIDER_ID,
+  getEnabledModels,
   listNvidiaModelInfos,
   normalizeNvidiaModelId,
-} = providerApi;
-const { loadProviders, saveProviderKey, validateProvider } = settingsApi;
-const { __resetClientStoreForTests, getProviderKey } = storeApi;
+  NVIDIA_PROVIDER_ID,
+  withProviderConnection,
+} from "../lib/client/providers";
+import { __resetClientStoreForTests } from "../lib/client/store";
+import { nvidiaProvider } from "../lib/providers/nvidia";
+import { getProviderDefinition } from "../lib/providers/provider-registry";
+import { installStubRunner, json, STUB_PROXY_URL, type StubRequest } from "./model-proxy-test-support.mts";
 
+let failures = 0;
 function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures += 1;
-  console.log(
-    `${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`
-  );
+  console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-function sseEvent(data: unknown): string {
-  return `data: ${JSON.stringify(data)}\n\n`;
+const NVIDIA_PROXY = `${STUB_PROXY_URL}/v2/model-proxy/nvidia`;
+const PROXY_TOKEN = "proxy_nvidia-stub-token";
+
+function sse(chunks: string[]): Response {
+  const body = [
+    ...chunks.map((content) => `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content }, finish_reason: null }] })}\n\n`),
+    `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("");
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  let raw = "";
-  req.setEncoding("utf8");
-  for await (const chunk of req) raw += chunk;
-  return JSON.parse(raw) as Record<string, unknown>;
+const now = new Date().toISOString();
+// An enabled NVIDIA row with no key: the key lives in the AIBoard home.
+const nvidiaRow: ProviderKey = {
+  providerId: NVIDIA_PROVIDER_ID, baseURL: null, runnerToken: null, models: ["nvidia:z-ai/glm-5.2", "deepseek-ai/deepseek-v4-flash"],
+  enabledModelIds: null, defaultModel: "z-ai/glm-5.2", enabled: true, keyHint: null, lastValidationSucceeded: null, lastValidatedAt: null, updatedAt: now,
+};
+__resetClientStoreForTests({ providerKeys: [nvidiaRow] } as never);
+
+check("raw NVIDIA model id is preserved", normalizeNvidiaModelId("z-ai/glm-5.2") === "z-ai/glm-5.2");
+check("full NVIDIA model id is normalized to provider-local id", normalizeNvidiaModelId("nvidia:z-ai/glm-5.2") === "z-ai/glm-5.2");
+check(
+  "NVIDIA user-defined models are listed and enabled with no key in the browser",
+  listNvidiaModelInfos().map((model) => model.id).join(",") === "z-ai/glm-5.2,deepseek-ai/deepseek-v4-flash" &&
+    getEnabledModels().filter((model) => model.providerId === NVIDIA_PROVIDER_ID).length === 2,
+  { listed: listNvidiaModelInfos().map((model) => model.id), enabled: getEnabledModels().map((model) => model.id) },
+);
+const definition = getProviderDefinition(NVIDIA_PROVIDER_ID);
+check(
+  "NVIDIA has no account-peer URL, runner token or runner download in Settings (OD-32)",
+  !definition?.baseURLField && !definition?.runnerTokenField && !definition?.runnerDownload && !definition?.accountRunner &&
+    definition?.connection?.transport === "openai-compatible" && definition.modelDiscovery?.source === "provider-api",
+  definition,
+);
+
+function noKeyLeaves(requests: StubRequest[]): boolean {
+  return requests.every((request) =>
+    request.url.startsWith(`${NVIDIA_PROXY}/`) &&
+    request.headers.get("authorization") === `Bearer ${PROXY_TOKEN}` &&
+    !/nvapi-|"apiKey"/.test(request.body) &&
+    !request.headers.has("x-runner-token"));
 }
 
-async function withRunnerStub(
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>
-): Promise<{ url: string; close: () => Promise<void> }> {
-  const server = createServer((req, res) => {
-    handler(req, res).catch((err) => {
-      res.writeHead(500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+// Chat: the same resolver path the discussion engine takes.
+{
+  const stub = installStubRunner({ proxyTokens: [PROXY_TOKEN], upstream: () => sse(["NVIDIA ", "reply"]) });
+  try {
+    const params = await withProviderConnection(NVIDIA_PROVIDER_ID, {
+      model: "z-ai/glm-5.2",
+      messages: [{ role: "user" as const, content: "Say hello." }],
+      maxTokens: 32,
     });
+    let text = "";
+    for await (const chunk of nvidiaProvider.streamChat(params)) if (chunk.type === "token") text += chunk.content ?? "";
+    const request = stub.requests[0];
+    const body = request ? JSON.parse(request.body) as { model?: string; max_tokens?: number; stream?: boolean } : {};
+    check(
+      "NVIDIA chat streams through the proxy's chat/completions with the proxy token and no key",
+      text === "NVIDIA reply" && request?.url === `${NVIDIA_PROXY}/chat/completions` && request.method === "POST" &&
+        body.model === "z-ai/glm-5.2" && body.max_tokens === 32 && body.stream === true && noKeyLeaves(stub.requests),
+      { text, requests: stub.requests.map((entry) => entry.url), body },
+    );
+  } finally {
+    stub.restore();
+  }
+}
+
+// Catalog: GET models through the proxy.
+{
+  const stub = installStubRunner({
+    proxyTokens: [PROXY_TOKEN],
+    upstream: () => json({ object: "list", data: [{ id: "z-ai/glm-5.2", object: "model", created: 1_700_000_000, owned_by: "z-ai" }, { id: "minimaxai/minimax-m3", object: "model", created: 1_700_000_100, owned_by: "minimaxai" }] }),
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("server did not bind to TCP");
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    close: async () => {
-      server.closeAllConnections();
-      server.close();
-      await once(server, "close");
+  try {
+    const catalog = await fetchProviderModelCatalog({ providerId: NVIDIA_PROVIDER_ID });
+    check(
+      "NVIDIA catalog comes from the proxy's models with no key in the browser",
+      catalog.map((model) => model.id).join(",") === "minimaxai/minimax-m3,z-ai/glm-5.2" &&
+        stub.requests.length === 1 && stub.requests[0]!.method === "GET" && stub.requests[0]!.url === `${NVIDIA_PROXY}/models` &&
+        noKeyLeaves(stub.requests),
+      { catalog: catalog.map((model) => model.id), requests: stub.requests.map((entry) => `${entry.method} ${entry.url}`) },
+    );
+  } finally {
+    stub.restore();
+  }
+}
+
+// Validation: a model test through the proxy; a text-only model gets no image probe.
+{
+  const stub = installStubRunner({ proxyTokens: [PROXY_TOKEN], upstream: () => sse(["AIBOARD_TEXT_OK"]) });
+  try {
+    const result = await validateProvider({ providerId: NVIDIA_PROVIDER_ID });
+    const body = stub.requests[0] ? JSON.parse(stub.requests[0].body) as { model?: string; messages?: Array<{ content?: unknown }> } : {};
+    const sentImage = JSON.stringify(body.messages ?? []).includes("image_url");
+    check(
+      "NVIDIA validation tests through the proxy, skips the image probe for a text-only model, and holds no key",
+      result.valid && result.usedImage === false && body.model === "z-ai/glm-5.2" && !sentImage && stub.requests.length === 1 && noKeyLeaves(stub.requests),
+      { result, requests: stub.requests.map((entry) => entry.url) },
+    );
+  } finally {
+    stub.restore();
+  }
+}
+
+// A stalled stream: the test times out and aborts the request.
+{
+  let sawAbort = false;
+  const stub = installStubRunner({
+    proxyTokens: [PROXY_TOKEN],
+    upstream: (request) => {
+      request.signal?.addEventListener("abort", () => { sawAbort = true; }, { once: true });
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(": waiting\n\n"));
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
     },
-  };
+  });
+  try {
+    const timed = await Promise.race([
+      validateProvider({ providerId: NVIDIA_PROVIDER_ID }, { timeoutMs: 50 }),
+      new Promise<{ valid: false; error: string }>((resolve) => setTimeout(() => resolve({ valid: false, error: "test timed out" }), 2_000)),
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    check(
+      "NVIDIA validation times out and aborts a stalled stream",
+      timed.valid === false && /timed out/i.test(timed.error ?? "") && timed.error !== "test timed out" && sawAbort,
+      { timed, sawAbort },
+    );
+  } finally {
+    stub.restore();
+  }
 }
 
-__resetClientStoreForTests();
-
-check(
-  "raw NVIDIA model id is preserved",
-  normalizeNvidiaModelId("z-ai/glm-5.2") === "z-ai/glm-5.2",
-  normalizeNvidiaModelId("z-ai/glm-5.2")
-);
-
-check(
-  "full NVIDIA model id is normalized to provider-local id",
-  normalizeNvidiaModelId("nvidia:z-ai/glm-5.2") === "z-ai/glm-5.2",
-  normalizeNvidiaModelId("nvidia:z-ai/glm-5.2")
-);
-
-saveProviderKey({
-  providerId: NVIDIA_PROVIDER_ID,
-  apiKey: "nvapi-test-provider-key",
-  runnerToken: "local-runner-token",
-  baseURL: " http://127.0.0.1:1455 ",
-  models: [" nvidia:z-ai/glm-5.2 ", "deepseek-ai/deepseek-v4-flash"],
-  defaultModel: "z-ai/glm-5.2",
-  enabled: true,
-});
-
-const saved = getProviderKey(NVIDIA_PROVIDER_ID);
-const loaded = loadProviders().providers.find(
-  (provider) => provider.providerId === NVIDIA_PROVIDER_ID
-);
-const modelInfos = listNvidiaModelInfos();
-
-check(
-  "NVIDIA provider stores API key separately from local runner token",
-  saved?.apiKey === "nvapi-test-provider-key" &&
-    saved?.runnerToken === "local-runner-token" &&
-    saved.keyHint !== saved.runnerTokenHint,
-  saved
-);
-
-check(
-  "NVIDIA provider persists runner URL and runner token hint for Settings",
-  loaded?.baseURL === "http://127.0.0.1:1455" &&
-    loaded.runnerTokenHint === saved?.runnerTokenHint,
-  loaded
-);
-
-check(
-  "NVIDIA user-defined models are normalized and shown in Settings",
-  modelInfos.length === 2 &&
-    modelInfos[0].id === "z-ai/glm-5.2" &&
-    modelInfos[1].id === "deepseek-ai/deepseek-v4-flash" &&
-    loaded?.models.some((model) => model.id === "z-ai/glm-5.2"),
-  { modelInfos, loadedModels: loaded?.models }
-);
-
-let validationRequestBody: Record<string, unknown> | undefined;
-const validationRunner = await withRunnerStub(async (req, res) => {
-  validationRequestBody = await readBody(req);
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-  });
-  res.write(sseEvent({ type: "token", content: "AIBOARD_TEXT_OK" }));
-  res.write(sseEvent({ type: "done" }));
-  res.end();
-});
-
-try {
-  saveProviderKey({
-    providerId: NVIDIA_PROVIDER_ID,
-    apiKey: "nvapi-test-provider-key",
-    runnerToken: "local-runner-token",
-    baseURL: validationRunner.url,
-    models: ["z-ai/glm-5.2"],
-    defaultModel: "z-ai/glm-5.2",
-    enabled: true,
-  });
-
-  const result = await validateProvider({ providerId: NVIDIA_PROVIDER_ID });
-  const validationAttachments = validationRequestBody?.attachments as unknown[] | undefined;
-
-  check(
-    "NVIDIA Settings test skips image probe for text-only models",
-    result.valid &&
-      result.usedImage === false &&
-      validationRequestBody?.model === "z-ai/glm-5.2" &&
-      Array.isArray(validationAttachments) &&
-      validationAttachments.length === 0,
-    { result, validationRequestBody }
-  );
-} finally {
-  await validationRunner.close();
-}
-
-let stalledRunnerSawClose = false;
-const stalledRunner = await withRunnerStub(async (req, res) => {
-  await readBody(req);
-  res.on("close", () => {
-    stalledRunnerSawClose = true;
-  });
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-  });
-  res.write(sseEvent({ type: "token", content: "" }));
-});
-
-try {
-  saveProviderKey({
-    providerId: NVIDIA_PROVIDER_ID,
-    apiKey: "nvapi-test-provider-key",
-    runnerToken: "local-runner-token",
-    baseURL: stalledRunner.url,
-    models: ["z-ai/glm-5.2"],
-    defaultModel: "z-ai/glm-5.2",
-    enabled: true,
-  });
-
-  const timedResult = await Promise.race([
-    (validateProvider as (...args: unknown[]) => Promise<{ valid: boolean; error?: string }>)(
-      { providerId: NVIDIA_PROVIDER_ID },
-      { timeoutMs: 50 }
-    ),
-    new Promise<{ valid: false; error: string }>((resolve) =>
-      setTimeout(() => resolve({ valid: false, error: "test timed out" }), 500)
-    ),
-  ]);
-  await new Promise((resolve) => setTimeout(resolve, 50));
-
-  check(
-    "NVIDIA Settings test times out and aborts stalled streams",
-    timedResult.valid === false &&
-      /timed out/i.test(timedResult.error ?? "") &&
-      stalledRunnerSawClose,
-    { timedResult, stalledRunnerSawClose }
-  );
-} finally {
-  await stalledRunner.close();
-}
-
-if (failures === 0) {
-  console.log("PASS");
-} else {
-  console.log(`FAIL ${failures} check(s) failed`);
-}
-
+console.log(failures === 0 ? "PASS" : `FAIL ${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

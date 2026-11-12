@@ -1,12 +1,13 @@
 import {
   FunctionCallingConfigMode,
-  GoogleGenAI,
+  type GoogleGenAI,
   type Content,
   type GenerateContentConfig,
   type Part,
   type Tool,
 } from "@google/genai";
 import type { AttachmentPayload } from "../attachments/types";
+import { createGoogleClient } from "./connection";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import type {
   AIProvider,
@@ -340,9 +341,9 @@ export const googleProvider: AIProvider = {
     );
   },
 
-  async validateApiKey(apiKey: string) {
+  async validateConnection(connection) {
     try {
-      const genAI = new GoogleGenAI({ apiKey });
+      const genAI = createGoogleClient(connection);
       await genAI.models.generateContent({
         model: getValidationModelId("google"),
         contents: "Hi",
@@ -354,7 +355,7 @@ export const googleProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
-    const genAI = new GoogleGenAI({ apiKey: params.apiKey });
+    const genAI = createGoogleClient(params);
     yield* streamGoogleByPlan(genAI, params);
   },
 };

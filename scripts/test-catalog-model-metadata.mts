@@ -8,6 +8,7 @@ import { buildProviderCatalogModel, buildOpenRouterCatalogModel, collectGoogleMo
 import { effectiveModelMetadata, extractModelMetadata, missingModelMetadata } from "../lib/providers/model-metadata";
 import { getModelPricing } from "../lib/providers/pricing";
 import { ModelMetadataEditor } from "../components/ModelMetadataEditor";
+import { installStubRunner, STUB_PROXY_URL } from "./model-proxy-test-support.mts";
 
 __resetClientStoreForTests({});
 for (const provider of getAllProviders()) if (getProviderDefinition(provider.id)?.modelDiscovery) {
@@ -101,19 +102,20 @@ assert.equal(getUserSettings().modelContextOverrides?.[key]?.maxOutputTokens, 40
 assert.equal(getUserSettings().modelContextOverrides?.[key]?.buildOutputReserveTokens, undefined);
 assert.equal(getUserSettings().discoveredModelMetadata?.[key]?.overrides?.contextWindowTokens, 64000);
 assert.equal(getUserSettings().discoveredModelMetadata?.[key]?.overrides?.inputUsdPer1M, 7, "Build resets preserve separate model details");
-const realFetch = globalThis.fetch;
 let pages = 0;
-globalThis.fetch = (async (input) => {
+// The catalog goes through the Runner's model proxy (HM4a); a stub Runner answers.
+const stub = installStubRunner({ upstream: (request) => {
   pages++;
-  const second = String(input).includes("after_id=");
+  const second = request.url.includes("after_id=");
   return new Response(JSON.stringify({ data: [{ id: second ? "claude-second" : "claude-first", display_name: "Published model", created_at: "2026-10-19T00:00:00Z", max_input_tokens: 64000, max_tokens: 4096 }],
     has_more: !second, first_id: second ? "claude-second" : "claude-first", last_id: second ? "claude-second" : "claude-first" }), { headers: { "content-type": "application/json" } });
-}) as typeof fetch;
+} });
 try {
-  const catalog = await fetchProviderModelCatalog({ providerId: "anthropic", apiKey: "fake-key" });
+  const catalog = await fetchProviderModelCatalog({ providerId: "anthropic" });
   assert.equal(pages, 2); assert.equal(catalog.length, 2);
   assert.equal(catalog[1].contextWindowTokens, 64000); assert.equal(catalog[1].maxOutputTokens, 4096);
-} finally { globalThis.fetch = realFetch; }
+  assert.ok(stub.requests.every((request) => request.url.startsWith(`${STUB_PROXY_URL}/v2/model-proxy/anthropic/v1/models`)));
+} finally { stub.restore(); }
 const html = renderToStaticMarkup(React.createElement(ModelMetadataEditor, { modelId: "new", metadata: sparse, overrides: {}, onChange: () => {} }));
 assert.match(html, /unknown/); assert.match(html, /Not checked/); assert.match(html, /Max output tokens/); assert.match(html, /Input price/);
 assert.equal(html.includes('value="0"'), false, "blank fields must not turn into free pricing");
