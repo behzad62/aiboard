@@ -82,6 +82,21 @@ test("launcher bootstrap starts only the fixed Runner V2 and peer runner entrypo
 });
 
 
+test("the AIBoard home CLI starts no process, makes no network call, and runs before any Runner start", () => {
+  const homeCli = readFileSync(join(sourceRoot, "home-cli.ts"), "utf8");
+  assert.doesNotMatch(homeCli, rawChildProcessImport);
+  assert.doesNotMatch(homeCli, /from\s+["'](?:node:)?(?:http|https|net|tls|dgram|dns)["']|\bfetch\s*\(|WebSocket/);
+  // It writes only through the home store: no direct file writes.
+  assert.doesNotMatch(homeCli, /from\s+["'](?:node:)?fs(?:\/promises)?["']/);
+  assert.match(homeCli, /applyHomeBatch\(/);
+  const launcher = readFileSync(join(sourceRoot, "launcher.ts"), "utf8");
+  const dispatch = launcher.indexOf("if (args.home) {");
+  assert.ok(dispatch > 0, "the launcher dispatches home commands");
+  for (const later of ["await projectIdentity(", "spawnRunner(process.execPath", "const version = await readRunnerVersion();"]) {
+    assert.ok(launcher.indexOf(later, launcher.indexOf("export async function runLauncher")) > dispatch, `home commands return before ${later}`);
+  }
+});
+
 test("native script process creation is confined to explicit audited platform boundaries", () => {
   const offenders: string[] = [];
   const missingMarkers: string[] = [];

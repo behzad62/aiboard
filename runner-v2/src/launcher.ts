@@ -30,6 +30,7 @@ import { commandApprovalsMessage, promptCommandApproval } from "./remote-approva
 import { pairingRelayConfiguration } from "./remote-pairing.js";
 import { runDoctorCommand, runUninstallCommand, runUpdateCommand } from "./self-update.js";
 import { gitUnavailableNotice, type GitUnavailableCode } from "./git-preflight.js";
+import { HOME_COMMANDS, parseHomeCommand, runHomeCommand, type HomeCommand, type HomeCommandName } from "./home-cli.js";
 import { formatCliError, PLAIN_STYLE, styleFor, terminalStyle, type TerminalStyle } from "./terminal-style.js";
 
 export type RunnerKind = "runner" | "accounts" | "legacy" | "bench";
@@ -41,7 +42,7 @@ const peerEntries: Record<Exclude<RunnerKind, "runner">, string> = {
   bench: fileURLToPath(new URL("../../scripts/bench-runner.mjs", import.meta.url)),
 };
 
-type Command = "start" | "status" | "stop" | "version" | "help" | "remote" | "mcp";
+type Command = "start" | "status" | "stop" | "version" | "help" | "remote" | "mcp" | HomeCommandName;
 export interface LauncherArguments {
   command: Command;
   runners: RunnerKind[];
@@ -58,6 +59,8 @@ export interface LauncherArguments {
   audit?: boolean;
   auditLimit?: number;
   policyFlags?: boolean;
+  /** `aiboard config|keys|models` (§6.6): the AIBoard home from a terminal; starts no Runner. */
+  home?: HomeCommand;
 }
 
 const VALUE_FLAGS = new Set(["--project", "--state-dir", "--port", "--capabilities-config", "--extensions-home", "--mcp", "--mcp-envelope", "--allow-origin", "--set-aside-run", "--relay-url", "--relay-root-key"]);
@@ -73,6 +76,13 @@ const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 export function parseLauncherArguments(raw: string[]): LauncherArguments {
   const args = [...raw];
   while (args[0] === "--") args.shift();
+  const first = args[0];
+  if (first !== undefined && (HOME_COMMANDS as readonly string[]).includes(first)) {
+    const rest = args.slice(1);
+    if (rest.includes("--help") || rest.includes("-h")) return { command: "help", runners: ["runner"], runnerFlags: [] };
+    const name = first as HomeCommandName;
+    return { command: name, runners: ["runner"], runnerFlags: [], home: parseHomeCommand(name, rest) };
+  }
   let command: Command = "start";
   const selected: RunnerKind[] = [];
   while (args[0] && !args[0].startsWith("-")) {
@@ -202,6 +212,14 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
     return runDoctorCommand(await readRunnerVersion());
   }
   const args = parseLauncherArguments(raw);
+  if (args.home) {
+    return await runHomeCommand(args.home, {
+      ...(runtime.environment ? { environment: runtime.environment } : {}),
+      ...(runtime.platform ? { platform: runtime.platform } : {}),
+      ...(runtime.home ? { home: runtime.home } : {}),
+      ...(runtime.write ? { write: runtime.write } : {}),
+    });
+  }
   const startLike = args.command === "start" || args.command === "mcp" || (args.command === "remote" && !args.logout && !args.policy && !args.audit);
   const write = runtime.write ?? ((message: string) => (args.command === "mcp" ? process.stderr : process.stdout).write(message));
   const style = runtime.write
@@ -1210,7 +1228,12 @@ function help(): string {
   return [
     "AIBoard Runner", "", "Usage: aiboard [runner|accounts|legacy|bench|all ...] [options]", "       aiboard [status|stop|version|doctor] [options]",
     "       aiboard update [--check | --rollback]  Install the newest signed release, or return to the previous one.",
-    "       aiboard uninstall [--yes] [--keep-state | --remove-state]", "",
+    "       aiboard uninstall [--yes] [--keep-state | --remove-state]",
+    "       aiboard config [--json] | config set defaults.reasoningEffort <effort>",
+    "       aiboard keys set <provider> [--stdin] | keys remove <provider> | keys reset [--yes]",
+    "       aiboard models [--json] | models enable <provider:model> | models disable <provider:model>",
+    "  The AIBoard home (~/.aiboard, or AIBOARD_HOME) holds your settings and keys for every AI Board surface.",
+    "  keys set prompts with your typing hidden, or reads one line from a pipe with --stdin; a key is never an argument.", "",
     "Runs the selected runners for the current directory in the foreground, or reuses healthy ones.",
     "With no selection Runner V2 runs with the account runner (ChatGPT, GitHub Copilot,",
     "NVIDIA); `aiboard runner` runs Runner V2 alone and `all` runs every runner. Runner V2",
