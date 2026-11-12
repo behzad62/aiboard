@@ -41,7 +41,8 @@ export function remoteDeviceDirectory(options: StateLocationOptions): string {
   return (options.platform === "win32" ? win32 : posix).join(userDataRoot(options), "remote");
 }
 
-function userDataRoot(options: StateLocationOptions): string {
+/** The per-user AIBoard data root: per-folder state, the remote device key and the AIBoard home key live here. */
+export function userDataRoot(options: StateLocationOptions): string {
   const paths = options.platform === "win32" ? win32 : posix;
   let base: string;
   if (options.platform === "win32") {
@@ -265,7 +266,14 @@ export async function assertProjectBinding(stateDirectory: string, identity: Lau
 }
 
 export function tryAcquireLock(stateDirectory: string, kind: "discovery" | "lifetime"): (() => void) | null {
-  const file = join(stateDirectory, `launcher-${kind}.sqlite`);
+  return tryAcquireLockFile(join(stateDirectory, `launcher-${kind}.sqlite`));
+}
+
+/**
+ * An exclusive SQLite write transaction on one lock file (the same BEGIN IMMEDIATE pattern as the
+ * launcher's discovery and lifetime locks). Returns null at once when another holder has it.
+ */
+export function tryAcquireLockFile(file: string): (() => void) | null {
   assertLockFileIdentity(file);
   const database = new DatabaseSync(sqliteDatabaseLocation(file), { timeout: 0 });
   try {
@@ -281,6 +289,23 @@ export function tryAcquireLock(stateDirectory: string, kind: "discovery" | "life
     database.close();
     if (/database is locked|database is busy|SQLITE_BUSY/i.test(String(error))) return null;
     throw error;
+  }
+}
+
+/**
+ * tryAcquireLockFile, polled every 50 ms for up to waitMs. Returns null when the wait is exhausted,
+ * so each caller refuses with its own typed error (the AIBoard home: home_busy).
+ */
+export async function acquireLockFile(file: string, waitMs: number): Promise<(() => void) | null> {
+  if (!Number.isFinite(waitMs) || waitMs < 0) throw new Error("Lock wait must be a non-negative number of milliseconds.");
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    let release: (() => void) | null = null;
+    try { release = tryAcquireLockFile(file); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "LAUNCHER_LOCK_NOT_READY") throw error; }
+    if (release) return release;
+    if (Date.now() >= deadline) return null;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
   }
 }
 

@@ -10,7 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { linkSync, writeFileSync } from "node:fs";
+
+import { aiboardHomeDenyEntries } from "../src/aiboard-home-paths.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import { createFilesystemTools } from "../src/filesystem-tools.js";
+import { FixedPathDeny } from "../src/remote-path-guard.js";
 import type {
   NativeTool,
   ToolCallBlock,
@@ -513,3 +518,52 @@ function context(): ToolExecutionContext {
     actor: { role: "worker", id: "worker_1" },
   };
 }
+
+test("every broker denies the AIBoard home's credentials and key to every actor, and config.json writes, through links", async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-home-broker-")));
+  const project = join(root, "project"), home = join(root, "home"), local = join(root, "local");
+  for (const dir of [project, home, join(local, "AIBoard")]) mkdirSync(dir, { recursive: true });
+  const previous = process.env.AIBOARD_HOME;
+  try {
+    writeFileSync(join(home, "credentials.json"), "{\"stub\":\"envelope\"}");
+    writeFileSync(join(home, "config.json"), "{\"contractVersion\":\"aiboard.home.v1\"}");
+    writeFileSync(join(local, "AIBoard", "home-key"), Buffer.alloc(32, 3));
+    writeFileSync(join(project, "readme.txt"), "project file\n");
+    const linkType = process.platform === "win32" ? "junction" as const : "dir" as const;
+    symlinkSync(home, join(project, "home-link"), linkType);
+    linkSync(join(local, "AIBoard", "home-key"), join(project, "key-alias"));
+    const environment = { AIBOARD_HOME: home, LOCALAPPDATA: local, XDG_DATA_HOME: local };
+    const entries = aiboardHomeDenyEntries({ platform: process.platform, environment, home: join(root, "user") })
+      .map((entry) => entry.category === "aiboard_home_key" ? { ...entry, path: join(local, "AIBoard", "home-key") } : entry);
+    const broker = new ToolBroker({ permissionProfile: "full", workspacePath: project, fixedPathDeny: new FixedPathDeny(entries) });
+    for (const tool of createFilesystemTools({})) broker.register(tool);
+    const call = (callId: string, name: string, args: Record<string, unknown>, role: ToolExecutionContext["actor"]["role"]) =>
+      broker.invoke({ type: "tool_call", callId, name, arguments: args }, { runId: "run_1", sessionId: "s", actor: { role, id: `${role}_1` }, workspacePath: project });
+    for (const role of ["worker", "architect", "remote", "local_mcp"] as const) {
+      for (const path of [join(home, "credentials.json"), "home-link/credentials.json", join(local, "AIBoard", "home-key"), "key-alias"]) {
+        const read = await call(`${role}-read-${path}`, "fs.read", { path }, role);
+        assert.equal(read.error?.code, "path_denied", `${role} read of ${path}: ${JSON.stringify(read)}`);
+        assert.ok(!JSON.stringify(read).includes("stub"), "no byte of the file is returned");
+      }
+      const write = await call(`${role}-write`, "fs.write", { path: "home-link/config.json", content: "{}" }, role);
+      assert.equal(write.error?.code, "path_denied", `${role} write of config.json: ${JSON.stringify(write)}`);
+      const search = await call(`${role}-search`, "fs.search", { path: "home-link", pattern: "stub" }, role);
+      assert.equal(search.error?.code, "path_denied", `${role} search of the home: ${JSON.stringify(search)}`);
+    }
+    const config = await call("worker-config-read", "fs.read", { path: "home-link/config.json" }, "worker");
+    assert.equal(config.isError, false, JSON.stringify(config));
+    const ordinary = await call("worker-project-read", "fs.read", { path: "readme.txt" }, "worker");
+    assert.equal(ordinary.isError, false, JSON.stringify(ordinary));
+    assert.ok(broker.auditRecords().some((record) => record.decision === "denied" && record.pathCategory === "aiboard_home_credentials" && record.actor.role === "worker"));
+
+    // A broker built without the option still denies this process's own home.
+    process.env.AIBOARD_HOME = home;
+    const defaulted = new ToolBroker({ permissionProfile: "full", workspacePath: project });
+    for (const tool of createFilesystemTools({})) defaulted.register(tool);
+    const denied = await defaulted.invoke({ type: "tool_call", callId: "default-read", name: "fs.read", arguments: { path: join(home, "credentials.json") } }, context());
+    assert.equal(denied.error?.code, "path_denied", JSON.stringify(denied));
+  } finally {
+    if (previous === undefined) delete process.env.AIBOARD_HOME; else process.env.AIBOARD_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

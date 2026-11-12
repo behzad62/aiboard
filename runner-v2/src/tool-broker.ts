@@ -26,7 +26,8 @@ import {
   type ExecutionGrantAuthority,
   type OpaqueExecutionGrant,
 } from "./execution-grants.js";
-import { RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
+import { createAiboardHomeDeny } from "./aiboard-home-paths.js";
+import { RemotePathDeniedError, type FixedPathDeny, type RemotePathGuard } from "./remote-path-guard.js";
 import { PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES } from "./runner-extension.js";
 import { findWindowsPathTooLongError } from "./windows-path-limits.mjs";
 import {
@@ -84,7 +85,15 @@ export interface ToolBrokerOptions {
   budgetScopeId?: string;
   executionGrants?: ExecutionGrantAuthority;
   pathGuard?: RemotePathGuard;
+  /**
+   * The fixed deny every broker applies to every actor (the AIBoard home's credentials, lock and key,
+   * and writes to its config). Defaults to this process's home; tests pass their own. It cannot be turned off.
+   */
+  fixedPathDeny?: FixedPathDeny;
 }
+
+/** Tools that read a whole folder's file contents: a folder holding a denied file is refused. */
+const FIXED_DENY_TREE_TOOLS: ReadonlySet<string> = new Set(["fs.search"]);
 
 interface InvocationCacheEntry {
   fingerprint: string;
@@ -120,6 +129,7 @@ export class ToolBroker implements AgentToolRuntime {
   private readonly budgetScopeId?: string;
   private readonly executionGrants: ExecutionGrantAuthority;
   private readonly pathGuard?: RemotePathGuard;
+  private readonly fixedPathDeny: FixedPathDeny;
   private readonly invocationCache = new Map<string, InvocationCacheEntry>();
   private readonly audit: ToolAuditRecord[] = [];
   private readonly decisions = new Map<string, InvocationDecision>();
@@ -139,6 +149,7 @@ export class ToolBroker implements AgentToolRuntime {
     this.budgetScopeId = options.budgetScopeId;
     this.executionGrants = options.executionGrants ?? createExecutionGrantAuthority();
     this.pathGuard = options.pathGuard;
+    this.fixedPathDeny = options.fixedPathDeny ?? createAiboardHomeDeny();
     if (Boolean(this.budget) !== Boolean(this.budgetScopeId)) {
       throw new Error("Tool budget and budgetScopeId must be configured together.");
     }
@@ -289,7 +300,8 @@ export class ToolBroker implements AgentToolRuntime {
     const access = tool.assessAccess?.(input, toolContext) ?? {
       capability: tool.definition.effect,
     };
-    const pathDenial = await this.checkRemotePaths(tool.definition.name, access, toolContext);
+    const pathDenial = await this.checkFixedDenies(tool.definition.name, access, toolContext) ??
+      await this.checkRemotePaths(tool.definition.name, access, toolContext);
     if (pathDenial) return pathDenial;
     // Capture identities before any approval/grant await can allow substitution.
     const mutationCapture = isFilesystemMutation(tool.definition.name)
@@ -464,7 +476,8 @@ export class ToolBroker implements AgentToolRuntime {
           toolName: tool.definition.name, callId, permissionProfile: this.git?.permissionProfile ?? this.permissionProfile },
         signal,
       }) : undefined;
-      const lastMileDenial = await this.checkRemotePaths(tool.definition.name, access, toolContext);
+      const lastMileDenial = await this.checkFixedDenies(tool.definition.name, access, toolContext) ??
+        await this.checkRemotePaths(tool.definition.name, access, toolContext);
       if (lastMileDenial) return lastMileDenial;
       const invocationContext = { ...toolContext, signal, executionGrant, filesystemMutation };
       const execution = this.git
@@ -557,6 +570,25 @@ export class ToolBroker implements AgentToolRuntime {
       { callId, toolName, ...output },
       this.clock()
     );
+  }
+
+  /** The fixed deny, for every actor and every tool that names paths, independent of the remote guard. */
+  private async checkFixedDenies(
+    toolName: string,
+    access: ToolAccessRequest,
+    context: ToolExecutionContext,
+  ): Promise<ToolExecutionOutput | undefined> {
+    for (const entry of access.paths ?? []) {
+      const target = isAbsolute(entry.path) ? resolve(entry.path) : resolve(this.workspacePath, entry.path);
+      const hit = await this.fixedPathDeny.check(target, entry.access, { tree: FIXED_DENY_TREE_TOOLS.has(toolName) });
+      if (!hit) continue;
+      this.decisions.set(context.callId ?? "unknown", {
+        decision: "denied", capability: access.capability, outsideWorkspace: false,
+        pathCategory: hit.category, pathDenialReason: "protected_location",
+      });
+      return outputFailure("path_denied", hit.message);
+    }
+    return undefined;
   }
 
   private async checkRemotePaths(

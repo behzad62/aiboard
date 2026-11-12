@@ -407,3 +407,130 @@ export async function assertRemotePathAllowed(
   const resolved = guard instanceof RemotePathGuard ? guard : createRemotePathGuard(guard);
   return await resolved.assertAllowed(target, mode, context);
 }
+
+/**
+ * A fixed deny that every tool broker applies to every actor at every level, independent of the
+ * remote/local_mcp guard above (Simple Build plan §5.8: the AIBoard home's credentials, write lock
+ * and key, and writes to its config). It resolves the target the way the guard does: the supplied
+ * spelling, the canonical path through symlinks and junctions (the nearest existing parent for a
+ * missing leaf), and object identity, so a hard link, an 8.3 name or a junction to a denied file or
+ * to one of its parent folders is refused too. On Windows an alternate-data-stream suffix and
+ * trailing dots or spaces are stripped first, since Win32 opens the same file through them.
+ */
+export interface FixedDenyEntry {
+  readonly path: string;
+  /** "all" refuses read, write and delete; "mutate" refuses write and delete only. */
+  readonly modes: "all" | "mutate";
+  readonly category: string;
+  /** "prefix": also any sibling whose name starts with the entry's name (temporary files of a key). */
+  readonly match?: "exact" | "prefix";
+}
+
+export interface FixedDenyHit {
+  readonly category: string;
+  readonly message: string;
+}
+
+export type FixedDenyAccess = "read" | "write" | "delete";
+
+export class FixedPathDeny {
+  private readonly paths: typeof win32 | typeof posix;
+  private readonly caseInsensitive: boolean;
+
+  constructor(readonly entries: readonly FixedDenyEntry[], readonly platform: NodeJS.Platform = process.platform) {
+    this.paths = platform === "win32" ? win32 : posix;
+    this.caseInsensitive = platform === "win32" || platform === "darwin";
+  }
+
+  /**
+   * `tree` covers operations that act on a folder's contents (delete, move, search): they are refused
+   * when the folder holds a denied entry, even though the folder itself is not denied.
+   */
+  async check(target: string, access: FixedDenyAccess, options: { tree?: boolean } = {}): Promise<FixedDenyHit | undefined> {
+    if (this.entries.length === 0) return undefined;
+    if (typeof target !== "string" || target.length === 0 || target.includes("\0")) {
+      return { category: "malformed_path", message: "The path is empty or contains a NUL byte." };
+    }
+    const tree = options.tree === true || access === "delete";
+    const absolute = this.stripAliases(this.paths.resolve(target));
+    const canonical = await this.canonical(absolute);
+    const targetIdentity = await identityOf(canonical);
+    for (const entry of this.entries) {
+      if (entry.modes === "mutate" && access === "read") continue;
+      const entryPath = this.paths.resolve(entry.path);
+      const entryCanonical = await this.canonical(entryPath);
+      const hit: FixedDenyHit = { category: entry.category, message: `Tools cannot ${access === "read" ? "read" : "change"} ${entry.category} files; they change only through AI Board's settings routes and commands.` };
+      for (const spelling of [absolute, canonical]) {
+        for (const denied of [entryPath, entryCanonical]) {
+          if (this.same(spelling, denied) || (entry.match === "prefix" && this.siblingPrefix(spelling, denied))) return hit;
+          if (tree && this.within(denied, spelling)) return hit;
+        }
+      }
+      if (!targetIdentity) continue;
+      const entryIdentity = await identityOf(entryCanonical);
+      if (entryIdentity && entryIdentity.dev === targetIdentity.dev && entryIdentity.ino === targetIdentity.ino) return hit;
+      if (tree) {
+        let current = this.paths.dirname(entryCanonical);
+        for (;;) {
+          const identity = await identityOf(current);
+          if (identity && identity.dev === targetIdentity.dev && identity.ino === targetIdentity.ino) return hit;
+          const parent = this.paths.dirname(current);
+          if (parent === current) break;
+          current = parent;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private stripAliases(absolute: string): string {
+    // UNC and device-namespace spellings keep their prefix; canonical and identity checks still apply.
+    if (this.platform !== "win32" || /^[\\/]{2}/.test(absolute)) return absolute;
+    const [root, ...segments] = absolute.split(/[\\/]+/);
+    const cleaned = segments.map((segment) => {
+      const stream = segment.indexOf(":");
+      const base = stream >= 0 ? segment.slice(0, stream) : segment;
+      return base.replace(/[. ]+$/, "") || base;
+    });
+    return this.paths.resolve([root, ...cleaned].join("\\") || absolute);
+  }
+
+  private async canonical(absolute: string): Promise<string> {
+    let current = absolute;
+    const missing: string[] = [];
+    for (;;) {
+      try {
+        const resolved = await realpath(current);
+        return this.paths.resolve(resolved, ...[...missing].reverse());
+      } catch {
+        const parent = this.paths.dirname(current);
+        if (parent === current) return absolute;
+        missing.push(this.paths.basename(current));
+        current = parent;
+      }
+    }
+  }
+
+  private fold(value: string): string {
+    const normalized = this.paths.resolve(value).replaceAll("/", this.paths.sep).replaceAll("\\", this.paths.sep);
+    const unicode = this.platform === "darwin" ? normalized.normalize("NFC") : normalized;
+    return this.caseInsensitive ? unicode.toLowerCase() : unicode;
+  }
+
+  private same(left: string, right: string): boolean {
+    return this.fold(left) === this.fold(right);
+  }
+
+  private siblingPrefix(candidate: string, denied: string): boolean {
+    return this.same(this.paths.dirname(candidate), this.paths.dirname(denied)) &&
+      this.fold(this.paths.basename(candidate)).startsWith(this.fold(this.paths.basename(denied)));
+  }
+
+  /** True when `inner` is inside the folder `outer`. */
+  private within(inner: string, outer: string): boolean {
+    const folded = this.fold(inner);
+    const root = this.fold(outer);
+    const prefix = root.endsWith(this.paths.sep) ? root : `${root}${this.paths.sep}`;
+    return folded !== root && folded.startsWith(prefix);
+  }
+}
