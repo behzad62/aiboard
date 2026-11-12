@@ -34,6 +34,12 @@ export interface CommandEvidenceFact {
   stdoutArtifactHash: string;
   stderrArtifactHash: string;
   repositoryRevision?: string;
+  /**
+   * VF6: files the command was asked to keep (screenshots, reports, logs), stored as artifacts after
+   * it exited, plus the requested paths that matched nothing. Absent on records from older Runners
+   * and on commands that named no outputs.
+   */
+  outputs?: import("./command-output-files.js").CommandOutputCapture;
 }
 
 export interface BrowserSnapshotEvidenceFact {
@@ -76,7 +82,8 @@ export type EvidenceFact =
 export function evidenceFactArtifactHashes(fact: EvidenceFact): string[] {
   switch (fact.kind) {
     case "command":
-      return [fact.stdoutArtifactHash, fact.stderrArtifactHash];
+      // Output files are artifacts of the same record, so criterion links and reviews may cite them.
+      return [fact.stdoutArtifactHash, fact.stderrArtifactHash, ...commandOutputHashes(fact)];
     case "browser_snapshot":
       return [fact.htmlArtifactHash];
     case "browser_screenshot":
@@ -92,7 +99,7 @@ export function evidenceFactSummary(fact: EvidenceFact): string {
       // T10 (M7): name the check (label), the argv, and the true outcome so
       // the Architect can tell a test run from a lint run without
       // re-inspection. Timeouts and signals are not "exited null".
-      return `${fact.label}: ${[fact.command, ...fact.args].join(" ").slice(0, 120)} → ${fact.timedOut ? "timed out" : fact.signal ? `signal ${fact.signal}` : `exit ${fact.exitCode}`}`;
+      return `${fact.label}: ${[fact.command, ...fact.args].join(" ").slice(0, 120)} → ${fact.timedOut ? "timed out" : fact.signal ? `signal ${fact.signal}` : `exit ${fact.exitCode}`}${commandOutputsSummary(fact)}`;
     case "browser_snapshot":
       return `browser snapshot "${fact.title}" at ${fact.url}`;
     case "browser_screenshot":
@@ -100,6 +107,20 @@ export function evidenceFactSummary(fact: EvidenceFact): string {
     case "browser_events":
       return `browser events: ${fact.consoleErrorCount} console errors, ${fact.networkFailureCount} network failures`;
   }
+}
+
+/** Output file hashes of a command fact; tolerant of records written before VF6. */
+function commandOutputHashes(fact: { outputs?: { files?: ReadonlyArray<{ artifactHash: string }> } }): string[] {
+  return Array.isArray(fact.outputs?.files) ? fact.outputs.files.map((file) => file.artifactHash) : [];
+}
+
+function commandOutputsSummary(fact: CommandEvidenceFact): string {
+  const outputs = fact.outputs;
+  if (!outputs || !Array.isArray(outputs.files)) return "";
+  if (outputs.notCaptured) return "; outputs not captured";
+  const images = outputs.files.filter((file) => ["image/png", "image/jpeg", "image/webp"].includes(file.mediaType)).length;
+  const missing = Array.isArray(outputs.missing) ? outputs.missing.length : 0;
+  return `; ${outputs.files.length} output file${outputs.files.length === 1 ? "" : "s"}${images ? ` (${images} image${images === 1 ? "" : "s"})` : ""}${missing ? `, ${missing} missing` : ""}`;
 }
 
 export interface EvidenceRecord {

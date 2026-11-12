@@ -6,8 +6,11 @@ import { isHiddenWorkspacePath } from "./filesystem-tools.js";
 import { RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
 import { IMAGE_LIMITS, ImageInspectionError, prepareImageForModel, type ImageCrop, type PreparedImage } from "./image-inspection.js";
 
-/** Runner tools whose artifact blocks may carry model-visible image metadata. */
-export const RUNNER_VISUAL_TOOLS: ReadonlySet<string> = new Set(["image.inspect", "browser.screenshot"]);
+/**
+ * Runner tools whose artifact blocks may carry model-visible image metadata. The evidence tools
+ * deliver image outputs of a command (VF6) through visualArtifactOutput, like browser.screenshot.
+ */
+export const RUNNER_VISUAL_TOOLS: ReadonlySet<string> = new Set(["image.inspect", "browser.screenshot", "run_evidence_command", "inspect_evidence"]);
 
 type Input = Record<string, unknown>;
 

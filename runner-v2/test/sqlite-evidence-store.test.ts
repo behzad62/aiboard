@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
+import { evidenceFactArtifactHashes, evidenceFactSummary, type CommandEvidenceFact } from "../src/evidence-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 
 interface RawEvidenceRow {
@@ -241,6 +242,60 @@ test("raw pre-P1 evidence migration rolls back after failure before commit and r
     }
   } finally {
     if (!rawClosed) fixture.raw.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("command output files survive reopen; an older command record without outputs loads and replays unchanged", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-evidence-outputs-"));
+  const database = join(root, "evidence.sqlite");
+  const runId = "run_outputs";
+  const taskId = "task_outputs";
+  const base: CommandEvidenceFact = {
+    kind: "command", label: "ui test", command: "npm", args: ["test"], cwd: "/w",
+    startedAt: "2026-11-13T00:00:00.000Z", finishedAt: "2026-11-13T00:00:01.000Z",
+    exitCode: 0, signal: null, timedOut: false, cancelled: false, outputTruncated: false,
+    stdoutArtifactHash: "a".repeat(64), stderrArtifactHash: "b".repeat(64),
+  };
+  const withOutputs: CommandEvidenceFact = {
+    ...base,
+    outputs: {
+      requested: ["screens/*.png", "logs/*.log"],
+      files: [{ path: "screens/main.png", artifactHash: "c".repeat(64), mediaType: "image/png", byteLength: 120 }],
+      missing: ["logs/*.log"],
+      refused: [{ path: "screens/huge.png", reason: "file_too_large", byteLength: 30_000_000 }],
+    },
+  };
+  let store = new SqliteEvidenceStore(database);
+  try {
+    // A row written by a Runner from before VF6: the command fact has no outputs field at all.
+    const raw = new DatabaseSync(database);
+    try {
+      raw.prepare(`INSERT INTO evidence_records (evidence_id, run_id, task_id, actor_json, fact_json, created_at, idempotency_key, attempt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run("legacy_command", runId, taskId, JSON.stringify({ role: "worker", id: "w" }),
+        JSON.stringify(base), "2026-11-13T00:00:00.000Z", "legacy-command", 1);
+    } finally { raw.close(); }
+    const recorded = store.record({ runId, taskId, actor: { role: "worker", id: "w" }, fact: withOutputs, createdAt: "2026-11-13T00:00:02.000Z", idempotencyKey: "with-outputs", attempt: 1 });
+    // Returned records are copies: changing one never reaches the store.
+    if (recorded.fact.kind === "command") recorded.fact.outputs!.files.length = 0;
+    assert.equal(store.record({ runId, taskId, actor: { role: "worker", id: "w" }, fact: withOutputs, createdAt: "2026-11-13T00:00:02.000Z", idempotencyKey: "with-outputs", attempt: 1 }).id, recorded.id);
+    assert.throws(() => store.record({ runId, taskId, actor: { role: "worker", id: "w" }, fact: { ...withOutputs, outputs: { ...withOutputs.outputs!, missing: [] } }, createdAt: "2026-11-13T00:00:02.000Z", idempotencyKey: "with-outputs", attempt: 1 }), /idempotency conflict/);
+    assert.throws(() => store.record({ runId, taskId, actor: { role: "worker", id: "w" }, fact: { ...base, outputs: { requested: ["x"], files: [{ path: "x", artifactHash: "not-a-hash", mediaType: "text/plain", byteLength: 1 }], missing: [] } }, createdAt: "2026-11-13T00:00:03.000Z", idempotencyKey: "bad-output-hash" }), /Invalid evidence artifact not-a-hash/);
+    store.close();
+
+    store = new SqliteEvidenceStore(database);
+    const [legacy, current] = store.list({ runId, taskId });
+    assert.ok(legacy?.fact.kind === "command" && current?.fact.kind === "command");
+    assert.deepEqual(legacy.fact, base);
+    assert.equal("outputs" in legacy.fact, false);
+    assert.deepEqual(evidenceFactArtifactHashes(legacy.fact), ["a".repeat(64), "b".repeat(64)]);
+    assert.equal(evidenceFactSummary(legacy.fact), "ui test: npm test → exit 0");
+    assert.deepEqual(current.fact, withOutputs);
+    assert.deepEqual(evidenceFactArtifactHashes(current.fact), ["a".repeat(64), "b".repeat(64), "c".repeat(64)]);
+    assert.equal(evidenceFactSummary(current.fact), "ui test: npm test → exit 0; 1 output file (1 image), 1 missing");
+    assert.deepEqual(store.getByIds({ runId, taskId, ids: [current.id] })[0]?.fact, withOutputs);
+  } finally {
+    store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

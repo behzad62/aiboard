@@ -16,7 +16,7 @@ import {
   type EvidenceApplicabilityDecision,
   type EvidenceApplicabilityImpact,
 } from "./planning-contracts.js";
-import type { EvidenceRecord } from "./evidence-store.js";
+import { evidenceFactArtifactHashes, type EvidenceRecord } from "./evidence-store.js";
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -273,7 +273,7 @@ export function decideUnverifiedClaim(input: {
   if ((record.fact.repositoryRevision ?? "") !== input.claim.snapshotRevision) {
     mismatches.push(`revision mismatch (record "${record.fact.repositoryRevision ?? ""}", claim "${input.claim.snapshotRevision}")`);
   }
-  const actualArtifacts = new Set([record.fact.stdoutArtifactHash, record.fact.stderrArtifactHash]);
+  const actualArtifacts = new Set(evidenceFactArtifactHashes(record.fact));
   for (const hash of input.claim.artifactHashes) {
     if (!actualArtifacts.has(hash)) mismatches.push(`artifact ${hash} not recorded by evidence ${record.id}`);
   }

@@ -265,6 +265,7 @@ export async function runWorkerTask(
       clock,
       ...(attempt !== undefined ? { attempt } : {}),
       ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
+      ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
     })) registerStaticWorkerTool(broker, tool);
   }
   if (options.skillCatalog) {

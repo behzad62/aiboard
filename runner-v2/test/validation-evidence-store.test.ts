@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
+import { decideUnverifiedClaim } from "../src/evidence-applicability.js";
 import { createEvidenceTools, createValidationEvidenceTools } from "../src/evidence-tools.js";
 import type { EvidenceRecord, StoredValidationObservation } from "../src/evidence-store.js";
 import {
@@ -303,6 +304,63 @@ test("repair N9: an observation citing non-existent evidence is refused", () => 
       idempotencyKey: "noev-1",
     }), /non-existent evidence/);
     assert.deepEqual(store.listObservations({ runId: "run_1" }), []);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("VF6: a claim and an observation may cite a command's output file; inspect_evidence lists outputs", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-vf6-claims-"));
+  const store = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const HASH_SHOT = "c".repeat(64);
+  try {
+    const legacy = recordCommandEvidence(store, "run_1", "ev-legacy");
+    const withOutputs = store.record({
+      runId: "run_1",
+      taskId: "task_1",
+      actor: { role: "worker", id: "worker_1" },
+      fact: {
+        kind: "command", label: "ui test", command: "npm", args: ["run", "ui-test"], cwd: "/w",
+        startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z",
+        exitCode: 0, signal: null, timedOut: false, cancelled: false, outputTruncated: false,
+        stdoutArtifactHash: HASH_A, stderrArtifactHash: HASH_B, repositoryRevision: "rev_1",
+        outputs: { requested: ["shots/*.png"], files: [{ path: "shots/main.png", artifactHash: HASH_SHOT, mediaType: "image/png", byteLength: 10 }], missing: [] },
+      },
+      createdAt: "2026-01-01T00:00:01.000Z",
+      idempotencyKey: "ev-outputs",
+    });
+    const recordsById = new Map([[legacy.id, legacy], [withOutputs.id, withOutputs]]);
+    const claim = (evidenceId: string, args: string[], artifactHashes: string[]) => decideUnverifiedClaim({
+      claim: { evidenceId, command: "npm", args, exitCode: 0, snapshotRevision: "rev_1", artifactHashes },
+      recordsById,
+      hasSemanticResidue: false,
+    });
+    assert.equal(claim(withOutputs.id, ["run", "ui-test"], [HASH_SHOT]).status, "verified");
+    // The screenshot belongs to its own record only; an older record without outputs is unchanged.
+    assert.equal(claim(legacy.id, ["test"], [HASH_SHOT]).status, "unverified_claim");
+    assert.equal(claim(legacy.id, ["test"], [HASH_A]).status, "verified");
+    const stored = store.recordObservation({
+      runId: "run_1",
+      observation: observation(withOutputs.id),
+      capabilityFingerprint: "cap_1",
+      artifactHashes: [HASH_SHOT],
+      createdAt: "2026-01-01T00:00:02.000Z",
+      idempotencyKey: "o-shot",
+    });
+    assert.deepEqual(stored.artifactHashes, [HASH_SHOT]);
+
+    const registry = new ToolRegistry();
+    for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_1" })) registry.register(tool);
+    const listed = await registry.invoke(
+      { type: "tool_call", callId: "list", name: "inspect_evidence", arguments: {} },
+      { runId: "run_1", sessionId: "s", actor: { role: "architect", id: "architect_1" }, workspacePath: root },
+    );
+    assert.equal(listed.isError, false);
+    const facts = (listed.content[0] as { value: Array<{ fact: Record<string, unknown> }> }).value.map((entry) => entry.fact);
+    assert.equal("outputs" in facts[0]!, false);
+    assert.deepEqual((facts[1]!.outputs as { files: Array<{ path: string }> }).files.map((file) => file.path), ["shots/main.png"]);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

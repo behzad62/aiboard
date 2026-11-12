@@ -625,7 +625,7 @@ function validate(input: RecordEvidenceInput): void {
 
 function cloneFact(fact: EvidenceFact): EvidenceFact {
   return fact.kind === "command"
-    ? { ...fact, args: [...fact.args] }
+    ? { ...fact, args: [...fact.args], ...(fact.outputs ? { outputs: structuredClone(fact.outputs) } : {}) }
     : { ...fact };
 }
 
