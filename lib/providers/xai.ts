@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import type {
   AIProvider,
   ChatParams,
@@ -17,18 +17,10 @@ import {
 import { xAIReasoningEffort } from "./reasoning";
 import { openAIResponsesTextFormatField } from "./structured-output";
 import type { ToolCapabilityId } from "./tool-capabilities";
-import { providerDefaultBaseUrl } from "./provider-registry";
+import { createOpenAIClient, type ConnectionParams } from "./connection";
 
-const XAI_BASE_URL = providerDefaultBaseUrl("xai");
-
-function createXAIClient(apiKey: string, disableAutomaticRetries = false) {
-  return new OpenAI({
-    apiKey,
-    baseURL: XAI_BASE_URL,
-    dangerouslyAllowBrowser: true,
-    timeout: 360_000,
-    ...(disableAutomaticRetries ? { maxRetries: 0 } : {}),
-  });
+function createXAIClient(connection: ConnectionParams, disableAutomaticRetries = false): OpenAI {
+  return createOpenAIClient(connection, "xAI", { timeout: 360_000, disableAutomaticRetries });
 }
 
 function enabledPlanTool(params: ChatParams, id: ToolCapabilityId): boolean {
@@ -551,9 +543,9 @@ export const xaiProvider: AIProvider = {
     );
   },
 
-  async validateApiKey(apiKey: string) {
+  async validateConnection(connection) {
     try {
-      const client = createXAIClient(apiKey);
+      const client = createXAIClient(connection);
       await client.models.list();
       return true;
     } catch {
@@ -562,10 +554,7 @@ export const xaiProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams) {
-    const client = createXAIClient(
-      params.apiKey,
-      params.disableAutomaticRetries,
-    );
+    const client = createXAIClient(params, params.disableAutomaticRetries);
     yield* streamXAIResponses(client, params);
   },
 };

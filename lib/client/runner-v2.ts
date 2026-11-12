@@ -77,7 +77,15 @@ export interface NativeRunnerHealth {
   protocolVersion: 2;
   projectPath: string;
   nodeVersion: string;
-  capabilities?: { soloToolBench?: boolean };
+  capabilities?: {
+    soloToolBench?: boolean;
+    extensions?: boolean;
+    chatSessions?: boolean;
+    home?: boolean;
+    modelProxy?: boolean;
+    secretlessProviderConfigs?: boolean;
+  };
+  catalogVersion?: string;
 }
 
 export interface NativeProviderConfig {
@@ -88,7 +96,13 @@ export interface NativeProviderConfig {
   billingBasis: "account_not_metered" | "api_priced" | "unknown";
   transport: "account-runner" | "openai-compatible" | "anthropic" | "google";
   baseUrl?: string;
-  secret: string;
+  /**
+   * Absent on every web push since HM4a: home-backed configs name
+   * `secretSource: "home"`, and account-backed ones carry the peer's token.
+   */
+  secret?: string;
+  /** "home": the Runner fills the key, base URL and transport from the AIBoard home (HM3). */
+  secretSource?: "home";
   runnerToken?: string;
   capabilities: string[];
   inputCapabilities?: {
@@ -1482,12 +1496,26 @@ export async function getNativeRunnerHealth(
   return await request(connection, "/v2/health", { signal }, fetchImpl);
 }
 
+/** "Update AI Board" (lib/client/model-proxy-client.ts), kept here so this module stays store-free. */
+const UPDATE_RUNNER_FOR_SECRETLESS_CONFIGS = "Update AI Board: run `aiboard update`";
+
+/**
+ * Pushes provider configs. Since HM4a a push carries no secret, so a Runner
+ * without `capabilities.secretlessProviderConfigs` is refused before the push
+ * with "Update AI Board" (plan §9 "Old Runners").
+ */
 export async function configureNativeProviders(
   connection: NativeRunnerConnection,
   configs: readonly NativeProviderConfig[],
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal
 ): Promise<void> {
+  if (configs.some((config) => config.secretSource === "home" || config.secret === undefined)) {
+    const health = await getNativeRunnerHealth(connection, fetchImpl, signal);
+    if (health.capabilities?.secretlessProviderConfigs !== true) {
+      throw new NativeRunnerError(UPDATE_RUNNER_FOR_SECRETLESS_CONFIGS, 426, "update_required");
+    }
+  }
   await request(connection, "/v2/provider-configs", {
     method: "PUT",
     body: JSON.stringify({ configs }),

@@ -12,7 +12,10 @@ const archivedRunner = normalize(await archive.file("account-provider-runner.mjs
 const archivedSdk = normalize(await archive.file("account-provider-copilot-sdk.mjs")!.async("string"));
 assert.equal(Number(/const VERSION = (\d+);/.exec(sourceRunner)?.[1]), ACCOUNT_RUNNER_VERSION,
   "download button version must match the actual runner version");
-for (const id of ["chatgpt", "github-copilot", "nvidia"] as const) {
+// NVIDIA left the account runner in HM4a (OD-32): it is OpenAI-compatible behind the model proxy.
+const nvidia = getProviderDefinition("nvidia")!;
+assert.equal(nvidia.accountRunner ?? nvidia.runnerDownload, undefined, "nvidia must not point at the account runner package");
+for (const id of ["chatgpt", "github-copilot"] as const) {
   const provider = getProviderDefinition(id)!;
   const setup = provider.accountRunner ?? provider.runnerDownload;
   assert.equal(setup?.downloadHref, "/aiboard-account-provider-runner.zip", `${id} must use the shared package`);

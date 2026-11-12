@@ -38,15 +38,24 @@ export function ToolRuntimeSettingsPanel({
     onChanged?.();
   };
 
-  const saveFileSearch = () => {
+  const [fileSearchError, setFileSearchError] = useState<string | null>(null);
+  const saveFileSearch = async () => {
     const ids = [...new Set(vectorStoreIds.split(/[\s,]+/).map((id) => id.trim()).filter(Boolean))];
     const config: OpenAIFileSearchSettings | null = ids.length > 0
       ? { enabled: fileSearchEnabled, vectorStoreIds: ids }
       : null;
-    saveOpenAIFileSearch(config);
-    setSaved(true);
+    setFileSearchError(null);
+    try {
+      await saveOpenAIFileSearch(config);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } catch (error) {
+      // A failed save reverts the form to what the home holds.
+      setFileSearchEnabled(fileSearchEnabledSetting);
+      setVectorStoreIds(vectorStoreIdsSetting);
+      setFileSearchError(error instanceof Error ? error.message : "Could not save file search");
+    }
     onChanged?.();
-    setTimeout(() => setSaved(false), 1500);
   };
 
 
@@ -95,7 +104,8 @@ export function ToolRuntimeSettingsPanel({
               Separate multiple IDs with commas or spaces. Create/upload content to the vector store in OpenAI first, then paste the resulting ID here.
             </p>
           </div>
-          <Button type="button" onClick={saveFileSearch}>{saved ? "Saved" : "Save File Search"}</Button>
+          <Button type="button" onClick={() => void saveFileSearch()}>{saved ? "Saved" : "Save File Search"}</Button>
+          {fileSearchError && <p className="text-sm text-destructive" role="alert">{fileSearchError}</p>}
         </CardContent>
       </Card>
     </div>

@@ -11,6 +11,7 @@ import { createCertifiedRunContext } from "../lib/benchmark/certified/run-persis
 import { callCertifiedModel } from "../lib/benchmark/certified/model-call";
 import type { SelectedModel, StreamChunk, StructuredOutputFormat } from "../lib/providers/base";
 import type * as ClientStore from "../lib/client/store";
+import { installStubRunner, STUB_PROXY_URL } from "./model-proxy-test-support.mts";
 
 let failures = 0;
 
@@ -178,6 +179,20 @@ await expectReject(
 );
 
 const customServer = await startOpenAICompatibleServer();
+// Since HM4a a custom model is reached through the Runner's model proxy (custom/<id>), which adds the
+// home's endpoint and key. The stub Runner forwards the proxied call to the local custom server.
+const realFetch = globalThis.fetch;
+const customProxyPrefix = `${STUB_PROXY_URL}/v2/model-proxy/custom/local-certified/`;
+const stubRunner = installStubRunner({
+  proxyTokens: ["proxy_certified-stub"],
+  upstream: (request) => request.url.startsWith(customProxyPrefix)
+    ? realFetch(`${customServer.baseURL}/${request.url.slice(customProxyPrefix.length)}`, {
+      method: request.method,
+      headers: { "content-type": "application/json" },
+      body: request.body,
+    })
+    : new Response("unexpected upstream", { status: 500 }),
+});
 try {
   const require = createRequire(import.meta.url);
   const clientStore = require("@/lib/client/store") as typeof ClientStore;
@@ -238,7 +253,15 @@ try {
       ),
     customResult
   );
+  const proxied = stubRunner.requests.at(-1);
+  check(
+    "custom certified model call goes through the model proxy with the proxy token and no key",
+    proxied?.url === `${customProxyPrefix}chat/completions` &&
+      proxied.headers.get("authorization") === "Bearer proxy_certified-stub",
+    { url: proxied?.url, authorization: proxied?.headers.get("authorization") }
+  );
 } finally {
+  stubRunner.restore();
   await customServer.close();
 }
 

@@ -6,38 +6,45 @@
  */
 
 import { v4 as uuidv4 } from "uuid";
-import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
-import { GoogleGenAI, type Model as GoogleModel } from "@google/genai";
+import type { Model as GoogleModel } from "@google/genai";
 import type { CustomModel, UserSettings, ReasoningEffort } from "@/lib/db/schema";
 import type { ModelInfo, StreamChunk } from "@/lib/providers/base";
 import { extractModelMetadata, validateModelMetadataOverrides, type ModelMetadataDetails, type ModelMetadataValues } from "@/lib/providers/model-metadata";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import { streamOpenAICompatibleChat, isLoopbackOllamaEndpoint } from "@/lib/providers/openai-compat";
-import { META_MODEL_API_BASE_URL } from "@/lib/providers/meta";
+import {
+  connectionParams,
+  createAnthropicClient,
+  createGoogleClient,
+  createOpenAIClient,
+  providerFetch,
+  type ProviderConnection,
+} from "@/lib/providers/connection";
 import {
   resolveModelContextProfile,
   type ModelContextProfileOverride,
 } from "@/lib/providers/model-context";
 import type { AttachmentPayload, AttachmentSummary } from "@/lib/attachments/types";
 import { classifyMimeType } from "@/lib/attachments/classify";
-import { maskApiKey } from "@/lib/utils";
 import {
   addAttachment,
-  addCustomModel as storeAddCustomModel,
   deleteAttachmentRecord,
-  deleteCustomModel as storeDeleteCustomModel,
   getAttachment,
   getCustomModelById,
   getCustomModels,
   getProviderKey,
   getProviderKeys,
   getUserSettings,
-  updateCustomModel as storeUpdateCustomModel,
-  updateProviderKey,
-  updateUserSettings,
-  upsertProviderKey,
 } from "./store";
+import {
+  ACCOUNT_BACKED_PROVIDER_IDS,
+  customModelEntry,
+  providerOps,
+  saveHome,
+  saveHomeSettings,
+  type HomeOp,
+  type HomeProviderPatch,
+} from "./home-client";
 import {
   CUSTOM_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
@@ -54,10 +61,10 @@ import {
   normalizeProviderModelId,
   normalizeOpenRouterModelId,
   resolveModelCapabilities,
+  resolveProviderConnection,
 } from "./providers";
 import { formatModelId } from "@/lib/providers/base";
 import { getPeerConnection } from "./local-runner-handoff";
-import { DEEPSEEK_BASE_URL } from "@/lib/providers/deepseek";
 import type { ProviderId } from "@/lib/providers/provider-registry";
 import type {
   CapabilityEvidence,
@@ -112,7 +119,8 @@ export function loadProviders(): {
       name: p.name,
       models: listProviderModelInfos(p.id as ProviderId).map(withContext),
       enabledModelIds: saved?.enabledModelIds ?? undefined,
-      hasKey: !!saved,
+      // A key saved in the AIBoard home shows as its hint; ChatGPT and Copilot take none (they sign in).
+      hasKey: ACCOUNT_BACKED_PROVIDER_IDS.has(p.id) ? !!saved : !!saved?.keyHint,
       keyHint: saved?.keyHint,
       baseURL: saved?.baseURL ?? null,
       runnerTokenHint: saved?.runnerTokenHint ?? null,
@@ -169,95 +177,82 @@ export function resolveAccountRunnerConnection(saved?: { baseURL?: string | null
   return saved?.baseURL && saved?.runnerToken ? { baseURL: saved.baseURL, runnerToken: saved.runnerToken } : null;
 }
 
-export function saveOpenAIConnectionMode(mode: "api" | "subscription"): void {
-  updateUserSettings({ openAIConnectionMode: mode });
+export async function saveOpenAIConnectionMode(mode: "api" | "subscription"): Promise<void> {
+  await saveHomeSettings({ openAIConnectionMode: mode });
 }
 
-export function saveProviderKey(input: {
+/**
+ * Saves a provider's row and, when typed, its key to the AIBoard home in one
+ * batch (HM4b), with the discovered metadata of its listed models. The key goes
+ * in the request body only; the page keeps no copy. ChatGPT and Copilot never
+ * take a key: their account peer comes from the launcher (OD-32).
+ */
+export async function saveProviderKey(input: {
   providerId: string;
   apiKey?: string;
   baseURL?: string;
+  /** Ignored since HM4b: the account peer's token comes from the launcher at call time. */
   runnerToken?: string;
   models?: string[];
   enabledModelIds?: string[];
   defaultModel?: string | null;
   enabled?: boolean;
-}): void {
-  const existing = getProviderKey(input.providerId);
-  const now = new Date().toISOString();
+}): Promise<void> {
   const baseURL = input.baseURL?.trim();
-  const runnerToken = input.runnerToken?.trim();
+  const apiKey = input.apiKey?.trim() || undefined;
   const models = input.models
     ?.map((m) => m.trim())
     .filter((m) => m.length > 0);
   const enabledModelIds = input.enabledModelIds
     ?.map((m) => m.trim())
     .filter((m) => m.length > 0);
-  if (existing) {
-    updateProviderKey(input.providerId, {
-      ...(input.apiKey
-        ? {
-            apiKey: input.apiKey,
-            keyHint: maskApiKey(input.apiKey),
-            lastValidationSucceeded: null,
-            lastValidatedAt: null,
-          }
-        : {}),
-      ...(input.baseURL !== undefined ? { baseURL: baseURL || null } : {}),
-      ...(input.runnerToken
-        ? {
-            runnerToken,
-            runnerTokenHint: runnerToken ? maskApiKey(runnerToken) : null,
-            lastValidationSucceeded: null,
-            lastValidatedAt: null,
-          }
-        : {}),
-      ...(input.models !== undefined ? { models: models ?? [] } : {}),
-      ...(input.enabledModelIds !== undefined
-        ? { enabledModelIds: enabledModelIds ?? [] }
-        : {}),
-      defaultModel:
-        input.defaultModel !== undefined
-          ? input.defaultModel
-          : existing.defaultModel,
-      enabled: input.enabled ?? existing.enabled,
-      updatedAt: now,
-    });
-  } else if (input.apiKey) {
-    upsertProviderKey({
-      providerId: input.providerId,
-      apiKey: input.apiKey,
-      baseURL: baseURL || null,
-      runnerToken: runnerToken || null,
-      runnerTokenHint: runnerToken ? maskApiKey(runnerToken) : null,
-      models: models ?? [],
-      enabledModelIds: enabledModelIds ?? null,
-      defaultModel: input.defaultModel ?? null,
-      enabled: input.enabled ?? true,
-      keyHint: maskApiKey(input.apiKey),
-      lastValidationSucceeded: null,
-      lastValidatedAt: null,
-      updatedAt: now,
-    });
-  } else {
-    throw new Error("API key required");
-  }
-  if (getProviderDefinition(input.providerId)?.modelDiscovery) {
-    const settings = getUserSettings();
-    const metadata = { ...(settings.discoveredModelMetadata ?? {}) };
-    let changed = false;
-    for (const model of listProviderModelInfos(input.providerId as ProviderId)) {
-      const key = formatModelId(input.providerId, model.id);
-      if (metadata[key]) continue;
-      metadata[key] = {
-        name: model.id, reportedFields: [],
-        image: false, document: false, audio: false, video: false,
-        source: "provider-models", updatedAt: now,
-      };
-      changed = true;
+  await saveHome((view, settings) => {
+    const existing = view.config.providers[input.providerId];
+    const accountBacked = ACCOUNT_BACKED_PROVIDER_IDS.has(input.providerId);
+    if (!existing && !apiKey && !accountBacked) throw new Error("API key required");
+    const patch: HomeProviderPatch = {};
+    if (apiKey) {
+      patch.lastValidationSucceeded = null;
+      patch.lastValidatedAt = null;
     }
-    if (changed) updateUserSettings({ discoveredModelMetadata: metadata });
-  }
+    if (input.baseURL !== undefined) patch.baseUrl = baseURL || null;
+    if (input.models !== undefined) patch.models = models ?? [];
+    if (input.enabledModelIds !== undefined) patch.enabledModelIds = enabledModelIds ?? [];
+    if (input.defaultModel !== undefined) patch.defaultModel = input.defaultModel;
+    if (input.enabled !== undefined) patch.enabled = input.enabled;
+    else if (!existing) patch.enabled = true;
+    const ops: HomeOp[] = providerOps(input.providerId, patch, accountBacked ? undefined : apiKey);
+    if (getProviderDefinition(input.providerId)?.modelDiscovery) {
+      const metadata = settings.discoveredModelMetadata ?? {};
+      const now = new Date().toISOString();
+      // The ids this save leaves configured, as listProviderModelInfos reads them after
+      // the save (the mirror still shows the row as it was before).
+      const defaultModel = patch.defaultModel !== undefined ? patch.defaultModel : existing?.defaultModel;
+      const configured = [
+        ...(patch.models ?? existing?.models ?? []),
+        ...(patch.enabledModelIds ?? existing?.enabledModelIds ?? []),
+        ...(defaultModel ? [defaultModel] : []),
+      ].map((id) => normalizeProviderModelId(input.providerId, id)).filter((id) => id.length > 0);
+      for (const id of new Set(configured)) {
+        const key = formatModelId(input.providerId, id);
+        if (metadata[key]) continue;
+        ops.push({ path: `settings.discoveredModelMetadata.${key}`, op: "set", value: {
+          name: id, reportedFields: [],
+          image: false, document: false, audio: false, video: false,
+          source: "provider-models", updatedAt: now,
+        } });
+      }
+    }
+    return ops;
+  });
+}
+
+/** Removes a provider's key from the AIBoard home; its row stays. */
+export async function removeProviderKey(providerId: string): Promise<void> {
+  await saveHome(() => [
+    { path: `credentials.providers.${providerId}`, op: "remove" },
+    { path: `providers.${providerId}`, op: "merge", value: { lastValidationSucceeded: null, lastValidatedAt: null } },
+  ]);
 }
 
 interface OpenRouterModelsResponse {
@@ -488,21 +483,17 @@ export async function collectGoogleModelCatalog(
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function fetchGoogleModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
-  const pager = await new GoogleGenAI({ apiKey }).models.list({
+async function fetchGoogleModelCatalog(connection: ProviderConnection): Promise<ProviderCatalogModel[]> {
+  const pager = await createGoogleClient(connectionParams(connection)).models.list({
     config: { pageSize: 1000, queryBase: true },
   });
   return collectGoogleModelCatalog(pager);
 }
 async function fetchOpenAICompatibleModelCatalog(
-  apiKey: string,
-  baseURL?: string
+  connection: ProviderConnection,
+  label: string,
 ): Promise<ProviderCatalogModel[]> {
-  const page = await new OpenAI({
-    apiKey,
-    ...(baseURL ? { baseURL } : {}),
-    dangerouslyAllowBrowser: true,
-  }).models.list();
+  const page = await createOpenAIClient(connectionParams(connection), label).models.list();
   return page.data
     .filter((model) => typeof model.id === "string" && model.id.length > 0)
     .map((model) => {
@@ -515,9 +506,9 @@ async function fetchOpenAICompatibleModelCatalog(
 }
 
 async function fetchAnthropicModelCatalog(
-  apiKey: string
+  connection: ProviderConnection
 ): Promise<ProviderCatalogModel[]> {
-  const page = await new Anthropic({ apiKey, dangerouslyAllowBrowser: true }).models.list({
+  const page = await createAnthropicClient(connectionParams(connection), "Anthropic").models.list({
     limit: 1000,
   });
   const models: ProviderCatalogModel[] = [];
@@ -531,10 +522,8 @@ async function fetchAnthropicModelCatalog(
   return models.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function fetchMetaModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
-  const response = await fetch(`${META_MODEL_API_BASE_URL}/models`, {
-    headers: { authorization: `Bearer ${apiKey}` },
-  });
+async function fetchMetaModelCatalog(connection: ProviderConnection): Promise<ProviderCatalogModel[]> {
+  const response = await providerFetch(connectionParams(connection), "Meta Model API", "models");
   const payload = (await response.json().catch(() => ({}))) as {
     data?: Array<{ id?: string; name?: string; display_name?: string }>;
     error?: { message?: string } | string;
@@ -558,10 +547,8 @@ async function fetchMetaModelCatalog(apiKey: string): Promise<ProviderCatalogMod
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function fetchXaiLanguageModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
-  const response = await fetch("https://api.x.ai/v1/language-models", {
-    headers: { authorization: `Bearer ${apiKey}` },
-  });
+async function fetchXaiLanguageModelCatalog(connection: ProviderConnection): Promise<ProviderCatalogModel[]> {
+  const response = await providerFetch(connectionParams(connection), "xAI", "language-models");
   const payload = (await response.json().catch(() => ({}))) as {
     models?: Array<{ id?: string; input_modalities?: string[] }>;
     error?: { message?: string } | string;
@@ -622,8 +609,7 @@ export async function fetchChatGPTAccountStatus(baseURL: string, runnerToken: st
 }
 
 async function fetchRunnerModelCatalog(input: {
-  providerId: "chatgpt" | "github-copilot" | "nvidia";
-  apiKey: string;
+  providerId: "chatgpt" | "github-copilot";
   baseURL: string;
   runnerToken: string;
 }): Promise<ProviderCatalogModel[]> {
@@ -642,9 +628,7 @@ async function fetchRunnerModelCatalog(input: {
         "content-type": "application/json",
         "x-runner-token": input.runnerToken,
       },
-      body: JSON.stringify(
-        input.providerId === "nvidia" ? { apiKey: input.apiKey } : {}
-      ),
+      body: "{}",
     }
   );
   const payload = (await response.json().catch(() => ({}))) as {
@@ -675,68 +659,53 @@ async function fetchRunnerModelCatalog(input: {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/**
+ * A provider's live model catalog, through the connection the resolver gives
+ * (HM4a): the model proxy, with the key saved in the AIBoard home, or the
+ * account peer for ChatGPT and Copilot. A typed but unsaved key, URL or
+ * token is not used; HM4b saves a key before testing it (plan §9 "Testing a
+ * key"). The keyless OpenRouter public catalog stays a direct call.
+ */
 export async function fetchProviderModelCatalog(input: {
   providerId: string;
+  /** Ignored since HM4a: calls use what the AIBoard home holds. */
   apiKey?: string;
+  /** Ignored since HM4a. */
   baseURL?: string;
+  /** Ignored since HM4a. */
   runnerToken?: string;
 }): Promise<ProviderCatalogModel[]> {
   if (input.providerId === OPENROUTER_PROVIDER_ID) {
     return fetchOpenRouterModelCatalog();
   }
-  const explicitApiKey = input.apiKey?.trim() || "";
-  const explicitBaseURL = input.baseURL?.trim() || "";
-  const explicitRunnerToken = input.runnerToken?.trim() || "";
-  const isChatGPT = input.providerId === "chatgpt";
-  const isGitHubCopilot = input.providerId === "github-copilot";
-  const isNvidia = input.providerId === NVIDIA_PROVIDER_ID;
-  const needsSavedRunnerSettings =
-    ((isChatGPT || isGitHubCopilot) && !explicitBaseURL) ||
-    (isNvidia && (!explicitBaseURL || !explicitRunnerToken));
-  const saved = !explicitApiKey || needsSavedRunnerSettings
-    ? getProviderKey(input.providerId)
-    : undefined;
-  const apiKey = explicitApiKey || saved?.apiKey?.trim() || "";
-  if (!apiKey) throw new Error("Save or enter the provider credential first");
-
-  if (input.providerId === "anthropic") {
-    return fetchAnthropicModelCatalog(apiKey);
-  }
-  if (input.providerId === "meta") {
-    return fetchMetaModelCatalog(apiKey);
-  }
-  if (input.providerId === "xai") {
-    return fetchXaiLanguageModelCatalog(apiKey);
-  }
-  if (isChatGPT || isGitHubCopilot || input.providerId === NVIDIA_PROVIDER_ID) {
-    const baseURL = input.baseURL?.trim() || saved?.baseURL?.trim() || "";
-    const runnerToken =
-      isChatGPT || isGitHubCopilot
-        ? apiKey
-        : input.runnerToken?.trim() || saved?.runnerToken?.trim() || "";
-    if (!baseURL || !runnerToken) {
-      throw new Error("Save the local runner URL and token before browsing models");
-    }
-    const runnerProviderId = isChatGPT
-      ? "chatgpt"
-      : isGitHubCopilot
-        ? "github-copilot"
-        : NVIDIA_PROVIDER_ID;
+  const connection = await resolveProviderConnection(input.providerId);
+  if (input.providerId === "chatgpt" || input.providerId === "github-copilot") {
     return fetchRunnerModelCatalog({
-      providerId: runnerProviderId,
-      apiKey,
-      baseURL,
-      runnerToken,
+      providerId: input.providerId,
+      baseURL: connection.baseURL,
+      runnerToken: connection.apiKey,
     });
   }
+  if (input.providerId === "anthropic") {
+    return fetchAnthropicModelCatalog(connection);
+  }
+  if (input.providerId === "meta") {
+    return fetchMetaModelCatalog(connection);
+  }
+  if (input.providerId === "xai") {
+    return fetchXaiLanguageModelCatalog(connection);
+  }
   if (input.providerId === "google") {
-    return fetchGoogleModelCatalog(apiKey);
+    return fetchGoogleModelCatalog(connection);
   }
   if (input.providerId === "openai") {
-    return fetchOpenAICompatibleModelCatalog(apiKey);
+    return fetchOpenAICompatibleModelCatalog(connection, "OpenAI");
   }
   if (input.providerId === DEEPSEEK_PROVIDER_ID) {
-    return fetchOpenAICompatibleModelCatalog(apiKey, DEEPSEEK_BASE_URL);
+    return fetchOpenAICompatibleModelCatalog(connection, "DeepSeek");
+  }
+  if (input.providerId === NVIDIA_PROVIDER_ID) {
+    return fetchOpenAICompatibleModelCatalog(connection, "NVIDIA NIM");
   }
   throw new Error(`Live model discovery is not supported for ${input.providerId}`);
 }
@@ -789,24 +758,29 @@ export function discoveryMetadataFromCatalogModel(
   };
 }
 
-export function persistProviderCatalogModels(providerId: string, models: ProviderCatalogModel[]): void {
-  const settings = getUserSettings();
-  const metadata = { ...(settings.discoveredModelMetadata ?? {}) };
-  let evidence = [...(settings.providerToolCapabilityEvidence ?? [])];
+export async function persistProviderCatalogModels(providerId: string, models: ProviderCatalogModel[]): Promise<void> {
+  if (models.length === 0) return;
   const updatedAt = new Date().toISOString();
-  for (const model of models) {
-    const key = formatModelId(providerId, model.id);
-    metadata[key] = { ...discoveryMetadataFromCatalogModel(model, providerId === "openrouter" ? "openrouter-models" : "provider-models", updatedAt),
-      overrides: metadata[key]?.overrides, supplemental: model.supplemental ?? metadata[key]?.supplemental,
-      apiEquivalentPricing: model.apiEquivalentPricing ?? metadata[key]?.apiEquivalentPricing };
-    if (providerId === "openrouter" && model.parametersReported) evidence = mergeCapabilityEvidenceRecords(evidence, openRouterCatalogCapabilityEvidence(model, updatedAt));
-  }
-  updateUserSettings({ discoveredModelMetadata: metadata, providerToolCapabilityEvidence: evidence });
+  await saveHomeSettings((settings) => {
+    const metadata = { ...(settings.discoveredModelMetadata ?? {}) };
+    let evidence = [...(settings.providerToolCapabilityEvidence ?? [])];
+    for (const model of models) {
+      const key = formatModelId(providerId, model.id);
+      metadata[key] = { ...discoveryMetadataFromCatalogModel(model, providerId === "openrouter" ? "openrouter-models" : "provider-models", updatedAt),
+        overrides: metadata[key]?.overrides, supplemental: model.supplemental ?? metadata[key]?.supplemental,
+        apiEquivalentPricing: model.apiEquivalentPricing ?? metadata[key]?.apiEquivalentPricing };
+      if (providerId === "openrouter" && model.parametersReported) evidence = mergeCapabilityEvidenceRecords(evidence, openRouterCatalogCapabilityEvidence(model, updatedAt));
+    }
+    return { discoveredModelMetadata: metadata, providerToolCapabilityEvidence: evidence };
+  });
 }
 
-export function saveModelMetadataOverrides(fullModelId: string, values: ModelMetadataValues): void {
+export async function saveModelMetadataOverrides(fullModelId: string, values: ModelMetadataValues): Promise<void> {
   validateModelMetadataOverrides(values);
-  const settings = getUserSettings();
+  await saveHomeSettings((settings) => modelMetadataOverridesPatch(settings, fullModelId, values));
+}
+
+function modelMetadataOverridesPatch(settings: UserSettings, fullModelId: string, values: ModelMetadataValues): Partial<UserSettings> {
   const metadata = { ...(settings.discoveredModelMetadata ?? {}) };
   const previous = metadata[fullModelId] ?? { image: false, document: false, audio: false, video: false,
     source: "provider-models" as const, updatedAt: new Date().toISOString(), reportedFields: [] };
@@ -821,7 +795,7 @@ export function saveModelMetadataOverrides(fullModelId: string, values: ModelMet
     if (Object.keys(next).every((field) => field === "updatedAt")) delete contexts[fullModelId];
     else contexts[fullModelId] = next;
   }
-  updateUserSettings({ discoveredModelMetadata: metadata, modelPricingOverrides: prices, modelContextOverrides: contexts });
+  return { discoveredModelMetadata: metadata, modelPricingOverrides: prices, modelContextOverrides: contexts };
 }
 
 export function getModelMetadataOverrides(fullModelId: string): ModelMetadataValues {
@@ -853,11 +827,8 @@ export async function refreshOpenRouterModelCapabilities(
       .map((entry) => [entry.id, entry])
   );
 
-  const settings = getUserSettings();
-  const nextMetadata = { ...(settings.discoveredModelMetadata ?? {}) };
-  let nextEvidence = [...(settings.providerToolCapabilityEvidence ?? [])];
   const missing: string[] = [];
-  let synced = 0;
+  const found: Array<{ id: string; model: ReturnType<typeof buildOpenRouterCatalogModel> }> = [];
   const updatedAt = new Date().toISOString();
   for (const id of targets) {
     const entry = modelIndex.get(id);
@@ -865,19 +836,23 @@ export async function refreshOpenRouterModelCapabilities(
       missing.push(id);
       continue;
     }
-    const model = buildOpenRouterCatalogModel(entry);
-    const key = formatModelId(OPENROUTER_PROVIDER_ID, id);
-    nextMetadata[key] = { ...discoveryMetadataFromCatalogModel(model, "openrouter-models", updatedAt), overrides: nextMetadata[key]?.overrides, supplemental: model.supplemental ?? nextMetadata[key]?.supplemental };
-    if (model.parametersReported) nextEvidence = mergeCapabilityEvidenceRecords(
-      nextEvidence, openRouterCatalogCapabilityEvidence(model, updatedAt),
-    );
-    synced += 1;
+    found.push({ id, model: buildOpenRouterCatalogModel(entry) });
   }
-  updateUserSettings({
-    discoveredModelMetadata: nextMetadata,
-    providerToolCapabilityEvidence: nextEvidence,
-  });
-  return { synced, missing };
+  if (found.length > 0) {
+    await saveHomeSettings((settings) => {
+      const nextMetadata = { ...(settings.discoveredModelMetadata ?? {}) };
+      let nextEvidence = [...(settings.providerToolCapabilityEvidence ?? [])];
+      for (const { id, model } of found) {
+        const key = formatModelId(OPENROUTER_PROVIDER_ID, id);
+        nextMetadata[key] = { ...discoveryMetadataFromCatalogModel(model, "openrouter-models", updatedAt), overrides: nextMetadata[key]?.overrides, supplemental: model.supplemental ?? nextMetadata[key]?.supplemental };
+        if (model.parametersReported) nextEvidence = mergeCapabilityEvidenceRecords(
+          nextEvidence, openRouterCatalogCapabilityEvidence(model, updatedAt),
+        );
+      }
+      return { discoveredModelMetadata: nextMetadata, providerToolCapabilityEvidence: nextEvidence };
+    });
+  }
+  return { synced: found.length, missing };
 }
 
 export async function refreshProviderModelCapabilities(input: {
@@ -899,9 +874,8 @@ export async function refreshProviderModelCapabilities(input: {
 
   const catalog = await fetchProviderModelCatalog(input);
   const modelIndex = new Map(catalog.map((model) => [model.id, model]));
-  const nextMetadata = { ...(getUserSettings().discoveredModelMetadata ?? {}) };
   const missing: string[] = [];
-  let synced = 0;
+  const found: Array<{ id: string; model: ProviderCatalogModel }> = [];
   const updatedAt = new Date().toISOString();
   for (const id of targets) {
     const model = modelIndex.get(id);
@@ -909,12 +883,19 @@ export async function refreshProviderModelCapabilities(input: {
       missing.push(id);
       continue;
     }
-    const key = formatModelId(input.providerId, id);
-    nextMetadata[key] = { ...discoveryMetadataFromCatalogModel(model, "provider-models", updatedAt), overrides: nextMetadata[key]?.overrides, supplemental: model.supplemental ?? nextMetadata[key]?.supplemental };
-    synced += 1;
+    found.push({ id, model });
   }
-  updateUserSettings({ discoveredModelMetadata: nextMetadata });
-  return { synced, missing };
+  if (found.length > 0) {
+    await saveHomeSettings((settings) => {
+      const nextMetadata = { ...(settings.discoveredModelMetadata ?? {}) };
+      for (const { id, model } of found) {
+        const key = formatModelId(input.providerId, id);
+        nextMetadata[key] = { ...discoveryMetadataFromCatalogModel(model, "provider-models", updatedAt), overrides: nextMetadata[key]?.overrides, supplemental: model.supplemental ?? nextMetadata[key]?.supplemental };
+      }
+      return { discoveredModelMetadata: nextMetadata };
+    });
+  }
+  return { synced: found.length, missing };
 }
 
 const TEST_IMAGE: AttachmentPayload = {
@@ -1079,10 +1060,18 @@ async function runModelTest(
   };
 }
 
+/**
+ * A model test through the resolved connection (HM4a). It tests the key saved
+ * in the AIBoard home; a typed but unsaved key, URL or token is not used (HM4b
+ * saves a key before testing it, plan §9 "Testing a key").
+ */
 export async function validateProvider(input: {
   providerId: string;
+  /** Ignored since HM4a: the test uses the key saved in the AIBoard home. */
   apiKey?: string;
+  /** Ignored since HM4a. */
   baseURL?: string;
+  /** Ignored since HM4a. */
   runnerToken?: string;
   modelId?: string;
 }, options?: { timeoutMs?: number }): Promise<ModelTestResult & { modelId?: string }> {
@@ -1090,12 +1079,6 @@ export async function validateProvider(input: {
   if (!provider) return { valid: false, usedImage: false, error: "Unknown provider" };
 
   const saved = getProviderKey(input.providerId);
-  const usingSaved = !input.apiKey;
-  const apiKey = input.apiKey ?? saved?.apiKey ?? null;
-  if (!apiKey) return { valid: false, usedImage: false, error: "No API key available" };
-  const baseURL = input.baseURL?.trim() || saved?.baseURL || undefined;
-  const runnerToken =
-    input.runnerToken?.trim() || saved?.runnerToken || undefined;
 
   const modelId =
     input.modelId ??
@@ -1115,13 +1098,17 @@ export async function validateProvider(input: {
             : "No model available",
     };
 
+  let connection: ProviderConnection;
+  try {
+    connection = await resolveProviderConnection(input.providerId);
+  } catch (error) {
+    return { valid: false, usedImage: false, error: error instanceof Error ? error.message : String(error), modelId };
+  }
   const capabilities = resolveModelCapabilities(formatModelId(input.providerId, modelId));
   const result = await runModelTest(
     (prompt, attachments, signal) =>
       provider.streamChat({
-        apiKey,
-        baseURL,
-        runnerToken,
+        ...connectionParams(connection),
         model: modelId,
         messages: [
           { role: "system", content: TEST_SYSTEM },
@@ -1135,19 +1122,24 @@ export async function validateProvider(input: {
     { allowImage: capabilities?.image !== false, timeoutMs: options?.timeoutMs }
   );
 
-  if (usingSaved && saved) {
-    updateProviderKey(input.providerId, {
-      lastValidationSucceeded: result.valid,
-      lastValidatedAt: new Date().toISOString(),
-    });
+  if (saved) {
+    // The outcome goes to the home (plan §9 "Testing a key"); a failed save does not hide the test's result.
+    try {
+      await saveHome(() => providerOps(input.providerId, {
+        lastValidationSucceeded: result.valid,
+        lastValidatedAt: new Date().toISOString(),
+      }));
+    } catch {
+      // The result below is still accurate; Settings re-reads the home.
+    }
   }
   return { ...result, modelId };
 }
 
 // ── Pricing overrides ─────────────────────────────────────────────────────────
 
-function clearMetadataOverrideFields(fullModelId: string, fields: Array<keyof ModelMetadataValues>) {
-  const metadata = { ...(getUserSettings().discoveredModelMetadata ?? {}) };
+function clearMetadataOverrideFields(settings: UserSettings, fullModelId: string, fields: Array<keyof ModelMetadataValues>) {
+  const metadata = { ...(settings.discoveredModelMetadata ?? {}) };
   const record = metadata[fullModelId];
   if (record?.overrides) {
     const overrides = { ...record.overrides };
@@ -1157,30 +1149,32 @@ function clearMetadataOverrideFields(fullModelId: string, fields: Array<keyof Mo
   return metadata;
 }
 
-export function savePricingOverride(input: {
+export async function savePricingOverride(input: {
   fullModelId: string;
   inputUsdPer1M?: number;
   outputUsdPer1M?: number;
   cachedInputUsdPer1M?: number | null;
   clear?: boolean;
-}): void {
-  const settings = getUserSettings();
-  const next = { ...(settings.modelPricingOverrides ?? {}) };
-  if (input.clear) {
-    delete next[input.fullModelId];
-  } else {
-    if (input.inputUsdPer1M === undefined || input.outputUsdPer1M === undefined) {
-      throw new Error("Input and output pricing are required");
-    }
-    next[input.fullModelId] = {
-      inputUsdPer1M: input.inputUsdPer1M,
-      outputUsdPer1M: input.outputUsdPer1M,
-      cachedInputUsdPer1M: input.cachedInputUsdPer1M ?? null,
-      updatedAt: new Date().toISOString(),
-    };
+}): Promise<void> {
+  if (!input.clear && (input.inputUsdPer1M === undefined || input.outputUsdPer1M === undefined)) {
+    throw new Error("Input and output pricing are required");
   }
-  updateUserSettings({ modelPricingOverrides: next,
-    ...(input.clear ? { discoveredModelMetadata: clearMetadataOverrideFields(input.fullModelId, ["inputUsdPer1M", "outputUsdPer1M", "cachedInputUsdPer1M"]) } : {}),
+  const updatedAt = new Date().toISOString();
+  await saveHomeSettings((settings) => {
+    const next = { ...(settings.modelPricingOverrides ?? {}) };
+    if (input.clear) {
+      delete next[input.fullModelId];
+    } else {
+      next[input.fullModelId] = {
+        inputUsdPer1M: input.inputUsdPer1M!,
+        outputUsdPer1M: input.outputUsdPer1M!,
+        cachedInputUsdPer1M: input.cachedInputUsdPer1M ?? null,
+        updatedAt,
+      };
+    }
+    return { modelPricingOverrides: next,
+      ...(input.clear ? { discoveredModelMetadata: clearMetadataOverrideFields(settings, input.fullModelId, ["inputUsdPer1M", "outputUsdPer1M", "cachedInputUsdPer1M"]) } : {}),
+    };
   });
 }
 
@@ -1197,8 +1191,11 @@ export function saveModelContextOverride(input: {
   recommendedBuildRoles?: ModelContextProfileOverride["recommendedBuildRoles"];
   clearBuildSettings?: boolean;
   clear?: boolean;
-}): void {
-  const settings = getUserSettings();
+}): Promise<void> {
+  return saveHomeSettings((settings) => modelContextOverridePatch(settings, input));
+}
+
+function modelContextOverridePatch(settings: UserSettings, input: Parameters<typeof saveModelContextOverride>[0]): Partial<UserSettings> {
   const next = { ...(settings.modelContextOverrides ?? {}) };
   if (input.clear) {
     delete next[input.fullModelId];
@@ -1239,9 +1236,9 @@ export function saveModelContextOverride(input: {
       updatedAt: new Date().toISOString(),
     };
   }
-  updateUserSettings({ modelContextOverrides: next,
-    ...(input.clear ? { discoveredModelMetadata: clearMetadataOverrideFields(input.fullModelId, ["contextWindowTokens", "maxOutputTokens"]) } : {}),
-  });
+  return { modelContextOverrides: next,
+    ...(input.clear ? { discoveredModelMetadata: clearMetadataOverrideFields(settings, input.fullModelId, ["contextWindowTokens", "maxOutputTokens"]) } : {}),
+  };
 }
 
 // ── Custom models ─────────────────────────────────────────────────────────────
@@ -1282,7 +1279,8 @@ export function listCustomModels(): CustomModelView[] {
   return getCustomModels().map(redactCustom);
 }
 
-export function addCustomModel(input: {
+/** Saves a custom model to the AIBoard home, with its key (if typed) in the same batch; the page keeps no key. */
+export async function addCustomModel(input: {
   label: string;
   baseURL: string;
   model: string;
@@ -1291,29 +1289,36 @@ export function addCustomModel(input: {
   toolCapabilityOverrides?: ToolCapabilityDescriptor[];
   compatibleTransports?: ProviderTransportId[];
   reasoningEffort?: ReasoningEffort;
-}): CustomModelView {
+}): Promise<CustomModelView> {
+  const apiKey = input.apiKey?.trim() || undefined;
   const record: CustomModel = {
     id: uuidv4(),
     label: input.label,
     baseURL: input.baseURL,
     model: input.model,
-    apiKey: input.apiKey || undefined,
-    hasKey: !!input.apiKey,
+    hasKey: !!apiKey,
     capabilities: input.capabilities ?? { ...NO_CAPS },
     toolCapabilityOverrides: input.toolCapabilityOverrides ?? [],
     compatibleTransports: customCompatibleTransports(input.compatibleTransports),
     reasoningEffort: input.reasoningEffort ?? "default",
     createdAt: new Date().toISOString(),
   };
-  storeAddCustomModel(record);
-  return redactCustom(record);
+  await saveHome(() => [
+    { path: `customModels.${record.id}`, op: "set", value: customModelEntry(record) },
+    ...(apiKey ? [{ path: `credentials.customModels.${record.id}`, op: "set" as const, value: { secret: apiKey } }] : []),
+  ]);
+  return redactCustom(getCustomModelById(record.id) ?? record);
+}
+
+function updateCustomModel(id: string, patch: Partial<CustomModel>): Promise<void> {
+  return saveHome(() => [{ path: `customModels.${id}`, op: "merge", value: customModelEntry(patch) }]);
 }
 
 export function updateCustomModelCapabilities(
   id: string,
   capabilities: CustomModelView["capabilities"]
-): void {
-  storeUpdateCustomModel(id, { capabilities });
+): Promise<void> {
+  return updateCustomModel(id, { capabilities });
 }
 
 export function updateCustomModelToolConfiguration(
@@ -1322,39 +1327,58 @@ export function updateCustomModelToolConfiguration(
     toolCapabilityOverrides: ToolCapabilityDescriptor[];
     compatibleTransports: ProviderTransportId[];
   },
-): void {
-  storeUpdateCustomModel(id, {
+): Promise<void> {
+  return updateCustomModel(id, {
     toolCapabilityOverrides: input.toolCapabilityOverrides,
     compatibleTransports: customCompatibleTransports(input.compatibleTransports),
   });
 }
-export function updateCustomModelReasoning(id: string, effort: ReasoningEffort): void {
-  storeUpdateCustomModel(id, { reasoningEffort: effort, lastValidationSucceeded: null });
+export function updateCustomModelReasoning(id: string, effort: ReasoningEffort): Promise<void> {
+  return updateCustomModel(id, { reasoningEffort: effort, lastValidationSucceeded: null });
 }
-export function deleteCustomModel(id: string): void {
-  storeDeleteCustomModel(id);
+/** Removes a custom model and its key from the AIBoard home. */
+export function deleteCustomModel(id: string): Promise<void> {
+  return saveHome(() => [
+    { path: `customModels.${id}`, op: "remove" },
+    { path: `credentials.customModels.${id}`, op: "remove" },
+  ]);
 }
 
+export const UNSAVED_CUSTOM_MODEL_TEST_MESSAGE =
+  "Save the custom model first: AI Board tests it through the Runner, with the endpoint and key saved in the AIBoard home.";
+
+/**
+ * Tests a custom model through the model proxy's `custom/<id>` route (HM4a).
+ * The proxy uses only what the AIBoard home saved for that id, so a model that
+ * has no id yet cannot be tested before it is saved: CustomModelsManager saves
+ * a new or edited model first, then tests it (HM4b, test-saves-first).
+ */
 export async function testCustomModel(input: {
+  /** The saved model's id; without it the test refuses before any call. */
+  id?: string;
   baseURL: string;
   model: string;
+  /** Ignored since HM4a: the proxy uses the key saved in the AIBoard home. */
   apiKey?: string;
   capabilities?: { image?: boolean };
   reasoningEffort?: ReasoningEffort;
 }): Promise<ModelTestResult> {
+  if (!input.id) return { valid: false, usedImage: false, error: UNSAVED_CUSTOM_MODEL_TEST_MESSAGE };
   const localOllama = isLoopbackOllamaEndpoint(input.baseURL);
-  const client = new OpenAI({
-    apiKey: input.apiKey || "not-needed",
-    baseURL: input.baseURL,
-    dangerouslyAllowBrowser: true,
-  });
+  let connection: ProviderConnection;
+  try {
+    connection = await resolveProviderConnection(formatModelId(CUSTOM_PROVIDER_ID, input.id));
+  } catch (error) {
+    return { valid: false, usedImage: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  const client = createOpenAIClient(connectionParams(connection), input.model);
   // A text-only model must not waste its first probe on an unsupported image.
   // Cold-starting Ollama on a 10 GB GPU may exceed the cloud-model timeout.
   const result = await runModelTest((prompt, attachments, signal) =>
     streamOpenAICompatibleChat(
       client,
       {
-        apiKey: input.apiKey ?? "",
+        ...connectionParams(connection),
         model: input.model,
         messages: [
           { role: "system", content: TEST_SYSTEM },
@@ -1387,16 +1411,20 @@ export async function testSavedCustomModel(id: string): Promise<ModelTestResult>
   const model = getCustomModelById(id);
   if (!model) return { valid: false, usedImage: false, error: "Model not found" };
   const result = await testCustomModel({
+    id: model.id,
     baseURL: model.baseURL,
     model: model.model,
-    apiKey: model.apiKey,
     capabilities: model.capabilities,
     reasoningEffort: model.reasoningEffort,
   });
-  storeUpdateCustomModel(id, {
-    lastValidationSucceeded: result.valid,
-    lastValidatedAt: new Date().toISOString(),
-  });
+  try {
+    await updateCustomModel(id, {
+      lastValidationSucceeded: result.valid,
+      lastValidatedAt: new Date().toISOString(),
+    });
+  } catch {
+    // The test's result stands; Settings re-reads the home.
+  }
   return result;
 }
 

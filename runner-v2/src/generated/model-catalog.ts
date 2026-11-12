@@ -4,7 +4,7 @@
 // Data only: runner-v2/src/home-model-policy.ts holds the rules that are code.
 
 export const MODEL_CATALOG_SNAPSHOT = {
-  "catalogVersion": "c15b9a864e9feeb3",
+  "catalogVersion": "b90dd671eab5d6d3",
   "contextProfiles": {
     "default": {
       "buildOutputReserveTokens": 4096,
@@ -1867,7 +1867,7 @@ export const MODEL_CATALOG_SNAPSHOT = {
       "defaultBaseUrl": "https://integrate.api.nvidia.com/v1",
       "id": "nvidia",
       "maxTokens": true,
-      "modelDiscovery": "runner",
+      "modelDiscovery": "provider-api",
       "modelSource": "user-defined",
       "name": "NVIDIA NIM",
       "protocol": "chat-completions",

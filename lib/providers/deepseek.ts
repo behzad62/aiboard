@@ -1,21 +1,13 @@
-import OpenAI from "openai";
 import type { AIProvider, ChatParams } from "./base";
 import { getCatalogModelsForProvider } from "./catalog";
 import { streamOpenAICompatibleChat } from "./openai-compat";
-import { providerDefaultBaseUrl } from "./provider-registry";
-
-export const DEEPSEEK_BASE_URL = providerDefaultBaseUrl("deepseek");
+import { createOpenAIClient, type ConnectionParams } from "./connection";
 
 function createDeepSeekClient(
-  apiKey: string,
+  connection: ConnectionParams,
   disableAutomaticRetries = false,
 ) {
-  return new OpenAI({
-    apiKey,
-    baseURL: DEEPSEEK_BASE_URL,
-    dangerouslyAllowBrowser: true,
-    ...(disableAutomaticRetries ? { maxRetries: 0 } : {}),
-  });
+  return createOpenAIClient(connection, "DeepSeek", { disableAutomaticRetries });
 }
 
 export const deepseekProvider: AIProvider = {
@@ -28,9 +20,9 @@ export const deepseekProvider: AIProvider = {
     );
   },
 
-  async validateApiKey(apiKey: string) {
+  async validateConnection(connection) {
     try {
-      const client = createDeepSeekClient(apiKey);
+      const client = createDeepSeekClient(connection);
       await client.models.list();
       return true;
     } catch {
@@ -39,10 +31,7 @@ export const deepseekProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams) {
-    const client = createDeepSeekClient(
-      params.apiKey,
-      params.disableAutomaticRetries,
-    );
+    const client = createDeepSeekClient(params, params.disableAutomaticRetries);
     yield* streamOpenAICompatibleChat(
       client,
       params,

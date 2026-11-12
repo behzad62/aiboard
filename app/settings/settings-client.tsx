@@ -10,6 +10,10 @@ import { ToolRuntimeSettingsPanel } from "@/components/ToolRuntimeSettingsPanel"
 import { ExtensionsSettings } from "@/components/extensions/ExtensionsSettings";
 import { ensureReady, saveSettings } from "@/lib/client/api";
 import { loadProviders } from "@/lib/client/settings-api";
+import { loadHome, type HomeState } from "@/lib/client/home-client";
+import { useHomeState } from "@/lib/client/use-home-state";
+import { onHomeMirrorChange } from "@/lib/client/store";
+import { RunnerSetup } from "@/components/RunnerSetup";
 import { DetailControl } from "@/components/DetailControl";
 import { ReasoningControl } from "@/components/ReasoningControl";
 import {
@@ -78,6 +82,39 @@ const MODES: DiscussionMode[] = ["chat", "panel", "debate", "specialist", "build
 
 const TAB_VALUES = ["providers", "tools", "extensions", "capability-lab", "defaults", "storage", "security"];
 
+/**
+ * Providers, Tools, Capability Lab and Defaults are saved in the AIBoard home, so
+ * they need a connected, home-capable AI Board (plan §6.1). Storage is about this
+ * browser's history and works without one.
+ */
+function HomeGate({ home, children }: { home: HomeState; children: React.ReactNode }) {
+  if (home.status === "ready") return <>{children}</>;
+  if (home.status === "idle" || home.status === "loading") {
+    return (
+      <Card>
+        <CardContent className="py-6 text-sm text-muted-foreground" role="status">
+          Loading your settings from AI Board…
+        </CardContent>
+      </Card>
+    );
+  }
+  const message = home.status === "not_connected"
+    ? "AI Board isn't connected. Run `aiboard` in a terminal, in a project folder (not your home folder), and open the link it prints."
+    : home.message;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{home.status === "update_required" ? "Update AI Board" : home.status === "not_connected" ? "Connect AI Board" : "Settings unavailable"}</CardTitle>
+        <CardDescription role="alert">{message}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {home.status === "not_connected" && <RunnerSetup />}
+        <Button type="button" variant="outline" onClick={() => void loadHome()}>Try again</Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const [tab, setTab] = useState("providers");
   const [data, setData] = useState<SettingsData | null>(null);
@@ -90,6 +127,8 @@ export default function SettingsPage() {
   const [defaultReasoningEffort, setDefaultReasoningEffort] =
     useState<ReasoningEffort>("default");
   const [saved, setSaved] = useState(false);
+  const [defaultsError, setDefaultsError] = useState<string | null>(null);
+  const home = useHomeState();
 
   const load = async () => {
     const { needsPassphrase } = await ensureReady();
@@ -123,6 +162,19 @@ export default function SettingsPage() {
     if (requested === "pricing") setTab("providers");
     else if (requested && TAB_VALUES.includes(requested)) setTab(requested);
     load().catch(() => undefined);
+    // The page re-reads the home whenever its tab is shown again, and redraws when
+    // the home's mirror changes (a save here, or another tab's, after a re-read).
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void loadHome();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const stopMirror = onHomeMirrorChange(() => {
+      load().catch(() => undefined);
+    });
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      stopMirror();
+    };
   }, []);
 
   const effectiveProviders = (data?.providers ?? []).map((provider) => ({
@@ -172,17 +224,24 @@ export default function SettingsPage() {
     setDraftEnabled((prev) => ({ ...prev, [providerId]: patch.enabled }));
   };
 
+  // The six defaults are one batch; a failed save shows the error and reverts the form.
   const saveDefaults = async () => {
-    saveSettings({
-      defaultEffort,
-      defaultMode,
-      judgeModelId: judgeModelId || undefined,
-      defaultVerbosity,
-      defaultStyleNote,
-      defaultReasoningEffort,
-    });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setDefaultsError(null);
+    try {
+      await saveSettings({
+        defaultEffort,
+        defaultMode,
+        judgeModelId: judgeModelId || null,
+        defaultVerbosity,
+        defaultStyleNote,
+        defaultReasoningEffort,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (error) {
+      setDefaultsError(error instanceof Error ? error.message : "Could not save the defaults");
+    }
+    await load();
   };
 
   return (
@@ -193,8 +252,13 @@ export default function SettingsPage() {
         </h1>
         <p className="mt-2 text-muted-foreground">
           Provider keys, tools, pricing, and the defaults for new chats and
-          builds. Everything is stored locally on your device.
+          builds, saved in your AIBoard home on this computer.
         </p>
+        {home.status === "ready" && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="home-path">
+            Saved in <code className="rounded bg-muted px-1">{home.view.home}</code>
+          </p>
+        )}
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -210,6 +274,7 @@ export default function SettingsPage() {
 
         {/* ── Providers ─────────────────────────────────────────── */}
         <TabsContent value="providers" className="space-y-6">
+          <HomeGate home={home}>
           <Card className="border-primary/20 bg-gradient-to-br from-background via-background to-primary/5 shadow-sm">
             <CardHeader className="pb-4">
               <div className="flex flex-wrap items-center gap-2">
@@ -332,16 +397,18 @@ export default function SettingsPage() {
               </TabsContent>
             </Tabs>
           </div>
-
+          </HomeGate>
         </TabsContent>
 
         {/* ── Tools ─────────────────────────────────────────────── */}
         <TabsContent value="tools">
-          <ToolRuntimeSettingsPanel
-            settings={data?.settings.toolRuntime}
-            onChanged={load}
-            onOpenExtensions={() => setTab("extensions")}
-          />
+          <HomeGate home={home}>
+            <ToolRuntimeSettingsPanel
+              settings={data?.settings.toolRuntime}
+              onChanged={load}
+              onOpenExtensions={() => setTab("extensions")}
+            />
+          </HomeGate>
         </TabsContent>
 
         {/* ── Extensions ────────────────────────────────────────── */}
@@ -351,15 +418,18 @@ export default function SettingsPage() {
 
         {/* ── Capability Lab ───────────────────────────────────── */}
         <TabsContent value="capability-lab">
-          <CapabilityLab
-            providers={effectiveProviders}
-            capabilityProfiles={data?.settings.modelCapabilityProfiles}
-            onChanged={load}
-          />
+          <HomeGate home={home}>
+            <CapabilityLab
+              providers={effectiveProviders}
+              capabilityProfiles={data?.settings.modelCapabilityProfiles}
+              onChanged={load}
+            />
+          </HomeGate>
         </TabsContent>
 
         {/* ── Defaults ──────────────────────────────────────────── */}
         <TabsContent value="defaults">
+          <HomeGate home={home}>
           <Card>
             <CardHeader>
               <CardTitle>Chat defaults</CardTitle>
@@ -445,11 +515,13 @@ export default function SettingsPage() {
                 />
               </div>
 
-              <Button type="button" onClick={saveDefaults}>
+              <Button type="button" onClick={() => void saveDefaults()}>
                 {saved ? "Saved!" : "Save defaults"}
               </Button>
+              {defaultsError && <p className="text-sm text-destructive" role="alert">{defaultsError}</p>}
             </CardContent>
           </Card>
+          </HomeGate>
         </TabsContent>
 
         {/* ── Storage ───────────────────────────────────────────── */}
@@ -457,56 +529,44 @@ export default function SettingsPage() {
           <StorageSettings onChanged={load} />
         </TabsContent>
 
-        {/* ── Security ──────────────────────────────────────────── */}
+        {/* ── Security: where your settings and keys live (plan §6.1, OD-27) ── */}
         <TabsContent value="security">
           <Card>
             <CardHeader>
-              <CardTitle>Security &amp; privacy</CardTitle>
+              <CardTitle>Where your settings and keys live</CardTitle>
               <CardDescription>
-                Where your data lives and where it goes.
+                AI Board is a tool on your computer; this page is its window.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
               <p>
-                <strong className="text-foreground">
-                  Everything stays on your device.
-                </strong>{" "}
-                Discussions, prompts, attachments, settings, and API keys are
-                stored only locally — in this browser (IndexedDB) or in the
-                local folder you pick on the Storage tab. This app has no
-                backend: it is served as static files, and nothing you type or
-                upload is sent to or stored on any server of ours.
+                <strong className="text-foreground">Settings and keys: your AIBoard home.</strong>{" "}
+                {home.status === "ready" ? (
+                  <>Saved in <code className="rounded bg-muted px-1">{home.view.home}</code>.</>
+                ) : (
+                  <>Saved in the AIBoard home folder, <code className="rounded bg-muted px-1">~/.aiboard</code> (or <code className="rounded bg-muted px-1">AIBOARD_HOME</code>), once AI Board is connected.</>
+                )}{" "}
+                <code className="rounded bg-muted px-1">config.json</code> holds settings and no secret. Keys are encrypted in{" "}
+                <code className="rounded bg-muted px-1">credentials.json</code> with a key kept outside the home
+                {home.status === "ready" && home.view.keyPath ? <> (<code className="rounded bg-muted px-1">{home.view.keyPath}</code>)</> : null}
+                , so a copied or synced home never carries usable keys. The same settings serve every browser and every
+                project, and <code className="rounded bg-muted px-1">aiboard keys</code> and{" "}
+                <code className="rounded bg-muted px-1">aiboard config</code> in a terminal.
               </p>
               <p>
-                <strong className="text-foreground">
-                  Prompts go only to the AI providers you configure.
-                </strong>{" "}
-                When you run a discussion, your topic, transcript, and
-                attachments are sent over HTTPS directly from your browser to
-                the providers of the models you selected (e.g. OpenAI,
-                Anthropic, Google, OpenRouter, or your own local endpoint) —
-                nowhere else. Each provider handles that data under its own
-                privacy policy; a local model via Ollama never leaves your
-                machine.
+                <strong className="text-foreground">Who can read them.</strong> Any program running as your user can read
+                the home and its key, as with other command-line tools that keep keys in your user folder. There is no
+                passphrase, so tasks can run unattended. Commands that a task runs at an unconfined access level can read
+                them too: choose a confined level for work you don&apos;t trust.
               </p>
               <p>
-                <strong className="text-foreground">
-                  API keys never leave your device
-                </strong>{" "}
-                except inside requests to their own provider. If you enable
-                passphrase encryption, the main store file that contains
-                settings and provider keys is encrypted with PBKDF2-derived
-                AES-256-GCM. Discussion folders stay as readable local JSON so
-                you can inspect and delete them directly from your storage
-                folder.
+                <strong className="text-foreground">Where prompts go.</strong> Model calls go from this page through AI
+                Board on your computer, which adds the key and forwards them to the provider you picked. This site has no
+                backend and never receives your keys or prompts.
               </p>
               <p>
-                <strong className="text-foreground">
-                  Runner V2 is local and visible.
-                </strong>{" "}
-                Build mode requires it. It binds to 127.0.0.1, is scoped by the
-                selected access profile, and persists recovery state outside
-                the project. Stop it any time with Ctrl+C.
+                <strong className="text-foreground">This browser&apos;s history.</strong> Chats, builds and benchmark results
+                stay in this browser (IndexedDB) or in the folder you pick on the Storage tab.
               </p>
             </CardContent>
           </Card>

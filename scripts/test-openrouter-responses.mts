@@ -192,6 +192,7 @@ try {
 
     const chunks = await collect(openrouterProvider.streamChat({
       apiKey: "test-key",
+      baseURL: "https://openrouter.ai/api/v1",
       model: "openai/gpt-5.6",
       messages: [
         { role: "system", content: "Use tools when useful." },
@@ -307,6 +308,7 @@ try {
 
     const chunks = await collect(openrouterProvider.streamChat({
       apiKey: "test-key",
+      baseURL: "https://openrouter.ai/api/v1",
       model: "vendor/legacy-model",
       messages: [{ role: "user", content: "Hello" }],
       capabilities: { image: false, document: false, audio: false, video: false },

@@ -57,6 +57,7 @@ import {
 } from "@/lib/client/api";
 import { getToolRuntimeRunner } from "@/lib/client/tool-runtime";
 import { getLauncherConnection } from "@/lib/client/local-runner-handoff";
+import { homeSettled } from "@/lib/client/home-client";
 import { claimPendingProjectFolder } from "@/lib/client/project-fs";
 import { ProjectAccessSetup } from "@/components/ProjectAccessSetup";
 import type { RunnerSelection } from "@/components/RunnerSetup";
@@ -201,6 +202,9 @@ export default function DashboardPage() {
           ? { url: launcher.url, token: launcher.token, access: "ask" }
           : getToolRuntimeRunner()
       );
+      // Model pickers and defaults wait for the first read of the AIBoard home (HM4b),
+      // so they never show this browser's old settings in its place.
+      if (launcher) await homeSettled();
       const d = loadDashboard();
       {
         setData(d);

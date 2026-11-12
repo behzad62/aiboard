@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -13,26 +12,29 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  applyStorageConfig,
+  declineEncryptedStore,
   exportStore,
   flush,
   getConfig,
   initStore,
+  isEncryptedStorePendingPlainSave,
   replaceStore,
+  saveStoreWithoutEncryption,
   switchStorageLocation,
+  withoutSecrets,
 } from "@/lib/client/store";
 import {
   fileSystemAccessSupported,
   pickDirectory,
   type StorageConfig,
 } from "@/lib/client/storage-adapter";
-import {
-  lock,
-  setPassphrase as cryptoSetPassphrase,
-  unlock,
-} from "@/lib/client/crypto-box";
+import { unlock } from "@/lib/client/crypto-box";
 import { FolderOpen, HardDrive, Lock, ShieldCheck } from "lucide-react";
-import { mergeSettingsImport, parseSettingsImport } from "@/lib/client/storage-import";
+import { homeOpsFromSettingsImport, parseSettingsImport } from "@/lib/client/storage-import";
+import { KEYS_NOT_IMPORTED_MESSAGE, isHomeReady, saveHome } from "@/lib/client/home-client";
+
+/** The AIBoard home takes at most 256 ops in one batch. */
+const IMPORT_BATCH_OPS = 200;
 
 export function StorageSettings({
   onChanged,
@@ -41,6 +43,7 @@ export function StorageSettings({
 }) {
   const [config, setConfig] = useState<StorageConfig | null>(null);
   const [needsPassphrase, setNeedsPassphrase] = useState(false);
+  const [pendingPlainSave, setPendingPlainSave] = useState(false);
   const [passphrase, setPassphraseInput] = useState("");
   const [fsaSupported, setFsaSupported] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -49,6 +52,7 @@ export function StorageSettings({
   const refresh = async () => {
     const res = await initStore();
     setNeedsPassphrase(res.needsPassphrase);
+    setPendingPlainSave(isEncryptedStorePendingPlainSave());
     setConfig({ ...getConfig() });
   };
 
@@ -79,7 +83,27 @@ export function StorageSettings({
       setPassphraseInput("");
       await refresh();
       await onChanged?.();
-      setMessage("Unlocked.");
+      setMessage("Unlocked. Nothing is saved until you choose below.");
+    });
+
+  // OD-28: the store opened once with its passphrase is saved without encryption
+  // only after the user confirms; declining leaves it untouched.
+  const confirmPlainSave = () =>
+    run(async () => {
+      await saveStoreWithoutEncryption();
+      await refresh();
+      await onChanged?.();
+      setMessage("Saved without encryption. Your chats and builds are kept.");
+    });
+
+  const declinePlainSave = () =>
+    run(async () => {
+      const result = await declineEncryptedStore();
+      await refresh();
+      await onChanged?.();
+      setMessage(result.startedNewBrowserStore
+        ? "The encrypted folder was left untouched. This page now uses a new store in this browser."
+        : "The encrypted store was left untouched and is locked again.");
     });
 
   const useBrowser = () =>
@@ -120,52 +144,32 @@ export function StorageSettings({
       );
     });
 
-  const enableEncryption = () =>
-    run(async () => {
-      if (passphrase.length < 6) {
-        throw new Error("Use a passphrase of at least 6 characters.");
-      }
-      const salt = await cryptoSetPassphrase(passphrase);
-      await applyStorageConfig({
-        ...getConfig(),
-        encryptionEnabled: true,
-        salt,
-      });
-      setPassphraseInput("");
-      await refresh();
-      setMessage(
-        "Encryption on. You'll enter this passphrase once per session — there is no recovery if you lose it."
-      );
-    });
-
-  const disableEncryption = () =>
-    run(async () => {
-      await applyStorageConfig({
-        ...getConfig(),
-        encryptionEnabled: false,
-        salt: undefined,
-      });
-      lock();
-      await refresh();
-      await onChanged?.();
-      setMessage("Passphrase lock removed. The main store is now saved unencrypted.");
-    });
-
   const fileRef = useRef<HTMLInputElement>(null);
   const settingsFileRef = useRef<HTMLInputElement>(null);
 
+  // Imported settings go to the AIBoard home; keys are skipped (plan §6.1 "Import and export").
   const importSettings = (file: File) =>
     run(async () => {
+      if (!isHomeReady()) {
+        throw new Error("Connect AI Board first: settings are imported into your AIBoard home.");
+      }
       const imported = parseSettingsImport(await file.text());
-      replaceStore(mergeSettingsImport(exportStore(), imported));
-      await flush();
+      const plan = homeOpsFromSettingsImport(imported);
+      for (let index = 0; index < plan.ops.length; index += IMPORT_BATCH_OPS) {
+        const batch = plan.ops.slice(index, index + IMPORT_BATCH_OPS);
+        await saveHome(() => batch);
+      }
       await onChanged?.();
-      setMessage("Imported provider settings, custom models, and app defaults. Your existing chats and benchmark history were preserved.");
+      setMessage([
+        "Imported provider settings, custom models, and app defaults into your AIBoard home. Your existing chats and benchmark history were preserved.",
+        plan.skippedKeys.length > 0 ? `Not imported: the keys for ${plan.skippedKeys.join(", ")}. ${KEYS_NOT_IMPORTED_MESSAGE}` : null,
+      ].filter(Boolean).join(" "));
     });
 
+  // An export never holds a key.
   const exportToFile = () =>
     run(async () => {
-      const blob = new Blob([JSON.stringify(exportStore(), null, 2)], {
+      const blob = new Blob([JSON.stringify(withoutSecrets(exportStore()), null, 2)], {
         type: "application/json",
       });
       const url = URL.createObjectURL(blob);
@@ -190,10 +194,11 @@ export function StorageSettings({
       ) {
         return;
       }
-      replaceStore(parsed.store ?? parsed);
+      // Keys are never imported; under a connected AI Board the settings stay the home's.
+      replaceStore(withoutSecrets(parsed.store ?? parsed));
       await flush();
       await onChanged?.();
-      setMessage("Imported data from file.");
+      setMessage(`Imported data from file. ${KEYS_NOT_IMPORTED_MESSAGE}`);
     });
 
   if (needsPassphrase) {
@@ -205,8 +210,10 @@ export function StorageSettings({
             Unlock storage
           </CardTitle>
           <CardDescription>
-            This store is encrypted. Enter your passphrase to unlock it for this
-            session.
+            This store was encrypted with a passphrase. AI Board no longer
+            encrypts this browser&apos;s store: your keys live in your AIBoard
+            home. Enter the passphrase once to open it; then choose whether to
+            save it without encryption.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -291,59 +298,41 @@ export function StorageSettings({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-primary" />
-            Passphrase encryption
-          </CardTitle>
-          <CardDescription>
-            Encrypts the main store file (including API keys) with a passphrase.
-            Discussion folders stay as readable local JSON so you can inspect,
-            remove, or back them up directly.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {config?.encryptionEnabled ? (
-            <div className="space-y-2">
-              <p className="text-sm text-muted-foreground">
-                Encryption is on for the main store. Discussion folders remain
-                readable local JSON files. Remove the passphrase lock to stop
-                requiring an unlock after tab or browser restarts.
-              </p>
-              <Button variant="outline" onClick={disableEncryption} disabled={busy}>
-                Remove passphrase lock
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <Label htmlFor="set-passphrase">Set a passphrase</Label>
-              <Input
-                id="set-passphrase"
-                type="password"
-                value={passphrase}
-                onChange={(e) => setPassphraseInput(e.target.value)}
-                placeholder="At least 6 characters"
-              />
-              <Button onClick={enableEncryption} disabled={busy}>
-                Enable encryption
-              </Button>
-              <p className="text-xs text-muted-foreground">
-                No recovery — if you forget it, the data can&apos;t be decrypted.
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {pendingPlainSave && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-primary" />
+              Save without encryption?
+            </CardTitle>
+            <CardDescription>
+              This store is open with its passphrase and nothing has been saved
+              yet. Save it without encryption to keep your chats, builds and
+              benchmark history. Your keys are not part of it any more: they
+              live in your AIBoard home.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <Button onClick={confirmPlainSave} disabled={busy}>
+              Save without encryption
+            </Button>
+            <Button variant="outline" onClick={declinePlainSave} disabled={busy}>
+              {config?.kind === "filesystem" ? "Leave the folder untouched" : "Keep it encrypted"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
           <CardTitle>Backup &amp; restore</CardTitle>
           <CardDescription>
             Import settings from a local folder&apos;s store.json or an exported
-            backup to copy providers, custom models, and defaults into this
-            browser. Existing chats and benchmark history stay in place.
-            Export or restore a full backup with the other actions.
+            backup to copy providers, custom models, and defaults into your
+            AIBoard home. Keys are never imported or exported: set them on the
+            Providers tab or with <code>aiboard keys set</code>. Existing chats
+            and benchmark history stay in place. Export or restore a full
+            backup with the other actions.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">

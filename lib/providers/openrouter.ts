@@ -1,22 +1,19 @@
-import OpenAI from "openai";
 import type { AIProvider, ChatParams } from "./base";
 import { getCatalogModelsForProvider } from "./catalog";
 import { streamOpenAICompatibleChat } from "./openai-compat";
 import { streamOpenAIResponses } from "./openai";
-import { providerDefaultBaseUrl } from "./provider-registry";
+import { createOpenAIClient, providerFetch, type ConnectionParams } from "./connection";
 
-const OPENROUTER_BASE_URL = providerDefaultBaseUrl("openrouter");
+/** OpenRouter's attribution headers; the model proxy forwards exactly these two. */
+export const OPENROUTER_ATTRIBUTION_HEADERS: Readonly<Record<string, string>> = {
+  "HTTP-Referer": process.env.APP_URL ?? "http://localhost:3000",
+  "X-Title": "AI Board",
+};
 
-function createOpenRouterClient(apiKey: string, disableAutomaticRetries = false) {
-  return new OpenAI({
-    apiKey,
-    baseURL: OPENROUTER_BASE_URL,
-    dangerouslyAllowBrowser: true,
-    ...(disableAutomaticRetries ? { maxRetries: 0 } : {}),
-    defaultHeaders: {
-      "HTTP-Referer": process.env.APP_URL ?? "http://localhost:3000",
-      "X-Title": "AI Board",
-    },
+function createOpenRouterClient(connection: ConnectionParams, disableAutomaticRetries = false) {
+  return createOpenAIClient(connection, "OpenRouter", {
+    disableAutomaticRetries,
+    defaultHeaders: { ...OPENROUTER_ATTRIBUTION_HEADERS },
   });
 }
 
@@ -36,11 +33,9 @@ export const openrouterProvider: AIProvider = {
     );
   },
 
-  async validateApiKey(apiKey: string) {
+  async validateConnection(connection) {
     try {
-      const res = await fetch(`${OPENROUTER_BASE_URL}/models`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-      });
+      const res = await providerFetch(connection, "OpenRouter", "models");
       return res.ok;
     } catch {
       return false;
@@ -48,10 +43,7 @@ export const openrouterProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams) {
-    const client = createOpenRouterClient(
-      params.apiKey,
-      params.disableAutomaticRetries
-    );
+    const client = createOpenRouterClient(params, params.disableAutomaticRetries);
     const requiresChatMultimodal = (params.attachments ?? []).some(
       (attachment) =>
         !!attachment.base64Data &&

@@ -58,7 +58,7 @@ export function ModelPricingEditor({
     setSaving(true);
     setMessage(null);
     try {
-      savePricingOverride({
+      await savePricingOverride({
         fullModelId,
         inputUsdPer1M: nextInput,
         outputUsdPer1M: nextOutput,
@@ -78,7 +78,7 @@ export function ModelPricingEditor({
     setSaving(true);
     setMessage(null);
     try {
-      savePricingOverride({ fullModelId, clear: true });
+      await savePricingOverride({ fullModelId, clear: true });
       await flush();
       await onSaved();
       setMessage("Pricing override reset");

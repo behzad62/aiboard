@@ -28,18 +28,20 @@ import {
   CUSTOM_PROVIDER_ID,
   getCustomModelByFullId,
   customModelPlanningContext,
-  getDecryptedApiKey,
   getPersistedProviderCapabilityEvidence,
   getProvider,
-  getProviderBaseURL,
-  getProviderRunnerToken,
   getRunnerCapabilityPlanningContext,
+  assertModelConnection,
+  isProviderEnabled,
+  resolveProviderConnection,
   resolveClientModelContextProfile,
   resolveModelCapabilities,
   resolveModelName,
   streamCustomChat,
 } from "./providers";
+import { connectionParams } from "@/lib/providers/connection";
 import {
+  formatModelId,
   parseModelId,
   type AIProvider,
   type ChatMessage,
@@ -390,10 +392,17 @@ export async function collectStreamWithUsage(
     const customAttachments = attachments.filter(
       (a) => a.category !== "text_inline" && customCaps[a.category]
     );
+    // The model proxy's custom route adds the endpoint and key from the home (HM4a).
+    const customConnection = await resolveProviderConnection(
+      formatModelId(CUSTOM_PROVIDER_ID, customModel.id),
+      { signal },
+    );
     const customParams = preflightProviderChatParams(
       CUSTOM_PROVIDER_ID,
       {
-        apiKey: "",
+        ...connectionParams(customConnection),
+        // Stop aborts the request itself, so a stopped stream frees its proxy connection at once.
+        signal,
         model: customModel.model,
         messages,
         attachments: customAttachments,
@@ -474,10 +483,11 @@ export async function collectStreamWithUsage(
   }
 
   const provider = getProvider(providerId);
-  const apiKey = getDecryptedApiKey(providerId);
-  if (!provider || !apiKey) {
+  if (!provider || !isProviderEnabled(providerId)) {
     throw new Error(`Provider ${providerId} is not configured`);
   }
+  // The one way to a provider (HM4a): the model proxy, or the account peer for ChatGPT and Copilot.
+  const connection = await resolveProviderConnection(providerId, { signal });
 
   // Foundry models (and any future gateway provider) aren't in the static
   // capability registry — resolve their caps explicitly.
@@ -500,9 +510,9 @@ export async function collectStreamWithUsage(
   const providerParams = preflightProviderChatParams(
     providerId,
     {
-      apiKey,
-      baseURL: getProviderBaseURL(providerId),
-      runnerToken: getProviderRunnerToken(providerId),
+      ...connectionParams(connection),
+      // Stop aborts the request itself, so a stopped stream frees its proxy connection at once.
+      signal,
       model,
       messages,
       attachments: modelAttachments,
@@ -655,6 +665,10 @@ export async function runDiscussion(
       await runNativeBuildDiscussion(discussion, emit, signal);
       return;
     }
+
+    // Every model call goes through the Runner (HM4a): refuse before the first
+    // one, naming the fix, when AI Board is not connected or too old.
+    await assertModelConnection(signal);
 
     const config = EFFORT_CONFIG[effort];
     const verbosity = (discussion.verbosity ?? "balanced") as Verbosity;

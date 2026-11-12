@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mergeSettingsImport, parseSettingsImport } from "../lib/client/storage-import";
+import { homeOpsFromSettingsImport, parseSettingsImport } from "../lib/client/storage-import";
+import { KEYS_NOT_IMPORTED_MESSAGE } from "../lib/client/home-client";
 import { IndexedDBAdapter, createAdapter } from "../lib/client/storage-adapter";
 import {
   __clearClientStoreForTests, __resetClientStoreForTests, __setAdapterForTests,
-  exportStore, flush, getConfig, replaceStore, switchStorageLocation,
+  exportStore, flush, getConfig, replaceStore, switchStorageLocation, withoutSecrets,
 } from "../lib/client/store";
 
 const kv = new Map<string, unknown>();
@@ -46,9 +47,13 @@ try {
     benchmarkResultSets: [{ id: "keep-result" }],
   } as unknown as typeof initial;
   const source = {
-    userSettings: { defaultMode: "chat", defaultStyleNote: "Imported defaults" },
+    userSettings: {
+      defaultMode: "chat", defaultStyleNote: "Imported defaults",
+      modelPricingOverrides: { "openai:model-a": { inputUsdPer1M: 1, outputUsdPer1M: 2, cachedInputUsdPer1M: null, updatedAt: "2026-11-12T00:00:00.000Z" } },
+      toolRuntime: { remoteMcpServer: { enabled: true, name: "docs", url: "https://mcp.example.test/sse", authorizationToken: "mcp-test-token" } },
+    },
     providerKeys: [{ providerId: "replace", apiKey: "new-test-key" }, { providerId: "new-provider", enabled: true }],
-    customModels: [{ id: "new-custom", label: "Imported" }],
+    customModels: [{ id: "new-custom", label: "Imported", baseURL: "http://127.0.0.1:11434/v1", model: "gemma", apiKey: "custom-test-key" }],
     discussions: [{ id: "source-chat-metadata-only" }],
     benchmarkRuns: [{ id: "source-benchmark" }],
   };
@@ -56,16 +61,6 @@ try {
   const folderFile = JSON.stringify({ v: 1, encrypted: false, data: JSON.stringify(source) });
   const parsed = parseSettingsImport(folderFile);
   assert.deepEqual(Object.keys(parsed).sort(), ["customModels", "providerKeys", "userSettings"]);
-  const merged = mergeSettingsImport(current, parsed);
-  assert.equal(merged.userSettings.defaultStyleNote, "Imported defaults");
-  assert.equal(merged.userSettings.defaultVerbosity, "concise");
-  assert.deepEqual(merged.providerKeys.map(item => item.providerId), ["keep", "replace", "new-provider"]);
-  assert.equal(merged.providerKeys.find(item => item.providerId === "replace")?.apiKey, "new-test-key");
-  assert.deepEqual(merged.customModels.map(item => item.id), ["existing-custom", "new-custom"]);
-  for (const field of ["discussions", "messages", "benchmarkRuns", "benchmarkResultSets"] as const) {
-    assert.deepEqual(merged[field], current[field], `${field} survives settings-only import`);
-  }
-  assert.equal(JSON.stringify(current), snapshot, "merging does not mutate active data before commit");
   assert.deepEqual(parseSettingsImport(JSON.stringify(source)), parsed);
   assert.deepEqual(parseSettingsImport(JSON.stringify({ store: source })), parsed);
   for (const invalid of ["null", "[]", "{}", '{"providerKeys":{}}', '{"customModels":[{"id":null}]}', '{"userSettings":[]}']) {
@@ -73,13 +68,33 @@ try {
   }
   assert.throws(() => parseSettingsImport('{"encrypted":true,"data":"ciphertext"}'), /Unlock it in the original browser/);
 
-  // The real store commits imported settings and persists them in this browser.
+  // HM4b: imported settings become AIBoard home ops; every key is skipped and named.
+  const plan = homeOpsFromSettingsImport(parsed);
+  const sent = JSON.stringify(plan.ops);
+  assert.ok(!sent.includes("new-test-key") && !sent.includes("custom-test-key") && !sent.includes("mcp-test-token"), "no key is imported");
+  assert.ok(plan.ops.every((op) => !op.path.startsWith("credentials.")), "no credential op");
+  assert.deepEqual([...plan.skippedKeys].sort(), ["Imported", "remote MCP server", "replace"]);
+  assert.ok(plan.ops.some((op) => op.path === "settings.defaultStyleNote" && op.value === "Imported defaults"));
+  assert.ok(plan.ops.some((op) => op.path === "providers.new-provider" && op.op === "merge"));
+  assert.ok(plan.ops.some((op) => op.path === "customModels.new-custom" && op.op === "set"));
+  assert.ok(plan.ops.some((op) => op.path === "settings.toolRuntime" && JSON.stringify(op.value) === JSON.stringify({ remoteMcpServer: { enabled: true, name: "docs", url: "https://mcp.example.test/sse" } })));
+  assert.ok(plan.ops.some((op) => op.path === "settings.modelPricingOverrides.openai:model-a"), "map settings import entry by entry");
+  assert.ok(!plan.ops.some((op) => op.path === "settings.discussions" || op.path.startsWith("discussions")), "work is never part of a settings import");
+  assert.match(KEYS_NOT_IMPORTED_MESSAGE, /aiboard keys set/, "the import says how to set keys");
+  assert.equal(JSON.stringify(current), snapshot, "building the import does not touch active data");
+
+  // Export and full restore never carry a key.
+  const exported = JSON.stringify(withoutSecrets(current));
+  assert.ok(!exported.includes("old-test-key"), "an export has no key");
+  for (const field of ["discussions", "messages", "benchmarkRuns", "benchmarkResultSets"] as const) {
+    assert.deepEqual(withoutSecrets(current)[field], current[field], `${field} survive in an export`);
+  }
   __resetClientStoreForTests();
   __setAdapterForTests(new IndexedDBAdapter());
-  replaceStore(mergeSettingsImport(exportStore(), parsed));
+  replaceStore(withoutSecrets({ ...exportStore(), ...source, providerKeys: [{ providerId: "replace", apiKey: "new-test-key", runnerToken: "peer-test-token" }] } as never));
   await flush();
   const persisted = JSON.parse(JSON.parse(kv.get("store") as string).data);
-  assert.equal(persisted.providerKeys[0].apiKey, "new-test-key");
+  assert.ok(!JSON.stringify(persisted).includes("new-test-key") && !JSON.stringify(persisted).includes("peer-test-token"), "a restored backup holds no key");
   assert.equal(persisted.customModels[0].id, "new-custom");
 
   // Startup can fall back quietly, but an explicit folder switch must refuse
@@ -89,9 +104,9 @@ try {
   assert.equal((await createAdapter(desired)).kind, "indexeddb");
   await assert.rejects(switchStorageLocation(desired), /storage location has not changed/);
   assert.equal(getConfig().kind, "indexeddb");
-  assert.equal(exportStore().providerKeys[0].apiKey, "new-test-key");
+  assert.ok(!JSON.stringify(exportStore()).includes("new-test-key"));
   assert.equal(kv.has("config"), false);
-  console.log("PASS local-folder envelope and backup settings imports, preserved work, browser persistence, and refused folder-switch fallback");
+  console.log("PASS settings import builds home ops and skips keys with a message; export and restore carry no key; refused folder-switch fallback");
 } finally {
   __clearClientStoreForTests();
   if (originalIndexedDB) Object.defineProperty(globalThis, "indexedDB", originalIndexedDB);

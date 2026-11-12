@@ -91,6 +91,7 @@ export interface NativeToolCall {
 }
 
 export interface ChatParams {
+  /** The connection's token (the model proxy's, or the account peer's), never a provider key (HM4a). */
   apiKey: string;
   model: string;
   messages: ChatMessage[];
@@ -110,8 +111,12 @@ export interface ChatParams {
   toolChoice?: NativeToolChoice;
   /** Explicit capabilities — used for custom models not in the static catalog. */
   capabilities?: ModelCapabilities;
-  /** Endpoint override — used by gateway providers (e.g. Azure AI Foundry). */
+  /** The connection's base URL from `resolveProviderConnection` (lib/client/providers.ts). */
   baseURL?: string;
+  /** The connection's extra headers. */
+  providerHeaders?: Record<string, string>;
+  /** The connection's proxy-aware fetch (renews the proxy token on 401). */
+  providerFetch?: typeof fetch;
   /** Local provider-runner token, when separate from the provider API key. */
   runnerToken?: string;
   /** Optional sink for provider-generated binary outputs; providers stream only lightweight refs. */
@@ -229,12 +234,15 @@ export interface StreamChunk {
   finishReason?: string;
 }
 
+export type ProviderConnectionParams = Pick<ChatParams, "apiKey" | "baseURL" | "providerHeaders" | "providerFetch">;
+
 export interface AIProvider {
   id: string;
   name: string;
   listModels(): ModelInfo[];
   streamChat(params: ChatParams): AsyncIterable<StreamChunk>;
-  validateApiKey(apiKey: string): Promise<boolean>;
+  /** Checks the provider through a resolved connection (HM4a); the key itself stays in the AIBoard home. */
+  validateConnection(connection: ProviderConnectionParams): Promise<boolean>;
 }
 
 export interface SelectedModel {

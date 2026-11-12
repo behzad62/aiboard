@@ -1,10 +1,9 @@
 import { estimatedUsdForTokens } from "@/lib/client/build-usage";
 import {
   CUSTOM_PROVIDER_ID,
-  getDecryptedApiKey,
   getCustomModelByFullId,
   getProvider,
-  getProviderBaseURL,
+  resolveProviderConnection,
   streamCustomChat,
 } from "@/lib/client/providers";
 import { getUserSettings } from "@/lib/client/store";
@@ -140,6 +139,7 @@ export interface CallCertifiedModelInput {
   // can map by id instead of positional order.
   scenarioId?: string;
   pricing?: Pick<ModelPricing, "inputUsdPer1M" | "outputUsdPer1M"> | null;
+  /** An explicit connection (tests); otherwise `resolveProviderConnection` gives it. */
   apiKey?: string;
   baseURL?: string;
   streamChat?: CertifiedModelStream;
@@ -212,10 +212,15 @@ async function callCertifiedModelOnce(
   if (providerId === CUSTOM_PROVIDER_ID && !customModel) {
     throw new Error(`Unknown custom certified model: ${fullModelId}.`);
   }
-  const apiKey =
-    input.apiKey ??
-    (customModel ? customModel.apiKey || "not-needed" : getDecryptedApiKey(providerId)) ??
-    "";
+  // The one way to a provider (HM4a): the model proxy, or the account peer.
+  // An injected stream, or an explicit connection, is used as given.
+  const connection =
+    input.streamChat || (input.apiKey !== undefined && input.baseURL !== undefined)
+      ? null
+      : await resolveProviderConnection(customModel ? fullModelId : providerId, {
+          signal: input.signal,
+        });
+  const apiKey = connection?.apiKey ?? input.apiKey ?? "";
   const streamChat =
     input.streamChat ??
     (customModel
@@ -223,9 +228,6 @@ async function callCertifiedModelOnce(
           yield* streamCustomChat(customModel, params);
         } satisfies CertifiedModelStream)
       : defaultCertifiedModelStream);
-  if (!input.streamChat && !customModel && !apiKey) {
-    throw new Error(`No API key configured for certified provider ${providerId}.`);
-  }
 
   const preflightUsage = estimateModelCallUsage({
     messages,
@@ -283,10 +285,9 @@ async function callCertifiedModelOnce(
     temperature: input.temperature,
     reasoningEffort: input.reasoningEffort,
     structuredOutput: input.structuredOutput,
-    baseURL:
-      input.baseURL ??
-      customModel?.baseURL ??
-      (input.streamChat ? undefined : getProviderBaseURL(providerId)),
+    baseURL: connection?.baseURL ?? input.baseURL,
+    ...(connection ? { providerHeaders: connection.headers } : {}),
+    ...(connection?.fetch ? { providerFetch: connection.fetch } : {}),
     capabilities: customModel?.capabilities,
     signal: attemptController.signal,
     contextProfile: input.model.contextProfile,

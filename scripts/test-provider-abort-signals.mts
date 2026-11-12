@@ -146,6 +146,8 @@ async function exerciseProvider(providerCase: ProviderCase): Promise<void> {
   const iterator = providerCase
     .stream({
       apiKey: "test-key",
+      // Every client takes its base URL from the resolved connection (HM4a).
+      baseURL: `http://127.0.0.1:9/v2/model-proxy/${providerCase.name}`,
       model: providerCase.model,
       messages: [{ role: "user", content: "Abort this request." }],
       maxTokens: 16,

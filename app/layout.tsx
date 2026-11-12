@@ -3,6 +3,7 @@ import { Inter, Fraunces, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
 import { Code } from "lucide-react";
 import { AppNav } from "@/components/AppNav";
+import { UnsavedStoreNotice } from "@/components/UnsavedStoreNotice";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   SITE_CONTACT_EMAIL,
@@ -104,6 +105,7 @@ export default function RootLayout({
               </div>
             </div>
           </header>
+          <UnsavedStoreNotice />
           <main className="mx-auto w-full flex-1 px-4 py-8 sm:px-6">{children}</main>
           <footer className="px-4 py-6 text-xs text-muted-foreground">
             <div className="mx-auto flex max-w-[100rem] flex-wrap items-center justify-center gap-x-4 gap-y-2">

@@ -35,8 +35,9 @@ import {
   getTrustedBenchRunnerReadiness,
   type BenchRunnerHealth,
 } from "@/lib/client/bench-runner";
-import { getEnabledModels } from "@/lib/client/providers";
-import { getUserSettings, updateUserSettings } from "@/lib/client/store";
+import { assertModelConnection, getEnabledModels } from "@/lib/client/providers";
+import { isModelConnectionError } from "@/lib/client/model-proxy-client";
+import { getUserSettings, updateBrowserSettings } from "@/lib/client/store";
 import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE } from "@/lib/benchmark/native-suites";
 
 import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
@@ -126,7 +127,7 @@ export function CertifiedRunPanel({
     runnerCheck.current = null;
     setCheckingWorkBenchRunner(false);
     setWorkBenchRunnerHealth(null);
-    updateUserSettings({ benchmarkRunner: { url, token } });
+    updateBrowserSettings({ benchmarkRunner: { url, token } });
   }
 
   useEffect(() => {
@@ -324,6 +325,14 @@ export function CertifiedRunPanel({
           }))
         );
         setMessage(null);
+        // Every model call goes through the Runner (HM4a): refuse before the first one.
+        try {
+          await assertModelConnection(signal);
+        } catch (error) {
+          if (!isModelConnectionError(error)) throw error;
+          setMessage(error.message);
+          return;
+        }
         await runPreset(
           preset,
           {

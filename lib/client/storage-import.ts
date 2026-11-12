@@ -1,4 +1,5 @@
 import type { ClientStore } from "./store";
+import type { HomeOp } from "./home-client";
 
 type ImportedSettings = Partial<Pick<ClientStore, "userSettings" | "providerKeys" | "customModels">>;
 
@@ -37,12 +38,82 @@ export function parseSettingsImport(text: string): ImportedSettings {
   return settings;
 }
 
-/** Imported entries replace matching settings; other settings and all work remain. */
-export function mergeSettingsImport(current: ClientStore, imported: ImportedSettings): ClientStore {
-  return {
-    ...current,
-    userSettings: { ...current.userSettings, ...imported.userSettings },
-    providerKeys: Array.from(new Map([...current.providerKeys, ...(imported.providerKeys ?? [])].map(item => [item.providerId, item])).values()),
-    customModels: Array.from(new Map([...current.customModels, ...(imported.customModels ?? [])].map(item => [item.id, item])).values()),
-  };
+/** The settings an import may write to the AIBoard home: the home-owned UserSettings fields, never a secret. */
+const IMPORTABLE_SETTINGS = [
+  "defaultEffort", "defaultMode", "judgeModelId", "defaultVerbosity", "defaultStyleNote",
+  "defaultReasoningEffort", "defaultBuildRunPolicy", "defaultBuildSkillMode", "defaultBuildBudgetUsd",
+  "defaultBuildTimeLimitMinutes", "defaultBuildAlwaysRequireIndependentVerifier",
+  "modelPricingOverrides", "modelContextOverrides", "discoveredModelMetadata", "providerToolCapabilityEvidence",
+  "modelCapabilityProfiles",
+] as const;
+const MAP_SETTINGS = new Set(["modelPricingOverrides", "modelContextOverrides", "discoveredModelMetadata", "modelCapabilityProfiles"]);
+const CUSTOM_MODEL_FIELDS = [
+  "label", "baseURL", "model", "capabilities", "toolCapabilityOverrides", "compatibleTransports",
+  "reasoningEffort", "createdAt",
+] as const;
+
+export interface SettingsImportPlan {
+  ops: HomeOp[];
+  /** Provider and custom-model names whose keys the file held and the import skipped. */
+  skippedKeys: string[];
+}
+
+/**
+ * Imported entries replace matching settings in the AIBoard home; other settings
+ * and all of this browser's work remain. Keys are skipped: the file's provider
+ * keys, runner tokens, custom-model keys and the remote MCP token never leave
+ * this page (plan §6.1 "Import and export"). Map-valued settings import entry by
+ * entry, so entries the file does not name keep their value.
+ */
+export function homeOpsFromSettingsImport(imported: ImportedSettings): SettingsImportPlan {
+  const ops: HomeOp[] = [];
+  const skippedKeys: string[] = [];
+  const settings = (imported.userSettings ?? {}) as unknown as Record<string, unknown>;
+  for (const field of IMPORTABLE_SETTINGS) {
+    const value = settings[field];
+    if (value === undefined) continue;
+    if (MAP_SETTINGS.has(field) && record(value)) {
+      for (const [entry, entryValue] of Object.entries(value)) ops.push({ path: `settings.${field}.${entry}`, op: "set", value: entryValue });
+      continue;
+    }
+    if (value === null && field !== "judgeModelId") continue;
+    ops.push({ path: `settings.${field}`, op: "set", value });
+  }
+  if (settings.openAIConnectionMode === "api" || settings.openAIConnectionMode === "subscription") {
+    ops.push({ path: "openAIConnectionMode", op: "set", value: settings.openAIConnectionMode });
+  }
+  const runtime = record(settings.toolRuntime) ? settings.toolRuntime : undefined;
+  if (runtime) {
+    const home: Record<string, unknown> = {};
+    const remote = runtime.remoteMcpServer;
+    if (record(remote) && typeof remote.enabled === "boolean" && typeof remote.name === "string" && typeof remote.url === "string") {
+      home.remoteMcpServer = { enabled: remote.enabled, name: remote.name, url: remote.url };
+      if (typeof remote.authorizationToken === "string" && remote.authorizationToken) skippedKeys.push("remote MCP server");
+    }
+    const search = runtime.openaiFileSearch;
+    if (record(search) && typeof search.enabled === "boolean" && Array.isArray(search.vectorStoreIds)) {
+      home.openaiFileSearch = { enabled: search.enabled, vectorStoreIds: search.vectorStoreIds.filter((id) => typeof id === "string") };
+    }
+    if (Object.keys(home).length > 0) ops.push({ path: "settings.toolRuntime", op: "merge", value: home });
+  }
+  for (const key of imported.providerKeys ?? []) {
+    const value: Record<string, unknown> = {};
+    if (typeof key.enabled === "boolean") value.enabled = key.enabled;
+    if (key.baseURL !== undefined) value.baseUrl = key.baseURL || null;
+    if (key.models !== undefined) value.models = key.models;
+    if (key.enabledModelIds !== undefined) value.enabledModelIds = key.enabledModelIds;
+    if (key.defaultModel !== undefined) value.defaultModel = key.defaultModel;
+    if (Object.keys(value).length > 0) ops.push({ path: `providers.${key.providerId}`, op: "merge", value });
+    if (key.apiKey || key.runnerToken || key.encryptedKey) skippedKeys.push(key.providerId);
+  }
+  for (const model of imported.customModels ?? []) {
+    const value: Record<string, unknown> = {};
+    for (const field of CUSTOM_MODEL_FIELDS) {
+      if (model[field] !== undefined) value[field] = model[field];
+    }
+    if (typeof value.label !== "string" || typeof value.baseURL !== "string" || typeof value.model !== "string") continue;
+    ops.push({ path: `customModels.${model.id}`, op: "set", value });
+    if (model.apiKey || model.encryptedKey) skippedKeys.push(model.label || model.id);
+  }
+  return { ops, skippedKeys };
 }

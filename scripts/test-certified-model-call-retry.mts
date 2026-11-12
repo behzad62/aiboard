@@ -512,19 +512,21 @@ for (let waitIndex = 0; waitIndex < CERTIFIED_RETRY_DELAYS_MS.length; waitIndex+
 }
 
 {
+  // Since HM4a every SDK client is built in lib/providers/connection.ts; each provider passes the flag on.
   const providerSources = [
     "lib/providers/openai.ts",
     "lib/providers/anthropic.ts",
-    "lib/providers/custom.ts",
     "lib/providers/openrouter.ts",
     "lib/providers/xai.ts",
+    "lib/providers/deepseek.ts",
+    "lib/providers/nvidia.ts",
     "lib/client/providers.ts",
   ].map((file) => fs.readFileSync(file, "utf8"));
+  const factories = fs.readFileSync("lib/providers/connection.ts", "utf8");
   check(
     "certified calls disable automatic SDK retries at every supported constructor",
-    providerSources.every((source) =>
-      source.includes("disableAutomaticRetries") && source.includes("maxRetries: 0")
-    )
+    providerSources.every((source) => source.includes("disableAutomaticRetries")) &&
+      (factories.match(/options\.disableAutomaticRetries \? \{ maxRetries: 0 \}/g) ?? []).length === 2
   );
 }
 

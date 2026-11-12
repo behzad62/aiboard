@@ -21,8 +21,10 @@ export type ProviderFailureClass = "transient" | "fatal" | "other";
 // exceeded your current quota, please check your plan and billing details"
 // was only caught via the incidental "billing" token; pin the quota phrasing
 // explicitly.
+// "Connect AI Board" / "Update AI Board" are the model-connection refusals
+// (lib/client/model-proxy-client.ts): no retry can fix them.
 const FATAL_PATTERN =
-  /credits? (are )?depleted|requires more credits|can only afford|prepayment|billing|quota exceeded|exceeded your current quota|insufficient (funds|quota|credit)|payment required|api key|unauthorized|forbidden|invalid.*key|model.*not.*(found|exist)/i;
+  /connect ai board|update ai board|credits? (are )?depleted|requires more credits|can only afford|prepayment|billing|quota exceeded|exceeded your current quota|insufficient (funds|quota|credit)|payment required|api key|unauthorized|forbidden|invalid.*key|model.*not.*(found|exist)/i;
 const TRANSIENT_PATTERN =
   /timed?\s?out|timeout|too many requests|rate.?limit|(?<![a-z0-9])(429|500|502|503|504)(?![a-z0-9])|overloaded|server error|unavailable|network|fetch failed|econn|socket|empty response|processing your request|retry your request|help\.openai\.com|request id/i;
 

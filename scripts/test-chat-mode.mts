@@ -16,6 +16,7 @@ import {
 } from "../lib/client/store";
 import { runDiscussion } from "../lib/client/engine";
 import { openaiProvider } from "../lib/providers/openai";
+import { installStubRunner, STUB_PROXY_URL } from "./model-proxy-test-support.mts";
 import type { ChatMessage, StreamChunk } from "../lib/providers/base";
 import {
   createDiscussion,
@@ -138,9 +139,13 @@ console.log("PASS chats start from a short message and follow-ups are stored as 
     enabled: true,
   });
   const seen: ChatMessage[][] = [];
+  const connections: Array<{ apiKey: string; baseURL?: string }> = [];
   const original = openaiProvider.streamChat;
+  // Model calls go through the Runner's model proxy (HM4a): a stub Runner hands out the connection.
+  const stub = installStubRunner({ proxyTokens: ["proxy_chat-stub"] });
   openaiProvider.streamChat = async function* (params): AsyncIterable<StreamChunk> {
     seen.push(params.messages.map((message) => ({ ...message })));
+    connections.push({ apiKey: params.apiKey, baseURL: params.baseURL });
     yield { type: "token", content: `Reply ${seen.length}` };
     yield { type: "done" };
   };
@@ -168,8 +173,10 @@ console.log("PASS chats start from a short message and follow-ups are stored as 
     // Running again with nothing pending must not call the model.
     await runDiscussion(chatId, () => undefined);
     assert.equal(seen.length, 2);
+    assert.deepEqual(connections[0], { apiKey: "proxy_chat-stub", baseURL: `${STUB_PROXY_URL}/v2/model-proxy/openai` }, "the call takes the proxy connection, never the browser key");
   } finally {
     openaiProvider.streamChat = original;
+    stub.restore();
   }
   console.log("PASS the engine answers each pending turn with the full conversation");
 }

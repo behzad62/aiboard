@@ -7,6 +7,7 @@ import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
 import { getProviderDefinition, providerConnection } from "@/lib/providers/provider-registry";
 import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-resolution";
 import {
+  ACCOUNT_PEER_MISSING_MESSAGE,
   getDiscoveredModelMetadata,
   getPersistedProviderCapabilityEvidence,
   resolveClientModelContextProfile,
@@ -40,7 +41,8 @@ import {
   type NativeRunnerConnection,
 } from "./runner-v2";
 import { requestSpecificationSource } from "./native-planning-view";
-import { resolveRunnerConnection } from "./local-runner-handoff";
+import { getPeerConnection, resolveRunnerConnection } from "./local-runner-handoff";
+import { ModelConnectionError } from "./model-proxy-client";
 import { loadAttachmentPayloads } from "./attachments";
 import { initialNativeBuildTextAttachments } from "./build-guidance-files";
 import { followUpObjective } from "./build-notes";
@@ -599,10 +601,52 @@ export async function applyNativeBuildCrew(
   }, `crew:${runId}:${Date.now()}`);
 }
 
+export interface NativeProviderConfigOptions {
+  /** The account peer for ChatGPT and Copilot; the launcher's at call time by default (OD-32). */
+  accountPeer?: { url: string; token: string } | null;
+}
+
+function accountPeerFor(providerId: string, options: NativeProviderConfigOptions): { url: string; token: string } {
+  const peer = options.accountPeer !== undefined ? options.accountPeer : getPeerConnection("accounts");
+  if (!peer?.url || !peer.token) {
+    throw new ModelConnectionError("account_peer_missing", `${getProviderDefinition(providerId)?.name ?? providerId}: ${ACCOUNT_PEER_MISSING_MESSAGE}`);
+  }
+  return peer;
+}
+
+/**
+ * The config the web pushes for a runtime (HM4a): it carries no secret.
+ * - A home-backed runtime (every API provider, NVIDIA and custom models) has
+ *   no `secret` and no `baseUrl` and names `secretSource: "home"`; the Runner
+ *   fills the key, base URL and transport from the AIBoard home (HM3).
+ * - An account-backed runtime (ChatGPT, Copilot) carries the launcher's
+ *   account-peer address and token, read now, never a provider key (OD-32).
+ */
 export function createNativeProviderConfig(
   runtimeId: string,
   priority: number,
-  reasoningEffort?: string | null
+  reasoningEffort?: string | null,
+  options: NativeProviderConfigOptions = {},
+): NativeProviderConfig {
+  const described = describeNativeProviderConfig(runtimeId, priority, reasoningEffort, options);
+  if (described.transport === "account-runner") return described;
+  const pushed: NativeProviderConfig = { ...described, secretSource: "home" };
+  delete pushed.baseUrl;
+  delete pushed.secret;
+  delete pushed.runnerToken;
+  return pushed;
+}
+
+/**
+ * Everything the web knows about a runtime, with the base URL it would use:
+ * the HM2 parity script compares it with the Runner's `resolveHomeRuntime`.
+ * It holds no provider key; account-backed runtimes carry the peer's token.
+ */
+export function describeNativeProviderConfig(
+  runtimeId: string,
+  priority: number,
+  reasoningEffort?: string | null,
+  options: NativeProviderConfigOptions = {},
 ): NativeProviderConfig {
   const settings = getUserSettings();
   // A role at a second reasoning effort runs the same model under `model#effort`.
@@ -634,7 +678,6 @@ export function createNativeProviderConfig(
       }),
       transport: "openai-compatible",
       baseUrl: custom.baseURL,
-      secret: custom.apiKey || "aiboard-local-endpoint",
       ...(effort && effort !== "default" ? { reasoningEffort: effort } : {}),
       maxOutputTokens: profile.maxOutputTokens,
       capabilities: ["*"],
@@ -646,14 +689,16 @@ export function createNativeProviderConfig(
   }
   const saved = getProviderKey(providerId);
   const definition = getProviderDefinition(providerId);
-  if (!saved?.enabled || !saved.apiKey) {
+  if (!saved?.enabled) {
     throw new Error(`Provider ${providerId} is not configured.`);
   }
+  const accountBacked = Boolean(definition?.accountRunner);
+  const peer = accountBacked ? accountPeerFor(providerId, options) : null;
   const native = resolveNativeProviderTransport(
     providerId,
-    saved.baseURL ?? undefined,
-    saved.runnerToken ?? undefined,
-    Boolean(definition?.accountRunner)
+    peer ? peer.url : saved.baseURL ?? undefined,
+    undefined,
+    accountBacked
   );
   const catalogModel = MODEL_CATALOG.find(
     (candidate) => candidate.providerId === providerId && candidate.id === model
@@ -683,10 +728,8 @@ export function createNativeProviderConfig(
     }),
     transport: native.transport,
     ...(native.baseUrl ? { baseUrl: native.baseUrl } : {}),
-    secret: saved.apiKey,
-    ...(native.transport === "account-runner" && saved.runnerToken
-      ? { runnerToken: saved.runnerToken }
-      : {}),
+    // The account runner reads its token from `secret` (native-build-factory: runnerToken ?? secret).
+    ...(peer ? { secret: peer.token } : {}),
     // Native coding agents can use the task-scoped tool registry regardless of
     // the descriptive labels the Architect chooses for a task.
     capabilities: ["*"],

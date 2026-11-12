@@ -17,7 +17,8 @@ import {
   NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
   supportsNativeRunnerNodeVersion,
 } from "./native-build-policy";
-import { getUserSettings, updateUserSettings } from "./store";
+import { getUserSettings, updateBrowserToolRuntimeRunner } from "./store";
+import { saveHome, settingsPatchOps } from "./home-client";
 
 export interface ToolRuntimeSignal {
   configured?: boolean;
@@ -121,20 +122,31 @@ function notifyToolRuntimeChanged(): void {
   }
 }
 
+/** The Tools tab's Runner connection names a Runner, not a user, so it stays in this browser (§5.8). */
 export function saveToolRuntimeRunner(runner: ToolRuntimeRunnerSettings | null): void {
-  const current = getToolRuntimeSettings();
-  updateUserSettings({ toolRuntime: { ...current, runner } });
+  updateBrowserToolRuntimeRunner(runner);
   notifyToolRuntimeChanged();
 }
 
-export function saveOpenAIFileSearch(settings: OpenAIFileSearchSettings | null): void {
-  const current = getToolRuntimeSettings();
-  updateUserSettings({ toolRuntime: { ...current, openaiFileSearch: settings } });
+/** Saved to the AIBoard home. */
+export async function saveOpenAIFileSearch(settings: OpenAIFileSearchSettings | null): Promise<void> {
+  await saveHome((_view, current) => settingsPatchOps(current, { toolRuntime: { openaiFileSearch: settings } }));
   notifyToolRuntimeChanged();
 }
-export function saveRemoteMcpServer(server: RemoteMcpServerSettings | null): void {
-  const current = getToolRuntimeSettings();
-  updateUserSettings({ toolRuntime: { ...current, remoteMcpServer: server } });
+
+/**
+ * Saved to the AIBoard home: the server's fields to config.json and a typed
+ * token to the home's credentials, in one batch. A server cleared to null also
+ * removes its token. Leaving the token empty keeps the saved one.
+ */
+export async function saveRemoteMcpServer(server: RemoteMcpServerSettings | null): Promise<void> {
+  const token = server?.authorizationToken?.trim();
+  await saveHome((_view, current) => [
+    ...settingsPatchOps(current, { toolRuntime: { remoteMcpServer: server ? { enabled: server.enabled, name: server.name, url: server.url } : null } }),
+    ...(server === null
+      ? [{ path: "credentials.remoteMcpAuthorizationToken", op: "remove" as const }]
+      : token ? [{ path: "credentials.remoteMcpAuthorizationToken", op: "set" as const, value: { secret: token } }] : []),
+  ]);
   notifyToolRuntimeChanged();
 }
 

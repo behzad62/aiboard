@@ -1,133 +1,53 @@
-import { once } from "node:events";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createRequire } from "node:module";
-import type { runCapabilityProbes } from "../lib/client/capability-api";
-import type { saveProviderKey } from "../lib/client/settings-api";
-
-const require = createRequire(import.meta.url);
-const capabilityApi = require("../lib/client/capability-api") as {
-  runCapabilityProbes: typeof runCapabilityProbes;
-};
-const settingsApi = require("../lib/client/settings-api") as {
-  saveProviderKey: typeof saveProviderKey;
-};
-const storeApi = require("../lib/client/store") as {
-  __resetClientStoreForTests: () => void;
-};
-const providerApi = require("../lib/client/providers") as {
-  NVIDIA_PROVIDER_ID: string;
-};
+/*
+ * Capability Lab probes NVIDIA NIM through the Runner's model proxy (HM4a, OD-32).
+ * Run: npx tsx scripts/test-nvidia-capability-lab.mts
+ *
+ * NVIDIA used to be probed through the account peer with its key in the body; this script pinned that.
+ * Since HM4a the probe is an OpenAI-compatible call to the proxy, which adds the key from the AIBoard
+ * home, so the browser holds no NVIDIA key. A stub Runner and a stub upstream answer.
+ */
+import { runCapabilityProbes } from "../lib/client/capability-api";
+import { NVIDIA_PROVIDER_ID } from "../lib/client/providers";
+import { __resetClientStoreForTests } from "../lib/client/store";
+import { STUB_PROXY_URL } from "./model-proxy-test-support.mts";
+import { connectStubHome, removeStubHomes } from "./home-test-support.mts";
 
 let failures = 0;
-
 function check(name: string, ok: boolean, detail?: unknown): void {
   if (!ok) failures += 1;
-  console.log(
-    `${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`
-  );
+  console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-function sseEvent(data: unknown): string {
-  return `data: ${JSON.stringify(data)}\n\n`;
-}
-
-async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  let raw = "";
-  req.setEncoding("utf8");
-  for await (const chunk of req) raw += chunk;
-  return JSON.parse(raw) as Record<string, unknown>;
-}
-
-async function withRunnerStub(
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>
-): Promise<{
-  url: string;
-  close: () => Promise<void>;
-}> {
-  const server = createServer((req, res) => {
-    handler(req, res).catch((err) => {
-      res.writeHead(500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
-    });
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("server did not bind to TCP");
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    close: async () => {
-      server.close();
-      await once(server, "close");
-    },
-  };
-}
-
-async function main(): Promise<void> {
-  let requestPath = "";
-  let requestToken: string | string[] | undefined;
-  let requestBody: Record<string, unknown> | undefined;
-  const runner = await withRunnerStub(async (req, res) => {
-    requestPath = req.url ?? "";
-    requestToken = req.headers["x-runner-token"];
-    requestBody = await readBody(req);
-    res.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-    });
-    res.write(sseEvent({ type: "token", content: "AIBOARD_TEXT_OK" }));
-    res.write(sseEvent({ type: "done" }));
-    res.end();
-  });
-
-  try {
-    storeApi.__resetClientStoreForTests();
-    settingsApi.saveProviderKey({
-      providerId: providerApi.NVIDIA_PROVIDER_ID,
-      apiKey: "nvapi-probe-key",
-      runnerToken: "runner-probe-token",
-      baseURL: runner.url,
-      models: ["nvidia:z-ai/glm-5.2"],
-      defaultModel: "z-ai/glm-5.2",
-      enabled: true,
-    });
-
-    const profile = await capabilityApi.runCapabilityProbes({
-      fullModelId: "nvidia:z-ai/glm-5.2",
-      probeIds: ["text"],
-    });
-
-    check(
-      "Capability Lab resolves user-defined NVIDIA models",
-      profile.fullModelId === "nvidia:z-ai/glm-5.2" &&
-        profile.providerId === "nvidia" &&
-        profile.results[0]?.status === "pass",
-      profile
-    );
-    check(
-      "Capability Lab sends NVIDIA probes through the local provider runner",
-      requestPath === "/providers/nvidia/chat" &&
-        requestToken === "runner-probe-token" &&
-        requestBody?.apiKey === "nvapi-probe-key" &&
-        requestBody?.model === "z-ai/glm-5.2",
-      { requestPath, requestToken, requestBody }
-    );
-  } finally {
-    await runner.close();
-  }
-
-  if (failures === 0) {
-    console.log("PASS");
-  } else {
-    console.log(`FAIL ${failures} check(s) failed`);
-  }
-
-  // exitCode, not process.exit(): exiting while the stub's keep-alive socket is
-  // still closing trips a libuv assertion on Windows (UV_HANDLE_CLOSING, exit 127).
-  process.exitCode = failures === 0 ? 0 : 1;
-}
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+__resetClientStoreForTests({});
+// The NVIDIA row lives in the AIBoard home (HM4b), and the probe's profile is saved there.
+const stub = await connectStubHome({
+  seed: [{ path: `providers.${NVIDIA_PROVIDER_ID}`, op: "set", value: { models: ["nvidia:z-ai/glm-5.2"], defaultModel: "z-ai/glm-5.2", enabled: true } }],
+  proxyTokens: ["proxy_lab-stub"],
+  upstream: () => new Response(
+    `data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "AIBOARD_TEXT_OK" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  ),
 });
+try {
+  const profile = await runCapabilityProbes({ fullModelId: "nvidia:z-ai/glm-5.2", probeIds: ["text"] });
+  check(
+    "Capability Lab resolves user-defined NVIDIA models",
+    profile.fullModelId === "nvidia:z-ai/glm-5.2" && profile.providerId === "nvidia" && profile.results[0]?.status === "pass",
+    profile,
+  );
+  const request = stub.requests[0];
+  const body = request ? JSON.parse(request.body) as { model?: string; apiKey?: string } : {};
+  check(
+    "Capability Lab sends NVIDIA probes to the model proxy with the proxy token and no key",
+    request?.url === `${STUB_PROXY_URL}/v2/model-proxy/nvidia/chat/completions` &&
+      request.headers.get("authorization") === "Bearer proxy_lab-stub" &&
+      !request.headers.has("x-runner-token") && body.apiKey === undefined && body.model === "z-ai/glm-5.2",
+    { url: request?.url, body },
+  );
+} finally {
+  stub.restore();
+  removeStubHomes();
+}
+
+console.log(failures === 0 ? "PASS" : `FAIL ${failures} check(s) failed`);
+process.exitCode = failures === 0 ? 0 : 1;

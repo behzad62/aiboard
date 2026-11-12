@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import type {
   AIProvider,
   ChatParams,
@@ -16,16 +16,10 @@ import {
   type ProviderToolEvent,
 } from "./provider-events";
 import type { ToolCapabilityId } from "./tool-capabilities";
-import { providerDefaultBaseUrl } from "./provider-registry";
+import { createOpenAIClient, providerFetch, type ConnectionParams } from "./connection";
 
-export const META_MODEL_API_BASE_URL = providerDefaultBaseUrl("meta");
-
-function createMetaClient(apiKey: string): OpenAI {
-  return new OpenAI({
-    apiKey,
-    baseURL: META_MODEL_API_BASE_URL,
-    dangerouslyAllowBrowser: true,
-  });
+function createMetaClient(connection: ConnectionParams): OpenAI {
+  return createOpenAIClient(connection, "Meta Model API");
 }
 
 function enabledPlanTool(params: ChatParams, id: ToolCapabilityId): boolean {
@@ -439,11 +433,9 @@ export const metaProvider: AIProvider = {
     );
   },
 
-  async validateApiKey(apiKey: string): Promise<boolean> {
+  async validateConnection(connection): Promise<boolean> {
     try {
-      const response = await fetch(`${META_MODEL_API_BASE_URL}/models`, {
-        headers: { authorization: `Bearer ${apiKey}` },
-      });
+      const response = await providerFetch(connection, "Meta Model API", "models");
       return response.ok;
     } catch {
       return false;
@@ -451,6 +443,6 @@ export const metaProvider: AIProvider = {
   },
 
   async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
-    yield* streamMetaByPlan(createMetaClient(params.apiKey), params);
+    yield* streamMetaByPlan(createMetaClient(params), params);
   },
 };

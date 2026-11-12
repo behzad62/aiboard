@@ -116,7 +116,7 @@ export function ModelContextEditor({
     setSaving(true);
     setMessage(null);
     try {
-      saveModelContextOverride({
+      await saveModelContextOverride({
         fullModelId,
         contextWindowTokens: advancedOnly ? override?.contextWindowTokens ?? undefined : nextContext ?? undefined,
         maxOutputTokens: advancedOnly ? override?.maxOutputTokens ?? undefined : nextMaxOutput ?? undefined,
@@ -140,7 +140,7 @@ export function ModelContextEditor({
     setSaving(true);
     setMessage(null);
     try {
-      saveModelContextOverride(advancedOnly ? { fullModelId, clearBuildSettings: true } : { fullModelId, clear: true });
+      await saveModelContextOverride(advancedOnly ? { fullModelId, clearBuildSettings: true } : { fullModelId, clear: true });
       await flush();
       await onSaved();
       setMessage(advancedOnly ? "Build settings reset" : "Context override reset");
