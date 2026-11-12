@@ -2,15 +2,19 @@
  *
  * Usage:
  *   OPENROUTER_API_KEY=... npx tsx scripts/test-openrouter-structured-output-live.mts
- *   AIBOARD_STORE_PATH="C:/Users/.../AIBoard" npx tsx scripts/test-openrouter-structured-output-live.mts
+ *   npx tsx scripts/test-openrouter-structured-output-live.mts   # the OpenRouter key saved in the AIBoard home
+ *   npx tsx scripts/test-openrouter-structured-output-live.mts --dry-run   # find the key, call nothing
+ *
+ * Without OPENROUTER_API_KEY the key comes from the AIBoard home (`~/.aiboard`, or AIBOARD_HOME), as
+ * `aiboard keys set openrouter` or Settings saved it, together with the home's OpenRouter base URL.
+ * The key is never printed.
  *
  * Optional:
  *   OPENROUTER_LIVE_MODELS="z-ai/glm-5.2,minimax/minimax-m3"
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import type { AIProvider, StructuredOutputFormat } from "../lib/providers/base";
+import { liveProviderKey } from "./live-home-key.mts";
 
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
@@ -20,12 +24,19 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 
 const openrouterModule = await import("../lib/providers/openrouter");
 const openrouterProvider = resolveOpenRouterProvider(openrouterModule);
-const apiKey = loadOpenRouterApiKey();
+const found = liveProviderKey("openrouter", "OPENROUTER_API_KEY");
 
-if (!apiKey) {
+if (!found.found) {
   console.log(
-    "SKIP - set OPENROUTER_API_KEY or AIBOARD_STORE_PATH to run the live OpenRouter structured-output smoke test"
+    `SKIP - ${found.reason}; set OPENROUTER_API_KEY or save an OpenRouter key in the AIBoard home to run the live OpenRouter structured-output smoke test`
   );
+  process.exit(0);
+}
+const apiKey = found.key;
+const baseURL = found.baseUrl ?? undefined;
+
+if (process.argv.includes("--dry-run")) {
+  console.log(`DRY-RUN - OpenRouter key found (source=${found.source}${baseURL ? ", home base URL" : ""}); no provider call made`);
   process.exit(0);
 }
 
@@ -90,6 +101,7 @@ async function callStructuredSmoke(model: string): Promise<{
 
   for await (const chunk of openrouterProvider.streamChat({
     apiKey,
+    ...(baseURL ? { baseURL } : {}),
     model,
     messages: [
       {
@@ -145,47 +157,4 @@ async function callStructuredSmoke(model: string): Promise<{
     preview: content.slice(0, 120),
     ...(error ? { error: error.slice(0, 260) } : {}),
   };
-}
-
-function loadOpenRouterApiKey(): string | null {
-  const envKey = process.env.OPENROUTER_API_KEY?.trim();
-  if (envKey) return envKey;
-
-  const storePath = process.env.AIBOARD_STORE_PATH?.trim();
-  if (!storePath) return null;
-
-  const resolvedStorePath = resolveStoreJsonPath(storePath);
-  if (!resolvedStorePath) return null;
-
-  const raw = fs.readFileSync(resolvedStorePath, "utf8");
-  const outer = JSON.parse(raw) as { data?: unknown };
-  const data =
-    typeof outer.data === "string"
-      ? JSON.parse(outer.data)
-      : outer.data && typeof outer.data === "object"
-        ? outer.data
-        : outer;
-  const providerKeys = (data as { providerKeys?: unknown }).providerKeys;
-  if (!Array.isArray(providerKeys)) return null;
-  const openrouterKey = providerKeys.find(
-    (entry): entry is { providerId: string; apiKey: string } =>
-      Boolean(
-        entry &&
-          typeof entry === "object" &&
-          (entry as { providerId?: unknown }).providerId === "openrouter" &&
-          typeof (entry as { apiKey?: unknown }).apiKey === "string"
-      )
-  );
-  return openrouterKey?.apiKey.trim() || null;
-}
-
-function resolveStoreJsonPath(inputPath: string): string | null {
-  const absolute = path.resolve(inputPath);
-  if (!fs.existsSync(absolute)) return null;
-  const stat = fs.statSync(absolute);
-  if (stat.isDirectory()) {
-    const candidate = path.join(absolute, "store.json");
-    return fs.existsSync(candidate) ? candidate : null;
-  }
-  return absolute;
 }

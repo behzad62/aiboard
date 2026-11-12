@@ -30,6 +30,35 @@ Exceptional AI-assisted process recovery is a separate explicit path using the c
 
 Trusted filesystem mutation captures path identity and expected content/revision, rechecks them before publication, and fails typed on conflicts, aliasing, unsupported primitives, or identity changes. It is deliberately **not** an atomic compare-and-swap against an uncontrolled external writer and is not a kernel filesystem sandbox. An external process can still race between checks; atomic replacement preserves complete bytes but does not promise ACL/xattr preservation or crash durability.
 
+## Settings and keys: the AIBoard home
+
+The user's settings and keys live in the AIBoard home, one per-user folder that every AI Board surface reads: `AIBOARD_HOME` when set (an absolute folder the user owns; on POSIX not group- or world-writable, otherwise every surface refuses with `home_unsafe`), else `~/.aiboard` (`C:\Users\<user>\.aiboard` on Windows).
+
+- `config.json` holds providers, enabled models, custom models (without keys) and settings, with no secret. Readers derive "has a key" and the key hints from `credentials.json`.
+- `credentials.json` is an AES-256-GCM envelope encrypted with the home key, 32 bytes at `<user data root>/home-key`, outside the home, so a copied or synced home never carries usable keys. Keys saved under another computer's home key are refused with `home_key_mismatch` until `aiboard keys reset` replaces them.
+- `home-lock.sqlite` serializes writers. Every write re-reads both files and applies one batch of ops at a base revision; a batch touching a section that changed meanwhile is refused with `home_conflict`, so a concurrent edit is never lost silently.
+- A key is used only while the provider's or custom model's upstream equals the one it was saved for, and a change of base URL removes that key.
+- Account-backed models (ChatGPT and Copilot through the account peer) keep their settings in the home but never a credential: the launcher supplies the peer's address and token at call time.
+- Every tool broker denies `credentials.json`, `home-lock.sqlite` and the home key to every actor, and denies writes to `config.json`. Any process of the user's account can still read the files, as with other CLIs that keep keys in the user folder; there is no passphrase, so tasks can run unattended. A command run at an unconfined access level can read them too.
+- `aiboard uninstall --remove-state` deletes the home's files with the rest of AI Board's data; without it they stay.
+
+The web reads and writes the home only through the Runner (`GET /v2/home`, `POST /v2/home`) and keeps no key in the browser. Browser model calls go through the Runner's model proxy, which swaps a short-lived proxy token for the key in the home and forwards the call to the provider; ChatGPT and Copilot go through the account peer.
+
+From a terminal:
+
+~~~
+aiboard config [--json]                               # where the home and its key are; providers with key hints; enabled models; defaults
+aiboard config set defaults.reasoningEffort <effort>  # the default reasoning effort
+aiboard keys set <provider> [--stdin]                 # prompts with echo off; --stdin reads one line from a pipe
+aiboard keys remove <provider>
+aiboard keys reset [--yes]                            # after a confirmation, removes every saved key (home_key_mismatch)
+aiboard models [--json]                               # every enabled model
+aiboard models enable <provider:model>
+aiboard models disable <provider:model>
+~~~
+
+These commands start no Runner, make no network call, and write through the home lock, retrying once on `home_conflict`. They refuse inside an AIBoard task or a Runner's child, so a task cannot rewrite the user's home. A key is never taken from argv; at a terminal the prompt echoes nothing, and a stdin that is not a terminal is read only with `--stdin` (a leading BOM and a trailing CR or LF are stripped). A key saved this way shows as not validated until Settings validates it. `aiboard models enable` refuses an id with an unknown provider and names the nearest catalog ids. Custom models and pricing are edited in Settings.
+
 See [architecture](./architecture.md) for ownership composition and [security](./security.md) for threat-boundary details.
 ## Test integrity in new planning runs
 

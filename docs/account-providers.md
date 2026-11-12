@@ -34,12 +34,12 @@ the account runner and its Copilot helper together. Runner v28 pins the SDK and
 CLI versions to the tested combination, so fresh installs cannot silently pick
 an incompatible newer CLI. If an old folder reports a missing SDK or an outdated
 helper, replace it with the full current Copilot package and install again.
-Restarting creates a new runner session token: save that token in every provider
-using the runner. This token is separate from the saved GitHub authorization.
-
-It prints a local URL and a local runner token. Reuse that same URL and token in
-each provider's settings and save. Only one runner process is needed. ChatGPT and
-GitHub still have separate sign-in buttons and account permissions.
+It prints a local URL and a session token. AI Board's Settings and model calls
+reach the account runner only through the connection that `aiboard` gives the
+tab: the account runner's address and session token come from the launcher at
+each call and are never saved (OD-32), and Settings has no field for a URL or
+token. ChatGPT and GitHub still have separate sign-in buttons and account
+permissions.
 
 ## Repository users
 
@@ -53,7 +53,7 @@ node lib/account-provider-runner.mjs
 `/account-provider-runner.mjs` and the supported installable package at
 `/aiboard-account-provider-runner.zip`.
 
-The browser stores only the runner URL and runner token. Account authorization data is kept by the local bridge in the user's home folder.
+The browser stores no URL, token or key for account providers. The AIBoard home keeps their settings (the enabled and default models) but never a credential for them. Account authorization data is kept by the local bridge in the user's home folder.
 
 ## ChatGPT plan sign-in (runner v25+)
 
@@ -61,7 +61,7 @@ ChatGPT subscription mode uses OpenAI's public `https://api.openai.com/v1/models
 and `/responses` endpoints with an OAuth token authorized for ChatGPT plan usage.
 It does not need an OpenAI API key or borrow a credential from API key mode.
 
-1. Run `aiboard` in a project folder (or, with the standalone package: download and extract the updated package, stop the previous runner, run npm install and npm start in the package folder, and save its URL and new local session token in AI Board).
+1. Run `aiboard` in a project folder.
 2. Open the ChatGPT subscription provider settings in the connected tab.
 3. Select **Continue with ChatGPT** and approve AI Board's ChatGPT plan usage permission.
 4. Return to Settings, refresh the catalog, select a model, and test the connection.

@@ -13,7 +13,7 @@ aiboard --capabilities-config C:\runner-config\capabilities.json
 
 From a repository checkout, `npm run runner:v2 -- --project C:\work\my-project --state-dir C:\runner-state --capabilities-config C:\runner-config\capabilities.json` does the same.
 
-The configuration is deliberately strict. It must be a regular, non-symbolic JSON file; extension paths must be absolute; unknown fields are rejected; and the Runner never reads this configuration from environment variables. Before it opens its control listener, Runner validates extension manifests and registrations and runs each extension's startup/cleanup preflight atomically. Keep secrets out of this file. Provider credentials continue to use Runner's encrypted provider configuration.
+The configuration is deliberately strict. It must be a regular, non-symbolic JSON file; extension paths must be absolute; unknown fields are rejected; and the Runner never reads this configuration from environment variables. Before it opens its control listener, Runner validates extension manifests and registrations and runs each extension's startup/cleanup preflight atomically. Keep secrets out of this file. Provider keys live in the AIBoard home (`credentials.json`, encrypted with the home key; see the [guide](./guide.md#settings-and-keys-the-aiboard-home)), and every tool broker, extension tools included, is refused the home's keys and writes to its `config.json`.
 
 ```json
 {

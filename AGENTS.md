@@ -28,11 +28,11 @@ Task 12 / P6 acceptance is closed: T8 and Gate G were accepted on 2026-10-15. `d
 
 ## Architecture
 
-AI Board is a static-export Next.js app (App Router, React 19, strict TypeScript, no API routes). Discussion modes run in the browser. Build mode requires the separate native Runner V2 process. Import alias: `@/*` points to the repository root.
+AI Board is a static-export Next.js app (App Router, React 19, strict TypeScript, no API routes) that works with the local AIBoard Runner (Runner V2). Discussion engines run in the browser, Build mode runs in the Runner, and every model call goes through the Runner: keyed providers and custom models through its model proxy, which adds the key from the AIBoard home, and ChatGPT and Copilot through the launcher's account peer. Import alias: `@/*` points to the repository root.
 
 ### Browser store
 
-`lib/client/store.ts` keeps one in-memory store and persists through `lib/client/storage-adapter.ts` to IndexedDB or a user-picked folder. Optional encryption uses `lib/client/crypto-box.ts`. Shared schema types are in `lib/db/schema.ts`; several array-shaped fields are stored as JSON strings.
+`lib/client/store.ts` keeps one in-memory store and persists through `lib/client/storage-adapter.ts` to IndexedDB or a user-picked folder. Settings and keys are not part of it: they live in the AIBoard home (`~/.aiboard`, or `AIBOARD_HOME`), which `lib/client/home-client.ts` reads and writes through the Runner's `/v2/home` routes; the store shows a mirror of the home that is never persisted. There is no passphrase encryption; a store encrypted by an older version opens once with its passphrase (`lib/client/crypto-box.ts`) and is written only after the user saves it without encryption or declines. Shared schema types are in `lib/db/schema.ts`; several array-shaped fields are stored as JSON strings.
 
 ### Engines
 
@@ -48,7 +48,7 @@ Runner V2 requires the certified Node.js 24.x LTS release line and Git. Git abse
 
 Browser discussion providers implement `AIProvider` from `lib/providers/base.ts`. `lib/client/providers.ts` is the live browser registry. `lib/providers/catalog.ts` is the built-in model source of truth and `lib/providers/provider-registry.ts` owns provider metadata and runtime policies.
 
-Runner V2 provider configuration and transports live under `runner-v2/src/`. Account-backed models use the account-provider transport; the browser sends configuration to the localhost runner, which encrypts it in runner state.
+Runner V2 provider configuration and transports live under `runner-v2/src/`. Keys and provider settings come from the AIBoard home (`runner-v2/src/aiboard-home-store.ts`): `config.json` without secrets, and `credentials.json` encrypted with a home key kept in the user data root. The web edits the home through the Runner's `/v2/home` routes, and the `aiboard config`, `aiboard keys` and `aiboard models` commands edit it from a terminal (`runner-v2/src/home-cli.ts`). The browser pushes secretless provider configs to the Runner, which resolves the key from the home. Account-backed models use the account-provider transport and never have a key in the home. Runner code never imports from `lib/`: the model knowledge it needs is a generated snapshot (`runner-v2/src/generated/model-catalog.ts`) under `scripts/test-runner-model-catalog-parity.mts`.
 
 ### Runner V2
 
