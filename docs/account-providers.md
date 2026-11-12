@@ -19,9 +19,9 @@ and verified against its pinned checksum.
 
 ### Standalone account runner
 
-To run the account runner on its own, open the ChatGPT subscription, GitHub
-Copilot, or NVIDIA NIM provider settings and click **Download standalone account
-runner (ZIP)**. Every button downloads the same package. Extract it, open a
+To run the account runner on its own, open the ChatGPT subscription or GitHub
+Copilot provider settings and click **Download standalone account runner
+(ZIP)**. Both buttons download the same package. Extract it, open a
 terminal in that directory, install once, then start:
 
 ```powershell

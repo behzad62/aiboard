@@ -10,9 +10,12 @@ import { homedir } from "node:os";
 
 import { resolveAiboardHome } from "../runner-v2/src/aiboard-home-paths.js";
 import { readAiboardHomeSync } from "../runner-v2/src/aiboard-home-store.js";
+import { snapshotProvider } from "../runner-v2/src/home-model-policy.js";
+import { homeProviderUpstream } from "../runner-v2/src/home-runtime.js";
 
 export type LiveHomeKey =
-  | { found: true; key: string; source: "env" | "home"; baseUrl: string | null }
+  /** `baseUrl` is the upstream to call: the home's base URL, else the catalog snapshot's default. */
+  | { found: true; key: string; source: "env" | "home"; baseUrl: string }
   | { found: false; reason: string };
 
 /**
@@ -20,16 +23,17 @@ export type LiveHomeKey =
  * cannot be read (another computer's keys, an unsafe AIBOARD_HOME) is a skip reason, never a throw.
  */
 export function liveProviderKey(providerId: string, envName: string, env: NodeJS.ProcessEnv = process.env): LiveHomeKey {
+  const defaultBaseUrl = snapshotProvider(providerId)?.defaultBaseUrl;
+  if (!defaultBaseUrl) return { found: false, reason: `${providerId} is not a keyed provider in the Runner's catalog snapshot` };
   const fromEnv = env[envName]?.trim();
-  if (fromEnv) return { found: true, key: fromEnv, source: "env", baseUrl: null };
+  if (fromEnv) return { found: true, key: fromEnv, source: "env", baseUrl: defaultBaseUrl };
   try {
     const location = resolveAiboardHome({ platform: process.platform, environment: env, home: homedir() });
     const home = readAiboardHomeSync(location);
     if (!home.exists) return { found: false, reason: `no ${envName} and no AIBoard home at ${location.home}` };
     const key = home.secret(`credentials.providers.${providerId}`)?.trim();
     if (!key) return { found: false, reason: `no ${envName} and no ${providerId} key in the AIBoard home (aiboard keys set ${providerId})` };
-    const baseUrl = home.config.providers[providerId]?.baseUrl;
-    return { found: true, key, source: "home", baseUrl: typeof baseUrl === "string" && baseUrl ? baseUrl : null };
+    return { found: true, key, source: "home", baseUrl: homeProviderUpstream(home.config, providerId) ?? defaultBaseUrl };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { found: false, reason: `no ${envName}, and the AIBoard home cannot be read (${message.split(":")[0]})` };

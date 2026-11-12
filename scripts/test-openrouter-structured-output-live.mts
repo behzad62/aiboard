@@ -33,10 +33,12 @@ if (!found.found) {
   process.exit(0);
 }
 const apiKey = found.key;
-const baseURL = found.baseUrl ?? undefined;
+// Since HM4a a provider call without a base URL is refused (lib/providers/connection.ts), so the probe
+// always names the upstream: the home's OpenRouter base URL, else the catalog default.
+const baseURL = found.baseUrl;
 
 if (process.argv.includes("--dry-run")) {
-  console.log(`DRY-RUN - OpenRouter key found (source=${found.source}${baseURL ? ", home base URL" : ""}); no provider call made`);
+  console.log(`DRY-RUN - OpenRouter key found (source=${found.source}); no provider call made`);
   process.exit(0);
 }
 
@@ -101,7 +103,7 @@ async function callStructuredSmoke(model: string): Promise<{
 
   for await (const chunk of openrouterProvider.streamChat({
     apiKey,
-    ...(baseURL ? { baseURL } : {}),
+    baseURL,
     model,
     messages: [
       {

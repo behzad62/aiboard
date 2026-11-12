@@ -62,7 +62,7 @@ irm https://aiboard.me/install.ps1 | iex          # Windows (PowerShell)
 curl -fsSL https://aiboard.me/install.sh | sh     # macOS / Linux
 ```
 
-Then open a new terminal in your project folder and run `aiboard`. It opens AI Board in the browser already connected, and also starts the account runner for ChatGPT, GitHub Copilot and NVIDIA. `aiboard config`, `aiboard keys` and `aiboard models` show and edit your settings, keys and enabled models in the AIBoard home without starting a Runner (`aiboard keys set` asks for the key with your typing hidden, or reads it from a pipe with `--stdin`). `aiboard remote` lets ChatGPT or Claude use this computer, `aiboard update` installs the newest signed release, and `aiboard --help` lists every option.
+Then open a new terminal in your project folder and run `aiboard`. It opens AI Board in the browser already connected, and also starts the account runner for ChatGPT and GitHub Copilot. `aiboard config`, `aiboard keys` and `aiboard models` show and edit your settings, keys and enabled models in the AIBoard home without starting a Runner (`aiboard keys set` asks for the key with your typing hidden, or reads it from a pipe with `--stdin`). `aiboard remote` lets ChatGPT or Claude use this computer, `aiboard update` installs the newest signed release, and `aiboard --help` lists every option.
 
 From a repository checkout, contributors can run the source copy instead: `npm run runner:v2 -- --project C:\path\to\project --state-dir C:\path\to\aiboard-state --port 8787` prints a local URL and a new control token to paste into Build setup (`--allow-origin https://aiboard.me` permits a hosted UI; `npm run runner:v2 -- --help` lists the arguments).
 

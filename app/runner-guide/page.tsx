@@ -42,7 +42,7 @@ export default function RunnerGuidePage() {
         </pre>
         <p>
           It opens AI Board in your browser and connects this computer, with nothing to paste. The same command
-          starts the account runner for ChatGPT, GitHub Copilot, and NVIDIA. Keep the terminal open; Ctrl+C stops
+          starts the account runner for ChatGPT and GitHub Copilot. Keep the terminal open; Ctrl+C stops
           the Runner. Start it in a project folder, not your home folder.
         </p>
         <p className="text-sm text-muted-foreground">
