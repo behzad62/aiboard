@@ -302,8 +302,13 @@ test("C4: docs-v2 planning turn drops templates, keeps one write line, carries t
           ? "Draft the plan once with draft_planning_plan, then revise it with patch_planning_plan listing only the changed tasks, phases or requirements (revise_planning_plan re-sends the whole plan); investigations need a question, deliverable, decision criterion, and dependent unlock.\n" +
             "Each task's acceptance criteria name the tests that prove that task (its new or changed tests, its own package's suite); the runner runs the whole project suite once in final verification, so make \"the root/full test suite stays green\" a criterion only of a task that builds or changes the test setup itself."
           : line)
+        // VF5: the Architect may run commands while planning, in its disposable copy.
+        .map((line) => line.startsWith("No worker starts until the plan is ready")
+          ? "No worker starts until the plan is ready, and plan-only runs never start workers. Outside plan-only runs you may run commands while planning, in your disposable copy, to learn how the project builds, tests and behaves before you plan."
+          : line)
         .join("\n"),
     );
+    assert.doesNotMatch(NEW_POLICY_PLANNING_INSTRUCTIONS_DOCS_V2, /Command execution is refused/);
     // Per-role token counts (existing ceil(bytes/4) estimation): v2 < v1 on the same turn.
     const v1projection = { ...base, projectDocsPolicyVersion: undefined };
     const v1pack = buildArchitectContext(parityInput(v1projection as SchedulerProjection));

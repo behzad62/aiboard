@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn, ToolResult } from "../src/agent-contracts.js";
@@ -32,7 +32,9 @@ import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
+import type { ManagedProcessService } from "../src/managed-process.js";
 import { ToolRegistry } from "../src/tool-registry.js";
+import { fakeManagedProcesses } from "./support/fake-managed-processes.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -1530,6 +1532,11 @@ test("an Architect turn with no command creates no disposable copy", async () =>
         model.requests[0]?.tools.some((tool) => tool.name === "run_evidence_command"),
         true,
       );
+      // VF5: no managed-process service is wired, so no process tool is listed.
+      assert.equal(
+        model.requests[0]?.tools.some((tool) => tool.name.startsWith("process.")),
+        false,
+      );
       assert.equal(seen.creates, 0);
       assert.equal(seen.cleanups, 0);
     },
@@ -1721,6 +1728,142 @@ test("a review command checkout failure is returned and does not fall back to in
       assert.match(results[0]?.error?.message ?? "", /task revision unavailable/);
     },
   });
+});
+
+function processCall(callId: string, name: string, args: Record<string, unknown>): ModelTurn["blocks"][number] {
+  return { type: "tool_call", callId, name, arguments: args };
+}
+
+const ARCHITECT_PROCESS_TOOLS = [
+  "process.interact",
+  "process.list",
+  "process.poll",
+  "process.read_output",
+  "process.signal",
+  "process.start",
+  "process.write_stdin",
+];
+
+test("VF5 the Architect starts a server in its copy, reads its output, and the process is stopped before the copy is removed", async () => {
+  const label = "vf5-live-server";
+  const root = mkdtempSync(join(tmpdir(), `aiboard-architect-${label}-`));
+  const copy = join(root, "copy");
+  const log: string[] = [];
+  const processes = fakeManagedProcesses({ stateDirectory: join(root, "managed"), runId: `run-${label}`, log });
+  try {
+    await driveArchitectCommandTurn({
+      label,
+      root,
+      turns: [{
+        blocks: [processCall("start-1", "process.start", { command: "node", args: ["server.js"], cwd: "." })],
+        stopReason: "tool_calls",
+      }, {
+        blocks: [processCall("read-1", "process.read_output", { processId: "p1" })],
+        stopReason: "tool_calls",
+      }, {
+        blocks: [],
+        stopReason: "cancelled",
+      }],
+      permissionProfile: "full",
+      managedProcesses: processes.service,
+      workspace: {
+        workspaceKind: "independent-verifier",
+        create: async (revision) => {
+          assert.equal(revision, LAZY_COMMAND_REVISION);
+          mkdirSync(copy, { recursive: true });
+          return { path: copy };
+        },
+        cleanup: async () => {
+          log.push("cleanup");
+          rmSync(copy, { recursive: true, force: true });
+        },
+      },
+      assertTurn: (model) => {
+        const listed = (model.requests[0]?.tools ?? []).map((tool) => tool.name);
+        for (const name of ARCHITECT_PROCESS_TOOLS) assert.equal(listed.includes(name), true, `${name} is listed`);
+        const started = toolResults(model, 1);
+        assert.equal(started.length, 1);
+        assert.equal(started[0]?.isError, false, JSON.stringify(started[0]));
+        const read = toolResults(model, 2).find((result) => result.callId === "read-1");
+        assert.equal(read?.isError, false, JSON.stringify(read));
+        assert.match(JSON.stringify(read?.content), /listening/);
+        // Started in the copy (never the project), stopped, and only then the copy removed.
+        assert.deepEqual(log, [`start:${resolve(copy)}`, "stop:p1", "cleanup"]);
+        assert.equal(processes.status("p1"), "stopped");
+        assert.equal(existsSync(copy), false);
+        assert.equal(existsSync(join(root, "project", "server.js")), false);
+      },
+    });
+  } finally {
+    await processes.service.close().catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("VF5 a process stop the Runner cannot prove keeps the Architect's copy and fails the turn", async () => {
+  const label = "vf5-unproven-stop";
+  const root = mkdtempSync(join(tmpdir(), `aiboard-architect-${label}-`));
+  const copy = join(root, "copy");
+  const log: string[] = [];
+  const processes = fakeManagedProcesses({ stateDirectory: join(root, "managed"), runId: `run-${label}`, log, failStop: true });
+  try {
+    await driveArchitectCommandTurn({
+      label,
+      root,
+      turns: [{
+        blocks: [processCall("start-1", "process.start", { command: "node", args: ["server.js"], cwd: "." })],
+        stopReason: "tool_calls",
+      }, {
+        blocks: [],
+        stopReason: "cancelled",
+      }],
+      permissionProfile: "full",
+      managedProcesses: processes.service,
+      expectRunError: /cleanup remains unverified/,
+      workspace: {
+        workspaceKind: "independent-verifier",
+        create: async () => {
+          mkdirSync(copy, { recursive: true });
+          return { path: copy };
+        },
+        cleanup: async () => {
+          log.push("cleanup");
+        },
+      },
+      assertTurn: () => {
+        assert.deepEqual(log, [`start:${resolve(copy)}`, "stop:p1"]);
+        assert.equal(existsSync(copy), true, "a copy is never removed under a process that may still run");
+      },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("VF5 plan_only lists neither commands nor process tools even when a process service is wired", async () => {
+  const label = "vf5-plan-only";
+  const root = mkdtempSync(join(tmpdir(), `aiboard-architect-${label}-`));
+  const processes = fakeManagedProcesses({ stateDirectory: join(root, "managed"), runId: `run-${label}` });
+  const seen = { creates: 0, cleanups: 0 };
+  try {
+    await driveArchitectCommandTurn({
+      label,
+      root,
+      turns: [{ blocks: [], stopReason: "cancelled" }],
+      managedProcesses: processes.service,
+      runPolicy: "plan_only",
+      workspace: countingWorkspace(seen, async () => ({ path: "unused-copy" })),
+      assertTurn: (model) => {
+        const listed = (model.requests[0]?.tools ?? []).map((tool) => tool.name);
+        assert.equal(listed.includes("run_evidence_command"), false);
+        assert.equal(listed.some((name) => name.startsWith("process.")), false);
+        assert.equal(seen.creates, 0);
+      },
+    });
+  } finally {
+    await processes.service.close().catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function markerExecutor(seen: string[]): OneShotCommandExecutor {
@@ -1923,6 +2066,11 @@ async function driveArchitectCommandTurn(input: {
   permissionProfile?: "full";
   execution?: OneShotCommandExecutor;
   review?: { changeSetId: string; taskRevision: string };
+  /** VF5: the live process tools beside run_evidence_command. */
+  managedProcesses?: ManagedProcessService;
+  runPolicy?: "plan_only";
+  /** VF5: the turn is expected to throw this (after assertTurn still runs). */
+  expectRunError?: RegExp;
 }): Promise<void> {
   const root = input.root ?? mkdtempSync(join(tmpdir(), `aiboard-architect-${input.label}-`));
   const project = join(root, "project");
@@ -2013,6 +2161,8 @@ async function driveArchitectCommandTurn(input: {
       ...(input.execution
         ? { execution: input.execution, git: fixtureGitContext(input.permissionProfile ?? "full", input.execution) }
         : {}),
+      ...(input.managedProcesses ? { managedProcesses: input.managedProcesses } : {}),
+      ...(input.runPolicy ? { runPolicy: input.runPolicy } : {}),
     });
     if (input.review) {
       const sessionId = `worker:${runId}:task-a:0`;
@@ -2038,7 +2188,7 @@ async function driveArchitectCommandTurn(input: {
         unresolvedConcerns: [],
       }, "2026-09-23T00:00:05.000Z");
     }
-    await architect.run({
+    const turn = architect.run({
       runId,
       reason: input.review
         ? { type: "review_required", taskId: "task-a", changeSetId: input.review.changeSetId }
@@ -2051,6 +2201,8 @@ async function driveArchitectCommandTurn(input: {
         actor: { role: "architect", id: "architect" },
       },
     });
+    if (input.expectRunError) await assert.rejects(turn, input.expectRunError);
+    else await turn;
     input.assertTurn(model);
   } finally {
     sessions.close();

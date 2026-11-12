@@ -1747,7 +1747,7 @@ test("T9 under triage answer an Architect command runs in a disposable copy and 
       projectRoot: project,
       objective,
       permissionProfile: "full",
-      answerCommandRevision: "b".repeat(40),
+      baselineCommandRevision: "b".repeat(40),
       commandWorkspace: {
         workspaceKind: "independent-verifier",
         create: async (targetRevision: string) => {
@@ -1793,20 +1793,24 @@ test("T9 under triage answer an Architect command runs in a disposable copy and 
   }
 });
 
-test("T9 under build without a ready plan and under clarify commands stay refused", async () => {
+test("VF5 under build without a ready plan and under clarify an Architect command runs in a disposable copy of the baseline", async () => {
   for (const decision of ["build", "clarify"] as const) {
     const root = mkdtempSync(join(tmpdir(), `aiboard-t9-cmd-${decision}-`));
     const project = join(root, "project");
     const state = join(root, "state");
     mkdirSync(project, { recursive: true });
     mkdirSync(state, { recursive: true });
+    writeFileSync(join(project, "app.ts"), "export const answer = 42;\n");
+    const before = hashTree(project);
     const artifacts = new ArtifactStore(join(state, "artifacts"));
     const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
     const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
     const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
     const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
     const runId = `run-t9-cmd-${decision}`;
-    const seen = { creates: 0 };
+    const copyDir = join(root, "copy");
+    const seen = { creates: 0, cleanups: 0, revisions: [] as string[] };
+    const executed: string[] = [];
     try {
       scheduler.append({
         runId,
@@ -1820,6 +1824,24 @@ test("T9 under build without a ready plan and under clarify commands stay refuse
       seedTriage(scheduler, runId, advancingClock(), decision);
       assert.equal(isPlanningState(projectionOf(scheduler, runId)), true);
 
+      const execution: OneShotCommandExecutor = {
+        execute: async (request) => {
+          executed.push(request.workingDirectory);
+          writeFileSync(join(request.workingDirectory, "vf5-marker.txt"), "planning command ran here");
+          return {
+            process: {
+              logicalProcessId: `vf5-${decision}`,
+              outcome: "exited",
+              exitCode: 0,
+              finishedAt: "2026-09-24T00:00:01.000Z",
+              output: [],
+              cleanup: { state: "not_required" },
+            },
+            enforcement: "write_confinement_exact_grant",
+            disclosure: "provider_specific_not_universal_boundary",
+          };
+        },
+      };
       const candidate: AgentRuntimeCandidate = {
         runtimeId: "test:architect",
         providerId: "test",
@@ -1829,7 +1851,7 @@ test("T9 under build without a ready plan and under clarify commands stay refuse
       };
       const health = new ProviderHealthRegistry();
       const model = new ScriptedModel([
-        toolCallTurn("run_evidence_command", { label: "sneak", command: "echo", args: ["hi"], cwd: "." }),
+        toolCallTurn("run_evidence_command", { label: "learn", command: "echo", args: ["hi"], cwd: "." }),
         { blocks: [], stopReason: "cancelled" },
       ]);
       const architect = new NativeArchitectRuntime({
@@ -1847,15 +1869,21 @@ test("T9 under build without a ready plan and under clarify commands stay refuse
         projectId: `project-t9-cmd-${decision}`,
         projectRoot: project,
         objective: "Build the feature.",
-        answerCommandRevision: "b".repeat(40),
+        permissionProfile: "full",
+        baselineCommandRevision: "b".repeat(40),
         commandWorkspace: {
           workspaceKind: "independent-verifier",
-          create: async () => {
+          create: async (targetRevision: string) => {
             seen.creates += 1;
-            return { path: join(root, "copy") };
+            seen.revisions.push(targetRevision);
+            mkdirSync(copyDir, { recursive: true });
+            return { path: copyDir };
           },
-          cleanup: async () => undefined,
+          cleanup: async () => {
+            seen.cleanups += 1;
+          },
         } satisfies ArchitectCommandWorkspaceProvider,
+        execution,
       });
       await architect.run({
         runId,
@@ -1868,20 +1896,17 @@ test("T9 under build without a ready plan and under clarify commands stay refuse
           actor: { role: "architect", id: "architect" },
         },
       });
-      // The T3a planning-state guard still owns these turns: the command
-      // tool is not even listed, the call errors, and the answer-path base
-      // revision never creates a copy.
+      // VF5 replaced the T3a planning-state refusal: the command tool is
+      // listed, runs once in a copy of the baseline, never in the project,
+      // and the copy is removed with the action.
       const listed = (model.requests[0]?.tools ?? []).map((tool) => tool.name);
-      assert.equal(listed.includes("run_evidence_command"), false);
-      const toolMessages = model.requests.flatMap((request) =>
-        request.messages.filter((message) => message.role === "tool"),
-      );
-      assert.ok(toolMessages.length > 0);
-      assert.equal(
-        toolMessages.every((message) => JSON.stringify(message.content).includes('"isError":true')),
-        true,
-      );
-      assert.equal(seen.creates, 0);
+      assert.equal(listed.includes("run_evidence_command"), true, decision);
+      assert.equal(seen.creates, 1, decision);
+      assert.deepEqual(seen.revisions, ["b".repeat(40)], decision);
+      assert.deepEqual(executed, [copyDir], decision);
+      assert.equal(readFileSync(join(copyDir, "vf5-marker.txt"), "utf8"), "planning command ran here", decision);
+      assert.equal(hashTree(project), before, decision);
+      assert.equal(seen.cleanups, 1, decision);
     } finally {
       sessions.close();
       scheduler.close();
