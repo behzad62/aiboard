@@ -62,7 +62,15 @@ export interface RemotePathGuardOptions {
 }
 
 interface ObjectIdentity { readonly dev: bigint; readonly ino: bigint }
-interface ProtectedCanonical { readonly location: ProtectedLocation; readonly canonical: string; readonly identity?: ObjectIdentity }
+interface ProtectedCanonical {
+  readonly location: ProtectedLocation;
+  readonly canonical: string;
+  /** False when the root could not be canonicalized and `canonical` is only its configured spelling. */
+  readonly resolved: boolean;
+  readonly identity?: ObjectIdentity;
+}
+/** Windows: the target's volume serial and the folded drive (path root) of its canonical path. */
+interface WindowsVolume { readonly dev: bigint; readonly drive: string }
 export interface RemotePathScope {
   readonly workspace: string;
   readonly restricted: () => boolean;
@@ -83,7 +91,7 @@ export class RemotePathGuard {
   private readonly maxProtectedScanEntries: number;
   private readonly maxTreeEntries: number;
   private protectedCanonicals?: Promise<readonly ProtectedCanonical[]>;
-  private readonly protectedFileIdentities = new Map<bigint, Promise<{ readonly identities: ReadonlyMap<string, string>; readonly complete: boolean }>>();
+  private readonly protectedFileIdentities = new Map<string, Promise<{ readonly identities: ReadonlyMap<string, string>; readonly complete: boolean }>>();
   private readonly scopes = new AsyncLocalStorage<RemotePathScope>();
 
   constructor(locations: ProtectedLocations, options: RemotePathGuardOptions = {}) {
@@ -275,6 +283,9 @@ export class RemotePathGuard {
         let resolved: string;
         try { resolved = await realpath(current); }
         catch { throw new RemotePathDeniedError("identity_unprovable", "identity_unprovable", "An existing path could not be resolved."); }
+        if (!this.rootedPath(resolved)) {
+          throw new RemotePathDeniedError("identity_unprovable", "identity_unprovable", "An existing path resolved to a location with no drive or share.");
+        }
         return { canonical: this.paths.resolve(resolved, ...missing.reverse()), exists: missing.length === 0 };
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
@@ -289,6 +300,17 @@ export class RemotePathGuard {
         current = parent;
       }
     }
+  }
+
+  /**
+   * A canonical path must name its volume: a drive or a share on Windows. libuv strips `\\?\` from
+   * GetFinalPathNameByHandleW, so a volume with no DOS name would come back as `Volume{GUID}\…`,
+   * which `resolve` would silently place under the current directory.
+   */
+  private rootedPath(resolved: string): boolean {
+    // realpath's spelling is the host's, whatever platform the locations were classified for.
+    if (process.platform !== "win32") return resolved.startsWith("/");
+    return /^[a-zA-Z]:[\\/]/.test(resolved) || /^[\\/]{2}[^\\/]+[\\/]+[^\\/]+/.test(resolved);
   }
 
   private async assertCanonicalWithinWorkspace(canonical: string, exists: boolean, workspace: string): Promise<void> {
@@ -327,10 +349,11 @@ export class RemotePathGuard {
         // A missing root is canonicalized through its nearest existing parent,
         // so creating it later through an aliased parent is still denied.
         let canonical = location.path;
-        try { canonical = (await this.canonicalize(this.paths.resolve(location.path))).canonical; }
+        let resolved = false;
+        try { canonical = (await this.canonicalize(this.paths.resolve(location.path))).canonical; resolved = true; }
         catch { /* Unverifiable roots still deny lexically. */ }
         const identity = await identityOf(canonical);
-        roots.push({ location, canonical, ...(identity ? { identity } : {}) });
+        roots.push({ location, canonical, resolved, ...(identity ? { identity } : {}) });
       }
       return Object.freeze(roots);
     })();
@@ -339,10 +362,13 @@ export class RemotePathGuard {
 
   private async checkHardLink(canonical: string, identity: ObjectIdentity): Promise<void> {
     // Object identity is (device, inode), so only protected files on the target's device can alias it.
-    let scan = this.protectedFileIdentities.get(identity.dev);
+    // On Windows the scan also depends on the target's drive, so two volumes sharing a serial never share a scan.
+    const volume = this.windowsVolume(canonical, identity.dev);
+    const key = volume ? `${identity.dev}|${volume.drive}` : String(identity.dev);
+    let scan = this.protectedFileIdentities.get(key);
     if (!scan) {
-      scan = this.scanProtectedFileIdentities(identity.dev);
-      this.protectedFileIdentities.set(identity.dev, scan);
+      scan = this.scanProtectedFileIdentities(identity.dev, volume);
+      this.protectedFileIdentities.set(key, scan);
     }
     const { identities, complete } = await scan;
     const category = identities.get(`${identity.dev}:${identity.ino}`);
@@ -361,8 +387,10 @@ export class RemotePathGuard {
    * cannot be stat'ed, or the entry cap. On Linux a subtree is skipped only when the kernel mount
    * table proves it holds nothing on the target's device (see `skippableSubtree`); /proc and /sys
    * can never be enumerated, so without that proof no multi-link file could ever be allowed there.
+   * On Windows a whole protected folder on another volume is skipped (see `onAnotherWindowsVolume`);
+   * the per-user browser profiles and the AIBoard data root alone far exceed the cap.
    */
-  private async scanProtectedFileIdentities(targetDevice: bigint): Promise<{ identities: ReadonlyMap<string, string>; complete: boolean }> {
+  private async scanProtectedFileIdentities(targetDevice: bigint, volume: WindowsVolume | undefined): Promise<{ identities: ReadonlyMap<string, string>; complete: boolean }> {
     const identities = new Map<string, string>();
     const mounts = this.locations.platform === "linux" && process.platform === "linux" ? await readMountTable() : undefined;
     let seen = 0;
@@ -397,11 +425,40 @@ export class RemotePathGuard {
         } catch (error) {
           if (!isMissing(error)) complete = false;
         }
-      } else {
+      } else if (!(volume && await this.onAnotherWindowsVolume(root, volume))) {
         await visit(root.canonical, root.location.category, 0);
       }
     }
     return { identities, complete };
+  }
+
+  /** Windows only: the target's volume serial and drive, or undefined when the drive proof cannot apply. */
+  private windowsVolume(canonical: string, dev: bigint): WindowsVolume | undefined {
+    if (this.locations.platform !== "win32" || process.platform !== "win32" || dev === 0n) return undefined;
+    const drive = win32.parse(canonical).root;
+    return drive ? { dev, drive: this.fold(drive) } : undefined;
+  }
+
+  /**
+   * True when a protected folder provably holds no other name of the target. NTFS and ReFS hard links
+   * never cross volumes, so every name of the target is on its volume. Windows `realpath`
+   * (GetFinalPathNameByHandleW) spells a file as its volume's DOS name plus its path on that volume,
+   * so every name of the target canonicalizes onto the target's drive. A folder whose canonical path
+   * is on another drive and whose volume serial differs therefore cannot hold one by location. What it
+   * shows through a volume mount point or a volume junction canonicalizes onto its own volume, where
+   * the guard allows it even as a single-link file; drive-letter junctions and symlinks are never
+   * followed. Both the serial and the drive must differ (several shares of one server volume have one
+   * serial but different drives), the folder must exist and report a serial (0 means unknown), and an
+   * unresolved root keeps its configured spelling, which may be a junction, so it is always scanned.
+   * ReFS's 64-bit file IDs are not unique, which can only add false aliases, never hide one.
+   */
+  private async onAnotherWindowsVolume(root: ProtectedCanonical, volume: WindowsVolume): Promise<boolean> {
+    if (!root.resolved) return false;
+    let info;
+    try { info = await lstat(root.canonical, { bigint: true }); } catch { return false; }
+    if (!info.isDirectory() || info.isSymbolicLink() || info.dev === 0n || info.dev === volume.dev) return false;
+    const drive = win32.parse(root.canonical).root;
+    return drive !== "" && this.fold(drive) !== volume.drive;
   }
 }
 

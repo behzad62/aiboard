@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, sep, win32 } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -10,7 +12,7 @@ import { createFilesystemTools } from "../src/filesystem-tools.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { resolveProtectedLocations, type ProtectedLocations } from "../src/protected-locations.js";
 import { aiboardHomeDenyEntries } from "../src/aiboard-home-paths.js";
-import { createRemotePathGuard, FixedPathDeny, parseMountInfo, RemotePathDeniedError, type RemotePathGuard } from "../src/remote-path-guard.js";
+import { createRemotePathGuard, FixedPathDeny, parseMountInfo, RemotePathDeniedError, type RemotePathGuard, type RemotePathGuardOptions } from "../src/remote-path-guard.js";
 import { RemotePrincipalStore } from "../src/remote-principal.js";
 import { createLocalMcpOwner, LocalMcpToolSession, RemoteToolRuntime } from "../src/remote-tool-runtime.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -177,9 +179,17 @@ test("guard follows symlinks and junctions only to allowed targets", async () =>
  * system roots decide the hard-link result on their own: a non-root Linux user cannot list
  * /etc/ssl/private, which correctly leaves every multi-link file on that filesystem unprovable.
  */
-function hermeticGuard(fx: Fixture, extra: (location: ProtectedLocations["locations"][number]) => boolean = () => false): RemotePathGuard {
+function hermeticGuard(fx: Fixture, extra: (location: ProtectedLocations["locations"][number]) => boolean = () => false,
+  options: RemotePathGuardOptions = {}): RemotePathGuard {
   const inside = (path: string) => path === fx.root || path.startsWith(`${fx.root}${sep}`);
-  return createRemotePathGuard({ ...fx.locations, locations: fx.locations.locations.filter((location) => inside(location.path) || extra(location)) });
+  return createRemotePathGuard({ ...fx.locations, locations: fx.locations.locations.filter((location) => inside(location.path) || extra(location)) }, options);
+}
+
+/** The folded drive (path root) of a path's canonical spelling, or of the path itself when it cannot be resolved. */
+async function canonicalDrive(path: string): Promise<string> {
+  let canonical = path;
+  try { canonical = await realpath(path); } catch { /* A missing root keeps its configured spelling. */ }
+  return win32.parse(canonical).root.toLowerCase();
 }
 
 const canDropPermissions = process.platform !== "win32" && process.getuid?.() !== 0;
@@ -207,6 +217,73 @@ test("on Linux the pseudo filesystems do not make a benign hard link unprovable"
     await guard.assertAllowed(join(fx.allowed, "benign-copy.txt"), "read");
     await denied(guard.assertAllowed("/proc/self/environ", "read"), "protected_location");
   } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test("on Windows the host's protected folders on another volume do not make a benign hard link unprovable", { skip: process.platform !== "win32" }, async (t) => {
+  const fx = await fixture();
+  try {
+    const systemRoot = process.env.SystemRoot;
+    assert.ok(systemRoot && win32.isAbsolute(systemRoot), "SystemRoot is set");
+    // The host's real per-user roots (browser profiles and the AIBoard data root alone can exceed the scan cap), plus
+    // %SystemRoot% as a configured folder: on every Windows host it holds unlistable folders and far more entries than the cap.
+    const real = resolveProtectedLocations({ platform: "win32", env: process.env, home: homedir(), configuredDirectories: [systemRoot] });
+    assert.equal(real.failClosed, false, JSON.stringify(real.failures));
+    const fixtureDrive = await canonicalDrive(fx.root);
+    const elsewhere: ProtectedLocations["locations"][number][] = [];
+    for (const location of real.locations) if (await canonicalDrive(location.path) !== fixtureDrive) elsewhere.push(location);
+    if (!elsewhere.some((location) => location.category === "configured")) {
+      t.skip("the checkout shares a drive with %SystemRoot%, so no unlistable protected folder is on another volume");
+      return;
+    }
+    const own = fx.locations.locations.filter((location) => location.path.startsWith(`${fx.root}${sep}`));
+    const guard = createRemotePathGuard({ ...fx.locations, locations: [...own, ...elsewhere] });
+    await link(join(fx.home, ".ssh", "id_rsa"), join(fx.allowed, "copy.txt"));
+    assert.equal((await denied(guard.assertAllowed(join(fx.allowed, "copy.txt"), "read"))).reason, "hardlink_alias");
+    await link(join(fx.allowed, "file.txt"), join(fx.allowed, "benign-copy.txt"));
+    await guard.assertAllowed(join(fx.allowed, "benign-copy.txt"), "read");
+    await denied(guard.assertAllowed(join(systemRoot, "System32", "config", "SAM"), "read"), "protected_location");
+  } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test("protected folders on the target's own volume are still enumerated in full, cap included", async () => {
+  const fx = await fixture();
+  try {
+    await link(join(fx.allowed, "file.txt"), join(fx.allowed, "benign-copy.txt"));
+    // The fixture's protected folders share the target's volume and hold more than two entries.
+    await denied(hermeticGuard(fx, undefined, { maxProtectedScanEntries: 2 }).assertAllowed(join(fx.allowed, "benign-copy.txt"), "read"),
+      "hardlink_confinement_unprovable");
+    await hermeticGuard(fx).assertAllowed(join(fx.allowed, "benign-copy.txt"), "read");
+  } finally { await rm(fx.root, { recursive: true, force: true }); }
+});
+
+test("on Windows a file behind a volume junction in a protected folder is placed on its own volume", { skip: process.platform !== "win32" }, async (t) => {
+  const fx = await fixture();
+  const other = await mkdtemp(join(tmpdir(), "remote-guard-volume-"));
+  const vault = join(other, "vault"), junction = join(vault, "mounted");
+  try {
+    const drive = win32.parse(await realpath(fx.root)).root;
+    if (await canonicalDrive(other) === drive.toLowerCase()) { t.skip("the temp folder shares the checkout's drive"); return; }
+    let volume = "";
+    try { volume = execFileSync("mountvol", [drive.slice(0, 2), "/L"], { encoding: "utf8" }).trim(); } catch { /* Checked below. */ }
+    if (!/^\\\\\?\\Volume\{[0-9a-f-]+\}\\$/i.test(volume)) { t.skip("mountvol could not name the checkout's volume"); return; }
+    await mkdir(vault);
+    // A junction to \\?\Volume{GUID}\…, the form a mount point takes: lstat follows it, unlike a drive-letter junction.
+    execFileSync("cmd", ["/c", "mklink", "/J", junction, `${volume}${(await realpath(fx.allowed)).slice(drive.length)}`], { stdio: "ignore" });
+    await writeFile(join(fx.allowed, "single.txt"), "single\n");
+    await link(join(fx.allowed, "file.txt"), join(fx.allowed, "benign-copy.txt"));
+    const guard = hermeticGuard(fx);
+    const withVault = createRemotePathGuard({ ...guard.locations, locations: [...guard.locations.locations, { path: vault, category: "configured", kind: "directory" }] });
+    // The spelling through the vault is denied, but realpath places the file on its own volume, where it was always readable.
+    await denied(withVault.assertAllowed(join(junction, "single.txt"), "read"), "protected_location");
+    assert.equal(await realpath(join(junction, "single.txt")), await realpath(join(fx.allowed, "single.txt")));
+    await withVault.assertAllowed(join(fx.allowed, "single.txt"), "read");
+    // A multi-link file there is treated the same way. Only the old scan entered the vault through the junction, refusing this one.
+    await withVault.assertAllowed(join(fx.allowed, "benign-copy.txt"), "read");
+  } finally {
+    await rmdir(junction).catch(() => undefined); // removes the junction itself, never what it points to
+    await rm(other, { recursive: true, force: true });
+    await rm(fx.root, { recursive: true, force: true });
+  }
 });
 
 test("a protected folder the guard cannot fully enumerate keeps multi-link files unprovable", { skip: !canDropPermissions }, async () => {
