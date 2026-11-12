@@ -937,7 +937,7 @@ aiboard exec apply <task id>
 - **One commit-undo step.** Their step that undoes a CLI's own commits is the method SB4b needs, and SB4b reuses it (§12.3).
 - **Names.** Call them CLI workers, with a `cli` transport. Here "Delegate" means `aiboard exec`, and the Runner already says "local agents" for Build and Chat (local-agents-availability.ts:1-13 *(3903fc46)*).
 - **Re-run checks.** Their plan re-runs the checks a CLI reports. It should refuse or time-limit `npm run test:runner-v2`, which takes hours (§18.2).
-- **Browser evidence.** A CLI cannot record AIBoard's browser evidence. The build verification plan (docs/plans/2026-11-13-build-verification.md, OD-34) comes first: the Runner then re-runs the checks a CLI reports, with their output files, and the Architect can start the app to look at a CLI's UI work during review.
+- **Browser evidence.** A CLI cannot record AIBoard's browser evidence. The build verification plan (docs/plans/2026-11-13-build-verification.md, OD-34) comes first: every role, CLI workers included, then browses through the Playwright CLI the Runner ships; the Runner re-runs the checks a CLI reports, with their output files; and the Architect can start the app to look at a CLI's UI work during review.
 - **Access.** CLI workers run only under Full access, since a CLI's own permission prompts cannot be answered through AIBoard (OD-36).
 
 ### 6.6 CLI: the AIBoard home

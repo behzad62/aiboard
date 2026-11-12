@@ -1,6 +1,6 @@
 # Build Verification: the Runner Records, the Architect Decides, the Owner Sets What Is Mandatory — Implementation Plan
 Date: 2026-11-13
-Status: Draft for the owner's approval. When approved, it runs after the AIBoard home (done 2026-11-12) and before the CLI workers plan (VD-1).
+Status: Approved by the owner on 2026-11-13 ("revise the plan then start the implementation"), with the revision that moves browsing to the Playwright CLI (§4.5). It runs after the AIBoard home (done 2026-11-12) and before the CLI workers plan (VD-1).
 Audience: the owner, and whoever implements the packets: a person or a Claude Code session.
 Primary repository: D:\repos\ai-discussion-board, read at 8a3f4843 (main, 2026-11-12). Bare file names are under `runner-v2/src/`; `test/...` is `runner-v2/test/...`; other paths are repo-relative.
 
@@ -24,9 +24,9 @@ Primary repository: D:\repos\ai-discussion-board, read at 8a3f4843 (main, 2026-1
   4. Projects declare checks in `aiboard-validation.json`, and mark the mandatory ones.
   5. The Architect can run commands while planning, and start the app in its own copy.
   6. A command the Runner runs can return files (screenshots, reports) as evidence, for any kind of app.
-  7. The browser check uses an installed Chrome or Edge first; browser tools are offered only when a browser exists.
+  7. Every role browses through the Playwright CLI that each Runner already ships, as an ordinary command. The Runner's own `browser.*` tools are retired for new runs, and the final check has no built-in browser kind.
   8. The Build summary gets a "Not verified" section.
-- **Estimate:** 15.5–20.5 days in nine packets (§6). A smaller first step (VF1, VF2, VF4, VF7, VF8) is 8–10.5 days; it stops the blocking and lists the gaps, but keeps the Runner's four fixed categories and gives the Architect no new tools.
+- **Estimate:** 17–22.5 days in ten packets (§6).
 
 ## 1. What the owner asked
 
@@ -38,6 +38,7 @@ From the planning conversation, 2026-11-12 and 2026-11-13:
 - The Architect is too limited. It should be able to run commands that help verification.
 - The user decides which checks are mandatory.
 - Do not stop the Build to report what was missing unless it is critical. The Build summary lists what was left to verify, and what the Build could not verify.
+- Building Playwright into the Runner may have been a mistake; Playwright's own MCP server and CLI are cross-platform, and Microsoft recommends the CLI for coding agents (§4.5).
 
 ## 2. What Build does today
 
@@ -60,8 +61,10 @@ This part already works for every kind of app. It stays.
 - **No tool check before planning.** Nothing in runner-v2/src records which toolchains or browsers are installed.
 
 ### 2.3 The browser
-- The Runner launches only the Chromium that Playwright downloads (browser-tools.ts:264-268). Nothing installs it, so on a fresh machine every browser call and every browser check fails.
-- Workers and the Architect get `browser.*` tools (role-capabilities.ts:71-90, :301-310). Verifiers do not.
+- The Runner imports the `playwright` library (browser-tools.ts:1-2) and launches only the Chromium that Playwright downloads (browser-tools.ts:264-268). Nothing installs it, so on a fresh machine every browser call and every browser check fails.
+- Workers and the Architect get ten `browser.*` tools (role-capabilities.ts:71-90, :301-310). Verifiers do not.
+- **The Runner already ships the Playwright CLI.** The release bundle copies the whole `playwright` package and its dependencies (scripts/release/bundle-contents.mts:11, scripts/release/build-bundle.mts:124-150). Playwright 1.61.1 (package.json:83) includes `playwright cli`, Microsoft's CLI for coding agents, and its agent skill (node_modules/playwright-core/lib/tools/cli-client/skill/SKILL.md, about 12 KB). It runs on Windows, macOS and Linux, and can use an installed Chrome or Edge (`open --browser=...`, `attach --cdp=chrome`).
+- Microsoft's playwright-mcp and playwright-cli READMEs recommend the CLI with skills over the MCP server for coding agents: CLI commands avoid loading large tool schemas and full accessibility trees into the model's context, and snapshots go to files the agent reads as needed. MCP is for long exploratory loops that keep reasoning over a live page.
 
 ### 2.4 The Architect's tools
 - `run_evidence_command` exists for the Architect, in a disposable copy, but only once an integration revision exists or during a review (native-architect-runtime.ts:598-620). In the planning state it is refused (:365-380).
@@ -86,10 +89,10 @@ Decided by the owner on 2026-11-13. Every packet follows them.
 5. **Stop only when it matters** (§4.6):
    - a mandatory check cannot run, or still fails after its repairs;
    - the safety stops that exist today: secrets, process ownership, budgets, provider outages.
-6. **No kind of app is special.** Web apps keep their browser check as one optional kind of check, not as the model for all checks.
+6. **No kind of app is special.** The Runner has no built-in web check. A browser is one tool on the machine, used through ordinary commands like any other.
 7. **The summary says what was and was not verified.** Nothing is left out because it went well or badly.
 
-These do not change the Runner V2 standing rules: fail-closed process ownership and fencing stay as they are, no timeout is raised to make a test pass, and every change is checked with its targeted tests plus `npm run typecheck:runner-v2`.
+These do not change the Runner V2 standing rules: fail-closed process ownership and fencing stay as they are, no timeout is raised to make a test pass, a change to process ownership gets an independent review, and every change is checked with its targeted tests plus `npm run typecheck:runner-v2`.
 
 ## 4. Design
 
@@ -97,8 +100,8 @@ These do not change the Runner V2 standing rules: fail-closed process ownership 
 
 Before planning, and again on resume, the Runner records what this machine has:
 - Git and Node, which it already requires.
-- For each detected or declared check, its executable, looked up on PATH the way language servers are (extensions.md: the Runner resolves a bare command once and records the path). Then `--version` (or the family's version flag), with a short timeout and no network.
-- A browser: installed Chrome, installed Edge, or Playwright's Chromium (§4.5).
+- For each detected or declared check, its executable, looked up on PATH the way language servers are (docs/runner-v2/extensions.md: the Runner resolves a bare command once and records the path). Then `--version` (or the family's version flag), with a short timeout and no network.
+- A browser the Playwright CLI can use: installed Chrome, installed Edge, or a Chromium downloaded by `aiboard browser install` (§4.5).
 
 It records one `environment.inventory_recorded` event: for each tool, found or not, the resolved path, and the first line of its version. The Architect sees it in its planning context, and the web shows it in Run details. It decides nothing.
 
@@ -107,7 +110,7 @@ It records one `environment.inventory_recorded` event: for each tool, found or n
 - When a check's executable is not found on PATH, the Runner records the check as `not_run` with reason `tool_missing`, naming the executable. It does this at the per-task boundary and in the final check.
 - It never reports a failure for it, never asks for repairs, and never spends a repair cycle.
 - A launch that fails for any other reason stays a failure, as today.
-- A browser check with no browser is `not_run: tool_missing` (browser).
+- On the v1 contract, the built-in browser check with no browser it can launch is `not_run: tool_missing` (browser).
 - VF2 lands on today's contract first, as a third result next to green and failed, so the blocking stops before VF3.
 
 ### 4.3 The final check becomes the Architect's list (VF3, VF4)
@@ -118,16 +121,15 @@ It records one `environment.inventory_recorded` event: for each tool, found or n
 interface VerificationCheckV2 {
   id: string;                       // stable within the run
   label: string;
-  kind: "build" | "tests" | "start" | "browser" | "other";
+  kind: "build" | "tests" | "start" | "other";
   origin: "detected" | "project" | "architect";
   mandatory: boolean;               // only from aiboard-validation.json; the Architect cannot set it
   run?: { executable: string; args: string[]; cwd?: string; timeoutMs?: number };            // build, tests, other
   start?: {                          // start: run a program and see that it works
     executable: string; args: string[]; timeoutMs?: number;
     ready: { http?: { path: string; status: number } } | { outputLine: string } | { exitCode: number };
-    steps?: { label: string; executable: string; args: string[] }[];
+    steps?: { label: string; executable: string; args: string[]; outputs?: string[] }[];
   };
-  browser?: { startCheckId: string; path: string; policy: BrowserPolicy };                  // opens a started app
   outputs?: string[];                // workspace-relative paths or globs kept as evidence (VF6)
 }
 interface VerificationPlanV2 {
@@ -138,12 +140,12 @@ interface VerificationPlanV2 {
 ```
 
 - **Prefill.** The Runner offers its detected checks and the project's declared ones. The Architect keeps them, changes their commands, skips them with a reason, or adds its own. A mandatory check cannot be skipped or changed.
-- **Results** per check: `passed`, `failed` (exit code, timeout or policy), or `not_run` (`tool_missing`, set by the Runner, or `skipped`, set by the Architect's plan).
+- **Results** per check: `passed`, `failed` (exit code, timeout or readiness), or `not_run` (`tool_missing`, set by the Runner, or `skipped`, set by the Architect's plan).
 - **`start` covers every kind of program.**
   - A server is ready on an HTTP status, on a port the Runner leases, as runtime_smoke does today.
   - A CLI is ready on its exit code.
   - A desktop app's own headless or test mode is ready on a line of its output.
-  - Optional steps run against it, as runtime_smoke's steps do today.
+  - Steps run against the started program, as runtime_smoke's steps do today. A web app's browser check is a step that runs Playwright CLI commands against the leased port (open the page, list console errors, take a screenshot) and keeps the files as outputs. There is no `browser` kind: the Runner records what the commands did, and the Architect judges it (principle 6).
 - **Repairs** are keyed by check id instead of category. The Architect still plans them as today.
 - **Old runs.** A run started before VF3 keeps the v1 contract to the end; its events replay unchanged, and the v1 tests stay. A new run records `verificationContractVersion: 2` when it starts.
 - **Project checks (VF4).** `aiboard-validation.json` version 2 adds `checks` in the same shape, each with `mandatory`, next to the existing tiers. A version-1 file still works. An older Runner refuses a version-2 file with a clear error (project-validation-config.ts already fails closed on a malformed file).
@@ -153,18 +155,20 @@ interface VerificationPlanV2 {
 ### 4.4 The Architect's tools (VF5)
 
 - `run_evidence_command` also works in the planning state, in a disposable copy of the baseline revision, created when first used (as the review copy is today). The Architect can check a tool's version, run the existing tests, or run the program to learn how it behaves before it plans.
-- The process tools the verifiers have (`process.start`, `poll`, `read_output`, `signal`, `interact`, `write_stdin`, `list`; role-capabilities.ts:56-68) join `architect:inspection`, bound to the Architect's disposable copy. The Architect can start the app and look at it: with `browser.*` when a browser exists, or through the program's output.
+- The process tools the verifiers have (`process.start`, `poll`, `read_output`, `signal`, `interact`, `write_stdin`, `list`; role-capabilities.ts:56-68) join `architect:inspection`, bound to the Architect's disposable copy. The Architect can start the app and look at it, through the program's output or, after VF7, the Playwright CLI.
 - They run under the Build's access level, with the same approvals as the verifiers' commands. Processes the Architect starts are stopped when its copy is removed, the way verifier processes are; no ownership or fencing rule changes.
 
-### 4.5 Evidence from any app (VF6) and the browser (VF7)
+### 4.5 Evidence from any app (VF6) and browsing through the Playwright CLI (VF7)
 
-- **Output files (VF6).** A check, or a `run_evidence_command` call, may list `outputs`: paths or globs in its workspace, with a cap on count and size. After the command exits, the Runner stores those files as artifacts linked to the evidence record. Images go to reviewers whose model accepts images, as `image.inspect` and the visual artifact output already do (image-tools.ts). A desktop UI test, a mobile emulator test or a game's screenshot script then gets the same visual review that web apps get from the browser.
-- **The browser (VF7).**
-  - The Runner tries an installed Chrome, then an installed Edge (Playwright's `channel` option), then Playwright's own Chromium. The inventory records which one it found. Edge ships with Windows, so most Windows machines need no download.
-  - `browser.*` tools are registered only when a browser was found (role-capabilities.ts already has optional tools that depend on configuration).
-  - A browser download happens only as the owner's own action: `aiboard browser install`, or a button in Settings > Tools, which runs Playwright's Chromium install (VD-4). A Build never downloads a browser on its own.
-  - On Linux, a launch that fails for missing system libraries is recorded as `tool_missing` with the first error line. The Runner guide says how to install them; that needs root, so the Runner never does it.
-- Moving `browser.*` to an MCP connector is not part of this plan (VD-6).
+- **Output files (VF6).** A check, or a `run_evidence_command` call, may list `outputs`: paths or globs in its workspace, with a cap on count and size. After the command exits, the Runner stores those files as artifacts linked to the evidence record. Images go to reviewers whose model accepts images, as `image.inspect` and the visual artifact output already do (image-tools.ts:70). A desktop UI test, a mobile emulator test, a game's screenshot script or a Playwright CLI screenshot all get the same visual review.
+- **Browsing (VF7).** Every role browses with the Playwright CLI the Runner already ships (§2.3), through ordinary commands:
+  - API workers run it with their process tools; CLI workers (Claude Code, Codex, agy) use it with their own skills; the Architect runs it with VF5's commands; the verifiers run it with `run_evidence_command`, which gives them a browser for the first time.
+  - The Runner puts a `playwright-cli` command on PATH for the processes it starts, pointing at its bundled Playwright, so the version matches the skill it offers. The CLI's skill text is offered to API workers, the Architect and the verifiers as an AIBoard skill.
+  - Snapshots and screenshots are files. Each CLI call is a command the Runner records, and the files a check names in `outputs` become evidence (VF6). New runs need no browser evidence kinds.
+  - **The CLI's session is a Runner-owned process.** The CLI keeps a browser running between commands and closes it after an hour with no commands (playwright-cli README, "Sessions"). The Runner owns and stops every process a task starts. VF7a finds out how that session behaves under the Runner's process containment on Windows, macOS and Linux before any product code: whether it survives between `process.run` calls, whether it can be started and stopped as a managed process, and whether any browser process is left behind after a task ends. VF7b then starts each task's session as a managed process, names it with the CLI's `-s` option so tasks never share one, and stops it with the task. The change gets an independent review, as the standing rules require for process ownership.
+  - The browser: the inventory (VF1) records which one the CLI can use, installed Chrome or Edge first. A download happens only as the owner's own action, `aiboard browser install` or a button in Settings > Tools, which runs Playwright's Chromium install (VD-4). A Build never downloads a browser on its own. On Linux, missing system libraries are recorded with the first error line; installing them needs root, so the Runner never does it.
+  - The `browser.*` tools are no longer registered for new runs, which removes ten tools from the tool surface. Their code stays until no stored run needs it for replay; removing it is a later cleanup.
+- **MCP.** The Runner already supports MCP servers, so a user who wants Playwright MCP can add it as an extension. It is not a default (VD-6).
 
 ### 4.6 When a Build stops
 
@@ -195,14 +199,14 @@ A handoff with known defects already pauses for the owner's choice (AGENTS.md:45
 The CLI workers plan comes after this one and builds on it:
 - A CLI reports the checks it ran; the Runner re-runs them through `run_evidence_command`, with their output files (VF6).
 - A missing tool is `not_run`, as for any worker.
-- Each CLI browses with its own tools; the Runner trusts only what it re-runs and its own final check.
+- A CLI browses with the same Playwright CLI as every other role, and the Runner trusts only what it re-runs and its own final check.
 - The Architect can start the app during review (VF5), so it can look at a CLI worker's UI work even though the CLI's own server stopped when the CLI exited.
 
 ## 5. What does not change
 
 - Evidence for each task works as in §2.1: a claim needs Runner evidence, and the Architect's override needs a reason.
 - The verifiers and the independent reviews.
-- Process ownership, fencing, containment, cleanup and the port authority.
+- Process ownership, fencing, containment, cleanup and the port authority. VF7b adds a managed process; it does not change the rules.
 - Access levels and approvals.
 - The legacy browser Build engine and the benchmark tracks.
 
@@ -213,38 +217,44 @@ Verification rules for every packet:
 - The full `test:runner-v2` runs only at the gate (VF9), by CI or the owner.
 - A module that newly imports a mutation-capable `node:fs` API updates test/filesystem-mutation-routing.test.ts and adds a filesystem-owner review record (AGENTS.md).
 - Stale tests that pin the old "detected means required" rule are rewritten to the new rule, never bent around it.
+- Each packet is a pull request against main, reviewed and merged before the packets that depend on it start.
 
 | Id | Title | Depends on | Days | Targeted tests | Acceptance |
 |---|---|---|---|---|---|
-| VF1 | Tool inventory: PATH lookup and version line for each check's executable and for a browser; `environment.inventory_recorded` before planning and on resume; shown to the Architect and in Run details | — | 1.5–2 | new test/verification-inventory.test.ts, test/native-architect-runtime.test.ts, test/build-runtime.test.ts, scripts/test-runner-v2-client.mts | • no network, a short timeout per probe, no project file written<br>• a missing tool is recorded as missing with its name<br>• the event replays; a resumed run records a new inventory<br>• the Architect's planning context lists it |
-| VF2 | `not_run: tool_missing` at the per-task boundary and in the final check, on the v1 contract; no repairs and no repair cycle for it; a browser that cannot open is `tool_missing` | — | 2–2.5 | test/final-verification-runtime.test.ts, test/final-verification-browser.test.ts, test/final-verification-repair.test.ts, test/final-verification-orchestration.test.ts, test/t6b-repair-boundary.test.ts, test/iv2-selected-kernel.test.ts, test/repair-cycles.test.ts | • a check whose executable is not on PATH never produces a failure, a repair task or a cycle charge<br>• a launch failure with the tool present stays a failure<br>• the Architect cannot set `tool_missing`<br>• a Build with every tool missing reaches its handoff |
-| VF3 | `VerificationPlanV2`: the Architect's list with suggestions, skips with reasons and its own checks; results per check; repairs keyed by check id; `verificationContractVersion` per run; v1 runs unchanged | VF2 | 3.5–4.5 | test/final-verification-contracts.test.ts, test/final-verification-submission.test.ts, test/final-verification-review.test.ts, test/final-verification-completion.test.ts, test/final-verification-scheduler.test.ts, test/w3-final-verification-prefill.test.ts, test/native-final-verification-factory.test.ts, test/architect-tools.test.ts, new test/verification-plan-v2.test.ts | • a detected check can be skipped with a reason, and a mandatory one cannot<br>• an Architect-added check runs in the fresh checkout and its facts are recorded<br>• a v1 run started before VF3 replays and finishes unchanged<br>• the prompts describe the list, not four categories |
-| VF4 | `aiboard-validation.json` version 2: `checks` with `mandatory`; `start` checks with HTTP, output-line or exit-code readiness; the one pause before planning for a mandatory check with a missing tool; no `next start` suggestion for a static export | VF1, VF3 | 1.5–2 | test/iv3-validation-budget-tiers.test.ts, test/final-verification-profile.test.ts, test/v3-language-profiles.test.ts, new test/project-validation-checks.test.ts, test/build-runtime.test.ts | • version 1 files behave as today; unknown keys still fail closed<br>• a CLI `start` check passes on its exit code, a server's on HTTP, a desktop test mode's on an output line<br>• a mandatory check with a missing tool pauses once, before any model call, naming the tool<br>• a Next app with `output: "export"` gets no `next start` check |
-| VF5 | Architect commands in planning, in a disposable copy of the baseline; the verifiers' process tools on `architect:inspection`, bound to that copy; cleanup with the copy | — | 1.5–2.5 | test/native-architect-runtime.test.ts, test/role-capabilities.test.ts, test/process-tools.test.ts, test/evidence-tools.test.ts | • a planning-state command runs in the copy and never in the project<br>• the Architect starts a server in its copy and reads it with `browser.*`; the process is gone after the copy is removed<br>• approvals match the verifiers' at every access level<br>• no ownership or fencing test changes |
+| VF1 | Tool inventory: PATH lookup and version line for each check's executable and for a browser the Playwright CLI can use; `environment.inventory_recorded` before planning and on resume; shown to the Architect and in Run details | VF2, VF5 (shared files) | 1.5–2 | new test/verification-inventory.test.ts, test/native-architect-runtime.test.ts, test/build-runtime.test.ts, scripts/test-runner-v2-client.mts | • no network, a short timeout per probe, no project file written<br>• a missing tool is recorded as missing with its name<br>• the event replays; a resumed run records a new inventory<br>• the Architect's planning context lists it |
+| VF2 | `not_run: tool_missing` at the per-task boundary and in the final check, on the v1 contract; no repairs and no repair cycle for it; a v1 browser check that cannot open a browser is `tool_missing` | — | 2–2.5 | test/final-verification-runtime.test.ts, test/final-verification-browser.test.ts, test/final-verification-repair.test.ts, test/final-verification-orchestration.test.ts, test/t6b-repair-boundary.test.ts, test/iv2-selected-kernel.test.ts, test/repair-cycles.test.ts | • a check whose executable is not on PATH never produces a failure, a repair task or a cycle charge<br>• a launch failure with the tool present stays a failure<br>• the Architect cannot set `tool_missing`<br>• a Build with every tool missing reaches its handoff |
+| VF3 | `VerificationPlanV2`: the Architect's list with suggestions, skips with reasons and its own checks; kinds build, tests, start and other, with no browser kind; results per check; repairs keyed by check id; `verificationContractVersion` per run; v1 runs unchanged | VF2 | 3–4 | test/final-verification-contracts.test.ts, test/final-verification-submission.test.ts, test/final-verification-review.test.ts, test/final-verification-completion.test.ts, test/final-verification-scheduler.test.ts, test/w3-final-verification-prefill.test.ts, test/native-final-verification-factory.test.ts, test/architect-tools.test.ts, new test/verification-plan-v2.test.ts | • a detected check can be skipped with a reason, and a mandatory one cannot<br>• an Architect-added check runs in the fresh checkout and its facts are recorded<br>• a v1 run started before VF3 replays and finishes unchanged<br>• the prompts describe the list, not four categories |
+| VF4 | `aiboard-validation.json` version 2: `checks` with `mandatory`; `start` checks with HTTP, output-line or exit-code readiness and steps; the one pause before planning for a mandatory check with a missing tool; no `next start` suggestion for a static export | VF1, VF3 | 1.5–2 | test/iv3-validation-budget-tiers.test.ts, test/final-verification-profile.test.ts, test/v3-language-profiles.test.ts, new test/project-validation-checks.test.ts, test/build-runtime.test.ts | • version 1 files behave as today; unknown keys still fail closed<br>• a CLI `start` check passes on its exit code, a server's on HTTP, a desktop test mode's on an output line<br>• a mandatory check with a missing tool pauses once, before any model call, naming the tool<br>• a Next app with `output: "export"` gets no `next start` check |
+| VF5 | Architect commands in planning, in a disposable copy of the baseline; the verifiers' process tools on `architect:inspection`, bound to that copy; cleanup with the copy | — | 1.5–2.5 | test/native-architect-runtime.test.ts, test/role-capabilities.test.ts, test/process-tools.test.ts, test/evidence-tools.test.ts | • a planning-state command runs in the copy and never in the project<br>• the Architect starts a server in its copy and reads it; the process is gone after the copy is removed<br>• approvals match the verifiers' at every access level<br>• no ownership or fencing test changes |
 | VF6 | Output files: `outputs` on checks and on `run_evidence_command`, kept as artifacts linked to the evidence; images offered to reviewers whose model accepts images | — | 1.5–2 | test/evidence-tools.test.ts, test/sqlite-evidence-store.test.ts, test/validation-evidence-store.test.ts, test/image-inspection.test.ts | • paths stay inside the workspace (no `..`, symlink or junction out)<br>• count and size caps; a missing file is recorded as missing, not an error<br>• a screenshot reaches a vision reviewer and is skipped for others |
-| VF7 | Browser: installed Chrome, then Edge, then Playwright's Chromium; `browser.*` only when one exists; `aiboard browser install` and the Settings > Tools button; Linux library errors recorded | VF1 | 1–1.5 | test/browser-tools.test.ts, test/role-capabilities.test.ts, test/local-launcher.test.ts, `npx tsc --noEmit`, `npm run lint` | • with no browser, no role lists `browser.*` and browser checks are `not_run`<br>• the install runs only on the owner's action, never inside a Build<br>• the inventory names the browser used |
+| VF7a | Spike, no product code: the bundled `playwright cli` under the Runner's process containment on Windows, macOS and Linux (Docker); a written report with the session's lifetime under `process.run` and as a managed process, what is left behind after a task's tree kill, and the bundle's CLI files | — | 0.5–1 | a throwaway harness outside runner-v2/src; `npx tsx scripts/release/test-bundle-closure.mts` | • the report names the process design for VF7b, with evidence from each OS<br>• no browser process left behind in the chosen design<br>• confirms the release bundle contains the CLI client and its skill |
+| VF7b | Browsing through the Playwright CLI: `playwright-cli` on PATH for Runner-started processes; the task's CLI session as a managed process, named per task and stopped with the task; the skill offered to API workers, the Architect and the verifiers; `browser.*` not registered for new runs; `aiboard browser install` and the Settings > Tools button | VF1, VF6, VF7a | 2.5–3 | test/browser-tools.test.ts, test/role-capabilities.test.ts, test/process-tools.test.ts, test/local-launcher.test.ts, test/runner-resource-cleanup.test.ts, new test/playwright-cli-session.test.ts, `npx tsc --noEmit`, `npm run lint` | • a worker opens a page and takes a screenshot that becomes an evidence file<br>• no browser process remains after the task ends, on every kill kind the Runner uses<br>• two tasks never share a session<br>• new runs list no `browser.*`; a run started before VF7b replays<br>• the install runs only on the owner's action, never inside a Build<br>• an independent review of the process change |
 | VF8 | Summary: the handoff's Not verified section; `leftToVerify` on `complete_run`; a non-mandatory check failing at the repair limit becomes a known defect; Run details and the final card in the web | VF2, VF3 | 2–2.5 | test/handoff-snapshot.test.ts, test/build-runtime.test.ts, test/repair-cycles.test.ts, scripts/test-build-live-state.mts, scripts/test-build-ui-overhaul.mts, `npx tsc --noEmit`, `npm run lint` | • every `not_run` check, skip, override and `leftToVerify` item appears once<br>• a non-mandatory failure at the limit reaches the handoff as a known defect and no extra pause<br>• a mandatory failure at the limit still pauses<br>• the snapshot digest still verifies |
-| VF9 | Gate and docs: the Runner guide (checks, mandatory, browser install), AGENTS.md and CLAUDE.md lines on verification, this repository's own `aiboard-validation.json` (VD-5) | VF1–VF8 | 1 | `npm run typecheck:runner-v2`, root `npx tsc --noEmit`, `npm run lint`, the targeted tests above; the full `test:runner-v2` by CI or the owner | green, or fixed forward; no doc still says a detected check must run |
+| VF9 | Gate and docs: the Runner guide (checks, mandatory, browsing, browser install), AGENTS.md and CLAUDE.md lines on verification and browsing, this repository's own `aiboard-validation.json` (VD-5) | VF1–VF8 | 1 | `npm run typecheck:runner-v2`, root `npx tsc --noEmit`, `npm run lint`, the targeted tests above; the full `test:runner-v2` by CI or the owner | green, or fixed forward; no doc still says a detected check must run or that the Runner has browser tools |
 
-**Parallel work.** VF1, VF2, VF5 and VF6 do not depend on each other and can run in separate Claude Code sessions, each in its own worktree. VF2 and VF3 both touch final-verification-*.ts, so VF3 waits for VF2. agent-prompts.ts is shared by VF1, VF3 and VF5; the later packet rebases.
-
-**Smaller first step.** VF1, VF2, VF4 (without the `checks` that need VF3: only `mandatory` on the tiers and the static-export fix), VF7 and VF8 take 8–10.5 days. They stop the blocking and list the gaps. They keep the four fixed categories and give the Architect no new tools.
+**Order.**
+- First wave, in parallel, each in its own worktree: VF2, VF5, VF6, VF7a. They touch different files.
+- Then VF1 (it shares build-runtime.ts with VF2 and native-architect-runtime.ts with VF5) and VF3 (after VF2).
+- Then VF4, VF7b and VF8, then VF9.
+- agent-prompts.ts is shared by several packets; each keeps its prompt edits small and rebases on main before its pull request.
 
 ## 7. Owner decisions
 
-| Id | Question | Recommendation | Source |
+| Id | Question | Decision | Source |
 |---|---|---|---|
 | VD-1 | Order | After the home, before the CLI workers plan; then the AIBoard Build. Built in Claude Code sessions. | owner (2026-11-13) |
-| VD-2 | Where "mandatory" is set | Only in the project's `aiboard-validation.json`, which is committed with the project. A per-Build switch in the web can come later. | proposed |
-| VD-3 | A non-mandatory check that still fails at the repair limit | It becomes a known defect and the Build goes on to its handoff, which pauses for the owner's choice as today. | proposed |
-| VD-4 | Browser download | Never automatic. `aiboard browser install` and a Settings > Tools button; an installed Chrome or Edge is used first. | proposed |
-| VD-5 | This repository's mandatory checks | `npm run typecheck:runner-v2`, root `npx tsc --noEmit` and `npm run lint` mandatory; targeted test groups as suggested checks; never the full `test:runner-v2`, which takes hours. | proposed |
-| VD-6 | Moving `browser.*` to an MCP connector | Not in this plan. It can be decided after CLI workers. | proposed |
-| VD-7 | `requiredEvidenceKinds` in plans | Left as a label. Checking it would make the Runner decide again. | proposed |
+| VD-2 | Where "mandatory" is set | Only in the project's `aiboard-validation.json`, which is committed with the project. A per-Build switch in the web can come later. | owner (2026-11-13) |
+| VD-3 | A non-mandatory check that still fails at the repair limit | It becomes a known defect and the Build goes on to its handoff, which pauses for the owner's choice as today. | owner (2026-11-13) |
+| VD-4 | Browser download | Never automatic. `aiboard browser install` and a Settings > Tools button; an installed Chrome or Edge is used first. | owner (2026-11-13) |
+| VD-5 | This repository's mandatory checks | `npm run typecheck:runner-v2`, root `npx tsc --noEmit` and `npm run lint` mandatory; targeted test groups as suggested checks; never the full `test:runner-v2`, which takes hours. | owner (2026-11-13) |
+| VD-6 | How models browse | Through the Playwright CLI the Runner ships, as ordinary commands, for every role. The Runner's `browser.*` tools are retired for new runs; Playwright MCP stays available as a user-added MCP server, not a default. | owner (2026-11-13) |
+| VD-7 | `requiredEvidenceKinds` in plans | Left as a label. Checking it would make the Runner decide again. | owner (2026-11-13) |
 
 ## 8. Risks
 
 - **The v2 contract touches the most-tested part of the Runner.** About twenty test files cover final verification. VF2 lands first on v1, so the blocking stops early even if VF3 takes longer.
+- **The CLI's session process.** It must never outlive its task or escape the Runner's containment. VF7a settles the design before any product code, and VF7b gets an independent review.
+- **Losing the automatic console-error rule.** The built-in browser check failed on any console error. Now the Architect judges the recorded console output, unless the check it writes fails on errors itself. The summary shows what was checked.
 - **Skipping becomes easy.** The Architect could skip checks it should run. Every skip needs a reason and appears in the summary, and the owner can make a check mandatory.
 - **Architect commands in planning cost time.** They count against the Build's budgets like any tool call.
 - **Older Runners refuse a version-2 `aiboard-validation.json`.** The error names the fix: update the Runner.
