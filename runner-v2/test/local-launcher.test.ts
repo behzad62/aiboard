@@ -703,6 +703,40 @@ test("existing advanced Runner options pass through", () => {
   });
 });
 
+test("aiboard config, keys and models join the parsed Command union and start no Runner", async () => {
+  assert.deepEqual(parseLauncherArguments(["config"]).home, { command: "config", action: "show", json: false });
+  assert.equal(parseLauncherArguments(["config", "--json"]).command, "config");
+  assert.deepEqual(parseLauncherArguments(["config", "set", "defaults.reasoningEffort", "high"]).home,
+    { command: "config", action: "set", key: "defaults.reasoningEffort", value: "high" });
+  assert.deepEqual(parseLauncherArguments(["keys", "set", "openai", "--stdin"]).home, { command: "keys", action: "set", provider: "openai", stdin: true });
+  assert.deepEqual(parseLauncherArguments(["keys", "remove", "openai"]).home, { command: "keys", action: "remove", provider: "openai" });
+  assert.deepEqual(parseLauncherArguments(["keys", "reset", "--yes"]).home, { command: "keys", action: "reset", yes: true });
+  assert.deepEqual(parseLauncherArguments(["models"]).home, { command: "models", action: "list", json: false });
+  assert.deepEqual(parseLauncherArguments(["models", "disable", "openai:gpt-5.5"]).home, { command: "models", action: "disable", id: "openai:gpt-5.5" });
+  assert.equal(parseLauncherArguments(["keys", "--help"]).command, "help");
+  assert.throws(() => parseLauncherArguments(["keys", "set", "openai", "stub-not-a-real-key"]), (error: unknown) =>
+    error instanceof Error && /no key on the command line/.test(error.message) && !error.message.includes("stub-not-a-real-key"));
+  assert.throws(() => parseLauncherArguments(["config", "--port", "0"]), /invalid_arguments/);
+
+  const root = await mkdtemp(join(tmpdir(), "aiboard-launcher-home-"));
+  try {
+    const output: string[] = [];
+    const environment = { AIBOARD_HOME: join(root, "home"), LOCALAPPDATA: join(root, "local"), XDG_DATA_HOME: join(root, "data") };
+    await runLauncher(["config", "--json"], {
+      environment, home: root, cwd: root, write: (text) => { output.push(text); },
+      spawnRunner: () => { throw new Error("a home command must not start a Runner"); },
+      spawnPeer: () => { throw new Error("a home command must not start a peer"); },
+    });
+    const view = JSON.parse(output.join("")) as { home: string; exists: boolean; providers: unknown[] };
+    assert.equal(view.home, environment.AIBOARD_HOME);
+    assert.equal(view.exists, false);
+    assert.deepEqual(view.providers, []);
+    assert.deepEqual(await readdir(root), [], "reading the home creates nothing, and no Runner state");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("the legacy Runner command retains its flags", async () => {
   const output = await childOutput(spawn(process.execPath, [legacyBin, "--help"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true }));
   assert.equal(output.code, 0);

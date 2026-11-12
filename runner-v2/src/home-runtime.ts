@@ -166,9 +166,17 @@ export interface HomeEnabledModel {
   modelId: string;
 }
 
-/** lib/client/providers.ts `listProviderModelInfos`, as ids. */
-function providerModelIds(home: HomeModelSource, providerId: string, provider: SnapshotProvider): string[] {
-  const entry = providerEntry(home.config, providerId);
+/**
+ * The models a provider lists before its `enabledModelIds` filter (lib/client/providers.ts
+ * `listProviderModelInfos`), as ids; [] for an unknown provider.
+ */
+export function listHomeProviderModelIds(config: AiboardHomeConfigV1, providerId: string): string[] {
+  const provider = snapshotProvider(providerId);
+  return provider ? providerModelIds(config, providerId, provider) : [];
+}
+
+function providerModelIds(config: AiboardHomeConfigV1, providerId: string, provider: SnapshotProvider): string[] {
+  const entry = providerEntry(config, providerId);
   if (provider.modelSource === "user-defined" && provider.modelDiscovery === null) {
     // Azure AI Foundry: the user's deployments (`listFoundryModelInfos`).
     return (stringList(entry?.models) ?? [])
@@ -203,7 +211,7 @@ export function listHomeEnabledModels(home: HomeModelSource): HomeEnabledModel[]
   for (const providerId of snapshotProviderIds()) {
     if (!homeProviderHasKey(home, providerId)) continue;
     const provider = snapshotProvider(providerId)!;
-    const ids = providerModelIds(home, providerId, provider);
+    const ids = providerModelIds(home.config, providerId, provider);
     const configured = stringList(providerEntry(home.config, providerId)?.enabledModelIds);
     const enabled = configured === null ? ids : ids.filter((id) => new Set(configured).has(id));
     for (const modelId of enabled) models.push({ id: formatFullModelId(providerId, modelId), providerId, modelId });
