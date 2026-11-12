@@ -1,5 +1,7 @@
 # T8 continuation — 2026-10-12
 
+> **History — do not resume.** Task 12 / P6 is closed: T8 and Gate G were accepted on 2026-10-15. This file is a historical record. Every "Current gate", IN_PROGRESS, NOT ACCEPTED or NOT STARTED statement in it is superseded; do not follow its gate order. The standing rules that survive are in AGENTS.md and CLAUDE.md.
+
 ## 2026-10-15 — T8 merged locally; REL-1 prepared, deployment not started
 
 The owner now authorizes merging T8 into main and preparing REL-1, superseding the earlier T8-only no-merge restriction. Local integration code merge is `d88f1e9aa5362841ab8f53963ddafb999f07e973` (parents previous main `5e5e71c882fb8fe972232819e2270d03f1e2063f` and accepted T8 `a750ef6cc4efe990b25c7fac3dd992f2745798e8`). T8/Gate G remain accepted in their recorded scope. Main-only features/account runner/legal changes are preserved. Three generated ZIP conflicts were resolved from merged source: executable members retain accepted T8 bytes, with current main legal/package metadata. Account ZIP is unchanged from main. Dependency versions are unchanged; merged app TypeScript exited 0. Independent bounded merge-resolution ACCEPT `675c0b196b58a4f2318b10548f79a1d53174d0bc39c5d2f62a66b0300513c39c` pins tree `4614cd49189ca3d7bdd43c5ffe44957bb597ee46`. No accepted T8 test suite or hosted CI was replayed.
@@ -357,7 +359,7 @@ Checklist31 scoped accepted/4 broad groups open. Current gate D/platform coverag
 
 Use **D:/repos/ai-discussion-board/.worktrees/p66-t8** for every repository command. Branch `codex/p66-t8`, HEAD `f750ed468e9c93266f4c5c4bca883da53cf421d4`. Preserve all accepted uncommitted/untracked files; do not reset, restart, clean, or overwrite concurrent changes. Primary checkout stays untouched. No native/test runtime is still running. No commits were created in this continuation.
 
-Read `task-12-bounded-gates.md`, `t8-checklist.md` and the newest entries of `task-12-status.md`. Gate C is open; T8 is not accepted; REL-1 has not started. Checklist:29 scoped accepted,5 broad groups open. Counts are not a percentage.
+*(Superseded: Task 12/P6 was accepted on 2026-10-15; historical.)* Read `task-12-bounded-gates.md`, `t8-checklist.md` and the newest entries of `task-12-status.md`. Gate C is open; T8 is not accepted; REL-1 has not started. Checklist:29 scoped accepted,5 broad groups open. Counts are not a percentage.
 
 User preferences: keep tokens/output low, omit unnecessary evidence and repeated reviews/permission cycles. Reuse accepted checks/harnesses. Retain meaningful verification and required independent invariant review, preferably one consolidated outcome review. After each fix report its task and validated implementation iterations separately from harness/native attempts. Hardest overall remains Windows ownership/startup/crash cleanup. Iteration ledger: `D:/tmp/t8-benchmark-fix-ledger.json`; unknown historical totals stay unknown.
 

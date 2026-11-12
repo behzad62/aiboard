@@ -1,6 +1,8 @@
 # Runner V2 Task 12 — Bounded-Gate Implementation Plan
 
-> **Agent mandate:** This document is the authoritative execution plan for the remainder of Runner V2 Task 12 / P6 acceptance. Execute gates in order. Do not replace this with ad-hoc CI repair.
+> **History — do not resume.** Task 12 / P6 is closed: T8 and Gate G were accepted on 2026-10-15. This file is a historical record. Every "Current gate", IN_PROGRESS, NOT ACCEPTED or NOT STARTED statement in it is superseded; do not follow its gate order. The standing rules that survive are in AGENTS.md and CLAUDE.md.
+
+> **Former agent mandate (superseded, kept as history):** This document was the authoritative execution plan for the remainder of Runner V2 Task 12 / P6 acceptance. Execute gates in order. Do not replace this with ad-hoc CI repair.
 
 ## Goal
 

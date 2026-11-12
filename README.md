@@ -9,8 +9,8 @@
 - Runtime provider configuration for hosted and OpenAI-compatible models.
 - Native Build orchestration with an Architect, parallel workers, isolated Git worktrees, task commits, tools, skills, project memory, evidence, budgets, and provider failover.
 - Durable checkpoints that survive browser and runner restarts.
-- Guarded and Full access profiles.
-- Explicit user-controlled final project handoff.
+- Guarded, Project and Full permission profiles.
+- Final project handoff as a user choice, or automatic when a finished `finish` or `budgeted` run asked for a project handoff and has no known defects.
 
 ## License and contributions
 
@@ -32,7 +32,7 @@ rights; this license change does not revoke them.
 
 The static web app has no backend or account system. Discussion data and provider settings stay in browser storage or the local storage folder you choose. Provider requests go directly to the configured provider.
 
-Runner V2 runs on your machine, binds to `127.0.0.1`, and requires a control token. It is mandatory only for Build mode. Provider configuration stored by the runner is encrypted using that token.
+Runner V2 runs on your machine, binds to `127.0.0.1`, and requires a control token. It is mandatory only for Build mode. Provider and extension credentials stored by the runner are encrypted under a per-state storage key (`state/storage-key`, from which each store's key is derived), not the control token.
 
 ## Requirements
 
@@ -71,14 +71,14 @@ Execution safety, capability selection, cleanup, OCI configuration, and platform
 
 The proposed [Unified Cloud↔Desktop and Agent-Harness implementation plan](docs/plans/aiboard-unified-cloud-desktop-agent-platform-2026-10-15.md) covers simplified installation, pluggable coding harnesses, bidirectional MCP, remote device access, and optional GUI control. It is a roadmap, not implemented functionality.
 
-Guarded access requires approval for destructive or external effects. Full access allows configured agents to perform destructive operations, writes outside the project, credential changes, pushes/PRs, deployments, and other external actions without per-action approval. Final project handoff always pauses for the user in both profiles.
+Guarded access asks for approval before any action with an effect, such as a file write or a command. Project access runs work inside the project without prompts, but asks before writes outside the project and before destructive, network, credential-changing or other external actions. Full access allows configured agents to perform destructive operations, writes outside the project, credential changes, pushes/PRs, deployments, and other external actions without per-action approval. A Build's final project handoff pauses for a user choice unless the run's policy is `finish` or `budgeted`, a project handoff was requested, and no known defects are recorded; a failed automatic apply pauses for the user. This holds in every profile, Full included.
 
-If the project is not a Git repository, Runner V2 creates a safe local repository and baseline without requiring a global Git identity. When the Architect finishes, choose either:
+If the project is not a Git repository, Runner V2 creates a safe local repository and baseline without requiring a global Git identity. When the Architect finishes and the handoff pauses for you, choose either:
 
 - Keep the run-owned integration branch.
-- Apply its binary diff to the original project after a successful `git apply --check` dry run.
+- Apply its binary diff to the original project after a successful `git apply --check` dry run. The apply needs a named branch and a clean worktree and index in the project, and it lands as a commit on that branch.
 
-A conflict leaves the original project unchanged and keeps the handoff decision open.
+A conflict leaves the original project unchanged and keeps the handoff decision open. An automatic apply makes the same checks; if it fails, the run pauses for your choice.
 
 ## Production build
 
@@ -91,12 +91,13 @@ The app exports to `out/` for static hosting. The build publishes account-provid
 ## Checks
 
 ```bash
-npm run test:runner-v2
+npx tsx --test --test-concurrency=1 runner-v2/test/<file>.test.ts   # the Runner V2 tests a change affects
+npm run typecheck:runner-v2
 npm run lint
 npm run build
 ```
 
-Additional focused tests live under `runner-v2/test/` and `scripts/test-*`.
+The full Runner V2 suite, `npm run test:runner-v2`, takes hours; CI or the owner runs it, not each change. Other focused tests live under `runner-v2/test/` and `scripts/test-*`.
 
 ## Security
 

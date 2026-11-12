@@ -36,7 +36,7 @@ Exports contain redacted, bounded records and artifact references rather than or
 
 Worker cards name the run/source/plan, phase/task contract, required base, current claim where recorded, validation/report references and standing orders. Workers continue only eligible assigned packets, submit for independent review/integration, never self-accept, and persist a precise handoff when blocked or ending. Controller cards require current ownership, dependencies, serialized surfaces and full gate evidence. A resume-planning card forbids implementation, implementation tests, migrations and workloads until execution is authorized.
 
-Native launch chips are not applicable on the current Runner control plane because it exposes no API for non-executing chip preparation. Copying a card creates no task and dispatches no worker. Legacy runs retain their existing documentation policy and do not gain new coverage or cards on replay. Final project handoff always waits for your choice.
+Native launch chips are not applicable on the current Runner control plane because it exposes no API for non-executing chip preparation. Copying a card creates no task and dispatches no worker. Legacy runs retain their existing documentation policy and do not gain new coverage or cards on replay. A Build's final project handoff pauses for a user choice unless the run's policy is `finish` or `budgeted`, a project handoff was requested, and no known defects are recorded; a failed automatic apply pauses for the user.
 
 ## Contract reference and implementation history
 

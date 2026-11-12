@@ -73,8 +73,9 @@ export default function RunnerGuidePage() {
         <p>
           Guarded access pauses for every mutation. Project Autonomous runs project-contained work without prompts
           but pauses for outside or external effects. Full Access allows destructive, credential, push/PR,
-          deployment, and external-system operations without per-action approval. Final project handoff is always
-          a user choice in every profile.
+          deployment, and external-system operations without per-action approval. In every profile, a Build&apos;s
+          final project handoff pauses for your choice unless the run&apos;s policy is finish or budgeted, a project
+          handoff was requested, and no known defects are recorded; a failed automatic apply pauses for you.
         </p>
       </section>
       <section className="space-y-3">

@@ -6,7 +6,7 @@ Runner V2 is the native Build kernel. Execution is capability-driven: Runner val
 
 Strict profiles fail closed. They never fall back to a native host command when the configured provider cannot prove the required capability. A strict OCI selection is provider-specific enforcement: the configured provider must attest its CLI and immutable image and return the owned execution plan for the exact lease/grant. Native execution, the Docker CLI process itself, and partial or unverified providers are not described as universally confined.
 
-`full` is an explicit bypass, persistently disclosed as `unconfined_explicit_full`; it is not confinement. Full may authorize otherwise guarded effects according to run policy. Final project handoff still pauses for the user.
+`full` is an explicit bypass, persistently disclosed as `unconfined_explicit_full`; it is not confinement. Full may authorize otherwise guarded effects according to run policy. A Build's final project handoff pauses for a user choice unless the run's policy is `finish` or `budgeted`, a project handoff was requested, and no known defects are recorded; a failed automatic apply pauses for the user.
 
 Windows Job Objects are an optional host enhancement. Portable Windows behavior remains the baseline; Job support is used only from current semantic capability evidence and is never a Windows-only product requirement.
 
@@ -39,7 +39,7 @@ An unexplained command/configuration change stops boundary execution. A smaller 
 
 An initial project with no configured suite uses an immutable Git inventory proof with no invented denominator or report. Its first suite may be introduced, but acceptance still requires a fresh positive machine-readable test report. Detected tests or runner configuration without a usable command remain blocked. A successful task acceptance atomically promotes the trusted baseline; a passed boundary or failed attempt alone cannot.
 
-Historical runs retain their recorded policy and are not automatically upgraded on recovery. These runtime project checks are separate from repository development validation: packet tests run during implementation, and the wider development suite remains scheduled for the final P6.6 gate.
+Historical runs retain their recorded policy and are not automatically upgraded on recovery. These runtime project checks are separate from repository development validation: packet tests run during implementation, and the full development suite (`npm run test:runner-v2`, which takes hours) runs in CI or by the owner. P6.6 and T8 were accepted on 2026-10-15.
 
 ## Submission scope and secret checks
 

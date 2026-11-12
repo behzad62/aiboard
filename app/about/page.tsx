@@ -85,7 +85,8 @@ export default function AboutPage() {
           An architect plans the work as tasks, workers implement them in
           isolated Git worktrees, and an independent verifier checks the
           evidence before anything is accepted. You approve the gates that
-          matter and choose how the finished work is handed back.
+          matter and choose how the finished work is handed back, or let a
+          finished run under the finish or budgeted policy apply it for you.
         </p>
         <p>
           Builds run on{" "}
