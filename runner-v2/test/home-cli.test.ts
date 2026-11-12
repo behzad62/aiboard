@@ -118,6 +118,23 @@ test("a key on argv is refused, with the hint, and never repeated", () => {
   assert.throws(() => parseHomeCommand("config", ["--json", "--json"]), /Duplicate option/);
 });
 
+test("a key typed where the provider goes is never repeated by keys set or keys remove", { timeout: 120_000 }, async () => {
+  const fx = fixture();
+  try {
+    for (const argv of [["keys", "set", CANARY, "--stdin"], ["keys", "set", CANARY], ["keys", "remove", CANARY]]) {
+      const runtime = runtimeFor(fx, { stdin: new PipeInput("stub-key-0001\n") });
+      const error = await rejectsCode(runHomeCommand(parseHomeCommand("keys", argv.slice(1)), runtime), "unknown_provider");
+      assert.match(error.message, /That is not a provider AI Board knows\. Providers: openai/);
+      for (const text of [error.message, ...runtime.captured.out, ...runtime.captured.err]) assert.ok(!text.includes(CANARY), `keys ${argv[1]} repeated the argument`);
+      const run = await runBin(fx, argv, "stub-key-0001\n");
+      assert.notEqual(run.code, 0, `aiboard keys ${argv[1]} exits non-zero`);
+      assert.match(run.stderr, /unknown_provider/);
+      assert.ok(!run.stdout.includes(CANARY) && !run.stderr.includes(CANARY), `aiboard keys ${argv[1]} printed the argument`);
+    }
+    assert.equal(existsSync(fx.location.configPath), false, "nothing was saved");
+  } finally { cleanup(fx); }
+});
+
 // ------------------------------------------------------------------ the prompt
 
 test("the key prompt switches to raw mode and echoes nothing (fake TTY)", async () => {
@@ -202,7 +219,7 @@ function holdLockInAnotherProcess(fx: Fixture) {
     "",
   ].join("\n"));
   // The batch must write credentials for afterCredentialsWrite to run: seed the key first in the parent.
-  const child = spawn(process.execPath, [TSX_CLI, script, fx.userHome], { env: { ...process.env, ...fx.environment }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const child = spawn(process.execPath, [TSX_CLI, script, fx.userHome], { env: { ...process.env, ...fx.environment, HOME: fx.userHome, USERPROFILE: fx.userHome }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
   let output = "", errors = "";
   child.stdout.on("data", (chunk) => { output += chunk; });
   child.stderr.on("data", (chunk) => { errors += chunk; });
@@ -332,7 +349,9 @@ test("home-writing commands refuse under AIBOARD_TASK_ID or a Runner depth; read
 // ------------------------------------------------------------------ secrets in output
 
 function cleanEnvironment(fx: Fixture): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...process.env, ...fx.environment, NO_COLOR: "1" };
+  // The child's own home folder too: on macOS the home key's folder comes only from it, so an inherited
+  // HOME would put a key in the developer's real data root.
+  const environment: NodeJS.ProcessEnv = { ...process.env, ...fx.environment, HOME: fx.userHome, USERPROFILE: fx.userHome, NO_COLOR: "1" };
   delete environment.AIBOARD_TASK_ID;
   delete environment.AIBOARD_MCP_DEPTH;
   return environment;
@@ -361,6 +380,7 @@ test("a canary secret in the home never appears in config output, argv, stdout, 
   try {
     const saved = await runBin(fx, ["keys", "set", "openai", "--stdin"], `﻿${CANARY}\r\n`);
     assert.equal(saved.code, 0, saved.stderr);
+    assert.ok(existsSync(fx.location.keyPath), "the child's home key is in the fixture's data root, never the real one");
     await seed(fx, [
       { path: "providers.openai", op: "merge", value: { enabledModelIds: ["gpt-5.5"] } },
       { path: "customModels.local-a", op: "set", value: { label: "Local", baseURL: "http://127.0.0.1:11434/v1", model: "gemma", createdAt: "2026-11-12T00:00:00.000Z" } },

@@ -360,7 +360,8 @@ async function showConfig(io: Io, json: boolean): Promise<void> {
 function keyProvider(id: string): { id: string; name: string } {
   const provider = snapshotProvider(id);
   if (!provider) {
-    throw new HomeModelError("unknown_provider", `${id} is not a provider AI Board knows. Providers: ${(snapshotProviderIds() as string[]).filter((item) => !snapshotProvider(item)?.accountBacked).join(", ")}.`);
+    // Never repeat the argument: the likeliest mistake is a key typed where the provider goes.
+    throw new HomeModelError("unknown_provider", `That is not a provider AI Board knows. Providers: ${(snapshotProviderIds() as string[]).filter((item) => !snapshotProvider(item)?.accountBacked).join(", ")}.`);
   }
   if (provider.accountBacked) {
     throw invalid(`${provider.name} takes no key: it signs in through the account runner that a plain \`aiboard\` start launches.`);
