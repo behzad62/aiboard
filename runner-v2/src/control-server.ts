@@ -1416,7 +1416,7 @@ export class ControlServer {
   /**
    * Pushed configs without secrets (§9, HM3). A config that takes its key from the home is resolved
    * from it: the home's transport, base URL and protocol, stored with `secretSource: "home"` and no
-   * secret. Account-peer configs and configs that carry their own secret pass through as pushed. On
+   * key (HOME_SECRET_PLACEHOLDER). Account-peer configs and configs that carry their own secret pass through as pushed. On
    * the first push that names the home, the secrets already stored for home-backed providers are
    * deleted: each such config is re-resolved from the home, or dropped when the home cannot serve it.
    */

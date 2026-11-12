@@ -17,7 +17,7 @@ import { NativeBuildRuntimeInitializationError } from "../src/native-build-facto
 import { BuildRuntimeRegistry, type BuildControlPlane } from "../src/build-runtime-registry.js";
 import { BuildRuntime } from "../src/build-runtime.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
-import { validateProviderConfigs, type RunnerProviderConfig } from "../src/provider-config-store.js";
+import { HOME_SECRET_PLACEHOLDER, validateProviderConfigs, type RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { GitPreflightResult } from "../src/git-preflight.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
 import { SqlitePermissionStore } from "../src/permission-store.js";
@@ -2107,7 +2107,7 @@ test("a pushed config without a secret is resolved from the home: stored with se
     assert.equal(reply.status, 200, reply.text);
     assert.equal(reply.text.includes(HOME_OPENAI_KEY), false);
     const [stored] = fx.stored.current;
-    assert.equal(stored!.secret, "");
+    assert.equal(stored!.secret, HOME_SECRET_PLACEHOLDER, "stored with the placeholder, never the home's key");
     assert.equal(stored!.secretSource, "home");
     assert.equal(stored!.transport, "openai-compatible");
     assert.equal(stored!.baseUrl, "https://api.openai.com/v1");
@@ -2225,9 +2225,42 @@ test("secrets already stored for home-backed providers are deleted on the first 
     assert.equal(text.includes("legacy-openai-secret"), false);
     assert.equal(text.includes("legacy-anthropic-secret"), false);
     const openai = fx.stored.current.find((config) => config.runtimeId === "openai:gpt-4.1");
-    assert.deepEqual({ secret: openai!.secret, secretSource: openai!.secretSource }, { secret: "", secretSource: "home" }, "a provider the home has a key for now takes it from the home");
+    assert.deepEqual({ secret: openai!.secret, secretSource: openai!.secretSource }, { secret: HOME_SECRET_PLACEHOLDER, secretSource: "home" }, "a provider the home has a key for now takes it from the home");
     assert.equal(fx.stored.current.some((config) => config.runtimeId === "anthropic:claude-sonnet-4-5"), false, "one the home has no key for is dropped with its secret");
     assert.equal(fx.stored.current.find((config) => config.runtimeId === "chatgpt:gpt-5.5")!.secret, "peer-session-token", "an account-peer config is untouched");
+  } finally {
+    await fx.close();
+  }
+});
+
+/**
+ * The check a Runner from before HM3 (0.3.16, provider-config-store.ts at 3903fc46) runs on every load
+ * of its provider store: one config that fails it makes the whole store unreadable, so after
+ * `aiboard update --rollback` that Runner could start no Build at all.
+ */
+function passesPreHomeStoreCheck(config: RunnerProviderConfig): boolean {
+  return Boolean(config.runtimeId && config.providerId && config.modelId && config.secret);
+}
+
+test("a store with home-backed configs stays loadable by a Runner from before HM3, which never gets a real key from it", async () => {
+  const fx = await homeControlFixture();
+  try {
+    const custom = { runtimeId: "custom:local-a", providerId: "custom", modelId: "gemma", transport: "openai-compatible", capabilities: ["*"], priority: 2 };
+    assert.equal((await fx.put([pushedOpenAi, custom])).status, 200);
+    assert.equal(fx.stored.current.length, 2);
+    for (const config of fx.stored.current) {
+      assert.equal(passesPreHomeStoreCheck(config), true, `${config.runtimeId} keeps the store loadable after a rollback`);
+      assert.equal(config.secret, HOME_SECRET_PLACEHOLDER);
+    }
+    assert.equal(JSON.stringify(fx.stored.current).includes(HOME_OPENAI_KEY), false, "the store holds no home key");
+    assert.notEqual(HOME_SECRET_PLACEHOLDER, LOCAL_ENDPOINT_PLACEHOLDER_SECRET);
+    // This Runner never sends the placeholder: every runtime it builds takes the real key from the home.
+    const built = fx.store.load();
+    assert.equal(built.find((config) => config.runtimeId === pushedOpenAi.runtimeId)!.secret, HOME_OPENAI_KEY);
+    assert.equal(built.some((config) => config.secret === HOME_SECRET_PLACEHOLDER), false);
+    // And the store accepts the placeholder only for a home-backed config.
+    assert.throws(() => validateProviderConfigs([{ ...fx.stored.current[0]!, secret: "" }]), /secret are required/);
+    assert.throws(() => validateProviderConfigs([{ ...fx.stored.current[0]!, secret: "some-other-value" }]), /secret are required/);
   } finally {
     await fx.close();
   }
