@@ -10,7 +10,7 @@
 - Native Build orchestration with an Architect, parallel workers, isolated Git worktrees, task commits, tools, skills, project memory, evidence, budgets, and provider failover.
 - Durable checkpoints that survive browser and runner restarts.
 - Guarded, Project and Full permission profiles.
-- Final project handoff as a user choice, or automatic for a finished `finish` or `budgeted` run with no known defects.
+- Final project handoff as a user choice, or automatic when a finished `finish` or `budgeted` run asked for a project handoff and has no known defects.
 
 ## License and contributions
 
@@ -71,7 +71,7 @@ Execution safety, capability selection, cleanup, OCI configuration, and platform
 
 The proposed [Unified Cloud↔Desktop and Agent-Harness implementation plan](docs/plans/aiboard-unified-cloud-desktop-agent-platform-2026-10-15.md) covers simplified installation, pluggable coding harnesses, bidirectional MCP, remote device access, and optional GUI control. It is a roadmap, not implemented functionality.
 
-Guarded access requires approval for destructive or external effects. Project access runs project-contained work without prompts but pauses for outside or external effects. Full access allows configured agents to perform destructive operations, writes outside the project, credential changes, pushes/PRs, deployments, and other external actions without per-action approval. A Build's final project handoff pauses for a user choice unless the run's policy is `finish` or `budgeted`, a project handoff was requested, and no known defects are recorded; a failed automatic apply pauses for the user. This holds in every profile, Full included.
+Guarded access asks for approval before any action with an effect, such as a file write or a command. Project access runs work inside the project without prompts, but asks before writes outside the project and before destructive, network, credential-changing or other external actions. Full access allows configured agents to perform destructive operations, writes outside the project, credential changes, pushes/PRs, deployments, and other external actions without per-action approval. A Build's final project handoff pauses for a user choice unless the run's policy is `finish` or `budgeted`, a project handoff was requested, and no known defects are recorded; a failed automatic apply pauses for the user. This holds in every profile, Full included.
 
 If the project is not a Git repository, Runner V2 creates a safe local repository and baseline without requiring a global Git identity. When the Architect finishes and the handoff pauses for you, choose either:
 
