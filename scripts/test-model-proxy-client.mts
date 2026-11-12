@@ -286,6 +286,37 @@ for (const [label, capabilities] of [
   pass("a provider's own 401 passes through; a session near expiry is renewed before it is handed out");
 }
 
+// ---------------------------------------------------------------- the token goes only to the proxy
+
+{
+  resetStore();
+  const stub = installStubRunner({ proxyTokens: ["proxy_guarded"], upstream: () => json({ data: [] }) });
+  try {
+    const foreign = [
+      "https://api.openai.com/v1/models",
+      `${STUB_PROXY_URL}/v2/health`,
+      `${STUB_PROXY_URL}/v2/model-proxy/../home/proxy-session`,
+      `${STUB_PROXY_URL.replace("127.0.0.1", "localhost")}/v2/model-proxy/openai/models`,
+      `${STUB_PROXY_URL.replace("http://", "http://user:pw@")}/v2/model-proxy/openai/models`,
+      "not a url",
+    ];
+    for (const url of foreign) {
+      const error = await modelProxyClient
+        .fetch(url, { headers: { authorization: "Bearer placeholder", "x-api-key": "placeholder" } })
+        .then(() => null, (caught: unknown) => caught);
+      assert.ok(error instanceof ModelConnectionError && error.code === "not_proxy_url", `${url} is refused`);
+      assert.ok(!error.message.includes("proxy_guarded"), "the refusal never names the token");
+    }
+    assert.equal(stub.requests.length, 0, "no request leaves for a foreign URL");
+    const ok = await modelProxyClient.fetch(`${STUB_PROXY_URL}/v2/model-proxy/openai/models`, { headers: { authorization: "Bearer placeholder" } });
+    assert.equal(ok.status, 200);
+    assert.equal(stub.requests.length, 1);
+  } finally {
+    stub.restore();
+  }
+  pass("the proxy fetch refuses, with no request made, any URL outside the session's /v2/model-proxy/");
+}
+
 // ---------------------------------------------------------------- one streamed call per SDK
 
 {

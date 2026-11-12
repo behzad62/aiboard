@@ -28,7 +28,8 @@ export type ModelConnectionErrorCode =
   | "not_connected"
   | "update_required"
   | "account_peer_missing"
-  | "proxy_session_failed";
+  | "proxy_session_failed"
+  | "not_proxy_url";
 
 export class ModelConnectionError extends Error {
   constructor(readonly code: ModelConnectionErrorCode, message: string) {
@@ -61,6 +62,43 @@ interface RunnerHealthCapabilities {
 
 function launcherKey(connection: LauncherConnection): string {
   return `${connection.url}|${connection.token}`;
+}
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "an unparsable URL";
+  }
+}
+
+/**
+ * Refuses, before anything is sent, a URL outside the session's
+ * `${proxyBaseUrl}/v2/model-proxy/`, so a proxy token never reaches a third
+ * party. The URL is parsed first, so a `..` segment can't climb out of the
+ * prefix. The message names the URL's origin, never the token.
+ */
+export function assertModelProxyUrl(url: string, session: Pick<ProxySession, "proxyBaseUrl">): void {
+  const parse = (value: string): URL | null => {
+    try {
+      return new URL(value);
+    } catch {
+      return null;
+    }
+  };
+  const target = parse(url);
+  const prefix = parse(`${session.proxyBaseUrl}/v2/model-proxy/`);
+  if (
+    !target || !prefix ||
+    target.origin !== prefix.origin ||
+    !target.pathname.startsWith(prefix.pathname) ||
+    target.username !== "" || target.password !== ""
+  ) {
+    throw new ModelConnectionError(
+      "not_proxy_url",
+      `AI Board refused to send a model proxy request to ${originOf(url)}: model calls go only to the Runner's model proxy.`,
+    );
+  }
 }
 
 export class ModelProxyClient {
@@ -196,7 +234,8 @@ export class ModelProxyClient {
    * The fetch handed to the OpenAI and Anthropic SDKs and to raw provider
    * requests: it puts the current proxy token in whichever key header the
    * request carries, and on a 401 `proxy_token_expired` (or `_invalid`) asks
-   * for a new token and retries once.
+   * for a new token and retries once. It refuses, before sending, any URL
+   * outside the current session's `${proxyBaseUrl}/v2/model-proxy/`.
    */
   readonly fetch: typeof fetch = async (input, init) => {
     // The SDKs call fetch(url, init); a Request is read once so a retry can resend it.
@@ -211,7 +250,9 @@ export class ModelProxyClient {
           ...init,
         }
       : { ...init };
-    const send = (token: string) => {
+    const send = (session: ProxySession) => {
+      assertModelProxyUrl(url, session);
+      const token = session.token;
       const headers = new Headers(baseInit.headers);
       for (const name of KEY_HEADERS) {
         if (!headers.has(name)) continue;
@@ -221,7 +262,7 @@ export class ModelProxyClient {
     };
     const signal = baseInit.signal ?? undefined;
     const session = await this.getSession({ signal });
-    const response = await send(session.token);
+    const response = await send(session);
     if (response.status !== 401) return response;
     const code = await response.clone().json().then(
       (body: { code?: unknown }) => (typeof body?.code === "string" ? body.code : null),
@@ -230,7 +271,7 @@ export class ModelProxyClient {
     if (!code || !RENEWABLE_TOKEN_CODES.has(code)) return response;
     const renewed = await this.getSession({ staleToken: session.token, signal });
     if (renewed.token === session.token) return response;
-    return send(renewed.token);
+    return send(renewed);
   };
 
   /** Drops every cached session (tests, and a launcher change). */
