@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, rmdir, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, sep, win32 } from "node:path";
 import test from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost, type ExecutionHost } from "../src/execution-host.js";
@@ -282,6 +283,75 @@ test("on Windows a file behind a volume junction in a protected folder is placed
   } finally {
     await rmdir(junction).catch(() => undefined); // removes the junction itself, never what it points to
     await rm(other, { recursive: true, force: true });
+    await rm(fx.root, { recursive: true, force: true });
+  }
+});
+
+for (const mode of [
+  { label: "every recently changed folder is listed again", options: {}, quiet: 0 },
+  // Folders older than the racy window are reused, so here only their changed times reveal each change.
+  { label: "unchanged folders are reused", options: { scanRacyWindowMs: 50 }, quiet: 150 },
+]) {
+  test(`a protected file that appears after an earlier check is still found (${mode.label})`, async () => {
+    const fx = await fixture();
+    try {
+      const ssh = join(fx.home, ".ssh"), benign = join(fx.allowed, "benign-copy.txt");
+      await link(join(fx.allowed, "file.txt"), benign);
+      const guard = hermeticGuard(fx, undefined, mode.options);
+      // A check after a pause leaves every folder listed, and old enough to be reused by the next check.
+      const settled = async () => { await sleep(mode.quiet); await guard.assertAllowed(benign, "read"); };
+      const reason = async (name: string) => (await denied(guard.assertAllowed(join(fx.allowed, name), "read"))).reason;
+
+      await settled();
+      await writeFile(join(ssh, "id_new"), "NEW\n");
+      await link(join(ssh, "id_new"), join(fx.allowed, "new-alias.txt"));
+      assert.equal(await reason("new-alias.txt"), "hardlink_alias", "a new key");
+
+      await settled();
+      await writeFile(join(ssh, "id_rsa.next"), "ROTATED\n");
+      await rename(join(ssh, "id_rsa.next"), join(ssh, "id_rsa"));
+      await link(join(ssh, "id_rsa"), join(fx.allowed, "rotated-alias.txt"));
+      assert.equal(await reason("rotated-alias.txt"), "hardlink_alias", "a key replaced under the same name");
+
+      await settled();
+      await mkdir(join(ssh, "more"));
+      await writeFile(join(ssh, "more", "key"), "K\n");
+      await link(join(ssh, "more", "key"), join(fx.allowed, "nested-alias.txt"));
+      assert.equal(await reason("nested-alias.txt"), "hardlink_alias", "a key in a new subfolder");
+
+      await settled();
+      await mkdir(join(fx.home, ".aws"));
+      await writeFile(join(fx.home, ".aws", "credentials"), "C\n");
+      await link(join(fx.home, ".aws", "credentials"), join(fx.allowed, "aws-alias.txt"));
+      assert.equal(await reason("aws-alias.txt"), "hardlink_alias", "a protected folder that did not exist before");
+
+      await settled();
+      await writeFile(join(fx.state, "fresh-token"), "T\n");
+      await link(join(fx.state, "fresh-token"), join(fx.allowed, "state-alias.txt"));
+      const names = ["state-alias.txt", "new-alias.txt", "aws-alias.txt", "rotated-alias.txt"];
+      assert.deepEqual(await Promise.all(names.map(reason)), names.map(() => "hardlink_alias"), "concurrent checks");
+      await guard.assertAllowed(benign, "read");
+    } finally { await rm(fx.root, { recursive: true, force: true }); }
+  });
+}
+
+test("a scan that could not read a protected folder recovers when it can, and notices when it no longer can", { skip: !canDropPermissions }, async () => {
+  const fx = await fixture();
+  const secrets = join(fx.root, "ext-secrets");
+  try {
+    const benign = join(fx.allowed, "benign-copy.txt");
+    await link(join(fx.allowed, "file.txt"), benign);
+    const guard = hermeticGuard(fx, undefined, { scanRacyWindowMs: 50 });
+    await chmod(secrets, 0o000);
+    await denied(guard.assertAllowed(benign, "read"), "hardlink_confinement_unprovable");
+    await chmod(secrets, 0o755);
+    await guard.assertAllowed(benign, "read");
+    await sleep(150);
+    await guard.assertAllowed(benign, "read");
+    await chmod(secrets, 0o000);
+    await denied(guard.assertAllowed(benign, "read"), "hardlink_confinement_unprovable");
+  } finally {
+    await chmod(secrets, 0o755).catch(() => undefined);
     await rm(fx.root, { recursive: true, force: true });
   }
 });

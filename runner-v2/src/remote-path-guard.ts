@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { BigIntStats } from "node:fs";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { posix, win32 } from "node:path";
 
@@ -59,6 +60,8 @@ export interface RemotePathGuardOptions {
   readonly onDenied?: (record: RemotePathAuditRecord) => void;
   readonly maxProtectedScanEntries?: number;
   readonly maxTreeEntries?: number;
+  /** Tests only, to reach the folder-reuse path: see RACY_WINDOW_MS. Lowering it in production risks a stale scan. */
+  readonly scanRacyWindowMs?: number;
 }
 
 interface ObjectIdentity { readonly dev: bigint; readonly ino: bigint }
@@ -71,6 +74,46 @@ interface ProtectedCanonical {
 }
 /** Windows: the target's volume serial and the folded drive (path root) of its canonical path. */
 interface WindowsVolume { readonly dev: bigint; readonly drive: string }
+
+/** What a scan saw of one object. A folder with the same stamp still holds the same entries. */
+interface Stamp { readonly dev: bigint; readonly ino: bigint; readonly mtimeNs: bigint; readonly ctimeNs: bigint }
+/** One protected path as the last scan saw it (see `observe`). */
+interface ScanNode {
+  readonly path: string;
+  readonly category: string;
+  readonly depth: number;
+  /** listed: a folder whose entries were read; skipped: a folder that cannot hold the target's identity. */
+  readonly mode: "missing" | "failed" | "file" | "other" | "skipped" | "listed";
+  readonly stamp?: Stamp;
+  /** A listed folder that changed so recently that it may change again within the same clock tick. */
+  readonly relist?: boolean;
+  readonly children: readonly ScanNode[];
+}
+interface ScanFailure { readonly path: string; readonly follow: boolean }
+interface ScanResult { readonly identities: ReadonlyMap<string, string>; readonly complete: boolean }
+interface ScanState {
+  roots?: readonly (ScanNode | undefined)[];
+  result?: ScanResult;
+  /** Paths that made the last scan incomplete; it is refreshed once all of them can be read. */
+  failures: readonly ScanFailure[];
+  /** Over the entry cap or the depth limit: the result stays a refusal for the guard's lifetime. */
+  capped: boolean;
+  running?: { readonly startedAt: number; readonly promise: Promise<ScanResult> };
+}
+interface ScanPass {
+  readonly targetDevice: bigint;
+  readonly mounts?: readonly MountEntry[];
+  seen: number;
+  capped: boolean;
+  readonly failures: ScanFailure[];
+}
+
+/**
+ * A folder changed within this long of being listed may change again in the same timestamp tick
+ * without moving its times (NTFS ticks are coarse, ext3 and HFS+ keep whole seconds), so it is
+ * listed again on the next check.
+ */
+const RACY_WINDOW_MS = 10_000;
 export interface RemotePathScope {
   readonly workspace: string;
   readonly restricted: () => boolean;
@@ -90,8 +133,10 @@ export class RemotePathGuard {
   private readonly onDenied?: (record: RemotePathAuditRecord) => void;
   private readonly maxProtectedScanEntries: number;
   private readonly maxTreeEntries: number;
+  private readonly racyWindowNs: bigint;
   private protectedCanonicals?: Promise<readonly ProtectedCanonical[]>;
-  private readonly protectedFileIdentities = new Map<string, Promise<{ readonly identities: ReadonlyMap<string, string>; readonly complete: boolean }>>();
+  private readonly protectedScans = new Map<string, ScanState>();
+  private scanSequence = 0;
   private readonly scopes = new AsyncLocalStorage<RemotePathScope>();
 
   constructor(locations: ProtectedLocations, options: RemotePathGuardOptions = {}) {
@@ -101,6 +146,7 @@ export class RemotePathGuard {
     this.onDenied = options.onDenied;
     this.maxProtectedScanEntries = options.maxProtectedScanEntries ?? 20_000;
     this.maxTreeEntries = options.maxTreeEntries ?? 10_000;
+    this.racyWindowNs = BigInt(Math.max(0, Math.floor(options.scanRacyWindowMs ?? RACY_WINDOW_MS))) * 1_000_000n;
   }
 
   auditRecords(): readonly RemotePathAuditRecord[] {
@@ -365,12 +411,7 @@ export class RemotePathGuard {
     // On Windows the scan also depends on the target's drive, so two volumes sharing a serial never share a scan.
     const volume = this.windowsVolume(canonical, identity.dev);
     const key = volume ? `${identity.dev}|${volume.drive}` : String(identity.dev);
-    let scan = this.protectedFileIdentities.get(key);
-    if (!scan) {
-      scan = this.scanProtectedFileIdentities(identity.dev, volume);
-      this.protectedFileIdentities.set(key, scan);
-    }
-    const { identities, complete } = await scan;
+    const { identities, complete } = await this.currentProtectedScan(key, identity.dev, volume);
     const category = identities.get(`${identity.dev}:${identity.ino}`);
     if (category) {
       throw new RemotePathDeniedError("hardlink_alias", category, "The file is a hard link to a protected file.");
@@ -382,54 +423,132 @@ export class RemotePathGuard {
   }
 
   /**
-   * Collects the identities of protected files that could share `targetDevice`. `complete` is false
-   * whenever part of a protected tree could not be enumerated: an unreadable folder, an entry that
-   * cannot be stat'ed, or the entry cap. On Linux a subtree is skipped only when the kernel mount
-   * table proves it holds nothing on the target's device (see `skippableSubtree`); /proc and /sys
-   * can never be enumerated, so without that proof no multi-link file could ever be allowed there.
-   * On Windows a whole protected folder on another volume is skipped (see `onAnotherWindowsVolume`);
-   * the per-user browser profiles and the AIBoard data root alone far exceed the cap.
+   * The protected-file scan as it stands now. A check uses only a scan that started after the check
+   * did, or one it has just brought up to date (`refreshProtectedScan`), so a protected file created
+   * after an earlier check is still found. An incomplete scan only ever refuses, so it is kept until
+   * every path that made it incomplete can be read again; one over the entry cap is kept for good.
    */
-  private async scanProtectedFileIdentities(targetDevice: bigint, volume: WindowsVolume | undefined): Promise<{ identities: ReadonlyMap<string, string>; complete: boolean }> {
-    const identities = new Map<string, string>();
-    const mounts = this.locations.platform === "linux" && process.platform === "linux" ? await readMountTable() : undefined;
-    let seen = 0;
-    let complete = true;
-    const visit = async (candidate: string, category: string, depth: number): Promise<void> => {
-      if (!complete || depth > 32) { if (depth > 32) complete = false; return; }
-      let info;
-      try { info = await lstat(candidate, { bigint: true }); } catch (error) {
-        // Only a missing entry is benign; anything else hides an object the scan cannot identify.
-        if (!isMissing(error)) complete = false;
-        return;
+  private async currentProtectedScan(key: string, targetDevice: bigint, volume: WindowsVolume | undefined): Promise<ScanResult> {
+    const begun = ++this.scanSequence;
+    let state = this.protectedScans.get(key);
+    if (!state) {
+      state = { failures: [], capped: false };
+      this.protectedScans.set(key, state);
+    }
+    for (;;) {
+      const running = state.running;
+      if (running) {
+        const result = await running.promise;
+        if (running.startedAt > begun) return result;
+        continue;
       }
-      seen += 1;
-      if (seen > this.maxProtectedScanEntries) { complete = false; return; }
-      if (info.isFile()) { identities.set(`${info.dev}:${info.ino}`, category); return; }
-      if (!info.isDirectory() || info.isSymbolicLink()) return;
-      if (mounts && info.dev !== targetDevice && skippableSubtree(mounts, candidate, info.dev)) {
-        // Nothing on this filesystem can share the target's identity; filesystems mounted below it still can.
-        for (const mountPoint of topSubmounts(mounts, candidate)) await visit(mountPoint, category, depth + 1);
-        return;
-      }
-      let names: string[];
-      try { names = await readdir(candidate); } catch { complete = false; return; }
-      for (const name of names) await visit(this.paths.join(candidate, name), category, depth + 1);
+      const last = state.result;
+      if (last && !last.complete && (state.capped || await stillUnreadable(state.failures))) return last;
+      if (state.running) continue;
+      const entry = { startedAt: ++this.scanSequence, promise: this.refreshProtectedScan(state, targetDevice, volume) };
+      state.running = entry;
+      try { return await entry.promise; } finally { if (state.running === entry) state.running = undefined; }
+    }
+  }
+
+  /**
+   * Brings the scan up to date and collects the identities of protected files that could share
+   * `targetDevice`. `complete` is false whenever part of a protected tree could not be enumerated: an
+   * unreadable folder, an entry that cannot be stat'ed, or the entry cap. On Linux a subtree is skipped
+   * only when the kernel mount table proves it holds nothing on the target's device (see
+   * `skippableSubtree`); /proc and /sys can never be enumerated, so without that proof no multi-link
+   * file could ever be allowed there. On Windows a whole protected folder on another volume is skipped
+   * (see `onAnotherWindowsVolume`); the browser profiles and the AIBoard data root far exceed the cap.
+   */
+  private async refreshProtectedScan(state: ScanState, targetDevice: bigint, volume: WindowsVolume | undefined): Promise<ScanResult> {
+    const pass: ScanPass = {
+      targetDevice,
+      ...(this.locations.platform === "linux" && process.platform === "linux" ? { mounts: await readMountTable() } : {}),
+      seen: 0, capped: false, failures: [],
     };
-    for (const root of await this.canonicalProtectedRoots()) {
+    const identities = new Map<string, string>();
+    const roots: (ScanNode | undefined)[] = [];
+    for (const [index, root] of (await this.canonicalProtectedRoots()).entries()) {
       if (root.location.kind === "file") {
+        roots.push(undefined);
         try {
           const info = await stat(root.canonical, { bigint: true });
-          if (info.ino === 0n) complete = false;
+          if (info.ino === 0n) pass.failures.push({ path: root.canonical, follow: true });
           else identities.set(`${info.dev}:${info.ino}`, root.location.category);
         } catch (error) {
-          if (!isMissing(error)) complete = false;
+          if (!isMissing(error)) pass.failures.push({ path: root.canonical, follow: true });
         }
-      } else if (!(volume && await this.onAnotherWindowsVolume(root, volume))) {
-        await visit(root.canonical, root.location.category, 0);
+        continue;
       }
+      const onAnotherVolume = volume ? (info: BigIntStats) => this.onAnotherWindowsVolume(root, info, volume) : undefined;
+      roots.push(await this.observe(root.canonical, root.location.category, 0, state.roots?.[index], pass, onAnotherVolume));
     }
-    return { identities, complete };
+    if (pass.seen > this.maxProtectedScanEntries) pass.capped = true;
+    for (const node of roots) if (node) collectIdentities(node, identities);
+    state.roots = pass.capped ? undefined : roots;
+    state.failures = pass.failures;
+    state.capped = pass.capped;
+    state.result = { identities, complete: !pass.capped && pass.failures.length === 0 };
+    return state.result;
+  }
+
+  /**
+   * Looks at one protected path, reusing what the last scan saw there wherever that still provably
+   * holds. A listed folder whose identity, modification time and change time are all unchanged still
+   * holds the same entries: creating, linking, renaming or deleting an entry moves both times, and a
+   * file keeps its identity while it keeps its name. So its files are kept without a syscall, while
+   * its folders and links, which can change without touching it (a mount, a junction retargeted in
+   * place), are looked at again. A folder that changed within RACY_WINDOW_MS of being listed is listed
+   * again next time, since a second change in the same timestamp tick would not move its times.
+   */
+  private async observe(path: string, category: string, depth: number, previous: ScanNode | undefined, pass: ScanPass,
+    onAnotherVolume?: (info: BigIntStats) => boolean): Promise<ScanNode> {
+    if (pass.capped || depth > 32 || pass.seen >= this.maxProtectedScanEntries) {
+      pass.capped = true;
+      return { path, category, depth, mode: "failed", children: [] };
+    }
+    const observedAt = BigInt(Date.now()) * 1_000_000n;
+    let info: BigIntStats;
+    try { info = await lstat(path, { bigint: true }); } catch (error) {
+      // Only a missing entry is benign; anything else hides an object the scan cannot identify.
+      if (isMissing(error)) return { path, category, depth, mode: "missing", children: [] };
+      pass.failures.push({ path, follow: false });
+      return { path, category, depth, mode: "failed", children: [] };
+    }
+    pass.seen += 1;
+    const stamp: Stamp = { dev: info.dev, ino: info.ino, mtimeNs: info.mtimeNs, ctimeNs: info.ctimeNs };
+    if (info.isFile()) return { path, category, depth, mode: "file", stamp, children: [] };
+    if (!info.isDirectory() || info.isSymbolicLink()) return { path, category, depth, mode: "other", stamp, children: [] };
+    const earlier = new Map((previous?.children ?? []).map((child) => [child.path, child]));
+    if (pass.mounts && info.dev !== pass.targetDevice && skippableSubtree(pass.mounts, path, info.dev)) {
+      // Nothing on this filesystem can share the target's identity; filesystems mounted below it still can.
+      const children: ScanNode[] = [];
+      for (const mountPoint of topSubmounts(pass.mounts, path)) {
+        children.push(await this.observe(mountPoint, category, depth + 1, earlier.get(mountPoint), pass));
+      }
+      return { path, category, depth, mode: "skipped", stamp, children };
+    }
+    if (onAnotherVolume?.(info)) return { path, category, depth, mode: "skipped", stamp, children: [] };
+    if (previous?.mode === "listed" && !previous.relist && sameStamp(previous.stamp, stamp)) {
+      const children = await Promise.all(previous.children.map(async (child) => {
+        if (child.mode !== "file") return await this.observe(child.path, category, depth + 1, child, pass);
+        pass.seen += 1;
+        return child;
+      }));
+      return { path, category, depth, mode: "listed", stamp, relist: false, children };
+    }
+    let names: string[];
+    try { names = await readdir(path); } catch {
+      pass.failures.push({ path, follow: false });
+      return { path, category, depth, mode: "failed", stamp, children: [] };
+    }
+    const children: ScanNode[] = [];
+    for (const name of names) {
+      const child = this.paths.join(path, name);
+      children.push(await this.observe(child, category, depth + 1, earlier.get(child), pass));
+    }
+    const newest = info.mtimeNs > info.ctimeNs ? info.mtimeNs : info.ctimeNs;
+    return { path, category, depth, mode: "listed", stamp, relist: newest >= observedAt - this.racyWindowNs, children };
   }
 
   /** Windows only: the target's volume serial and drive, or undefined when the drive proof cannot apply. */
@@ -452,11 +571,9 @@ export class RemotePathGuard {
    * unresolved root keeps its configured spelling, which may be a junction, so it is always scanned.
    * ReFS's 64-bit file IDs are not unique, which can only add false aliases, never hide one.
    */
-  private async onAnotherWindowsVolume(root: ProtectedCanonical, volume: WindowsVolume): Promise<boolean> {
-    if (!root.resolved) return false;
-    let info;
-    try { info = await lstat(root.canonical, { bigint: true }); } catch { return false; }
-    if (!info.isDirectory() || info.isSymbolicLink() || info.dev === 0n || info.dev === volume.dev) return false;
+  private onAnotherWindowsVolume(root: ProtectedCanonical, info: BigIntStats, volume: WindowsVolume): boolean {
+    // `observe` asks only about a root that lstat shows as a real directory.
+    if (!root.resolved || info.dev === 0n || info.dev === volume.dev) return false;
     const drive = win32.parse(root.canonical).root;
     return drive !== "" && this.fold(drive) !== volume.drive;
   }
@@ -465,6 +582,32 @@ export class RemotePathGuard {
 function isMissing(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function sameStamp(left: Stamp | undefined, right: Stamp): boolean {
+  return left !== undefined && left.dev === right.dev && left.ino === right.ino &&
+    left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+
+function collectIdentities(node: ScanNode, identities: Map<string, string>): void {
+  if (node.mode === "file" && node.stamp) identities.set(`${node.stamp.dev}:${node.stamp.ino}`, node.category);
+  for (const child of node.children) collectIdentities(child, identities);
+}
+
+/** True while any path that made the last scan incomplete still cannot be read. */
+async function stillUnreadable(failures: readonly ScanFailure[]): Promise<boolean> {
+  for (const failure of failures) {
+    try {
+      if (failure.follow) {
+        if ((await stat(failure.path, { bigint: true })).ino === 0n) return true;
+      } else if ((await lstat(failure.path)).isDirectory()) {
+        await readdir(failure.path);
+      }
+    } catch (error) {
+      if (!isMissing(error)) return true;
+    }
+  }
+  return false;
 }
 
 /** One row of /proc/self/mountinfo: where a filesystem is mounted, its device and its type. */
