@@ -13,8 +13,8 @@ const pages: { path: string; lastModified: string; priority: number }[] = [
   { path: "/runner-guide", lastModified: "2026-10-31", priority: 0.6 },
   { path: "/remote", lastModified: "2026-11-06", priority: 0.6 },
   // Legal pages: keep in step with LEGAL_LAST_UPDATED in lib/site.ts.
-  { path: "/terms", lastModified: "2026-11-06", priority: 0.3 },
-  { path: "/privacy", lastModified: "2026-11-06", priority: 0.3 },
+  { path: "/terms", lastModified: "2026-11-12", priority: 0.3 },
+  { path: "/privacy", lastModified: "2026-11-12", priority: 0.3 },
   { path: "/refunds", lastModified: "2026-11-06", priority: 0.3 },
 ];
 

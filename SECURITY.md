@@ -19,12 +19,13 @@ Do not include real API keys, runner tokens, SSH keys, private prompts, or priva
 
 ## Security model
 
-AI Board is a static, client-side app. There is no application backend, account system, hosted database, or server-side key storage.
+The AI Board web app is a static site with no application backend, hosted database, or server-side key storage. It works with the AI Board Runner, which the user starts on their own computer. The optional AIBoard Remote service (mcp.aiboard.me) is a separate service with its own accounts for pairing devices; provider keys never go to it.
 
-- Provider API keys are entered at runtime in the browser Settings page.
-- Discussions, settings, and attachments are stored in browser storage or a local folder selected by the user.
-- Optional passphrase encryption is zero-knowledge; lost passphrases cannot be recovered.
-- The optional local runner is started by the user, binds to `127.0.0.1`, and requires a token.
+- Provider API keys and settings live in the AIBoard home (`~/.aiboard`, or `AIBOARD_HOME`). `config.json` holds settings and no secret. `credentials.json` holds the keys, encrypted (AES-256-GCM) with a per-user home key kept outside the home, so a copied or synced home carries no usable keys. Any process running as the user can read the home and its key; there is no passphrase.
+- Keys are entered in Settings, which saves them through the local Runner, or with `aiboard keys set` in a terminal. The browser never stores them.
+- Browser model calls go through the Runner's model proxy on `127.0.0.1`. The page holds only a proxy token: it lasts at most 12 hours, is replaced on renewal, and is good only for allow-listed provider paths under the upstream fixed by the home. The proxy adds the key; it never returns it.
+- The Runner binds to `127.0.0.1` and requires a token or a paired local session. Its tool brokers deny the home's keys to every actor and refuse writes to its settings file.
+- Discussions and attachments are stored in browser storage or a local folder selected by the user.
 - MCP tools and SearXNG search are user-configured integrations. Treat their endpoints and tool outputs as external input.
 
 ## Out of scope

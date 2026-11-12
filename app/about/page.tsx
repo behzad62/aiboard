@@ -124,11 +124,12 @@ export default function AboutPage() {
           Local-first and private by design
         </h2>
         <p>
-          The app has no backend. It is a static site that calls the AI
-          providers directly with the keys you enter in Settings. Keys,
-          sessions, and attachments stay in your browser (IndexedDB) or in a
-          local folder you pick, optionally encrypted with a passphrase using
-          AES-256-GCM. None of it is uploaded to a server of ours.
+          The app has no backend. It is a static site that works with the AI
+          Board Runner on your computer: the Runner keeps your settings and
+          keys in the AIBoard home folder (<code>~/.aiboard</code>), adds the
+          key to each call and sends it to the AI provider you picked.
+          Sessions and attachments stay in your browser (IndexedDB) or in a
+          local folder you pick. None of it is uploaded to a server of ours.
         </p>
         <p>
           The one exception is the optional AIBoard Remote service, which lets
