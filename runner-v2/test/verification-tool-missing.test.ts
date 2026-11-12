@@ -10,6 +10,7 @@ import {
   type ArchitectActionRequest,
   type FinalVerificationCheckDriver,
 } from "../src/build-runtime.js";
+import { projectFinalVerificationObservability } from "../src/build-observability.js";
 import { lookUpCheckTool } from "../src/check-tool-lookup.js";
 import {
   parseVerificationNotRun,
@@ -232,7 +233,11 @@ test("VF2: a Build whose every check's tool is missing reaches its handoff with 
     ]);
     assert.equal(current.review?.status, "approved");
 
-    // VF8 lists them from the handoff snapshot.
+    // VF8 lists them from the Runner's status view and the handoff snapshot.
+    assert.deepEqual(
+      projectFinalVerificationObservability(projection).current!.categories.map((category) => [category.category, category.notRun?.tool]),
+      [["build", "fixture"], ["tests", "fixture"], ["runtime_smoke", "fixture"], ["browser", "browser"]],
+    );
     const snapshot = renderHandoffSnapshot(handoffSnapshotInputFromProjection(projection));
     assert.match(snapshot, /not run \(tool missing: fixture\)/);
     assert.match(snapshot, /not run \(tool missing: browser\)/);
