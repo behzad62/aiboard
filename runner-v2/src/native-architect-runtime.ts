@@ -61,6 +61,9 @@ import { createEvidenceTools } from "./evidence-tools.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createMemoryTools } from "./memory-tools.js";
+import type { ManagedProcessService } from "./managed-process.js";
+import { createManagedProcessTools } from "./managed-process-tools.js";
+import type { ManagedProcessOwner } from "./managed-process-transport.js";
 import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
@@ -74,7 +77,7 @@ import {
 } from "./provider-health.js";
 import type { AgentRuntimeCandidate, RuntimeRouter } from "./runtime-router.js";
 import type { SchedulerProjection, SchedulerStore } from "./scheduler-store.js";
-import { isPlanningState, rebuildSchedulerProjection } from "./scheduler-store.js";
+import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { rankSkillsForTask } from "./skill-routing.js";
@@ -153,13 +156,20 @@ export interface NativeArchitectRuntimeOptions {
   /** Disposable copy for `run_evidence_command`. Absent means the tool is absent. */
   commandWorkspace?: ArchitectCommandWorkspaceProvider;
   /**
-   * T9 (EP41): the base revision for Architect command execution on the
-   * answer path, where no integration revision exists yet. Production wires
-   * the integration baseline; without it answer turns list no command tool.
-   * Never used for plan_only runs (no execution there, before or after T9).
+   * T9 (EP41), VF5: the base revision for Architect command execution on an
+   * evidence-gated run before any integration revision exists: the planning
+   * state and the answer path. Production wires the integration baseline;
+   * without it those turns list no command tool. Never used for plan_only
+   * runs (no execution there).
    */
-  answerCommandRevision?: string;
+  baselineCommandRevision?: string;
   execution?: OneShotCommandExecutor;
+  /**
+   * VF5: the verifiers' live process tools, bound to the Architect's
+   * disposable copy and registered only beside `run_evidence_command`.
+   * Processes the Architect starts are stopped before its copy is removed.
+   */
+  managedProcesses?: ManagedProcessService;
   /**
    * C4 (AR-R11): live base-snapshot read for docs-v2 triage/planning turns.
    * Evaluated for each eligible context (never captured at construction):
@@ -203,7 +213,8 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
   };
   private readonly clock: () => string;
   private readonly candidateById: Map<string, AgentRuntimeCandidate>;
-  private architectCommandCopyOpen = false;
+  /** The open disposable copy of the current turn and the owner of its processes. */
+  private architectCommandCopy: { readonly owner: ManagedProcessOwner } | undefined;
 
   constructor(private readonly options: NativeArchitectRuntimeOptions) {
     this.clock = options.clock ?? (() => new Date().toISOString());
@@ -329,6 +340,13 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       this.options.projectRoot,
       this.options.canonicalProjectRoot,
     );
+    // The exact owner the managed-process service records for every process
+    // this turn starts: the loop's tool context carries these three fields.
+    const processOwner: ManagedProcessOwner = {
+      runId: request.context.runId,
+      sessionId: request.context.sessionId,
+      actor: request.context.actor,
+    };
     let managedRuntime: ManagedBuildToolRuntime | undefined;
     try {
     const extras = createArchitectInspectionBroker({
@@ -359,40 +377,32 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           tool.definition.readOnly === true && tool.definition.effect === "none",
       });
     }
-    // T3a (OA-7/EP41): a new-policy run in planning state — no ready plan and
-    // no triage `answer` — is refused Architect command execution at the tool
-    // boundary, not only in the prompt. Legacy runs behave as today.
+    // VF5: commands (and, when wired, live processes) run in a disposable
+    // copy on every non-plan_only turn that has a copy revision, the planning
+    // state included; before any integration that copy is the baseline.
+    // plan_only never lists them (architectCommandRevision is undefined).
     let inspectionTools: AgentToolRuntime;
     if (this.options.runPolicy === "plan_only") {
       inspectionTools = new PlanOnlyInspectionRuntime(extras);
-    } else if (isPlanningState(projection)) {
-      inspectionTools = new PlanningStateInspectionRuntime(extras);
     } else if (commandRevision) {
-      // T3a repair (N4): the command tool stays listed for the turn, but
-      // every invoke re-reads the projection — losing readiness mid-turn
-      // refuses run_evidence_command from that point on.
-      inspectionTools = new PlanningStateCommandGuard(
-        composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
-          () => this.openArchitectCommandCopy(commandRevision),
-          {
-            projectRoot: this.options.projectRoot,
-            permissionProfile: this.options.permissionProfile ?? "project",
-            artifacts: this.options.artifacts,
-            evidenceStore: this.options.evidenceStore,
-            clock: this.clock,
-            ...(this.options.git ? { git: this.options.git } : {}),
-            ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
-            ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
-            ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
-            ...(this.options.execution ? { execution: this.options.execution } : {}),
-            ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
-            ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
-          },
-        )),
-        () => rebuildSchedulerProjection(
-          this.options.schedulerStore.readRun(request.runId),
-        ),
-      );
+      inspectionTools = composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
+        () => this.openArchitectCommandCopy(commandRevision, processOwner),
+        {
+          projectRoot: this.options.projectRoot,
+          permissionProfile: this.options.permissionProfile ?? "project",
+          artifacts: this.options.artifacts,
+          evidenceStore: this.options.evidenceStore,
+          clock: this.clock,
+          ...(this.options.git ? { git: this.options.git } : {}),
+          ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
+          ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+          ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+          ...(this.options.execution ? { execution: this.options.execution } : {}),
+          ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
+          ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
+          ...(this.options.managedProcesses ? { managedProcesses: this.options.managedProcesses } : {}),
+        },
+      ));
     } else {
       inspectionTools = extras;
     }
@@ -602,19 +612,16 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
   ): Promise<string | undefined> {
     if (request.reason.type !== "review_required") {
       if (projection.integrationRevision) return projection.integrationRevision;
-      // T9 (EP41 positive half): once triage is `answer` (not a planning
-      // state), command execution is admitted against the answer-path base
-      // revision — in a lazily created disposable copy only. Under `build`
-      // without a ready plan and under `clarify` the run is in planning
-      // state, so the inspection runtime refuses commands before this
-      // matters; plan_only never reaches execution (architectCommandRevision
-      // returns undefined there, before and after T9).
-      if (
-        projection.planningPolicyVersion === 1 &&
-        projection.planningTriageDecision === "answer"
-      ) {
-        return this.options.answerCommandRevision?.trim()
-          ? this.options.answerCommandRevision
+      // T9 (EP41), VF5: before any integration, an evidence-gated run's
+      // commands run against the baseline revision, in a lazily created
+      // disposable copy only: on the answer path and in the planning state
+      // (before triage, under `clarify`, and under `build` without a ready
+      // plan). plan_only never reaches execution (architectCommandRevision
+      // returns undefined there). Legacy runs keep no command tool until an
+      // integration revision exists.
+      if (projection.planningPolicyVersion === 1) {
+        return this.options.baselineCommandRevision?.trim()
+          ? this.options.baselineCommandRevision
           : undefined;
       }
       return undefined;
@@ -642,7 +649,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     return revision;
   }
 
-  private async openArchitectCommandCopy(revision: string): Promise<string> {
+  private async openArchitectCommandCopy(revision: string, owner: ManagedProcessOwner): Promise<string> {
     const provider = this.options.commandWorkspace;
     if (!provider) throw new Error("Architect command workspace is unavailable.");
     if (provider.workspaceKind !== "independent-verifier") {
@@ -650,13 +657,21 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     }
     const workspace = await provider.create(revision);
     if (!workspace?.path) throw new Error("Architect command copy was not created.");
-    this.architectCommandCopyOpen = true;
+    this.architectCommandCopy = { owner };
     return workspace.path;
   }
 
+  /**
+   * VF5: processes the Architect started in its copy are stopped first, the
+   * way a verifier's end with its session, and only then is the copy
+   * removed. A stop that cannot be proven throws before the removal, so a
+   * copy is never deleted under a process that may still be running.
+   */
   private async closeArchitectCommandCopy(): Promise<void> {
-    if (!this.architectCommandCopyOpen) return;
-    this.architectCommandCopyOpen = false;
+    const copy = this.architectCommandCopy;
+    if (!copy) return;
+    this.architectCommandCopy = undefined;
+    await this.options.managedProcesses?.closeAgent(copy.owner);
     await this.options.commandWorkspace?.cleanup();
   }
 
@@ -1158,6 +1173,25 @@ export interface ArchitectCommandBrokerInput {
   hiddenPaths?: readonly string[];
   /** Test double. Production uses `run_evidence_command` from `createEvidenceTools`. */
   commandTool?: NativeTool<unknown>;
+  /** VF5: registers the live process tools on this broker, bound to the same copy. */
+  managedProcesses?: ManagedProcessService;
+}
+
+/**
+ * VF5: the verifiers' live process tools for the Architect, exactly as the
+ * verifier command broker builds them, admitted against the Architect
+ * inspection allow-list. Fails closed if the service offers a tool the list
+ * does not name, so a new process tool never reaches the Architect unreviewed.
+ */
+function architectProcessTools(service: ManagedProcessService | undefined): NativeTool<unknown>[] {
+  if (!service) return [];
+  const tools = createManagedProcessTools(service);
+  for (const tool of tools) {
+    if (!staticToolAdmitted("architect", "inspection", tool.definition.name)) {
+      throw new Error(`Architect process tool ${tool.definition.name} is not on the inspection allow-list.`);
+    }
+  }
+  return tools;
 }
 
 export function createArchitectCommandBroker(input: ArchitectCommandBrokerInput): ToolBroker {
@@ -1191,10 +1225,14 @@ export function createArchitectCommandBroker(input: ArchitectCommandBrokerInput)
     throw new Error("Architect command tool is not on the inspection allow-list.");
   }
   broker.register(tool);
+  for (const processTool of architectProcessTools(input.managedProcesses)) broker.register(processTool);
   return broker;
 }
 
-/** Lists `run_evidence_command` immediately and creates the disposable copy on first execute. */
+/**
+ * Lists `run_evidence_command` (and, when wired, the live process tools)
+ * immediately and creates the disposable copy on the first execute of any of them.
+ */
 class LazyArchitectCommandRuntime implements AgentToolRuntime {
   private opening: Promise<ToolBroker> | undefined;
   private readonly listing = new ToolRegistry();
@@ -1216,6 +1254,7 @@ class LazyArchitectCommandRuntime implements AgentToolRuntime {
     }));
     this.input = { ...input, commandTool: tool };
     this.listing.register(tool);
+    for (const processTool of architectProcessTools(input.managedProcesses)) this.listing.register(processTool);
   }
 
   definitions() {
@@ -1420,91 +1459,6 @@ export class PlanOnlyInspectionRuntime implements AgentToolRuntime {
       },
     };
   }
-}
-
-/**
- * T3a (OA-7/EP41): the inspection surface for a new-policy run in planning
- * state. Full read-only inspection stays available; `run_evidence_command` is
- * neither listed nor invokable — forged calls are refused with
- * `planning_state_command_refused`, and no disposable copy is ever created.
- */
-export class PlanningStateInspectionRuntime implements AgentToolRuntime {
-  constructor(private readonly runtime: AgentToolRuntime) {}
-
-  definitions() {
-    return this.runtime.definitions().filter(
-      (definition) => definition.name !== "run_evidence_command",
-    );
-  }
-
-  isLifecycleTool(name: string): boolean {
-    return name !== "run_evidence_command" && this.runtime.isLifecycleTool(name);
-  }
-
-  isReadOnlyTool(name: string): boolean {
-    return name !== "run_evidence_command" && this.runtime.isReadOnlyTool(name);
-  }
-
-  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
-    this.runtime.assertUniqueCallIds(calls, seen);
-  }
-
-  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
-    if (call.name === "run_evidence_command") {
-      return planningStateCommandRefused(call);
-    }
-    return await this.runtime.invoke(call, context);
-  }
-}
-
-/**
- * T3a repair (N4): per-invoke planning-state gate for Architect turns that
- * started outside planning state. The command tool stays listed, but every
- * `run_evidence_command` invoke re-reads the durable projection and is
- * refused once the run has returned to planning state (e.g. readiness lost
- * mid-turn). All other tools delegate untouched.
- */
-export class PlanningStateCommandGuard implements AgentToolRuntime {
-  constructor(
-    private readonly runtime: AgentToolRuntime,
-    private readonly readProjection: () => SchedulerProjection,
-  ) {}
-
-  definitions() {
-    return this.runtime.definitions();
-  }
-
-  isLifecycleTool(name: string): boolean {
-    return this.runtime.isLifecycleTool(name);
-  }
-
-  isReadOnlyTool(name: string): boolean {
-    return this.runtime.isReadOnlyTool(name);
-  }
-
-  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
-    this.runtime.assertUniqueCallIds(calls, seen);
-  }
-
-  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
-    if (call.name === "run_evidence_command" && isPlanningState(this.readProjection())) {
-      return planningStateCommandRefused(call);
-    }
-    return await this.runtime.invoke(call, context);
-  }
-}
-
-function planningStateCommandRefused(call: ToolCallBlock): ToolResult {
-  const message =
-    "Architect command execution is refused while the run is in planning state: " +
-    "no ready plan exists and the triage decision is not answer.";
-  return {
-    callId: call.callId,
-    toolName: call.name,
-    content: [{ type: "text", text: message }],
-    isError: true,
-    error: { code: "planning_state_command_refused", message },
-  };
 }
 
 class LayeredToolRuntime implements AgentToolRuntime {
