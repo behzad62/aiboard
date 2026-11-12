@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { resolveAiboardHome } from "../src/aiboard-home-paths.js";
+import { applyHomeBatch, readAiboardHome } from "../src/aiboard-home-store.js";
+import { CachedHomeReader } from "../src/home-reader.js";
 import { ControlServer } from "../src/control-server.js";
+import { catalogVersion } from "../src/generated/model-catalog.js";
+import { HomeBackedProviderConfigStore } from "../src/home-provider-configs.js";
+import { LOCAL_ENDPOINT_PLACEHOLDER_SECRET } from "../src/home-runtime.js";
+import { ModelProxy } from "../src/model-proxy.js";
 import { publishLiveModelOutput } from "../src/live-model-output.js";
 import { NativeBuildRuntimeInitializationError } from "../src/native-build-factory.js";
 import { BuildRuntimeRegistry, type BuildControlPlane } from "../src/build-runtime-registry.js";
 import { BuildRuntime } from "../src/build-runtime.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
-import type { RunnerProviderConfig } from "../src/provider-config-store.js";
+import { validateProviderConfigs, type RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { GitPreflightResult } from "../src/git-preflight.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
 import { SqlitePermissionStore } from "../src/permission-store.js";
@@ -2015,5 +2022,213 @@ test("live model output SSE is authenticated and delivers isolated transient del
     controller.abort();
     await fixture.close();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------------------------ HM3: configs pushed without secrets
+
+// Stub keys only; no provider is called.
+const HOME_OPENAI_KEY = "sk-stub-home-openai-0123456789abcdef";
+const HOME_REPLACED_KEY = "sk-stub-home-openai-replaced-0123456789";
+
+async function homeControlFixture(options: { withHome?: boolean } = {}) {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-home-configs-"));
+  const userHome = join(directory, "user");
+  mkdirSync(userHome, { recursive: true });
+  const environment: NodeJS.ProcessEnv = { AIBOARD_HOME: join(directory, "home"), LOCALAPPDATA: join(directory, "local"), XDG_DATA_HOME: join(directory, "data") };
+  const location = resolveAiboardHome({ platform: process.platform, environment, home: userHome });
+  await applyHomeBatch(location, { baseRevision: 0, ops: [
+    { path: "providers.openai", op: "set", value: { enabled: true } },
+    { path: "credentials.providers.openai", op: "set", value: { secret: HOME_OPENAI_KEY } },
+    { path: "providers.anthropic", op: "set", value: { enabled: true } },
+    { path: "customModels.local-a", op: "set", value: { label: "Local", baseURL: "http://127.0.0.1:11434/v1", model: "gemma", createdAt: "2026-11-12T00:00:00.000Z" } },
+  ] });
+  const stored = { current: [] as RunnerProviderConfig[] };
+  // The Runner's own reader: it reuses a snapshot only while the home's files are unchanged.
+  const reader = new CachedHomeReader(location);
+  const store = new HomeBackedProviderConfigStore({
+    load: () => stored.current.map((config) => ({ ...config })),
+    save: (next) => { validateProviderConfigs(next); stored.current = next.map((config) => ({ ...config })); },
+    close: () => undefined,
+  }, () => reader.readSync());
+  const proxy = new ModelProxy({ home: location });
+  const withHome = options.withHome !== false;
+  if (withHome) await proxy.start(0);
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const server = new ControlServer({
+    supervisor, token, bootstrapRun,
+    runnerInfo: { projectPath: directory, nodeVersion: process.versions.node },
+    providerConfigs: store,
+    ...(withHome ? { home: location, modelProxy: proxy } : {}),
+  });
+  const { url } = await server.start(0);
+  const put = async (configs: unknown[]) => {
+    const response = await fetch(`${url}/v2/provider-configs`, authorized({ method: "PUT", body: JSON.stringify({ configs }) }));
+    const text = await response.text();
+    return { status: response.status, text, body: JSON.parse(text) as { code?: string; error?: string } };
+  };
+  return {
+    location, url, store, stored, put,
+    async close() {
+      await server.close();
+      await proxy.close();
+      supervisor.close();
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+const pushedOpenAi = { runtimeId: "openai:gpt-5", providerId: "openai", modelId: "gpt-5", transport: "openai-compatible", capabilities: ["*"], priority: 1 };
+
+test("health reports the home, model proxy and secretless provider config capabilities and the catalog version", async () => {
+  const withHome = await homeControlFixture();
+  const without = await homeControlFixture({ withHome: false });
+  try {
+    const health = await json(await fetch(`${withHome.url}/v2/health`, authorized()));
+    assert.deepEqual(health.capabilities, { soloToolBench: false, extensions: false, chatSessions: false, home: true, modelProxy: true, secretlessProviderConfigs: true });
+    assert.equal(health.catalogVersion, catalogVersion);
+    assert.match(String(health.catalogVersion), /\S/);
+    const old = await json(await fetch(`${without.url}/v2/health`, authorized()));
+    assert.deepEqual(old.capabilities, { soloToolBench: false, extensions: false, chatSessions: false, home: false, modelProxy: false, secretlessProviderConfigs: false });
+    const refused = await without.put([pushedOpenAi]);
+    assert.equal(refused.status, 422, "a Runner without the home refuses a config with no secret");
+    assert.equal(refused.body.code, "home_unavailable");
+  } finally {
+    await withHome.close();
+    await without.close();
+  }
+});
+
+test("a pushed config without a secret is resolved from the home: stored with secretSource home and no secret, filled at use", async () => {
+  const fx = await homeControlFixture();
+  try {
+    // The pushed transport and protocol are ignored: the home decides them.
+    const reply = await fx.put([{ ...pushedOpenAi, transport: "anthropic", protocol: "chat-completions", inputCostMicrosPerMillion: 1_250_000, outputCostMicrosPerMillion: 10_000_000, billingBasis: "api_priced" }]);
+    assert.equal(reply.status, 200, reply.text);
+    assert.equal(reply.text.includes(HOME_OPENAI_KEY), false);
+    const [stored] = fx.stored.current;
+    assert.equal(stored!.secret, "");
+    assert.equal(stored!.secretSource, "home");
+    assert.equal(stored!.transport, "openai-compatible");
+    assert.equal(stored!.baseUrl, "https://api.openai.com/v1");
+    assert.equal(stored!.protocol, "responses");
+    assert.equal(stored!.inputCostMicrosPerMillion, 1_250_000, "the pushed pricing and limits are kept");
+    const [filled] = fx.store.load();
+    assert.equal(filled!.secret, HOME_OPENAI_KEY, "a runtime built from the stored config takes the home's key");
+    assert.equal(filled!.secretSource, undefined);
+    const listed = await (await fetch(`${fx.url}/v2/provider-configs`, authorized())).json() as Array<{ secretSource?: string }>;
+    assert.equal(listed[0]!.secretSource, "home");
+    assert.equal(JSON.stringify(listed).includes(HOME_OPENAI_KEY), false);
+    const both = await fx.put([{ ...pushedOpenAi, secretSource: "home", secret: "inline" }]);
+    assert.equal(both.status, 400, "a config cannot name the home and carry a key");
+  } finally {
+    await fx.close();
+  }
+});
+
+test("a pushed config with a foreign base URL gets upstream_mismatch and never a key", async () => {
+  const fx = await homeControlFixture();
+  try {
+    for (const baseUrl of ["https://evil.example/v1", "https://api.openai.com.evil.example/v1", "http://api.openai.com/v1", "https://api.openai.com/v2"]) {
+      const reply = await fx.put([{ ...pushedOpenAi, baseUrl }]);
+      assert.equal(reply.status, 422, baseUrl);
+      assert.equal(reply.body.code, "upstream_mismatch", baseUrl);
+      assert.equal(reply.text.includes(HOME_OPENAI_KEY), false);
+    }
+    assert.deepEqual(fx.stored.current, [], "nothing was stored");
+    assert.deepEqual(fx.store.load(), [], "so no runtime can send the home key anywhere");
+    const same = await fx.put([{ ...pushedOpenAi, baseUrl: "https://api.openai.com/v1/" }]);
+    assert.equal(same.status, 200, "the home's own upstream, spelled with a trailing slash, is the same upstream");
+    const custom = await fx.put([{ runtimeId: "custom:local-a", providerId: "custom", modelId: "gemma", transport: "openai-compatible", baseUrl: "https://elsewhere.example/v1", capabilities: ["*"], priority: 2 }]);
+    assert.equal(custom.body.code, "upstream_mismatch", "a custom model's upstream is its saved base URL");
+  } finally {
+    await fx.close();
+  }
+});
+
+test("a keyless custom endpoint gets the placeholder secret, and a provider without a home key gets home_key_missing", async () => {
+  const fx = await homeControlFixture();
+  try {
+    const custom = await fx.put([{ runtimeId: "custom:local-a", providerId: "custom", modelId: "gemma", transport: "openai-compatible", capabilities: ["*"], priority: 2 }]);
+    assert.equal(custom.status, 200, custom.text);
+    const [filled] = fx.store.load();
+    assert.equal(filled!.secret, LOCAL_ENDPOINT_PLACEHOLDER_SECRET);
+    assert.equal(filled!.baseUrl, "http://127.0.0.1:11434/v1");
+    const missing = await fx.put([{ runtimeId: "anthropic:claude-opus-4-1", providerId: "anthropic", modelId: "claude-opus-4-1", transport: "anthropic", capabilities: ["*"], priority: 3 }]);
+    assert.equal(missing.status, 422);
+    assert.equal(missing.body.code, "home_key_missing");
+    assert.match(String(missing.body.error), /Anthropic/, "the refusal names the provider");
+    const disabled = await fx.put([{ runtimeId: "google:gemini-2.5-pro", providerId: "google", modelId: "gemini-2.5-pro", transport: "google", capabilities: ["*"], priority: 3 }]);
+    assert.equal(disabled.body.code, "provider_not_configured");
+  } finally {
+    await fx.close();
+  }
+});
+
+test("a removed key stops working without a new push, and a replaced key takes effect at once", async () => {
+  const fx = await homeControlFixture();
+  try {
+    assert.equal((await fx.put([pushedOpenAi])).status, 200);
+    assert.equal(fx.store.load()[0]!.secret, HOME_OPENAI_KEY);
+    let home = await readAiboardHome(fx.location, { credentials: false });
+    await applyHomeBatch(fx.location, { baseRevision: home.revision, ops: [{ path: "credentials.providers.openai", op: "set", value: { secret: HOME_REPLACED_KEY } }] });
+    assert.equal(fx.store.load()[0]!.secret, HOME_REPLACED_KEY, "a replaced key is used by the next runtime");
+    home = await readAiboardHome(fx.location, { credentials: false });
+    await applyHomeBatch(fx.location, { baseRevision: home.revision, ops: [{ path: "credentials.providers.openai", op: "remove" }] });
+    assert.deepEqual(fx.store.load(), [], "with its key removed the runtime is no longer configured");
+    assert.equal(fx.stored.current.length, 1, "the stored config stays, so a new key brings it back");
+    home = await readAiboardHome(fx.location, { credentials: false });
+    await applyHomeBatch(fx.location, { baseRevision: home.revision, ops: [
+      { path: "providers.openai", op: "merge", value: { baseUrl: "https://gateway.example.test/v1" } },
+      { path: "credentials.providers.openai", op: "set", value: { secret: HOME_OPENAI_KEY } },
+    ] });
+    assert.equal(fx.store.load()[0]!.baseUrl, "https://gateway.example.test/v1", "the base URL also comes from the home at use, never from the stored config");
+  } finally {
+    await fx.close();
+  }
+});
+
+test("an account-peer config is stored as pushed, never filled from the home and never refused with home_key_missing", async () => {
+  const fx = await homeControlFixture();
+  try {
+    const chatgpt = {
+      runtimeId: "chatgpt:gpt-5.5", providerId: "chatgpt", modelId: "gpt-5.5", transport: "account-runner",
+      baseUrl: "http://127.0.0.1:9911", secret: "peer-session-token", runnerToken: "peer-runner-token", capabilities: ["*"], priority: 1,
+    };
+    const reply = await fx.put([chatgpt, pushedOpenAi]);
+    assert.equal(reply.status, 200, reply.text);
+    assert.deepEqual(fx.stored.current.find((config) => config.runtimeId === "chatgpt:gpt-5.5"), chatgpt, "the home has no ChatGPT entry, and the push is stored exactly as sent");
+    assert.deepEqual(fx.store.load().find((config) => config.runtimeId === "chatgpt:gpt-5.5"), chatgpt);
+    const keyless = await fx.put([{ ...chatgpt, secret: "" }]);
+    assert.equal(keyless.status, 400, "an account-peer config is never resolved from the home: without its peer token it is invalid");
+    assert.equal(keyless.body.code, "invalid_provider_config");
+  } finally {
+    await fx.close();
+  }
+});
+
+test("secrets already stored for home-backed providers are deleted on the first push that names the home", async () => {
+  const fx = await homeControlFixture();
+  try {
+    // What a Runner holds after the web before HM4a pushed configs with their keys.
+    const legacy = [
+      { runtimeId: "openai:gpt-4.1", providerId: "openai", modelId: "gpt-4.1", transport: "openai-compatible", baseUrl: "https://api.openai.com/v1", secret: "legacy-openai-secret", capabilities: ["*"], priority: 1 },
+      { runtimeId: "anthropic:claude-sonnet-4-5", providerId: "anthropic", modelId: "claude-sonnet-4-5", transport: "anthropic", secret: "legacy-anthropic-secret", capabilities: ["*"], priority: 2 },
+      { runtimeId: "chatgpt:gpt-5.5", providerId: "chatgpt", modelId: "gpt-5.5", transport: "account-runner", baseUrl: "http://127.0.0.1:9911", secret: "peer-session-token", capabilities: ["*"], priority: 3 },
+    ];
+    const old = await fx.put(legacy);
+    assert.equal(old.status, 200, "a config that carries its own secret still passes through as before");
+    assert.equal(fx.stored.current.find((config) => config.runtimeId === "openai:gpt-4.1")!.secret, "legacy-openai-secret");
+
+    assert.equal((await fx.put([pushedOpenAi])).status, 200);
+    const text = JSON.stringify(fx.stored.current);
+    assert.equal(text.includes("legacy-openai-secret"), false);
+    assert.equal(text.includes("legacy-anthropic-secret"), false);
+    const openai = fx.stored.current.find((config) => config.runtimeId === "openai:gpt-4.1");
+    assert.deepEqual({ secret: openai!.secret, secretSource: openai!.secretSource }, { secret: "", secretSource: "home" }, "a provider the home has a key for now takes it from the home");
+    assert.equal(fx.stored.current.some((config) => config.runtimeId === "anthropic:claude-sonnet-4-5"), false, "one the home has no key for is dropped with its secret");
+    assert.equal(fx.stored.current.find((config) => config.runtimeId === "chatgpt:gpt-5.5")!.secret, "peer-session-token", "an account-peer config is untouched");
+  } finally {
+    await fx.close();
   }
 });

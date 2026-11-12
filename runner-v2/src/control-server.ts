@@ -43,9 +43,10 @@ import {
 } from "./planning-controls.js";
 import { assertBudgetLimits } from "./budget-policy.js";
 import { type GitPreflightResult } from "./git-preflight.js";
-import type {
-  ProviderConfigStore,
-  RunnerProviderConfig,
+import {
+  validateProviderConfigs,
+  type ProviderConfigStore,
+  type RunnerProviderConfig,
 } from "./provider-config-store.js";
 import type { RunSupervisor } from "./run-supervisor.js";
 import type { McpManager } from "./mcp-tools.js";
@@ -56,12 +57,15 @@ import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput 
 import type { LocalPairing } from "./local-pairing.js";
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
 import { WINDOWS_PATH_TOO_LONG } from "./windows-path-limits.mjs";
+import { AiboardHomeError, type AiboardHomeLocation } from "./aiboard-home-paths.js";
+import { applyHomeBatch, keyHint, readAiboardHome, type AiboardHomeSnapshot, type HomeOp } from "./aiboard-home-store.js";
+import { buildAllowedOriginSet, isAllowedBrowserOrigin, normalizeOrigin } from "./browser-origins.js";
+import { catalogVersion } from "./generated/model-catalog.js";
+import { snapshotProvider } from "./home-model-policy.js";
+import { loadStoredProviderConfigs, PushedConfigError, resolvePushedConfig, takesKeyFromHome } from "./home-provider-configs.js";
+import type { ModelProxy } from "./model-proxy.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
-  "https://aiboard.me",
-  "https://www.aiboard.me",
-]);
 
 export interface ControlServerOptions {
   localAgentsUnavailableNestedState?: boolean;
@@ -92,6 +96,10 @@ export interface ControlServerOptions {
   allowLocalPairDevOrigin?: boolean;
   /** Status only; control routes are never forwarded to or from the relay. `undefined`: Remote is off. */
   remoteStatus?: () => unknown;
+  /** The AIBoard home (HM3): `/v2/home` routes, and provider configs pushed without a secret. */
+  home?: AiboardHomeLocation;
+  /** The model proxy on its own port (HM3); `/v2/home/proxy-session` issues its tokens. */
+  modelProxy?: ModelProxy;
 }
 
 export interface RunBootstrapInput {
@@ -264,6 +272,8 @@ export class ControlServer {
   private readonly allowLocalPairDevOrigin: boolean;
   private readonly remoteStatus?: ControlServerOptions["remoteStatus"];
   private readonly buildPathProblem?: string;
+  private readonly home?: AiboardHomeLocation;
+  private readonly modelProxy?: ModelProxy;
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
@@ -296,6 +306,11 @@ export class ControlServer {
     this.localMcp = options.localMcp;
     this.allowLocalPairDevOrigin = options.allowLocalPairDevOrigin === true;
     this.remoteStatus = options.remoteStatus;
+    this.home = options.home;
+    this.modelProxy = options.modelProxy;
+    // Revoking a paired session revokes its proxy token (§9 "Proxy token").
+    const proxy = this.modelProxy;
+    if (proxy) this.localPairing?.onSessionEnded((sessionId) => proxy.endSession(`paired:${sessionId}`));
   }
 
   async start(port = 0): Promise<ControlServerAddress> {
@@ -333,6 +348,7 @@ export class ControlServer {
 
   async close(): Promise<void> {
     this.localPairing?.close();
+    await this.modelProxy?.close();
     await this.localMcp?.close();
     await this.toolBench?.close();
     await this.chatSessions?.close();
@@ -528,6 +544,10 @@ export class ControlServer {
       }
       throw new HttpError(404, "not_found", "Unknown ToolBench session endpoint.");
     }
+    if (segments[1] === "home") {
+      await this.routeHome(request, response, segments);
+      return;
+    }
     if (segments.length === 3 && segments[1] === "remote" && segments[2] === "status" && request.method === "GET") {
       const status = this.remoteStatus?.();
       if (status === undefined) throw new HttpError(503, "remote_unavailable", "Remote service is unavailable.");
@@ -541,7 +561,15 @@ export class ControlServer {
       sendJson(response, 200, {
         ok: true,
         protocolVersion: 2,
-        capabilities: { soloToolBench: Boolean(this.toolBench), extensions: Boolean(this.extensions), chatSessions: Boolean(this.chatSessions) },
+        capabilities: {
+          soloToolBench: Boolean(this.toolBench),
+          extensions: Boolean(this.extensions),
+          chatSessions: Boolean(this.chatSessions),
+          home: Boolean(this.home),
+          modelProxy: Boolean(this.home && this.modelProxy?.url),
+          secretlessProviderConfigs: Boolean(this.home && this.providerConfigs),
+        },
+        catalogVersion,
         ...(this.localAgentsUnavailableNestedState ? { localAgents: "unavailable_nested_state" } : {}),
         projectPath: this.runnerInfo.projectPath,
         nodeVersion: this.runnerInfo.nodeVersion,
@@ -583,14 +611,17 @@ export class ControlServer {
     if (segments.length === 2 && segments[1] === "provider-configs") {
       const store = this.requireProviderConfigs();
       if (request.method === "GET") {
-        sendJson(response, 200, store.load().map(redactProviderConfig));
+        sendJson(response, 200, loadStoredProviderConfigs(store).map(redactProviderConfig));
         return;
       }
       if (request.method === "PUT") {
         const body = await readJson<ProviderConfigsBody>(request);
-        if (!Array.isArray(body.configs)) invalidBody();
-        const previous = store.load();
-        const merged = mergeProviderConfigs(previous, body.configs);
+        if (!Array.isArray(body.configs) || !body.configs.every((config) => config !== null && typeof config === "object" && !Array.isArray(config))) invalidBody();
+        const previous = loadStoredProviderConfigs(store);
+        const pushed = await this.resolvePushedConfigs(previous, body.configs);
+        const merged = mergeProviderConfigs(pushed.previous, pushed.incoming);
+        try { validateProviderConfigs(merged); }
+        catch (error) { throw new HttpError(400, "invalid_provider_config", error instanceof Error ? error.message : "Invalid provider config."); }
         store.save(merged);
         const changes = credentialChanges(previous, merged);
         if (changes.length > 0 && this.builds?.providerCredentialsChanged) {
@@ -1382,6 +1413,129 @@ export class ControlServer {
     return this.processRecovery;
   }
 
+  /**
+   * Pushed configs without secrets (§9, HM3). A config that takes its key from the home is resolved
+   * from it: the home's transport, base URL and protocol, stored with `secretSource: "home"` and no
+   * secret. Account-peer configs and configs that carry their own secret pass through as pushed. On
+   * the first push that names the home, the secrets already stored for home-backed providers are
+   * deleted: each such config is re-resolved from the home, or dropped when the home cannot serve it.
+   */
+  private async resolvePushedConfigs(
+    previous: RunnerProviderConfig[],
+    incoming: RunnerProviderConfig[],
+  ): Promise<{ previous: RunnerProviderConfig[]; incoming: RunnerProviderConfig[] }> {
+    if (!incoming.some(takesKeyFromHome)) return { previous, incoming };
+    if (!this.home) throw new HttpError(422, "home_unavailable", "A provider config without a secret needs a Runner with the AIBoard home; update AI Board.");
+    const home = await readAiboardHome(this.home);
+    const resolved = incoming.map((config) => (takesKeyFromHome(config) ? resolvePushedConfig(home, config) : config));
+    const pushedIds = new Set(incoming.map((config) => config.runtimeId));
+    const kept = previous.flatMap((config) => {
+      if (pushedIds.has(config.runtimeId) || config.transport === "account-runner" || config.secretSource === "home") return [config];
+      try {
+        return [resolvePushedConfig(home, { ...config, secret: "", baseUrl: undefined, runnerToken: undefined })];
+      } catch (error) {
+        if (error instanceof PushedConfigError) return [];
+        throw error;
+      }
+    });
+    return { previous: kept, incoming: resolved };
+  }
+
+  /** `/v2/home`, its credential routes and `/v2/home/proxy-session` (§6.2, HM3). */
+  private async routeHome(request: IncomingMessage, response: ServerResponse, segments: string[]): Promise<void> {
+    const home = this.home;
+    if (!home) throw new HttpError(404, "home_unavailable", "This Runner has no AIBoard home; update AI Board.");
+    if (segments.length === 2 && request.method === "GET") {
+      sendJson(response, 200, await homeView(home));
+      return;
+    }
+    if (segments.length === 2 && request.method === "POST") {
+      const body = await readJson<unknown>(request);
+      assertExactBodyKeys(body, ["baseRevision", "ops"]);
+      if (!Number.isSafeInteger(body.baseRevision) || (body.baseRevision as number) < 0 || !Array.isArray(body.ops)) invalidBody();
+      try {
+        const result = await applyHomeBatch(home, { baseRevision: body.baseRevision as number, ops: body.ops as HomeOp[] });
+        sendJson(response, 200, { revision: result.revision, touched: result.touched, removedCredentials: result.removedCredentials });
+      } catch (error) {
+        if (error instanceof AiboardHomeError && error.code === "home_conflict") {
+          // The current values of every conflicting section; credential sections say only whether a key is saved.
+          sendJson(response, 409, { code: error.code, error: homeErrorMessage(error), ...(error.details && typeof error.details === "object" ? error.details : {}) });
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
+    if (segments.length === 3 && segments[2] === "proxy-session" && request.method === "POST") {
+      const proxy = this.modelProxy;
+      if (!proxy?.url) throw new HttpError(503, "model_proxy_unavailable", "The model proxy is not running.");
+      // The Runner token is a manual connection, whose proxy token lives as long as the Runner;
+      // a paired session's token expires after 12 h and dies with the session.
+      if (hasBearerToken(request.headers.authorization, this.token)) {
+        sendJson(response, 200, proxy.issue("manual", { expires: false }));
+        return;
+      }
+      const sessionId = this.localPairing?.sessionId(bearerToken(request.headers.authorization) ?? "");
+      if (!sessionId) throw new HttpError(401, "unauthorized", "A valid runner token is required.");
+      sendJson(response, 200, proxy.issue(`paired:${sessionId}`, { expires: true }));
+      return;
+    }
+    if (segments[2] === "credentials" && request.method === "POST" && segments.length >= 4 && segments.length <= 5) {
+      let path: string;
+      let providerId: string | undefined;
+      if (segments.length === 4 && segments[3] === "remote-mcp") path = "credentials.remoteMcpAuthorizationToken";
+      else if (segments.length === 5 && segments[3] === "custom") path = `credentials.customModels.${segments[4]}`;
+      else if (segments.length === 4) {
+        providerId = segments[3]!;
+        const provider = snapshotProvider(providerId);
+        if (!provider) throw new HttpError(422, "unknown_provider", "That is not a provider AI Board knows.");
+        if (provider.accountBacked) throw new HttpError(422, "home_invalid_op", `${provider.name} takes no key: it signs in through the account runner.`);
+        path = `credentials.providers.${providerId}`;
+      } else {
+        throw new HttpError(404, "not_found", "Route not found.");
+      }
+      const body = await readJson<unknown>(request);
+      if (!body || typeof body !== "object" || Array.isArray(body)) invalidBody();
+      const record = body as Record<string, unknown>;
+      let set: string | undefined;
+      if (record.action === "set") {
+        assertExactBodyKeys(body, ["action", "secret"]);
+        if (typeof record.secret !== "string" || record.secret.length === 0) invalidBody();
+        set = record.secret;
+      } else if (record.action === "remove") {
+        assertExactBodyKeys(body, ["action"]);
+      } else {
+        invalidBody();
+      }
+      const opsFor = (snapshot: AiboardHomeSnapshot): HomeOp[] => {
+        if (set === undefined) return [{ path, op: "remove" }];
+        const ops: HomeOp[] = [];
+        if (providerId) {
+          // As the web's saveProviderKey and `aiboard keys set`: a new key is not validated, and a
+          // provider seen for the first time is enabled.
+          ops.push(snapshot.config.providers[providerId]
+            ? { path: `providers.${providerId}`, op: "merge", value: { lastValidationSucceeded: null, lastValidatedAt: null } }
+            : { path: `providers.${providerId}`, op: "set", value: { enabled: true } });
+        }
+        ops.push({ path, op: "set", value: { secret: set } });
+        return ops;
+      };
+      // One key, no baseRevision: read, apply at the read's revision, and retry once on a conflict.
+      for (let attempt = 0; ; attempt += 1) {
+        const snapshot = await readAiboardHome(home, { credentials: false });
+        try {
+          const result = await applyHomeBatch(home, { baseRevision: snapshot.revision, ops: opsFor(snapshot) });
+          sendJson(response, 200, { revision: result.revision, saved: set !== undefined, keyHint: set === undefined ? null : keyHint(set) });
+          return;
+        } catch (error) {
+          if (error instanceof AiboardHomeError && error.code === "home_conflict" && attempt === 0) continue;
+          throw error;
+        }
+      }
+    }
+    throw new HttpError(404, "not_found", "Route not found.");
+  }
+
   private requireProviderConfigs(): ProviderConfigStore {
     if (!this.providerConfigs) {
       throw new HttpError(503, "provider_config_unavailable", "Provider configuration is unavailable.");
@@ -1757,47 +1911,6 @@ function setCommonHeaders(
   response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
 }
 
-function normalizeOrigin(value: string): string | undefined {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return undefined;
-  }
-}
-
-function isAllowedBrowserOrigin(
-  normalizedOrigin: string,
-  allowedOrigins: ReadonlySet<string>
-): boolean {
-  if (isLoopbackOrigin(normalizedOrigin)) {
-    return true;
-  }
-  return allowedOrigins.has(normalizedOrigin);
-}
-
-function isLoopbackOrigin(origin: string): boolean {
-  const url = new URL(origin);
-  return (
-    (url.protocol === "http:" || url.protocol === "https:") &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
-    url.pathname === "/" &&
-    !url.username &&
-    !url.password
-  );
-}
-
-function buildAllowedOriginSet(allowedOrigins?: string[]): ReadonlySet<string> {
-  const resolved = new Set<string>(ALLOWED_RUNNER_EXTRA_ORIGINS);
-  if (!allowedOrigins) return resolved;
-  for (const origin of allowedOrigins) {
-    const normalized = normalizeOrigin(origin);
-    if (normalized) {
-      resolved.add(normalized);
-    }
-  }
-  return resolved;
-}
-
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -1934,6 +2047,7 @@ function redactProviderConfig(config: RunnerProviderConfig) {
     priority: config.priority,
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     ...(config.protocol ? { protocol: config.protocol } : {}),
+    ...(config.secretSource ? { secretSource: config.secretSource } : {}),
     configured: true,
   };
 }
@@ -1984,8 +2098,65 @@ function describeInternalError(error: unknown, depth = 0): string {
   return [head, ...causes.map((cause) => `  ${"  ".repeat(depth)}- ${describeInternalError(cause, depth + 1)}`)].join("\n");
 }
 
+/** A home error's own message, without the `code: ` prefix AiboardHomeError adds. */
+function homeErrorMessage(error: AiboardHomeError): string {
+  return error.message.startsWith(`${error.code}: `) ? error.message.slice(error.code.length + 2) : error.message;
+}
+
+const HOME_ERROR_STATUS: Readonly<Record<AiboardHomeError["code"], number>> = {
+  home_invalid_op: 400,
+  home_conflict: 409,
+  home_newer: 409,
+  home_key_mismatch: 409,
+  home_busy: 503,
+  home_unsafe: 422,
+  home_unreadable: 422,
+};
+
+/**
+ * GET `/v2/home` (§6.2): the home's config, which never holds a secret, with "has a key" and the key
+ * hints derived from the credentials, the paths of the home and its key, and the revisions. When the
+ * saved keys cannot be read (another computer's keys, a missing or corrupt home key), the settings
+ * are still returned, with the reason.
+ */
+async function homeView(location: AiboardHomeLocation): Promise<Record<string, unknown>> {
+  let snapshot: AiboardHomeSnapshot;
+  let keysError: { code: string; message: string } | undefined;
+  try {
+    snapshot = await readAiboardHome(location);
+  } catch (error) {
+    if (!(error instanceof AiboardHomeError) || !["home_key_mismatch", "home_unreadable", "home_newer", "home_unsafe"].includes(error.code)) throw error;
+    snapshot = await readAiboardHome(location, { credentials: false });
+    keysError = { code: error.code, message: homeErrorMessage(error) };
+  }
+  const status = snapshot.credentials;
+  const keys = (entries: Record<string, { keyHint: string }> | undefined) =>
+    Object.fromEntries(Object.entries(entries ?? {}).map(([id, entry]) => [id, { hasKey: true, keyHint: entry.keyHint }]));
+  return {
+    home: location.home,
+    homeSource: location.source,
+    keyPath: location.keyPath,
+    exists: snapshot.exists,
+    writable: snapshot.writable,
+    revision: snapshot.revision,
+    pathRevisions: snapshot.config.pathRevisions,
+    config: snapshot.config,
+    credentials: status
+      ? {
+          providers: keys(status.providers),
+          customModels: keys(status.customModels),
+          ...(status.remoteMcpAuthorizationToken ? { remoteMcpAuthorizationToken: { hasKey: true, keyHint: status.remoteMcpAuthorizationToken.keyHint } } : {}),
+        }
+      : null,
+    ...(keysError ? { keysError } : {}),
+    catalogVersion,
+  };
+}
+
 function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
+  if (error instanceof PushedConfigError) return new HttpError(error.status, error.code, error.message);
+  if (error instanceof AiboardHomeError) return new HttpError(HOME_ERROR_STATUS[error.code] ?? 422, error.code, homeErrorMessage(error));
   if (error instanceof LocalAgentsUnavailableError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ExtensionManagementError || error instanceof ChatSessionError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ProcessRecoveryError) {

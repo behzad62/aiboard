@@ -19,7 +19,13 @@ export interface RunnerProviderConfig {
   billingBasis?: ProviderBillingBasis;
   transport: ProviderTransport;
   baseUrl?: string;
+  /**
+   * The key sent upstream. Empty in a stored `secretSource: "home"` config: the Runner reads the key
+   * from the AIBoard home each time it builds a runtime (home-provider-configs.ts, HM3).
+   */
   secret: string;
+  /** "home": stored with no secret; the key, base URL, transport and protocol come from the AIBoard home. */
+  secretSource?: "home";
   runnerToken?: string;
   capabilities: string[];
   inputCapabilities?: {
@@ -96,9 +102,12 @@ export function validateProviderConfigs(
       !config.runtimeId ||
       !config.providerId ||
       !config.modelId ||
-      !config.secret
+      (config.secretSource === undefined ? !config.secret : config.secret !== "")
     ) {
       throw new Error("Provider runtime identity and secret are required.");
+    }
+    if (config.secretSource !== undefined && (config.secretSource !== "home" || config.transport === "account-runner" || config.runnerToken !== undefined)) {
+      throw new Error(`Provider runtime ${config.runtimeId} has an invalid secret source.`);
     }
     if (ids.has(config.runtimeId)) {
       throw new Error(`Duplicate provider runtime ${config.runtimeId}.`);
