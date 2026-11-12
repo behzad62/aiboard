@@ -231,6 +231,8 @@ jobs:
           runner-v2/test/aiboard-home-store.test.ts
           runner-v2/test/home-runtime.test.ts
           runner-v2/test/home-cli.test.ts
+          runner-v2/test/control-server-home.test.ts
+          runner-v2/test/model-proxy.test.ts
           runner-v2/test/execution-grants.test.ts
           runner-v2/test/filesystem-mutation-fence.test.ts
           runner-v2/test/filesystem-mutation-routing.test.ts

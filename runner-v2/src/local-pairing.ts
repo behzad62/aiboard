@@ -41,6 +41,7 @@ export class LocalPairing {
   private readonly attempts: number[] = [];
   private peerList: LocalPairPeer[] = [];
   private closed = false;
+  private readonly endedListeners: Array<(sessionId: string) => void> = [];
 
   constructor(readonly instanceId: string, private readonly clock: () => number = () => performance.now()) {
     if (!INSTANCE_ID.test(instanceId)) throw new Error("Invalid pairing instance identity.");
@@ -90,15 +91,37 @@ export class LocalPairing {
     return !this.closed && /^session_[A-Za-z0-9_-]{43}$/.test(token) && this.sessions.has(hash(token));
   }
 
+  /** A stable id for a live session (its token's hash), for state that must die with it; never the token. */
+  sessionId(token: string): string | undefined {
+    return this.hasSession(token) ? hash(token) : undefined;
+  }
+
+  /** Called with the session id whenever a session ends: revoked, or every session when pairing closes. */
+  onSessionEnded(listener: (sessionId: string) => void): void {
+    this.endedListeners.push(listener);
+  }
+
   revoke(token: string): boolean {
-    return !this.closed && this.sessions.delete(hash(token));
+    if (this.closed) return false;
+    const id = hash(token);
+    if (!this.sessions.delete(id)) return false;
+    this.notifyEnded(id);
+    return true;
   }
 
   close(): void {
+    const ended = [...this.sessions];
     this.closed = true;
+    for (const id of ended) this.notifyEnded(id);
     this.tickets.clear();
     this.sessions.clear();
     this.attempts.length = 0;
     this.peerList = [];
+  }
+
+  private notifyEnded(sessionId: string): void {
+    for (const listener of this.endedListeners) {
+      try { listener(sessionId); } catch { /* a listener's failure never keeps a session alive */ }
+    }
   }
 }

@@ -23,6 +23,10 @@ import { SkillCatalog } from "./skill-catalog.js";
 import { ArtifactStore } from "./artifact-store.js";
 import { BuildUserMediaStore } from "./build-user-media.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
+import { resolveAiboardHome, type AiboardHomeLocation } from "./aiboard-home-paths.js";
+import { HomeBackedProviderConfigStore } from "./home-provider-configs.js";
+import { CachedHomeReader } from "./home-reader.js";
+import { ModelProxy } from "./model-proxy.js";
 import { prepareCredentialStores } from "./credential-migration.js";
 import { createExecutionHost, type ExecutionHost } from "./execution-host.js";
 import { createRunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
@@ -227,12 +231,23 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       stateDirectory: options.stateDirectory,
       legacyToken: options.legacyTokenProvided ? options.legacyToken ?? options.token : undefined,
     });
-    let providerConfigs: EncryptedProviderConfigStore;
+    // The AIBoard home (HM3): `/v2/home`, the model proxy, and provider configs filled from the home.
+    // A Runner whose user home cannot be found still starts, without them.
+    let homeLocation: AiboardHomeLocation | undefined;
+    try { homeLocation = resolveAiboardHome(location); }
+    catch (error) { console.warn(`[runner] the AIBoard home is unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+    const homeReader = homeLocation ? new CachedHomeReader(homeLocation) : undefined;
+    let providerConfigs: HomeBackedProviderConfigStore;
     let extensionCredentials: ExtensionCredentialStore;
     try {
       const storeOptions = { requireExisting: true, beforeAccess: credentialStorage.assertLegacyUnchanged };
-      providerConfigs = new EncryptedProviderConfigStore(credentialStorage.providerPath, credentialStorage.providerKey, storeOptions);
-      resources.providerConfigs = providerConfigs;
+      const storedProviderConfigs = new EncryptedProviderConfigStore(credentialStorage.providerPath, credentialStorage.providerKey, storeOptions);
+      resources.providerConfigs = storedProviderConfigs;
+      const home = homeReader;
+      providerConfigs = new HomeBackedProviderConfigStore(storedProviderConfigs, () => {
+        if (!home) throw new Error("the AIBoard home is unavailable on this Runner");
+        return home.readSync();
+      });
       extensionCredentials = new ExtensionCredentialStore(credentialStorage.extensionPath, credentialStorage.extensionKey, storeOptions);
       resources.extensionCredentials = extensionCredentials;
     } finally {
@@ -500,7 +515,12 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       permissionProfile: "full", capabilitiesConfig, stateDirectory: options.stateDirectory,
       deviceDirectory,
       extensionDirectories: [options.extensionsHome], protectedLocations }) : undefined;
+    const modelProxy = homeReader && seams.controlListener !== "none"
+      ? new ModelProxy({ home: homeReader, allowedOrigins: options.allowOrigins })
+      : undefined;
     const server = new ControlServer({
+      ...(homeLocation ? { home: homeLocation } : {}),
+      ...(modelProxy ? { modelProxy } : {}),
       localAgentsUnavailableNestedState: remoteOnly,
       remoteStatus: () => remote.current()?.status(),
       localPairing,
@@ -547,6 +567,11 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       },
     });
     if (seams.controlListener !== "none") resources.server = server;
+    // The server's close() closes the proxy, so the proxy starts only once the server is a resource.
+    if (modelProxy) {
+      try { await modelProxy.start(0); }
+      catch (error) { console.warn(`[runner] the model proxy did not start: ${error instanceof Error ? error.message : String(error)}`); }
+    }
     await localMcp?.recover();
     const address = seams.controlListener === "none" ? undefined : await server.start(options.port);
     if (address) oauthRedirect.uri = `${address.url}${OAUTH_CALLBACK_PATH}`;

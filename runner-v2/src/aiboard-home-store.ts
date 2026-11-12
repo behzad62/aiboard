@@ -418,18 +418,35 @@ export function verifyHomeDirectory(location: AiboardHomeLocation, options: { cr
   return true;
 }
 
+/** One read attempt: the parsed file, `undefined` when it is missing, or `retry`. */
+function readAttempt<T>(path: string, parse: (bytes: Buffer) => T, label: string, advice: string, deadline: number): { value: T | undefined } | "retry" {
+  try {
+    return { value: parse(readFileSync(path)) };
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") return { value: undefined };
+    if (error instanceof AiboardHomeError) throw error;
+    if (Date.now() >= deadline) throw unreadable(`The AIBoard home's ${label} could not be read (${errnoCode(error) ?? (error instanceof Error ? error.message : "error")}).`, error, advice);
+    return "retry";
+  }
+}
+
 /** Read a file, retrying any error but a missing file for up to 2 s (a sync client or an antivirus scan). */
 async function readWithRetry<T>(path: string, parse: (bytes: Buffer) => T, label: string, advice: string): Promise<T | undefined> {
   const deadline = Date.now() + READ_RETRY_MS;
   for (;;) {
-    try {
-      return parse(readFileSync(path));
-    } catch (error) {
-      if (errnoCode(error) === "ENOENT") return undefined;
-      if (error instanceof AiboardHomeError) throw error;
-      if (Date.now() >= deadline) throw unreadable(`The AIBoard home's ${label} could not be read (${errnoCode(error) ?? (error instanceof Error ? error.message : "error")}).`, error, advice);
-      await sleep(RETRY_DELAY_MS);
-    }
+    const attempt = readAttempt(path, parse, label, advice, deadline);
+    if (attempt !== "retry") return attempt.value;
+    await sleep(RETRY_DELAY_MS);
+  }
+}
+
+/** The same read for synchronous callers. It waits only after a failed attempt, as the async read does. */
+function readWithRetrySync<T>(path: string, parse: (bytes: Buffer) => T, label: string, advice: string): T | undefined {
+  const deadline = Date.now() + READ_RETRY_MS;
+  for (;;) {
+    const attempt = readAttempt(path, parse, label, advice, deadline);
+    if (attempt !== "retry") return attempt.value;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RETRY_DELAY_MS);
   }
 }
 
@@ -511,11 +528,22 @@ function parseConfig(bytes: Buffer): { config: AiboardHomeConfigV1; newer: boole
   return { config, newer };
 }
 
-async function readConfig(location: AiboardHomeLocation, now: string): Promise<ConfigRead> {
-  const read = await readWithRetry(location.configPath, (bytes) => {
+function configParser(location: AiboardHomeLocation): (bytes: Buffer) => { config: AiboardHomeConfigV1; newer: boolean } {
+  return (bytes) => {
     assertPrivateFile(location.configPath, location.platform, false);
     return parseConfig(bytes);
-  }, "config.json", configAdvice(location.configPath));
+  };
+}
+
+async function readConfig(location: AiboardHomeLocation, now: string): Promise<ConfigRead> {
+  return finishConfigRead(await readWithRetry(location.configPath, configParser(location), "config.json", configAdvice(location.configPath)), now);
+}
+
+function readConfigSync(location: AiboardHomeLocation, now: string): ConfigRead {
+  return finishConfigRead(readWithRetrySync(location.configPath, configParser(location), "config.json", configAdvice(location.configPath)), now);
+}
+
+function finishConfigRead(read: { config: AiboardHomeConfigV1; newer: boolean } | undefined, now: string): ConfigRead {
   if (!read) return { config: defaultConfig(now), exists: false, newer: false };
   // §5.8 "Model ids": every read sees renamed model ids migrated, so the next write saves them (HM2).
   migrateHomeConfigModelIds(read.config);
@@ -577,17 +605,36 @@ type CredentialsRead =
   | { state: "error"; error: AiboardHomeError };
 
 /** Never a partial read: either every credential is decrypted with the local key, or a typed error. */
+function envelopeParser(location: AiboardHomeLocation): (bytes: Buffer) => CredentialsEnvelope {
+  return (bytes) => {
+    assertPrivateFile(location.credentialsPath, location.platform, true);
+    return parseEnvelope(bytes);
+  };
+}
+
 async function readCredentials(location: AiboardHomeLocation): Promise<CredentialsRead> {
   let envelope: CredentialsEnvelope | undefined;
   try {
-    envelope = await readWithRetry(location.credentialsPath, (bytes) => {
-      assertPrivateFile(location.credentialsPath, location.platform, true);
-      return parseEnvelope(bytes);
-    }, "credentials.json", KEYS_ADVICE);
+    envelope = await readWithRetry(location.credentialsPath, envelopeParser(location), "credentials.json", KEYS_ADVICE);
   } catch (error) {
     if (error instanceof AiboardHomeError) return { state: "error", error };
     throw error;
   }
+  return openCredentials(location, envelope);
+}
+
+function readCredentialsSync(location: AiboardHomeLocation): CredentialsRead {
+  let envelope: CredentialsEnvelope | undefined;
+  try {
+    envelope = readWithRetrySync(location.credentialsPath, envelopeParser(location), "credentials.json", KEYS_ADVICE);
+  } catch (error) {
+    if (error instanceof AiboardHomeError) return { state: "error", error };
+    throw error;
+  }
+  return openCredentials(location, envelope);
+}
+
+function openCredentials(location: AiboardHomeLocation, envelope: CredentialsEnvelope | undefined): CredentialsRead {
   if (!envelope) return { state: "absent" };
   let keyRead: KeyRead;
   try { keyRead = readHomeKey(location); }
@@ -699,11 +746,28 @@ export async function readAiboardHome(location: AiboardHomeLocation, options: { 
   const now = new Date().toISOString();
   const exists = verifyHomeDirectory(location, { create: false });
   const configRead: ConfigRead = exists ? await readConfig(location, now) : { config: defaultConfig(now), exists: false, newer: false };
+  const credentialsRead: CredentialsRead | undefined = options.credentials === false ? undefined : exists ? await readCredentials(location) : { state: "absent" };
+  return snapshotOf(location, configRead, credentialsRead);
+}
+
+/**
+ * The same read for synchronous callers: the Runner fills a home-backed provider config with its key
+ * each time it builds a runtime (Simple Build plan §9 "Pushed configs without secrets", HM3), and the
+ * places that build runtimes load their configs synchronously.
+ */
+export function readAiboardHomeSync(location: AiboardHomeLocation, options: { credentials?: boolean } = {}): AiboardHomeSnapshot {
+  const now = new Date().toISOString();
+  const exists = verifyHomeDirectory(location, { create: false });
+  const configRead: ConfigRead = exists ? readConfigSync(location, now) : { config: defaultConfig(now), exists: false, newer: false };
+  const credentialsRead: CredentialsRead | undefined = options.credentials === false ? undefined : exists ? readCredentialsSync(location) : { state: "absent" };
+  return snapshotOf(location, configRead, credentialsRead);
+}
+
+function snapshotOf(location: AiboardHomeLocation, configRead: ConfigRead, read: CredentialsRead | undefined): AiboardHomeSnapshot {
   let status: HomeCredentialStatusV1 | undefined;
   let secrets = new Map<string, string>();
   let credentialsNewer = false;
-  if (options.credentials !== false) {
-    const read: CredentialsRead = exists ? await readCredentials(location) : { state: "absent" };
+  if (read) {
     if (read.state === "error") throw read.error;
     if (read.state === "ok") {
       read.key.fill(0);
