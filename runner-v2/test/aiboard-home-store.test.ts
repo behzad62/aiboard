@@ -578,3 +578,112 @@ test("userStatePaths lists the home's files, for the default home and AIBOARD_HO
   const custom = aiboardHomeStatePaths({ platform: "linux", environment: { AIBOARD_HOME: "/data/aiboard-home" }, home: "/home/u" });
   assert.ok(custom.includes("/data/aiboard-home/credentials.json"));
 });
+
+// ------------------------------------------------------------------ review fixes (PR 174)
+
+const TSX_CLI = fileURLToPath(new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url));
+const LAUNCHER_INSTANCE_URL = new URL("../src/launcher-instance.ts", import.meta.url).href;
+
+/** acquireLockFile(lockPath, 0) in a separate process: "acquired" or "busy". */
+async function probeLockFromAnotherProcess(root: string, lockPath: string): Promise<string> {
+  const script = join(root, "probe-lock.mts");
+  writeFileSync(script, [
+    `import { acquireLockFile } from ${JSON.stringify(LAUNCHER_INSTANCE_URL)};`,
+    "const release = await acquireLockFile(process.argv[2], 0);",
+    "process.stdout.write(release ? \"acquired\" : \"busy\");",
+    "release?.();",
+    "",
+  ].join("\n"));
+  const child = spawn(process.execPath, [TSX_CLI, script, lockPath], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  let output = "", errors = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { errors += chunk; });
+  const code = await new Promise<number | null>((resolveExit) => child.once("close", resolveExit));
+  assert.equal(code, 0, errors);
+  return output;
+}
+
+test("a second writer in this process never releases the first one's lock to another process", { timeout: 60_000 }, async () => {
+  const fx = fixture();
+  try {
+    await write(fx, [{ path: "settings.defaultMode", op: "set", value: "chat" }], 0);
+    let paused!: () => void;
+    const isPaused = new Promise<void>((resolvePaused) => { paused = resolvePaused; });
+    let open!: () => void;
+    const gate = new Promise<void>((resolveGate) => { open = resolveGate; });
+    const first = applyHomeBatch(fx.location, { baseRevision: 1, ops: [{ path: "credentials.providers.openai", op: "set", value: { secret: SECRET_A } }] }, {
+      lockWaitMs: 30_000, afterCredentialsWrite: async () => { paused(); await gate; },
+    });
+    await isPaused;
+    const second = applyHomeBatch(fx.location, { baseRevision: 1, ops: [{ path: "settings.modelPricingOverrides.m", op: "set", value: { inputUsdPer1M: 1, outputUsdPer1M: 1, updatedAt: "z" } }] }, { lockWaitMs: 30_000 });
+    // A waiter that gives up in this process gets home_busy and does not break the queue.
+    await rejectsWith(applyHomeBatch(fx.location, { baseRevision: 1, ops: [{ path: "settings.defaultVerbosity", op: "set", value: "brief" }] }, { lockWaitMs: 150 }), "home_busy");
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 300)); // a polling waiter would have probed the file several times
+    assert.equal(await probeLockFromAnotherProcess(fx.root, fx.location.lockPath), "busy", "the first writer still holds the OS-level lock");
+    open();
+    const results = await Promise.all([first, second]);
+    assert.deepEqual(results.map((result) => result.revision), [2, 3]);
+    const home = await readAiboardHome(fx.location);
+    assert.equal(home.secret("credentials.providers.openai"), SECRET_A);
+    assert.ok((home.config.settings.modelPricingOverrides as Record<string, unknown>).m);
+    assert.equal(home.config.settings.defaultVerbosity, undefined);
+    assert.equal(await probeLockFromAnotherProcess(fx.root, fx.location.lockPath), "acquired", "the lock is free afterwards");
+  } finally { cleanup(fx); }
+});
+
+test("a key saved from a stale view of its base URL gets home_conflict with the new URL", async () => {
+  const fx = fixture();
+  try {
+    await write(fx, [{ path: "providers.azure", op: "set", value: provider("https://a.example.test/v1") }, { path: "credentials.providers.azure", op: "set", value: { secret: SECRET_A } }], 0);
+    await write(fx, [{ path: "providers.azure", op: "merge", value: { baseUrl: "https://b.example.test/v1" } }], 1);
+    const conflict = await rejectsWith(write(fx, [{ path: "credentials.providers.azure", op: "set", value: { secret: SECRET_B } }], 1), "home_conflict");
+    const details = conflict.details as HomeConflictDetails;
+    assert.equal(details.currentRevision, 2);
+    assert.equal((details.sections["providers.azure"] as { baseUrl: string }).baseUrl, "https://b.example.test/v1", "the conflict shows the new URL");
+    assert.deepEqual(details.sections["credentials.providers.azure"], { hasKey: false });
+    assert.equal((await readAiboardHome(fx.location)).secret("credentials.providers.azure"), undefined);
+    await write(fx, [{ path: "credentials.providers.azure", op: "set", value: { secret: SECRET_B } }], 2);
+    assert.equal((await readAiboardHome(fx.location)).secret("credentials.providers.azure"), SECRET_B, "at the current revision the key lands, bound to URL B");
+    // The same rule for a custom model and the remote MCP server.
+    await write(fx, [
+      { path: "customModels.cm", op: "set", value: { label: "cm", baseURL: "http://127.0.0.1:1/v1", model: "m" } },
+      { path: "settings.toolRuntime", op: "set", value: { remoteMcpServer: { enabled: true, name: "d", url: "https://mcp-a.example.test" } } },
+    ], 3);
+    await write(fx, [
+      { path: "customModels.cm", op: "merge", value: { baseURL: "http://127.0.0.1:2/v1" } },
+      { path: "settings.toolRuntime", op: "set", value: { remoteMcpServer: { enabled: true, name: "d", url: "https://mcp-b.example.test" } } },
+    ], 4);
+    const both = await rejectsWith(write(fx, [{ path: "credentials.customModels.cm", op: "set", value: { secret: SECRET_A } }, { path: "credentials.remoteMcpAuthorizationToken", op: "set", value: { secret: SECRET_A } }], 4), "home_conflict");
+    assert.deepEqual(Object.keys((both.details as HomeConflictDetails).sections).sort(), ["credentials.customModels.cm", "credentials.remoteMcpAuthorizationToken", "customModels.cm", "settings.toolRuntime"]);
+  } finally { cleanup(fx); }
+});
+
+test("a newer credentials envelope gives home_newer, and settings-only writes still land", async () => {
+  const fx = fixture();
+  try {
+    await write(fx, [{ path: "credentials.providers.openai", op: "set", value: { secret: SECRET_A } }], 0);
+    const envelope = JSON.parse(readFileSync(fx.location.credentialsPath, "utf8"));
+    envelope.version = 2;
+    writeFileSync(fx.location.credentialsPath, JSON.stringify(envelope), { mode: 0o600 });
+    const bytes = readFileSync(fx.location.credentialsPath, "utf8");
+    const read = await rejectsWith(readAiboardHome(fx.location), "home_newer");
+    assert.match(read.message, /update AI Board/);
+    assert.doesNotMatch(read.message, /keys reset/);
+    await rejectsWith(write(fx, [{ path: "credentials.providers.openai", op: "remove" }]), "home_newer");
+    await write(fx, [{ path: "settings.defaultMode", op: "set", value: "panel" }]);
+    assert.equal((await readAiboardHome(fx.location, { credentials: false })).config.settings.defaultMode, "panel");
+    assert.equal(readFileSync(fx.location.credentialsPath, "utf8"), bytes, "the newer envelope is never rewritten");
+  } finally { cleanup(fx); }
+});
+
+test("an unreadable config.json says to fix or remove that file, not to enter the keys again", async () => {
+  const fx = fixture();
+  try {
+    await write(fx, [{ path: "settings.defaultMode", op: "set", value: "chat" }], 0);
+    writeFileSync(fx.location.configPath, "{ not json", { mode: 0o600 });
+    const error = await rejectsWith(readAiboardHome(fx.location, { credentials: false }), "home_unreadable");
+    assert.match(error.message, /Fix or remove/);
+    assert.ok(error.message.includes(fx.location.configPath));
+    assert.doesNotMatch(error.message, /keys reset/);
+  } finally { cleanup(fx); }
+});

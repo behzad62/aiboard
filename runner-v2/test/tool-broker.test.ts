@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import {
+  linkSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-
-import { linkSync, writeFileSync } from "node:fs";
 
 import { aiboardHomeDenyEntries } from "../src/aiboard-home-paths.js";
 import { ArtifactStore } from "../src/artifact-store.js";

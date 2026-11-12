@@ -331,8 +331,14 @@ function invalid(message: string): AiboardHomeError {
   return new AiboardHomeError("home_invalid_op", message);
 }
 
-function unreadable(message: string, cause?: unknown): AiboardHomeError {
-  const error = new AiboardHomeError("home_unreadable", `${message} Enter the keys again with \`aiboard keys reset\` or in Settings.`);
+const KEYS_ADVICE = "Enter the keys again with `aiboard keys reset` or in Settings.";
+
+function configAdvice(path: string): string {
+  return `Fix or remove ${path}; without it, settings start from their defaults and the saved keys are kept.`;
+}
+
+function unreadable(message: string, cause?: unknown, advice = KEYS_ADVICE): AiboardHomeError {
+  const error = new AiboardHomeError("home_unreadable", `${message} ${advice}`);
   if (cause !== undefined) (error as { cause?: unknown }).cause = cause;
   return error;
 }
@@ -406,7 +412,7 @@ export function verifyHomeDirectory(location: AiboardHomeLocation, options: { cr
 }
 
 /** Read a file, retrying any error but a missing file for up to 2 s (a sync client or an antivirus scan). */
-async function readWithRetry<T>(path: string, parse: (bytes: Buffer) => T, label: string): Promise<T | undefined> {
+async function readWithRetry<T>(path: string, parse: (bytes: Buffer) => T, label: string, advice: string): Promise<T | undefined> {
   const deadline = Date.now() + READ_RETRY_MS;
   for (;;) {
     try {
@@ -414,7 +420,7 @@ async function readWithRetry<T>(path: string, parse: (bytes: Buffer) => T, label
     } catch (error) {
       if (errnoCode(error) === "ENOENT") return undefined;
       if (error instanceof AiboardHomeError) throw error;
-      if (Date.now() >= deadline) throw unreadable(`The AIBoard home's ${label} could not be read (${errnoCode(error) ?? (error instanceof Error ? error.message : "error")}).`, error);
+      if (Date.now() >= deadline) throw unreadable(`The AIBoard home's ${label} could not be read (${errnoCode(error) ?? (error instanceof Error ? error.message : "error")}).`, error, advice);
       await sleep(RETRY_DELAY_MS);
     }
   }
@@ -502,7 +508,7 @@ async function readConfig(location: AiboardHomeLocation, now: string): Promise<C
   const read = await readWithRetry(location.configPath, (bytes) => {
     assertPrivateFile(location.configPath, location.platform, false);
     return parseConfig(bytes);
-  }, "config.json");
+  }, "config.json", configAdvice(location.configPath));
   if (!read) return { config: defaultConfig(now), exists: false, newer: false };
   return { config: read.config, exists: true, newer: read.newer };
 }
@@ -546,6 +552,10 @@ function createHomeKey(location: AiboardHomeLocation): Buffer {
 
 function parseEnvelope(bytes: Buffer): CredentialsEnvelope {
   const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
+  // A newer AI Board's envelope: never "enter the keys again", which would lead the user to wipe them.
+  if (isRecord(parsed) && Number.isSafeInteger(parsed.version) && (parsed.version as number) > 1) {
+    throw new AiboardHomeError("home_newer", "The saved keys were written by a newer AI Board; update AI Board to use or change them.");
+  }
   if (!isRecord(parsed) || parsed.version !== 1 || typeof parsed.keyId !== "string" || !/^[0-9a-f]{16}$/.test(parsed.keyId)) {
     throw new Error("credentials.json is not a version 1 envelope");
   }
@@ -564,7 +574,7 @@ async function readCredentials(location: AiboardHomeLocation): Promise<Credentia
     envelope = await readWithRetry(location.credentialsPath, (bytes) => {
       assertPrivateFile(location.credentialsPath, location.platform, true);
       return parseEnvelope(bytes);
-    }, "credentials.json");
+    }, "credentials.json", KEYS_ADVICE);
   } catch (error) {
     if (error instanceof AiboardHomeError) return { state: "error", error };
     throw error;
@@ -952,19 +962,37 @@ function validateBatch(batch: HomeBatch): Array<{ op: HomeOp; section: Section }
   });
 }
 
+/** The section that holds a credential's upstream: a key is bound to the URL its writer saw there. */
+function upstreamSection(section: Section): Section | undefined {
+  if (section.kind === "credential") return section.target === "providers" ? { kind: "provider", id: section.id } : { kind: "customModel", id: section.id };
+  if (section.kind === "credentialRemoteMcp") return { kind: "setting", field: "toolRuntime" };
+  return undefined;
+}
+
+/**
+ * The sections whose current values a home_conflict reports: every touched section that changed after
+ * baseRevision, and for a credential also the section holding its upstream when that changed, so a key
+ * entered against URL A is never bound to a URL B the writer did not see.
+ */
 function conflictingSections(config: AiboardHomeConfigV1, baseRevision: number, touched: Section[]): Section[] {
-  const conflicts: Section[] = [];
-  const recorded = Object.entries(config.pathRevisions).filter(([, revision]) => revision > baseRevision);
-  for (const section of touched) {
+  const conflicts = new Map<string, Section>();
+  const recorded = Object.entries(config.pathRevisions).filter(([, revision]) => revision > baseRevision).map(([recordedPath]) => {
+    let segments: string[] | undefined;
+    try { segments = sectionSegments(parseHomePath(recordedPath)); } catch { segments = undefined; }
+    return { recordedPath, segments };
+  });
+  const changed = (section: Section): boolean => {
     const segments = sectionSegments(section);
     const path = sectionPath(section);
-    for (const [recordedPath] of recorded) {
-      let other: string[] | undefined;
-      try { other = sectionSegments(parseHomePath(recordedPath)); } catch { other = undefined; }
-      if (recordedPath === path || (other && overlaps(segments, other))) { conflicts.push(section); break; }
-    }
+    return recorded.some((entry) => entry.recordedPath === path || (entry.segments !== undefined && overlaps(segments, entry.segments)));
+  };
+  for (const section of touched) {
+    const holder = upstreamSection(section);
+    const holderChanged = holder !== undefined && changed(holder);
+    if (changed(section) || holderChanged) conflicts.set(sectionPath(section), section);
+    if (holder && holderChanged) conflicts.set(sectionPath(holder), holder);
   }
-  return conflicts;
+  return [...conflicts.values()];
 }
 
 // ------------------------------------------------------------------ writes
@@ -1083,14 +1111,51 @@ export async function resetHomeCredentials(location: AiboardHomeLocation, option
   });
 }
 
+/**
+ * This process's writers, queued per lock file. On POSIX, closing ANY descriptor of a file releases every
+ * fcntl lock the process holds on it, SQLite's included, and acquireLockFile's identity check opens and
+ * closes the lock file on every poll. So a second writer in this process must never probe the file while
+ * the first holds it, or a writer in another process could enter at the same time. The in-process wait
+ * shares the lock budget and ends in home_busy like the file lock's.
+ */
+const inProcessHomeWriters = new Map<string, Promise<void>>();
+
+function inProcessLockKey(location: AiboardHomeLocation): string {
+  const path = location.lockPath;
+  return location.platform === "win32" || location.platform === "darwin" ? path.toLowerCase() : path;
+}
+
+function homeBusy(): AiboardHomeError {
+  return new AiboardHomeError("home_busy", "Another AI Board surface is saving the AIBoard home; try again in a moment.");
+}
+
 async function withHomeLock<T>(location: AiboardHomeLocation, options: HomeWriteOptions, action: (now: string) => Promise<T>): Promise<T> {
   verifyHomeDirectory(location, { create: true });
-  const release = await acquireLockFile(location.lockPath, options.lockWaitMs ?? LOCK_WAIT_MS);
-  if (!release) throw new AiboardHomeError("home_busy", "Another AI Board surface is saving the AIBoard home; try again in a moment.");
+  const deadline = Date.now() + (options.lockWaitMs ?? LOCK_WAIT_MS);
+  const key = inProcessLockKey(location);
+  const previous = inProcessHomeWriters.get(key) ?? Promise.resolve();
+  let finishLocal!: () => void;
+  const local = new Promise<void>((resolveLocal) => { finishLocal = resolveLocal; });
+  // The next writer waits for this one AND every one before it, even if this one gives up early.
+  const tail = previous.then(() => local);
+  inProcessHomeWriters.set(key, tail);
   try {
-    return await action((options.now?.() ?? new Date()).toISOString());
+    let timer: NodeJS.Timeout | undefined;
+    const turn = await Promise.race([
+      previous.then(() => true),
+      new Promise<false>((resolveWait) => { timer = setTimeout(() => resolveWait(false), Math.max(0, deadline - Date.now())); }),
+    ]).finally(() => clearTimeout(timer));
+    if (!turn) throw homeBusy();
+    const release = await acquireLockFile(location.lockPath, Math.max(0, deadline - Date.now()));
+    if (!release) throw homeBusy();
+    try {
+      return await action((options.now?.() ?? new Date()).toISOString());
+    } finally {
+      release();
+    }
   } finally {
-    release();
+    finishLocal();
+    if (inProcessHomeWriters.get(key) === tail) inProcessHomeWriters.delete(key);
   }
 }
 
