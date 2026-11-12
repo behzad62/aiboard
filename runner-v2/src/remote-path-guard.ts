@@ -87,6 +87,8 @@ interface ScanNode {
   readonly stamp?: Stamp;
   /** A listed folder that changed so recently that it may change again within the same clock tick. */
   readonly relist?: boolean;
+  /** Linux: a file whose path was a mount point when it was observed. */
+  readonly mountPoint?: boolean;
   readonly children: readonly ScanNode[];
 }
 interface ScanFailure { readonly path: string; readonly follow: boolean }
@@ -98,11 +100,21 @@ interface ScanState {
   failures: readonly ScanFailure[];
   /** Over the entry cap or the depth limit: the result stays a refusal for the guard's lifetime. */
   capped: boolean;
+  /** Linux: the mount table changed during the last pass, or could not be read. */
+  mountsMoved: boolean;
   running?: { readonly startedAt: number; readonly promise: Promise<ScanResult> };
 }
 interface ScanPass {
   readonly targetDevice: bigint;
   readonly mounts?: readonly MountEntry[];
+  /** Linux: every mount point in the table, files included. */
+  readonly mountPoints?: ReadonlySet<string>;
+  /**
+   * False when no file node may be kept without a syscall: on Linux a file can be a mount point, and
+   * a mount moves neither of its folder's times, so files are kept only against a mount table that
+   * was readable and did not change during the last pass.
+   */
+  readonly reuseFiles: boolean;
   seen: number;
   capped: boolean;
   readonly failures: ScanFailure[];
@@ -432,7 +444,7 @@ export class RemotePathGuard {
     const begun = ++this.scanSequence;
     let state = this.protectedScans.get(key);
     if (!state) {
-      state = { failures: [], capped: false };
+      state = { failures: [], capped: false, mountsMoved: false };
       this.protectedScans.set(key, state);
     }
     for (;;) {
@@ -461,9 +473,13 @@ export class RemotePathGuard {
    * (see `onAnotherWindowsVolume`); the browser profiles and the AIBoard data root far exceed the cap.
    */
   private async refreshProtectedScan(state: ScanState, targetDevice: bigint, volume: WindowsVolume | undefined): Promise<ScanResult> {
+    const linux = this.locations.platform === "linux" && process.platform === "linux";
+    const mountText = linux ? await readMountText() : undefined;
+    const mounts = mountText === undefined ? undefined : parseMountInfo(mountText);
     const pass: ScanPass = {
       targetDevice,
-      ...(this.locations.platform === "linux" && process.platform === "linux" ? { mounts: await readMountTable() } : {}),
+      ...(mounts ? { mounts, mountPoints: new Set(mounts.map((mount) => mount.mountPoint)) } : {}),
+      reuseFiles: !linux || (mounts !== undefined && !state.mountsMoved),
       seen: 0, capped: false, failures: [],
     };
     const identities = new Map<string, string>();
@@ -484,6 +500,8 @@ export class RemotePathGuard {
       roots.push(await this.observe(root.canonical, root.location.category, 0, state.roots?.[index], pass, onAnotherVolume));
     }
     if (pass.seen > this.maxProtectedScanEntries) pass.capped = true;
+    // A mount made during this pass may have been seen by some lstat and not by the table read above.
+    if (linux) state.mountsMoved = mounts === undefined || await readMountText() !== mountText;
     for (const node of roots) if (node) collectIdentities(node, identities);
     state.roots = pass.capped ? undefined : roots;
     state.failures = pass.failures;
@@ -498,8 +516,10 @@ export class RemotePathGuard {
    * holds the same entries: creating, linking, renaming or deleting an entry moves both times, and a
    * file keeps its identity while it keeps its name. So its files are kept without a syscall, while
    * its folders and links, which can change without touching it (a mount, a junction retargeted in
-   * place), are looked at again. A folder that changed within RACY_WINDOW_MS of being listed is listed
-   * again next time, since a second change in the same timestamp tick would not move its times.
+   * place), are looked at again, and so is any file that is or was a mount point (Linux can bind-mount
+   * over a file; see `ScanPass.reuseFiles`). A folder that changed within RACY_WINDOW_MS of being
+   * listed is listed again next time, since a second change in the same timestamp tick would not
+   * move its times.
    */
   private async observe(path: string, category: string, depth: number, previous: ScanNode | undefined, pass: ScanPass,
     onAnotherVolume?: (info: BigIntStats) => boolean): Promise<ScanNode> {
@@ -517,7 +537,9 @@ export class RemotePathGuard {
     }
     pass.seen += 1;
     const stamp: Stamp = { dev: info.dev, ino: info.ino, mtimeNs: info.mtimeNs, ctimeNs: info.ctimeNs };
-    if (info.isFile()) return { path, category, depth, mode: "file", stamp, children: [] };
+    if (info.isFile()) {
+      return { path, category, depth, mode: "file", stamp, ...(pass.mountPoints?.has(path) ? { mountPoint: true } : {}), children: [] };
+    }
     if (!info.isDirectory() || info.isSymbolicLink()) return { path, category, depth, mode: "other", stamp, children: [] };
     const earlier = new Map((previous?.children ?? []).map((child) => [child.path, child]));
     if (pass.mounts && info.dev !== pass.targetDevice && skippableSubtree(pass.mounts, path, info.dev)) {
@@ -531,7 +553,9 @@ export class RemotePathGuard {
     if (onAnotherVolume?.(info)) return { path, category, depth, mode: "skipped", stamp, children: [] };
     if (previous?.mode === "listed" && !previous.relist && sameStamp(previous.stamp, stamp)) {
       const children = await Promise.all(previous.children.map(async (child) => {
-        if (child.mode !== "file") return await this.observe(child.path, category, depth + 1, child, pass);
+        if (child.mode !== "file" || !pass.reuseFiles || child.mountPoint || pass.mountPoints?.has(child.path)) {
+          return await this.observe(child.path, category, depth + 1, child, pass);
+        }
         pass.seen += 1;
         return child;
       }));
@@ -629,8 +653,8 @@ const UNIFORM_DEVICE_FILESYSTEMS = new Set([
   "hugetlbfs", "efivarfs", "fusectl", "nsfs", "rpc_pipefs",
 ]);
 
-async function readMountTable(): Promise<readonly MountEntry[] | undefined> {
-  try { return parseMountInfo(await readFile("/proc/self/mountinfo", "utf8")); } catch { return undefined; }
+async function readMountText(): Promise<string | undefined> {
+  try { return await readFile("/proc/self/mountinfo", "utf8"); } catch { return undefined; }
 }
 
 /** Parses /proc/self/mountinfo; any malformed row makes the whole table unusable (undefined). */

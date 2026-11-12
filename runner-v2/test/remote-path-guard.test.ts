@@ -335,6 +335,40 @@ for (const mode of [
   });
 }
 
+test("on Linux a file bind-mounted over a protected key after a check is seen, and so is the key after unmounting",
+  { skip: process.platform !== "linux" || process.getuid?.() !== 0 }, async (t) => {
+    const fx = await fixture();
+    const key = join(fx.home, ".ssh", "id_rsa");
+    let mounted = false;
+    try {
+      const source = join(fx.allowed, "mount-source.txt"), sourceAlias = join(fx.allowed, "source-alias.txt");
+      await writeFile(source, "SOURCE\n");
+      await link(source, sourceAlias);
+      const guard = hermeticGuard(fx, undefined, { scanRacyWindowMs: 50 });
+      // Two checks a pause apart, so the second keeps .ssh's files from the first without looking at them.
+      await guard.assertAllowed(sourceAlias, "read");
+      await sleep(150);
+      await guard.assertAllowed(sourceAlias, "read");
+      try { execFileSync("mount", ["--bind", source, key], { stdio: "ignore" }); mounted = true; } catch {
+        t.skip("mount --bind is not permitted here");
+        return;
+      }
+      // The mount moves neither of .ssh's times, but the protected key now shows the source file.
+      assert.equal((await denied(guard.assertAllowed(sourceAlias, "read"))).reason, "hardlink_alias");
+      await sleep(150);
+      assert.equal((await denied(guard.assertAllowed(sourceAlias, "read"))).reason, "hardlink_alias");
+      execFileSync("umount", [key]);
+      mounted = false;
+      // Unmounted, the key is itself again: its own identity is protected and the source is not.
+      await link(key, join(fx.allowed, "key-alias.txt"));
+      assert.equal((await denied(guard.assertAllowed(join(fx.allowed, "key-alias.txt"), "read"))).reason, "hardlink_alias");
+      await guard.assertAllowed(sourceAlias, "read");
+    } finally {
+      if (mounted) { try { execFileSync("umount", [key]); } catch { /* Reported by the assertion that failed. */ } }
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
 test("a scan that could not read a protected folder recovers when it can, and notices when it no longer can", { skip: !canDropPermissions }, async () => {
   const fx = await fixture();
   const secrets = join(fx.root, "ext-secrets");
