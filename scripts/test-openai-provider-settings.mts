@@ -20,7 +20,9 @@ assert.match(mergedSource, /API key/);
 assert.match(mergedSource, /ChatGPT subscription/);
 assert.match(mergedSource, /providerId === "chatgpt"|chatgptProvider/);
 const apiKeyFormSource = await readFile(new URL("../components/ApiKeyForm.tsx", import.meta.url), "utf8");
-assert.match(apiKeyFormSource, /accountRunner \? "Saved runner token" : "Saved key"/);
+// HM4b: an account-backed row has no key, token or address fields; the launcher's peer connects it (OD-32).
+assert.match(apiKeyFormSource, /const runnerTokenField = accountBacked \? undefined/);
+assert.match(apiKeyFormSource, /apiKey: accountBacked \? undefined/);
 const settingsApiSource = await readFile(new URL("../lib/client/settings-api.ts", import.meta.url), "utf8");
 assert.match(settingsApiSource, /account runner is too old for ChatGPT live model discovery/);
 assert.equal(chatgpt?.accountRunner?.loginLabel, "Continue with ChatGPT");

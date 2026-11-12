@@ -37,7 +37,7 @@ import {
 } from "@/lib/client/bench-runner";
 import { assertModelConnection, getEnabledModels } from "@/lib/client/providers";
 import { isModelConnectionError } from "@/lib/client/model-proxy-client";
-import { getUserSettings, updateUserSettings } from "@/lib/client/store";
+import { getUserSettings, updateBrowserSettings } from "@/lib/client/store";
 import { getNativeBenchmarkPack, HARNESSBENCH_SUITE, NATIVE_TOOLBENCH_SUITE } from "@/lib/benchmark/native-suites";
 
 import { certifiedTabRunCoordinator } from "@/lib/benchmark/certified/run-session";
@@ -127,7 +127,7 @@ export function CertifiedRunPanel({
     runnerCheck.current = null;
     setCheckingWorkBenchRunner(false);
     setWorkBenchRunnerHealth(null);
-    updateUserSettings({ benchmarkRunner: { url, token } });
+    updateBrowserSettings({ benchmarkRunner: { url, token } });
   }
 
   useEffect(() => {

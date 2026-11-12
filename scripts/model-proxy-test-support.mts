@@ -31,6 +31,8 @@ export interface StubRunnerOptions {
   withAccountPeer?: boolean;
   /** Answers every request that is not a control-port call. */
   upstream?: (request: StubRequest) => Response | Promise<Response>;
+  /** Answers other control-port routes (HM4b: `/v2/home`); undefined falls through to 404. */
+  control?: (path: string, method: string, body: string) => Response | undefined | Promise<Response | undefined>;
 }
 
 export interface StubRunner {
@@ -76,6 +78,8 @@ export function installStubRunner(options: StubRunnerOptions = {}): StubRunner {
         const expiresInMs = options.expiresInMs === undefined ? 12 * 60 * 60 * 1000 : options.expiresInMs;
         return json({ token, proxyBaseUrl: STUB_PROXY_URL, expiresAt: expiresInMs === null ? null : new Date(Date.now() + expiresInMs).toISOString() });
       }
+      const routed = await options.control?.(path, method, body);
+      if (routed) return routed;
       return json({ error: "not found", code: "not_found" }, 404);
     }
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined) ?? undefined;

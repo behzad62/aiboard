@@ -38,7 +38,6 @@ import {
   isInitialized,
   listDiscussions,
   updateDiscussion,
-  updateUserSettings,
   upsertBuildCheckpoint,
 } from "./store";
 import {
@@ -51,7 +50,9 @@ import {
   stopDiscussion,
 } from "./engine";
 import { queueBuildNote } from "./build-notes";
+import { homeSettled, saveHomeSettings, startHomeSync } from "./home-client";
 import {
+  getLauncherConnection,
   resolveRunnerConnection,
   sanitizeRunnerTokenForPersistence,
 } from "./local-runner-handoff";
@@ -523,8 +524,14 @@ export function updateDiscussionConfig(
 
 /** Load the client store (idempotent). Returns needsPassphrase when locked. */
 export async function ensureReady(): Promise<{ needsPassphrase: boolean }> {
-  if (isInitialized()) return { needsPassphrase: false };
-  return initStore();
+  // Settings and keys come from the AIBoard home once the store is ready (HM4b).
+  startHomeSync();
+  const result = isInitialized() ? { needsPassphrase: false } : await initStore();
+  // With a Runner connected, nothing reads settings before the first home read settles: a page
+  // that ran a chat first would see neither the home's rows nor the old browser ones (removed by
+  // an earlier page) and report the provider as not configured.
+  if (!result.needsPassphrase && getLauncherConnection()) await homeSettled();
+  return result;
 }
 
 function withFullId(models: ModelInfo[]): Array<ModelInfo & { fullId: string }> {
@@ -712,6 +719,7 @@ export function deleteDiscussion(id: string): void {
   storeDeleteDiscussion(id);
 }
 
-export function saveSettings(patch: Partial<UserSettings>): void {
-  updateUserSettings(patch);
+/** Saves home-owned settings (defaults and the like) to the AIBoard home as one batch. */
+export function saveSettings(patch: Partial<UserSettings>): Promise<void> {
+  return saveHomeSettings(patch);
 }

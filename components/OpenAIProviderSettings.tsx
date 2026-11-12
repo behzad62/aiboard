@@ -11,7 +11,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { saveOpenAIConnectionMode } from "@/lib/client/settings-api";
-import { flush } from "@/lib/client/store";
 
 export type OpenAIConnectionMode = "api" | "subscription";
 
@@ -44,11 +43,19 @@ export function OpenAIProviderSettings({
     initialOpenAIConnectionMode(apiProvider, chatgptProvider, preferredMode),
   );
 
+  const [modeError, setModeError] = useState<string | null>(null);
   const changeMode = async (next: OpenAIConnectionMode) => {
     if (next === mode) return;
+    const previous = mode;
     setMode(next);
-    saveOpenAIConnectionMode(next);
-    await flush();
+    setModeError(null);
+    try {
+      await saveOpenAIConnectionMode(next);
+    } catch (error) {
+      // A failed save reverts the switch and says why.
+      setMode(previous);
+      setModeError(error instanceof Error ? error.message : "Could not save the connection mode");
+    }
   };
 
   const subscriptionModels = useMemo(() => chatgptProvider.models.map((model) => ({
@@ -79,6 +86,7 @@ export function OpenAIProviderSettings({
           <p className="text-xs text-muted-foreground">
             API key mode uses OpenAI API billing. ChatGPT subscription mode uses your ChatGPT plan through the public OpenAI API and local account runner, without an API key. Continue with ChatGPT to authorize plan usage. Model availability depends on your account.
           </p>
+          {modeError && <p className="text-sm text-destructive" role="alert">{modeError}</p>}
         </div>
       </div>
 

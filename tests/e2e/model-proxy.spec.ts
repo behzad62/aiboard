@@ -5,7 +5,8 @@
  * temp folder) and a stub upstream that stands in for OpenAI, Anthropic and Google:
  * - one streamed call per provider SDK completes through the proxy, with the home's key added there;
  * - with two tabs and four parallel run streams holding six proxy streams open, an approval and a cancel
- *   on the control port still go through at once, and the page's own Stop reaches the upstream.
+ *   on the control port still go through at once, and the page's own Stop reaches the upstream;
+ * - HM4b: one settings save from the Settings page lands in the home, and the browser store never saves it.
  *
  * Stub keys and a stub upstream only; no live provider call.
  */
@@ -160,10 +161,10 @@ async function launcherSession(context: BrowserContext, port: number, sessionTok
   }, { port, instanceId: INSTANCE, kind: "runner", sessionToken });
 }
 
-test.describe("HM4a: browser model calls through the model proxy", () => {
+test.describe("HM4a/HM4b: browser model calls through the model proxy, settings on the home", () => {
   test.setTimeout(240_000);
 
-  test("each provider SDK streams through the proxy; an approval and a cancel go through while six streams are held", async ({ browser }) => {
+  test("each provider SDK streams through the proxy; an approval and a cancel go through while six streams are held; a settings save lands in the home", async ({ browser }) => {
     const root = mkdtempSync(join(tmpdir(), "aiboard-model-proxy-e2e-"));
     const userHome = join(root, "user");
     mkdirSync(userHome, { recursive: true });
@@ -177,11 +178,12 @@ test.describe("HM4a: browser model calls through the model proxy", () => {
     await applyHomeBatch(location, {
       baseRevision: 0,
       ops: [
-        { path: "providers.openai", op: "set", value: { enabled: true, baseUrl: `${upstream.base}/v1` } },
+        // Since HM4b the page shows the home's provider rows, so the enabled models are the home's.
+        { path: "providers.openai", op: "set", value: { enabled: true, baseUrl: `${upstream.base}/v1`, enabledModelIds: ["gpt-5.5", ...HOLD_MODELS], defaultModel: "gpt-5.5" } },
         { path: "credentials.providers.openai", op: "set", value: { secret: OPENAI_KEY } },
-        { path: "providers.anthropic", op: "set", value: { enabled: true, baseUrl: upstream.base } },
+        { path: "providers.anthropic", op: "set", value: { enabled: true, baseUrl: upstream.base, enabledModelIds: ["claude-sonnet-4-6"], defaultModel: "claude-sonnet-4-6" } },
         { path: "credentials.providers.anthropic", op: "set", value: { secret: ANTHROPIC_KEY } },
-        { path: "providers.google", op: "set", value: { enabled: true, baseUrl: upstream.base } },
+        { path: "providers.google", op: "set", value: { enabled: true, baseUrl: upstream.base, enabledModelIds: ["gemini-2.5-flash"], defaultModel: "gemini-2.5-flash" } },
         { path: "credentials.providers.google", op: "set", value: { secret: GOOGLE_KEY } },
       ],
     });
@@ -309,6 +311,31 @@ test.describe("HM4a: browser model calls through the model proxy", () => {
         expect(request.headers.authorization ?? request.headers["x-api-key"] ?? request.headers["x-goog-api-key"]).toBeDefined();
         expect(JSON.stringify(request.headers)).not.toContain("proxy_");
       }
+
+      // ---- HM4b: one settings save from the Settings page goes to the home, through the Runner
+      const styleNote = "Answer like an e2e settings save.";
+      await tabA.goto("/settings");
+      await expect(tabA.getByTestId("home-path")).toContainText(location.home, { timeout: 30_000 });
+      await tabA.getByRole("tab", { name: "Defaults" }).click();
+      await tabA.locator("#default-style").fill(styleNote);
+      await tabA.getByRole("button", { name: "Save defaults" }).click();
+      await expect(tabA.getByRole("button", { name: "Saved!" })).toBeVisible({ timeout: 30_000 });
+      expect(readAiboardHomeSync(location).config.settings.defaultStyleNote).toBe(styleNote);
+      // The page re-reads the home after its save, and the browser store keeps no copy of the home's settings or keys.
+      await tabA.reload();
+      await tabA.getByRole("tab", { name: "Defaults" }).click();
+      await expect(tabA.locator("#default-style")).toHaveValue(styleNote, { timeout: 30_000 });
+      const persisted = await tabA.evaluate(() => new Promise<string>((resolve, reject) => {
+        const request = indexedDB.open("ai-discussion-board", 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const read = request.result.transaction("kv", "readonly").objectStore("kv").get("store");
+          read.onsuccess = () => { request.result.close(); resolve(String(read.result ?? "")); };
+          read.onerror = () => { request.result.close(); reject(read.error); };
+        };
+      }));
+      expect(persisted).not.toContain(styleNote);
+      for (const key of [OPENAI_KEY, ANTHROPIC_KEY, GOOGLE_KEY]) expect(persisted).not.toContain(key);
     } finally {
       await context.close();
       await server.close();

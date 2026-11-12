@@ -16,7 +16,6 @@ import {
   addCustomModel,
   deleteCustomModel,
   listCustomModels,
-  testCustomModel,
   testSavedCustomModel,
   updateCustomModelCapabilities,
   updateCustomModelReasoning,
@@ -147,20 +146,24 @@ export function CustomModelsManager({
     model.trim().length > 0;
   const canTest = baseURL.trim().length > 0 && model.trim().length > 0;
 
+  /** Saves the form to the AIBoard home (the key in the same batch) and clears it, key included. */
+  const saveForm = () =>
+    addCustomModel({
+      label: label.trim() || model.trim(),
+      baseURL,
+      model,
+      apiKey: apiKey || undefined,
+      capabilities,
+      toolCapabilityOverrides: buildCustomToolCapabilityOverrides(declaredTools),
+      compatibleTransports,
+      reasoningEffort,
+    });
+
   const add = async () => {
     setSaving(true);
     setMessage(null);
     try {
-      addCustomModel({
-        label,
-        baseURL,
-        model,
-        apiKey: apiKey || undefined,
-        capabilities,
-        toolCapabilityOverrides: buildCustomToolCapabilityOverrides(declaredTools),
-        compatibleTransports,
-        reasoningEffort,
-      });
+      await saveForm();
       setMessage("Custom model added.");
       reset();
       await load();
@@ -172,27 +175,39 @@ export function CustomModelsManager({
     }
   };
 
+  // Testing an unsaved endpoint saves it first: the Runner's model proxy uses only
+  // what the AIBoard home saved (plan §9 "Testing a key"). A failed test leaves it
+  // saved and marked not validated, so it can be corrected or removed below.
   const test = async () => {
     setTesting(true);
     setMessage(null);
     try {
-      const data = await testCustomModel({
-        baseURL,
-        model,
-        apiKey: apiKey || undefined,
-        capabilities,
-        reasoningEffort,
-      });
+      const saved = await saveForm();
+      reset();
+      const data = await testSavedCustomModel(saved.id);
       setMessage(
         data.valid
-          ? `Model test successful${data.usedImage ? " with test image" : ""}: ${data.preview ?? "Response received"}`
-          : `Test failed: ${data.error ?? "unknown error"}`,
+          ? `Saved and tested${data.usedImage ? " with a test image" : ""}: ${data.preview ?? "Response received"}`
+          : `Saved, but the test failed: ${data.error ?? "unknown error"}. Correct it or remove it below.`,
       );
-    } catch {
-      setMessage("Test failed: could not reach the endpoint.");
+      await load();
+      onChanged?.();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Test failed: could not reach the endpoint.");
     } finally {
       setTesting(false);
     }
+  };
+
+  /** Runs one saved-model change; a failed save shows its error and the list re-reads the home. */
+  const mutate = async (change: () => Promise<void>) => {
+    try {
+      await change();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Could not save the change");
+    }
+    await load();
+    onChanged?.();
   };
 
   const testSaved = async (id: string) => {
@@ -218,22 +233,13 @@ export function CustomModelsManager({
     }
   };
 
-  const changeSavedReasoning = async (m: CustomModelView, effort: ReasoningEffort) => {
-    updateCustomModelReasoning(m.id, effort);
-    await load();
-    onChanged?.();
-  };
-  const remove = async (id: string) => {
-    deleteCustomModel(id);
-    await load();
-    onChanged?.();
-  };
+  const changeSavedReasoning = (m: CustomModelView, effort: ReasoningEffort) =>
+    mutate(() => updateCustomModelReasoning(m.id, effort));
+  const remove = (id: string) => mutate(() => deleteCustomModel(id));
 
-  const toggleCapability = async (m: CustomModelView, key: keyof ModelCaps) => {
+  const toggleCapability = (m: CustomModelView, key: keyof ModelCaps) => {
     const current = m.capabilities ?? { ...NO_CAPS };
-    updateCustomModelCapabilities(m.id, { ...current, [key]: !current[key] });
-    await load();
-    onChanged?.();
+    return mutate(() => updateCustomModelCapabilities(m.id, { ...current, [key]: !current[key] }));
   };
 
   const declaredToolIds = (m: CustomModelView) =>
@@ -254,12 +260,10 @@ export function CustomModelsManager({
     const current = declaredToolIds(m);
     if (current.has(id)) current.delete(id);
     else current.add(id);
-    updateCustomModelToolConfiguration(m.id, {
+    await mutate(() => updateCustomModelToolConfiguration(m.id, {
       toolCapabilityOverrides: buildCustomToolCapabilityOverrides([...current]),
       compatibleTransports: m.compatibleTransports ?? ["chat_completions"],
-    });
-    await load();
-    onChanged?.();
+    }));
   };
 
   const nextTransportSelection = (
@@ -276,15 +280,13 @@ export function CustomModelsManager({
     m: CustomModelView,
     id: ProviderTransportId,
   ) => {
-    updateCustomModelToolConfiguration(m.id, {
+    await mutate(() => updateCustomModelToolConfiguration(m.id, {
       toolCapabilityOverrides: m.toolCapabilityOverrides ?? [],
       compatibleTransports: nextTransportSelection(
         m.compatibleTransports ?? ["chat_completions"],
         id,
       ),
-    });
-    await load();
-    onChanged?.();
+    }));
   };
   return (
     <div className="space-y-6">
@@ -648,7 +650,7 @@ export function CustomModelsManager({
             onClick={test}
             disabled={!canTest || testing}
           >
-            {testing ? "Testing…" : "Test connection"}
+            {testing ? "Testing…" : "Save and test"}
           </Button>
         </div>
         {message && <p className="text-sm text-muted-foreground">{message}</p>}

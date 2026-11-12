@@ -6,11 +6,11 @@
  * Since HM4a the probe is an OpenAI-compatible call to the proxy, which adds the key from the AIBoard
  * home, so the browser holds no NVIDIA key. A stub Runner and a stub upstream answer.
  */
-import type { ProviderKey } from "../lib/db/schema";
 import { runCapabilityProbes } from "../lib/client/capability-api";
 import { NVIDIA_PROVIDER_ID } from "../lib/client/providers";
 import { __resetClientStoreForTests } from "../lib/client/store";
-import { installStubRunner, STUB_PROXY_URL } from "./model-proxy-test-support.mts";
+import { STUB_PROXY_URL } from "./model-proxy-test-support.mts";
+import { connectStubHome, removeStubHomes } from "./home-test-support.mts";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail?: unknown): void {
@@ -18,13 +18,10 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${ok ? "" : ` -> ${JSON.stringify(detail)}`}`);
 }
 
-const now = new Date().toISOString();
-const row: ProviderKey = {
-  providerId: NVIDIA_PROVIDER_ID, baseURL: null, runnerToken: null, models: ["nvidia:z-ai/glm-5.2"], enabledModelIds: null,
-  defaultModel: "z-ai/glm-5.2", enabled: true, keyHint: null, lastValidationSucceeded: null, lastValidatedAt: null, updatedAt: now,
-};
-__resetClientStoreForTests({ providerKeys: [row] } as never);
-const stub = installStubRunner({
+__resetClientStoreForTests({});
+// The NVIDIA row lives in the AIBoard home (HM4b), and the probe's profile is saved there.
+const stub = await connectStubHome({
+  seed: [{ path: `providers.${NVIDIA_PROVIDER_ID}`, op: "set", value: { models: ["nvidia:z-ai/glm-5.2"], defaultModel: "z-ai/glm-5.2", enabled: true } }],
   proxyTokens: ["proxy_lab-stub"],
   upstream: () => new Response(
     `data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "AIBOARD_TEXT_OK" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
@@ -49,6 +46,7 @@ try {
   );
 } finally {
   stub.restore();
+  removeStubHomes();
 }
 
 console.log(failures === 0 ? "PASS" : `FAIL ${failures} check(s) failed`);

@@ -175,9 +175,13 @@ export function CapabilityLab({
 
   const resetCurrent = async () => {
     if (!selectedModelId) return;
-    clearCapabilityProfile(selectedModelId);
+    try {
+      await clearCapabilityProfile(selectedModelId);
+      setMessage("Capability profile reset.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not reset the capability profile");
+    }
     setProfiles(getCapabilityProfiles());
-    setMessage("Capability profile reset.");
     await onChanged?.();
   };
 

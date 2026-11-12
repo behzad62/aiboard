@@ -48,7 +48,8 @@ import {
   type ModelCapabilityProbeProfile,
   type ToolCapabilityProbeDefinition,
 } from "@/lib/providers/capability-probes";
-import { getUserSettings, updateUserSettings } from "./store";
+import { getUserSettings } from "./store";
+import { saveHome, saveHomeSettings } from "./home-client";
 import {
   configuredOpenAIFileSearchIntent,
   configuredRemoteMcpIntent,
@@ -139,9 +140,6 @@ function createProbeArtifactSink(): ProviderArtifactSink {
   };
 }
 
-function updateCapabilitySettings(patch: CapabilitySettingsExtension): void {
-  updateUserSettings(patch as unknown as Parameters<typeof updateUserSettings>[0]);
-}
 
 export function getCapabilityProfiles(): Record<string, ModelCapabilityProbeProfile> {
   return {
@@ -155,19 +153,13 @@ export function getCapabilityProfile(
   return getCapabilityProfiles()[fullModelId];
 }
 
-export function clearCapabilityProfile(fullModelId: string): void {
-  const next = getCapabilityProfiles();
-  delete next[fullModelId];
-  updateCapabilitySettings({ modelCapabilityProfiles: next });
+/** Removes one model's probe profile from the AIBoard home (its own entry, so other models' profiles are untouched). */
+export function clearCapabilityProfile(fullModelId: string): Promise<void> {
+  return saveHome(() => [{ path: `settings.modelCapabilityProfiles.${fullModelId}`, op: "remove" }]);
 }
 
-function saveCapabilityProfile(profile: ModelCapabilityProbeProfile): void {
-  updateCapabilitySettings({
-    modelCapabilityProfiles: {
-      ...getCapabilityProfiles(),
-      [profile.fullModelId]: profile,
-    },
-  });
+function saveCapabilityProfile(profile: ModelCapabilityProbeProfile): Promise<void> {
+  return saveHome(() => [{ path: `settings.modelCapabilityProfiles.${profile.fullModelId}`, op: "set", value: profile }]);
 }
 
 function resolveProbeTarget(fullModelId: string): ProbeTarget {
@@ -946,7 +938,7 @@ export async function runCapabilityProbes(input: {
     ? 2
     : 1;
 
-  saveCapabilityProfile(profile);
+  await saveCapabilityProfile(profile);
   const evidence = results.flatMap((result) => {
     const capabilityId = parseToolCapabilityProbeId(result.id);
     if (!capabilityId || !result.transport) return [];
@@ -962,12 +954,12 @@ export async function runCapabilityProbes(input: {
     return item ? [item] : [];
   });
   if (evidence.length > 0) {
-    updateUserSettings({
+    await saveHomeSettings((settings) => ({
       providerToolCapabilityEvidence: mergeCapabilityEvidenceRecords(
-        getUserSettings().providerToolCapabilityEvidence,
+        settings.providerToolCapabilityEvidence,
         evidence,
       ),
-    });
+    }));
   }
   return profile;
 }

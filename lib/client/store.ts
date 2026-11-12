@@ -283,7 +283,19 @@ function referencedAttachmentIds(data: ClientStore): Set<string> {
   return ids;
 }
 
-function clientStoreForMainPersistence(data: ClientStore): PersistedMainStore {
+/** The store as this browser saves it: the home mirror replaced by the browser's own copy. */
+function withoutHomeMirror(data: ClientStore): ClientStore {
+  if (!homeMirror || !browserHomeFields) return data;
+  return {
+    ...data,
+    providerKeys: browserHomeFields.providerKeys,
+    customModels: browserHomeFields.customModels,
+    userSettings: withHomeOwnedSettings(data.userSettings, browserHomeFields.settings),
+  };
+}
+
+function clientStoreForMainPersistence(live: ClientStore): PersistedMainStore {
+  const data = withoutHomeMirror(live);
   const referencedIds = referencedAttachmentIds(data);
   const mainStore: PersistedMainStore = {
     ...structuredClone(data),
@@ -519,6 +531,7 @@ async function commitLoadedStore(
   if (generation !== initGeneration || memory) return;
   const migration = migrateClientStoreModelSelections(loaded);
   memory = migration.store;
+  adoptLoadedStoreUnderMirror(memory, true);
   await runBenchmarkResultSetDeletionRecovery();
   notifyReady();
   if (migration.changed) schedulePersist();
@@ -938,7 +951,11 @@ export async function flush(): Promise<void> {
   }
   if (!adapter) return;
   const currentAdapter = adapter;
-  if (config.encryptionEnabled && !isUnlocked()) {
+  // Passphrase encryption is removed (OD-27). A store that is still encrypted is
+  // opened once with its passphrase and written again only after the user
+  // confirms saving it without encryption (OD-28); until then nothing is
+  // written, so a declined picked folder stays untouched.
+  if (config.encryptionEnabled) {
     persistDirty = true;
     return;
   }
@@ -1618,6 +1635,181 @@ export function deleteCustomModel(id: string): void {
   s.customModels = s.customModels.filter((m) => m.id !== id);
   schedulePersist();
 }
+
+// ── The AIBoard home mirror (HM4b, plan §6.1 and §9 "Old Runners") ───────────
+//
+// Settings and keys live in the AIBoard home, read through the connected
+// Runner. Once the page has read it, the store's provider rows, custom models
+// and home-owned settings fields show the home (the mirror), so the
+// synchronous readers keep working. The mirror is never persisted: the store
+// keeps saving what this browser had (`browserHomeFields`), from which the old
+// secrets are removed after the first home read. Only lib/client/home-client.ts
+// changes the mirror (scripts/test-settings-home.mts).
+
+/** UserSettings fields the AIBoard home owns (§5.8); `toolRuntime` only for its remoteMcpServer and openaiFileSearch. */
+export const HOME_OWNED_USER_SETTINGS_FIELDS = [
+  "defaultEffort", "defaultMode", "judgeModelId", "defaultVerbosity", "defaultStyleNote",
+  "defaultReasoningEffort", "defaultBuildRunPolicy", "defaultBuildSkillMode", "defaultBuildBudgetUsd",
+  "defaultBuildTimeLimitMinutes", "defaultBuildAlwaysRequireIndependentVerifier",
+  "modelPricingOverrides", "modelContextOverrides", "discoveredModelMetadata", "providerToolCapabilityEvidence",
+  "modelCapabilityProfiles", "openAIConnectionMode", "toolRuntime",
+] as const;
+/** UserSettings fields that stay in each browser: they name a browser or a Runner, not a user. */
+export const BROWSER_OWNED_USER_SETTINGS_FIELDS = ["id", "chatDefaultApplied", "benchmarkRunner"] as const;
+
+/** What the home holds, in the store's shapes. Secrets are never part of it. */
+export interface HomeMirror {
+  providerKeys: ProviderKey[];
+  customModels: CustomModel[];
+  /** Home-owned UserSettings fields; `toolRuntime` holds only remoteMcpServer and openaiFileSearch. */
+  settings: Partial<UserSettings>;
+}
+
+interface BrowserHomeFields {
+  providerKeys: ProviderKey[];
+  customModels: CustomModel[];
+  settings: Partial<UserSettings>;
+}
+
+let homeMirror: HomeMirror | null = null;
+let browserHomeFields: BrowserHomeFields | null = null;
+const homeMirrorListeners = new Set<() => void>();
+
+function pickHomeOwnedSettings(settings: UserSettings): Partial<UserSettings> {
+  const picked: Record<string, unknown> = {};
+  for (const field of HOME_OWNED_USER_SETTINGS_FIELDS) {
+    const value = (settings as unknown as Record<string, unknown>)[field];
+    if (value !== undefined) picked[field] = structuredClone(value);
+  }
+  return picked as Partial<UserSettings>;
+}
+
+/** The browser's own fields of `base` with the home-owned fields of `home`. */
+function withHomeOwnedSettings(base: UserSettings, home: Partial<UserSettings>): UserSettings {
+  const next: Record<string, unknown> = { ...base };
+  const source = home as Record<string, unknown>;
+  // A field the home has not set takes the app's default, never this browser's old value (OD-26: start fresh).
+  const defaults = DEFAULT_STORE.userSettings as unknown as Record<string, unknown>;
+  for (const field of HOME_OWNED_USER_SETTINGS_FIELDS) {
+    if (field === "toolRuntime") continue;
+    const value = source[field] !== undefined ? source[field] : defaults[field];
+    if (value === undefined) delete next[field];
+    else next[field] = structuredClone(value);
+  }
+  const runner = base.toolRuntime?.runner;
+  const runtime = { ...(home.toolRuntime ?? {}) };
+  delete runtime.runner;
+  next.toolRuntime = { ...runtime, ...(runner !== undefined ? { runner } : {}) };
+  return next as unknown as UserSettings;
+}
+
+function overlayHomeMirror(target: ClientStore): void {
+  if (!homeMirror) return;
+  target.providerKeys = structuredClone(homeMirror.providerKeys);
+  target.customModels = structuredClone(homeMirror.customModels);
+  target.userSettings = withHomeOwnedSettings(target.userSettings, homeMirror.settings);
+}
+
+/** A store just loaded or replaced keeps showing the mirror; a loaded one's fields become this browser's own copy. */
+function adoptLoadedStoreUnderMirror(target: ClientStore, adoptBrowserFields: boolean): void {
+  if (!homeMirror) return;
+  if (adoptBrowserFields || !browserHomeFields) {
+    browserHomeFields = {
+      providerKeys: structuredClone(target.providerKeys),
+      customModels: structuredClone(target.customModels),
+      settings: pickHomeOwnedSettings(target.userSettings),
+    };
+  }
+  overlayHomeMirror(target);
+}
+
+function notifyHomeMirror(): void {
+  for (const listener of Array.from(homeMirrorListeners)) {
+    try {
+      listener();
+    } catch {
+      // A listener must not break the mirror.
+    }
+  }
+}
+
+/**
+ * Shows the AIBoard home in the store (home client only). The first call keeps
+ * what this browser had for those fields as its own, persisted copy.
+ */
+export function applyHomeMirror(mirror: HomeMirror): void {
+  const s = store();
+  if (!browserHomeFields) {
+    browserHomeFields = {
+      providerKeys: structuredClone(s.providerKeys),
+      customModels: structuredClone(s.customModels),
+      settings: pickHomeOwnedSettings(s.userSettings),
+    };
+  }
+  homeMirror = structuredClone(mirror);
+  overlayHomeMirror(s);
+  notifyHomeMirror();
+}
+
+export function isHomeMirrorActive(): boolean {
+  return homeMirror !== null;
+}
+
+/** Called when the home mirror changes, so views re-read the store. */
+export function onHomeMirrorChange(listener: () => void): () => void {
+  homeMirrorListeners.add(listener);
+  return () => {
+    homeMirrorListeners.delete(listener);
+  };
+}
+
+/**
+ * Removes the old secrets from this browser's own copy (§9 "Old Runners"): every
+ * provider row (keys and manual account-peer connections), every custom model's
+ * key, and the remote MCP server's token. The Runner connections
+ * (`toolRuntime.runner`, `benchmarkRunner`) stay. It runs only after the first
+ * home read, so it does nothing before the mirror is shown. Returns whether
+ * anything changed.
+ */
+export function removeOldBrowserSecrets(): boolean {
+  const target = browserHomeFields;
+  if (!target) return false;
+  let changed = target.providerKeys.length > 0;
+  target.providerKeys = [];
+  target.customModels = target.customModels.map((model) => {
+    if (model.apiKey === undefined && !model.encryptedKey && !model.iv && !model.authTag && !model.hasKey) return model;
+    changed = true;
+    const rest: Record<string, unknown> = { ...model };
+    for (const field of ["apiKey", "encryptedKey", "iv", "authTag"]) delete rest[field];
+    return { ...(rest as unknown as CustomModel), hasKey: false };
+  });
+  const remote = target.settings.toolRuntime?.remoteMcpServer;
+  if (remote && remote.authorizationToken !== undefined) {
+    const rest: Record<string, unknown> = { ...remote };
+    delete rest.authorizationToken;
+    target.settings = {
+      ...target.settings,
+      toolRuntime: { ...target.settings.toolRuntime, remoteMcpServer: rest as unknown as typeof remote },
+    };
+    changed = true;
+  }
+  if (changed) schedulePersist();
+  return changed;
+}
+
+/** The browser-owned settings (never in the home): this browser's Benchmark Runner connection. */
+export function updateBrowserSettings(patch: Pick<Partial<UserSettings>, "benchmarkRunner">): void {
+  const s = store();
+  s.userSettings = { ...s.userSettings, ...patch };
+  schedulePersist();
+}
+
+/** The Tools tab's Runner connection: it names a Runner, not a user, so it stays in this browser. */
+export function updateBrowserToolRuntimeRunner(runner: NonNullable<UserSettings["toolRuntime"]>["runner"]): void {
+  const s = store();
+  s.userSettings = { ...s.userSettings, toolRuntime: { ...(s.userSettings.toolRuntime ?? {}), runner } };
+  schedulePersist();
+}
 export function addAttachment(a: AttachmentRecord): void {
   store().attachments.push(a);
   schedulePersist();
@@ -1634,12 +1826,44 @@ export function deleteAttachmentRecord(id: string): void {
 export function replaceStore(data: Partial<ClientStore>): void {
   initGeneration++;
   memory = migrateClientStoreModelSelections(hydrateStore(data)).store;
+  // Under the home mirror the replaced store keeps showing the home, and this
+  // browser's own copy of the home-owned fields stays as it was.
+  adoptLoadedStoreUnderMirror(memory, false);
   notifyReady();
   schedulePersist();
 }
 
 export function exportStore(): ClientStore {
   return store();
+}
+
+/** A copy of `data` without any secret: provider keys and runner tokens, custom-model keys, the remote MCP token (§6.1 "Import and export"). */
+export function withoutSecrets<T extends Partial<ClientStore>>(data: T): T {
+  const next = structuredClone(data) as T & Partial<ClientStore>;
+  if (next.providerKeys) {
+    next.providerKeys = next.providerKeys.map((key) => {
+      const rest: Record<string, unknown> = { ...key };
+      for (const field of ["apiKey", "runnerToken", "encryptedKey", "iv", "authTag"]) delete rest[field];
+      return { ...(rest as unknown as ProviderKey), runnerToken: null, runnerTokenHint: null };
+    });
+  }
+  if (next.customModels) {
+    next.customModels = next.customModels.map((model) => {
+      const rest: Record<string, unknown> = { ...model };
+      for (const field of ["apiKey", "encryptedKey", "iv", "authTag"]) delete rest[field];
+      return { ...(rest as unknown as CustomModel), hasKey: false };
+    });
+  }
+  const remote = next.userSettings?.toolRuntime?.remoteMcpServer;
+  if (next.userSettings && remote && remote.authorizationToken !== undefined) {
+    const rest: Record<string, unknown> = { ...remote };
+    delete rest.authorizationToken;
+    next.userSettings = {
+      ...next.userSettings,
+      toolRuntime: { ...next.userSettings.toolRuntime, remoteMcpServer: rest as unknown as typeof remote },
+    };
+  }
+  return next;
 }
 
 export async function saveBenchmarkRunBlob(
@@ -1843,6 +2067,8 @@ export function __resetClientStoreForTests(data: Partial<ClientStore> = {}): voi
   pendingDeletedDiscussionIds.clear();
   mergedBenchmarkRunIds.clear();
   corruptBenchmarkRunIds.clear();
+  homeMirror = null;
+  browserHomeFields = null;
   notifyReady();
 }
 
@@ -1858,6 +2084,8 @@ export function __clearClientStoreForTests(): void {
   initPromise = null;
   config = { kind: "indexeddb", encryptionEnabled: false };
   benchmarkRunBlobStorageForTests = null;
+  homeMirror = null;
+  browserHomeFields = null;
   pendingDeletedDiscussionIds.clear();
   mergedBenchmarkRunIds.clear();
   corruptBenchmarkRunIds.clear();
@@ -1878,9 +2106,12 @@ export async function __loadClientStoreFromAdapterForTests(
   config = { kind: next.kind, encryptionEnabled: false };
   pendingDeletedDiscussionIds.clear();
   const raw = await next.load();
+  const envelope = raw ? parseEnvelope(raw) : null;
+  // As loadStore: an encrypted envelope keeps the store encrypted until the user decides (OD-28).
+  if (envelope?.encrypted) config = { kind: next.kind, encryptionEnabled: true, salt: envelope.salt };
   const persisted = raw
-    ? parseEnvelope(raw)
-      ? JSON.parse(await unwrap(parseEnvelope(raw)!))
+    ? envelope
+      ? JSON.parse(await unwrap(envelope))
       : JSON.parse(raw)
     : {};
   const benchmarkData = await loadBenchmarkStoreFields();
@@ -1930,6 +2161,51 @@ export async function applyStorageConfig(next: StorageConfig): Promise<void> {
   await setStorageConfig(next);
   adapter = await createAdapter(next);
   await flush();
+}
+
+/** True while an encrypted store is open and not yet saved without encryption (OD-28). */
+export function isEncryptedStorePendingPlainSave(): boolean {
+  return config.encryptionEnabled && isUnlocked() && memory !== null;
+}
+
+/**
+ * The user confirmed: the unlocked store is saved without encryption, in the
+ * same place (this browser or the picked folder), so its history survives (OD-28).
+ */
+export async function saveStoreWithoutEncryption(): Promise<void> {
+  if (!config.encryptionEnabled) return;
+  if (!isUnlocked() || !memory) throw new Error("Unlock the store with its passphrase first.");
+  const next: StorageConfig = { ...config, encryptionEnabled: false, salt: undefined };
+  config = next;
+  await setStorageConfig(next);
+  // The same place (this browser or the picked folder), now written plain.
+  persistDirty = true;
+  await flush();
+  lockCrypto();
+}
+
+/**
+ * The user declined. A picked folder is left untouched and the page starts a new
+ * IndexedDB store; an encrypted IndexedDB store stays encrypted and locked.
+ */
+export async function declineEncryptedStore(): Promise<{ startedNewBrowserStore: boolean }> {
+  if (!config.encryptionEnabled) return { startedNewBrowserStore: false };
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  persistDirty = false;
+  lockCrypto();
+  if (config.kind !== "filesystem") {
+    initGeneration++;
+    memory = null;
+    return { startedNewBrowserStore: false };
+  }
+  memory = hydrateStore();
+  const next: StorageConfig = { kind: "indexeddb", encryptionEnabled: false };
+  const nextAdapter = await createAdapter(next);
+  await switchClientStoreAdapter(nextAdapter, next, true);
+  return { startedNewBrowserStore: true };
 }
 
 export interface StorageSwitchResult {
@@ -2022,6 +2298,7 @@ async function switchClientStoreAdapter(
     mergeBenchmarkStoreFields(loaded, benchmarkData)
   );
   memory = migration.store;
+  adoptLoadedStoreUnderMirror(memory, true);
   await runBenchmarkResultSetDeletionRecovery();
   notifyReady();
   if (

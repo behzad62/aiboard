@@ -47,7 +47,7 @@ import {
   saveProviderKey,
   validateProvider,
 } from "@/lib/client/settings-api";
-import { flush, getProviderKey, getUserSettings } from "@/lib/client/store";
+import { getUserSettings } from "@/lib/client/store";
 
 function acceptSuggestionFromKey(
   event: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
@@ -204,8 +204,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     reasoningEffort: false,
   });
   const providerDefinition = getProviderDefinition(provider.providerId);
-  const baseUrlField = providerDefinition?.baseURLField;
-  const runnerTokenField = providerDefinition?.runnerTokenField;
+  const accountBacked = Boolean(providerDefinition?.accountRunner);
+  // ChatGPT and Copilot reach their account peer through the launcher's connection
+  // (OD-32): no URL, token or key is typed or saved for them.
+  const baseUrlField = accountBacked ? undefined : providerDefinition?.baseURLField;
+  const runnerTokenField = accountBacked ? undefined : providerDefinition?.runnerTokenField;
   const hasModelDiscovery = providerDefinition?.modelDiscovery != null;
   const modelIdsField = useMemo(() => hasModelDiscovery && providerDefinition?.modelIdsField
     ? { ...providerDefinition.modelIdsField, label: "Model ids", suggestedValue: undefined, placeholder: "Browse the catalog or enter model ids",
@@ -221,9 +224,9 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
 
   useEffect(() => {
     if (provider.providerId !== "chatgpt") return;
-    const saved = getProviderKey("chatgpt");
-    const url = (baseURL || saved?.baseURL || "").trim();
-    const token = (apiKey || saved?.apiKey || "").trim();
+    const peer = getLauncherAccountRunnerConnection();
+    const url = peer?.baseURL ?? "";
+    const token = peer?.runnerToken ?? "";
     if (!url || !token) { setChatgptStatus(null); setChatgptStatusError(null); return; }
     const controller = new AbortController();
     const refresh = async () => {
@@ -242,7 +245,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     void refresh();
     window.addEventListener("focus", refresh);
     return () => { controller.abort(); window.removeEventListener("focus", refresh); };
-  }, [provider.providerId, provider.keyHint, baseURL, apiKey]);
+  }, [provider.providerId, provider.keyHint]);
 
   useEffect(() => {
     setOpenRouterCatalog([]);
@@ -280,8 +283,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     void fetchProviderModelCatalog({ providerId: provider.providerId })
       .then(async (catalog) => {
         if (cancelled) return;
-        persistProviderCatalogModels(provider.providerId, catalog.filter((model) => ids.includes(model.id)));
-        await flush();
+        await persistProviderCatalogModels(provider.providerId, catalog.filter((model) => ids.includes(model.id)));
         if (cancelled) return;
         const missing = ids.filter((id) => !catalog.some((model) => model.id === id));
         setDetailsSync({ loading: false, ...(missing.length ? { error: `Catalog did not include: ${missing.join(", ")}. Their details remain unverified.` } : {}) });
@@ -401,12 +403,10 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setMessage(null);
     setCatalogMetadataNote("");
     try {
-      const models = await fetchProviderModelCatalog({
-        providerId: provider.providerId,
-        apiKey: apiKey || undefined,
-        baseURL: baseUrlField ? baseURL : undefined,
-        runnerToken: runnerTokenField ? runnerToken.trim() || undefined : undefined,
-      });
+      // The catalog comes through the model proxy with the saved key, so a typed key or
+      // endpoint is saved first (plan §9 "Testing a key").
+      if (await saveTypedCredentials()) await onSaved();
+      const models = await fetchProviderModelCatalog({ providerId: provider.providerId });
       const enriched = await fetchSupplementalCatalogMetadata(provider.providerId, models);
       const savedMetadata = getUserSettings().discoveredModelMetadata;
       setOpenRouterCatalog(enriched.models.map((model) => applySupplementalCatalogMetadata(model,
@@ -455,23 +455,23 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         ? nextDefault
         : enabledSelection[0] ?? null;
       Object.values(metadataDrafts).forEach(validateModelMetadataOverrides);
-      saveProviderKey({
+      await saveProviderKey({
         providerId: provider.providerId,
-        apiKey: apiKey || undefined,
+        apiKey: accountBacked ? undefined : apiKey || undefined,
         baseURL: baseUrlField ? baseURL : undefined,
-        runnerToken: runnerTokenField
-          ? runnerToken.trim() || undefined
-          : undefined,
         models: modelIdsField ? parsedModelIds : undefined,
         enabledModelIds: enabledSelection,
         defaultModel: defaultForSave,
         enabled,
       });
+      // The key went to the AIBoard home in the request body; the field keeps no copy.
+      setApiKey("");
+      setRunnerToken("");
       let savedMessage = "Saved successfully";
       const selectedCatalogModels = openRouterCatalog.filter((model) => parsedModelIdSet.has(model.id));
-      persistProviderCatalogModels(provider.providerId, selectedCatalogModels);
+      await persistProviderCatalogModels(provider.providerId, selectedCatalogModels);
       for (const [id, values] of Object.entries(metadataDrafts)) {
-        if (parsedModelIdSet.has(id)) saveModelMetadataOverrides(`${provider.providerId}:${id}`, values);
+        if (parsedModelIdSet.has(id)) await saveModelMetadataOverrides(`${provider.providerId}:${id}`, values);
       }
       const capabilitySyncIds = isOpenRouter
         ? selectableModels.map((model) => model.id)
@@ -497,9 +497,6 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
               : "Saved successfully, but live capability sync failed.";
         }
       }
-      setApiKey("");
-      setRunnerToken("");
-      await flush();
       await onSaved();
       setMetadataDrafts({});
       setMessage(savedMessage);
@@ -510,27 +507,47 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     }
   };
 
+  /**
+   * Saves a typed key or a changed endpoint to the AIBoard home, then clears the
+   * key field. The model proxy uses only saved keys, so testing or browsing with
+   * typed input saves it first (plan §9 "Testing a key"). Returns whether it saved.
+   */
+  const saveTypedCredentials = async (): Promise<boolean> => {
+    const typedKey = accountBacked ? "" : apiKey.trim();
+    const endpointChanged = Boolean(baseUrlField) && baseURL.trim() !== (provider.baseURL ?? "").trim();
+    if (!typedKey && !endpointChanged) return false;
+    if (baseUrlField && !baseURL.trim()) {
+      throw new Error(providerDefinition?.baseURLRequiredMessage ?? "This provider needs its endpoint base URL");
+    }
+    await saveProviderKey({
+      providerId: provider.providerId,
+      apiKey: typedKey || undefined,
+      baseURL: endpointChanged ? baseURL : undefined,
+    });
+    setApiKey("");
+    return true;
+  };
+
   const testKey = async () => {
     setTesting(true);
     setMessage(null);
+    let savedFirst = false;
     try {
+      savedFirst = await saveTypedCredentials();
       const data = await validateProvider({
         providerId: provider.providerId,
-        apiKey: apiKey || undefined,
-        baseURL: baseUrlField ? baseURL : undefined,
-        runnerToken: runnerTokenField
-          ? runnerToken.trim() || undefined
-          : undefined,
         modelId: defaultModel,
       });
       setMessage(
         data.valid
-          ? `Model test successful${data.usedImage ? " with test image" : ""}: ${data.preview ?? "Response received"}`
-          : data.error ?? "Model test failed"
+          ? `${savedFirst ? "Saved and tested. " : ""}Model test successful${data.usedImage ? " with test image" : ""}: ${data.preview ?? "Response received"}`
+          : savedFirst
+            ? `Saved, but the test failed, so it is marked not validated: ${data.error ?? "Model test failed"}. Correct the key or remove it.`
+            : data.error ?? "Model test failed"
       );
       await onSaved();
-    } catch {
-      setMessage("Validation failed");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Validation failed");
       await onSaved();
     } finally {
       setTesting(false);
@@ -543,12 +560,13 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setMessage(null);
     setDeviceLoginPrompt(null);
     try {
-      const saved = getProviderKey(provider.providerId);
+      // The account peer that `aiboard` started, from the launcher's connection (OD-32).
       const launcherAccount = getLauncherAccountRunnerConnection();
-      const runnerBaseURL = (launcherAccount?.baseURL || baseURL || saved?.baseURL || "").trim().replace(/\/$/, "");
-      const runnerToken = (launcherAccount?.runnerToken || apiKey || saved?.apiKey || "").trim();
-      if (!runnerBaseURL) throw new Error("Enter the account runner URL first");
-      if (!runnerToken) throw new Error("Enter or save the account runner token first");
+      const runnerBaseURL = (launcherAccount?.baseURL ?? "").trim().replace(/\/$/, "");
+      const runnerToken = (launcherAccount?.runnerToken ?? "").trim();
+      if (!runnerBaseURL || !runnerToken) {
+        throw new Error("Connect AI Board first: run `aiboard` in a project folder and open the link it prints. It starts the account runner for you.");
+      }
       if (provider.providerId === "chatgpt") await fetchChatGPTAccountStatus(runnerBaseURL, runnerToken);
 
       const response = await fetch(`${runnerBaseURL}/providers/${accountRunner.path}/login`, {
@@ -614,7 +632,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   };
 
   const handleEnabledChange = async (checked: boolean) => {
-    if (!provider.hasKey) {
+    if (!provider.hasKey && !accountBacked) {
       setMessage(
         providerDefinition?.missingCredentialMessage ??
           "Save an API key before enabling this provider"
@@ -636,12 +654,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setMessage(null);
 
     try {
-      saveProviderKey({
+      await saveProviderKey({
         providerId: provider.providerId,
         defaultModel,
         enabled: checked,
       });
-      await flush();
       setMessage(checked ? "Provider enabled" : "Provider disabled");
       await onSaved();
     } catch (err) {
@@ -682,9 +699,9 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-semibold">{provider.name}</h3>
-          {provider.hasKey && provider.keyHint && (
+          {provider.hasKey && provider.keyHint && !accountBacked && (
             <p className="text-xs text-muted-foreground">
-              {accountRunner ? "Saved runner token" : "Saved key"}: {provider.keyHint}
+              Saved key: {provider.keyHint}
             </p>
           )}
           {provider.runnerTokenHint && (
@@ -748,21 +765,22 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         </div>
       )}
 
-      <div className="space-y-2">
-        <Label htmlFor={`key-${provider.providerId}`}>{keyLabel}</Label>
-        <Input
-          id={`key-${provider.providerId}`}
-          type="password"
-          placeholder={keyPlaceholder}
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-        />
-        {accountRunner && (
+      {!accountBacked && (
+        <div className="space-y-2">
+          <Label htmlFor={`key-${provider.providerId}`}>{keyLabel}</Label>
+          <Input
+            id={`key-${provider.providerId}`}
+            type="password"
+            autoComplete="off"
+            placeholder={keyPlaceholder}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
           <p className="text-xs text-muted-foreground">
-            {accountRunner.tokenHint}
+            Saved to your AIBoard home through AI Board; this page keeps only the hint. Test saves the key first.
           </p>
-        )}
-      </div>
+        </div>
+      )}
 
       {runnerTokenField && (
         <div className="space-y-2">

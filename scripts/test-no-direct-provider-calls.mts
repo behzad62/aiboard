@@ -49,6 +49,7 @@ function resolveSpecifier(file: string, specifier: string): string | null {
 const FETCH_ALLOWED: Record<string, string> = {
   "lib/providers/connection.ts": "the resolver's raw provider request (providerFetch), to the resolved connection only",
   "lib/client/model-proxy-client.ts": "the launcher's control port (health, proxy-session) and the proxy port",
+  "lib/client/home-client.ts": "the launcher's control port: GET and POST /v2/home (settings and keys, never a provider)",
   "lib/client/settings-api.ts": "the keyless OpenRouter public catalog, and the account peer's ChatGPT status and model list",
   "lib/providers/account-runner.ts": "the account peer (ChatGPT, Copilot) at the launcher's address",
   "lib/providers/runner-capabilities.ts": "the account peer's capability handshake",

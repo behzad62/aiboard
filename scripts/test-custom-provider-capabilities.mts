@@ -19,6 +19,7 @@ import { streamCustomChat } from "../lib/providers/custom";
 import type { CustomModel } from "../lib/db/schema";
 import type { ChatParams, NativeToolDefinition, StreamChunk } from "../lib/providers/base";
 import { customModelPlanningContext } from "../lib/client/providers";
+import { connectStubHome, removeStubHomes } from "./home-test-support.mts";
 
 const defaultPlan = resolveProviderCallPlan({
   context: {
@@ -124,8 +125,10 @@ console.log("PASS user-override capability evidence is ignored for non-custom pr
 
 
 __resetClientStoreForTests();
+// Custom models live in the AIBoard home (HM4b): a stub Runner serves a real home in a temp folder.
+const home = await connectStubHome();
 try {
-  const saved = addCustomModel({
+  const saved = await addCustomModel({
     label: "Declared endpoint",
     baseURL: "http://127.0.0.1:9/v1",
     model: "declared-model",
@@ -134,7 +137,7 @@ try {
   });
   assert.deepEqual(saved.toolCapabilityOverrides, functionOverrides);
   assert.deepEqual(saved.compatibleTransports, ["responses"]);
-  updateCustomModelToolConfiguration(saved.id, {
+  await updateCustomModelToolConfiguration(saved.id, {
     toolCapabilityOverrides: responsesOverrides,
     compatibleTransports: ["responses"],
   });
@@ -147,12 +150,12 @@ try {
     toolCapabilityOverrides: updated?.toolCapabilityOverrides,
     compatibleTransports: updated?.compatibleTransports,
   });
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response("unavailable", { status: 503 });
+  // The connection test goes through the model proxy; the stub endpoint is down.
+  home.upstream = async () => new Response("unavailable", { status: 503 });
   try {
     await testSavedCustomModel(saved.id);
   } finally {
-    globalThis.fetch = originalFetch;
+    home.upstream = undefined;
   }
   const afterTest = listCustomModels().find((item) => item.id === saved.id);
   assert.equal(
@@ -164,6 +167,8 @@ try {
   );
   console.log("PASS connection tests never mutate custom tool declarations");
 } finally {
+  home.restore();
+  removeStubHomes();
   __clearClientStoreForTests();
 }
 
