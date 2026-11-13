@@ -60,7 +60,7 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
     let manager: NativeBuildManager | undefined;
     let executionHost: ReturnType<typeof createExecutionHost> | undefined;
     let runtime:
-      | { step: () => Promise<{ status: string; action?: string }>; projection: () => SchedulerProjection }
+      | { step: () => Promise<{ status: string; action?: string }>; projection: () => SchedulerProjection; pause: (reason: string, idempotencyKey: string) => unknown }
       | undefined;
     let bodyFailed = false;
     let bodyError: unknown;
@@ -252,6 +252,8 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
         pageUrl: `/discussion?id=${DISCUSSION_ID}`, runnerUrl: address.url, runId: RUN_ID,
       });
 
+      // The planning panel lives in the workspace's Activity view (2ff73ece).
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
       const planningPanel = page.getByLabel("Evidence-gated planning");
       await expect(planningPanel).toBeVisible();
       await expect(planningPanel.getByText(/Plan ready — delivery incomplete/)).toBeVisible();
@@ -327,14 +329,17 @@ test.describe("Runner V2 T8 evidence-gated planning browser journey", () => {
         "planning.execution_authorized", "run.resumed",
       ]);
 
-      await runtime!.step();
-      const afterOneStep = manager.events(RUN_ID);
-      expect(afterOneStep.length).toBeGreaterThan(afterStart.length);
-      for (let i = 0; i < 20 && worker.requests.length === 0; i += 1) {
-        await runtime!.step();
-      }
+      // The explicit start dispatches the worker in the first step. With a valid submission that step
+      // goes on through submission, the test-integrity baseline and review delivery, which this journey
+      // does not exercise, so the owner pauses once the worker is running and the step settles there.
+      const stepping = runtime!.step();
+      while (worker.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 25));
+      runtime!.pause("T8 journey stops after the worker dispatch", "pause:t8-after-dispatch");
+      await stepping;
       expect(worker.requests.length).toBeGreaterThan(0);
-      expect(manager.events(RUN_ID).length).toBeGreaterThan(afterOneStep.length);
+      const afterDispatch = manager.events(RUN_ID).slice(afterStart.length).map((event) => event.type);
+      expect(afterDispatch).toContain("worker.runtime_assigned");
+      expect(afterDispatch).toContain("run.paused");
     } catch (error) {
       bodyFailed = true; bodyError = error;
       atBodyFailure = browserHttp?.snapshot();
