@@ -28,7 +28,14 @@ import type {
   ProviderHealthProjection,
   SchedulerEvent,
 } from "./scheduler-store.js";
-import type { FinalVerificationCategory, VerificationNotRun } from "./final-verification-contracts.js";
+import type { FinalVerificationCategory, FinalVerificationPlan, VerificationNotRun } from "./final-verification-contracts.js";
+import {
+  isVerificationPlanV2,
+  type VerificationCheckKind,
+  type VerificationCheckOrigin,
+  type VerificationCheckResultV2,
+  type VerificationNotRunV2,
+} from "./verification-plan-v2.js";
 import { redactSensitiveValue } from "./sensitive-redaction.js";
 import type {
   BuildRiskKernelFacts,
@@ -75,8 +82,29 @@ export interface FinalVerificationObservabilityGeneration {
     /** VF2: the Runner did not run this check because its tool is missing. */
     notRun?: VerificationNotRun;
   }>;
+  /**
+   * VF3: a v2 generation's checks, in plan order then the skipped ones; `categories` is empty.
+   * `not_run` (tool missing, or skipped with a reason) is not a failure.
+   */
+  checks?: Array<{
+    checkId: string;
+    label: string;
+    kind: VerificationCheckKind;
+    origin: VerificationCheckOrigin;
+    mandatory: boolean;
+    status: "pending" | "passed" | "failed" | "not_run";
+    evidenceIds: string[];
+    issues: string[];
+    notRun?: VerificationNotRunV2;
+  }>;
   submission: { status: "pending" | "submitted"; submissionId?: string; green?: boolean };
-  mechanicalFailure?: { failureId: string; failedCategories: FinalVerificationCategory[]; evidenceIds: string[] };
+  mechanicalFailure?: {
+    failureId: string;
+    failedCategories: FinalVerificationCategory[];
+    /** VF3: the failed v2 checks. */
+    failedCheckIds?: string[];
+    evidenceIds: string[];
+  };
   cleanup: { status: "pending" | "started" | "succeeded" | "failed"; attempt?: number; error?: string; diagnosticsAvailable: boolean; diagnosticsPath?: never; diagnostics?: FinalVerificationDiagnosticsManifest };
   review: { status: "pending" | "requested" | "approved" | "repair_required" | "rejected"; summary?: string };
   repairs: Array<{ taskId: string; status: string }>;
@@ -545,14 +573,18 @@ function projectGeneration(
   canonicalRevision: string | undefined,
   diagnostics?: FinalVerificationDiagnosticsManifest,
 ): FinalVerificationObservabilityGeneration {
-  const checks = new Map((generation.completedChecks ?? []).map((check) => [check.category, check]));
+  const plan = generation.plan;
+  const v2 = isVerificationPlanV2(plan);
+  const checks = new Map((generation.completedChecks ?? []).flatMap((check) =>
+    "category" in check ? [[check.category, check] as const] : []));
   const cleanup = generation.cleanup;
   return {
     generationId: generation.generationId,
     taskId: generation.taskId,
     targetRevision: generation.targetRevision,
     revisionStatus: generation.state === "current" && generation.targetRevision === canonicalRevision ? "current" : "stale",
-    categories: generation.plan.checks.map((planned) => {
+    ...(v2 ? { checks: projectV2Checks(generation) } : {}),
+    categories: v2 ? [] : (plan as FinalVerificationPlan).checks.map((planned) => {
       const check = checks.get(planned.category);
       return {
         category: planned.category,
@@ -567,7 +599,7 @@ function projectGeneration(
     submission: generation.submission
       ? { status: "submitted", submissionId: generation.submission.submissionId, green: generation.submissionResult?.green }
       : { status: "pending" },
-    ...(generation.failure ? { mechanicalFailure: { failureId: generation.failure.failureId, failedCategories: [...generation.failure.failedCategories], evidenceIds: [...generation.failure.evidenceIds] } } : {}),
+    ...(generation.failure ? { mechanicalFailure: { failureId: generation.failure.failureId, failedCategories: [...generation.failure.failedCategories], ...(generation.failure.failedCheckIds ? { failedCheckIds: [...generation.failure.failedCheckIds] } : {}), evidenceIds: [...generation.failure.evidenceIds] } } : {}),
     cleanup: {
       status: cleanup?.status ?? "pending",
       ...(cleanup ? { attempt: cleanup.attempt } : {}),
@@ -581,6 +613,46 @@ function projectGeneration(
     },
     repairs: (generation.repairTaskIds ?? []).map((taskId) => ({ taskId, status: projection.tasks[taskId]?.status ?? "missing" })),
   };
+}
+
+/** VF3: every planned check (pending until it ran), then each skipped one as not run. */
+function projectV2Checks(
+  generation: FinalVerificationGenerationProjection,
+): NonNullable<FinalVerificationObservabilityGeneration["checks"]> {
+  if (!isVerificationPlanV2(generation.plan)) return [];
+  const completed = new Map((generation.completedChecks ?? []).flatMap((check) =>
+    "checkId" in check ? [[check.checkId, check as VerificationCheckResultV2] as const] : []));
+  const suggestions = new Map((generation.executionProfile.verification?.suggestions ?? []).map((check) => [check.id, check]));
+  const planned = generation.plan.checks.map((check) => {
+    const result = completed.get(check.id);
+    return {
+      checkId: check.id,
+      label: check.label,
+      kind: check.kind,
+      origin: check.origin,
+      mandatory: check.mandatory,
+      status: !result ? "pending" as const : result.outcome,
+      evidenceIds: [...(result?.evidenceIds ?? [])],
+      issues: [...(result?.issues ?? [])],
+      ...(result?.notRun ? { notRun: { ...result.notRun } } : {}),
+    };
+  });
+  const skipped = generation.plan.skipped.flatMap((entry) => {
+    const suggestion = suggestions.get(entry.checkId);
+    if (!suggestion) return [];
+    return [{
+      checkId: suggestion.id,
+      label: suggestion.label,
+      kind: suggestion.kind,
+      origin: suggestion.origin,
+      mandatory: suggestion.mandatory,
+      status: "not_run" as const,
+      evidenceIds: [],
+      issues: [],
+      notRun: { reason: "skipped" as const, detail: entry.reason },
+    }];
+  });
+  return [...planned, ...skipped];
 }
 
 const MAX_DIAGNOSTICS_BYTES = 256 * 1024;

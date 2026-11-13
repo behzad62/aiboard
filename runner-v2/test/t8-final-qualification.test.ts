@@ -2596,7 +2596,7 @@ class T8SpineArchitect implements AgentModel {
         return this.call("plan_final_verification", { plan: t8SpineFvPlan() });
       }
       if (current.review?.status === "requested" && current.submission && current.submissionResult) {
-        const submission = current.submissionResult;
+        const submission = current.submissionResult as import("../src/final-verification-submission.js").FinalVerificationSubmission;
         return this.call("review_final_verification", {
           taskId: current.taskId,
           generationId: current.generationId,

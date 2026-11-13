@@ -67,7 +67,7 @@ test("raw terminal events require the exact current approved verification projec
       projection.finalVerification!.current!.completedChecks!.pop();
     }],
     ["required category evidence", (projection) => {
-      const current = projection.finalVerification!.current!;
+      const current = projection.finalVerification!.current! as import("../src/scheduler-store.js").FinalVerificationGenerationProjectionV1;
       const planned = current.plan.checks[0]!;
       current.plan.checks[0] = { category: planned.category, status: "required" };
       projection.tasks[FINAL_TASK_ID]!.verificationPlan = current.plan;

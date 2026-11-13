@@ -1707,7 +1707,8 @@ test("T7a product: unseeded opt-in provisioning plans, covers, builds, and accep
       "planning-policy",
     ]);
     assert.deepEqual(events[0]!.payload, { version: 2 });
-    assert.deepEqual(events[1]!.payload, expectedGeneratedRunInitializedPayload("Deliver the value module."));
+    // VF3: a run the product route creates records the v2 final-verification contract.
+    assert.deepEqual(events[1]!.payload, { ...expectedGeneratedRunInitializedPayload("Deliver the value module."), verificationContractVersion: 2 });
     assert.deepEqual(events[2]!.payload, { version: 1 });
     // Lane-B guards activate immediately after the T7a prefix, before source registration.
     assert.deepEqual(events.slice(3, 5).map((event) => event.type), [

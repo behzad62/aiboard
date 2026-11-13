@@ -62,6 +62,9 @@ import {
   currentAnswerReviewVerdict,
   DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
+  failureFailedCheckKeys,
+  reviewFailedCheckKeys,
+  reviewRepairEvidenceIds,
   handoffFilesOf,
   handoffSnapshotRetryPending,
   isAnsweredRun,
@@ -143,14 +146,21 @@ import type {
 import {
   verificationCheckFailed,
   type FinalVerificationCategory,
-  type FinalVerificationPlan,
   type FinalVerificationPlanPrefill,
 } from "./final-verification-contracts.js";
 import type {
   FinalVerificationCheckResult,
   FinalVerificationRun,
 } from "./final-verification-runtime.js";
-import { submitFinalVerification } from "./final-verification-submission.js";
+import { submitFinalVerification, submitFinalVerificationV2 } from "./final-verification-submission.js";
+import {
+  factCategoryForMode,
+  isVerificationPlanV2,
+  verificationCheckKey,
+  type AnyFinalVerificationPlan,
+  type VerificationCheckResultV2,
+  type VerificationPlanPrefillV2,
+} from "./verification-plan-v2.js";
 import {
   TaskScheduler,
   type TaskSchedulerOptions,
@@ -158,7 +168,7 @@ import {
 } from "./task-scheduler.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
-import { buildFinalVerificationPlanPrefill, type FinalVerificationExecutionProfile } from "./final-verification-profile.js";
+import { buildFinalVerificationPlanPrefill, buildVerificationPlanPrefillV2, type FinalVerificationExecutionProfile } from "./final-verification-profile.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { ArtifactNotFoundError } from "./artifact-store.js";
 import type { ArchitectActionReason } from "./user-steering-contracts.js";
@@ -248,8 +258,12 @@ export interface FinalVerificationCheckDriverInput {
   generationId: string;
   targetRevision: string;
   attempt: number;
-  plan: FinalVerificationPlan;
+  /** v1: the four categories. VF3 (v2): the Architect's list of checks. */
+  plan: AnyFinalVerificationPlan;
+  /** v1: the category to run. On v2, the fact category of the check's mode; `checkId` names it. */
   category: FinalVerificationCategory;
+  /** VF3: the v2 check to run, resolved in `executionProfile.verification`. */
+  checkId?: string;
   executionProfile: FinalVerificationExecutionProfile;
   signal?: AbortSignal;
 }
@@ -258,7 +272,8 @@ export interface FinalVerificationCheckExecution {
   workspacePath: string;
   startedAt: string;
   finishedAt: string;
-  check: FinalVerificationCheckResult;
+  /** A v1 category result, or (VF3) a v2 check result. */
+  check: FinalVerificationCheckResult | VerificationCheckResultV2;
 }
 
 export interface FinalVerificationCheckDriver {
@@ -291,12 +306,13 @@ export interface FinalVerificationCleanupDriver {
  */
 export interface FlakyRerunInput {
   runId: string;
+  /** The v1 category, or (VF3) the v2 check id. */
   category: string;
   failingTestIds: readonly string[];
   generationId: string;
   taskId: string;
   targetRevision: string;
-  plan: FinalVerificationPlan;
+  plan: AnyFinalVerificationPlan;
   executionProfile: FinalVerificationExecutionProfile;
   attempt: number;
   signal?: AbortSignal;
@@ -468,6 +484,10 @@ export interface BuildRuntimeOptions {
   environmentInventory?: (input: { trigger: InventoryTrigger }) => Promise<EnvironmentInventory>;
   /** An Architect-named runtime smoke on a leased port; supplied only for full-access runs. */
   finalVerificationRuntimeSmoke?: import("./architect-tools.js").ArchitectToolsOptions["finalVerificationRuntimeSmoke"];
+  /** VF3: resolves a v2 plan into the runner-owned execution profile. */
+  finalVerificationWithPlan?: import("./architect-tools.js").ArchitectToolsOptions["finalVerificationWithPlan"];
+  /** VF3: a v2 check may launch commands the Architect wrote (full access only). */
+  finalVerificationArchitectCommands?: boolean;
   independentVerifier?: IndependentVerifierDriver;
   planCritic?: PlanCriticDriver;
   repairPlanLimit?: number;
@@ -503,6 +523,8 @@ export interface BuildRuntimeOptions {
    * the legacy docs1+init pair. Absent means legacy behavior, unchanged.
    */
   planningPolicy?: NativeBuildPlanningPolicy;
+  /** VF3: the spec's final-verification contract, checked against the provisioned prefix. */
+  verificationContractVersion?: 2;
   /**
    * T3b: drives the independent source-coverage review for new-policy runs.
    * When absent, a requested review records an explicit outstanding gate
@@ -924,6 +946,8 @@ export class BuildRuntime {
   /** VF1: the resume sequence this instance last tried to record an inventory for, so a refused record never re-probes every step. */
   private environmentInventoryAttempted?: number;
   private readonly finalVerificationRuntimeSmoke?: BuildRuntimeOptions["finalVerificationRuntimeSmoke"];
+  private readonly finalVerificationWithPlan?: BuildRuntimeOptions["finalVerificationWithPlan"];
+  private readonly finalVerificationArchitectCommands: boolean;
   private readonly independentVerifier?: IndependentVerifierDriver;
   private readonly planCritic?: PlanCriticDriver;
   private readonly repairPlanLimit: number;
@@ -942,6 +966,7 @@ export class BuildRuntime {
   private readonly architectLifecycleProbe?: BuildRuntimeOptions["architectLifecycleProbe"];
   private readonly planningSourceReader?: PlanningSourceReader;
   private readonly provisioningPolicyVersion: 1 | undefined;
+  private readonly verificationContractVersion: 2 | undefined;
   private readonly coverageReview?: CoverageReviewDriver;
   private readonly answerReview?: AnswerReviewDriver;
   private readonly answerAuthority: AnswerReviewAuthority;
@@ -995,6 +1020,8 @@ export class BuildRuntime {
     this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
     this.environmentInventory = options.environmentInventory;
     this.finalVerificationRuntimeSmoke = options.finalVerificationRuntimeSmoke;
+    this.finalVerificationWithPlan = options.finalVerificationWithPlan;
+    this.finalVerificationArchitectCommands = options.finalVerificationArchitectCommands === true;
     this.independentVerifier = options.independentVerifier;
     this.planCritic = options.planCritic;
     this.repairPlanLimit = options.repairPlanLimit ?? DEFAULT_REPAIR_PLAN_LIMIT;
@@ -1008,6 +1035,7 @@ export class BuildRuntime {
     this.architectLifecycleProbe = options.architectLifecycleProbe;
     this.planningSourceReader = options.planningSourceReader;
     this.provisioningPolicyVersion = options.planningPolicy?.version === 1 ? 1 : undefined;
+    this.verificationContractVersion = options.verificationContractVersion === 2 ? 2 : undefined;
     this.coverageReview = options.coverageReview;
     this.answerReview = options.answerReview;
     this.answerAuthority = new SchedulerAnswerReviewAuthority(options.store);
@@ -2264,7 +2292,9 @@ export class BuildRuntime {
           generation.targetRevision,
         );
         if (pausedForRepair) return pausedForRepair;
-        const reviewDispatch = await this.prepareRepairDispatch(decision.failedCategories, { taskId: generation.taskId, evidenceIds: [...new Set(decision.categoryReviews.flatMap((review) => review.verdict === "repair_required" ? review.evidenceIds : []))], failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
+        // VF3: a v2 review names its failed checks by id.
+        const reviewEvidenceIds = reviewRepairEvidenceIds(decision);
+        const reviewDispatch = await this.prepareRepairDispatch(reviewFailedCheckKeys(decision), { taskId: generation.taskId, evidenceIds: reviewEvidenceIds, failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
         if (reviewDispatch.paused) return reviewDispatch.paused;
         await this.runArchitect({
           type: "final_verification_repair_plan_required",
@@ -2276,10 +2306,8 @@ export class BuildRuntime {
             submissionId: generation.submission.submissionId,
             reviewId: generation.review.reviewId,
           },
-          failedCategories: reviewDispatch.categories,
-          evidenceIds: [...new Set(decision.categoryReviews.flatMap(
-            (review) => review.verdict === "repair_required" ? review.evidenceIds : [],
-          ))],
+          ...repairReasonKeys(generation.plan, reviewDispatch.categories),
+          evidenceIds: reviewEvidenceIds,
         }, this.projection());
         const repaired = this.projection().finalVerification?.current;
         // T6b repair (B3): a pause recorded during the turn returns paused,
@@ -2367,7 +2395,7 @@ export class BuildRuntime {
         generation.targetRevision,
       );
       if (pausedForRepair) return pausedForRepair;
-      const mechanicalDispatch = await this.prepareRepairDispatch(generation.failure.failedCategories, { taskId: generation.taskId, evidenceIds: [...generation.failure.evidenceIds], failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
+      const mechanicalDispatch = await this.prepareRepairDispatch(failureFailedCheckKeys(generation.failure), { taskId: generation.taskId, evidenceIds: [...generation.failure.evidenceIds], failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
       if (mechanicalDispatch.paused) return mechanicalDispatch.paused;
       await this.runArchitect({
         type: "final_verification_repair_plan_required",
@@ -2380,7 +2408,7 @@ export class BuildRuntime {
           issueIds: [...generation.failure.issueIds],
           factIds: [...generation.failure.factIds],
         },
-        failedCategories: mechanicalDispatch.categories,
+        ...repairReasonKeys(generation.plan, mechanicalDispatch.categories),
         evidenceIds: [...generation.failure.evidenceIds],
       }, this.projection());
       const repaired = this.projection().finalVerification?.current;
@@ -2396,14 +2424,24 @@ export class BuildRuntime {
       }
       return this.afterArchitect("final_verification_repair_plan_required");
     }
-    const pending = generation.plan.checks.find(
-      (planned) => !generation.completedChecks?.some(
-        (completed) => completed.category === planned.category,
-      ),
+    // VF3: a v2 plan's checks are keyed by id; a v1 plan's by category.
+    const plannedKeys = isVerificationPlanV2(generation.plan)
+      ? generation.plan.checks.map((check) => check.id)
+      : generation.plan.checks.map((check) => check.category);
+    const pendingKey = plannedKeys.find(
+      (key) => !generation.completedChecks?.some((completed) => verificationCheckKey(completed) === key),
     );
-    if (pending) {
+    if (pendingKey !== undefined) {
       if (!this.finalVerificationDriver) {
         throw new Error("Final verification execution requires a FinalVerificationCheckDriver.");
+      }
+      let target: { category: FinalVerificationCategory; checkId?: string };
+      if (isVerificationPlanV2(generation.plan)) {
+        const resolved = generation.executionProfile.verification?.checks.find((check) => check.checkId === pendingKey);
+        if (!resolved) throw new Error(`Final verification check ${pendingKey} has no resolved commands.`);
+        target = { category: factCategoryForMode(resolved.mode), checkId: pendingKey };
+      } else {
+        target = { category: pendingKey as FinalVerificationCategory };
       }
       let result: FinalVerificationCheckExecution;
       const signal = this.activeLifecycleSignal();
@@ -2415,7 +2453,7 @@ export class BuildRuntime {
           targetRevision: generation.targetRevision,
           attempt: 1,
           plan: generation.plan,
-          category: pending.category,
+          ...target,
           executionProfile: generation.executionProfile,
           signal,
         });
@@ -2440,9 +2478,9 @@ export class BuildRuntime {
       if (!this.isCurrentGeneration(generation)) {
         return { status: "progressed", action: "final_verification_invalidated" };
       }
-      if (result.check.category !== pending.category) {
+      if (verificationCheckKey(result.check) !== pendingKey) {
         throw new Error(
-          `Final verification driver returned ${result.check.category} for ${pending.category}.`,
+          `Final verification driver returned ${verificationCheckKey(result.check)} for ${pendingKey}.`,
         );
       }
       this.store.append({
@@ -2450,7 +2488,7 @@ export class BuildRuntime {
         type: "final_verification.check_completed",
         occurredAt: this.clock(),
         actor: { role: "runner", id: "build-runtime" },
-        idempotencyKey: `${generation.generationId}:check:${pending.category}`,
+        idempotencyKey: `${generation.generationId}:check:${pendingKey}`,
         payload: {
           generationId: generation.generationId,
           taskId: generation.taskId,
@@ -2484,7 +2522,35 @@ export class BuildRuntime {
     if (!this.evidenceStore) {
       throw new Error("Final verification submission requires an EvidenceStore.");
     }
-    const completed = generation.completedChecks ?? [];
+    if (isVerificationPlanV2(generation.plan)) {
+      const completedV2 = (generation.completedChecks ?? []) as Array<VerificationCheckResultV2 & {
+        attempt: number; workspacePath: string; startedAt: string; finishedAt: string;
+      }>;
+      const submissionV2 = await submitFinalVerificationV2(
+        {
+          generationId: generation.generationId,
+          runId: this.runId,
+          taskId: generation.taskId,
+          attempt: 1,
+          plan: generation.plan,
+          executionProfile: generation.executionProfile,
+          targetRevision: generation.targetRevision,
+          workspacePaths: Object.fromEntries(completedV2.map((check) => [check.checkId, check.workspacePath])),
+          checks: completedV2.map(({ attempt: _attempt, workspacePath: _workspacePath,
+            startedAt: _startedAt, finishedAt: _finishedAt, ...check }) => check),
+        },
+        {
+          evidenceStore: this.evidenceStore,
+          artifacts: this.artifacts,
+          currentIntegrationRevision: () => this.projection().integrationRevision ?? "",
+          clock: this.clock,
+        },
+      );
+      return this.recordFinalVerificationSubmission(generation, submissionV2);
+    }
+    const completed = (generation.completedChecks ?? []) as Array<FinalVerificationCheckResult & {
+      attempt: number; workspacePath: string; startedAt: string; finishedAt: string;
+    }>;
     const run: FinalVerificationRun = {
       generationId: generation.generationId,
       runId: this.runId,
@@ -2509,6 +2575,13 @@ export class BuildRuntime {
         clock: this.clock,
       },
     );
+    return this.recordFinalVerificationSubmission(generation, submission);
+  }
+
+  private recordFinalVerificationSubmission(
+    generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+    submission: unknown,
+  ): BuildStepResult {
     if (!this.isCurrentGeneration(generation)) {
       return { status: "progressed", action: "final_verification_invalidated" };
     }
@@ -2839,6 +2912,7 @@ export class BuildRuntime {
           runId: this.runId,
           ...(this.initialObjective !== undefined ? { objective: this.initialObjective } : {}),
           planningPolicy: { version: 1 },
+          ...(this.verificationContractVersion ? { verificationContractVersion: this.verificationContractVersion } : {}),
         },
         this.clock,
       );
@@ -4340,11 +4414,16 @@ export class BuildRuntime {
    */
   private async finalVerificationPlanPrefill(
     integrationRevision: string,
-  ): Promise<{ planPrefill?: FinalVerificationPlanPrefill }> {
+  ): Promise<{ planPrefill?: FinalVerificationPlanPrefill | VerificationPlanPrefillV2 }> {
     if (!this.finalVerificationProfileFor) return {};
     try {
       const profile = await this.finalVerificationProfileFor(integrationRevision);
-      return { planPrefill: buildFinalVerificationPlanPrefill(this.runId, profile) };
+      // VF3: a v2 run gets the Runner's suggested checks; a pre-VF3 run its required categories.
+      return {
+        planPrefill: this.projection().verificationContractVersion === 2
+          ? buildVerificationPlanPrefillV2(this.runId, profile)
+          : buildFinalVerificationPlanPrefill(this.runId, profile),
+      };
     } catch {
       return {};
     }
@@ -4430,6 +4509,14 @@ export class BuildRuntime {
         : {}),
       ...(this.finalVerificationRuntimeSmoke
         ? { finalVerificationRuntimeSmoke: this.finalVerificationRuntimeSmoke }
+        : {}),
+      // VF3: a v2 run plans, reviews and repairs a list of checks.
+      ...(projection.verificationContractVersion === 2
+        ? {
+            verificationContractVersion: 2 as const,
+            ...(this.finalVerificationWithPlan ? { finalVerificationWithPlan: this.finalVerificationWithPlan } : {}),
+            finalVerificationArchitectCommands: this.finalVerificationArchitectCommands,
+          }
         : {}),
       ...(this.discardFinalVerificationProfile
         ? { discardFinalVerificationProfile: this.discardFinalVerificationProfile }
@@ -5618,7 +5705,7 @@ export class BuildRuntime {
     completedChecks: Parameters<typeof failingTestIdsByCategory>[0] | undefined,
   ): void {
     if (this.projection().planningPolicyVersion !== 1) return;
-    const members = this.repairMembers(failure.failedCategories, failingTestIdsByCategory(completedChecks ?? []));
+    const members = this.repairMembers(failureFailedCheckKeys(failure), failingTestIdsByCategory(completedChecks ?? []));
     this.markDispatchedApproachesFailedForMembers(members, failure.failureId);
   }
 
@@ -5716,12 +5803,12 @@ export class BuildRuntime {
   }
 
   private async applyFailingCheckRepairCharge(
-    check: FinalVerificationCheckResult,
+    check: FinalVerificationCheckResult | VerificationCheckResultV2,
     rerun: {
       generationId: string;
       taskId: string;
       targetRevision: string;
-      plan: FinalVerificationPlan;
+      plan: AnyFinalVerificationPlan;
       executionProfile: FinalVerificationExecutionProfile;
       attempt: number;
       signal?: AbortSignal;
@@ -5739,7 +5826,10 @@ export class BuildRuntime {
       return { green: false };
     }
     const failingTestIds = [...new Set(check.facts.flatMap((fact) => fact.kind === "command" ? fact.report?.failingTestIds ?? [] : []))];
-    const [member] = this.repairMembers([`final-verification:${check.category}`], new Map([[check.category, failingTestIds]]));
+    // VF3: a v2 check is keyed by its id (never containing ":"); a v1 check by its category.
+    const checkKey = verificationCheckKey(check);
+    const testsCheck = "checkId" in check ? check.kind === "tests" : check.category === "tests";
+    const [member] = this.repairMembers([`final-verification:${checkKey}`], new Map([[checkKey, failingTestIds]]));
     if (!member) throw new Error("Failing check requires a repair issue.");
     const { issueId, rootCause } = member;
     await this.ensureRepairIssue(issueId, rootCause);
@@ -5749,7 +5839,7 @@ export class BuildRuntime {
       await this.recordCleanupSearch("verification");
       return { green: false };
     }
-    const flakyKey = `${rerun.generationId}:${check.category}`;
+    const flakyKey = `${rerun.generationId}:${checkKey}`;
     let flaky = this.projection().repairFlaky?.[flakyKey];
     // T6b repair (B2): the rerun runs once per failing check through the
     // audited path with the real failing test ids. When no rerun can be
@@ -5761,7 +5851,7 @@ export class BuildRuntime {
       if (this.flakyIsolation && check.evidenceIds.length > 0) {
       const outcome = await this.flakyIsolation.rerunFailingTests({
         runId: this.runId,
-        category: check.category,
+        category: checkKey,
         failingTestIds,
         generationId: rerun.generationId,
         taskId: rerun.taskId,
@@ -5777,9 +5867,9 @@ export class BuildRuntime {
           type: "repair.flaky_isolated",
           occurredAt: this.clock(),
           actor: { role: "runner", id: "build-runtime" },
-          idempotencyKey: `repair-flaky:${rerun.generationId}:${check.category}`,
+          idempotencyKey: `repair-flaky:${rerun.generationId}:${checkKey}`,
           payload: {
-            category: check.category,
+            category: checkKey,
             generationId: rerun.generationId,
             taskId: rerun.taskId,
             targetRevision: rerun.targetRevision,
@@ -5787,8 +5877,8 @@ export class BuildRuntime {
             rerunGreen: outcome.green,
             rerunEvidenceIds: [...outcome.evidenceIds],
             finding: outcome.green
-              ? `flaky: ${check.category} failed [${failingTestIds.join(", ")}] then passed on a rerun of only those tests; still requires a clean run.`
-              : `consistent failure: ${check.category} failed [${failingTestIds.join(", ")}] and failed again on rerun.`,
+              ? `flaky: ${checkKey} failed [${failingTestIds.join(", ")}] then passed on a rerun of only those tests; still requires a clean run.`
+              : `consistent failure: ${checkKey} failed [${failingTestIds.join(", ")}] and failed again on rerun.`,
           },
         });
         flaky = this.projection().repairFlaky?.[flakyKey];
@@ -5798,9 +5888,9 @@ export class BuildRuntime {
           type: "repair.flaky_isolated",
           occurredAt: this.clock(),
           actor: { role: "runner", id: "build-runtime" },
-          idempotencyKey: `repair-flaky:${rerun.generationId}:${check.category}`,
+          idempotencyKey: `repair-flaky:${rerun.generationId}:${checkKey}`,
           payload: {
-            category: check.category,
+            category: checkKey,
             generationId: rerun.generationId,
             taskId: rerun.taskId,
             targetRevision: rerun.targetRevision,
@@ -5818,9 +5908,9 @@ export class BuildRuntime {
           type: "repair.flaky_isolated",
           occurredAt: this.clock(),
           actor: { role: "runner", id: "build-runtime" },
-          idempotencyKey: `repair-flaky:${rerun.generationId}:${check.category}`,
+          idempotencyKey: `repair-flaky:${rerun.generationId}:${checkKey}`,
           payload: {
-            category: check.category,
+            category: checkKey,
             generationId: rerun.generationId,
             taskId: rerun.taskId,
             targetRevision: rerun.targetRevision,
@@ -5837,15 +5927,15 @@ export class BuildRuntime {
     // (an npm-managed command or a missing report) cannot be narrowed, so
     // the pump records not_performed with the reason instead of silently
     // skipping the rerun decision.
-    if (!flaky && check.category === "tests" && failingTestIds.length === 0) {
+    if (!flaky && testsCheck && failingTestIds.length === 0) {
       this.store.append({
         runId: this.runId,
         type: "repair.flaky_isolated",
         occurredAt: this.clock(),
         actor: { role: "runner", id: "build-runtime" },
-        idempotencyKey: `repair-flaky:${rerun.generationId}:${check.category}`,
+        idempotencyKey: `repair-flaky:${rerun.generationId}:${checkKey}`,
         payload: {
-          category: check.category,
+          category: checkKey,
           generationId: rerun.generationId,
           taskId: rerun.taskId,
           targetRevision: rerun.targetRevision,
@@ -6266,3 +6356,13 @@ function compareToolNames(left: string, right: string): number {
 
 /** Present only so universe derivation lists write_project_doc. Never executed. */
 const ARCHITECT_LIFECYCLE_UNIVERSE_ARTIFACTS = {} as ArtifactStore;
+
+/** VF3: the failed keys a repair reason names: check ids on v2, categories on v1. */
+function repairReasonKeys(
+  plan: AnyFinalVerificationPlan,
+  keys: readonly string[],
+): { failedCategories: string[]; failedCheckIds?: string[] } {
+  return isVerificationPlanV2(plan)
+    ? { failedCategories: [], failedCheckIds: [...keys] }
+    : { failedCategories: [...keys] };
+}

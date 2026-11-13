@@ -9,6 +9,8 @@ import type {
   NativeBuildProjection,
   NativeBuildFileSnapshot,
   NativeBuildTranscriptPage,
+  NativeFinalVerificationGenerationObservability,
+  NativeVerificationNotRun,
   NativeBuildUsageProjection,
   NativeProjectHandoffChoice,
   NativeProjectHandoffKnownDefect,
@@ -865,6 +867,54 @@ export function orderVerifierCandidates(
 
 type NativeBuildTask = NativeBuildProjection["tasks"][string];
 
+/** One row of a final verification as the owner reads it, from either contract. */
+export interface FinalVerificationCheckRow {
+  key: string;
+  label: string;
+  status: "pending" | "passed" | "failed" | "not_applicable" | "not_run";
+  issues: string[];
+  rationale?: string;
+  notRun?: NativeVerificationNotRun;
+}
+
+const FINAL_VERIFICATION_CATEGORY_LABELS: Record<string, string> = {
+  build: "Build", tests: "Tests", runtime_smoke: "Runtime", browser: "Browser",
+};
+
+/**
+ * VF3: a v2 run lists the Architect's checks by id and label; a run started before VF3 keeps the
+ * four categories. A check the Runner did not run is `not_run`, never `failed`.
+ */
+export function finalVerificationCheckRows(
+  generation: Pick<NativeFinalVerificationGenerationObservability, "generationId" | "categories" | "checks">,
+): FinalVerificationCheckRow[] {
+  if (generation.checks) {
+    return generation.checks.map((check) => ({
+      key: `${generation.generationId}:${check.checkId}`,
+      label: check.label,
+      status: check.status,
+      issues: [...check.issues],
+      ...(check.notRun ? { notRun: check.notRun } : {}),
+    }));
+  }
+  return generation.categories.map((category) => ({
+    key: `${generation.generationId}:${category.category}`,
+    label: FINAL_VERIFICATION_CATEGORY_LABELS[category.category] ?? category.category,
+    status: category.notRun ? "not_run" : category.status,
+    issues: [...category.issues],
+    ...(category.rationale !== undefined ? { rationale: category.rationale } : {}),
+    ...(category.notRun ? { notRun: category.notRun } : {}),
+  }));
+}
+
+/** What a not-run check tells the owner: the missing tool, or the Architect's reason to skip it. */
+export function finalVerificationNotRunText(notRun: NativeVerificationNotRun | undefined): string {
+  if (!notRun) return "Not run.";
+  return notRun.reason === "tool_missing"
+    ? `Not run: ${notRun.tool} is not installed on this machine, so this was not verified.`
+    : `Skipped: ${notRun.detail}`;
+}
+
 /** What nativeBuildTaskStatus needs to know about a final-verification task's generation. */
 export function nativeTaskVerificationState(
   projection: Pick<NativeBuildProjection, "finalVerification" | "tasks">,
@@ -875,7 +925,10 @@ export function nativeTaskVerificationState(
   return {
     kind: task.kind,
     ...(current && current.taskId === task.id ? { generation: {
-      categories: (current.completedChecks ?? []).map((check) => ({ status: check.green ? "passed" : "failed" })),
+      // A check the Runner did not run (its tool is missing, or the plan skipped it) is not a failure.
+      categories: (current.completedChecks ?? []).map((check) => ({
+        status: check.outcome ?? (check.notRun ? "not_run" : check.green ? "passed" : "failed"),
+      })),
       cleanup: { status: current.cleanup?.status ?? "pending" },
       review: { status: current.review?.status ?? "pending" },
       repairs: (current.repairTaskIds ?? []).map((taskId) => ({ status: projection.tasks[taskId]?.status ?? "missing" })),

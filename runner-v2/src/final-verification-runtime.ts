@@ -3,7 +3,7 @@ import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentit
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
 import type { TempRecordSink } from "./cleanup-ownership.js";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
@@ -24,6 +24,17 @@ import {
   type VerificationNotRun,
 } from "./final-verification-contracts.js";
 import type { CheckToolLookup } from "./check-tool-lookup.js";
+import {
+  captureCommandOutputs,
+  outputCaptureBlocker,
+  outputsNotCaptured,
+  type CommandOutputCapture,
+} from "./command-output-files.js";
+import {
+  joinWorkspace,
+  type ResolvedVerificationCheckV2,
+  type VerificationCheckResultV2,
+} from "./verification-plan-v2.js";
 import type {
   BrowserEventsEvidenceFact,
   BrowserScreenshotEvidenceFact,
@@ -243,7 +254,14 @@ export interface FinalVerificationRepositoryState {
 }
 
 export interface FinalVerificationCommandFact extends CommandEvidenceFact {
+  /**
+   * v1: the category. VF3 (v2): how the Runner ran the check (build: a one-shot command, tests: a
+   * one-shot command with test-report wiring, runtime_smoke: a managed program and its steps),
+   * and `checkId` names the check.
+   */
   category: FinalVerificationCategory;
+  /** VF3: the v2 check this fact belongs to. */
+  checkId?: string;
   executable: string;
   targetRevision: string;
   startState: FinalVerificationRepositoryState;
@@ -361,6 +379,40 @@ export interface FinalVerificationCategoryRun {
   startedAt: string;
   finishedAt: string;
   check: FinalVerificationCheckResult;
+}
+
+/** VF3: one executed v2 check, the v2 twin of FinalVerificationCategoryRun. */
+export interface FinalVerificationCheckRunV2 {
+  generationId: string;
+  runId: string;
+  taskId: string;
+  attempt?: number;
+  targetRevision: string;
+  workspacePath: string;
+  startedAt: string;
+  finishedAt: string;
+  check: VerificationCheckResultV2;
+}
+
+/** VF3: how runCheck runs one command-mode v2 check. */
+interface V2CommandContext {
+  checkId: string;
+  /** Absolute working directory inside the checkout. */
+  cwd?: string;
+  /** Set when the requested working directory is not a directory inside the checkout. */
+  cwdIssue?: string;
+  /** Exit codes other than 0 that mean success, by command index. */
+  expectedExitCodes?: ReadonlyMap<number, number>;
+  /** Commands from this index on are workflow steps after the program. */
+  workflowStepsFrom?: number;
+  outputs: (index: number) => readonly string[] | undefined;
+}
+
+/** VF3: how runRuntimeSmokeCheck runs one program-mode v2 check. */
+interface V2ProgramContext {
+  checkId: string;
+  outputs?: readonly string[];
+  stepOutputs: (index: number) => readonly string[] | undefined;
 }
 
 interface MutableVerificationCheck {
@@ -604,6 +656,198 @@ export class FinalVerificationRuntime {
     };
   }
 
+  /**
+   * VF3: execute one check of a v2 plan, exactly as the execution profile resolved it, in the
+   * fresh verification checkout. A tool the Runner's PATH lookup does not find makes the check
+   * not_run (tool_missing); anything else that keeps it from passing is a failure.
+   */
+  async runCheckV2(input: {
+    executionProfile: FinalVerificationExecutionProfile;
+    checkId: string;
+    signal?: AbortSignal;
+  }): Promise<FinalVerificationCheckRunV2> {
+    const resolved = input.executionProfile.verification?.checks.find((check) => check.checkId === input.checkId);
+    if (!resolved) throw new Error(`Final verification check ${input.checkId} is not planned.`);
+    const workspace = await this.tracked("Preparing the verification checkout", () => this.createOrResumeCategoryWorkspace());
+    await this.assertCurrentRevision(workspace);
+    assertFinalVerificationExecutionProfile(input.executionProfile, workspace.targetRevision);
+    if (input.executionProfile.portLease && this.validatePortLease) {
+      await this.validatePortLease(input.executionProfile.portLease);
+    }
+    const runOrdinal = ++this.runOrdinal;
+    const generationId = this.generationId ?? generationFor(this.runId, workspace.targetRevision);
+    const startedAt = this.clock();
+    const result = await this.tracked(`Running the check ${resolved.label}`, () => this.runResolvedCheck({
+      resolved,
+      profile: input.executionProfile,
+      workspace,
+      generationId,
+      runOrdinal,
+      ...(input.signal ? { signal: input.signal } : {}),
+    }));
+    await this.assertCurrentRevision(workspace);
+    const finishedAt = this.clock();
+    return {
+      generationId,
+      runId: this.runId,
+      taskId: this.taskId,
+      ...(this.attempt !== undefined ? { attempt: this.attempt } : {}),
+      targetRevision: workspace.targetRevision,
+      workspacePath: workspace.path,
+      startedAt,
+      finishedAt,
+      check: Object.freeze({
+        ...result,
+        evidenceIds: [...result.evidenceIds],
+        facts: Object.freeze(result.facts.map(freezeFact)),
+        issues: [...result.issues],
+      }) as VerificationCheckResultV2,
+    };
+  }
+
+  private async runResolvedCheck(input: {
+    resolved: ResolvedVerificationCheckV2;
+    profile: FinalVerificationExecutionProfile;
+    workspace: VerificationWorkspace;
+    generationId: string;
+    runOrdinal: number;
+    signal?: AbortSignal;
+  }): Promise<VerificationCheckResultV2> {
+    const { resolved } = input;
+    const identity = {
+      checkId: resolved.checkId,
+      kind: resolved.kind,
+      label: resolved.label,
+      origin: resolved.origin,
+      mandatory: resolved.mandatory,
+    };
+    const toResult = (check: FinalVerificationCheckResult): VerificationCheckResultV2 => ({
+      ...identity,
+      outcome: check.notRun ? "not_run" : check.green ? "passed" : "failed",
+      green: check.notRun ? false : check.green,
+      evidenceIds: [...check.evidenceIds],
+      facts: [...check.facts],
+      issues: [...check.issues],
+      ...(check.notRun ? { notRun: { ...check.notRun } } : {}),
+    });
+    const provisioning = input.profile.provisioning;
+    const notRun = await this.missingTool([
+      ...(provisioning ? [provisioning.command] : []),
+      ...resolved.commands,
+    ], input.workspace.path);
+    if (notRun) {
+      return {
+        ...identity,
+        outcome: "not_run",
+        green: false,
+        evidenceIds: [],
+        facts: [],
+        issues: [],
+        notRun,
+      };
+    }
+    // A check is required on v2 by being in the plan; v1's category is only how the Runner runs it.
+    const mode = resolved.mode;
+    const base: MutableVerificationCheck = {
+      category: mode === "tests" ? "tests" : mode === "program" ? "runtime_smoke" : "build",
+      status: "required",
+      evidenceIds: [],
+      facts: [],
+      issues: [],
+    };
+    if (provisioning) {
+      const issue = await this.tracked(`Installing dependencies (${provisioning.manager})`, () => this.provisionDependencies(
+        provisioning,
+        input.workspace,
+        input.signal,
+        `${input.generationId}:${resolved.checkId}:${input.runOrdinal}`,
+      ));
+      if (issue) {
+        base.issues.push(issue);
+        return toResult({ ...base, green: false });
+      }
+    }
+    if (mode === "program") {
+      const [program, ...steps] = resolved.commands;
+      const outputLine = resolved.outputLine;
+      const smoke: FinalVerificationRuntimeSmokeInput = {
+        label: program!.label,
+        executable: program!.executable,
+        args: [...program!.args],
+        ...(resolved.endpoint ? { endpoint: resolved.endpoint } : {}),
+        ...(program!.timeoutMs !== undefined ? { timeoutMs: program!.timeoutMs } : {}),
+        readiness: {
+          ...(resolved.readinessTimeoutMs !== undefined ? { timeoutMs: resolved.readinessTimeoutMs } : {}),
+          pollIntervalMs: 100,
+          ...(resolved.expectedStatus !== undefined ? { expectedStatus: resolved.expectedStatus } : {}),
+          ...(outputLine !== undefined
+            ? { healthCheck: ({ observation }) => observation.stdout.includes(outputLine) || observation.stderr.includes(outputLine) }
+            : {}),
+        },
+        ...(steps.length ? { steps: steps.map(({ outputs: _outputs, cwd: _cwd, ...step }) => step) } : {}),
+      };
+      return toResult(await this.runRuntimeSmokeCheck({
+        base,
+        input: smoke,
+        workspace: input.workspace,
+        generationId: input.generationId,
+        runOrdinal: input.runOrdinal,
+        ...(input.signal ? { signal: input.signal } : {}),
+        v2: {
+          checkId: resolved.checkId,
+          ...(resolved.outputs?.length ? { outputs: resolved.outputs } : {}),
+          stepOutputs: (index) => steps[index]?.outputs,
+        },
+      }));
+    }
+    const first = resolved.commands[0]!;
+    const cwd = first.cwd ? joinWorkspace(input.workspace.path, first.cwd) : undefined;
+    const cwdIssue = cwd ? await directoryInsideIssue(input.workspace.path, cwd, resolved.checkId) : undefined;
+    const reports = mode === "tests" ? reportDescriptorsFor(first, input.profile) : undefined;
+    return toResult(await this.runCheck({
+      check: { category: mode === "tests" ? "tests" : "build", status: "required" },
+      commands: resolved.commands.map(({ outputs: _outputs, cwd: _cwd, ...command }) => command),
+      runtimeSmoke: undefined,
+      browser: undefined,
+      // Provisioning ran above, once.
+      provisioning: undefined,
+      reports,
+      inventoryIncomplete: undefined,
+      workspace: input.workspace,
+      generationId: input.generationId,
+      runOrdinal: input.runOrdinal,
+      ...(input.signal ? { signal: input.signal } : {}),
+      v2: {
+        checkId: resolved.checkId,
+        ...(cwd ? { cwd } : {}),
+        ...(cwdIssue ? { cwdIssue } : {}),
+        ...(mode === "exit" ? {
+          expectedExitCodes: new Map([[0, resolved.expectedExitCode ?? 0]]),
+          workflowStepsFrom: 1,
+        } : {}),
+        outputs: (index) => {
+          const own = resolved.commands[index]?.outputs ?? [];
+          const checkLevel = index === 0 ? resolved.outputs ?? [] : [];
+          const patterns = [...new Set([...own, ...checkLevel])];
+          return patterns.length ? patterns : undefined;
+        },
+      },
+    }));
+  }
+
+  /** VF6: the files a finished v2 command was asked to keep, read only once its process tree is proven gone. */
+  private async captureOutputs(
+    execution: ProcessResult,
+    patterns: readonly string[],
+    workspace: string,
+    label: string,
+  ): Promise<CommandOutputCapture> {
+    if (!execution.routed) return outputsNotCaptured(patterns, "process_not_proven_ended");
+    const blocker = outputCaptureBlocker({ ...execution.routed.process, reused: execution.routed.reuseSource !== undefined });
+    if (blocker) return outputsNotCaptured(patterns, blocker);
+    return await captureCommandOutputs({ workspace, patterns, artifacts: this.artifacts, label });
+  }
+
   private async tracked<T>(label: string, work: () => Promise<T>): Promise<T> {
     return this.activity ? await this.activity.track(label, work, this.taskId) : await work();
   }
@@ -644,8 +888,12 @@ export class FinalVerificationRuntime {
     generationId: string;
     runOrdinal: number;
     signal?: AbortSignal;
+    /** VF3: running one command-mode v2 check; absent on v1, whose behavior it never changes. */
+    v2?: V2CommandContext;
   }): Promise<FinalVerificationCheckResult> {
     const { check } = input;
+    const v2 = input.v2;
+    const name = v2 ? `check ${v2.checkId}` : check.category;
     const base: MutableVerificationCheck = {
       category: check.category,
       status: check.status,
@@ -724,6 +972,7 @@ export class FinalVerificationRuntime {
     }
 
     for (const [index, command] of input.commands.entries()) {
+      const issuesBefore = base.issues.length;
       validateCommand(command, check.category, index, this.maximumTimeoutMs);
       // T6b repair (B2): direct node --test commands report through a
       // runner-owned junit file named for this exact run, so a stale file
@@ -778,7 +1027,12 @@ export class FinalVerificationRuntime {
             command: { label: command.label, executable: command.executable, args: [...command.args] },
             reportName: reportFileName.replace(/^\.aiboard-report-/, "").replace(/\.xml$/, ""),
           });
-          if (language === undefined) {
+          const v2Undescribed = v2 !== undefined && language !== undefined &&
+            !input.reports?.some((entry) => entry.commandLabel === command.label);
+          if (v2Undescribed) {
+            // VF3: a v2 tests command the Runner holds no trusted report descriptor for runs on its
+            // exit code alone; the Runner never mints counts it cannot read from a trusted report.
+          } else if (language === undefined) {
             const orphan = input.reports?.find((entry) => entry.commandLabel === command.label);
             if (orphan) {
               base.issues.push(`tests command ${command.label} carries a trusted report descriptor but matches no language report plan; refusing to guess its report.`);
@@ -845,24 +1099,32 @@ export class FinalVerificationRuntime {
       }
       const startState = await repositoryState(input.workspace.path, this.git);
       const workingTreeIdentity = await workingTreeForRunner(this.git, input.workspace.path);
+      const commandCwd = v2?.cwd ?? input.workspace.path;
+      const outputPatterns = v2?.outputs(index);
       const startedAt = this.clock();
-      const execution = await executeCommand(
-        runCommand,
-        input.workspace.path,
-        input.signal,
-        this.defaultTimeoutMs,
-        this.maximumTimeoutMs,
-        this.execution,
-        {
-          runId: this.runId,
-          sessionId: this.taskId,
-          actor: this.actor,
-          taskId: this.taskId,
-          callId: `${input.generationId}:${check.category}:${index}:${input.runOrdinal}`,
-        },
-        directJunit && junitDestination ? { destination: junitDestination, ambientNodeOptions: this.ambientNodeOptions } : undefined,
-      );
+      const execution = v2?.cwdIssue
+        ? cwdRefused(v2.cwdIssue)
+        : await executeCommand(
+          runCommand,
+          commandCwd,
+          input.signal,
+          this.defaultTimeoutMs,
+          this.maximumTimeoutMs,
+          this.execution,
+          {
+            runId: this.runId,
+            sessionId: this.taskId,
+            actor: this.actor,
+            taskId: this.taskId,
+            callId: `${input.generationId}:${v2 ? v2.checkId : check.category}:${index}:${input.runOrdinal}`,
+            ...(outputPatterns?.length ? { freshExecution: true as const } : {}),
+          },
+          directJunit && junitDestination ? { destination: junitDestination, ambientNodeOptions: this.ambientNodeOptions } : undefined,
+        );
       const finishedAt = this.clock();
+      const outputs = outputPatterns?.length
+        ? await this.captureOutputs(execution, outputPatterns, input.workspace.path, `${name} ${command.label}`)
+        : undefined;
       const junitReport = junitDestination
         ? await readJUnitTestReport(junitDestination, input.workspace.path, junitFiltered)
         : undefined;
@@ -917,8 +1179,8 @@ export class FinalVerificationRuntime {
       }
       const endState = await repositoryState(input.workspace.path, this.git);
       const [stdoutArtifact, stderrArtifact] = await Promise.all([
-        artifactForFinalOutput(this.artifacts, execution, "stdout", `${check.category} ${command.label} stdout`),
-        artifactForFinalOutput(this.artifacts, execution, "stderr", `${check.category} ${command.label} stderr`),
+        artifactForFinalOutput(this.artifacts, execution, "stdout", `${name} ${command.label} stdout`),
+        artifactForFinalOutput(this.artifacts, execution, "stderr", `${name} ${command.label} stderr`),
       ]);
       const executionErrorCode = stableExecutionErrorCode(execution.startError);
       const fact: FinalVerificationCommandFact = {
@@ -927,11 +1189,12 @@ export class FinalVerificationRuntime {
         childEnvironmentIdentity: execution.routed?.childEnvironmentIdentity ?? unknownChildEnvironment(),
         ...(execution.routed?.childEnvironmentAudit ? {childEnvironmentAudit: execution.routed.childEnvironmentAudit} : {}),
         category: executableCategory,
+        ...(v2 ? { checkId: v2.checkId } : {}),
         label: command.label,
         executable: command.executable,
         command: command.executable,
         args: [...command.args],
-        cwd: input.workspace.path,
+        cwd: commandCwd,
         startedAt,
         finishedAt,
         exitCode: execution.exitCode,
@@ -958,37 +1221,40 @@ export class FinalVerificationRuntime {
         ...(familyFactReport ? { report: familyFactReport } : {}),
         ...(execution.routed ? commandReuseMetadata(execution.routed) : {}),
         ...(execution.routed?.reuseSource?.fact.kind === "command" && "report" in execution.routed.reuseSource.fact ? {report: (execution.routed.reuseSource.fact as FinalVerificationCommandFact).report} : {}),
+        ...(v2 && index >= (v2.workflowStepsFrom ?? Number.POSITIVE_INFINITY) ? { workflowStep: true as const } : {}),
+        ...(outputs ? { outputs } : {}),
       };
       base.facts.push(fact);
 
-      if (execution.exitCode !== 0) {
-        base.issues.push(
-          `${check.category} command ${command.label} exited with non-zero code ${String(execution.exitCode)}.`,
-        );
+      const expectedExitCode = v2?.expectedExitCodes?.get(index) ?? 0;
+      if (execution.exitCode !== expectedExitCode && !v2?.cwdIssue) {
+        base.issues.push(expectedExitCode === 0
+          ? `${name} command ${command.label} exited with non-zero code ${String(execution.exitCode)}.`
+          : `${name} command ${command.label} exited with code ${String(execution.exitCode)}, not the expected ${expectedExitCode}.`);
       }
       if (execution.startError) {
         base.issues.push(
-          `${check.category} command ${command.label} could not start${executionErrorCode ? ` [${executionErrorCode}]` : ""}: ${execution.startError.message}.`,
+          `${name} command ${command.label} could not start${executionErrorCode ? ` [${executionErrorCode}]` : ""}: ${execution.startError.message}.`,
         );
       }
       if (execution.signal) {
-        base.issues.push(`${check.category} command ${command.label} ended by ${execution.signal}.`);
+        base.issues.push(`${name} command ${command.label} ended by ${execution.signal}.`);
       }
       if (execution.timedOut) {
-        base.issues.push(`${check.category} command ${command.label} timed out.`);
+        base.issues.push(`${name} command ${command.label} timed out.`);
       }
       if (execution.cancelled) {
-        base.issues.push(`${check.category} command ${command.label} was cancelled.`);
+        base.issues.push(`${name} command ${command.label} was cancelled.`);
       }
       if (startState.revision !== input.workspace.targetRevision) {
         base.issues.push(
-          `${check.category} command ${command.label} started at revision ${startState.revision}, ` +
+          `${name} command ${command.label} started at revision ${startState.revision}, ` +
             `not target revision ${input.workspace.targetRevision}.`,
         );
       }
       if (endState.revision !== input.workspace.targetRevision) {
         base.issues.push(
-          `${check.category} command ${command.label} changed the verification revision from ` +
+          `${name} command ${command.label} changed the verification revision from ` +
             `${input.workspace.targetRevision} to ${endState.revision}.`,
         );
       }
@@ -996,13 +1262,15 @@ export class FinalVerificationRuntime {
       const evidenceId = this.recordEvidence(
         fact,
         input.generationId,
-        executableCategory,
+        v2 ? v2.checkId : executableCategory,
         index,
         finishedAt,
         input.runOrdinal,
       );
       if (evidenceId) base.evidenceIds.push(evidenceId);
-      else base.issues.push(`${check.category} command ${command.label} has no durable evidence record.`);
+      else base.issues.push(`${name} command ${command.label} has no durable evidence record.`);
+      // VF3: a v2 program that failed is not followed by its steps.
+      if (v2 && base.issues.length > issuesBefore) break;
     }
     return {
       ...base,
@@ -1083,8 +1351,12 @@ export class FinalVerificationRuntime {
     generationId: string;
     runOrdinal: number;
     signal?: AbortSignal;
+    /** VF3: running one program-mode v2 check; absent on v1, whose behavior it never changes. */
+    v2?: V2ProgramContext;
   }): Promise<FinalVerificationCheckResult> {
     const smoke = input.input;
+    const v2 = input.v2;
+    const name = v2 ? `check ${v2.checkId}` : "runtime_smoke";
     if (!smoke) {
       input.base.issues.push("Required runtime_smoke check has no runtime command.");
       return { ...input.base, green: false };
@@ -1133,14 +1405,14 @@ export class FinalVerificationRuntime {
         }
         if (observation && readinessSatisfied && smoke.steps?.length) {
           for (const [index, step] of smoke.steps.entries()) {
-            const run = await this.runSmokeStep(smoke, step, index, input);
+            const run = await this.runSmokeStep(smoke, step, index, input, v2);
             steps.push(run);
             if (!run.passed) break;
           }
           observation = await this.managedProcess.poll(observation.processId).catch(() => observation!);
           if (observation.status !== "running") {
             input.base.issues.push(
-              `runtime_smoke command ${smoke.label} stopped while its workflow steps ran` +
+              `${name} command ${smoke.label} stopped while its workflow steps ran` +
                 `${observation.exitCode !== null ? ` (exit code ${String(observation.exitCode)})` : ""}.`,
             );
           }
@@ -1152,7 +1424,7 @@ export class FinalVerificationRuntime {
           observation = (await this.managedProcess.stop(observation.processId)) ?? observation;
           cleanupSucceeded = true;
         } catch (error) {
-          input.base.issues.push(`runtime_smoke process cleanup failed: ${asError(error).message}.`);
+          input.base.issues.push(`${name} process cleanup failed: ${asError(error).message}.`);
         }
       }
       if (smoke.releasePort) {
@@ -1160,7 +1432,7 @@ export class FinalVerificationRuntime {
           await smoke.releasePort(smoke.endpoint);
         } catch (error) {
           cleanupSucceeded = false;
-          input.base.issues.push(`runtime_smoke port cleanup failed: ${asError(error).message}.`);
+          input.base.issues.push(`${name} port cleanup failed: ${asError(error).message}.`);
         }
       }
     }
@@ -1178,11 +1450,18 @@ export class FinalVerificationRuntime {
       "text/plain",
       `runtime_smoke ${smoke.label} stderr`,
     );
+    // VF3: the program's own outputs are read only after it was stopped and its cleanup succeeded.
+    const programOutputs = v2?.outputs?.length
+      ? observation?.status === "stopped" && cleanupSucceeded
+        ? await captureCommandOutputs({ workspace: input.workspace.path, patterns: v2.outputs, artifacts: this.artifacts, label: `${name} ${smoke.label}` })
+        : outputsNotCaptured(v2.outputs, "process_not_proven_ended")
+      : undefined;
     const fact: FinalVerificationCommandFact = {
       kind: "command",
       workingTreeIdentity: settleWorkingTreeIdentity(workingTreeIdentity, await workingTreeForRunner(this.git, input.workspace.path)),
       childEnvironmentIdentity: unknownChildEnvironment(),
       category: "runtime_smoke",
+      ...(v2 ? { checkId: v2.checkId } : {}),
       label: smoke.label,
       executable: smoke.executable,
       command: smoke.executable,
@@ -1205,31 +1484,32 @@ export class FinalVerificationRuntime {
       readinessSatisfied,
       cleanupRequested: observation !== undefined,
       cleanupSucceeded,
+      ...(programOutputs ? { outputs: programOutputs } : {}),
     };
     input.base.facts.push(fact);
 
     if (startError) {
-      input.base.issues.push(`runtime_smoke command ${smoke.label} could not start: ${startError.message}.`);
+      input.base.issues.push(`${name} command ${smoke.label} could not start: ${startError.message}.`);
     }
-    if (cancelled) input.base.issues.push(`runtime_smoke command ${smoke.label} was cancelled.`);
-    if (timedOut) input.base.issues.push(`runtime_smoke command ${smoke.label} timed out before readiness.`);
+    if (cancelled) input.base.issues.push(`${name} command ${smoke.label} was cancelled.`);
+    if (timedOut) input.base.issues.push(`${name} command ${smoke.label} timed out before readiness.`);
     if (!readinessSatisfied && !timedOut && !cancelled) {
-      input.base.issues.push(`runtime_smoke command ${smoke.label} did not become ready.`);
+      input.base.issues.push(`${name} command ${smoke.label} did not become ready.`);
     }
     if (observation && observation.exitCode !== null && observation.exitCode !== 0) {
       input.base.issues.push(
-        `runtime_smoke command ${smoke.label} exited with non-zero code ${String(observation.exitCode)}.`,
+        `${name} command ${smoke.label} exited with non-zero code ${String(observation.exitCode)}.`,
       );
     }
     if (startState.revision !== input.workspace.targetRevision) {
       input.base.issues.push(
-        `runtime_smoke command ${smoke.label} started at revision ${startState.revision}, ` +
+        `${name} command ${smoke.label} started at revision ${startState.revision}, ` +
           `not target revision ${input.workspace.targetRevision}.`,
       );
     }
     if (endState.revision !== input.workspace.targetRevision) {
       input.base.issues.push(
-        `runtime_smoke command ${smoke.label} changed the verification revision from ` +
+        `${name} command ${smoke.label} changed the verification revision from ` +
           `${input.workspace.targetRevision} to ${endState.revision}.`,
       );
     }
@@ -1237,26 +1517,26 @@ export class FinalVerificationRuntime {
     const evidenceId = this.recordEvidence(
       fact,
       input.generationId,
-      "runtime_smoke",
+      v2 ? v2.checkId : "runtime_smoke",
       0,
       finishedAt,
       input.runOrdinal,
     );
     if (evidenceId) input.base.evidenceIds.push(evidenceId);
-    else input.base.issues.push(`runtime_smoke command ${smoke.label} has no durable evidence record.`);
+    else input.base.issues.push(`${name} command ${smoke.label} has no durable evidence record.`);
     for (const [index, step] of steps.entries()) {
       input.base.facts.push(step.fact);
       input.base.issues.push(...step.issues);
       const stepEvidenceId = this.recordEvidence(
         step.fact,
         input.generationId,
-        "runtime_smoke",
+        v2 ? v2.checkId : "runtime_smoke",
         index + 1,
         step.fact.finishedAt,
         input.runOrdinal,
       );
       if (stepEvidenceId) input.base.evidenceIds.push(stepEvidenceId);
-      else input.base.issues.push(`runtime_smoke step ${step.fact.label} has no durable evidence record.`);
+      else input.base.issues.push(`${name} step ${step.fact.label} has no durable evidence record.`);
     }
     return {
       ...input.base,
@@ -1270,8 +1550,12 @@ export class FinalVerificationRuntime {
     step: FinalVerificationCommand,
     index: number,
     input: { workspace: VerificationWorkspace; generationId: string; runOrdinal: number; signal?: AbortSignal },
+    v2?: V2ProgramContext,
   ): Promise<{ fact: FinalVerificationCommandFact; issues: string[]; passed: boolean }> {
-    const label = `${smoke.label} › ${step.label}`;
+    // A v2 step's label already names its check (the resolved command carries it).
+    const label = v2 ? step.label : `${smoke.label} › ${step.label}`;
+    const name = v2 ? `check ${v2.checkId}` : "runtime_smoke";
+    const outputPatterns = v2?.stepOutputs(index);
     const startState = await repositoryState(input.workspace.path, this.git);
     const workingTreeIdentity = await workingTreeForRunner(this.git, input.workspace.path);
     const startedAt = this.clock();
@@ -1287,16 +1571,20 @@ export class FinalVerificationRuntime {
         sessionId: this.taskId,
         actor: this.actor,
         taskId: this.taskId,
-        callId: `${input.generationId}:runtime_smoke:step${index}:${input.runOrdinal}`,
+        callId: `${input.generationId}:${v2 ? v2.checkId : "runtime_smoke"}:step${index}:${input.runOrdinal}`,
         // A step's result depends on the live program, so it must never be reused from an earlier run.
         toolName: "final-verification.runtime_smoke_step",
+        ...(outputPatterns?.length ? { freshExecution: true as const } : {}),
       },
     );
     const finishedAt = this.clock();
+    const outputs = outputPatterns?.length
+      ? await this.captureOutputs(execution, outputPatterns, input.workspace.path, `${name} ${label}`)
+      : undefined;
     const endState = await repositoryState(input.workspace.path, this.git);
     const [stdoutArtifact, stderrArtifact] = await Promise.all([
-      artifactForFinalOutput(this.artifacts, execution, "stdout", `runtime_smoke ${label} stdout`),
-      artifactForFinalOutput(this.artifacts, execution, "stderr", `runtime_smoke ${label} stderr`),
+      artifactForFinalOutput(this.artifacts, execution, "stdout", `${name} ${label} stdout`),
+      artifactForFinalOutput(this.artifacts, execution, "stderr", `${name} ${label} stderr`),
     ]);
     const executionErrorCode = stableExecutionErrorCode(execution.startError);
     const fact: FinalVerificationCommandFact = {
@@ -1305,6 +1593,7 @@ export class FinalVerificationRuntime {
       childEnvironmentIdentity: execution.routed?.childEnvironmentIdentity ?? unknownChildEnvironment(),
       ...(execution.routed?.childEnvironmentAudit ? {childEnvironmentAudit: execution.routed.childEnvironmentAudit} : {}),
       category: "runtime_smoke",
+      ...(v2 ? { checkId: v2.checkId } : {}),
       label,
       executable: step.executable,
       command: step.executable,
@@ -1326,22 +1615,23 @@ export class FinalVerificationRuntime {
       endState,
       ...(smoke.endpoint ? { endpoint: smoke.endpoint } : {}),
       workflowStep: true,
+      ...(outputs ? { outputs } : {}),
     };
     const issues: string[] = [];
-    if (execution.startError) issues.push(`runtime_smoke step ${label} could not start: ${execution.startError.message}.`);
-    if (execution.cancelled) issues.push(`runtime_smoke step ${label} was cancelled.`);
-    if (execution.timedOut) issues.push(`runtime_smoke step ${label} timed out.`);
-    if (execution.signal) issues.push(`runtime_smoke step ${label} ended by ${execution.signal}.`);
+    if (execution.startError) issues.push(`${name} step ${label} could not start: ${execution.startError.message}.`);
+    if (execution.cancelled) issues.push(`${name} step ${label} was cancelled.`);
+    if (execution.timedOut) issues.push(`${name} step ${label} timed out.`);
+    if (execution.signal) issues.push(`${name} step ${label} ended by ${execution.signal}.`);
     if (!execution.startError && !execution.cancelled && !execution.timedOut && execution.exitCode !== 0) {
       const detail = (execution.stderr.length ? execution.stderr : execution.stdout).toString("utf8").trim().slice(-400);
       issues.push(
-        `runtime_smoke step ${label} exited with non-zero code ${String(execution.exitCode)}` +
+        `${name} step ${label} exited with non-zero code ${String(execution.exitCode)}` +
           `${detail ? `: ${detail}` : ""}.`,
       );
     }
     if (endState.revision !== input.workspace.targetRevision) {
       issues.push(
-        `runtime_smoke step ${label} changed the verification revision from ` +
+        `${name} step ${label} changed the verification revision from ` +
           `${input.workspace.targetRevision} to ${endState.revision}.`,
       );
     }
@@ -1775,7 +2065,8 @@ export class FinalVerificationRuntime {
   private recordEvidence(
     fact: FinalVerificationFact,
     generationId: string,
-    category: FinalVerificationCategory,
+    /** The v1 category, or the v2 check id. */
+    category: string,
     index: number,
     createdAt: string,
     runOrdinal: number,
@@ -1792,6 +2083,46 @@ export class FinalVerificationRuntime {
     });
     return record.id;
   }
+}
+
+/** VF3: a v2 command that could not run because its working directory is not inside the checkout. */
+function cwdRefused(issue: string): ProcessResult {
+  return {
+    exitCode: null,
+    signal: null,
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+    timedOut: false,
+    cancelled: false,
+    outputTruncated: false,
+    startError: Object.assign(new Error(issue), { code: "cwd_not_in_checkout" }),
+  };
+}
+
+/** VF3: why a v2 command's working directory is unusable, or undefined when it is a directory inside the checkout. */
+async function directoryInsideIssue(workspacePath: string, cwd: string, checkId: string): Promise<string | undefined> {
+  try {
+    const [root, target] = await Promise.all([realpath(workspacePath), realpath(cwd)]);
+    const inside = relative(root, target);
+    if (inside.startsWith("..") || resolve(root, inside) !== target) {
+      return `check ${checkId} working directory leaves the verification checkout`;
+    }
+    if (!(await stat(target)).isDirectory()) return `check ${checkId} working directory is not a directory`;
+    return undefined;
+  } catch {
+    return `check ${checkId} working directory does not exist in the verification checkout`;
+  }
+}
+
+/** VF3: the trusted report descriptors for a v2 tests command that is one of the profile's own. */
+function reportDescriptorsFor(
+  command: FinalVerificationCommand,
+  profile: FinalVerificationExecutionProfile,
+): FinalVerificationReportDescriptor[] | undefined {
+  const own = (profile.commands.tests ?? []).find((candidate) =>
+    candidate.executable === command.executable && sameStringArray(candidate.args, command.args));
+  const descriptor = own ? profile.reports?.find((entry) => entry.commandLabel === own.label) : undefined;
+  return descriptor ? [{ ...descriptor, commandLabel: command.label }] : undefined;
 }
 
 /** VF2: the commands a check launches, in order, for the Runner's tool lookup. */
@@ -2176,6 +2507,8 @@ async function executeCommand(  command: FinalVerificationCommand,
     taskId: string;
     callId: string;
     toolName?: string;
+    /** VF6: a command that keeps output files never answers from earlier evidence. */
+    freshExecution?: true;
   },
   junit?: { destination: string; ambientNodeOptions?: string },
 ): Promise<ProcessResult> {
@@ -2219,6 +2552,7 @@ async function executeCommand(  command: FinalVerificationCommand,
       // runner-owned junit file, so the run records the real failing
       // test ids from this run report (mirrors the T6a reporter flags).
       ...(junitEnvironment(command, junit) ? { explicitEnvironment: junitEnvironment(command, junit) } : {}),
+      ...(identity.freshExecution ? { freshExecution: true as const } : {}),
       context: {
         runId: identity.runId,
         sessionId: identity.sessionId,

@@ -97,7 +97,10 @@ export function deliveryBoundaryRootCause(input: {
 
 /** Failing test ids per category from non-green completed checks. */
 export function failingTestIdsByCategory(checks: readonly {
-  readonly category: string;
+  /** v1: the check's category. */
+  readonly category?: string;
+  /** VF3: a v2 check is keyed by its id. */
+  readonly checkId?: string;
   readonly green: boolean;
   readonly facts: readonly {
     readonly kind: string;
@@ -108,7 +111,9 @@ export function failingTestIdsByCategory(checks: readonly {
   for (const check of checks) {
     if (check.green) continue;
     const ids = check.facts.flatMap((fact) => fact.kind === "command" ? fact.report?.failingTestIds ?? [] : []);
-    byCategory.set(check.category, [...(byCategory.get(check.category) ?? []), ...ids]);
+    const key = check.checkId ?? check.category;
+    if (key === undefined) throw new Error("A failing check needs a category or a check id.");
+    byCategory.set(key, [...(byCategory.get(key) ?? []), ...ids]);
   }
   return byCategory;
 }

@@ -809,7 +809,7 @@ test("identical STATE.md content in a second request commits after integration a
               summary: "Every persisted final-verification category supports approval.",
               architectRisk: "low",
               architectRiskRationale: "No additional semantic risk beyond the kernel-observed paths.",
-              categoryReviews: current.plan.checks.map((check) => ({
+              categoryReviews: (current.plan as import("../src/final-verification-contracts.js").FinalVerificationPlan).checks.map((check) => ({
                 category: check.category,
                 verdict: "approved",
                 rationale: `The persisted ${check.category} result supports this semantic decision.`,
@@ -853,7 +853,7 @@ test("identical STATE.md content in a second request commits after integration a
           startedAt: WHEN,
           finishedAt: WHEN,
           check: {
-            ...plan.checks.find((check) => check.category === category)!,
+            ...(plan as import("../src/final-verification-contracts.js").FinalVerificationPlan).checks.find((check) => check.category === category)!,
             green: true,
             evidenceIds: [],
             facts: [],
@@ -1035,7 +1035,7 @@ test("handoff after STATE.md keeps final verification current", async () => {
               summary: "Every persisted final-verification category supports approval.",
               architectRisk: "low",
               architectRiskRationale: "No additional semantic risk beyond the kernel-observed paths.",
-              categoryReviews: current.plan.checks.map((check) => ({
+              categoryReviews: (current.plan as import("../src/final-verification-contracts.js").FinalVerificationPlan).checks.map((check) => ({
                 category: check.category,
                 verdict: "approved",
                 rationale: `The persisted ${check.category} result supports this semantic decision.`,
@@ -1079,7 +1079,7 @@ test("handoff after STATE.md keeps final verification current", async () => {
           startedAt: WHEN,
           finishedAt: WHEN,
           check: {
-            ...plan.checks.find((check) => check.category === category)!,
+            ...(plan as import("../src/final-verification-contracts.js").FinalVerificationPlan).checks.find((check) => check.category === category)!,
             green: true,
             evidenceIds: [],
             facts: [],

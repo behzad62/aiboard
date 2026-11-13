@@ -411,7 +411,7 @@ class BuildArchitectModel implements AgentModel {
         return call("plan_final_verification", { plan: buildFvPlan() }, `fv-plan-${request.messages.length}-${tools}`);
       }
       if (current.review?.status === "requested" && current.submission && current.submissionResult) {
-        const submission = current.submissionResult;
+        const submission = current.submissionResult as import("../src/final-verification-submission.js").FinalVerificationSubmission;
         return call("review_final_verification", {
           taskId: current.taskId,
           generationId: current.generationId,
@@ -765,7 +765,7 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
     assert.equal(finished.submission?.targetRevision, canonical);
     assert.equal(finished.submissionResult?.targetRevision, canonical);
     assert.equal(finished.review?.status, "approved");
-    for (const check of finished.completedChecks ?? []) {
+    for (const check of (finished.completedChecks ?? []) as import("../src/scheduler-store.js").FinalVerificationCompletedCheckProjectionV1[]) {
       for (const fact of check.facts) {
         if (fact.kind === "command" && "repositoryRevision" in fact) {
           assert.equal(

@@ -451,7 +451,7 @@ const PLANNING_POLICY_KEY = "planning-policy";
  */
 export function ensurePlanningProvisioningPrefix(
   store: ProvisioningSchedulerStore,
-  spec: Pick<NativeBuildSpec, "runId" | "planningPolicy"> & {
+  spec: Pick<NativeBuildSpec, "runId" | "planningPolicy" | "verificationContractVersion"> & {
     readonly objective?: string;
   },
   clock: () => string = () => new Date().toISOString(),
@@ -506,7 +506,7 @@ function appendDocsPolicy(
 
 function appendRunInitialized(
   store: ProvisioningSchedulerStore,
-  spec: Pick<NativeBuildSpec, "runId"> & { readonly objective?: string },
+  spec: Pick<NativeBuildSpec, "runId" | "verificationContractVersion"> & { readonly objective?: string },
   occurredAt: string,
 ): void {
   store.append({
@@ -522,6 +522,8 @@ function appendRunInitialized(
       encodingSafetyPolicyVersion: 1,
       reviewEvidencePolicyVersion: 1,
       validationScopePolicyVersion: 1,
+      // VF3: the run's final verification is the Architect's list of checks.
+      ...(spec.verificationContractVersion === 2 ? { verificationContractVersion: 2 } : {}),
       ...(spec.objective !== undefined ? { objective: spec.objective } : {}),
     },
   });
@@ -563,7 +565,7 @@ function assertProvisioningDocsEvent(event: SchedulerEvent | undefined, runId: s
 
 function assertProvisioningInitEvent(
   event: SchedulerEvent,
-  spec: { readonly runId: string; readonly objective?: string },
+  spec: { readonly runId: string; readonly objective?: string; readonly verificationContractVersion?: 2 },
 ): void {
   if (
     event.runId !== spec.runId ||
@@ -577,7 +579,11 @@ function assertProvisioningInitEvent(
     fail("Planning provisioning refuses a non-matching scheduler prefix.");
   }
   const payload = event.payload as Record<string, unknown>;
-  const keys = Object.keys(payload).filter((key) => key !== "testIntegrityPolicyVersion" && key !== "submissionScopePolicyVersion" && key !== "reviewIntegrityPolicyVersion" && key !== "encodingSafetyPolicyVersion" && key !== "reviewEvidencePolicyVersion" && key !== "validationScopePolicyVersion");
+  const keys = Object.keys(payload).filter((key) => key !== "testIntegrityPolicyVersion" && key !== "submissionScopePolicyVersion" && key !== "reviewIntegrityPolicyVersion" && key !== "encodingSafetyPolicyVersion" && key !== "reviewEvidencePolicyVersion" && key !== "validationScopePolicyVersion" && key !== "verificationContractVersion");
+  // VF3: a run recovers only against the final-verification contract it started with.
+  if ((payload.verificationContractVersion === undefined ? undefined : payload.verificationContractVersion) !== spec.verificationContractVersion) {
+    fail("Planning provisioning refuses a scheduler prefix recorded with a different final-verification contract.");
+  }
   if (payload.reviewEvidencePolicyVersion !== undefined && payload.reviewEvidencePolicyVersion !== 1) fail("Planning provisioning refuses an unsupported review-evidence policy version.");
   if (payload.validationScopePolicyVersion !== undefined && payload.validationScopePolicyVersion !== 1) fail("Planning provisioning refuses an unsupported validation-scope policy version.");
   if (payload.encodingSafetyPolicyVersion !== undefined && payload.encodingSafetyPolicyVersion !== 1) fail("Planning provisioning refuses an unsupported encoding-safety policy version.");

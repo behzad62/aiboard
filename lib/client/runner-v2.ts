@@ -229,11 +229,30 @@ export interface NativeFinalVerificationObservability {
   }>;
 }
 
+/** Why the Runner did not run a final-verification check: its tool is missing, or (v2) the plan skipped it. */
+export type NativeVerificationNotRun =
+  | { reason: "tool_missing"; tool: string; detail: string }
+  | { reason: "skipped"; detail: string };
+
+/** VF3: one check of a v2 final verification (the Architect's list of checks). */
+export interface NativeFinalVerificationCheckObservation {
+  checkId: string;
+  label: string;
+  kind: "build" | "tests" | "start" | "other";
+  origin: "detected" | "project" | "architect";
+  mandatory: boolean;
+  status: "pending" | "passed" | "failed" | "not_run";
+  evidenceIds: string[];
+  issues: string[];
+  notRun?: NativeVerificationNotRun;
+}
+
 export interface NativeFinalVerificationGenerationObservability {
   generationId: string;
   taskId: string;
   targetRevision: string;
   revisionStatus: "current" | "stale";
+  /** A pre-VF3 run's four categories; empty on a v2 run, which lists `checks`. */
   categories: Array<{
     category: NativeFinalVerificationCategory;
     applicability: "required" | "not_applicable";
@@ -242,9 +261,13 @@ export interface NativeFinalVerificationGenerationObservability {
     status: "pending" | "passed" | "failed" | "not_applicable";
     evidenceIds: string[];
     issues: string[];
+    /** VF2: the Runner did not run this check because its tool is missing. */
+    notRun?: NativeVerificationNotRun;
   }>;
+  /** VF3: a v2 run's checks, in plan order then the skipped ones. */
+  checks?: NativeFinalVerificationCheckObservation[];
   submission: { status: "pending" | "submitted"; submissionId?: string; green?: boolean };
-  mechanicalFailure?: { failureId: string; failedCategories: NativeFinalVerificationCategory[]; evidenceIds: string[] };
+  mechanicalFailure?: { failureId: string; failedCategories: NativeFinalVerificationCategory[]; failedCheckIds?: string[]; evidenceIds: string[] };
   cleanup: {
     status: "pending" | "started" | "succeeded" | "failed";
     attempt?: number;
@@ -900,7 +923,10 @@ export interface NativeBuildProjection {
       generationId: string;
       targetRevision: string;
       planVersion: number;
-      plan: { checks: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; repositoryInspection?: { paths: string[]; summary: string } }> };
+      /** A pre-VF3 run's four categories, or (VF3, `version: 2`) the Architect's list of checks. */
+      plan:
+        | { version?: undefined; checks: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; repositoryInspection?: { paths: string[]; summary: string } }> }
+        | { version: 2; checks: Array<{ id: string; label: string; kind: NativeFinalVerificationCheckObservation["kind"]; origin: NativeFinalVerificationCheckObservation["origin"]; mandatory: boolean }>; skipped: Array<{ checkId: string; reason: string }> };
       state: "current" | "invalidated";
       invalidatedByRevision?: string;
       invalidatedByGuidanceId?: string;
@@ -910,7 +936,8 @@ export interface NativeBuildProjection {
       submissionResult?: { kind: "final_verification_submission"; generationId: string; runId: string; taskId: string; attempt: number; targetRevision: string; evidenceIds: string[]; submittedAt: string; green: boolean };
       review?: { reviewId: string; submissionId: string; generationId: string; targetRevision: string; attempt: number; status: "requested" | "approved" | "repair_required" | "rejected"; decision?: { decision: "approved" | "repair_required"; summary: string; targetRevision: string; architectRisk: { risk: "low" | "high"; rationale?: string; source: "architect" | "legacy_default" }; failedCategories: NativeFinalVerificationCategory[]; categoryReviews: Array<{ category: NativeFinalVerificationCategory; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }> } };
       repairTaskIds?: string[];
-      completedChecks?: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; green: boolean; evidenceIds: string[]; issues: string[]; attempt: number; startedAt: string; finishedAt: string }>;
+      /** A v1 check carries its category; a v2 check (VF3) its id, label, kind and outcome. */
+      completedChecks?: Array<{ category?: NativeFinalVerificationCategory; status?: "required" | "not_applicable"; rationale?: string; checkId?: string; label?: string; kind?: NativeFinalVerificationCheckObservation["kind"]; outcome?: "passed" | "failed" | "not_run"; green: boolean; evidenceIds: string[]; issues: string[]; notRun?: NativeVerificationNotRun; attempt: number; startedAt: string; finishedAt: string }>;
     };
     history: Array<{ generationId: string; taskId: string; targetRevision: string; state: "invalidated"; invalidatedByRevision?: string; invalidatedByGuidanceId?: string }>;
   };

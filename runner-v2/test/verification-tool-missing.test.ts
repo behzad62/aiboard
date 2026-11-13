@@ -217,7 +217,7 @@ test("VF2: a Build whose every check's tool is missing reaches its handoff with 
     assert.equal(projection.repairCycles?.used, 0, "and charges no repair cycle");
 
     const current = projection.finalVerification!.current!;
-    assert.deepEqual(current.completedChecks!.map((check) => [check.category, check.green, check.notRun?.tool]), [
+    assert.deepEqual((current.completedChecks! as import("../src/scheduler-store.js").FinalVerificationCompletedCheckProjectionV1[]).map((check) => [check.category, check.green, check.notRun?.tool]), [
       ["build", false, "fixture"],
       ["tests", false, "fixture"],
       ["runtime_smoke", false, "fixture"],
@@ -225,7 +225,7 @@ test("VF2: a Build whose every check's tool is missing reaches its handoff with 
     ]);
     assert.equal(current.failure, undefined);
     assert.equal(current.submissionResult?.green, true, "the submission has no failure");
-    assert.deepEqual(current.submissionResult!.checks.map((check) => [check.category, check.green, check.notRun?.reason]), [
+    assert.deepEqual((current.submissionResult as import("../src/final-verification-submission.js").FinalVerificationSubmission).checks.map((check) => [check.category, check.green, check.notRun?.reason]), [
       ["build", false, "tool_missing"],
       ["tests", false, "tool_missing"],
       ["runtime_smoke", false, "tool_missing"],

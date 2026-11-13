@@ -41,6 +41,7 @@ import { createManagedProcessTools } from "./managed-process-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import type { FinalVerificationCheckResult } from "./final-verification-runtime.js";
+import type { VerificationCheckResultV2 } from "./verification-plan-v2.js";
 import { createGitTools } from "./git-tools.js";
 import { classifyProviderFailure } from "./provider-health.js";
 import type {
@@ -122,7 +123,8 @@ export interface VerifierFinalVerificationSnapshot {
   readonly generationId: string;
   readonly targetRevision: string;
   readonly green: boolean;
-  readonly checks: readonly FinalVerificationCheckResult[];
+  /** The four v1 categories, or (VF3) the v2 checks including the skipped ones. */
+  readonly checks: readonly (FinalVerificationCheckResult | VerificationCheckResultV2)[];
 }
 
 export interface NativeVerifierInspectionRequest {
