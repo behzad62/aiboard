@@ -211,7 +211,9 @@ function profilesInUserTemp(): string[] {
 const AFTER_STOP_MS = POSIX_BROWSER_EXIT_GRACE_MS;
 /**
  * The CLI's `close` is not a Runner stop: the daemon leaves by itself, at the host's pace, so no product bound
- * applies. A harness bound only, never a product deadline: each wait returns as soon as its condition holds.
+ * applies. A harness bound only, never a product deadline: each wait returns as soon as its condition holds. It is
+ * longer than AFTER_STOP_MS because that bound is the product's stop grace, which a close never goes through; a
+ * loaded CI host can take seconds to let the daemon and Chrome exit.
  */
 const AFTER_CLOSE_HARNESS_MS = 25_000;
 
@@ -546,6 +548,13 @@ test("the session command refuses a second session for its owner and keeps the u
       await stale.line();
       stopTree(stale.child);
       await stale.exited;
+      // A start still in the session command, before its exec, counts as running too.
+      const early = spawn("sh", ["-c", "sleep 30", join(bin, "playwright-cli-session")], { stdio: "ignore" });
+      children.push(early);
+      await writeFile(join(state, "session.pid"), `${early.pid}\n`);
+      const racing = start();
+      assert.equal(await racing.exited, 5, racing.stderr());
+      stopTree(early);
       await writeFile(join(state, "session.pid"), `${process.pid}\n`);
     }
     const third = start();
@@ -773,6 +782,11 @@ test("an agent's close with a lingering browser succeeds and leaves a record: th
     assert.equal(stops, 3);
     // Run-level release still blocks on every recorded browser, and goes ahead once they are gone.
     await assert.rejects(sessions.removeRun(runId), (error: Error & { code?: string }) => error.code === "process_cleanup_unverified" && /PIDs 801, 802, 803/.test(error.message));
+    // After a Runner restart the run is no longer configured (a settled run's cleanup): its folder still blocks.
+    const restarted = new PlaywrightCliSessions({ stateRoot: join(root, "pw"), binDirectory: join(root, "bin"), platform: "linux", processes,
+      graceMs: 50, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 10))) });
+    await assert.rejects(restarted.removeRun(runId), /PIDs 801, 802, 803/);
+    assert.equal(existsSync(sessions.runFolder(runId)), true, "a live browser's folder is never removed");
     alive.clear();
     await sessions.removeRun(runId);
     assert.equal(existsSync(sessions.runFolder(runId)), false);

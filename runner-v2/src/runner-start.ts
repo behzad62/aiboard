@@ -383,7 +383,9 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         onCleanup: (record) => {
           if (record.status === "none" || record.status === "exited") return;
           process.stderr.write(`AIBoard: browser session cleanup ${record.status} for run ${record.runId}, session ${record.sessionId}`
-            + ` (${record.processId}): still running outside its process group, not signalled [${record.alive.join(", ")}]\n`);
+            + ` (${record.processId}): ${record.status === "escaped"
+              ? `still running outside its process group, recorded and not signalled [${record.alive.join(", ")}]`
+              : "the browser could not be read, so its state folder stays"}\n`);
         },
       });
     } catch (error) {

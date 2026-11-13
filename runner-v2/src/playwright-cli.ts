@@ -198,13 +198,18 @@ export function playwrightCliShimFiles(install: PlaywrightCliInstall, platform: 
     "esac",
     `mkdir -p "$AIBOARD_PLAYWRIGHT_STATE/tmp"${linux ? ' "$AIBOARD_PLAYWRIGHT_STATE/xdg"' : ""} || exit 4`,
     // One session per owner: the pidfile holds this shell's PID, which the daemon keeps through exec. A recorded PID
-    // counts only while it is alive and still runs this owner's daemon (a reused PID does not).
+    // counts only while it is alive and still runs this owner's daemon, or this command before its exec (a reused
+    // PID does not). Linux without procps reads /proc. Two starts racing on a stale pidfile can both run: both are
+    // owned managed processes with attributed profiles, so this is a usability guard, not a boundary.
     'PIDFILE="$AIBOARD_PLAYWRIGHT_STATE/session.pid"',
     'if ! (set -C; echo "$$" > "$PIDFILE") 2>/dev/null; then',
     '  OLD=$(cat "$PIDFILE" 2>/dev/null)',
     '  case "$OLD" in',
     '    ""|*[!0-9]*) ;;',
-    `    *) if kill -0 "$OLD" 2>/dev/null; then case "$(ps -p "$OLD" -o args= 2>/dev/null)" in *cliDaemon.js*"$PLAYWRIGHT_CLI_SESSION"*) echo ${shQuote(ALREADY_TEXT)} >&2; exit 5 ;; esac; fi ;;`,
+    '    *) if kill -0 "$OLD" 2>/dev/null; then',
+    `         ARGS=$(ps -p "$OLD" -o args= 2>/dev/null || tr '\\000' ' ' < "/proc/$OLD/cmdline" 2>/dev/null)`,
+    `         case "$ARGS" in *cliDaemon.js*"$PLAYWRIGHT_CLI_SESSION"*|*/${PLAYWRIGHT_CLI_SESSION_COMMAND}|*/${PLAYWRIGHT_CLI_SESSION_COMMAND}" ") echo ${shQuote(ALREADY_TEXT)} >&2; exit 5 ;; esac`,
+    '       fi ;;',
     '  esac',
     '  echo "$$" > "$PIDFILE" || exit 4',
     'fi',
@@ -430,14 +435,19 @@ export class PlaywrightCliSessions {
   /**
    * Removes a finished run's state folders, after every managed process of the run stopped. On POSIX it first runs
    * the browser check for each owner folder (a session that ended by itself was never stopped, so never checked),
-   * and throws, keeping the folder, when a browser survives or cannot be read; the run's cleanup retries it.
+   * and throws, keeping the folder, when a browser survives or cannot be read; the run's cleanup retries it. The
+   * check runs whenever the run's folder exists, also for a run this Runner process never configured (a settled
+   * run's cleanup after a restart): a folder exists only for a run that browsed.
+   *
+   * What this blocks is the run's browser state (the owner folders, profiles and socket folders) and the run's
+   * cleanup being marked done. By then the run's managed processes are stopped, each one's own group proven empty
+   * (§8.4, group-scoped), and its ExecutionHost binding closed; the lingering browser holds none of those.
    */
   async removeRun(runId: string): Promise<void> {
-    const enabled = this.runs.has(runId);
     this.runs.delete(runId);
     for (const key of [...this.sessionProcesses]) if (key.startsWith(`${runId}\0`)) this.sessionProcesses.delete(key);
     const folder = this.runFolder(runId);
-    if (this.platform !== "win32" && enabled && existsSync(folder)) {
+    if (this.platform !== "win32" && existsSync(folder)) {
       const survivors: number[] = [];
       let unknown = false;
       for (const name of safeReaddir(folder).filter((entry) => /^t-[0-9a-f]{8}$/.test(entry))) {
@@ -448,7 +458,6 @@ export class PlaywrightCliSessions {
         else if (outcome !== "clean") survivors.push(...outcome.map((entry) => entry.pid));
       }
       if (unknown || survivors.length > 0) {
-        this.runs.set(runId, Object.freeze({ browser: null }));
         throw new ManagedProcessError("process_cleanup_unverified", unknown
           ? `The browser of a session of run ${runId} could not be read, so its state folder stays.`
           : `The browser of a session of run ${runId} is still running outside its process group (PIDs ${survivors.join(", ")}); it is recorded, not signalled.`);
@@ -548,15 +557,16 @@ export class PlaywrightCliSessions {
     if (!recorded || typeof recorded !== "object" || (recorded as StopRecord).kind !== "session") return;
     const stop = recorded as StopRecord;
     this.sessionProcesses.delete(`${ownerKey(target)}\0${target.processId}`);
-    // A session the owner started again in the meantime writes its own profile into the same folder: only what was
-    // recorded before the stop is this session's browser, and the folder stays.
-    const restarted = (this.launches.get(ownerKey(target)) ?? 0) !== stop.launches;
-    const now = restarted ? [] : this.leaders(stop.folder);
-    const read = stop.before === undefined && now === undefined ? undefined : [...(stop.before ?? []), ...(now ?? [])];
-    try { await this.clean(target, stop.folder, read && withKnown(this.knownEscapes.get(stop.folder), read), !restarted); }
-    catch {
-      // Only a fault of the check itself lands here (the reads never throw): record it as unknown, never fail the stop.
-      this.record(target, "unknown", [], []);
+    try {
+      // A session the owner started again in the meantime writes its own profile into the same folder: only what was
+      // recorded before the stop is this session's browser, and the folder stays.
+      const restarted = (this.launches.get(ownerKey(target)) ?? 0) !== stop.launches;
+      const now = restarted ? undefined : this.leaders(stop.folder);
+      const read = stop.before === undefined && now === undefined ? undefined : [...(stop.before ?? []), ...(now ?? [])];
+      await this.clean(target, stop.folder, read && withKnown(this.knownEscapes.get(stop.folder), read), !restarted);
+    } catch {
+      // Only a fault of the check itself lands here: record it as unknown (known escapes stay), never fail the stop.
+      this.record(target, "unknown", this.knownEscapes.get(stop.folder) ?? [], []);
     }
   }
 

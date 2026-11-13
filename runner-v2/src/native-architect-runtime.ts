@@ -667,7 +667,11 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
    * VF5: processes the Architect started in its copy are stopped first, the
    * way a verifier's end with its session, and only then is the copy
    * removed. A stop that cannot be proven throws before the removal, so a
-   * copy is never deleted under a process that may still be running.
+   * copy is never deleted under a managed process that may still be running.
+   * VF7b: a browser session's Chrome leaves the managed group on POSIX; when it
+   * lingers after its session's proven stop it is recorded and blocks the run's
+   * release (playwright-cli.ts), not this removal. It writes only into its
+   * profile and temp folder in the Runner's state, never into the copy.
    */
   private async closeArchitectCommandCopy(): Promise<void> {
     const copy = this.architectCommandCopy;
