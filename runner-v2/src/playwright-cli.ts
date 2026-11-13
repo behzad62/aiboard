@@ -11,13 +11,17 @@
 //   that would escape the managed session.
 // - On POSIX, Playwright starts Chrome in a session of its own, outside the owned process group. After the session
 //   process's stop, PlaywrightCliSessions reads the browser Chrome recorded in the session's own profile, confirms
-//   it by PID, birth and group, and fails the stop closed while it still runs. It never lists the host's processes
-//   and never signals one outside the group: a known escape is recorded and blocks (DECISION 2026-09-19 §8.3).
+//   it by PID, birth and group, and waits a short grace for it to leave. One still running is a known escape: it is
+//   recorded, re-checked on the owner's later stops, and blocks the run's folder removal; it is never signalled
+//   (DECISION 2026-09-19 §8.3). The browser is found through its profile, never by enumerating the host's
+//   processes: every read is by PID, and the only listing is on the grace's last pass, one
+//   `ps -e -o pid=,pgid=,stat=` per browser group that still answers kill(-group, 0), read only as that group's
+//   emptiness evidence.
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { hostname, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { RunnerProcessEnvironment } from "./child-environment.js";
@@ -106,6 +110,15 @@ const ARGUMENTS_TEXT =
   "playwright-cli-session takes no arguments. Start it once with process.start: command playwright-cli-session, until pattern Daemon listening on.";
 const OUTSIDE_TEXT =
   "playwright-cli-session runs only in a process the AIBoard Runner starts for a Build agent session, which sets its session and state folder.";
+const ALREADY_TEXT =
+  "This agent session's browser session is already running: use it with playwright-cli, or stop its process with process.signal before starting another. Nothing was started.";
+/**
+ * The daemon reads `$PWTEST_CLI_GLOBAL_CONFIG/.playwright/cli.config.json` (default: the user's home) and every
+ * PLAYWRIGHT_MCP_* variable, and the environment outranks `--config`. The session command points the first at an
+ * empty config in the owner's state folder and drops every PLAYWRIGHT_MCP_* but the output folder, so neither the
+ * user's own Playwright setup nor a model's variable can point the session at another browser or endpoint.
+ */
+export const PLAYWRIGHT_CLI_GLOBAL_CONFIG_FOLDER = "global";
 
 function shQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -134,15 +147,31 @@ export function playwrightCliShimFiles(install: PlaywrightCliInstall, platform: 
       "exit /b 3",
       ":start",
       'if not exist "%AIBOARD_PLAYWRIGHT_STATE%\\tmp\\" mkdir "%AIBOARD_PLAYWRIGHT_STATE%\\tmp" || exit /b 4',
+      // One session per owner: cmd holds handle 9 on the lock file, open for writing, while :run runs (the daemon
+      // inherits it), so a second start's redirection fails and its :run never runs.
+      'set "AIBOARD_SESSION_RAN="',
+      '9>"%AIBOARD_PLAYWRIGHT_STATE%\\session.lock" call :run',
+      'set "AIBOARD_SESSION_CODE=%ERRORLEVEL%"',
+      "if not defined AIBOARD_SESSION_RAN goto already",
+      "exit /b %AIBOARD_SESSION_CODE%",
+      ":run",
+      'set "AIBOARD_SESSION_RAN=1"',
       'if "%PLAYWRIGHT_MCP_OUTPUT_DIR%"=="" goto prepared',
       'if not exist "%PLAYWRIGHT_MCP_OUTPUT_DIR%\\" mkdir "%PLAYWRIGHT_MCP_OUTPUT_DIR%" || exit /b 4',
       'if not exist "%PLAYWRIGHT_MCP_OUTPUT_DIR%\\.gitignore" >"%PLAYWRIGHT_MCP_OUTPUT_DIR%\\.gitignore" echo *',
       ":prepared",
-      'if not exist "%AIBOARD_PLAYWRIGHT_STATE%\\cli.config.json" >"%AIBOARD_PLAYWRIGHT_STATE%\\cli.config.json" echo {}',
+      '>"%AIBOARD_PLAYWRIGHT_STATE%\\cli.config.json" echo {}',
+      `if not exist "%AIBOARD_PLAYWRIGHT_STATE%\\${PLAYWRIGHT_CLI_GLOBAL_CONFIG_FOLDER}\\.playwright\\" mkdir "%AIBOARD_PLAYWRIGHT_STATE%\\${PLAYWRIGHT_CLI_GLOBAL_CONFIG_FOLDER}\\.playwright" || exit /b 4`,
+      `>"%AIBOARD_PLAYWRIGHT_STATE%\\${PLAYWRIGHT_CLI_GLOBAL_CONFIG_FOLDER}\\.playwright\\cli.config.json" echo {}`,
+      `set "PWTEST_CLI_GLOBAL_CONFIG=%AIBOARD_PLAYWRIGHT_STATE%\\${PLAYWRIGHT_CLI_GLOBAL_CONFIG_FOLDER}"`,
+      `for /f "delims==" %%V in ('set PLAYWRIGHT_MCP_ 2^>nul') do if /i not "%%V"=="PLAYWRIGHT_MCP_OUTPUT_DIR" set "%%V="`,
       'set "TEMP=%AIBOARD_PLAYWRIGHT_STATE%\\tmp"',
       'set "TMP=%AIBOARD_PLAYWRIGHT_STATE%\\tmp"',
       `"${node}" "${daemon}" "%PLAYWRIGHT_CLI_SESSION%" --browser=%AIBOARD_PLAYWRIGHT_BROWSER% "--config=%AIBOARD_PLAYWRIGHT_STATE%\\cli.config.json"`,
       "exit /b %ERRORLEVEL%",
+      ":already",
+      `>&2 echo ${ALREADY_TEXT}`,
+      "exit /b 5",
       ":arguments",
       `>&2 echo ${ARGUMENTS_TEXT}`,
       "exit /b 2",
@@ -168,6 +197,17 @@ export function playwrightCliShimFiles(install: PlaywrightCliInstall, platform: 
     `  *) echo ${shQuote(NO_BROWSER_TEXT)} >&2; exit 3 ;;`,
     "esac",
     `mkdir -p "$AIBOARD_PLAYWRIGHT_STATE/tmp"${linux ? ' "$AIBOARD_PLAYWRIGHT_STATE/xdg"' : ""} || exit 4`,
+    // One session per owner: the pidfile holds this shell's PID, which the daemon keeps through exec. A recorded PID
+    // counts only while it is alive and still runs this owner's daemon (a reused PID does not).
+    'PIDFILE="$AIBOARD_PLAYWRIGHT_STATE/session.pid"',
+    'if ! (set -C; echo "$$" > "$PIDFILE") 2>/dev/null; then',
+    '  OLD=$(cat "$PIDFILE" 2>/dev/null)',
+    '  case "$OLD" in',
+    '    ""|*[!0-9]*) ;;',
+    `    *) if kill -0 "$OLD" 2>/dev/null; then case "$(ps -p "$OLD" -o args= 2>/dev/null)" in *cliDaemon.js*"$PLAYWRIGHT_CLI_SESSION"*) echo ${shQuote(ALREADY_TEXT)} >&2; exit 5 ;; esac; fi ;;`,
+    '  esac',
+    '  echo "$$" > "$PIDFILE" || exit 4',
+    'fi',
     // The socket folder may be in the shared temp folder (a long state path): this user's own, mode 0700, never a link.
     'mkdir -m 700 "$AIBOARD_PLAYWRIGHT_SOCKETS" 2>/dev/null || true',
     'if [ -L "$AIBOARD_PLAYWRIGHT_SOCKETS" ] || [ ! -d "$AIBOARD_PLAYWRIGHT_SOCKETS" ] || [ ! -O "$AIBOARD_PLAYWRIGHT_SOCKETS" ]; then echo "The browser session socket folder is not this user\'s own: $AIBOARD_PLAYWRIGHT_SOCKETS" >&2; exit 4; fi',
@@ -176,7 +216,11 @@ export function playwrightCliShimFiles(install: PlaywrightCliInstall, platform: 
     '  mkdir -p "$PLAYWRIGHT_MCP_OUTPUT_DIR" || exit 4',
     "  [ -f \"$PLAYWRIGHT_MCP_OUTPUT_DIR/.gitignore\" ] || printf '*\\n' > \"$PLAYWRIGHT_MCP_OUTPUT_DIR/.gitignore\"",
     "fi",
-    "[ -f \"$AIBOARD_PLAYWRIGHT_STATE/cli.config.json\" ] || printf '{}\\n' > \"$AIBOARD_PLAYWRIGHT_STATE/cli.config.json\"",
+    "printf '{}\\n' > \"$AIBOARD_PLAYWRIGHT_STATE/cli.config.json\" || exit 4",
+    `mkdir -p "$AIBOARD_PLAYWRIGHT_STATE/${PLAYWRIGHT_CLI_GLOBAL_CONFIG_FOLDER}/.playwright" || exit 4`,
+    `printf '{}\\n' > "$AIBOARD_PLAYWRIGHT_STATE/${PLAYWRIGHT_CLI_GLOBAL_CONFIG_FOLDER}/.playwright/cli.config.json" || exit 4`,
+    `PWTEST_CLI_GLOBAL_CONFIG="$AIBOARD_PLAYWRIGHT_STATE/${PLAYWRIGHT_CLI_GLOBAL_CONFIG_FOLDER}"; export PWTEST_CLI_GLOBAL_CONFIG`,
+    "for name in $(env | sed -n 's/^\\(PLAYWRIGHT_MCP_[A-Za-z0-9_]*\\)=.*/\\1/p'); do [ \"$name\" = PLAYWRIGHT_MCP_OUTPUT_DIR ] || unset \"$name\"; done",
     'TMPDIR="$AIBOARD_PLAYWRIGHT_STATE/tmp"; TEMP="$TMPDIR"; TMP="$TMPDIR"; PWTEST_SOCKETS_DIR="$AIBOARD_PLAYWRIGHT_SOCKETS"',
     "export TMPDIR TEMP TMP PWTEST_SOCKETS_DIR",
     ...(linux ? ['XDG_CONFIG_HOME="$AIBOARD_PLAYWRIGHT_STATE/xdg"', "export XDG_CONFIG_HOME"] : []),
@@ -288,15 +332,21 @@ type Owner = { readonly runId: string; readonly sessionId: string; readonly proc
  *
  * POSIX stop check (spike §9.5, §9.6; DECISION 2026-09-19 §8). The Runner's stop proves only the managed process
  * group, and Chrome leaves it (setsid). The check records that known escape and blocks on it; it never signals a
- * process outside the group (§8.3). No process table is listed, and nothing is matched by name or ancestry. A
- * session process is one the Runner itself launched as `playwright-cli-session` (its launch record). When one is
- * stopped, the Runner reads, before and after the stop, the browser PIDs Chrome wrote into the profiles in the
- * owner's state folder (`SingletonLock -> <host>-<pid>`), confirms each (command line naming that profile; birth and
- * group unchanged around the read), and waits a short grace for the browser and its group to leave. Chrome quits on
- * DevTools-pipe EOF when the daemon dies (spike §5). A browser still there, or one that cannot be read, is recorded
- * and fails the stop closed (`process_cleanup_unverified`), so nothing is released while it runs. Crashpad handlers
- * leave Chrome's group too, are not in any file, and exit with Chrome; this check does not claim them. Windows does
- * nothing here: the Job proves the whole tree.
+ * process outside the group (§8.3). Nothing is matched by name or ancestry, and the host's processes are never
+ * enumerated to find the browser: the only listing is the zombie-aware group snapshot (`ps -e -o pid=,pgid=,stat=`)
+ * on the grace's last pass, once per browser group that still answers kill(-group, 0), read only as emptiness
+ * evidence. A session process is one the Runner itself launched as `playwright-cli-session` (its launch record).
+ * When one is stopped, the Runner reads, before and after the stop, the browser PIDs Chrome wrote into the profiles
+ * in the owner's state folder (`SingletonLock -> <host>-<pid>`), confirms each (command line naming that profile;
+ * birth and group unchanged around the read), and waits a short grace for the browser and its group to leave.
+ * Chrome quits on DevTools-pipe EOF when the daemon dies (spike §5).
+ *
+ * A browser still there, or one that cannot be read, is recorded (`escaped`/`unknown`) and the owner folder stays.
+ * The session process's own stop is still proven, so the stop itself succeeds and an agent's close never pauses its
+ * run. A known escape is kept per owner folder and re-checked on the owner's later stops; the run's folder removal
+ * (`removeRun`) checks every owner again and throws `process_cleanup_unverified` while one runs, so the run's
+ * resources are not released. Crashpad handlers leave Chrome's group too, are not in any file, and exit with
+ * Chrome; this check does not claim them. Windows does nothing here: the Job proves the whole tree.
  */
 export class PlaywrightCliSessions {
   private readonly runs = new Map<string, RunBrowsing>();
@@ -310,6 +360,8 @@ export class PlaywrightCliSessions {
   /** Session launches per owner key; a change between a stop's two halves means a new session started. */
   private readonly launches = new Map<string, number>();
   private readonly socketNames = new Map<string, string>();
+  /** Browsers recorded as escaped, per owner folder, until a later check proves them gone. */
+  private readonly knownEscapes = new Map<string, readonly AttributedBrowserProcess[]>();
 
   constructor(private readonly options: PlaywrightCliSessionsOptions) {
     this.platform = options.platform ?? process.platform;
@@ -389,9 +441,11 @@ export class PlaywrightCliSessions {
       const survivors: number[] = [];
       let unknown = false;
       for (const name of safeReaddir(folder).filter((entry) => /^t-[0-9a-f]{8}$/.test(entry))) {
-        const outcome = await this.clean({ runId, sessionId: name, processId: "run" }, join(folder, name), this.leaders(join(folder, name)), false);
+        const owner = join(folder, name);
+        const leaders = this.leaders(owner);
+        const outcome = await this.clean({ runId, sessionId: name, processId: "run" }, owner, leaders && withKnown(this.knownEscapes.get(owner), leaders), false);
         if (outcome === "unknown") unknown = true;
-        else if (outcome !== "clean") survivors.push(...outcome);
+        else if (outcome !== "clean") survivors.push(...outcome.map((entry) => entry.pid));
       }
       if (unknown || survivors.length > 0) {
         this.runs.set(runId, Object.freeze({ browser: null }));
@@ -402,6 +456,7 @@ export class PlaywrightCliSessions {
     }
     try { rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
     catch { /* a held file on Windows; the next removal or the state directory's own cleanup takes it */ }
+    for (const key of [...this.knownEscapes.keys()]) if (key.startsWith(`${folder}${sep}`)) this.knownEscapes.delete(key);
     for (const [key, name] of [...this.socketNames]) {
       if (!key.startsWith(`${runId}\0`)) continue;
       this.socketNames.delete(key);
@@ -484,6 +539,11 @@ export class PlaywrightCliSessions {
     return { kind: "session", folder, launches: this.launches.get(ownerKey(target)) ?? 0, before: this.leaders(folder) };
   }
 
+  /**
+   * Never throws for the browser: the session process's own stop is proven by the time this runs, and a stop that
+   * failed here would pause the closing agent's whole run (a verifier's, a reviewer's or an Architect copy's close).
+   * An escaped or unreadable browser is recorded, the owner folder stays, and `removeRun` blocks on it.
+   */
   private async afterStop(target: Readonly<ManagedProcessTarget>, recorded: unknown): Promise<void> {
     if (!recorded || typeof recorded !== "object" || (recorded as StopRecord).kind !== "session") return;
     const stop = recorded as StopRecord;
@@ -492,30 +552,26 @@ export class PlaywrightCliSessions {
     // recorded before the stop is this session's browser, and the folder stays.
     const restarted = (this.launches.get(ownerKey(target)) ?? 0) !== stop.launches;
     const now = restarted ? [] : this.leaders(stop.folder);
-    const all = new Map<string, AttributedBrowserProcess>();
-    for (const entry of [...(stop.before ?? []), ...(now ?? [])]) all.set(`${entry.pid}:${entry.birth}`, entry);
-    const outcome = await this.clean(target, stop.folder, stop.before === undefined && now === undefined ? undefined : [...all.values()], !restarted);
-    if (outcome === "unknown") {
-      throw new ManagedProcessError("process_cleanup_unverified", "The browser session's browser could not be read after its stop.");
-    }
-    if (outcome !== "clean") {
-      throw new ManagedProcessError("process_cleanup_unverified",
-        `The browser session's browser is still running outside the owned process group after its stop (PIDs ${outcome.join(", ")}); `
-        + "it is recorded, not signalled, and the stop stays unverified until it exits.");
+    const read = stop.before === undefined && now === undefined ? undefined : [...(stop.before ?? []), ...(now ?? [])];
+    try { await this.clean(target, stop.folder, read && withKnown(this.knownEscapes.get(stop.folder), read), !restarted); }
+    catch {
+      // Only a fault of the check itself lands here (the reads never throw): record it as unknown, never fail the stop.
+      this.record(target, "unknown", [], []);
     }
   }
 
   /**
    * Waits a short grace for the session's browser to leave (Chrome quits on DevTools-pipe EOF), and records the
-   * outcome. A browser still there is a known escape: recorded and returned, so the caller fails the stop closed and
-   * nothing is released, but never signalled (DECISION 2026-09-19 §8.3). "clean", "unknown" or the escaped PIDs.
+   * outcome. A browser still there is a known escape: recorded, kept for the owner folder's later checks and
+   * returned, never signalled (DECISION 2026-09-19 §8.3). "clean", "unknown" or the escaped browsers.
    */
-  private async clean(owner: Owner, folder: string, attributed: readonly AttributedBrowserProcess[] | undefined, removeFolder: boolean): Promise<"clean" | "unknown" | number[]> {
+  private async clean(owner: Owner, folder: string, attributed: readonly AttributedBrowserProcess[] | undefined, removeFolder: boolean): Promise<"clean" | "unknown" | AttributedBrowserProcess[]> {
     if (attributed === undefined) {
-      this.record(owner, "unknown", [], []);
+      this.record(owner, "unknown", this.knownEscapes.get(folder) ?? [], []);
       return "unknown";
     }
     const done = (status: BrowserCleanupRecord["status"]): "clean" => {
+      this.knownEscapes.delete(folder);
       this.record(owner, status, attributed, []);
       if (removeFolder) { try { rmSync(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* removed with the run */ } }
       return "clean";
@@ -523,8 +579,9 @@ export class PlaywrightCliSessions {
     if (attributed.length === 0) return done("none");
     const lingering = await this.waitGone(attributed, this.options.graceMs ?? POSIX_BROWSER_EXIT_GRACE_MS);
     if (lingering.length === 0) return done("exited");
+    this.knownEscapes.set(folder, Object.freeze(lingering));
     this.record(owner, "escaped", attributed, lingering.map((entry) => entry.pid));
-    return lingering.map((entry) => entry.pid);
+    return lingering;
   }
 
   private record(owner: Owner, status: BrowserCleanupRecord["status"], attributed: readonly AttributedBrowserProcess[], alive: readonly number[]): void {
@@ -557,6 +614,13 @@ export class PlaywrightCliSessions {
       await this.sleep(100);
     }
   }
+}
+
+/** The browsers read now, with the owner folder's earlier known escapes, each once (by PID and birth). */
+function withKnown(known: readonly AttributedBrowserProcess[] | undefined, read: readonly AttributedBrowserProcess[]): AttributedBrowserProcess[] {
+  const all = new Map<string, AttributedBrowserProcess>();
+  for (const entry of [...(known ?? []), ...read]) all.set(`${entry.pid}:${entry.birth}`, entry);
+  return [...all.values()];
 }
 
 function ownerKey(owner: { readonly runId: string; readonly sessionId: string }): string {

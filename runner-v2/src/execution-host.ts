@@ -137,8 +137,8 @@ export interface ExecutionHostRunBindingInput {
 
 /**
  * VF7b: a run's hook around every managed stop. `beforeStop` records; it never blocks or fails the stop.
- * `afterStop` runs once the owned process is proven stopped and throws when its own cleanup is unproven,
- * which leaves the stop unverified (fail closed).
+ * `afterStop` runs once the owned process is proven stopped; a throw leaves the stop unverified (fail closed).
+ * playwright-cli.ts never throws there: a browser it cannot prove gone is recorded and blocks the run's release.
  */
 export interface ManagedProcessStopObserver {
   /** The Runner's own launch request, before the launch (never a model's text about it). Never blocks or fails it. */

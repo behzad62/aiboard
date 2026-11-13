@@ -14,7 +14,7 @@
 // kill of 2). The full kill-kind matrix and its user-temp check (2, 5) start a browser per kind and run with
 // AIBOARD_PLAYWRIGHT_EXHAUSTIVE=1, locally and in Docker.
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { type ChildProcess, execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -25,7 +25,8 @@ import { promisify } from "node:util";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createChildEnvironmentFactory } from "../src/child-environment.js";
-import { createExecutionHost } from "../src/execution-host.js";
+import { createExecutionHost, observeManagedStops } from "../src/execution-host.js";
+import { ManagedProcessService } from "../src/managed-process.js";
 import { createManagedProcessTools } from "../src/managed-process-tools.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import {
@@ -42,7 +43,7 @@ import {
   type PlaywrightCliBrowser,
   type PosixProcessTable,
 } from "../src/playwright-cli.js";
-import { refusalFor, rewriteNotOpen } from "../src/playwright-cli-guard.mjs";
+import { refusalFor, rewriteNotOpen, sanitizeCliEnvironment } from "../src/playwright-cli-guard.mjs";
 import type { PosixProcessIdentityInspection } from "../src/portable-process-posix-control.mjs";
 import { createProcessTools, processRunSupport } from "../src/process-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -208,9 +209,14 @@ function profilesInUserTemp(): string[] {
 // The design's own bound: a stop runs the POSIX check (its grace for the browser to leave) before it returns, so
 // nothing of a stopped session may still run once both have passed; Windows' Job proves the tree at the stop itself.
 const AFTER_STOP_MS = POSIX_BROWSER_EXIT_GRACE_MS;
+/**
+ * The CLI's `close` is not a Runner stop: the daemon leaves by itself, at the host's pace, so no product bound
+ * applies. A harness bound only, never a product deadline: each wait returns as soon as its condition holds.
+ */
+const AFTER_CLOSE_HARNESS_MS = 25_000;
 
 async function pollUntilStopped(f: Fixture, processId: string, agent = "worker-a"): Promise<Record<string, unknown>> {
-  for (const deadline = Date.now() + AFTER_STOP_MS; ;) {
+  for (const deadline = Date.now() + AFTER_CLOSE_HARNESS_MS; ;) {
     const polled = await poll(f, processId, agent);
     if (polled.status !== "running" || Date.now() > deadline) return polled;
     await sleep(250);
@@ -275,16 +281,18 @@ test("one run: a refusal, the no-browser message, a managed session serving late
       assert.deepEqual(await waitFor(() => sessionProcesses(f.folder("worker-b")), (rows) => rows.length === 0, AFTER_STOP_MS), []);
       assert.ok(sessionProcesses(f.folder("worker-a")).length > 0, "worker-a's browser still runs");
       if (!WINDOWS) {
-        // The check really ran on the session's own stop (the stop target's pid is the supervisor's, not the daemon's).
-        const records = f.sessions.cleanupRecords().filter((record) => record.sessionId === "worker-b");
-        assert.ok(records.length > 0 && records.every((record) => ["none", "exited"].includes(record.status)), JSON.stringify(f.sessions.cleanupRecords()));
+        // The check really ran on the session's own stop (the stop target's pid is the supervisor's, not the daemon's),
+        // attributed worker-b's browser through its profile, and saw it leave within the grace.
+        const stop = f.sessions.cleanupRecords().find((record) => record.sessionId === "worker-b" && record.processId === b.processId);
+        assert.equal(stop?.status, "exited", JSON.stringify(f.sessions.cleanupRecords()));
+        assert.ok(stop!.attributed.length > 0, "the hard-killed session's browser was attributed");
       }
 
       // 1. close stops worker-a's session, and a later call through process.run says how to start it again.
       assert.match(await direct(f, ["close"]), /closed/i);
       const state = await pollUntilStopped(f, processId);
       assert.notEqual(state.status, "running", JSON.stringify(state));
-      assert.deepEqual(await waitFor(() => sessionProcesses(f.folder()), (rows) => rows.length === 0, AFTER_STOP_MS), [], "nothing is left after close");
+      assert.deepEqual(await waitFor(() => sessionProcesses(f.folder()), (rows) => rows.length === 0, AFTER_CLOSE_HARNESS_MS), [], "nothing is left after close");
       const after = await f.cli(["snapshot"]);
       assert.match(after.text, /is not running\. Start this agent session's browser once with process\.start: command playwright-cli-session/, after.text);
       assert.doesNotMatch(after.text, /playwright-cli open/, after.text);
@@ -437,6 +445,9 @@ test("Playwright still reads the hooks the session design relies on (fails when 
   assert.match(bundle, /UNIX_SOCKET_PATH_MAX = 103/, "the socket budget this module computes with");
   assert.match(bundle, /options\.outputDir = envToString\(e\.PLAYWRIGHT_MCP_OUTPUT_DIR\)/, "the output folder");
   assert.match(bundle, /"Daemon listening on/, "the readiness line");
+  assert.match(bundle, /\(env \?\? process\.env\)\["PWTEST_CLI_GLOBAL_CONFIG"\] \?\? import_os\d+\.default\.homedir\(\), "\.playwright", "cli\.config\.json"/, "the global config the session command replaces");
+  assert.match(bundle, /options\.cdpEndpoint = envToString\(e\.PLAYWRIGHT_MCP_CDP_ENDPOINT\)/, "a PLAYWRIGHT_MCP_* variable the session command drops");
+  assert.match(bundle, /result2 = mergeConfig\(result2, resolveConfigPaths\(configInFile, configDir\)\);\s*result2 = mergeConfig\(result2, resolveConfigPaths\(envOverrides, process\.cwd\(\)\)\);/, "the environment outranks --config");
   assert.ok(existsSync(resolvePlaywrightCliInstall().daemon), "the daemon entry the session command runs");
   assert.ok(existsSync(resolvePlaywrightCliInstall().cli), "the CLI entry the shim runs");
 });
@@ -466,9 +477,100 @@ test("the shims run the bundled CLI and daemon in the foreground: an exec-ing sh
   assert.match(cli!.content, /"C:\\AIBoard\\node\.exe" "C:\\AIBoard\\guard\.mjs" %\*/);
 });
 
+test("the session command refuses a second session for its owner and keeps the user's Playwright config out (a stand-in daemon)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pw-shim-"));
+  const children: ChildProcess[] = [];
+  const stopTree = (child: ChildProcess) => {
+    if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
+    if (WINDOWS) { try { execFileSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }); } catch { /* gone */ } }
+    else child.kill("SIGKILL");
+  };
+  try {
+    // A stand-in for cliDaemon.js: prints what it was given, then serves until it is stopped.
+    const daemon = join(root, "core", "cliDaemon.js");
+    await mkdir(dirname(daemon), { recursive: true });
+    await writeFile(daemon, [
+      "const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(PLAYWRIGHT_MCP_|PWTEST_CLI_GLOBAL_CONFIG$)/i.test(k)));",
+      "process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), env }) + '\\n');",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    const bin = installPlaywrightCliShims(join(root, "bin"), { ...resolvePlaywrightCliInstall(), daemon });
+    const state = join(root, "state", "t-0000000a");
+    const ambient = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(PLAYWRIGHT_|PWTEST_|AIBOARD_PLAYWRIGHT_)/i.test(name)));
+    const env = { ...ambient, PLAYWRIGHT_CLI_SESSION: "t-0000000a", AIBOARD_PLAYWRIGHT_STATE: state, AIBOARD_PLAYWRIGHT_SOCKETS: join(root, "s"),
+      AIBOARD_PLAYWRIGHT_BROWSER: "chromium", PLAYWRIGHT_MCP_OUTPUT_DIR: join(root, "out"),
+      // A user's or a model's PLAYWRIGHT_MCP_* would outrank --config and point the session elsewhere.
+      PLAYWRIGHT_MCP_CDP_ENDPOINT: "http://127.0.0.1:9", PLAYWRIGHT_MCP_EXECUTABLE_PATH: "/elsewhere/chrome", PWTEST_CLI_GLOBAL_CONFIG: join(root, "home") };
+    const start = () => {
+      const child = WINDOWS
+        ? spawn("cmd.exe", ["/d", "/c", join(bin, "playwright-cli-session.cmd")], { env, cwd: root })
+        : spawn(join(bin, "playwright-cli-session"), [], { env, cwd: root });
+      children.push(child);
+      let stdout = "", stderr = "";
+      child.stdout!.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+      child.stderr!.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+      const exited = new Promise<number | null>((done) => child.once("close", (code) => done(code)));
+      // The design's bound for a start to answer (the session's own `until` wait is longer); never raised to pass.
+      const line = async (): Promise<{ argv: string[]; env: Record<string, string> }> => {
+        const deadline = Date.now() + 15_000;
+        while (!stdout.includes("\n")) {
+          if (child.exitCode !== null || Date.now() > deadline) throw new Error(`no output (exit ${child.exitCode}): ${stderr}`);
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return JSON.parse(stdout.slice(0, stdout.indexOf("\n")));
+      };
+      return { child, line, exited, stderr: () => stderr };
+    };
+
+    const first = start();
+    const seen = await first.line();
+    assert.ok(seen.argv.includes("t-0000000a"));
+    const keys = Object.keys(seen.env).map((name) => name.toUpperCase()).sort();
+    assert.deepEqual(keys, ["PLAYWRIGHT_MCP_OUTPUT_DIR", "PWTEST_CLI_GLOBAL_CONFIG"], "only the output folder and the Runner's global config reach the daemon");
+    const global = Object.entries(seen.env).find(([name]) => name.toUpperCase() === "PWTEST_CLI_GLOBAL_CONFIG")![1];
+    assert.equal(global, join(state, "global"));
+    assert.equal(readFileSync(join(global, ".playwright", "cli.config.json"), "utf8").trim(), "{}");
+    assert.equal(readFileSync(join(state, "cli.config.json"), "utf8").trim(), "{}");
+
+    // A second start for the same owner while the first runs: refused, nothing started.
+    const second = start();
+    assert.equal(await second.exited, 5, second.stderr());
+    assert.match(second.stderr(), /already running/);
+
+    stopTree(first.child);
+    await first.exited;
+    // POSIX: the pidfile now names a dead PID, then a live PID that runs something else; neither is a session.
+    if (!WINDOWS) {
+      const stale = start();
+      await stale.line();
+      stopTree(stale.child);
+      await stale.exited;
+      await writeFile(join(state, "session.pid"), `${process.pid}\n`);
+    }
+    const third = start();
+    await third.line();
+    stopTree(third.child);
+    await third.exited;
+  } finally {
+    for (const child of children) stopTree(child);
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("the playwright-cli guard drops every PLAYWRIGHT_MCP_* but the output folder and reads the global config from the owner's folder", () => {
+  const environment: NodeJS.ProcessEnv = { PLAYWRIGHT_MCP_CDP_ENDPOINT: "x", PLAYWRIGHT_MCP_OUTPUT_DIR: ".aiboard-browser", AIBOARD_PLAYWRIGHT_STATE: join(tmpdir(), "st"), PATH: "/bin" };
+  sanitizeCliEnvironment(environment, "linux");
+  assert.deepEqual(Object.keys(environment).sort(), ["AIBOARD_PLAYWRIGHT_STATE", "PATH", "PLAYWRIGHT_MCP_OUTPUT_DIR", "PWTEST_CLI_GLOBAL_CONFIG"]);
+  assert.equal(environment.PWTEST_CLI_GLOBAL_CONFIG, join(tmpdir(), "st", "global"));
+  const windows: NodeJS.ProcessEnv = { playwright_mcp_browser: "firefox", Playwright_MCP_Output_Dir: ".aiboard-browser" };
+  sanitizeCliEnvironment(windows, "win32");
+  assert.deepEqual(Object.keys(windows), ["Playwright_MCP_Output_Dir"], "Windows names match without case");
+});
+
 // ---------------------------------------------------------------- the POSIX post-stop check (fake processes)
 
-test("the POSIX post-stop check reads the session's browser from its own profile, records an escape without signalling it, and fails closed", { skip: WINDOWS ? "the check is POSIX-only and its fake profiles need symlinks" : false }, async () => {
+test("the POSIX post-stop check reads the session's browser from its own profile, records an escape without signalling it, re-checks it on later stops, and blocks the run's removal", { skip: WINDOWS ? "the check is POSIX-only and its fake profiles need symlinks" : false }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pw-check-"));
   try {
     type Proc = { pid: number; pgid: number; birth: string; command: string; alive: boolean };
@@ -533,21 +635,31 @@ test("the POSIX post-stop check reads the session's browser from its own profile
     assert.deepEqual(records, ["exited"], "every outcome reaches onCleanup");
     assert.equal(existsSync(folder), false, "the owner's folder goes with a clean stop");
 
-    // A browser still there after the grace is a known escape: recorded, never signalled, and the stop fails closed.
+    // A browser still there after the grace is a known escape: recorded and never signalled. The session process's
+    // own stop is proven, so the stop itself succeeds (an agent's close never pauses its run); the folder stays.
     launch("mp-session-2");
     const p2 = await profile("playwright_chromiumdev_profile-e", "box-700");
     add({ pid: 700, pgid: 700, birth: "b700", command: `/chrome --user-data-dir=${p2} --headless` });
-    await assert.rejects(stop("mp-session-2"), /still running outside the owned process group after its stop \(PIDs 700\); it is recorded, not signalled/);
+    await stop("mp-session-2");
     assert.equal(last().status, "escaped");
     assert.deepEqual([...last().alive], [700]);
     assert.equal(table.get(700)!.alive, true, "nothing outside the managed group is signalled");
     assert.equal(table.get(400)!.alive, true);
-    assert.equal(existsSync(folder), true, "an unverified stop keeps the folder");
+    assert.equal(existsSync(folder), true, "an unverified browser keeps the folder");
+
+    // The owner's next stop re-checks the known escape even when its profile no longer names it.
+    await rm(join(p2, "SingletonLock"));
+    launch("mp-session-2b");
+    await stop("mp-session-2b");
+    assert.equal(last().status, "escaped");
+    assert.deepEqual([...last().alive], [700], "a known escape is re-checked and reported again");
+    await symlink("box-700", join(p2, "SingletonLock"));
 
     // The recorded PID reused by another program (new birth): the browser and its group are gone.
     launch("mp-session-3");
     await stop("mp-session-3", () => { table.set(700, { pid: 700, pgid: 700, birth: "reused", command: "/bin/other", alive: true }); });
     assert.equal(last().status, "exited");
+    assert.deepEqual(last().attributed.map((entry) => entry.pid), [700], "the known escape was checked again");
 
     // A session started again between the two halves: only the browser recorded before is the stopped session's;
     // the new session's browser is not looked at, and the folder stays.
@@ -568,22 +680,23 @@ test("the POSIX post-stop check reads the session's browser from its own profile
     const p5 = await profile("playwright_chromiumdev_profile-h", "box-730");
     add({ pid: 730, pgid: 730, birth: "b730", command: `/chrome --user-data-dir=${p5}` });
     add({ pid: 731, pgid: 730, birth: "b731", command: "/chrome --type=gpu-process" });
-    await assert.rejects(stop("mp-session-5", () => { table.get(730)!.alive = false; }), /still running outside the owned process group/);
+    await stop("mp-session-5", () => { table.get(730)!.alive = false; });
     assert.equal(last().status, "escaped");
     assert.equal(table.get(731)!.alive, true, "never signalled");
     table.get(731)!.alive = false;
 
-    // Nothing could be read: unknown, and the stop fails closed.
+    // Nothing could be read: recorded as unknown, the folder stays, and the stop still succeeds.
     launch("mp-session-6");
     const p6 = await profile("playwright_chromiumdev_profile-i", "box-740");
     add({ pid: 740, pgid: 740, birth: "b740", command: `/chrome --user-data-dir=${p6}` });
     readable = false;
-    await assert.rejects(stop("mp-session-6"), /could not be read/);
+    await stop("mp-session-6");
     assert.equal(last().status, "unknown");
+    assert.equal(existsSync(folder), true);
     readable = true;
 
-    // A session that ended by itself was never stopped: the run's removal checks its browser and refuses while it
-    // runs (the run's cleanup retries), then removes the folder once it is gone.
+    // The run's removal checks every owner folder again, with its known escapes (730's group has left by now), and
+    // refuses while a browser runs (the run's cleanup retries), then removes the folder once it is gone.
     await assert.rejects(sessions.removeRun(owner.runId), /still running outside its process group \(PIDs 740\); it is recorded, not signalled/);
     assert.equal(existsSync(sessions.runFolder(owner.runId)), true);
     assert.equal(table.get(740)!.alive, true);
@@ -600,6 +713,70 @@ test("the POSIX post-stop check reads the session's browser from its own profile
     w.launching!({ runId: owner.runId, sessionId: owner.sessionId, processId: "mp-w", command: "playwright-cli-session", args: [] });
     await w.afterStop(target("mp-w"), await w.beforeStop(target("mp-w")));
     assert.equal(reads, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an agent's close with a lingering browser succeeds and leaves a record: the verifier, the deliverable reviewer and an Architect copy", { skip: WINDOWS ? "the check is POSIX-only and its fake profiles need symlinks" : false }, async () => {
+  // native-verifier-runtime.ts, native-deliverable-review.ts and native-architect-runtime.ts each end their agent with
+  // ManagedProcessService.closeAgent(owner); a throw there pauses the whole Build. A real service over a scripted
+  // runtime, wrapped by the real stop observer: only the processes are fake.
+  const root = await mkdtemp(join(tmpdir(), "pw-close-"));
+  try {
+    const alive = new Set<number>();
+    const commands = new Map<number, string>();
+    const processes: PosixProcessTable = {
+      inspect: (pids) => new Map(pids.map((pid): [number, PosixProcessIdentityInspection] =>
+        [pid, alive.has(pid) ? { state: "present", value: { pid, groupId: pid, birth: `b${pid}` } } : { state: "absent" }])),
+      commandLine: (pid) => (alive.has(pid) ? commands.get(pid) : undefined),
+      groupAlive: (groupId) => alive.has(groupId),
+      hostname: () => "box",
+    };
+    const sessions = new PlaywrightCliSessions({ stateRoot: join(root, "pw"), binDirectory: join(root, "bin"), platform: "linux", processes,
+      graceMs: 50, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 10))) });
+    const runId = "run-close";
+    sessions.configureRun(runId, { browser: "chromium" });
+    const snapshot = (processId: string, status: "running" | "stopped") => ({ processId, pid: 99, status, exitCode: null, signal: null,
+      startedAt: "2026-11-13T00:00:00.000Z", updatedAt: "2026-11-13T00:00:00.000Z", stdout: "", stderr: "" });
+    let stops = 0;
+    const scripted = {
+      runId,
+      async start(request: { identity: { processId: string } }) { return snapshot(request.identity.processId, "running"); },
+      async observe(target: { processId: string }) { return snapshot(target.processId, "running"); },
+      async stop(target: { processId: string }) { stops += 1; return snapshot(target.processId, "stopped"); },
+    };
+    let id = 0;
+    const service = new ManagedProcessService({ stateDirectory: join(root, "state"), idFactory: () => `mp-${++id}`,
+      runtime: observeManagedStops(scripted as unknown as Parameters<typeof observeManagedStops>[0], sessions.stopObserver()) });
+    const owners = [
+      { name: "verifier", owner: { runId, sessionId: "verifier-task-1", actor: { role: "verifier" as const, id: "verifier-a" } } },
+      { name: "deliverable reviewer", owner: { runId, sessionId: "deliverable-review-1", actor: { role: "verifier" as const, id: "reviewer-a" } } },
+      { name: "Architect copy", owner: { runId, sessionId: "architect-commands-1", actor: { role: "architect" as const, id: "architect" } } },
+    ];
+    let pid = 800;
+    for (const { name, owner } of owners) {
+      await service.start({ command: "playwright-cli-session" }, { ...owner, workspacePath: root, callId: `call-${name}`, toolName: "process.start",
+        executionGrant: Object.freeze({}) as never });
+      const profile = join(sessions.ownerFolder(owner), "tmp", "playwright_chromiumdev_profile-x");
+      await mkdir(profile, { recursive: true });
+      await symlink(`box-${++pid}`, join(profile, "SingletonLock"));
+      alive.add(pid); commands.set(pid, `/chrome --user-data-dir=${profile} --headless`);
+      await service.closeAgent(owner); // resolves: the run goes on
+      const record = sessions.cleanupRecords().at(-1)!;
+      assert.equal(record.sessionId, owner.sessionId, name);
+      assert.equal(record.status, "escaped", `${name}: the lingering browser is recorded`);
+      assert.deepEqual([...record.alive], [pid], name);
+      assert.equal(alive.has(pid), true, `${name}: never signalled`);
+      assert.equal(existsSync(sessions.ownerFolder(owner)), true, `${name}: its folder stays`);
+    }
+    assert.equal(stops, 3);
+    // Run-level release still blocks on every recorded browser, and goes ahead once they are gone.
+    await assert.rejects(sessions.removeRun(runId), (error: Error & { code?: string }) => error.code === "process_cleanup_unverified" && /PIDs 801, 802, 803/.test(error.message));
+    alive.clear();
+    await sessions.removeRun(runId);
+    assert.equal(existsSync(sessions.runFolder(runId)), false);
+    await service.close();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

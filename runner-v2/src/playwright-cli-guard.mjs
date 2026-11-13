@@ -97,6 +97,19 @@ function interceptNotOpen(stream) {
   };
 }
 
+/**
+ * The client side of the session command's sanitizing (playwright-cli.ts): no PLAYWRIGHT_MCP_* but the output
+ * folder, and the global Playwright CLI config read from the owner's state folder, never the user's home.
+ */
+export function sanitizeCliEnvironment(environment, platform = process.platform) {
+  for (const name of Object.keys(environment)) {
+    const upper = platform === "win32" ? name.toUpperCase() : name;
+    if (upper.startsWith("PLAYWRIGHT_MCP_") && upper !== "PLAYWRIGHT_MCP_OUTPUT_DIR") delete environment[name];
+  }
+  if (environment.AIBOARD_PLAYWRIGHT_STATE) environment.PWTEST_CLI_GLOBAL_CONFIG = join(environment.AIBOARD_PLAYWRIGHT_STATE, "global");
+  return environment;
+}
+
 export function main(argv = process.argv.slice(2), environment = process.env) {
   const ownSession = environment.PLAYWRIGHT_CLI_SESSION || undefined;
   const refusal = refusalFor(argv, ownSession);
@@ -105,6 +118,7 @@ export function main(argv = process.argv.slice(2), environment = process.env) {
     process.exitCode = 2;
     return;
   }
+  sanitizeCliEnvironment(environment);
   const roots = playwrightRoots();
   interceptNotOpen(process.stdout);
   interceptNotOpen(process.stderr);
