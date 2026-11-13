@@ -519,7 +519,7 @@ export const CONTAINED_STOP_CONFIRMATION = "The process and every process it sta
  * without a Job): only the group. A process that left it keeps running and can still hold a port it inherited, so
  * this claims no closed port (docs/runner-v2/posix-detached-descendants.md).
  */
-export const PROCESS_GROUP_STOP_CONFIRMATION = "The process and every process still in its process group have exited. A process that left the group (setsid, setpgid, or spawn with detached: true) is not covered by this stop and may still be running or holding a port.";
+export const PROCESS_GROUP_STOP_CONFIRMATION = "The process and every process still in its process group have exited. A process that left the group (on POSIX: setsid, setpgid, or spawn with detached: true) is not covered by this stop and may still be running or holding a port.";
 
 /** The confirmation a verified stop earns, by the lifecycle scope its backend attested; no scope proves no more than a group. */
 export function stopConfirmation(scope: ManagedProcessSnapshot["lifecycleScope"]): string {

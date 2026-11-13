@@ -67,7 +67,9 @@ function sameEscapedChild(marker: string): boolean {
   return !!seen && !!now && now.pid === seen.pid && now.birth === seen.birth;
 }
 
+/** A child seen before stops only if it is still that PID and birth; one never seen (a failure came first) is taken at this sight. */
 function stopEscapedChild(marker: string): void {
+  if (!firstSeen.has(marker)) { const now = escapedChild(marker); if (now) firstSeen.set(marker, now); }
   if (sameEscapedChild(marker)) process.kill(firstSeen.get(marker)!.pid, "SIGKILL");
 }
 

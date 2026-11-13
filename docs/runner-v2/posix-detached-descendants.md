@@ -84,7 +84,7 @@ Limits:
 
 Say on POSIX what the group backend proves, and what it does not cover, so a model knows a detached child is its own concern:
 
-> The process and every process still in its process group have exited. A process that left the group (setsid, setpgid, or spawn with detached: true) is not covered by this stop and may still be running or holding a port.
+> The process and every process still in its process group have exited. A process that left the group (on POSIX: setsid, setpgid, or spawn with detached: true) is not covered by this stop and may still be running or holding a port.
 
 It makes no port claim, and it drops "No further check is needed": a leaver may hold an inherited socket. A contained workload keeps today's sentence, because its boundary proves the whole tree.
 
