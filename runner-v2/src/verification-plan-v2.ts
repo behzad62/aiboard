@@ -22,6 +22,7 @@ import {
   type VerificationNotRun,
 } from "./final-verification-contracts.js";
 import type { FinalVerificationCommand, FinalVerificationFact, FinalVerificationCommandFact } from "./final-verification-runtime.js";
+import { MAX_TIER_ARG_COUNT, MAX_TIER_TIMEOUT_MS } from "./project-validation-config.js";
 
 export const VERIFICATION_CONTRACT_VERSION = 2 as const;
 
@@ -45,6 +46,43 @@ export const VERIFICATION_PLAN_LIMITS = Object.freeze({
   maxRunTimeoutMs: 30 * 60_000,
   maxStartTimeoutMs: 300_000,
 });
+
+/** The bounds a command in a check is held to. */
+interface CommandLimits {
+  maxArgs: number;
+  maxArgLength: number;
+  minTimeoutMs: number;
+  maxRunTimeoutMs: number;
+  maxStartTimeoutMs: number;
+  /** A server the Architect starts takes the Runner-leased port as {port}. */
+  portPlaceholder: boolean;
+}
+
+/** A command the Architect writes. */
+const ARCHITECT_COMMAND_LIMITS: CommandLimits = Object.freeze({
+  maxArgs: VERIFICATION_PLAN_LIMITS.maxArgs,
+  maxArgLength: VERIFICATION_PLAN_LIMITS.maxArgLength,
+  minTimeoutMs: VERIFICATION_PLAN_LIMITS.minTimeoutMs,
+  maxRunTimeoutMs: VERIFICATION_PLAN_LIMITS.maxRunTimeoutMs,
+  maxStartTimeoutMs: VERIFICATION_PLAN_LIMITS.maxStartTimeoutMs,
+  portPlaceholder: true,
+});
+
+/**
+ * A command the Runner detected, which a v1 run accepts: an aiboard-validation.json
+ * tier command may have up to 100 args and any timeout from 1 ms. A suggestion, and a
+ * plan check that keeps a suggestion's commands, are held to these bounds, so a
+ * v1-valid project command never makes every plan invalid. A detected server already
+ * names its leased port, which the Runner resolves.
+ */
+export const VERIFICATION_SUGGESTION_LIMITS = Object.freeze({
+  maxArgs: MAX_TIER_ARG_COUNT,
+  maxArgLength: VERIFICATION_PLAN_LIMITS.maxArgLength,
+  minTimeoutMs: 1,
+  maxRunTimeoutMs: MAX_TIER_TIMEOUT_MS,
+  maxStartTimeoutMs: MAX_TIER_TIMEOUT_MS,
+  portPlaceholder: false,
+} satisfies CommandLimits);
 
 const CHECK_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
@@ -226,7 +264,10 @@ export interface VerificationPlanV2Validation {
 /**
  * Structural validation of a v2 plan, and with `suggestions` the rules the Runner holds the
  * Architect to: every suggested check is kept, changed or skipped with a reason; a mandatory
- * check is neither skipped nor changed; `origin` and `mandatory` are the Runner's.
+ * check is neither skipped nor changed; `origin` and `mandatory` are the Runner's; a check
+ * that runs commands the Architect wrote is held to the Architect's command bounds, and one
+ * that keeps a suggestion's commands to the Runner's. Without `suggestions` only the structure
+ * is checked, at the Runner's bounds.
  */
 export function validateVerificationPlanV2(
   plan: unknown,
@@ -247,8 +288,17 @@ export function validateVerificationPlanV2(
     issues.push(`The verification plan allows at most ${VERIFICATION_PLAN_LIMITS.maxChecks} checks.`);
   }
   const ids = new Set<string>();
+  const bySuggestion = new Map((options.suggestions ?? []).map((check) => [check.id, check]));
   for (const [index, candidate] of checks.entries()) {
-    issues.push(...checkIssues(candidate, index, true));
+    const suggestion = isRecord(candidate) && typeof candidate.id === "string" ? bySuggestion.get(candidate.id) : undefined;
+    const keepsCommands = suggestion !== undefined &&
+      sameValue(commandSpec(candidate as unknown as VerificationCheckV2), commandSpec(suggestion));
+    issues.push(...checkIssues(
+      candidate,
+      index,
+      true,
+      !options.suggestions || keepsCommands ? VERIFICATION_SUGGESTION_LIMITS : ARCHITECT_COMMAND_LIMITS,
+    ));
     if (isRecord(candidate) && typeof candidate.id === "string") {
       if (ids.has(candidate.id)) issues.push(`Check id ${candidate.id} is used more than once.`);
       ids.add(candidate.id);
@@ -370,7 +420,7 @@ function suggestionIssues(plan: VerificationPlanV2, suggestions: readonly Verifi
   return issues;
 }
 
-function checkIssues(candidate: unknown, index: number, full: boolean): string[] {
+function checkIssues(candidate: unknown, index: number, full: boolean, limits: CommandLimits): string[] {
   const at = `checks[${index}]`;
   if (!isRecord(candidate)) return [`${at} must be an object.`];
   const issues: string[] = [];
@@ -397,35 +447,35 @@ function checkIssues(candidate: unknown, index: number, full: boolean): string[]
   }
   if (kind === "start") {
     if (candidate.run !== undefined) issues.push(`Check ${name} is a start check: give start, not run.`);
-    issues.push(...startIssues(candidate.start, name));
+    issues.push(...startIssues(candidate.start, name, limits));
   } else if (typeof kind === "string") {
     if (candidate.start !== undefined) issues.push(`Check ${name} is a ${kind} check: give run, not start.`);
-    issues.push(...runIssues(candidate.run, name));
+    issues.push(...runIssues(candidate.run, name, limits));
   }
   if (candidate.outputs !== undefined) issues.push(...outputsIssues(candidate.outputs, `Check ${name} outputs`));
   return issues;
 }
 
-function runIssues(value: unknown, name: string): string[] {
+function runIssues(value: unknown, name: string, limits: CommandLimits): string[] {
   if (!isRecord(value)) return [`Check ${name} needs run: { executable, args }.`];
   const issues: string[] = [];
   const unknown = Object.keys(value).filter((key) => !["executable", "args", "cwd", "timeoutMs"].includes(key));
   if (unknown.length) issues.push(`Check ${name} run has unknown fields: ${unknown.join(", ")}.`);
-  issues.push(...commandIssues(value, `Check ${name} run`));
+  issues.push(...commandIssues(value, `Check ${name} run`, limits));
   if (value.cwd !== undefined && !relativeDirectory(value.cwd)) {
     issues.push(`Check ${name} run.cwd must be a directory inside the checkout, relative to its root (no '..', absolute or ':' paths).`);
   }
-  issues.push(...timeoutIssues(value.timeoutMs, VERIFICATION_PLAN_LIMITS.maxRunTimeoutMs, `Check ${name} run.timeoutMs`));
+  issues.push(...timeoutIssues(value.timeoutMs, limits.minTimeoutMs, limits.maxRunTimeoutMs, `Check ${name} run.timeoutMs`));
   return issues;
 }
 
-function startIssues(value: unknown, name: string): string[] {
+function startIssues(value: unknown, name: string, limits: CommandLimits): string[] {
   if (!isRecord(value)) return [`Check ${name} needs start: { executable, args, ready }.`];
   const issues: string[] = [];
   const unknown = Object.keys(value).filter((key) => !["executable", "args", "timeoutMs", "ready", "steps"].includes(key));
   if (unknown.length) issues.push(`Check ${name} start has unknown fields: ${unknown.join(", ")}.`);
-  issues.push(...commandIssues(value, `Check ${name} start`));
-  issues.push(...timeoutIssues(value.timeoutMs, VERIFICATION_PLAN_LIMITS.maxStartTimeoutMs, `Check ${name} start.timeoutMs`));
+  issues.push(...commandIssues(value, `Check ${name} start`, limits));
+  issues.push(...timeoutIssues(value.timeoutMs, limits.minTimeoutMs, limits.maxStartTimeoutMs, `Check ${name} start.timeoutMs`));
   const ready = value.ready;
   const readyKeys = isRecord(ready) ? Object.keys(ready) : [];
   if (!isRecord(ready) || readyKeys.length !== 1) {
@@ -437,7 +487,7 @@ function startIssues(value: unknown, name: string): string[] {
       !Number.isSafeInteger(http.status) || (http.status as number) < 100 || (http.status as number) > 599) {
       issues.push(`Check ${name} start.ready.http needs a path such as /healthz and an HTTP status from 100 to 599.`);
     }
-    if (Array.isArray(value.args) && !value.args.some((arg) => typeof arg === "string" && arg.includes(VERIFICATION_PORT_PLACEHOLDER))) {
+    if (limits.portPlaceholder && Array.isArray(value.args) && !value.args.some((arg) => typeof arg === "string" && arg.includes(VERIFICATION_PORT_PLACEHOLDER))) {
       issues.push(`Check ${name} is ready on HTTP, so start.args must pass the Runner-leased port as ${VERIFICATION_PORT_PLACEHOLDER}; the Runner owns the port.`);
     }
   } else if (readyKeys[0] === "outputLine") {
@@ -461,8 +511,8 @@ function startIssues(value: unknown, name: string): string[] {
         const extra = Object.keys(step).filter((key) => !["label", "executable", "args", "timeoutMs", "outputs"].includes(key));
         if (extra.length) issues.push(`${at} has unknown fields: ${extra.join(", ")}.`);
         if (!nonEmpty(step.label) || step.label.length > VERIFICATION_PLAN_LIMITS.maxLabelLength) issues.push(`${at}.label must name the step.`);
-        issues.push(...commandIssues(step, at));
-        issues.push(...timeoutIssues(step.timeoutMs, VERIFICATION_PLAN_LIMITS.maxStartTimeoutMs, `${at}.timeoutMs`));
+        issues.push(...commandIssues(step, at, limits));
+        issues.push(...timeoutIssues(step.timeoutMs, limits.minTimeoutMs, limits.maxStartTimeoutMs, `${at}.timeoutMs`));
         if (step.outputs !== undefined) issues.push(...outputsIssues(step.outputs, `${at}.outputs`));
       }
     }
@@ -470,23 +520,23 @@ function startIssues(value: unknown, name: string): string[] {
   return issues;
 }
 
-function commandIssues(value: Record<string, unknown>, at: string): string[] {
+function commandIssues(value: Record<string, unknown>, at: string, limits: CommandLimits): string[] {
   const issues: string[] = [];
   if (!nonEmpty(value.executable) || value.executable.includes("\0") || value.executable.length > 1_024) {
     issues.push(`${at}.executable must be a program name such as node.`);
   }
-  if (!Array.isArray(value.args) || value.args.length > VERIFICATION_PLAN_LIMITS.maxArgs ||
-    value.args.some((arg) => typeof arg !== "string" || arg.includes("\0") || arg.length > VERIFICATION_PLAN_LIMITS.maxArgLength)) {
-    issues.push(`${at}.args must be at most ${VERIFICATION_PLAN_LIMITS.maxArgs} strings without NUL characters.`);
+  if (!Array.isArray(value.args) || value.args.length > limits.maxArgs ||
+    value.args.some((arg) => typeof arg !== "string" || arg.includes("\0") || arg.length > limits.maxArgLength)) {
+    issues.push(`${at}.args must be at most ${limits.maxArgs} strings without NUL characters.`);
   }
   return issues;
 }
 
-function timeoutIssues(value: unknown, maximum: number, at: string): string[] {
+function timeoutIssues(value: unknown, minimum: number, maximum: number, at: string): string[] {
   if (value === undefined) return [];
-  return Number.isSafeInteger(value) && (value as number) >= VERIFICATION_PLAN_LIMITS.minTimeoutMs && (value as number) <= maximum
+  return Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= maximum
     ? []
-    : [`${at} must be an integer from ${VERIFICATION_PLAN_LIMITS.minTimeoutMs} to ${maximum}.`];
+    : [`${at} must be an integer from ${minimum} to ${maximum}.`];
 }
 
 function outputsIssues(value: unknown, at: string): string[] {
@@ -751,7 +801,7 @@ export function assertVerificationPlanResolution(value: unknown, port: number | 
     throw new Error("Final verification v2 resolution is invalid.");
   }
   for (const [index, suggestion] of value.suggestions.entries()) {
-    const issues = checkIssues(suggestion, index, true);
+    const issues = checkIssues(suggestion, index, true, VERIFICATION_SUGGESTION_LIMITS);
     if (issues.length) throw new Error(`Final verification v2 suggestion is invalid: ${issues.join(" ")}`);
   }
   const ids = new Set<string>();
@@ -1042,7 +1092,7 @@ export function parseVerificationPlanPrefillV2(value: unknown): VerificationPlan
     throw new Error("Final-verification plan prefill suggestedChecks are invalid.");
   }
   for (const [index, check] of value.suggestedChecks.entries()) {
-    const issues = checkIssues(check, index, true);
+    const issues = checkIssues(check, index, true, VERIFICATION_SUGGESTION_LIMITS);
     if (issues.length) throw new Error(`Final-verification plan prefill suggestion is invalid: ${issues.join(" ")}`);
   }
   return {
@@ -1057,11 +1107,25 @@ export function parseVerificationPlanPrefillV2(value: unknown): VerificationPlan
 // Tool schema
 // ---------------------------------------------------------------------------
 
+function timeoutSchema(architectMaximum: number): Record<string, unknown> {
+  return {
+    type: "integer",
+    minimum: VERIFICATION_SUGGESTION_LIMITS.minTimeoutMs,
+    maximum: VERIFICATION_SUGGESTION_LIMITS.maxRunTimeoutMs,
+    description: `Milliseconds. A command you write takes ${VERIFICATION_PLAN_LIMITS.minTimeoutMs} to ${architectMaximum}; a suggestion you keep is echoed as given.`,
+  };
+}
+
 /** JSON schema of the v2 plan as the Architect writes it (origin and mandatory are the Runner's). */
 export function verificationPlanV2Schema(): Record<string, unknown> {
   const command = {
     executable: { type: "string", minLength: 1, description: "Program to run in the verification checkout, e.g. node or npm." },
-    args: { type: "array", items: { type: "string" }, maxItems: VERIFICATION_PLAN_LIMITS.maxArgs },
+    args: {
+      type: "array",
+      items: { type: "string" },
+      maxItems: VERIFICATION_SUGGESTION_LIMITS.maxArgs,
+      description: `Arguments. Commands you write take at most ${VERIFICATION_PLAN_LIMITS.maxArgs}; a suggestion you keep is echoed as given.`,
+    },
   };
   const outputs = {
     type: "array",
@@ -1090,7 +1154,7 @@ export function verificationPlanV2Schema(): Record<string, unknown> {
               properties: {
                 ...command,
                 cwd: { type: "string", minLength: 1, description: "Directory inside the checkout, relative to its root." },
-                timeoutMs: { type: "integer", minimum: VERIFICATION_PLAN_LIMITS.minTimeoutMs, maximum: VERIFICATION_PLAN_LIMITS.maxRunTimeoutMs },
+                timeoutMs: timeoutSchema(VERIFICATION_PLAN_LIMITS.maxRunTimeoutMs),
               },
               required: ["executable", "args"],
               additionalProperties: false,
@@ -1100,7 +1164,7 @@ export function verificationPlanV2Schema(): Record<string, unknown> {
               description: "For start: run a program and see that it works. A server is ready on an HTTP status on the Runner-leased port ({port} in args), a CLI on its exit code, a desktop or headless mode on a line of its output; steps then run in order against it and must each exit 0.",
               properties: {
                 ...command,
-                timeoutMs: { type: "integer", minimum: VERIFICATION_PLAN_LIMITS.minTimeoutMs, maximum: VERIFICATION_PLAN_LIMITS.maxStartTimeoutMs },
+                timeoutMs: timeoutSchema(VERIFICATION_PLAN_LIMITS.maxStartTimeoutMs),
                 ready: {
                   type: "object",
                   description: "Exactly one of http, outputLine or exitCode.",
@@ -1124,7 +1188,7 @@ export function verificationPlanV2Schema(): Record<string, unknown> {
                     properties: {
                       label: { type: "string", minLength: 1 },
                       ...command,
-                      timeoutMs: { type: "integer", minimum: VERIFICATION_PLAN_LIMITS.minTimeoutMs, maximum: VERIFICATION_PLAN_LIMITS.maxStartTimeoutMs },
+                      timeoutMs: timeoutSchema(VERIFICATION_PLAN_LIMITS.maxStartTimeoutMs),
                       outputs,
                     },
                     required: ["label", "executable", "args"],

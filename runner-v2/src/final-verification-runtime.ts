@@ -731,10 +731,17 @@ export class FinalVerificationRuntime {
       ...(check.notRun ? { notRun: { ...check.notRun } } : {}),
     });
     const provisioning = input.profile.provisioning;
+    // A run check's commands launch in its own folder, so a bare command that lives
+    // there (gradlew with cwd android) is looked up there. Provisioning and a start
+    // check launch at the checkout root. A folder that leaves the checkout is
+    // refused at launch; its tools are looked up at the root.
+    const first = resolved.commands[0];
+    const cwd = resolved.mode !== "program" && first?.cwd ? joinWorkspace(input.workspace.path, first.cwd) : undefined;
+    const cwdIssue = cwd ? await directoryInsideIssue(input.workspace.path, cwd, resolved.checkId) : undefined;
     const notRun = await this.missingTool([
-      ...(provisioning ? [provisioning.command] : []),
-      ...resolved.commands,
-    ], input.workspace.path);
+      ...(provisioning ? [{ command: provisioning.command, cwd: input.workspace.path }] : []),
+      ...resolved.commands.map((command) => ({ command, cwd: cwd && !cwdIssue ? cwd : input.workspace.path })),
+    ]);
     if (notRun) {
       return {
         ...identity,
@@ -800,10 +807,7 @@ export class FinalVerificationRuntime {
         },
       }));
     }
-    const first = resolved.commands[0]!;
-    const cwd = first.cwd ? joinWorkspace(input.workspace.path, first.cwd) : undefined;
-    const cwdIssue = cwd ? await directoryInsideIssue(input.workspace.path, cwd, resolved.checkId) : undefined;
-    const reports = mode === "tests" ? reportDescriptorsFor(first, input.profile) : undefined;
+    const reports = mode === "tests" ? reportDescriptorsFor(first!, input.profile) : undefined;
     return toResult(await this.runCheck({
       check: { category: mode === "tests" ? "tests" : "build", status: "required" },
       commands: resolved.commands.map(({ outputs: _outputs, cwd: _cwd, ...command }) => command),
@@ -923,10 +927,11 @@ export class FinalVerificationRuntime {
     }
     // VF2: every tool this check needs is looked up before any of it launches.
     // A missing one is recorded as not run, never as a failure.
+    const commandCwd = input.v2?.cwd && !input.v2.cwdIssue ? input.v2.cwd : input.workspace.path;
     const notRun = await this.missingTool([
-      ...(input.provisioning ? [input.provisioning.command] : []),
-      ...checkCommands(check.category, input),
-    ], input.workspace.path);
+      ...(input.provisioning ? [{ command: input.provisioning.command, cwd: input.workspace.path }] : []),
+      ...checkCommands(check.category, input).map((command) => ({ command, cwd: commandCwd })),
+    ]);
     if (notRun) return { ...base, green: false, notRun };
     if (input.provisioning) {
       const provisioning = input.provisioning;
@@ -1278,18 +1283,22 @@ export class FinalVerificationRuntime {
     };
   }
 
+  /** Each command is looked up in the folder it launches in. */
   private async missingTool(
-    commands: readonly { executable: string; environment?: Readonly<Record<string, string | undefined>> }[],
-    cwd: string,
+    lookups: readonly {
+      command: { executable: string; environment?: Readonly<Record<string, string | undefined>> };
+      cwd: string;
+    }[],
   ): Promise<VerificationNotRun | undefined> {
     if (!this.toolLookup) return undefined;
     const missing: string[] = [];
     const seen = new Set<string>();
-    for (const command of commands) {
+    for (const { command, cwd } of lookups) {
       // A command that sets its own PATH searches directories the Runner did not look in.
       if (Object.keys(command.environment ?? {}).some((name) => name.toUpperCase() === "PATH")) continue;
-      if (seen.has(command.executable)) continue;
-      seen.add(command.executable);
+      const key = `${cwd}\u0000${command.executable}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       let found;
       try {
         found = await this.toolLookup(command.executable, { cwd });

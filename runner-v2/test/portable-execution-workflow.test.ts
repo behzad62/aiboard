@@ -21,6 +21,8 @@ const deterministicPrTests = [
   "runner-v2/test/planning-ui-fixture.test.ts",
   "runner-v2/test/native-build-manager.test.ts",
   "runner-v2/test/native-build-manager-readers.test.ts",
+  // VF3: the v1/v2 final-verification contract gate, in memory (about 1 s).
+  "runner-v2/test/verification-plan-v2-contract.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",
@@ -129,6 +131,8 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   for (const testPath of qualificationOnlyLeakGuards) {
     assert.equal(source.includes(testPath), false, `Host-sensitive qualification-only test leaked into required PR CI: ${testPath}.`);
   }
+  assert.equal(source.includes("runner-v2/test/verification-plan-v2.test.ts"), false,
+    "VF3's process tests (about 30 s of real checkouts and servers) stay out of required PR CI.");
   assert.equal(source.includes(nativeSmokeScript), true, "Required PR CI must retain one lightweight native-host smoke probe.");
   assert.doesNotMatch(source, /^  docker-oci-integration:/m,
     "Full Docker integration belongs to qualification, not the required hosted-runner PR gate.");

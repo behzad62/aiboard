@@ -2811,8 +2811,9 @@ test("T8-A1 synthetic complete-spec build spine with restart, correction, reuse,
     const taskBranches = [...worktreeList.matchAll(/^branch (.+)$/gm)].map((match) => match[1]!);
     assert.ok(taskBranches.length >= taskWorktrees.length, "each task worktree tracks its own branch");
     // Restart mid-validation behind an owner pause: the pause snapshot
-    // carries the stop and the Architect notes, and the reopened run
-    // resumes without duplicating work.
+    // carries the stop, and the reopened run resumes without duplicating
+    // work. An owner pause asks the Architect for no stop notes (72425614):
+    // the owner's reason is the note.
     await t8StepUntil("T-A submitted", served.runtime, (projection) => ["submitted", "architect_review"].includes(projection.tasks["T-A"]?.status ?? ""), 300);
     const pausedTask = served.runtime().projection().tasks["T-A"];
     const paused = await served.manager.pause(runId, "user", "pause:t8-spine-midrun");
@@ -2824,7 +2825,11 @@ test("T8-A1 synthetic complete-spec build spine with restart, correction, reuse,
     const repoPath = t8IntegrationRepoPath(state);
     const pauseBody = await t8GitText(repoPath, ["show", `${String(pauseSnapshot.payload.commit)}:${HANDOFF_STATE_PATH}`]);
     assert.ok(pauseBody.includes("T-A"), "the pause snapshot names the in-flight work");
-    assert.ok(pauseBody.includes(T8S_NOTES), "the pause snapshot carries the Architect notes");
+    assert.ok(!pauseBody.includes(T8S_NOTES), "an owner pause asks the Architect for no stop notes");
+    assert.ok(
+      pauseBody.includes("No Architect notes for this stop: the owner paused the run; the reason above is the note"),
+      "the pause snapshot says why it carries no Architect notes",
+    );
     await served.close();
     served = await serve();
     const recovery = await served.manager.recover();

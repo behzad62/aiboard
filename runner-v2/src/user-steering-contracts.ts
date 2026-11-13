@@ -490,14 +490,21 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
     case "final_verification_repair_plan_required": {
       exact(["finalVerificationTaskId", "generationId", "targetRevision", "source", "failedCategories", "failedCheckIds", "evidenceIds"]);
       const source = parseRepairSource(reason.source);
+      // VF3: a v2 reason names its failed checks by id and carries no category.
+      const failedCheckIds = reason.failedCheckIds === undefined
+        ? undefined
+        : requiredTextArray(reason, "failedCheckIds");
+      if (failedCheckIds && (!Array.isArray(reason.failedCategories) || reason.failedCategories.length !== 0)) {
+        throw new Error("failedCategories must be empty when failedCheckIds names the failed checks.");
+      }
       return {
         type,
         finalVerificationTaskId: text("finalVerificationTaskId"),
         generationId: text("generationId"),
         targetRevision: text("targetRevision"),
         source,
-        failedCategories: requiredTextArray(reason, "failedCategories"),
-        ...(reason.failedCheckIds === undefined ? {} : { failedCheckIds: requiredTextArray(reason, "failedCheckIds") }),
+        failedCategories: failedCheckIds ? [] : requiredTextArray(reason, "failedCategories"),
+        ...(failedCheckIds ? { failedCheckIds } : {}),
         evidenceIds: requiredTextArray(reason, "evidenceIds"),
       };
     }

@@ -2024,7 +2024,7 @@ const PLAN_FINAL_VERIFICATION_V2_DESCRIPTION = [
   "Create the kernel-owned final verification for the current canonical integration revision as your list of checks.",
   "The Runner suggests checks from what it detected (the prefill): keep each one, change it, or list it in skipped with a reason; then add checks of your own for what the acceptance criteria and README say a user does.",
   "Each check has an id (lowercase, no colon), a label, a kind (build, tests, start or other) and either run {executable, args, cwd?, timeoutMs?} or start {executable, args, ready, steps?}.",
-  "start runs the program the user runs: ready is {http: {path, status?}} on the Runner-leased port ({port} in args), {outputLine} the program prints, or {exitCode} for a CLI that runs and exits; steps then run in order against it and each must exit 0.",
+  "start runs the program the user runs: ready is {http: {path, status}} on the Runner-leased port ({port} in args), {outputLine} the program prints, or {exitCode} for a CLI that runs and exits; steps then run in order against it and each must exit 0.",
   "outputs keeps files the commands write (screenshots, reports) as evidence. origin and mandatory are the Runner's; a mandatory check cannot be skipped or changed.",
   "Checks whose commands you wrote need full access.",
 ].join(" ");
@@ -2174,9 +2174,11 @@ function reviewFinalVerificationV2Tool(
       summary: { type: "string", minLength: 1 },
       architectRisk: { type: "string", enum: ["low", "high"] },
       architectRiskRationale: { type: "string", minLength: 1 },
+      // A plan whose suggestions were all skipped, or that had none, runs no check
+      // and has nothing to review: the list may be empty. execute still needs one
+      // review per executed check.
       checkReviews: {
         type: "array",
-        minItems: 1,
         items: objectSchema({
           checkId: { type: "string", minLength: 1 },
           verdict: { type: "string", enum: ["approved", "repair_required"] },
@@ -2337,7 +2339,7 @@ function validateFinalVerificationReviewV2(input: unknown): ValidationResult<Rev
       !nonEmpty(value.summary) ||
       (value.architectRisk !== "low" && value.architectRisk !== "high") ||
       !nonEmpty(value.architectRiskRationale) ||
-      !Array.isArray(value.checkReviews) || value.checkReviews.length === 0 ||
+      !Array.isArray(value.checkReviews) ||
       value.categoryReviews !== undefined
     ) return null;
     const checkReviews: FinalVerificationCheckReviewInput[] = [];
