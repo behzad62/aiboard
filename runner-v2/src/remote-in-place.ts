@@ -110,8 +110,9 @@ export class RemoteController {
     // Events belong to one in-place session: a later launcher never replays an earlier session's pairing or error.
     this.queue.length = 0;
     const abort = new AbortController();
-    let entry: InPlaceRemote | undefined;
-    const emit = (event: RemoteEvent) => { if (!entry || entry.live) this.push(event); };
+    // create() may emit before the entry exists, so the closure reads it through a holder.
+    const session: { entry?: InPlaceRemote } = {};
+    const emit = (event: RemoteEvent) => { if (!session.entry || session.entry.live) this.push(event); };
     const service = await this.options.create(settings, emit, abort.signal);
     // The device owner lock is taken synchronously, before start() first awaits (pairing may then wait minutes).
     const starting = service.start();
@@ -122,8 +123,8 @@ export class RemoteController {
       throw failure instanceof Error ? failure
         : new Error("remote_already_active: Another AIBoard Runner has Remote on for this device; stop that Runner first.");
     }
-    entry = { service, settings, abort, live: true };
-    const started = entry;
+    const started: InPlaceRemote = { service, settings, abort, live: true };
+    session.entry = started;
     this.inPlace = started;
     this.renewLease(started);
     starting.catch((error: unknown) => {
