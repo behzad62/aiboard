@@ -2,6 +2,29 @@ name: Runner V2 portable execution
 
 on:
   pull_request:
+    # Docs-only and web-only pull requests skip this workflow; everything else runs it, Runner code, scripts, the
+    # lockfile and this workflow included. Later patterns win: the files after the exclusions are web or docs files a
+    # portable test or the publisher reads, and runner-v2/test/portable-execution-workflow.test.ts fails when a
+    # portable test reads one that this list leaves out. Pushes to main always run everything.
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!**/*.md"
+      - "!app/**"
+      - "!components/**"
+      - "!lib/**"
+      - "!tests/**"
+      - "!.github/workflows/benchmark-tests.yml"
+      - "!.github/workflows/deploy-aiboard.yml"
+      - "!.github/workflows/funboard-*.yml"
+      - "runner-v2/**"
+      - "TRADEMARKS.md"
+      - "docs/runner-v2/architecture.md"
+      - "app/discussion/discussion-client.tsx"
+      - "lib/account-provider-*.mjs"
+      - "lib/client/discussion-live-state.ts"
+      - "lib/db/schema.ts"
+      - "tests/e2e/runner-v2-t8-planning-journey.spec.ts"
   push:
     branches: [main]
   workflow_dispatch:
@@ -20,7 +43,15 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request cancels the run it replaces; runs on main are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Package parity and T8 coverage run as parallel parts (matrix.part) on the hosts where one job would take over
+  # about 3 minutes. Every step still runs on the same hosts; a part only decides which job it runs in. Keep the job
+  # count low: a public repository gets 20 concurrent jobs (5 on macOS), and more only queue.
   portable-contract:
     name: Portable contract (${{ matrix.os }}, Node ${{ matrix.node-version }})
     if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic')
@@ -35,15 +66,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Setup maintained Node
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
       - name: Acquire pinned Recoverable Job Service Runner source
         shell: bash
         run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
+      # node_modules exactly as npm ci left it, keyed by OS, CPU, Node version and lockfile. npm ci runs only when
+      # no saved copy matches, and its result is saved before any test runs.
+      - name: Restore installed dependencies
+        id: deps
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
         run: npm ci
+      - name: Save installed dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules
+          key: ${{ steps.deps.outputs.cache-primary-key }}
       - name: Run deterministic portable contract
         run: >-
           node node_modules/tsx/dist/cli.mjs --test
@@ -116,20 +163,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Setup maintained Node
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
       - name: Acquire pinned Recoverable Job Service Runner source
         shell: bash
         run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
+      - name: Restore installed dependencies
+        id: deps
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
         run: npm ci
+      - name: Save installed dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules
+          key: ${{ steps.deps.outputs.cache-primary-key }}
       - name: Probe the host-native adapter without lifecycle timing assertions
         run: node node_modules/tsx/dist/cli.mjs scripts/runner-v2-native-smoke.mts
 
   package-gate:
-    name: Package parity (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    name: Package parity (${{ matrix.os }}, Node ${{ matrix.node-version }}, ${{ matrix.part }})
     if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -138,35 +199,71 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
         node-version: [24.x]
+        # On Windows, archives (publish and check the archives, record their hashes) and install (install the packaged
+        # Runner) are separate jobs; on the other hosts one job runs both (all).
+        part: [archives, install, all]
+        exclude:
+          - os: windows-latest
+            part: all
+          - os: ubuntu-latest
+            part: archives
+          - os: ubuntu-latest
+            part: install
+          - os: macos-latest
+            part: archives
+          - os: macos-latest
+            part: install
     steps:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Setup maintained Node
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
       - name: Acquire pinned Recoverable Job Service Runner source
         shell: bash
         run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
+      - name: Restore installed dependencies
+        id: deps
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
         run: npm ci
-      - name: Prove package/archive and installed entrypoint parity
+      - name: Save installed dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+      - name: Prove package/archive parity
+        if: matrix.part != 'install'
         run: >-
           node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/package-parity.test.ts
+      - name: Prove installed entrypoint parity
+        if: matrix.part != 'archives'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/runner-entrypoints.test.ts
           runner-v2/test/node-version.test.ts
           runner-v2/test/portable-execution-workflow.test.ts
       - name: Publish archives for cross-host checksum
+        if: matrix.part != 'install'
         run: node scripts/publish-downloads.mjs --output-dir runner-v2-ci-package
       - name: Record cross-host package hashes
+        if: matrix.part != 'install'
         run: >-
           node scripts/runner-v2-package-hashes.mjs write
           --input-dir runner-v2-ci-package
           --output runner-v2-package-hashes-${{ matrix.os }}.json
           --label ${{ matrix.os }}
       - name: Upload cross-host package hashes
+        if: matrix.part != 'install'
         uses: actions/upload-artifact@v7
         with:
           name: runner-v2-package-hashes-${{ matrix.node-version }}-${{ matrix.os }}
@@ -203,7 +300,7 @@ jobs:
           --expected-labels windows-latest,ubuntu-latest,macos-latest
 
   t8-portable-coverage:
-    name: T8 portable coverage (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    name: T8 portable coverage (${{ matrix.os }}, Node ${{ matrix.node-version }}, ${{ matrix.part }})
     if: github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -212,20 +309,51 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
         node-version: [24.x]
+        # files is home-tools plus paths; Windows runs them as two jobs (the path guard takes about 90 s there).
+        # factory is the single native patch factory test, about 2 to 4 minutes on POSIX hosts, off Windows (below).
+        part: [home-tools, paths, files, factory]
+        exclude:
+          - os: windows-latest
+            part: files
+          - os: windows-latest
+            part: factory
+          - os: ubuntu-latest
+            part: home-tools
+          - os: ubuntu-latest
+            part: paths
+          - os: macos-latest
+            part: home-tools
+          - os: macos-latest
+            part: paths
     steps:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Setup maintained Node
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
       - name: Acquire pinned Recoverable Job Service Runner source
         shell: bash
         run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
+      - name: Restore installed dependencies
+        id: deps
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
         run: npm ci
-      - name: Run T8 affected portable filesystem grant patch broker coverage
+      - name: Save installed dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+      - name: Run T8 affected portable home, grant, patch and broker coverage
+        if: matrix.part == 'home-tools' || matrix.part == 'files'
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/aiboard-home-store.test.ts
@@ -239,6 +367,10 @@ jobs:
           runner-v2/test/filesystem-tools.test.ts
           runner-v2/test/openrouter-apply-patch-tool.test.ts
           runner-v2/test/tool-broker.test.ts
+      - name: Run T8 affected portable path guard and fixture coverage
+        if: matrix.part == 'paths' || matrix.part == 'files'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/remote-path-guard.test.ts
           runner-v2/test/git-fixture-canonical-root.test.ts
           runner-v2/test/npm-installed-profile.test.ts
@@ -246,13 +378,13 @@ jobs:
       # until the job's time limit, with no cause found after many attempts, and hasn't been seen failing elsewhere.
       # To run it there by hand, dispatch this workflow with qualification-scope windows-factory-diagnostic.
       - name: Run native patch factory coverage (not on Windows)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.part == 'factory'
         run: node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 runner-v2/test/openrouter-apply-patch-factory.test.ts
       - name: Typecheck Runner V2 (t8-portable-coverage probe only)
-        if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 't8-portable-coverage'
+        if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 't8-portable-coverage' && matrix.part != 'paths' && matrix.part != 'factory'
         run: npm run typecheck:runner-v2
       - name: Run scoped account-provider chat 21->22 stale-health target (t8-portable-coverage probe only)
-        if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 't8-portable-coverage'
+        if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 't8-portable-coverage' && matrix.part != 'paths' && matrix.part != 'factory'
         run: node node_modules/tsx/dist/cli.mjs scripts/test-account-provider-runner-chat.mts
 
   windows-factory-diagnostic:
