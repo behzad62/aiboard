@@ -607,3 +607,13 @@ test("the output folder never lands in a task commit: the Runner's git add -A ta
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("the POSIX process table reads birth with the command line, leaves zombies out, and matches inspect's birth", async () => {
+  const { parsePosixPsCommands, parsePosixPsIdentity } = await import("../src/portable-process-posix-control.mjs");
+  const rows = parsePosixPsCommands("  501   501   501 Ss   Thu Nov  3 10:00:00 2026 /bin/zsh -l\n  777   700   501 Z    Thu Nov 13 10:00:00 2026 (chrome)\n");
+  assert.deepEqual(rows, [{ pid: 501, groupId: 501, uid: 501, birth: "Thu Nov  3 10:00:00 2026", command: "/bin/zsh -l" }]);
+  assert.equal(parsePosixPsIdentity(501, "  501   501 Thu Nov  3 10:00:00 2026")?.birth, rows![0]!.birth, "the same fingerprint as the stop check's re-read");
+  assert.deepEqual(parsePosixPsCommands("  777   700   501 Z    Thu Nov 13 10:00:00 2026 (chrome)\n"), [], "only zombies: an empty table, not an unreadable one");
+  assert.equal(parsePosixPsCommands(""), undefined);
+  assert.equal(parsePosixPsCommands("garbage"), undefined);
+});

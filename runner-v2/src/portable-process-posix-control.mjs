@@ -117,7 +117,10 @@ export function listPosixProcessCommands() {
       if (!/^\d+$/.test(entry)) continue;
       const pid = Number(entry);
       try {
-        const first = parseLinuxProcStatIdentity(pid, readFileSync(`/proc/${entry}/stat`, "utf8"));
+        const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+        // A zombie has exited: it cannot run or hold a browser, and only waits for its parent to reap it.
+        if (linuxProcState(stat) === "Z") continue;
+        const first = parseLinuxProcStatIdentity(pid, stat);
         const uid = statSync(`/proc/${entry}`).uid;
         const command = readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0").filter(Boolean).join(" ");
         const second = parseLinuxProcStatIdentity(pid, readFileSync(`/proc/${entry}/stat`, "utf8"));
@@ -129,7 +132,7 @@ export function listPosixProcessCommands() {
     return rows.length > 0 ? rows : undefined;
   }
   try {
-    return parsePosixPsCommands(execFileSync("ps", ["-A", "-ww", "-o", "pid=,pgid=,uid=,lstart=,command="], {
+    return parsePosixPsCommands(execFileSync("ps", ["-A", "-ww", "-o", "pid=,pgid=,uid=,stat=,lstart=,command="], {
       encoding: "utf8",
       timeout: POSIX_CPU_INSPECTION_DEADLINE_MS,
       maxBuffer: 64 * 1024 * 1024,
@@ -139,32 +142,50 @@ export function listPosixProcessCommands() {
   }
 }
 
-/** `ps -o pid=,pgid=,uid=,lstart=,command=` rows; lstart is the same fingerprint as inspectPosixProcessIdentity's. */
+/**
+ * `ps -o pid=,pgid=,uid=,stat=,lstart=,command=` rows, zombies left out; lstart is the same fingerprint as
+ * inspectPosixProcessIdentity's.
+ */
 export function parsePosixPsCommands(output) {
   if (typeof output !== "string") return undefined;
   const rows = [];
+  let sawRow = false;
   for (const line of output.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})(?:\s(.*))?$/.exec(line);
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+\s+\S+\s+\d+\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})(?:\s(.*))?$/.exec(line);
     if (!match) return undefined;
-    rows.push({ pid: Number(match[1]), groupId: Number(match[2]), uid: Number(match[3]), birth: match[4], command: match[5] ?? "" });
+    sawRow = true;
+    if (match[4].startsWith("Z")) continue;
+    rows.push({ pid: Number(match[1]), groupId: Number(match[2]), uid: Number(match[3]), birth: match[5], command: match[6] ?? "" });
   }
-  return rows.length > 0 ? rows : undefined;
+  return sawRow ? rows : undefined;
+}
+
+function linuxProcState(stat) {
+  const close = typeof stat === "string" ? stat.lastIndexOf(")") : -1;
+  return close < 0 ? undefined : stat.slice(close + 1).trim().split(/\s+/)[0];
 }
 
 /**
  * VF7b: the identities of several PIDs in one bounded read (Linux: their /proc stat; elsewhere one `ps -p a,b,c`
- * with a 2 s limit). A PID the snapshot does not show is absent; an unreadable snapshot makes every one unknown.
+ * with a 2 s limit). A PID the snapshot does not show is absent, and so is a zombie (it has exited: it cannot run
+ * and only waits for its parent to reap it); an unreadable snapshot makes every one unknown.
  */
 export function inspectPosixProcessIdentities(pids) {
   const result = new Map();
   const wanted = [...new Set(pids)].filter(positivePid);
   if (wanted.length === 0) return result;
   if (process.platform === "linux") {
-    for (const pid of wanted) result.set(pid, inspectPosixProcessIdentity(pid));
+    for (const pid of wanted) {
+      let stat;
+      try { stat = readFileSync(`/proc/${pid}/stat`, "utf8"); }
+      catch (error) { result.set(pid, error?.code === "ENOENT" ? { state: "absent" } : { state: "unknown" }); continue; }
+      const value = parseLinuxProcStatIdentity(pid, stat);
+      result.set(pid, linuxProcState(stat) === "Z" ? { state: "absent" } : value ? { state: "present", value } : { state: "unknown" });
+    }
     return result;
   }
-  const ran = spawnSync("ps", ["-o", "pid=,pgid=,lstart=", "-p", wanted.join(",")], { encoding: "utf8", timeout: POSIX_CPU_INSPECTION_DEADLINE_MS });
+  const ran = spawnSync("ps", ["-o", "pid=,pgid=,stat=,lstart=", "-p", wanted.join(",")], { encoding: "utf8", timeout: POSIX_CPU_INSPECTION_DEADLINE_MS });
   // ps exits 1 when a listed PID is gone; it still prints the others.
   if (ran.error || (ran.status !== 0 && ran.status !== 1) || typeof ran.stdout !== "string") {
     for (const pid of wanted) result.set(pid, { state: "unknown" });
@@ -172,10 +193,11 @@ export function inspectPosixProcessIdentities(pids) {
   }
   const seen = new Map();
   for (const line of ran.stdout.split(/\r?\n/)) {
-    const pid = Number(/^\s*(\d+)/.exec(line)?.[1]);
-    if (!positivePid(pid)) continue;
-    const value = parsePosixPsIdentity(pid, line);
-    seen.set(pid, value ? { state: "present", value } : { state: "unknown" });
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/.exec(line);
+    const pid = Number(match?.[1]);
+    if (!match || !positivePid(pid)) continue;
+    const value = parsePosixPsIdentity(pid, `${match[1]} ${match[2]} ${match[4].trim()}`);
+    seen.set(pid, match[3].startsWith("Z") ? { state: "absent" } : value ? { state: "present", value } : { state: "unknown" });
   }
   for (const pid of wanted) result.set(pid, seen.get(pid) ?? (ran.status === 0 && seen.size === 0 ? { state: "unknown" } : { state: "absent" }));
   return result;
