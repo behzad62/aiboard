@@ -91,6 +91,10 @@ jobs:
         with:
           path: node_modules
           key: ${{ steps.deps.outputs.cache-primary-key }}
+      # The one lightweight native probe on every host: it asks the host's process backend what it supports and
+      # launches nothing, so it runs first, on a host no contract test has touched yet.
+      - name: Probe the host-native adapter without lifecycle timing assertions
+        run: node node_modules/tsx/dist/cli.mjs scripts/runner-v2-native-smoke.mts
       - name: Run deterministic portable contract
         run: >-
           node node_modules/tsx/dist/cli.mjs --test
@@ -148,46 +152,6 @@ jobs:
           runner-v2/test/managed-process-wait.test.ts
           runner-v2/test/managed-process-wait-tracker.test.ts
           runner-v2/test/managed-interaction-native.test.ts
-
-  native-smoke:
-    name: Native adapter probe (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic')
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-        node-version: [24.x]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Setup maintained Node
-        id: node
-        uses: actions/setup-node@v7
-        with:
-          node-version: ${{ matrix.node-version }}
-      - name: Acquire pinned Recoverable Job Service Runner source
-        shell: bash
-        run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
-      - name: Restore installed dependencies
-        id: deps
-        uses: actions/cache/restore@v6
-        with:
-          path: node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
-      - name: Install dependencies
-        if: steps.deps.outputs.cache-hit != 'true'
-        run: npm ci
-      - name: Save installed dependencies
-        if: steps.deps.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@v6
-        with:
-          path: node_modules
-          key: ${{ steps.deps.outputs.cache-primary-key }}
-      - name: Probe the host-native adapter without lifecycle timing assertions
-        run: node node_modules/tsx/dist/cli.mjs scripts/runner-v2-native-smoke.mts
 
   package-gate:
     name: Package parity (${{ matrix.os }}, Node ${{ matrix.node-version }}, ${{ matrix.part }})

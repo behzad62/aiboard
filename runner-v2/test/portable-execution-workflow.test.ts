@@ -83,10 +83,9 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   const source = readFileSync(workflowPath, "utf8");
   assert.match(source, /^\s*pull_request:/m);
   const portable = jobBlock(source, "portable-contract");
-  const nativeSmoke = jobBlock(source, "native-smoke");
   const packages = jobBlock(source, "package-gate");
 
-  for (const block of [portable, nativeSmoke, packages]) {
+  for (const block of [portable, packages]) {
     for (const host of ["windows-latest", "ubuntu-latest", "macos-latest"]) assert.match(block, new RegExp(host));
     assert.match(block, /node-version:\s*\[24\.x\]/);
   }
@@ -222,12 +221,27 @@ test("Docker-only manual scope preserves full, schedule and labelled qualificati
 
 test("required native smoke is an adapter probe rather than a lifecycle timing test", () => {
   const source = readFileSync(workflowPath, "utf8");
-  const nativeSmoke = jobBlock(source, "native-smoke");
-  assert.match(nativeSmoke, new RegExp(nativeSmokeScript.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.doesNotMatch(nativeSmoke, /--test\b/);
+  // One lightweight native probe on every host: a step of portable-contract (Windows, Ubuntu and macOS) that runs on
+  // each of them, right after dependencies are installed and before any contract test.
+  const portable = jobBlock(source, "portable-contract");
+  for (const host of ["windows-latest", "ubuntu-latest", "macos-latest"]) assert.match(portable, new RegExp(`os:\\s*\\[[^\\]]*${host}`));
+  assert.doesNotMatch(portable, /^\s+exclude:/m, "Every portable-contract host runs the native probe.");
+  const steps = portable.split(/\n(?=      - name: )/).slice(1);
+  const probes = steps.filter((step) => step.includes(nativeSmokeScript));
+  assert.equal(probes.length, 1, "portable-contract runs the native adapter probe exactly once.");
+  const probe = probes[0]!;
+  assert.doesNotMatch(probe, /^\s+if:/m, "The native adapter probe runs on every host, never behind a condition.");
+  assert.match(probe, new RegExp(`run: node node_modules/tsx/dist/cli\\.mjs ${nativeSmokeScript.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`));
+  assert.doesNotMatch(probe, /--test\b/);
   for (const testPath of [...qualificationEntrypoints, ...retiredQualificationMonoliths]) {
-    assert.equal(nativeSmoke.includes(testPath), false);
+    assert.equal(probe.includes(testPath), false);
   }
+  const index = steps.indexOf(probe);
+  const lastInstall = steps.findLastIndex((step) => /npm ci|actions\/cache\/(?:restore|save)/.test(step));
+  const firstTest = steps.findIndex((step) => /--test\b/.test(step));
+  assert.ok(lastInstall >= 0 && index > lastInstall, "The probe runs after dependencies are installed.");
+  assert.ok(firstTest > index, "The probe runs before any contract test.");
+  assert.equal(source.split(nativeSmokeScript).length, 2, "The probe has no second copy in another job.");
 });
 
 test("package parity remains cross-host and reproducible on Node 24", () => {
