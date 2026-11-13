@@ -549,7 +549,8 @@ test("the session command refuses a second session for its owner and keeps the u
       stopTree(stale.child);
       await stale.exited;
       // A start still in the session command, before its exec, counts as running too.
-      const early = spawn("sh", ["-c", "sleep 30", join(bin, "playwright-cli-session")], { stdio: "ignore" });
+      // `; :` keeps sh from exec-ing sleep (bash and newer dash do for one command), so the args keep the shim's path.
+      const early = spawn("sh", ["-c", "sleep 30; :", join(bin, "playwright-cli-session")], { stdio: "ignore" });
       children.push(early);
       await writeFile(join(state, "session.pid"), `${early.pid}\n`);
       const racing = start();
