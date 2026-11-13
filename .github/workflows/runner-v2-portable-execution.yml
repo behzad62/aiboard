@@ -115,6 +115,7 @@ jobs:
           runner-v2/test/project-validation-checks.test.ts
           runner-v2/test/verification-known-defects.test.ts
           runner-v2/test/handoff-not-verified.test.ts
+          runner-v2/test/final-verification-managed-authority.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
