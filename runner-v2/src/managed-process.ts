@@ -492,7 +492,11 @@ export class ManagedProcessService {
     if (!("schemaVersion" in record)) return historicalSnapshot(record, this.maxPollBytes);
     // The transport commits exact stop authority before any cancellable wait.
     // Do not race its acknowledgement against the caller signal afterwards.
-    const stop = this.runtime(record.runId).stop(record, exact, signal, this.stopDeadlineMs).then(snapshot => this.saveSnapshot(processId, snapshot));
+    // The saved record has no scope; the stop's answer keeps the one its backend attested, for what it may claim.
+    const stop = this.runtime(record.runId).stop(record, exact, signal, this.stopDeadlineMs).then(snapshot => {
+      const saved = this.saveSnapshot(processId, snapshot);
+      return snapshot.lifecycleScope ? Object.freeze({ ...saved, lifecycleScope: snapshot.lifecycleScope }) : saved;
+    });
     this.stops.set(processId, stop);
     try { return await stop; } finally { if (this.stops.get(processId) === stop) this.stops.delete(processId); }
   }

@@ -512,15 +512,29 @@ function clientSnapshot(snapshot: ManagedProcessSnapshot): Record<string, unknow
     ...(snapshot.signal !== null ? { signal: snapshot.signal } : {}) };
 }
 
+/** What a verified stop proves when the backend contains the whole workload (a Windows Job, an OCI container). */
+export const CONTAINED_STOP_CONFIRMATION = "The process and every process it started have exited, so any port it listened on is closed. No further check is needed.";
+/**
+ * What a verified stop proves when the backend owns a process group (native Linux and macOS, the Windows fallback
+ * without a Job): only the group. A process that left it keeps running and can still hold a port it inherited, so
+ * this claims no closed port (docs/runner-v2/posix-detached-descendants.md).
+ */
+export const PROCESS_GROUP_STOP_CONFIRMATION = "The process and every process still in its process group have exited. A process that left the group (setsid, setpgid, or spawn with detached: true) is not covered by this stop and may still be running or holding a port.";
+
+/** The confirmation a verified stop earns, by the lifecycle scope its backend attested; no scope proves no more than a group. */
+export function stopConfirmation(scope: ManagedProcessSnapshot["lifecycleScope"]): string {
+  return scope === "contained_workload" ? CONTAINED_STOP_CONFIRMATION : PROCESS_GROUP_STOP_CONFIRMATION;
+}
+
 /**
  * A signal returns only after the Runner's verified release (otherwise it throws process_cleanup_unverified), so a
- * stopped or exited result means the whole owned tree is gone. Saying so answers the check a model would otherwise
- * spend a turn or two on (listing processes, probing the port).
+ * stopped or exited result means the owned scope is empty. Saying what that covers answers the check a model would
+ * otherwise spend a turn or two on (listing processes, probing the port), and only where it is proven.
  */
 function stoppedSnapshot(snapshot: ManagedProcessSnapshot): Record<string, unknown> {
   const value = clientSnapshot(snapshot);
   return value.status === "stopped" || value.status === "exited"
-    ? { ...value, confirmed: "The process and every process it started have exited, so any port it listened on is closed. No further check is needed." }
+    ? { ...value, confirmed: stopConfirmation(snapshot.lifecycleScope) }
     : value;
 }
 
