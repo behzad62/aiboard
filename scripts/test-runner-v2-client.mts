@@ -14,6 +14,7 @@ import {
   decideNativeProcessRecovery,
   executeNativeProcessRecovery,
   contextRecordingView,
+  environmentInventoryView,
   projectNativeAcceptanceContract,
   resolveNativeBuildRunId,
   getNativeRunnerHealth,
@@ -66,6 +67,64 @@ assert.equal(contextRecordingView({
     notes: [{ sequence: 1, purpose: "worker:task", attempts: 3, reason: "locked" }],
   },
 })?.suspended, false);
+
+// VF1: Run details shows the Runner's tool inventory; a run recorded before VF1 shows none.
+assert.equal(environmentInventoryView({}), undefined);
+assert.equal(environmentInventoryView(null), undefined);
+const inventoryBase = {
+  version: 1 as const,
+  trigger: "planning" as const,
+  platform: "win32",
+  arch: "x64",
+  runnerNode: "v24.18.0",
+  tools: [
+    { name: "git", status: "found" as const, path: "C:/Git/cmd/git.exe", version: "git version 2.47.1.windows.1", usedBy: ["runner"] },
+    { name: "dotnet", status: "found" as const, path: "C:/dotnet/dotnet.exe", versionNote: "The version probe exited 1: A compatible .NET SDK was not found.", usedBy: ["build: dotnet build", "tests: dotnet test"] },
+    { name: "cargo", status: "missing" as const, usedBy: ["build: cargo build"] },
+    { name: "gradlew", status: "unknown" as const, note: "The executable names a path, not a tool on PATH.", usedBy: ["tier full: gradle"] },
+  ],
+  toolsOmitted: 2,
+  browsers: [
+    { id: "chrome" as const, status: "missing" as const },
+    { id: "msedge" as const, status: "found" as const, path: "C:/Edge/msedge.exe" },
+    { id: "chromium" as const, status: "missing" as const, version: "149.0.7827.55" },
+  ],
+  playwrightBrowser: "msedge" as const,
+  notes: ["The checks of this revision could not be read: package.json must contain an object."],
+  sequence: 7,
+  recordedAt: "2026-11-13T10:00:00.000Z",
+};
+assert.deepEqual(environmentInventoryView({ environmentInventory: inventoryBase }), {
+  heading: "Recorded before planning · win32 x64 · Node v24.18.0",
+  recordedAt: "2026-11-13T10:00:00.000Z",
+  tools: [
+    { name: "git", status: "found", detail: "git version 2.47.1.windows.1", usedBy: "runner" },
+    { name: "dotnet", status: "found", detail: "The version probe exited 1: A compatible .NET SDK was not found.", usedBy: "build: dotnet build, tests: dotnet test" },
+    { name: "cargo", status: "missing", detail: "not found on PATH", usedBy: "build: cargo build" },
+    { name: "gradlew", status: "unknown", detail: "The executable names a path, not a tool on PATH.", usedBy: "tier full: gradle" },
+  ],
+  omitted: "2 more not recorded",
+  browser: "Edge",
+  notes: ["The checks of this revision could not be read: package.json must contain an object."],
+});
+const linuxInventory = environmentInventoryView({ environmentInventory: {
+  ...inventoryBase,
+  trigger: "resume",
+  platform: "linux",
+  toolsOmitted: 0,
+  browsers: [
+    { id: "chrome", status: "missing" },
+    { id: "msedge", status: "missing" },
+    { id: "chromium", status: "found", path: "/cache/chrome", version: "149.0", missingLibraries: ["libnspr4.so", "libnss3.so"] },
+  ],
+  playwrightBrowser: null,
+  notes: [],
+} });
+assert.equal(linuxInventory?.heading, "Recorded on resume · linux x64 · Node v24.18.0");
+assert.equal(linuxInventory?.omitted, undefined);
+assert.equal(linuxInventory?.browser, "None usable: Playwright's Chromium is missing libnspr4.so, libnss3.so");
+assert.equal(environmentInventoryView({ environmentInventory: { ...inventoryBase, browsers: [], playwrightBrowser: null } })?.browser, "None found");
+assert.equal(environmentInventoryView({ environmentInventory: { ...inventoryBase, playwrightBrowser: "chromium", browsers: [{ id: "chromium", status: "found", version: "149.0" }] } })?.browser, "Playwright's Chromium 149.0");
 
 assert.equal(
   nativeBuildProvisioningRunId("native-reserved-by-browser"),

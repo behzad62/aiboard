@@ -6,6 +6,7 @@ import { BuildTranscriptFeed, buildActorRole, buildModelDisplayName, buildDispla
 import { buildCrewFromDiscussion, selectBuildCrewRuntimes } from "../lib/client/build-crew";
 import { BuildWorkspace } from "../components/build/BuildWorkspace";
 import { BuildEventCenter, alertsFromDiagnostics } from "../components/build/BuildEventCenter";
+import { EnvironmentInventoryPanel } from "../components/build/EnvironmentInventoryPanel";
 import type { DiagnosticEntry } from "../components/DiscussionDiagnostics";
 
 const messages = [
@@ -126,3 +127,26 @@ assert.ok(icons.includes("View errors, 1 new"));
 assert.ok(icons.includes("View warnings, 1 new"));
 assert.ok(icons.includes("animate-ping"));
 console.log("PASS build UI overhaul: all-role feed, chronology, expansion, alert severity and unread indicators");
+
+// VF1: Run details lists the tools the Runner recorded; a run from before VF1 renders nothing.
+assert.equal(renderToStaticMarkup(createElement(EnvironmentInventoryPanel, { projection: {} })), "");
+const inventoryPanel = renderToStaticMarkup(createElement(EnvironmentInventoryPanel, { projection: { environmentInventory: {
+  version: 1, trigger: "resume", platform: "linux", arch: "x64", runnerNode: "v24.21.0",
+  tools: [
+    { name: "git", status: "found", path: "/usr/bin/git", version: "git version 2.39.5", usedBy: ["runner"] },
+    { name: "pytest", status: "missing", usedBy: ["tests: pytest"] },
+  ],
+  toolsOmitted: 0,
+  browsers: [{ id: "chrome", status: "missing" }, { id: "msedge", status: "missing" }, { id: "chromium", status: "found", path: "/c/chrome", version: "149.0" }],
+  playwrightBrowser: "chromium",
+  notes: [],
+  sequence: 9,
+  recordedAt: "2026-11-13T10:00:00.000Z",
+} } }));
+assert.ok(inventoryPanel.includes("Tools on this machine"));
+assert.ok(inventoryPanel.includes("Recorded on resume · linux x64 · Node v24.21.0"));
+assert.ok(inventoryPanel.includes("git version 2.39.5"));
+assert.ok(inventoryPanel.includes("pytest") && inventoryPanel.includes(": Missing.") && inventoryPanel.includes("not found on PATH"));
+assert.ok(inventoryPanel.includes("Used by tests: pytest"));
+assert.ok(inventoryPanel.includes("Playwright&#x27;s Chromium 149.0"));
+console.log("PASS build UI overhaul: Run details tool inventory");

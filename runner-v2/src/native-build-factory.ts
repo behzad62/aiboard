@@ -95,6 +95,12 @@ import {
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
 import { createCheckToolLookup } from "./check-tool-lookup.js";
+import {
+  collectEnvironmentInventory,
+  inventoryCheckCommands,
+  oneShotInventoryRunner,
+  type InventoryCheckCommand,
+} from "./verification-inventory.js";
 import { flakyRerunPattern, isPackageRunTestCommand, judgeFlakyRerun, narrowNodeTestCommand } from "./flaky-rerun.js";
 import { topDefectClasses } from "./defect-history.js";
 import {
@@ -387,6 +393,12 @@ export interface NativeBuildFactoryOptions {
   closeProviderConfigs?: boolean;
   /** Injected only by focused lifecycle tests; live callers leave this undefined. */
   runtimeConstructionHooks?: NativeBuildRuntimeConstructionHooks;
+  /**
+   * VF1: record this machine's tool inventory before planning and on each
+   * resume. The CLI turns it on; focused tests that pin exact event logs or
+   * count commands leave it off.
+   */
+  environmentInventory?: boolean;
   /** Injected only by focused construction-order tests. */
   providerModelFactory?: (
     config: RunnerProviderConfig,
@@ -2202,6 +2214,43 @@ export class NativeBuildFactory {
           await finalVerificationPorts.release(profile.portLease, spec.runId, profile.targetRevision);
         }
       },
+      // VF1: the tool inventory reads the checks of the current revision in a
+      // disposable checkout (the profile slot, never the project), looks each
+      // executable up with VF2's lookup and runs its version probe as a
+      // Runner-internal one-shot command.
+      ...(this.options.environmentInventory
+        ? {
+            environmentInventory: async ({ trigger }) => {
+              const revision = integrationManager.revision;
+              const workspace = await finalVerificationProfileWorkspace.create(revision);
+              try {
+                let checks: InventoryCheckCommand[] = [];
+                let checksNote: string | undefined;
+                try {
+                  checks = inventoryCheckCommands(await inspectFinalVerificationExecutionProfile({
+                    repositoryRoot: workspace.path,
+                    targetRevision: revision,
+                    execute: requireGitRunner(gitContext).lifecycle("verification").run,
+                    ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+                  }));
+                } catch (error) {
+                  checksNote = `The checks of this revision could not be read: ${error instanceof Error ? error.message : String(error)}`;
+                }
+                return await collectEnvironmentInventory({
+                  trigger,
+                  revision,
+                  cwd: workspace.path,
+                  checks,
+                  ...(checksNote ? { checksNote } : {}),
+                  lookup: checkToolLookup,
+                  run: oneShotInventoryRunner(commandExecution, { runId: spec.runId }),
+                });
+              } finally {
+                await finalVerificationProfileWorkspace.cleanup();
+              }
+            },
+          }
+        : {}),
       // The runner launches an Architect-named smoke program without a per-command approval, so it
       // is offered only where the Architect could already run commands that way.
       ...(spec.permissionProfile === "full"

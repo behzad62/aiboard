@@ -175,6 +175,12 @@ import {
   type PlanRiskReason,
 } from "./plan-critique-contracts.js";
 import { describeFailureChain, describeFailureWithCauses, lifecycleTrace } from "./lifecycle-diagnostics.js";
+import {
+  boundEnvironmentInventory,
+  unavailableEnvironmentInventory,
+  type EnvironmentInventory,
+  type InventoryTrigger,
+} from "./verification-inventory.js";
 export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
@@ -454,6 +460,12 @@ export interface BuildRuntimeOptions {
   finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
+  /**
+   * VF1: takes this machine's tool inventory for the run's current revision.
+   * Called once before the first planning step and once after each resume.
+   * Absent, no inventory is recorded (focused tests and older embeddings).
+   */
+  environmentInventory?: (input: { trigger: InventoryTrigger }) => Promise<EnvironmentInventory>;
   /** An Architect-named runtime smoke on a leased port; supplied only for full-access runs. */
   finalVerificationRuntimeSmoke?: import("./architect-tools.js").ArchitectToolsOptions["finalVerificationRuntimeSmoke"];
   independentVerifier?: IndependentVerifierDriver;
@@ -908,6 +920,9 @@ export class BuildRuntime {
   private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
   private readonly discardFinalVerificationProfile?: BuildRuntimeOptions["discardFinalVerificationProfile"];
+  private readonly environmentInventory?: BuildRuntimeOptions["environmentInventory"];
+  /** VF1: the resume sequence this instance last tried to record an inventory for, so a refused record never re-probes every step. */
+  private environmentInventoryAttempted?: number;
   private readonly finalVerificationRuntimeSmoke?: BuildRuntimeOptions["finalVerificationRuntimeSmoke"];
   private readonly independentVerifier?: IndependentVerifierDriver;
   private readonly planCritic?: PlanCriticDriver;
@@ -978,6 +993,7 @@ export class BuildRuntime {
     this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
     this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
+    this.environmentInventory = options.environmentInventory;
     this.finalVerificationRuntimeSmoke = options.finalVerificationRuntimeSmoke;
     this.independentVerifier = options.independentVerifier;
     this.planCritic = options.planCritic;
@@ -1792,6 +1808,13 @@ export class BuildRuntime {
     projection = events.length === 0
       ? emptyProjection(this.runId)
       : rebuildSchedulerProjection(events);
+    // VF1: before this step's work, the inventory of this epoch (the run's
+    // start, then each resume), so the first planning turn sees one and a
+    // resumed run sees a fresh one.
+    if (projection.status === "running" && await this.recordEnvironmentInventoryIfDue(events)) {
+      events = this.store.readRun(this.runId);
+      projection = rebuildSchedulerProjection(events);
+    }
     const pendingInterruption = Object.values(projection.userGuidance)
       .filter((guidance) => guidance.interruptionStatus !== "completed")
       .sort((left, right) => left.version - right.version)[0];
@@ -4265,6 +4288,49 @@ export class BuildRuntime {
         ...(details.taskId ? { taskId: details.taskId } : {}),
       },
     });
+  }
+
+  /**
+   * VF1: records one `environment.inventory_recorded` per epoch: the run's
+   * start, then each `run.resumed`. The inventory is facts only; nothing
+   * here or in the kernel decides anything from it. A probe that throws is
+   * recorded as an inventory that says so, and a refused record is not
+   * retried by this instance: neither ever fails or pauses the step.
+   */
+  private async recordEnvironmentInventoryIfDue(events: readonly SchedulerEvent[]): Promise<boolean> {
+    if (!this.environmentInventory || events.length === 0) return false;
+    let lastResume = 0;
+    let recorded = false;
+    for (const event of events) {
+      if (event.type === "run.resumed") {
+        lastResume = event.sequence;
+        recorded = false;
+      } else if (event.type === "environment.inventory_recorded") {
+        recorded = true;
+      }
+    }
+    if (recorded || this.environmentInventoryAttempted === lastResume) return false;
+    this.environmentInventoryAttempted = lastResume;
+    const trigger: InventoryTrigger = lastResume > 0 ? "resume" : "planning";
+    let inventory: EnvironmentInventory;
+    try {
+      inventory = boundEnvironmentInventory(await this.environmentInventory({ trigger }));
+    } catch (error) {
+      inventory = unavailableEnvironmentInventory(trigger, error instanceof Error ? error.message : String(error));
+    }
+    try {
+      this.store.append({
+        runId: this.runId,
+        type: "environment.inventory_recorded",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `environment-inventory:${lastResume}`,
+        payload: { ...inventory },
+      });
+    } catch {
+      return false;
+    }
+    return true;
   }
 
   /**

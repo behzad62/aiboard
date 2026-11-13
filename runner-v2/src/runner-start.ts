@@ -381,6 +381,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       mcpStatusRegistry: mcpStatus,
       extensions: { service: extensions, bindings: extensionBindings, managedMcp },
       closeProviderConfigs: false,
+      environmentInventory: true,
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
         if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);

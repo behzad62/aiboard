@@ -2224,3 +2224,100 @@ function skillMetadata(name: string): SkillMetadata {
     source: "built-in",
   };
 }
+
+test("VF1 the Architect's planning context lists the Runner's tool inventory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-architect-vf1-inventory-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  const objective = "Build the feature.";
+  try {
+    for (const runId of ["run-vf1-inventory", "run-vf1-older"]) {
+      scheduler.append({
+        runId,
+        type: "run.initialized",
+        occurredAt: "2026-11-13T00:00:00.000Z",
+        actor: { role: "runner", id: "test" },
+        idempotencyKey: "init",
+        payload: { objective },
+      });
+    }
+    scheduler.append({
+      runId: "run-vf1-inventory",
+      type: "environment.inventory_recorded",
+      occurredAt: "2026-11-13T00:00:01.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "environment-inventory:0",
+      payload: {
+        version: 1,
+        trigger: "planning",
+        platform: "win32",
+        arch: "x64",
+        runnerNode: "v24.18.0",
+        tools: [
+          { name: "git", status: "found", path: "C:\\Program Files\\Git\\cmd\\git.exe", version: "git version 2.47.1.windows.1", usedBy: ["runner"] },
+          { name: "cargo", status: "missing", usedBy: ["build: cargo build", "tests: cargo test"] },
+        ],
+        toolsOmitted: 0,
+        browsers: [{ id: "chrome", status: "missing" }, { id: "msedge", status: "found", path: "C:\\Edge\\msedge.exe" }, { id: "chromium", status: "missing", version: "149.0.7827.55" }],
+        playwrightBrowser: "msedge",
+        notes: [],
+      },
+    });
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "test:architect",
+      providerId: "test",
+      modelId: "architect",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const contextFor = async (runId: string) => {
+      const health = new ProviderHealthRegistry();
+      const model = new ScriptedModel([{ blocks: [], stopReason: "cancelled" }]);
+      const architect = new NativeArchitectRuntime({
+        schedulerStore: scheduler,
+        router: new RuntimeRouter({ candidates: [candidate], health }),
+        health,
+        candidates: [candidate],
+        models: new Map([[candidate.runtimeId, model]]),
+        initialRuntimeId: candidate.runtimeId,
+        sessions,
+        artifacts,
+        skillCatalog: new SkillCatalog({ projectRoot: project }),
+        memoryStore: memory,
+        evidenceStore: evidence,
+        projectId: `project-${runId}`,
+        projectRoot: project,
+        objective,
+      });
+      await architect.run({
+        runId,
+        reason: { type: "plan_required" },
+        projection: rebuildSchedulerProjection(scheduler.readRun(runId)),
+        tools: new ToolRegistry(),
+        context: { runId, sessionId: `architect:${runId}`, actor: { role: "architect", id: "architect" } },
+      });
+      return String(model.requests[0]?.messages.find((message) => message.role === "user")?.content);
+    };
+    const text = await contextFor("run-vf1-inventory");
+    assert.match(text, /Tool inventory \(recorded by the Runner at event 2, before planning; win32 x64, Runner Node v24\.18\.0\)/);
+    assert.match(text, /- git: found at C:\\Program Files\\Git\\cmd\\git\.exe; git version 2\.47\.1\.windows\.1 \[used by: runner\]/);
+    assert.match(text, /- cargo: missing \[used by: build: cargo build, tests: cargo test\]/);
+    assert.match(text, /- Browser for the Playwright CLI: --browser=msedge \(chrome missing; msedge found; chromium missing 149\.0\.7827\.55\)\./);
+    assert.match(text, /a check whose tool is missing is recorded as not run/);
+    // A run recorded before VF1 has no inventory and its context has no such section.
+    assert.doesNotMatch(await contextFor("run-vf1-older"), /Tool inventory/);
+  } finally {
+    sessions.close();
+    scheduler.close();
+    evidence.close();
+    memory.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

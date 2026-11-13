@@ -44,6 +44,7 @@ import {
   rebuildSchedulerProjection,
 } from "../src/scheduler-store.js";
 import { RuntimeRouter } from "../src/runtime-router.js";
+import type { EnvironmentInventory } from "../src/verification-inventory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import {
@@ -2427,3 +2428,117 @@ class ScriptedIntegration implements IntegrationRuntimeDriver {
     };
   }
 }
+
+function vf1Inventory(trigger: "planning" | "resume", gitVersion: string): EnvironmentInventory {
+  return {
+    version: 1,
+    trigger,
+    platform: "linux",
+    arch: "x64",
+    runnerNode: "v24.0.0",
+    tools: [
+      { name: "git", status: "found", path: "/usr/bin/git", version: gitVersion, usedBy: ["runner"] },
+      { name: "cargo", status: "missing", usedBy: ["build: cargo build"] },
+    ],
+    toolsOmitted: 0,
+    browsers: [],
+    playwrightBrowser: null,
+    notes: [],
+  };
+}
+
+test("VF1 the inventory is recorded before the first planning turn and again after a resume", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf1-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const triggers: string[] = [];
+  const seen: Array<{ reason: string; inventory: unknown; recorded: number }> = [];
+  try {
+    const runtime = new BuildRuntime({
+      runId: "run_vf1",
+      store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: {
+        run: async (request) => {
+          seen.push({
+            reason: request.reason.type,
+            inventory: request.projection.environmentInventory,
+            recorded: store.readRun("run_vf1").filter((event) => event.type === "environment.inventory_recorded").length,
+          });
+        },
+      },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-11-13T00:00:00.000Z",
+      environmentInventory: async ({ trigger }) => {
+        triggers.push(trigger);
+        return vf1Inventory(trigger, triggers.length === 1 ? "git version 2.43.0" : "git version 2.47.1");
+      },
+    });
+    // The no-op Architect turn is refused, as for any run; the inventory came first.
+    await assert.rejects(() => runtime.step(), /without a typed action/i);
+    assert.deepEqual(triggers, ["planning"]);
+    assert.equal(seen[0]?.reason, "plan_required");
+    assert.equal(seen[0]?.recorded, 1, "recorded before the Architect's first planning turn");
+    assert.equal((seen[0]?.inventory as { trigger?: string } | undefined)?.trigger, "planning");
+    // A later step of the same epoch does not probe again.
+    await assert.rejects(() => runtime.step(), /without a typed action/i);
+    assert.deepEqual(triggers, ["planning"]);
+
+    runtime.pause("user", "vf1-pause");
+    assert.equal((await runtime.step()).status, "paused");
+    assert.deepEqual(triggers, ["planning"], "a paused run records nothing");
+    runtime.resume("vf1-resume");
+    await assert.rejects(() => runtime.step(), /without a typed action/i);
+    assert.deepEqual(triggers, ["planning", "resume"], "a resumed run records a new inventory");
+    const events = store.readRun("run_vf1");
+    const inventories = events.filter((event) => event.type === "environment.inventory_recorded");
+    assert.equal(inventories.length, 2);
+    const resumed = events.find((event) => event.type === "run.resumed")!;
+    assert.ok(inventories[1]!.sequence > resumed.sequence);
+    assert.equal(inventories[1]!.idempotencyKey, `environment-inventory:${resumed.sequence}`);
+    assert.deepEqual(inventories[1]!.actor, { role: "runner", id: "build-runtime" });
+    const projected = runtime.projection().environmentInventory;
+    assert.equal(projected?.trigger, "resume");
+    assert.equal(projected?.tools[0]?.version, "git version 2.47.1");
+    assert.equal(projected?.sequence, inventories[1]!.sequence);
+    assert.deepEqual(projected?.tools[1], { name: "cargo", status: "missing", usedBy: ["build: cargo build"] });
+    // The record replays from the log alone.
+    assert.deepEqual(rebuildSchedulerProjection(store.readRun("run_vf1")).environmentInventory, projected);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("VF1 an inventory probe that throws is recorded as unavailable and never fails the step", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf1-fail-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  let calls = 0;
+  let architectTurns = 0;
+  try {
+    const runtime = new BuildRuntime({
+      runId: "run_vf1_fail",
+      store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: { run: async () => { architectTurns += 1; } },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      environmentInventory: async () => {
+        calls += 1;
+        throw new Error("checkout failed");
+      },
+    });
+    await assert.rejects(() => runtime.step(), /without a typed action/i);
+    await assert.rejects(() => runtime.step(), /without a typed action/i);
+    assert.equal(calls, 1, "the epoch's inventory is taken once, even when it fails");
+    assert.equal(architectTurns, 2, "the Architect still gets its turns");
+    const inventory = runtime.projection().environmentInventory;
+    assert.deepEqual(inventory?.tools, []);
+    assert.deepEqual(inventory?.notes, ["The inventory could not be taken: checkout failed"]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
