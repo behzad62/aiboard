@@ -28,7 +28,7 @@ import type {
   ProviderHealthProjection,
   SchedulerEvent,
 } from "./scheduler-store.js";
-import type { FinalVerificationCategory } from "./final-verification-contracts.js";
+import type { FinalVerificationCategory, VerificationNotRun } from "./final-verification-contracts.js";
 import { redactSensitiveValue } from "./sensitive-redaction.js";
 import type {
   BuildRiskKernelFacts,
@@ -72,6 +72,8 @@ export interface FinalVerificationObservabilityGeneration {
     status: FinalVerificationCategoryStatus;
     evidenceIds: string[];
     issues: string[];
+    /** VF2: the Runner did not run this check because its tool is missing. */
+    notRun?: VerificationNotRun;
   }>;
   submission: { status: "pending" | "submitted"; submissionId?: string; green?: boolean };
   mechanicalFailure?: { failureId: string; failedCategories: FinalVerificationCategory[]; evidenceIds: string[] };
@@ -559,6 +561,7 @@ function projectGeneration(
         status: !check ? "pending" : planned.status === "not_applicable" ? "not_applicable" : check.green ? "passed" : "failed",
         evidenceIds: [...(check?.evidenceIds ?? [])],
         issues: [...(check?.issues ?? [])],
+        ...(check?.notRun ? { notRun: { ...check.notRun } } : {}),
       };
     }),
     submission: generation.submission

@@ -1,4 +1,5 @@
 import type { DeliveryTestReport } from "./delivery-acceptance.js";
+import type { VerificationNotRun } from "./final-verification-contracts.js";
 import type { TestIntegrityBinding, TestIntegrityException, TestIntegrityPin } from "./test-integrity.js";
 
 interface TestIntegrityBaselineCommon {
@@ -11,6 +12,8 @@ interface TestIntegrityBaselineCommon {
 export type TestIntegrityBaseline = TestIntegrityBaselineCommon & (
   | { kind: "executed_report"; executed: number; report: DeliveryTestReport }
   | { kind: "no_configured_test_suite"; inventory: string; inventoryDigest: string }
+  /** VF2: the initial tests could not run because their tool is missing; no counts, no evidence. */
+  | { kind: "tool_missing"; notRun: VerificationNotRun }
 );
 
 export type TestIntegrityBaselineInput = TestIntegrityBaseline extends infer B ? B extends TestIntegrityBaseline ? Omit<B, "sequence" | "acceptedTaskId"> : never : never;

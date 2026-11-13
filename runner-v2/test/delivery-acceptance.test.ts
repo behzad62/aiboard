@@ -317,7 +317,9 @@ interface HarnessOptions {
   reviewer?: ScriptedReviewer;
   architect?: ArchitectScript;
   changedPaths?: (taskId: string, attempt: number) => string[];
-  boundaryOutcome?: (taskId: string, call: number) => "passed" | "failed" | "unknown";
+  boundaryOutcome?: (taskId: string, call: number) => "passed" | "failed" | "unknown" | "not_run";
+  /** VF2: the initial tests' tool is missing, so the trusted baseline is a tool-missing record. */
+  baselineToolMissing?: boolean;
   /** Simulates an interrupted boundary run on the first call for this task. */
   boundaryThrowsOnceFor?: string;
   /** The owner pauses during this task's first boundary check, whose commands then cannot start. */
@@ -340,6 +342,8 @@ interface Harness {
   review: NativeDeliverableReviewRuntime;
   boundaryCalls: string[];
   boundaryAttempts: string[];
+  /** VF2: kernel refusals of malformed tool-missing baselines, recorded before the real one. */
+  baselineRefusals: string[];
   projection(): SchedulerProjection;
   until(predicate: (projection: SchedulerProjection) => boolean, maxSteps?: number): Promise<string[]>;
   close(): void;
@@ -437,7 +441,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
   });
   const boundaryCount = new Map<string, number>();
   const boundaryAttempts: string[] = [];
-  Object.assign(harness, { boundaryAttempts });
+  const baselineRefusals: string[] = [];
+  Object.assign(harness, { boundaryAttempts, baselineRefusals });
   const boundary: DeliveryBoundaryDriver = {
     check: async ({ taskId, integrationRevision, attempt }) => {
       const call = (boundaryCount.get(taskId) ?? 0) + 1;
@@ -450,6 +455,14 @@ function createHarness(options: HarnessOptions = {}): Harness {
       const outcome = pausedMidCheck ? "unknown" : options.boundaryOutcome?.(taskId, call) ?? "passed";
       const passedReport = await junitReport(artifacts, 2, 0);
       const checks: DeliveryBoundaryCheck[] = (["build", "tests"] as const).map((checkId) => {
+        if (outcome === "not_run") {
+          // VF2: what the delivery driver records when the Runner finds the tool missing.
+          const notRun = { reason: "tool_missing" as const, tool: "npm", detail: "npm was not found on PATH, so the check was not run." };
+          return {
+            checkId, command: "npm", args: ["run", checkId], evidenceIds: [], exitCode: null, outcome: "not_run" as const, reason: notRun.detail, notRun,
+            ...(checkId === "tests" ? { report: { status: "unknown" as const, runner: "node --test", reason: notRun.detail } } : {}),
+          };
+        }
         const report = checkId === "tests"
           ? outcome === "passed"
             ? passedReport
@@ -460,7 +473,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
         const record = evidence.record({ ...commandEvidence(`boundary:${taskId}:${checkId}:${call}`, { label: checkId, exitCode }), runId: RUN_ID, taskId: `delivery:${taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" } });
         return { checkId, command: "npm", args: ["run", checkId], evidenceIds: [record.id], exitCode, outcome, ...(report ? { report } : {}) };
       });
-      await ensureTestIntegrityBaseline(taskId, { scheduler, evidence, artifacts });
+      await ensureTestIntegrityBaseline(taskId, { scheduler, evidence, artifacts, ...(options.baselineToolMissing ? { toolMissingRefusals: baselineRefusals } : {}) });
       const integrityProjection = rebuildSchedulerProjection(scheduler.readRun(RUN_ID));
       const testsCheck = checks.find((check) => check.checkId === "tests")!;
       const integrity = boundaryTestIntegrity(integrityProjection, taskId, integrationRevision, testsCheck.report, testsCheck.evidenceIds);
@@ -525,11 +538,32 @@ function integrityCandidatePin(revision: string) {
 }
 
 /** Lazy one-time trusted baseline. The baseline report is a real stored artifact with real evidence; runs inside the boundary driver before the first check records. */
-async function ensureTestIntegrityBaseline(taskId: string, input: { scheduler: SqliteSchedulerStore; evidence: SqliteEvidenceStore; artifacts: ArtifactStore }): Promise<void> {
+async function ensureTestIntegrityBaseline(taskId: string, input: { scheduler: SqliteSchedulerStore; evidence: SqliteEvidenceStore; artifacts: ArtifactStore; toolMissingRefusals?: string[] }): Promise<void> {
   if (rebuildSchedulerProjection(input.scheduler.readRun(RUN_ID)).testIntegrity?.baseline) return;
   const record = input.evidence.record({ ...commandEvidence(`${taskId}:initial-tests:tests`, { label: "tests", exitCode: 0, repositoryRevision: INTEGRITY_BASE_REVISION }), runId: RUN_ID, taskId: `delivery:${taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" } });
   const report = await junitReport(input.artifacts, 2, 0);
   input.scheduler.append(event("delivery.test_integrity_initialized", "test-integrity-init", { role: "runner", id: "build-runtime" }, { revision: INTEGRITY_BASE_REVISION, architectActorId: "architect" }));
+  if (input.toolMissingRefusals) {
+    // VF2: the initial tests' tool is missing. A tool-missing baseline cites nothing and counts nothing.
+    const notRun = { reason: "tool_missing", tool: "npm", detail: "npm was not found on PATH, so the check was not run." };
+    const baseline = { taskId, pin: integrityCandidatePin(INTEGRITY_BASE_REVISION), evidenceIds: [] as string[], kind: "tool_missing", notRun };
+    for (const [key, payload] of [
+      ["with-evidence", { ...baseline, evidenceIds: [record.id] }],
+      ["with-report", { ...baseline, report }],
+      ["with-counts", { ...baseline, executed: 2 }],
+      ["without-record", { ...baseline, notRun: undefined }],
+      ["other-reason", { ...baseline, notRun: { ...notRun, reason: "launch_failed" } }],
+    ] as const) {
+      try {
+        input.scheduler.append(event("delivery.test_integrity_baseline_recorded", `test-integrity-baseline-${key}`, { role: "runner", id: "build-runtime" }, payload));
+        input.toolMissingRefusals.push(`${key}: accepted`);
+      } catch (error) {
+        input.toolMissingRefusals.push(`${key}: ${(error as Error).message}`);
+      }
+    }
+    input.scheduler.append(event("delivery.test_integrity_baseline_recorded", "test-integrity-baseline", { role: "runner", id: "build-runtime" }, baseline));
+    return;
+  }
   input.scheduler.append(event("delivery.test_integrity_baseline_recorded", "test-integrity-baseline", { role: "runner", id: "build-runtime" }, { taskId, pin: integrityCandidatePin(INTEGRITY_BASE_REVISION), evidenceIds: [record.id], kind: "executed_report", report }));
 }
 
@@ -1130,6 +1164,93 @@ test("real counts: the kernel refuses a passed tests result without this run's r
     const good = await junitReport(harness.artifacts, 2, 0);
     harness.scheduler.append(check(good));
     assert.equal(harness.projection().delivery!.boundaries.T1!.at(-1)!.passed, true);
+  } finally {
+    harness.close();
+  }
+});
+
+// VF2: a boundary check whose tool the Runner found missing is recorded as not run. It does not
+// fail the boundary, routes nothing to the Architect, opens no repair and is never called passed.
+test("VF2: boundary checks whose tool is missing pass as not run; tasks and phases accept them as not run", async () => {
+  const harness = createHarness({ boundaryOutcome: () => "not_run" });
+  try {
+    await harness.until((projection) => Object.values(projection.delivery?.phaseAcceptances ?? {}).some((acceptance) => acceptance.phaseId === "BP1"), 400);
+    const projection = harness.projection();
+    const boundary = projection.delivery!.boundaries.T1!.at(-1)!;
+    assert.equal(boundary.passed, true);
+    assert.deepEqual(boundary.checks.filter((check) => check.checkId !== "test_integrity").map((check) => [check.checkId, check.outcome, check.notRun?.tool]), [
+      ["build", "not_run", "npm"],
+      ["tests", "not_run", "npm"],
+    ]);
+    assert.equal(projection.delivery!.boundaries.T1!.length, 1, "a missing tool is not re-run without a state change");
+    assert.deepEqual(projection.delivery!.taskAcceptances.T1!.requiredChecks.filter((check) => check.kind === "integration_check").map((check) => [check.refId, check.outcome]), [
+      ["build", "not_run"],
+      ["tests", "not_run"],
+      ["test_integrity", "passed"],
+    ]);
+    assert.equal(harness.architect.reasons.some((reason) => reason.type === "delivery_boundary_failed"), false);
+    assert.equal(Object.keys(projection.repairIssues ?? {}).length, 0);
+    const phase = Object.values(projection.delivery!.phaseAcceptances).find((acceptance) => acceptance.phaseId === "BP1")!;
+    assert.ok(phase.exitChecks.length > 0);
+    for (const exit of phase.exitChecks) assert.equal(exit.notRun?.reason, "tool_missing", `${exit.validation} is satisfied as not run, never as passed`);
+  } finally {
+    harness.close();
+  }
+});
+
+test("VF2: a tool-missing initial test baseline cites and counts nothing; the guard then compares pins only", async () => {
+  const harness = createHarness({ boundaryOutcome: () => "not_run", baselineToolMissing: true });
+  try {
+    await harness.until(accepted("T1"), 200);
+    assert.deepEqual(harness.baselineRefusals.map((entry) => entry.split(":")[0]), ["with-evidence", "with-report", "with-counts", "without-record", "other-reason"]);
+    for (const refusal of harness.baselineRefusals) assert.doesNotMatch(refusal, /: accepted$/, refusal);
+    const projection = harness.projection();
+    const baseline = projection.testIntegrity!.baseline!;
+    assert.equal(baseline.kind, "tool_missing");
+    assert.deepEqual(baseline.evidenceIds, []);
+    const guard = projection.delivery!.boundaries.T1!.at(-1)!.checks.find((check) => check.checkId === "test_integrity")!;
+    assert.equal(guard.outcome, "passed");
+    assert.deepEqual(guard.evidenceIds, [], "nothing ran, so the guard has nothing to cite");
+  } finally {
+    harness.close();
+  }
+});
+
+test("VF2: the kernel refuses a not-run boundary check that is not exactly a Runner tool-missing record", async () => {
+  const harness = createHarness({ boundaryOutcome: (taskId) => (taskId === "T1" ? "failed" : "passed") });
+  try {
+    await harness.until((projection) => projection.delivery?.boundaries.T1 !== undefined, 150);
+    const revision = harness.projection().integrationRevision!;
+    const boundaryId = "boundary:T1:2";
+    harness.scheduler.append(event("delivery.boundary_failure_resolved", "vf2-recheck", { role: "architect", id: "architect" }, { taskId: "T1", boundaryId: "boundary:T1:1", resolutionGeneration: 1, resolution: "recheck", rationale: "Recheck." }));
+    harness.scheduler.append(event("delivery.boundary_started", "vf2-start", { role: "runner", id: "build-runtime" }, { taskId: "T1", boundaryId, attempt: 1, integrationRevision: revision }));
+    const record = harness.evidence.record({ ...commandEvidence("vf2-build", { label: "build", exitCode: 0 }), runId: RUN_ID, taskId: "delivery:T1", actor: { role: "verifier", id: "delivery-check-runtime" } });
+    const notRun = { reason: "tool_missing", tool: "npm", detail: "npm was not found on PATH, so the check was not run." };
+    const notRunReport = { status: "unknown", runner: "node --test", reason: notRun.detail };
+    const build = { checkId: "build", command: "npm", args: ["run", "build"], evidenceIds: [] as string[], exitCode: null as number | null, outcome: "not_run", notRun };
+    const tests = { checkId: "tests", command: "npm", args: ["run", "test"], evidenceIds: [] as string[], exitCode: null as number | null, outcome: "not_run", notRun, report: notRunReport };
+    let attempt = 0;
+    const check = (checks: Record<string, unknown>[], passed = true) => {
+      const integrity = boundaryTestIntegrity(harness.projection(), "T1", revision, undefined, []);
+      return event("delivery.boundary_checked", `vf2-check-${(attempt += 1)}`, { role: "runner", id: "build-runtime" }, {
+        taskId: "T1", boundaryId, generation: 2, attempt: 1, integrationRevision: revision, executedScope: "full_test_script",
+        changedFiles: ["src/feature.ts"], selection: { rung: "full_suite", selectedTests: [] },
+        checks: [...checks, integrity.guard], testIntegrity: integrity.testIntegrity, passed,
+      });
+    };
+    assert.throws(() => harness.scheduler.append(check([{ ...build, evidenceIds: [record.id] }, tests])), /no exit code and no evidence/, "a not-run check cites nothing");
+    assert.throws(() => harness.scheduler.append(check([{ ...build, evidenceIds: [record.id], exitCode: 0 }, tests])), /no exit code and no evidence/);
+    assert.throws(() => harness.scheduler.append(check([{ ...build, exitCode: 0 }, tests])), /no exit code and no evidence/);
+    assert.throws(() => harness.scheduler.append(check([build, tests, { checkId: "lint", evidenceIds: [], exitCode: null, outcome: "not_run", notRun }])), /build or tests check/);
+    assert.throws(() => harness.scheduler.append(check([{ ...build, notRun: undefined }, tests])), /tool-missing record/, "not run needs the Runner's record");
+    assert.throws(() => harness.scheduler.append(check([{ ...build, outcome: "failed", reason: "x" }, tests])), /only a not-run check carries one/, "only a not-run check carries the record");
+    assert.throws(() => harness.scheduler.append(check([build, { ...tests, notRun: { ...notRun, reason: "launch_failed" } }])), /not-run record is invalid/);
+    assert.throws(() => harness.scheduler.append(check([build, { ...tests, report: { ...notRunReport, status: "passed" } }])), /cannot carry a test report result/);
+    assert.throws(() => harness.scheduler.append(check([build, tests], false)), /passing or not run/);
+    harness.scheduler.append(check([build, tests]));
+    const boundary = harness.projection().delivery!.boundaries.T1!.at(-1)!;
+    assert.equal(boundary.passed, true);
+    assert.equal(boundary.checks.find((entry) => entry.checkId === "tests")!.notRun?.tool, "npm");
   } finally {
     harness.close();
   }

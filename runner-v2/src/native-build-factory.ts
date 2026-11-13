@@ -94,6 +94,7 @@ import {
 } from "./native-planning-provisioner.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
+import { createCheckToolLookup } from "./check-tool-lookup.js";
 import { flakyRerunPattern, isPackageRunTestCommand, judgeFlakyRerun, narrowNodeTestCommand } from "./flaky-rerun.js";
 import { topDefectClasses } from "./defect-history.js";
 import {
@@ -1685,6 +1686,11 @@ export class NativeBuildFactory {
       });
     };
     const deliveryGit = requireGitRunner(gitContext).lifecycle("verification").run;
+    // VF2: checks look their tools up on the PATH of the same ambient source the
+    // audited executor gives children; a tool it does not find is not run, never failed.
+    const checkToolLookup = createCheckToolLookup({
+      environment: () => this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+    });
     // The same ambient source the audited executor uses for children, so the
     // project's own NODE_OPTIONS is kept when the reporter flags are added.
     const deliveryNodeOptions = () => {
@@ -1806,6 +1812,7 @@ export class NativeBuildFactory {
         reviewWorkspace: deliveryReviewWorkspace,
         probeFileSystem: deliveryProbeFileSystem,
         ambientNodeOptions: deliveryNodeOptions,
+        toolLookup: checkToolLookup,
       }),
       budgetLedger,
       ledger,
@@ -1850,6 +1857,7 @@ export class NativeBuildFactory {
       boundaryWorkspace: deliveryBoundaryWorkspace,
       validationAccounting: { ledger: budgetLedger },
       ambientNodeOptions: deliveryNodeOptions,
+      toolLookup: checkToolLookup,
       testIntegrity: {
         projection: () => rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)),
         baselineWorkspace: testIntegrityBaselineWorkspace,
@@ -2004,6 +2012,7 @@ export class NativeBuildFactory {
             input.targetRevision,
           ),
           execution: commandExecution,
+          toolLookup: checkToolLookup,
         });
         const releaseTier = input.category === "tests" ? input.executionProfile?.tiers?.release : undefined;
         const effectiveProfile = releaseTier?.length

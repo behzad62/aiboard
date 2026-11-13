@@ -13,7 +13,7 @@ import {
 import type { ReviewerIndependence } from "./verifier-contracts.js";
 import type { TestIntegrityBoundary, TestConsolidationDisposition } from "./test-integrity-contracts.js";
 import { validateLateFindingBasis, type DeltaHunk, type PriorReadRange } from "./review-delta.js";
-import { VALIDATION_TIERS, type ValidationTier } from "./final-verification-contracts.js";
+import { VALIDATION_TIERS, type ValidationTier, type VerificationNotRun } from "./final-verification-contracts.js";
 
 /**
  * T6a (P6.6, OA-3/OA-4/OA-10/OA-11/OA-13): mandatory deliverable review and
@@ -420,10 +420,16 @@ export interface DeliveryBoundaryCheck {
   args?: string[];
   evidenceIds: string[];
   exitCode: number | null;
-  outcome: "passed" | "failed" | "unknown";
+  /**
+   * `not_run` (VF2): the Runner did not run this build or tests check because
+   * a tool it needs is missing; it carries `notRun`, no exit code and no
+   * evidence, and it does not fail the boundary.
+   */
+  outcome: "passed" | "failed" | "unknown" | "not_run";
   reason?: string;
   /** Required for the `tests` check (real counts). */
   report?: DeliveryTestReport;
+  notRun?: VerificationNotRun;
 }
 
 export interface DeliveryBoundaryResolution {
@@ -739,6 +745,8 @@ export interface DeliveryPhaseExitCheck {
   validation: string;
   checkId: string;
   boundaryId: string;
+  /** VF2: no passed run exists because the Runner found the check's tool missing. */
+  notRun?: VerificationNotRun;
 }
 
 export interface DeliveryPhaseAcceptanceRecord {
@@ -1431,11 +1439,20 @@ export function evaluatePhaseAcceptance(input: PhaseAcceptanceInputs): {
     }
     const boundary = currentBoundaries.find((candidate) =>
       candidate.checks.some((check) => check.checkId === checkId && check.outcome === "passed") && (checkId !== "tests" || candidate.executedScope === "full_test_script" || (candidate.executedScope === "validation_tier" && candidate.validationTier === "slow")));
-    if (!boundary) {
+    if (boundary) {
+      exitChecks.push({ validation, checkId, boundaryId: boundary.boundaryId });
+      continue;
+    }
+    // VF2: with no passed run, a run the Runner could not start because its tool is
+    // missing satisfies the exit check as not run, never as passed.
+    const notRunBoundary = currentBoundaries.find((candidate) =>
+      candidate.checks.some((check) => check.checkId === checkId && check.outcome === "not_run" && check.notRun));
+    const notRun = notRunBoundary?.checks.find((check) => check.checkId === checkId && check.outcome === "not_run")?.notRun;
+    if (!notRunBoundary || !notRun) {
       issues.push(`Phase ${input.phase.id} exit check "${validation}" has no passed ${checkId} run at the current integration revision.`);
       continue;
     }
-    exitChecks.push({ validation, checkId, boundaryId: boundary.boundaryId });
+    exitChecks.push({ validation, checkId, boundaryId: notRunBoundary.boundaryId, notRun: { ...notRun } });
   }
   return {
     ready: issues.length === 0,

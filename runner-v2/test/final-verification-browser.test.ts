@@ -191,6 +191,58 @@ test("browser verification closes once after thrown or cancelled navigation", as
   }
 });
 
+// VF2: Playwright's own "browser executable doesn't exist" is a missing tool.
+test("VF2: a browser Playwright reports as not installed is not run; other navigation errors stay issues", async () => {
+  const notInstalled = [
+    "browserType.launch: Executable doesn't exist at C:\\Users\\fixture\\ms-playwright\\chromium-1187\\chrome-win\\chrome.exe",
+    "╔═════════════════════════════════════════════════════════════════════════╗",
+    "║ Looks like Playwright Test or Playwright was just installed or updated. ║",
+    "║ Please run the following command to download new browsers:              ║",
+    "║     npx playwright install                                              ║",
+    "╚═════════════════════════════════════════════════════════════════════════╝",
+  ].join("\n");
+  for (const scenario of [
+    { name: "not-installed", openError: notInstalled, notRun: true },
+    { name: "refused", openError: "page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:4173/", notRun: false },
+  ]) {
+    const fixture = await createFixture(`vf2-${scenario.name}`);
+    const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+    const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+    const browser = new FixtureBrowserSession({ openError: scenario.openError });
+    const runtime = createRuntime(fixture, artifacts, evidence, browser);
+    try {
+      const browserInputValue = browserInput(`http://127.0.0.1:4173/${scenario.name}`);
+      const run = await runtime.run({
+        plan: browserPlan(),
+        executionProfile: browserProfile(fixture.integration.revision, browserInputValue),
+        browser: browserInputValue,
+      });
+      const check = browserCheck(run);
+      assert.equal(check.green, false);
+      assert.equal(browser.closeCalls, 1);
+      if (scenario.notRun) {
+        assert.equal(run.green, true, "a not-run browser check is not a failure");
+        assert.deepEqual(check.notRun, {
+          reason: "tool_missing",
+          tool: "browser",
+          detail: "browserType.launch: Executable doesn't exist at C:\\Users\\fixture\\ms-playwright\\chromium-1187\\chrome-win\\chrome.exe",
+        });
+        assert.deepEqual(check.issues, []);
+        assert.deepEqual(check.facts, []);
+        assert.equal(evidence.list({ runId: fixture.runId }).length, 0);
+      } else {
+        assert.equal(run.green, false);
+        assert.equal(check.notRun, undefined);
+        assert.match(check.issues.join(" "), /ERR_CONNECTION_REFUSED/);
+      }
+    } finally {
+      evidence.close();
+      await runtimeWorkspace(fixture).cleanup().catch(() => undefined);
+      await closeFixture(fixture);
+    }
+  }
+});
+
 function browserPlan(): FinalVerificationPlan {
   return {
     checks: [
@@ -300,6 +352,7 @@ interface Fixture {
 interface FixtureBrowserOptions {
   missingScreenshot?: boolean;
   failOpen?: boolean;
+  openError?: string;
   hangOpen?: boolean;
   observedUrl?: string;
   events?: { console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] };
@@ -317,6 +370,7 @@ class FixtureBrowserSession implements FinalVerificationBrowserSession {
   async open(input: { url: string; width: number; height: number }) {
     this.openCalls += 1;
     if (this.options.failOpen) throw new Error("browser navigation failed");
+    if (this.options.openError) throw new Error(this.options.openError);
     if (this.options.hangOpen) await new Promise<void>(() => undefined);
     return { url: this.options.observedUrl ?? input.url, title: "Fixture browser" };
   }

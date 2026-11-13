@@ -12,12 +12,14 @@ import {
 } from "./evidence-store.js";
 import {
   FINAL_VERIFICATION_CATEGORIES,
+  parseVerificationNotRun,
   planFinalVerification,
   type FinalVerificationCategory,
   type FinalVerificationCheck,
   type FinalVerificationPlan,
   type FinalVerificationRepositoryInspection,
   type FinalVerificationStatus,
+  type VerificationNotRun,
 } from "./final-verification-contracts.js";
 import type {
   FinalVerificationFact,
@@ -49,11 +51,13 @@ export interface FinalVerificationSubmissionOptions {
 export interface FinalVerificationSubmissionCheck {
   category: FinalVerificationCategory;
   status: FinalVerificationStatus;
-  green: true;
+  /** True for every check, except one the Runner did not run (VF2), which carries `notRun`. */
+  green: boolean;
   rationale?: string;
   repositoryInspection?: FinalVerificationRepositoryInspection;
   evidenceIds: readonly string[];
   facts: readonly FinalVerificationFact[];
+  notRun?: VerificationNotRun;
 }
 
 interface ValidatedSubmissionCheck {
@@ -65,6 +69,7 @@ interface ValidatedSubmissionCheck {
   evidenceIds: string[];
   facts: FinalVerificationFact[];
   issues: string[];
+  notRun?: VerificationNotRun;
 }
 
 type ValidatedFinalVerificationRun = FinalVerificationRun & { attempt: number };
@@ -82,7 +87,10 @@ export interface FinalVerificationSubmission {
   checks: readonly FinalVerificationSubmissionCheck[];
   evidenceIds: readonly string[];
   submittedAt: string;
-  /** Mechanical fact that every required check was green; not semantic completion. */
+  /**
+   * Mechanical fact that no required check failed: each is green, or was not
+   * run because the Runner found its tool missing (VF2). Not semantic completion.
+   */
   green: true;
 }
 
@@ -156,13 +164,14 @@ export async function submitFinalVerification(
     checks: checks.map((check) => ({
       category: check.category,
       status: check.status,
-      green: true,
+      green: check.notRun === undefined,
       ...(check.rationale !== undefined ? { rationale: check.rationale } : {}),
       ...(check.repositoryInspection
         ? { repositoryInspection: cloneInspection(check.repositoryInspection) }
         : {}),
       evidenceIds: [...check.evidenceIds],
       facts: check.facts.map(cloneFact),
+      ...(check.notRun ? { notRun: { ...check.notRun } } : {}),
     })),
     evidenceIds: [...evidenceIds],
     submittedAt,
@@ -332,6 +341,9 @@ function validateChecks(
       evidenceIds: [...check.evidenceIds] as string[],
       facts: [...check.facts] as FinalVerificationFact[],
       issues: [...check.issues],
+      ...(check.notRun !== undefined
+        ? { notRun: parseVerificationNotRun(check.notRun, `Final verification check ${check.category}`) }
+        : {}),
     };
     checksByCategory.set(check.category, normalized);
   }
@@ -347,7 +359,13 @@ function validateChecks(
       throw new Error(`Final verification check ${planned.category} does not match the exact plan.`);
     }
     const issues = check.issues;
-    if (check.status === "not_applicable") {
+    if (check.notRun) {
+      // VF2: a required check the Runner did not run because its tool is missing.
+      if (check.status !== "required" || check.green !== false || issues.length > 0 ||
+        check.evidenceIds.length > 0 || check.facts.length > 0) {
+        throw new Error(`Not-run final verification category ${check.category} carries a result, evidence or issues.`);
+      }
+    } else if (check.status === "not_applicable") {
       if (check.green !== true || issues.length > 0 || check.evidenceIds.length > 0 || check.facts.length > 0) {
         throw new Error(`Not-applicable final verification category ${check.category} carries executable result evidence.`);
       }
@@ -371,7 +389,7 @@ async function validateCheckEvidence(
   artifacts: ArtifactStore | undefined,
 ): Promise<void> {
   const facts = check.facts;
-  if (check.status === "not_applicable") return;
+  if (check.status === "not_applicable" || check.notRun) return;
   if (facts.length !== check.evidenceIds.length) {
     throw new Error(`Final verification category ${check.category} has mismatched facts and evidence citations.`);
   }

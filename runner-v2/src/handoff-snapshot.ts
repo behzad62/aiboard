@@ -453,7 +453,7 @@ function byLabel(a: HandoffSnapshotVerificationEntry, b: HandoffSnapshotVerifica
 /** Lower ranks are kept first when final-verification lines must truncate. */
 function verificationKeepRank(entry: HandoffSnapshotVerificationEntry): number {
   if (entry.result.startsWith("failed")) return 0;
-  if (entry.result.startsWith("unknown") || entry.result.startsWith("pending")) return 1;
+  if (entry.result.startsWith("unknown") || entry.result.startsWith("pending") || entry.result.startsWith("not run")) return 1;
   return 2;
 }
 
@@ -949,6 +949,16 @@ function verificationEntryForCheck(
       revision,
     };
   }
+  // VF2: the Runner did not run the check because its tool is missing.
+  if (check.notRun) {
+    return {
+      label: `final verification ${check.category}${suffix}`,
+      result: `not run (tool missing: ${check.notRun.tool})`,
+      counts: NOT_RECORDED,
+      command: NOT_RECORDED,
+      revision,
+    };
+  }
   const commandFacts = check.facts.filter((fact): fact is typeof fact & { command: string; args: string[] } =>
     (fact as { kind: string }).kind === "command" &&
     typeof (fact as { command?: unknown }).command === "string");
@@ -1240,9 +1250,11 @@ export function handoffSnapshotInputFromProjection(
           ? `${check.report.counts.selected} selected, ${check.report.counts.passed} passed, ${check.report.counts.failed} failed`
           : NOT_RECORDED;
         // A recorded reason travels next to unknown/failed outcomes (n10).
-        const result = check.reason !== undefined && check.outcome !== "passed"
-          ? `${check.outcome} (${check.reason})`
-          : check.outcome;
+        const result = check.outcome === "not_run"
+          ? `not run (tool missing: ${check.notRun?.tool ?? NOT_RECORDED})`
+          : check.reason !== undefined && check.outcome !== "passed"
+            ? `${check.outcome} (${check.reason})`
+            : check.outcome;
         verification.push({
           label: `boundary ${taskId} ${check.checkId}`,
           result,

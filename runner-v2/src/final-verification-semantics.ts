@@ -1,4 +1,4 @@
-import type { FinalVerificationCategory } from "./final-verification-contracts.js";
+import { parseVerificationNotRun, type FinalVerificationCategory } from "./final-verification-contracts.js";
 import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
 import type {
   FinalVerificationCommand,
@@ -37,6 +37,21 @@ export function assertFinalVerificationCheckSemantics(
   }
   if (check.green === true && issues.length > 0) {
     throw new Error(`Green final verification ${category} cannot carry mechanical issues.`);
+  }
+  // VF2: a required check the Runner did not run because its tool is missing.
+  if (check.notRun !== undefined) {
+    const notRun = parseVerificationNotRun(check.notRun, `Final verification ${category}`);
+    const evidenceIds = check.evidenceIds ?? [];
+    if (
+      status !== "required" || check.green !== false || facts.length > 0 || issues.length > 0 ||
+      !Array.isArray(evidenceIds) || evidenceIds.length > 0
+    ) {
+      throw new Error(`Not-run final verification ${category} cannot carry a result, evidence or issues.`);
+    }
+    if (!finalVerificationCheckTools(input.profile, category).includes(notRun.tool)) {
+      throw new Error(`Not-run final verification ${category} names a tool its runner-inspected specification does not use.`);
+    }
+    return;
   }
   if (status === "not_applicable") {
     if (check.green !== true || facts.length > 0 || issues.length > 0) {
@@ -145,6 +160,32 @@ export function assertFinalVerificationCheckSemantics(
       throw new Error("Green browser facts do not describe one exact browser session and observed URL.");
     }
   }
+}
+
+/**
+ * VF2: the tools a category's runner-inspected specification launches (its
+ * commands, provisioning, tiers and workflow steps), plus "browser" for the
+ * built-in browser check. A not-run record must name one of them.
+ */
+export function finalVerificationCheckTools(
+  profile: FinalVerificationExecutionProfile,
+  category: FinalVerificationCategory,
+): string[] {
+  const tools = new Set<string>();
+  if (profile.provisioning) tools.add(profile.provisioning.command.executable);
+  if (category === "build" || category === "tests") {
+    for (const command of profile.commands[category] ?? []) tools.add(command.executable);
+    if (category === "tests") {
+      for (const tier of Object.values(profile.tiers ?? {})) {
+        for (const command of tier ?? []) tools.add(command.executable);
+      }
+    }
+    return [...tools];
+  }
+  const program = category === "runtime_smoke" ? profile.runtimeSmoke : profile.browser?.server;
+  for (const command of program ? [program, ...(program.steps ?? [])] : []) tools.add(command.executable);
+  if (category === "browser") tools.add("browser");
+  return [...tools];
 }
 
 function assertCommandFacts(
