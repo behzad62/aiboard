@@ -33,7 +33,7 @@ import {
 import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { createArtifactTools } from "./artifact-tools.js";
-import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
+import { activeBrowserBackend, createBrowserTools, type BrowserBackend } from "./browser-tools.js";
 import { createCodeIntelligenceTools } from "./code-intelligence-tools.js";
 import type {
   BudgetLedger,
@@ -142,6 +142,8 @@ export interface NativeArchitectRuntimeOptions {
   ledger?: ToolInvocationLedger;
   permissions?: SqlitePermissionStore;
   browserBackend?: BrowserBackend;
+  /** VF7b: true for a run that browses through the Playwright CLI; the Architect gets no browser.* tools. */
+  browserToolsRetired?: () => boolean;
   mcpManager?: McpManager;
   managedBuildTools?: ManagedBuildToolSource;
   runPolicy?: NativeBuildRunPolicy;
@@ -367,7 +369,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
       ...(this.options.protectedPaths ? { protectedPaths: this.options.protectedPaths } : {}),
-      ...(this.options.browserBackend ? { browserBackend: this.options.browserBackend } : {}),
+      ...activeBrowserBackend(this.options.browserBackend, this.options.browserToolsRetired),
       ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
       ...(this.options.language ? { language: this.options.language } : {}),
     });

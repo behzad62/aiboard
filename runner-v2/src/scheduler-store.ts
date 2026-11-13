@@ -315,6 +315,7 @@ export type SchedulerEventType =
   | "answer.review_recorded"
   | "answer.review_unavailable"
   | "environment.inventory_recorded"
+  | "run.browsing_configured"
   | PlanningEventType;
 
 export interface SchedulerEvent {
@@ -1062,6 +1063,13 @@ export interface SchedulerProjection {
    * decide anything. Absent on every run recorded before VF1.
    */
   environmentInventory?: EnvironmentInventoryProjection;
+  /**
+   * VF7b: recorded once, before planning, by a run that browses through the
+   * Playwright CLI the Runner ships: it registers no `browser.*` tools. Absent
+   * on every run started before VF7b, which keeps those tools on resume and
+   * replay.
+   */
+  browsing?: { version: 1; surface: "playwright_cli"; sequence: number };
   /**
    * Legacy plans remain readable, but an active plan without criteria must
    * pass through one append-only Architect upgrade before it can proceed.
@@ -2183,6 +2191,8 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "provider.health_changed" ||
     // VF1: a Runner fact about this machine; it never advances the run.
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
+    // VF7b: the run's tool surface, recorded before planning; it never advances the run.
+    (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
     event.type === "architect.runtime_assigned" ||
     event.type === "architect.handoff_required" ||
     event.type === "architect.handoff_selected" ||
@@ -2242,6 +2252,8 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "provider.health_changed" ||
     // VF1: a Runner fact about this machine; it never advances the run.
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
+    // VF7b: the run's tool surface, recorded before planning; it never advances the run.
+    (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
     event.type === "architect.runtime_assigned" ||
     event.type === "architect.handoff_required" ||
     event.type === "architect.handoff_selected" ||
@@ -4932,6 +4944,24 @@ export function reduceSchedulerEvent(
         delete records[key];
         next.tempRecords = records;
       }
+      break;
+    }
+    case "run.browsing_configured": {
+      // VF7b: a new run records, before its first plan, that it browses
+      // through the Playwright CLI. Runs without this event keep browser.*.
+      if (event.actor.role !== "runner" || event.actor.id !== "build-runtime") {
+        throw new Error("Only the build runtime may configure the run's browsing.");
+      }
+      if (current.status !== "running") throw new Error("Only a running Build can configure its browsing.");
+      if (current.browsing) throw new Error("The run's browsing is already configured.");
+      if (current.planRevision !== 0 || Object.keys(current.tasks).length > 0) {
+        throw new Error("Browsing is configured only before the first plan.");
+      }
+      const payload = event.payload as Record<string, unknown>;
+      if (!payload || Object.keys(payload).sort().join(",") !== "surface,version" || payload.version !== 1 || payload.surface !== "playwright_cli") {
+        throw new Error("Browsing configuration payload is invalid.");
+      }
+      next.browsing = { version: 1, surface: "playwright_cli", sequence: event.sequence };
       break;
     }
     case "environment.inventory_recorded": {

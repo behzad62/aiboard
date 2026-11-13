@@ -218,7 +218,7 @@ export function createRuntimeBackedOneShotCommandExecutor(
       let reuseKey: string | undefined;
       let childEnvironmentAudit: import("./child-environment.js").ChildEnvironmentAudit | undefined;
       try {
-        const prepared = options.environments.prepare({ workingDirectory: request.workingDirectory, ambient: options.ambientEnvironment, explicitOverrides: request.explicitEnvironment, runId: originalIntent.runId, invocationId });
+        const prepared = options.environments.prepare({ workingDirectory: request.workingDirectory, ambient: options.ambientEnvironment, explicitOverrides: request.explicitEnvironment, runId: originalIntent.runId, ...(originalIntent.sessionId ? { sessionId: originalIntent.sessionId } : {}), invocationId });
         childEnvironmentAudit = prepared.audit;
         effectiveEnvironment = options.environments.withChildEnvironment(prepared.capability, (environment) => environment);
         selection = await options.isolation.acquire({

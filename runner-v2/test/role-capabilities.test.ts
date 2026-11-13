@@ -245,7 +245,10 @@ const VERIFIER_INSPECTION_FULL = [
   "git.show",
   "git.status",
   "inspect_evidence",
+  // VF7b: the Runner's skill catalog (the Playwright CLI skill), with the command tools.
+  "list_skills",
   ...VERIFIER_LIVE_PROCESS,
+  "read_skill",
   "run_evidence_command",
   "submit_verifier_verdict",
 ] as const;
@@ -329,7 +332,9 @@ const VERIFIER_DELIVERY_COMMANDS_FULL = [
   "git.show",
   "git.status",
   "inspect_evidence",
+  "list_skills",
   ...VERIFIER_LIVE_PROCESS,
+  "read_skill",
   "record_deliverable_findings",
   "run_evidence_command",
 ] as const;
@@ -632,6 +637,7 @@ test("constructed brokers match the derived surfaces and an unlisted probe fails
     const verdict = createVerifierReviewBroker({
       ...inspectionInput(root, artifacts),
       managedProcesses: {} as ManagedProcessService,
+      skillCatalog: new SkillCatalog({ projectRoot: root }),
       lifecycleTool: createSubmitVerifierVerdictTool({
         authority: {} as VerifierVerdictAuthority,
         runId: "run",

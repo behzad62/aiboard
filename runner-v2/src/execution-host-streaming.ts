@@ -275,6 +275,7 @@ export function createExecutionHostStreamingGraph(
         ambient: options.ambientEnvironment,
         explicitOverrides: request.explicitEnvironment,
         runId: request.intent.runId,
+        ...(request.intent.sessionId ? { sessionId: request.intent.sessionId } : {}),
         invocationId: request.intent.invocationId,
       });
       const environment = options.environments.withChildEnvironment(

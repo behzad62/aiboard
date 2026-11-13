@@ -122,6 +122,38 @@ test("process family production graph continues truthfully when private spill se
   }
 });
 
+test("VF7b process.run gets the Runner's per-owner values: the owner's browser session and the shim folder first on PATH", async (t) => {
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-runner-env-"));
+  const shims = join(workspace, "..", "aiboard-process-runner-env-bin");
+  const owners: Array<{ runId: string; sessionId: string }> = [];
+  const graph = createProductionOneShotCommandFixture(t, {
+    processEnvironment: (owner) => {
+      owners.push(owner);
+      return owner.runId === "run_1"
+        ? { values: { PLAYWRIGHT_CLI_SESSION: `t-${owner.sessionId.length.toString(16).padStart(8, "0")}` }, pathPrepend: [shims] }
+        : undefined;
+    },
+  });
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, toolTimeoutMs: 30_000, executionGrants: graph.executionGrants });
+  for (const tool of createProcessTools({ execution: graph.execution })) broker.register(tool);
+  try {
+    const result = await invoke(broker, "runner-env", {
+      command: process.execPath,
+      args: ["-e", "const path = process.env.PATH ?? process.env.Path ?? ''; console.log(JSON.stringify({ session: process.env.PLAYWRIGHT_CLI_SESSION ?? null, first: path.split(require('node:path').delimiter)[0] }))"],
+      timeoutMs: 25_000,
+      // A caller cannot name the session itself: the Runner's value wins.
+      env: { PLAYWRIGHT_CLI_SESSION: "forged" },
+    });
+    assert.equal(result.isError, false, result.error?.message ?? text(result));
+    assert.deepEqual(owners.at(-1), { runId: "run_1", sessionId: "session_1" });
+    const line = text(result).split(/\r?\n/u).find((entry) => entry.startsWith('{"session"'));
+    assert.ok(line, text(result));
+    assert.deepEqual(JSON.parse(line), { session: "t-00000009", first: shims });
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("process.run records stdout, stderr, and exit code without semantic verdicts", async (t) => {
   const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-run-"));
   const broker = brokerWithProcesses(workspace, t);

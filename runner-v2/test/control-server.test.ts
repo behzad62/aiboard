@@ -2085,11 +2085,11 @@ test("health reports the home, model proxy and secretless provider config capabi
   const without = await homeControlFixture({ withHome: false });
   try {
     const health = await json(await fetch(`${withHome.url}/v2/health`, authorized()));
-    assert.deepEqual(health.capabilities, { soloToolBench: false, extensions: false, chatSessions: false, home: true, modelProxy: true, secretlessProviderConfigs: true });
+    assert.deepEqual(health.capabilities, { soloToolBench: false, extensions: false, chatSessions: false, home: true, modelProxy: true, secretlessProviderConfigs: true, browserInstall: false });
     assert.equal(health.catalogVersion, catalogVersion);
     assert.match(String(health.catalogVersion), /\S/);
     const old = await json(await fetch(`${without.url}/v2/health`, authorized()));
-    assert.deepEqual(old.capabilities, { soloToolBench: false, extensions: false, chatSessions: false, home: false, modelProxy: false, secretlessProviderConfigs: false });
+    assert.deepEqual(old.capabilities, { soloToolBench: false, extensions: false, chatSessions: false, home: false, modelProxy: false, secretlessProviderConfigs: false, browserInstall: false });
     const refused = await without.put([pushedOpenAi]);
     assert.equal(refused.status, 422, "a Runner without the home refuses a config with no secret");
     assert.equal(refused.body.code, "home_unavailable");

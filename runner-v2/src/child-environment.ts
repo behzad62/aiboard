@@ -24,7 +24,8 @@ export type ChildEnvironmentDecision =
   | { readonly kind: "removed_explicit"; readonly name: string }
   | { readonly kind: "applied_explicit"; readonly name: string }
   | { readonly kind: "rejected_explicit"; readonly name: string }
-  | { readonly kind: "granted_credential"; readonly name: string };
+  | { readonly kind: "granted_credential"; readonly name: string }
+  | { readonly kind: "applied_runner"; readonly name: string };
 
 export interface ChildEnvironmentAudit {
   readonly inheritedNames: readonly string[];
@@ -39,10 +40,23 @@ export interface PrepareChildEnvironmentInput {
   readonly ambient: Readonly<Record<string, string | undefined>>;
   readonly explicitOverrides?: Readonly<Record<string, string | undefined>>;
   readonly runId?: string;
+  /** The owning agent session; with runId it selects the Runner's own per-owner values (processEnvironment). */
+  readonly sessionId?: string;
   readonly invocationId?: string;
   /** Caller-visible opaque id only; all authority is loaded from Runner storage. */
   readonly credentialGrantId?: string;
 }
+
+/**
+ * VF7b: values the Runner itself sets for every process it starts for one owner (the Playwright CLI
+ * session's name and state folders), and folders it puts first on PATH (the playwright-cli shims).
+ * Runner authority: applied after the caller's overrides, and the PATH entries after the install-root filter.
+ */
+export interface RunnerProcessEnvironment {
+  readonly values: Readonly<Record<string, string>>;
+  readonly pathPrepend: readonly string[];
+}
+export type RunnerProcessEnvironmentResolver = (owner: { readonly runId: string; readonly sessionId: string }) => RunnerProcessEnvironment | undefined;
 
 /** Opaque capability valid only in the factory closure that issued it. */
 export interface ChildEnvironmentCapability { readonly _opaque?: never }
@@ -66,6 +80,8 @@ export interface CreateChildEnvironmentFactoryOptions {
   readonly runnerInstallRoot?: string;
   /** Trusted next depth for a bound local MCP session. */
   readonly mcpChildDepth?: number;
+  /** VF7b: the Runner's per-owner values; consulted only when a prepare names both runId and sessionId. */
+  readonly processEnvironment?: RunnerProcessEnvironmentResolver;
 }
 
 export const LOCAL_MCP_DEPTH_LIMIT = 2;
@@ -82,6 +98,7 @@ interface PrepareChildEnvironmentSnapshot {
   readonly ambient: Readonly<Record<string, string | undefined>>;
   readonly explicitOverrides?: Readonly<Record<string, string | undefined>>;
   readonly runId?: string;
+  readonly sessionId?: string;
   readonly invocationId?: string;
   readonly credentialGrantId?: string;
 }
@@ -152,6 +169,16 @@ export function createChildEnvironmentFactory(
 
       // This is Runner authority, never a caller-controlled environment override.
       setEnvironment(environment, "AIBOARD_MCP_DEPTH", String(mcpChildDepth));
+      const runner = nonEmpty(request.runId) && nonEmpty(request.sessionId)
+        ? options.processEnvironment?.({ runId: request.runId, sessionId: request.sessionId })
+        : undefined;
+      for (const [name, value] of sortedEntries(runner?.values ?? {})) {
+        if (value === undefined) continue;
+        assertEnvironmentEntry(name, value);
+        if (canonicalName(name) === "PATH" || isForbiddenChildEnvironmentName(name)) throw new Error("Runner process environment is invalid.");
+        setEnvironment(environment, name, value);
+        decisions.push({ kind: "applied_runner", name });
+      }
       const path = environment.get("PATH");
       if (path) {
         const entries = path.value.split(delimiter);
@@ -163,6 +190,16 @@ export function createChildEnvironmentFactory(
           setEnvironment(environment, path.name, retained.join(delimiter));
           decisions.push({ kind: "removed_runner_path", name: path.name, count: entries.length - retained.length });
         }
+      }
+      const prepend = runner?.pathPrepend ?? [];
+      if (prepend.some((entry) => typeof entry !== "string" || !isAbsolute(entry) || entry.includes(delimiter))) {
+        throw new Error("Runner process environment is invalid.");
+      }
+      if (prepend.length > 0) {
+        const current = environment.get("PATH");
+        const name = current?.name ?? (process.platform === "win32" ? "Path" : "PATH");
+        setEnvironment(environment, name, [...prepend, ...(current?.value ? [current.value] : [])].join(delimiter));
+        decisions.push({ kind: "applied_runner", name });
       }
       const capability = Object.freeze({}) as ChildEnvironmentCapability;
       environments.set(capability, createRawEnvironment(environment));
@@ -193,6 +230,7 @@ function snapshotPrepareChildEnvironmentInput(
     ambient: input.ambient,
     explicitOverrides: input.explicitOverrides,
     runId: input.runId,
+    sessionId: input.sessionId,
     invocationId: input.invocationId,
     credentialGrantId: input.credentialGrantId,
   });

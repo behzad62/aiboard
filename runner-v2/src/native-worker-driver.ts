@@ -18,7 +18,7 @@ import type {
   ModelCallRole,
   ModelCostBasisSnapshot,
 } from "./budget-ledger.js";
-import type { BrowserBackend } from "./browser-tools.js";
+import { activeBrowserBackend, type BrowserBackend } from "./browser-tools.js";
 import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
@@ -84,6 +84,8 @@ export interface NativeWorkerDriverOptions {
   validationBudgetMs?: number;
   validationBudgetMsForTask?: (input: { taskId: string; baselineRevision: string; workspacePath: string }) => number | Promise<number>;
   browserBackend?: BrowserBackend;
+  /** VF7b: true for a run that browses through the Playwright CLI; its workers and subagents get no browser.* tools. */
+  browserToolsRetired?: () => boolean;
   mcpManager?: McpManager;
   managedBuildTools?: import("./managed-build-tools.js").ManagedBuildToolSource;
   permissions?: SqlitePermissionStore;
@@ -403,9 +405,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           : {}),
         ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
         ...(this.options.protectedPaths ? { protectedPaths: this.options.protectedPaths } : {}),
-        ...(this.options.browserBackend
-          ? { browserBackend: this.options.browserBackend }
-          : {}),
+        ...activeBrowserBackend(this.options.browserBackend, this.options.browserToolsRetired),
         ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
         ...(this.options.managedBuildTools ? { managedBuildTools: this.options.managedBuildTools } : {}),
         ...(this.options.permissions ? { permissions: this.options.permissions } : {}),

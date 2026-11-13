@@ -15,6 +15,13 @@ export type PosixAnchorAttestation =
   | { readonly state: "ready"; readonly members: readonly number[] }
   | { readonly state: "identity_mismatch" | "outcome_unknown" };
 
+export interface PosixProcessCommandRow {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly command: string;
+}
+export function listPosixProcessCommands(): readonly PosixProcessCommandRow[] | undefined;
+export function parsePosixPsCommands(output: string): readonly PosixProcessCommandRow[] | undefined;
 export function parseLinuxProcStatIdentity(pid: number, stat: string): PosixProcessIdentity | undefined;
 export function inspectPosixProcessIdentity(pid: number): PosixProcessIdentityInspection;
 export function parsePosixPsIdentity(pid: number, row: string): PosixProcessIdentity | undefined;

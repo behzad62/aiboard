@@ -9,7 +9,7 @@ import {
 import type { PermissionProfile } from "./contracts.js";
 import { assertCurrentConsumedExecutionGrantClaims, type ExecutionGrantBinding } from "./execution-grants.js";
 import type { ExecutionHostRunBinding } from "./execution-host.js";
-import { createChildEnvironmentFactory } from "./child-environment.js";
+import { createChildEnvironmentFactory, type RunnerProcessEnvironmentResolver } from "./child-environment.js";
 import { resolveLanguageServerExecutable } from "./language-server-executable.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { ManagedProcessError, type ManagedOutputEvidence, type ManagedProcessSnapshot } from "./managed-process-contracts.js";
@@ -39,9 +39,12 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
   /** Finalized spill evidence only; absent means earlier completed ranges are unavailable. */
   artifacts?: ArtifactStore;
+  /** VF7b: the run's per-owner values, so the launch resolves the command on the same PATH it runs with. */
+  processEnvironment?: RunnerProcessEnvironmentResolver;
 }>): ManagedProcessRunRuntime {
   const { run } = options; const entries = new Map<string, Entry>();
-  const environments = createChildEnvironmentFactory({ credentialResolver: { consume() { throw new Error("Managed credential grants are not configured."); } } });
+  const environments = createChildEnvironmentFactory({ credentialResolver: { consume() { throw new Error("Managed credential grants are not configured."); } },
+    ...(options.processEnvironment ? { processEnvironment: options.processEnvironment } : {}) });
   const recordOf = (target: ManagedProcessIdentity): Readonly<StreamingSessionRecord> | undefined => {
     if (target.runId !== run.runId || !/^[A-Za-z0-9._-]{1,96}$/.test(target.processId)) throw refused("Managed owner identity is invalid.");
     const record = run.streamingState.readSession(sessionId(target.processId));
@@ -141,7 +144,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
           if (options.permissionProfile !== "full" && !imageExecutable) {
             throw new ManagedProcessError("process_launch_failed", "Managed strict isolation cannot represent the host executable inside the configured image; launch is unavailable before process creation.");
           }
-          const prepared = environments.prepare({ workingDirectory: cwd, ambient: options.environment, explicitOverrides: request.environment });
+          const prepared = environments.prepare({ workingDirectory: cwd, ambient: options.environment, explicitOverrides: request.environment, runId: run.runId, sessionId: request.identity.sessionId });
           const executable = options.permissionProfile === "full"
             ? await environments.withChildEnvironment(prepared.capability, environment =>
                 resolveLanguageServerExecutable(request.command, { commandSearchDirectory: cwd, environment }))

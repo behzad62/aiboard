@@ -482,6 +482,13 @@ export interface BuildRuntimeOptions {
    * Absent, no inventory is recorded (focused tests and older embeddings).
    */
   environmentInventory?: (input: { trigger: InventoryTrigger }) => Promise<EnvironmentInventory>;
+  /**
+   * VF7b: a fresh run records `run.browsing_configured` before its first plan
+   * (it browses through the Playwright CLI and registers no `browser.*`), and
+   * each step tells `configure` what the run records: whether it browses
+   * through the CLI and the inventory's browser. Absent, nothing is recorded.
+   */
+  browsing?: { configure(input: { cli: boolean; browser: string | null }): void };
   /** An Architect-named runtime smoke on a leased port; supplied only for full-access runs. */
   finalVerificationRuntimeSmoke?: import("./architect-tools.js").ArchitectToolsOptions["finalVerificationRuntimeSmoke"];
   /** VF3: resolves a v2 plan into the runner-owned execution profile. */
@@ -943,6 +950,7 @@ export class BuildRuntime {
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
   private readonly discardFinalVerificationProfile?: BuildRuntimeOptions["discardFinalVerificationProfile"];
   private readonly environmentInventory?: BuildRuntimeOptions["environmentInventory"];
+  private readonly browsing?: BuildRuntimeOptions["browsing"];
   /** VF1: the resume sequence this instance last tried to record an inventory for, so a refused record never re-probes every step. */
   private environmentInventoryAttempted?: number;
   private readonly finalVerificationRuntimeSmoke?: BuildRuntimeOptions["finalVerificationRuntimeSmoke"];
@@ -1019,6 +1027,7 @@ export class BuildRuntime {
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
     this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
     this.environmentInventory = options.environmentInventory;
+    this.browsing = options.browsing;
     this.finalVerificationRuntimeSmoke = options.finalVerificationRuntimeSmoke;
     this.finalVerificationWithPlan = options.finalVerificationWithPlan;
     this.finalVerificationArchitectCommands = options.finalVerificationArchitectCommands === true;
@@ -1839,10 +1848,18 @@ export class BuildRuntime {
     // VF1: before this step's work, the inventory of this epoch (the run's
     // start, then each resume), so the first planning turn sees one and a
     // resumed run sees a fresh one.
+    if (projection.status === "running" && this.recordBrowsingIfDue(events, projection)) {
+      events = this.store.readRun(this.runId);
+      projection = rebuildSchedulerProjection(events);
+    }
     if (projection.status === "running" && await this.recordEnvironmentInventoryIfDue(events)) {
       events = this.store.readRun(this.runId);
       projection = rebuildSchedulerProjection(events);
     }
+    this.browsing?.configure({
+      cli: projection.browsing?.surface === "playwright_cli",
+      browser: projection.environmentInventory?.playwrightBrowser ?? null,
+    });
     const pendingInterruption = Object.values(projection.userGuidance)
       .filter((guidance) => guidance.interruptionStatus !== "completed")
       .sort((left, right) => left.version - right.version)[0];
@@ -4371,6 +4388,31 @@ export class BuildRuntime {
    * recorded as an inventory that says so, and a refused record is not
    * retried by this instance: neither ever fails or pauses the step.
    */
+  /**
+   * VF7b: a run that has never planned and never resumed records, once, that
+   * it browses through the Playwright CLI. A run started before VF7b already
+   * has a plan or a resume when this code first sees it, so it keeps the
+   * `browser.*` tools it started with. A refused record leaves the run as is.
+   */
+  private recordBrowsingIfDue(events: readonly SchedulerEvent[], projection: SchedulerProjection): boolean {
+    if (!this.browsing || events.length === 0 || projection.browsing) return false;
+    if (projection.planRevision !== 0 || Object.keys(projection.tasks).length > 0) return false;
+    if (events.some((event) => event.type === "run.resumed" || event.type === "run.browsing_configured")) return false;
+    try {
+      this.store.append({
+        runId: this.runId,
+        type: "run.browsing_configured",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: "run-browsing-configured",
+        payload: { version: 1, surface: "playwright_cli" },
+      });
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
   private async recordEnvironmentInventoryIfDue(events: readonly SchedulerEvent[]): Promise<boolean> {
     if (!this.environmentInventory || events.length === 0) return false;
     let lastResume = 0;

@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 // RUNNER_RAW_PROCESS_BOUNDARY: POSIX process/group identity inspection for owned-tree lifecycle enforcement.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 const POSIX_INSPECTION_DEADLINE_MS = 15_000;
 const POSIX_CPU_INSPECTION_DEADLINE_MS = 2_000;
@@ -99,6 +99,51 @@ export function parsePosixGroupMembers(output, groupId) {
   // A successful `ps -e` snapshot necessarily contains at least its own row.
   // Blank output is therefore unavailable evidence, never exact emptiness.
   return sawSnapshotRow ? members : undefined;
+}
+
+/**
+ * VF7b: a read-only table of every visible process (pid, parent and full command line), for the Playwright CLI
+ * session's attributable-browser check after a managed stop. Linux reads /proc; macOS and other POSIX systems run
+ * one `ps -A -ww`. Undefined when no snapshot could be read: callers treat that as unknown, never as empty.
+ */
+export function listPosixProcessCommands() {
+  if (process.platform === "linux") {
+    let entries;
+    try { entries = readdirSync("/proc"); } catch { return undefined; }
+    const rows = [];
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+        const close = stat.lastIndexOf(")");
+        const ppid = Number(stat.slice(close + 1).trim().split(/\s+/)[1]);
+        const command = readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0").filter(Boolean).join(" ");
+        if (positivePid(Number(entry)) && Number.isSafeInteger(ppid) && ppid >= 0) rows.push({ pid: Number(entry), ppid, command });
+      } catch { /* exited while listing */ }
+    }
+    return rows.length > 0 ? rows : undefined;
+  }
+  try {
+    return parsePosixPsCommands(execFileSync("ps", ["-A", "-ww", "-o", "pid=,ppid=,command="], {
+      encoding: "utf8",
+      timeout: POSIX_INSPECTION_DEADLINE_MS,
+      maxBuffer: 64 * 1024 * 1024,
+    }));
+  } catch {
+    return undefined;
+  }
+}
+
+export function parsePosixPsCommands(output) {
+  if (typeof output !== "string") return undefined;
+  const rows = [];
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const match = /^\s*(\d+)\s+(\d+)\s?(.*)$/.exec(line);
+    if (!match) return undefined;
+    rows.push({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" });
+  }
+  return rows.length > 0 ? rows : undefined;
 }
 
 export function reattestOwnedPosixAnchor(workloadGroup, inspect = inspectPosixProcessIdentity, listMembers = listOwnedPosixGroupMembers) {

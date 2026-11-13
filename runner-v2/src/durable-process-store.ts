@@ -2987,7 +2987,8 @@ function parseScrubDecisions(value: unknown): import("./child-environment.js").C
       return {kind: "removed_runner_path", name: o.name, count: o.count as number};
     }
     assertKeys(o, new Set(["kind", "name"]), "scrub decision");
-    if (!["removed_ambient", "removed_explicit", "applied_explicit", "rejected_explicit", "granted_credential"].includes(o.kind as string)) throw new Error("Invalid scrub decision.");
+    // VF7b: applied_runner names a Runner-set value (the Playwright CLI session's), never a caller's.
+    if (!["removed_ambient", "removed_explicit", "applied_explicit", "rejected_explicit", "granted_credential", "applied_runner"].includes(o.kind as string)) throw new Error("Invalid scrub decision.");
     return {kind: o.kind as "removed_ambient", name: o.name};
   });
 }
