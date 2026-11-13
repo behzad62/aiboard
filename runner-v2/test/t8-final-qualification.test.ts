@@ -738,6 +738,8 @@ import {
   inspectFinalVerificationExecutionProfile,
 } from "../src/final-verification-profile.js";
 import type { FinalVerificationPlan } from "../src/final-verification-contracts.js";
+import type { FinalVerificationSubmissionV2 } from "../src/final-verification-submission.js";
+import type { VerificationCheckV2, VerificationPlanPrefillV2 } from "../src/verification-plan-v2.js";
 import {
   detectLanguageFamilies,
   planLanguageTestReport,
@@ -2439,21 +2441,36 @@ class T8SpineReviewer implements AgentModel {
   }
 }
 
-function t8SpineFvPlan(): FinalVerificationPlan {
-  const na = (category: "build" | "runtime_smoke" | "browser"): FinalVerificationPlan["checks"][number] => ({
-    category,
-    status: "not_applicable",
-    rationale: `The fixture has no ${category} entry point.`,
-    repositoryInspection: { paths: ["package.json"], summary: `The fixture package has no ${category} entry point.` },
-  });
-  return {
-    checks: [
-      na("build"),
-      { category: "tests", status: "required" },
-      na("runtime_smoke"),
-      na("browser"),
-    ],
-  };
+/**
+ * VF3: the spine run is created through the control server with a planning
+ * policy, so its final verification is the Architect's list of checks. The
+ * scripted Architect reads the Runner's suggested checks from its prompt, as a
+ * model does, and keeps each one unchanged.
+ */
+function t8SpineSuggestedChecks(request: AgentModelRequest): VerificationCheckV2[] {
+  const text = t8RequestText(request);
+  const marker = text.lastIndexOf("Runner-suggested final-verification checks");
+  assert.ok(marker >= 0, "the v2 final-verification plan turn carries the Runner's suggested checks");
+  const start = text.indexOf("{", marker);
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index >= 0 && index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === "\"") inString = false;
+    } else if (char === "\"") {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return (JSON.parse(text.slice(start, index + 1)) as VerificationPlanPrefillV2).suggestedChecks;
+    }
+  }
+  throw new Error("The Runner's suggested checks are not complete JSON in the Architect prompt.");
 }
 
 interface T8SpineScenario {
@@ -2593,10 +2610,20 @@ class T8SpineArchitect implements AgentModel {
     if (["T-A", "T-B", "T-C"].every((taskId) => projection.tasks[taskId]?.status === "integrated")) {
       const current = projection.finalVerification?.current;
       if (!current) {
-        return this.call("plan_final_verification", { plan: t8SpineFvPlan() });
+        assert.equal(projection.verificationContractVersion, 2, "a new planning run records the v2 final-verification contract");
+        const suggested = t8SpineSuggestedChecks(request);
+        assert.ok(suggested.some((check) => check.kind === "tests"), "the spine fixture's tests are a suggested check");
+        return this.call("plan_final_verification", {
+          plan: {
+            version: 2,
+            checks: suggested.map(({ origin: _origin, mandatory: _mandatory, ...check }) => check),
+            skipped: [],
+          },
+        });
       }
       if (current.review?.status === "requested" && current.submission && current.submissionResult) {
-        const submission = current.submissionResult as import("../src/final-verification-submission.js").FinalVerificationSubmission;
+        const submission = current.submissionResult as FinalVerificationSubmissionV2;
+        const executed = new Set(submission.plan.checks.map((check) => check.id));
         return this.call("review_final_verification", {
           taskId: current.taskId,
           generationId: current.generationId,
@@ -2607,12 +2634,15 @@ class T8SpineArchitect implements AgentModel {
           summary: "Final verification is green on the integrated revision.",
           architectRisk: "low",
           architectRiskRationale: "Three small modules with passing tests.",
-          categoryReviews: submission.checks.map((check) => ({
-            category: check.category,
-            verdict: "approved",
-            rationale: check.status === "required" ? "Executed green with evidence." : "Not applicable to this fixture.",
-            evidenceIds: [...check.evidenceIds],
-          })),
+          checkReviews: submission.checks
+            .filter((check) => executed.has(check.checkId))
+            .map((check) => ({
+              checkId: check.checkId,
+              verdict: "approved",
+              rationale: check.outcome === "passed" ? "Executed green with evidence." : "Not run on this machine; nothing to repair.",
+              evidenceIds: [...check.evidenceIds],
+            }))
+            .sort((left, right) => left.checkId.localeCompare(right.checkId)),
         });
       }
     }
