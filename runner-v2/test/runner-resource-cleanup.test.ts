@@ -168,8 +168,7 @@ test("VF7b startup removes the Playwright CLI state a crashed Runner left, keeps
         inspect: (pids) => new Map(pids.map((pid) => [pid, !readable ? { state: "unknown" as const } : pid === 41
           ? { state: "present" as const, value: { pid, groupId: 41, birth: "b41" } } : { state: "absent" as const }])),
         commandLine: (pid) => (pid === 41 ? `/usr/bin/chrome --user-data-dir=${liveProfile}` : undefined),
-        groupAlive: () => { throw new Error("startup does not signal"); },
-        kill: () => { throw new Error("startup does not signal"); },
+        groupAlive: () => { throw new Error("startup only reads the profiles' browsers"); },
         hostname: () => "box",
       },
     });

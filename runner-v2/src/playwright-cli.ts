@@ -9,9 +9,10 @@
 //   `open`, which hangs process.run on Windows and leaves the owned process group on POSIX (spike §4).
 // - `playwright-cli` runs the bundled CLI behind playwright-cli-guard.mjs, a guardrail that refuses the commands
 //   that would escape the managed session.
-// - On POSIX, Playwright starts Chrome in a session of its own, outside the owned process group. After a managed
-//   stop, PlaywrightCliSessions checks the browser processes it can attribute to the owner exactly (PID and birth),
-//   kills the ones still alive, verifies, and fails the stop closed when one survives (spike §9.6).
+// - On POSIX, Playwright starts Chrome in a session of its own, outside the owned process group. After the session
+//   process's stop, PlaywrightCliSessions reads the browser Chrome recorded in the session's own profile, confirms
+//   it by PID, birth and group, and fails the stop closed while it still runs. It never lists the host's processes
+//   and never signals one outside the group: a known escape is recorded and blocks (DECISION 2026-09-19 §8.3).
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -59,8 +60,6 @@ export const PLAYWRIGHT_CLI_OWNER_VARIABLES = Object.freeze([
 ]);
 /** How long Chrome gets to leave on its own after the stop (it quits on DevTools-pipe EOF within 0.25 s, spike §5). */
 export const POSIX_BROWSER_EXIT_GRACE_MS = 2_000;
-/** How long a SIGKILL of an attributed process gets before the stop is reported unverified. */
-export const POSIX_BROWSER_KILL_VERIFY_MS = 2_000;
 
 export function isPlaywrightCliBrowser(value: unknown): value is PlaywrightCliBrowser {
   return typeof value === "string" && (PLAYWRIGHT_CLI_BROWSERS as readonly string[]).includes(value);
@@ -216,17 +215,18 @@ export interface PosixProcessTable {
   inspect(pids: readonly number[]): ReadonlyMap<number, PosixProcessIdentityInspection>;
   /** One process's command line, by its PID. */
   commandLine(pid: number): string | undefined;
-  /** Whether the group still has a live member: false only on proof of emptiness, undefined when unknown. */
-  groupAlive(groupId: number): boolean | undefined;
-  kill(pid: number, signal: NodeJS.Signals): void;
+  /**
+   * Whether the group still has a live member: false only on proof of emptiness, undefined when unknown. Without
+   * `confirm` only kill(-group, 0) is used; with it, a group that answers is confirmed by the zombie-aware snapshot.
+   */
+  groupAlive(groupId: number, confirm: boolean): boolean | undefined;
   hostname(): string;
 }
 
 const OS_PROCESS_TABLE: PosixProcessTable = Object.freeze({
   inspect: (pids: readonly number[]) => inspectPosixProcessIdentities(pids),
   commandLine: (pid: number) => readPosixProcessCommandLine(pid),
-  groupAlive: (groupId: number) => posixProcessGroupAlive(groupId),
-  kill: (pid: number, signal: NodeJS.Signals) => { process.kill(pid, signal); },
+  groupAlive: (groupId: number, confirm: boolean) => posixProcessGroupAlive(groupId, confirm),
   hostname: () => hostname(),
 });
 
@@ -247,9 +247,9 @@ export interface BrowserCleanupRecord {
   readonly sessionId: string;
   /** The stopped session process, or `run` when the run's folders are removed. */
   readonly processId: string;
-  readonly status: "none" | "exited" | "killed" | "unverified" | "unknown";
+  /** none: no browser recorded; exited: it left within the grace; escaped: still running (recorded, never signalled). */
+  readonly status: "none" | "exited" | "escaped" | "unknown";
   readonly attributed: readonly AttributedBrowserProcess[];
-  readonly killed: readonly number[];
   readonly alive: readonly number[];
   readonly at: string;
 }
@@ -265,7 +265,6 @@ export interface PlaywrightCliSessionsOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly now?: () => number;
   readonly graceMs?: number;
-  readonly killVerifyMs?: number;
   /** Every check's outcome (runner-start logs the ones that are not clean). */
   readonly onCleanup?: (record: BrowserCleanupRecord) => void;
 }
@@ -288,16 +287,16 @@ type Owner = { readonly runId: string; readonly sessionId: string; readonly proc
  * at its start); every other run gets nothing from here, so runs from before VF7b keep their environment.
  *
  * POSIX stop check (spike §9.5, §9.6; DECISION 2026-09-19 §8). The Runner's stop proves only the managed process
- * group, and Chrome leaves it (setsid). This is that one workload's narrow exception, not an escape killer: no
- * process table is listed, nothing is matched by name or ancestry, and only the session's own browser is signalled.
- * A session process is one the Runner itself launched as `playwright-cli-session` (its launch record). When one is
+ * group, and Chrome leaves it (setsid). The check records that known escape and blocks on it; it never signals a
+ * process outside the group (§8.3). No process table is listed, and nothing is matched by name or ancestry. A
+ * session process is one the Runner itself launched as `playwright-cli-session` (its launch record). When one is
  * stopped, the Runner reads, before and after the stop, the browser PIDs Chrome wrote into the profiles in the
- * owner's state folder, confirms each (command line naming that profile; birth and group unchanged around the
- * read), waits a short grace, kills a browser that is still there through its own group while its leader is
- * re-attested, verifies the group is empty, records the outcome, and fails the stop closed when a browser
- * survives, cannot be re-attested, or cannot be read. Crashpad handlers leave Chrome's group too and are not
- * attributable without listing processes; they exit with Chrome (spike §5), and this check does not claim them.
- * Windows does nothing here: the Job proves the whole tree.
+ * owner's state folder (`SingletonLock -> <host>-<pid>`), confirms each (command line naming that profile; birth and
+ * group unchanged around the read), and waits a short grace for the browser and its group to leave. Chrome quits on
+ * DevTools-pipe EOF when the daemon dies (spike §5). A browser still there, or one that cannot be read, is recorded
+ * and fails the stop closed (`process_cleanup_unverified`), so nothing is released while it runs. Crashpad handlers
+ * leave Chrome's group too, are not in any file, and exit with Chrome; this check does not claim them. Windows does
+ * nothing here: the Job proves the whole tree.
  */
 export class PlaywrightCliSessions {
   private readonly runs = new Map<string, RunBrowsing>();
@@ -398,7 +397,7 @@ export class PlaywrightCliSessions {
         this.runs.set(runId, Object.freeze({ browser: null }));
         throw new ManagedProcessError("process_cleanup_unverified", unknown
           ? `The browser of a session of run ${runId} could not be read, so its state folder stays.`
-          : `The browser of a session of run ${runId} is still running after SIGKILL (PIDs ${survivors.join(", ")}).`);
+          : `The browser of a session of run ${runId} is still running outside its process group (PIDs ${survivors.join(", ")}); it is recorded, not signalled.`);
       }
     }
     try { rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
@@ -473,7 +472,7 @@ export class PlaywrightCliSessions {
       if (second?.state === "absent") continue;
       if (command === undefined || second?.state !== "present") { unknown = true; continue; }
       if (second.value.birth !== first.value.birth || second.value.groupId !== first.value.groupId) continue;
-      if (!command.includes(`--user-data-dir=${profile}`)) continue;
+      if (!`${command} `.includes(`--user-data-dir=${profile} `)) continue;
       found.push(Object.freeze({ pid, groupId: first.value.groupId, birth: first.value.birth, profile }));
     }
     return unknown ? undefined : found;
@@ -501,50 +500,36 @@ export class PlaywrightCliSessions {
     }
     if (outcome !== "clean") {
       throw new ManagedProcessError("process_cleanup_unverified",
-        `The browser session's browser is still running outside the owned process group after its stop (PIDs ${outcome.join(", ")}).`);
+        `The browser session's browser is still running outside the owned process group after its stop (PIDs ${outcome.join(", ")}); `
+        + "it is recorded, not signalled, and the stop stays unverified until it exits.");
     }
   }
 
-  /** Waits, kills what is still the session's browser, verifies and records. "clean", "unknown" or the survivors. */
+  /**
+   * Waits a short grace for the session's browser to leave (Chrome quits on DevTools-pipe EOF), and records the
+   * outcome. A browser still there is a known escape: recorded and returned, so the caller fails the stop closed and
+   * nothing is released, but never signalled (DECISION 2026-09-19 §8.3). "clean", "unknown" or the escaped PIDs.
+   */
   private async clean(owner: Owner, folder: string, attributed: readonly AttributedBrowserProcess[] | undefined, removeFolder: boolean): Promise<"clean" | "unknown" | number[]> {
     if (attributed === undefined) {
-      this.record(owner, "unknown", [], [], []);
+      this.record(owner, "unknown", [], []);
       return "unknown";
     }
-    const done = (status: BrowserCleanupRecord["status"], killed: readonly number[]): "clean" => {
-      this.record(owner, status, attributed, killed, []);
+    const done = (status: BrowserCleanupRecord["status"]): "clean" => {
+      this.record(owner, status, attributed, []);
       if (removeFolder) { try { rmSync(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* removed with the run */ } }
       return "clean";
     };
-    if (attributed.length === 0) return done("none", []);
+    if (attributed.length === 0) return done("none");
     const lingering = await this.waitGone(attributed, this.options.graceMs ?? POSIX_BROWSER_EXIT_GRACE_MS);
-    if (lingering.length === 0) return done("exited", []);
-    const own = this.processes.inspect([process.pid]).get(process.pid);
-    const ownGroupId = own?.state === "present" ? own.value.groupId : undefined;
-    const current = this.processes.inspect(lingering.map((entry) => entry.pid));
-    const killed: number[] = [];
-    for (const entry of lingering) {
-      // Re-attested right before the signal: the recorded leader, same birth and group. A gone leader whose group
-      // still has members cannot be re-attested, so it is never signalled and the stop stays unverified.
-      const now = current.get(entry.pid);
-      if (now?.state !== "present" || now.value.birth !== entry.birth || now.value.groupId !== entry.groupId) continue;
-      const leadsGroup = ownGroupId !== undefined && entry.pid === entry.groupId && entry.groupId > 1 && entry.groupId !== ownGroupId;
-      try {
-        this.processes.kill(leadsGroup ? -entry.groupId : entry.pid, "SIGKILL");
-        killed.push(entry.pid);
-      } catch { /* already gone */ }
-    }
-    const survivors = await this.waitGone(lingering, this.options.killVerifyMs ?? POSIX_BROWSER_KILL_VERIFY_MS);
-    if (survivors.length > 0) {
-      this.record(owner, "unverified", attributed, killed, survivors.map((entry) => entry.pid));
-      return survivors.map((entry) => entry.pid);
-    }
-    return done("killed", killed);
+    if (lingering.length === 0) return done("exited");
+    this.record(owner, "escaped", attributed, lingering.map((entry) => entry.pid));
+    return lingering.map((entry) => entry.pid);
   }
 
-  private record(owner: Owner, status: BrowserCleanupRecord["status"], attributed: readonly AttributedBrowserProcess[], killed: readonly number[], alive: readonly number[]): void {
+  private record(owner: Owner, status: BrowserCleanupRecord["status"], attributed: readonly AttributedBrowserProcess[], alive: readonly number[]): void {
     const entry: BrowserCleanupRecord = Object.freeze({ runId: owner.runId, sessionId: owner.sessionId, processId: owner.processId, status,
-      attributed: Object.freeze([...attributed]), killed: Object.freeze([...killed]), alive: Object.freeze([...alive]), at: new Date(this.now()).toISOString() });
+      attributed: Object.freeze([...attributed]), alive: Object.freeze([...alive]), at: new Date(this.now()).toISOString() });
     this.cleanups.push(entry);
     if (this.cleanups.length > 256) this.cleanups.shift();
     try { this.options.onCleanup?.(entry); } catch { /* a logging failure never changes the outcome */ }
@@ -552,11 +537,13 @@ export class PlaywrightCliSessions {
 
   /**
    * The browsers not yet gone: a leader still present with its birth, or (when it leads its group) a group not yet
-   * proven empty. Unreadable counts as not gone. Bounded by `ms`.
+   * proven empty. Unreadable counts as not gone. Bounded by `ms`: each pass reads by PID and kill(-group, 0); only
+   * the last pass takes the zombie-aware membership snapshot of a group (emptiness evidence, never ownership).
    */
   private async waitGone(processes: readonly AttributedBrowserProcess[], ms: number): Promise<AttributedBrowserProcess[]> {
     const deadline = this.now() + ms;
     for (;;) {
+      const last = this.now() >= deadline;
       const current = this.processes.inspect(processes.map((entry) => entry.pid));
       const remaining = processes.filter((entry) => {
         const now = current.get(entry.pid);
@@ -564,9 +551,9 @@ export class PlaywrightCliSessions {
         // browser's group is gone too.
         if (now?.state === "present") return now.value.birth === entry.birth;
         if (now?.state !== "absent") return true;
-        return entry.pid === entry.groupId ? this.processes.groupAlive(entry.groupId) !== false : false;
+        return entry.pid === entry.groupId ? this.processes.groupAlive(entry.groupId, last) !== false : false;
       });
-      if (remaining.length === 0 || this.now() >= deadline) return remaining;
+      if (remaining.length === 0 || last) return remaining;
       await this.sleep(100);
     }
   }

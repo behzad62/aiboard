@@ -123,10 +123,11 @@ export function readPosixProcessCommandLine(pid) {
  * one, the zombie-aware membership snapshot this module already uses for owned groups. False only on proof of
  * emptiness; undefined when it cannot be told (EPERM, an unreadable snapshot).
  */
-export function posixProcessGroupAlive(groupId, listMembers = listOwnedPosixGroupMembers) {
+export function posixProcessGroupAlive(groupId, confirm = true, listMembers = listOwnedPosixGroupMembers) {
   if (!positivePid(groupId) || groupId <= 1) return undefined;
   try { process.kill(-groupId, 0); }
   catch (error) { return error?.code === "ESRCH" ? false : undefined; }
+  if (!confirm) return true;
   const members = listMembers(groupId);
   if (!Array.isArray(members)) return undefined;
   return members.length > 0;
