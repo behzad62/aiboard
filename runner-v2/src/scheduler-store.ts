@@ -185,6 +185,7 @@ import {
 } from "./planning-projection.js";
 import {
   parseEnvironmentInventory,
+  VERIFICATION_GATE_PAUSE_REASONS,
   type EnvironmentInventoryProjection,
 } from "./verification-inventory.js";
 
@@ -2191,6 +2192,7 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "provider.health_changed" ||
     // VF1: a Runner fact about this machine; it never advances the run.
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
+    isVerificationGatePause(event) ||
     // VF7b: the run's tool surface, recorded before planning; it never advances the run.
     (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
     event.type === "architect.runtime_assigned" ||
@@ -2224,6 +2226,16 @@ export function assertPendingUserGuidanceAllowsEvent(
   }
 }
 
+/**
+ * VF4: the pre-planning verification gate (a malformed aiboard-validation.json, or a mandatory
+ * check's missing tool) pauses ahead of the guidance turn and of an open question's answer; the
+ * owner's note or answer waits for the resume. A pause never advances work.
+ */
+function isVerificationGatePause(event: Pick<SchedulerEvent, "type" | "actor" | "payload">): boolean {
+  return event.type === "run.paused" && event.actor.role === "runner" && event.actor.id === "build-runtime" &&
+    VERIFICATION_GATE_PAUSE_REASONS.has(String(event.payload.reason));
+}
+
 const OWNER_REPAIR_ANSWERS: ReadonlySet<string> = new Set([
   "repair.issue_budget_extended",
   "repair.external_blocker_cleared",
@@ -2252,6 +2264,7 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "provider.health_changed" ||
     // VF1: a Runner fact about this machine; it never advances the run.
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
+    isVerificationGatePause(event) ||
     // VF7b: the run's tool surface, recorded before planning; it never advances the run.
     (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
     event.type === "architect.runtime_assigned" ||
@@ -9150,6 +9163,10 @@ function recordFinalVerificationCheckV2(
   if (result.notRun?.reason === "skipped") {
     throw new Error(`Final verification check ${result.checkId} is planned, so it is not skipped.`);
   }
+  // VF4: a mandatory check that could not run is not a result; the Runner pauses for the owner instead.
+  if (result.mandatory && result.outcome === "not_run") {
+    throw new Error(`Mandatory final verification check ${result.checkId} cannot be recorded as not run.`);
+  }
   const resolution = current.executionProfile.verification;
   if (!resolution) throw new Error("A v2 final verification needs its resolved plan in the execution profile.");
   const completed: FinalVerificationCompletedCheckProjectionV2 = {
@@ -9429,7 +9446,12 @@ function finalVerificationV2ReadinessIssues(
       continue;
     }
     // VF2: a check the Runner did not run (tool missing) is not a failure and carries no result.
+    // VF4: but a mandatory check must run: completion never accepts one that did not.
     if (check.outcome === "not_run") {
+      if (planned.mandatory) {
+        issues.push(`Mandatory final-verification check ${planned.id} was not run; a mandatory check must run and pass.`);
+        continue;
+      }
       if (
         check.notRun?.reason !== "tool_missing" || check.green !== false || check.issues.length > 0 ||
         check.evidenceIds.length > 0 || check.facts.length > 0

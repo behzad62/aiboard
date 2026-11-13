@@ -187,10 +187,17 @@ import {
 import { describeFailureChain, describeFailureWithCauses, lifecycleTrace } from "./lifecycle-diagnostics.js";
 import {
   boundEnvironmentInventory,
+  MANDATORY_CHECK_TOOL_MISSING_PAUSE,
+  mandatoryChecksMissingTools,
+  mandatoryToolMissingDetail,
+  PROJECT_VALIDATION_CONFIG_INVALID_PAUSE,
+  projectConfigInvalidDetail,
   unavailableEnvironmentInventory,
   type EnvironmentInventory,
   type InventoryTrigger,
 } from "./verification-inventory.js";
+
+export { MANDATORY_CHECK_TOOL_MISSING_PAUSE, PROJECT_VALIDATION_CONFIG_INVALID_PAUSE };
 export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
@@ -1856,6 +1863,12 @@ export class BuildRuntime {
       events = this.store.readRun(this.runId);
       projection = rebuildSchedulerProjection(events);
     }
+    // VF4: a malformed aiboard-validation.json or a mandatory check's missing tool stops the run
+    // here, ahead of any guidance turn, planning or other work.
+    if (projection.status === "running") {
+      const gate = this.verificationGatePause(events, projection);
+      if (gate) return gate;
+    }
     this.browsing?.configure({
       cli: projection.browsing?.surface === "playwright_cli",
       browser: projection.environmentInventory?.playwrightBrowser ?? null,
@@ -2499,6 +2512,30 @@ export class BuildRuntime {
         throw new Error(
           `Final verification driver returned ${verificationCheckKey(result.check)} for ${pendingKey}.`,
         );
+      }
+      // VF4: a mandatory check that cannot run is never recorded as done. The run pauses for the
+      // owner instead, and the check runs again after the resume (whose inventory checks first).
+      const check = result.check;
+      if ("checkId" in check && check.mandatory && check.notRun?.reason === "tool_missing") {
+        const declared = generation.executionProfile.projectChecks?.find((candidate) => candidate.id === check.checkId);
+        this.store.append({
+          runId: this.runId,
+          type: "run.paused",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `mandatory-check-tool-missing:${generation.generationId}:${check.checkId}:${this.projection().lastSequence}`,
+          payload: {
+            reason: MANDATORY_CHECK_TOOL_MISSING_PAUSE,
+            detail: mandatoryToolMissingDetail([{
+              checkId: check.checkId,
+              label: check.label,
+              ...(declared?.line !== undefined ? { configLine: declared.line } : {}),
+              tools: [check.notRun.tool],
+              missing: [check.notRun.tool],
+            }]),
+          },
+        });
+        return { status: "paused", action: MANDATORY_CHECK_TOOL_MISSING_PAUSE };
       }
       this.store.append({
         runId: this.runId,
@@ -4447,6 +4484,51 @@ export class BuildRuntime {
       return false;
     }
     return true;
+  }
+
+  /**
+   * VF4: the pre-planning verification gate. On a v2 run it stops, before planning or any further
+   * work and before any model call, when the inventory recorded for this epoch (the run's start,
+   * then each resume) says that the project's aiboard-validation.json is malformed or unreadable,
+   * or that a check it makes mandatory cannot run because its tool is missing.
+   * - A missing tool lives on this machine: the owner installs it and resumes, and the resume's
+   *   inventory decides again. One pause names every blocked check, its tools and its config line.
+   * - The file is read at the run's fixed starting revision, so no fix reaches this run (the
+   *   scheduler has no terminal stop to take instead): the pause says to start a new Build, and a
+   *   resume reads the same revision and pauses again saying that resuming cannot fix it.
+   * It reads the recorded inventory, never this process's memory, so a Runner restart between
+   * the inventory and the pause still pauses. A tool the lookup could not decide about launches as
+   * before (VF2). A pause that cannot be recorded throws: the step never goes on to planning.
+   */
+  private verificationGatePause(events: readonly SchedulerEvent[], projection: SchedulerProjection): BuildStepResult | undefined {
+    // A run on the v1 contract (started before VF3) never runs project checks.
+    if (projection.verificationContractVersion !== 2) return undefined;
+    const inventory = projection.environmentInventory;
+    if (!inventory) return undefined;
+    const lastResume = events.reduce((latest, event) => event.type === "run.resumed" ? event.sequence : latest, 0);
+    if (inventory.sequence < lastResume) return undefined;
+    const blocked = mandatoryChecksMissingTools(inventory);
+    const pause = inventory.projectConfigError
+      ? {
+        reason: PROJECT_VALIDATION_CONFIG_INVALID_PAUSE,
+        detail: projectConfigInvalidDetail(inventory.projectConfigError, {
+          ...(inventory.revision ? { revision: inventory.revision } : {}),
+          resumed: inventory.trigger === "resume",
+        }),
+      }
+      : blocked.length > 0
+        ? { reason: MANDATORY_CHECK_TOOL_MISSING_PAUSE, detail: mandatoryToolMissingDetail(blocked) }
+        : undefined;
+    if (!pause) return undefined;
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `${pause.reason}:${inventory.sequence}`,
+      payload: pause,
+    });
+    return { status: "paused", action: pause.reason };
   }
 
   /**

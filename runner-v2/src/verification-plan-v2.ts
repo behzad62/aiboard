@@ -6,12 +6,17 @@
  * the exact commands it will launch, records them in the runner-owned execution profile, runs
  * them in the fresh verification checkout and records what happened. It never decides what a
  * project needs. Only the Runner sets `mandatory` (from the project's aiboard-validation.json,
- * VF4); a mandatory check can never be skipped or changed.
+ * VF4); a mandatory check can never be skipped or changed. The Runner also sets a check's
+ * `environment` (VF4, from aiboard-validation.json): a suggested check keeps it when the
+ * Architect changes its command, and the Architect cannot write one.
  *
  * A run records `verificationContractVersion: 2` when it starts. A run started before VF3 keeps
  * the four fixed categories (final-verification-contracts.ts) to the end.
  */
-import { resolve as resolvePath } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { relative as relativePath, resolve as resolvePath } from "node:path";
+
+import type { CheckToolLookupTarget } from "./check-tool-lookup.js";
 
 import { normalizeOutputPatterns } from "./command-output-files.js";
 import {
@@ -22,7 +27,13 @@ import {
   type VerificationNotRun,
 } from "./final-verification-contracts.js";
 import type { FinalVerificationCommand, FinalVerificationFact, FinalVerificationCommandFact } from "./final-verification-runtime.js";
-import { MAX_TIER_ARG_COUNT, MAX_TIER_TIMEOUT_MS } from "./project-validation-config.js";
+import {
+  ENVIRONMENT_NAME_PATTERN,
+  MAX_TIER_ARG_COUNT,
+  MAX_TIER_ENV_VALUE_LENGTH,
+  MAX_TIER_ENV_VARS,
+  MAX_TIER_TIMEOUT_MS,
+} from "./validation-command-limits.js";
 
 export const VERIFICATION_CONTRACT_VERSION = 2 as const;
 
@@ -129,6 +140,12 @@ export interface VerificationCheckV2 {
   start?: VerificationStartV2;
   /** Workspace-relative paths or globs kept as evidence (VF6). */
   outputs?: string[];
+  /**
+   * VF4: environment overrides for a run check's command, only from aiboard-validation.json
+   * (a declared check, or a tier command the Runner suggests). The Runner fills it; a suggested
+   * check keeps it when the Architect changes the command, and the Architect cannot set one.
+   */
+  environment?: Record<string, string>;
 }
 
 export interface VerificationSkippedCheckV2 {
@@ -377,7 +394,14 @@ export function completeVerificationPlanV2(
     if (candidate.mandatory !== undefined && candidate.mandatory !== mandatory) {
       issues.push(`checks[${index}].mandatory is set only by the Runner, from aiboard-validation.json (${String(mandatory)}).`);
     }
-    return { ...candidate, origin, mandatory };
+    const environment = suggestion?.environment;
+    if (candidate.environment !== undefined && !sameValue(candidate.environment, environment)) {
+      issues.push(environment
+        ? `checks[${index}].environment is set by the Runner from aiboard-validation.json; omit it or echo it unchanged.`
+        : `checks[${index}].environment cannot be set: only aiboard-validation.json gives a check environment overrides.`);
+    }
+    const { environment: _environment, ...rest } = candidate;
+    return { ...rest, origin, mandatory, ...(environment ? { environment: { ...environment } } : {}) };
   });
   if (issues.length) return { ok: false, issues };
   const plan = { version: 2, checks, skipped: input.skipped ?? [] };
@@ -396,7 +420,11 @@ function suggestionIssues(plan: VerificationPlanV2, suggestions: readonly Verifi
     if (!suggestion) {
       if (check.origin !== "architect") issues.push(`Check ${check.id} is not one the Runner suggested, so its origin is architect.`);
       if (check.mandatory) issues.push(`Check ${check.id} cannot be mandatory: only the project's aiboard-validation.json makes a check mandatory.`);
+      if (check.environment !== undefined) issues.push(`Check ${check.id} cannot set environment: only aiboard-validation.json gives a check environment overrides.`);
       continue;
+    }
+    if (!sameValue(check.environment, suggestion.environment)) {
+      issues.push(`Check ${check.id} keeps the environment the Runner gave it from aiboard-validation.json.`);
     }
     if (check.origin !== suggestion.origin) issues.push(`Check ${check.id} keeps the origin ${suggestion.origin} the Runner gave it.`);
     if (check.mandatory !== suggestion.mandatory) issues.push(`Check ${check.id} keeps mandatory ${String(suggestion.mandatory)}: only the Runner sets it.`);
@@ -424,7 +452,7 @@ function checkIssues(candidate: unknown, index: number, full: boolean, limits: C
   const at = `checks[${index}]`;
   if (!isRecord(candidate)) return [`${at} must be an object.`];
   const issues: string[] = [];
-  const allowed = ["id", "label", "kind", "origin", "mandatory", "run", "start", "outputs"];
+  const allowed = ["id", "label", "kind", "origin", "mandatory", "run", "start", "outputs", "environment"];
   const unknown = Object.keys(candidate).filter((key) => !allowed.includes(key));
   if (unknown.length) issues.push(`${at} has unknown fields: ${unknown.join(", ")}.`);
   const id = candidate.id;
@@ -453,6 +481,26 @@ function checkIssues(candidate: unknown, index: number, full: boolean, limits: C
     issues.push(...runIssues(candidate.run, name, limits));
   }
   if (candidate.outputs !== undefined) issues.push(...outputsIssues(candidate.outputs, `Check ${name} outputs`));
+  if (candidate.environment !== undefined) {
+    issues.push(...environmentIssues(candidate.environment, `Check ${name} environment`));
+    // A started program inherits the Runner's environment; only a one-shot command takes overrides.
+    if (kind === "start") {
+      issues.push(`Check ${name} carries environment overrides, which only a build, tests or other check can use; keep it a run check, or skip it and add your own.`);
+    }
+  }
+  return issues;
+}
+
+function environmentIssues(value: unknown, at: string): string[] {
+  if (!isRecord(value)) return [`${at} must be an object of variable names to strings.`];
+  const entries = Object.entries(value);
+  if (entries.length > MAX_TIER_ENV_VARS) return [`${at} carries more than ${MAX_TIER_ENV_VARS} variables.`];
+  const issues: string[] = [];
+  for (const [name, entry] of entries) {
+    if (!ENVIRONMENT_NAME_PATTERN.test(name) || typeof entry !== "string" || entry.length > MAX_TIER_ENV_VALUE_LENGTH || entry.includes("\0")) {
+      issues.push(`${at} variable ${JSON.stringify(name)} must be a name such as NODE_ENV with a string of at most ${MAX_TIER_ENV_VALUE_LENGTH} characters.`);
+    }
+  }
   return issues;
 }
 
@@ -579,8 +627,164 @@ export interface DetectedVerificationSource {
 
 export interface VerificationSuggestion {
   check: VerificationCheckV2;
-  /** The exact commands the Runner launches when the Architect keeps the check unchanged. */
-  resolved: ResolvedVerificationCheckV2;
+  /**
+   * The exact commands the Runner launches when the Architect keeps a detected check unchanged.
+   * A project check has none: kept or changed, it runs as written, like an Architect check.
+   */
+  resolved?: ResolvedVerificationCheckV2;
+}
+
+/**
+ * VF4: a check the project declares in aiboard-validation.json version 2. It has the plan's
+ * check shape with `mandatory`, which only this file sets, and no `origin` (the Runner records
+ * `project`). `line` is not part of the file: the Runner records the line of the check's id
+ * when it reads the file, so a pause can point the owner at it.
+ */
+export interface ProjectVerificationCheck {
+  id: string;
+  label: string;
+  kind: VerificationCheckKind;
+  mandatory: boolean;
+  run?: VerificationCommandRunV2;
+  start?: VerificationStartV2;
+  outputs?: string[];
+  environment?: Record<string, string>;
+  line?: number;
+}
+
+/**
+ * A project check is held to the Runner's command bounds (a project command may be as long as a
+ * tier command), and a server it starts takes the Runner-leased port as {port}, like an
+ * Architect check: the Runner owns the port.
+ */
+const PROJECT_COMMAND_LIMITS: CommandLimits = Object.freeze({
+  ...VERIFICATION_SUGGESTION_LIMITS,
+  portPlaceholder: true,
+});
+
+const PROJECT_CHECK_KEYS = ["id", "label", "kind", "mandatory", "run", "start", "outputs", "environment"];
+
+/** Issues with one entry of a version-2 aiboard-validation.json `checks` list; empty when usable. */
+export function projectVerificationCheckIssues(candidate: unknown, index: number): string[] {
+  const at = `checks[${index}]`;
+  if (!isRecord(candidate)) return [`${at} must be an object.`];
+  const issues: string[] = [];
+  const unknown = Object.keys(candidate).filter((key) => !PROJECT_CHECK_KEYS.includes(key));
+  if (unknown.length) {
+    issues.push(`${at} has unknown fields: ${unknown.join(", ")}${unknown.includes("origin") ? " (the Runner records a declared check's origin as project)" : ""}.`);
+  }
+  // Unknown fields are reported once, above; the check's own rules see only the known ones.
+  const known = Object.fromEntries(Object.entries(candidate).filter(([key]) => PROJECT_CHECK_KEYS.includes(key)));
+  issues.push(...checkIssues(known, index, false, PROJECT_COMMAND_LIMITS));
+  if (typeof candidate.mandatory !== "boolean") {
+    issues.push(`${at}.mandatory must be true or false: a mandatory check stops the Build when it cannot run or still fails after its repairs.`);
+  }
+  return issues;
+}
+
+/** Validate and clone the `checks` of a version-2 aiboard-validation.json. */
+export function parseProjectVerificationChecks(value: unknown): ProjectVerificationCheck[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > VERIFICATION_PLAN_LIMITS.maxChecks) {
+    throw new Error(`checks must be a list of 1 to ${VERIFICATION_PLAN_LIMITS.maxChecks} checks.`);
+  }
+  const issues: string[] = [];
+  const ids = new Set<string>();
+  for (const [index, candidate] of value.entries()) {
+    issues.push(...projectVerificationCheckIssues(candidate, index));
+    if (isRecord(candidate) && typeof candidate.id === "string") {
+      if (ids.has(candidate.id)) issues.push(`Check id ${candidate.id} is declared more than once.`);
+      ids.add(candidate.id);
+    }
+  }
+  if (issues.length) throw new Error(issues.join(" "));
+  return (value as ProjectVerificationCheck[]).map((check) => cloneProjectCheck(check));
+}
+
+/** A project check with its recorded line, validated (the execution-profile boundary). */
+export function assertProjectVerificationChecks(value: unknown): asserts value is ProjectVerificationCheck[] {
+  if (!Array.isArray(value)) throw new Error("Final verification project checks are invalid.");
+  const withoutLines = value.map((check) => {
+    if (!isRecord(check)) return check;
+    const { line, ...rest } = check;
+    if (line !== undefined && (!Number.isSafeInteger(line) || (line as number) < 1)) {
+      throw new Error("Final verification project check line is invalid.");
+    }
+    return rest;
+  });
+  parseProjectVerificationChecks(withoutLines);
+}
+
+export function cloneProjectCheck(check: ProjectVerificationCheck): ProjectVerificationCheck {
+  const { origin: _origin, ...clone } = cloneCheck({ ...check, origin: "project" });
+  return { ...clone, ...(check.line !== undefined ? { line: check.line } : {}) };
+}
+
+/**
+ * VF4: the project's declared checks as suggestions (origin `project`, `mandatory` from the
+ * file). When a project declares checks, they are the whole suggestion list: detection is the
+ * fallback for a project that declares nothing.
+ */
+export function projectVerificationSuggestions(checks: readonly ProjectVerificationCheck[]): VerificationSuggestion[] {
+  return checks.map((check) => {
+    const { line: _line, ...declared } = cloneProjectCheck(check);
+    return { check: cloneCheck({ ...declared, origin: "project" }) };
+  });
+}
+
+/** Where a declared check is in aiboard-validation.json, for the owner. */
+export function projectCheckLocation(check: Pick<ProjectVerificationCheck, "id" | "line">): string {
+  return `aiboard-validation.json${check.line !== undefined ? ` line ${check.line}` : ""} (check "${check.id}")`;
+}
+
+/**
+ * The 1-based line of each declared check's `"id"` key in the file text, in declaration order:
+ * the key of `checks[i].id` itself, found by walking the JSON (strings, nesting, any line breaks),
+ * so a minified file, `\r` line breaks or an `"id"` inside an environment map all give the right
+ * line. A check whose id key is not found gets none. The text must already parse as JSON.
+ */
+export function projectCheckLines(text: string, count: number): Array<number | undefined> {
+  const found: Array<number | undefined> = Array.from({ length: count }, () => undefined);
+  // Each open container: an object (with the key of the value being read) or an array (with the index).
+  const stack: Array<{ kind: "object"; key?: string } | { kind: "array"; index: number }> = [];
+  let line = 1;
+  let pendingKey: string | undefined;
+  const path = () => stack.map((frame) => frame.kind === "object" ? frame.key : frame.index);
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (char === "\r") { if (text[index + 1] !== "\n") line += 1; continue; }
+    if (char === "\n") { line += 1; continue; }
+    if (char === "\"") {
+      let value = "";
+      for (index += 1; index < text.length && text[index] !== "\""; index += 1) {
+        if (text[index] === "\\") index += 1;
+        value += text[index];
+      }
+      const top = stack.at(-1);
+      // A string right after `{` or `,` inside an object is a key.
+      if (top?.kind === "object" && top.key === undefined) {
+        pendingKey = value;
+        const keyPath = [...path().slice(0, -1), value];
+        if (keyPath.length === 3 && keyPath[0] === "checks" && typeof keyPath[1] === "number" && keyPath[2] === "id" &&
+          keyPath[1] < count && found[keyPath[1]] === undefined) {
+          found[keyPath[1]] = line;
+        }
+      }
+      continue;
+    }
+    if (char === ":") { const top = stack.at(-1); if (top?.kind === "object") top.key = pendingKey; continue; }
+    if (char === "{") { stack.push({ kind: "object" }); continue; }
+    if (char === "[") { stack.push({ kind: "array", index: 0 }); continue; }
+    if (char === "}" || char === "]") {
+      stack.pop();
+      continue;
+    }
+    if (char === ",") {
+      const top = stack.at(-1);
+      if (top?.kind === "object") top.key = undefined;
+      else if (top?.kind === "array") top.index += 1;
+    }
+  }
+  return found;
 }
 
 /**
@@ -594,6 +798,10 @@ export function detectedVerificationSuggestions(source: DetectedVerificationSour
   const commandSuggestions = (kind: "build" | "tests", commands: readonly FinalVerificationCommand[] | undefined) => {
     for (const [index, command] of (commands ?? []).entries()) {
       const id = index === 0 ? kind : `${kind}-${index + 1}`;
+      // A tier command's overrides (aiboard-validation.json) are shown on the check, so the
+      // Architect sees them and a changed command keeps them.
+      const environment = Object.fromEntries(Object.entries(command.environment ?? {})
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
       const check: VerificationCheckV2 = {
         id,
         label: command.label,
@@ -605,6 +813,7 @@ export function detectedVerificationSuggestions(source: DetectedVerificationSour
           args: [...command.args],
           ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
         },
+        ...(Object.keys(environment).length ? { environment } : {}),
       };
       suggestions.push({
         check,
@@ -676,9 +885,10 @@ export function verificationCheckNamesArchitectCommands(
 }
 
 /**
- * Resolve every plan check into the commands the Runner launches. A suggested check whose
- * commands are unchanged runs exactly as detected; any other check runs as written, with
- * {port} replaced by the leased port and `node` by the Runner's own Node.
+ * Resolve every plan check into the commands the Runner launches. A detected check whose
+ * commands are unchanged runs exactly as detected; any other check (a project check, a changed
+ * suggestion, the Architect's own) runs as written, with {port} replaced by the leased port,
+ * `node` by the Runner's own Node, and the check's environment overrides on its command.
  */
 export function resolveVerificationPlanV2(input: {
   plan: VerificationPlanV2;
@@ -697,7 +907,7 @@ export function resolveVerificationPlanV2(input: {
       mandatory: check.mandatory,
       ...(check.outputs?.length ? { outputs: [...check.outputs] } : {}),
     };
-    if (suggestion && !verificationCheckNamesArchitectCommands(check, suggestion.check)) {
+    if (suggestion?.resolved && !verificationCheckNamesArchitectCommands(check, suggestion.check)) {
       const commands = suggestion.resolved.commands.map(cloneResolvedCommand);
       const steps = check.start?.steps ?? [];
       return {
@@ -727,6 +937,7 @@ export function resolveVerificationPlanV2(input: {
           args: substitute(run.args),
           ...(run.timeoutMs !== undefined ? { timeoutMs: run.timeoutMs } : {}),
           ...(run.cwd !== undefined ? { cwd: normalizeRelative(run.cwd) } : {}),
+          ...(check.environment ? { environment: { ...check.environment } } : {}),
         }],
       };
     }
@@ -775,7 +986,7 @@ export function verificationPlanNeedsPort(plan: VerificationPlanV2, suggestions:
   const bySuggestion = new Map(suggestions.map((suggestion) => [suggestion.check.id, suggestion]));
   return plan.checks.some((check) => {
     const suggestion = bySuggestion.get(check.id);
-    if (suggestion && !verificationCheckNamesArchitectCommands(check, suggestion.check)) {
+    if (suggestion?.resolved && !verificationCheckNamesArchitectCommands(check, suggestion.check)) {
       return suggestion.resolved.endpoint !== undefined;
     }
     const args = [...(check.run?.args ?? []), ...(check.start?.args ?? []), ...(check.start?.steps ?? []).flatMap((step) => step.args)];
@@ -1148,6 +1359,11 @@ export function verificationPlanV2Schema(): Record<string, unknown> {
             kind: { type: "string", enum: [...VERIFICATION_CHECK_KINDS] },
             origin: { type: "string", enum: [...VERIFICATION_CHECK_ORIGINS], description: "Set by the Runner; omit it." },
             mandatory: { type: "boolean", description: "Set by the Runner from aiboard-validation.json; omit it." },
+            environment: {
+              type: "object",
+              additionalProperties: { type: "string" },
+              description: "Set by the Runner from aiboard-validation.json; omit it. A suggested check keeps its environment when you change its command.",
+            },
             run: {
               type: "object",
               description: "For build, tests and other: one command; the check passes when it exits 0.",
@@ -1278,6 +1494,7 @@ function cloneCheck(check: VerificationCheckV2): VerificationCheckV2 {
       },
     } : {}),
     ...(check.outputs ? { outputs: [...check.outputs] } : {}),
+    ...(check.environment ? { environment: { ...check.environment } } : {}),
   };
 }
 
@@ -1318,6 +1535,80 @@ function normalizeRelative(value: string): string {
 /** The absolute directory a resolved command's relative cwd names inside the checkout. */
 export function joinWorkspace(workspacePath: string, cwd: string): string {
   return resolvePath(workspacePath, ...normalizeRelative(cwd).split("/"));
+}
+
+/**
+ * Where a resolved check's commands launch, and so where their tools are looked up (VF2): a run
+ * check in its own folder (gradlew with cwd android), provisioning and a start check at the
+ * checkout root. A folder that leaves the checkout or does not exist is refused at launch
+ * (`cwdIssue`), and its tools are looked up at the root. The final check and the pre-planning
+ * inventory (VF4) both use this, so they always look in the same places.
+ */
+export async function resolvedCheckLaunch(
+  resolved: ResolvedVerificationCheckV2,
+  workspacePath: string,
+  provisioning?: { executable: string; environment?: Readonly<Record<string, string | undefined>> },
+): Promise<{ cwd?: string; cwdIssue?: string; targets: CheckToolLookupTarget[] }> {
+  const first = resolved.commands[0];
+  const { cwd, cwdIssue, folder } = await checkLaunchFolder(workspacePath, resolved.mode !== "program" ? first?.cwd : undefined, resolved.checkId);
+  const target = (command: { executable: string; environment?: Readonly<Record<string, string | undefined>> }, at: string): CheckToolLookupTarget => ({
+    executable: command.executable,
+    cwd: at,
+    ...(command.environment ? { environment: command.environment } : {}),
+  });
+  return {
+    ...(cwd ? { cwd } : {}),
+    ...(cwdIssue ? { cwdIssue } : {}),
+    targets: [
+      ...(provisioning ? [target(provisioning, workspacePath)] : []),
+      ...resolved.commands.map((command) => target(command, folder)),
+    ],
+  };
+}
+
+/**
+ * The folder a run command with this checkout-relative `cwd` launches in: that folder, or the
+ * checkout root when it has none. A folder that leaves the checkout or does not exist is refused
+ * at launch (`cwdIssue`), and the lookup then searches the root.
+ */
+export async function checkLaunchFolder(
+  workspacePath: string,
+  relativeCwd: string | undefined,
+  checkId: string,
+): Promise<{ cwd?: string; cwdIssue?: string; folder: string }> {
+  const cwd = relativeCwd ? joinWorkspace(workspacePath, relativeCwd) : undefined;
+  const cwdIssue = cwd ? await directoryInsideIssue(workspacePath, cwd, checkId) : undefined;
+  return { ...(cwd ? { cwd } : {}), ...(cwdIssue ? { cwdIssue } : {}), folder: cwd && !cwdIssue ? cwd : workspacePath };
+}
+
+async function directoryInsideIssue(workspacePath: string, cwd: string, checkId: string): Promise<string | undefined> {
+  try {
+    const [root, target] = await Promise.all([realpath(workspacePath), realpath(cwd)]);
+    const inside = relativePath(root, target);
+    if (inside.startsWith("..") || resolvePath(root, inside) !== target) {
+      return `check ${checkId} working directory leaves the verification checkout`;
+    }
+    if (!(await stat(target)).isDirectory()) return `check ${checkId} working directory is not a directory`;
+    return undefined;
+  } catch {
+    return `check ${checkId} working directory does not exist in the verification checkout`;
+  }
+}
+
+/**
+ * VF4: one declared check as the commands the Runner would launch: resolved alone, as written
+ * (`node` is the Runner's own Node). A server's {port} becomes a stand-in port: only the
+ * executables and folders matter to a tool lookup.
+ */
+export function resolveProjectCheckForLookup(check: ProjectVerificationCheck, nodeExecutable: string): ResolvedVerificationCheckV2 {
+  const { line: _line, ...declared } = cloneProjectCheck(check);
+  const [resolved] = resolveVerificationPlanV2({
+    plan: { version: 2, checks: [{ ...declared, origin: "project" }], skipped: [] },
+    suggestions: [],
+    port: 1,
+    nodeExecutable,
+  });
+  return resolved!;
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {

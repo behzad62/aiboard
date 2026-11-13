@@ -42,6 +42,7 @@ import {
   CONTEXT_RECORDING_RETRY_LIMIT,
   latestUnresolvedContextRecordingNote,
   rebuildSchedulerProjection,
+  type SchedulerStore,
 } from "../src/scheduler-store.js";
 import { RuntimeRouter } from "../src/runtime-router.js";
 import type { EnvironmentInventory } from "../src/verification-inventory.js";
@@ -2505,6 +2506,271 @@ test("VF1 the inventory is recorded before the first planning turn and again aft
     assert.deepEqual(projected?.tools[1], { name: "cargo", status: "missing", usedBy: ["build: cargo build"] });
     // The record replays from the log alone.
     assert.deepEqual(rebuildSchedulerProjection(store.readRun("run_vf1")).environmentInventory, projected);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("VF4 a mandatory check whose tool is missing pauses once, before planning and any model call; the resume checks again", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf4-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const triggers: string[] = [];
+  let architectTurns = 0;
+  let tscInstalled = false;
+  const inventoryFor = (trigger: "planning" | "resume"): EnvironmentInventory => ({
+    ...vf1Inventory(trigger, "git version 2.47.1"),
+    tools: [
+      { name: "git", status: "found", path: "/usr/bin/git", version: "git version 2.47.1", usedBy: ["runner"] },
+      tscInstalled
+        ? { name: "tsc", status: "found", path: "/usr/bin/tsc", version: "Version 5.6.3", usedBy: ["check typecheck (mandatory): Type-check"] }
+        : { name: "tsc", status: "missing", usedBy: ["check typecheck (mandatory): Type-check"] },
+      { name: "eslint", status: "missing", usedBy: ["check lint: Lint"] },
+    ],
+    mandatoryChecks: [{ checkId: "typecheck", label: "Type-check", configLine: 9, tools: ["tsc"], missing: tscInstalled ? [] : ["tsc"] }],
+  });
+  try {
+    // A run on the v1 contract (started before VF3) never runs project checks, so it never stops for one.
+    let v1Turns = 0;
+    const v1 = new BuildRuntime({
+      runId: "run_vf4_v1",
+      store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: { run: async () => { v1Turns += 1; } },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-11-13T00:00:00.000Z",
+      environmentInventory: async ({ trigger }) => inventoryFor(trigger),
+    });
+    await assert.rejects(() => v1.step(), /without a typed action/i);
+    assert.equal(v1Turns, 1);
+    assert.equal(store.readRun("run_vf4_v1").some((event) => event.type === "run.paused"), false);
+
+    store.append({ runId: "run_vf4", type: "run.initialized", occurredAt: "2026-11-13T00:00:00.000Z", actor: { role: "runner", id: "runner" }, idempotencyKey: "init", payload: { verificationContractVersion: 2 } });
+    const runtime = new BuildRuntime({
+      runId: "run_vf4",
+      store,
+      workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+      architectDriver: { run: async () => { architectTurns += 1; } },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-11-13T00:00:00.000Z",
+      environmentInventory: async ({ trigger }) => {
+        triggers.push(trigger);
+        return inventoryFor(trigger);
+      },
+    });
+    const first = await runtime.step();
+    assert.deepEqual(first, { status: "paused", action: "mandatory_check_tool_missing" });
+    assert.equal(architectTurns, 0, "no model call before the pause");
+    const events = store.readRun("run_vf4");
+    const pauses = events.filter((event) => event.type === "run.paused");
+    assert.equal(pauses.length, 1, "one pause, for every missing mandatory tool");
+    assert.ok(pauses[0]!.sequence > events.find((event) => event.type === "environment.inventory_recorded")!.sequence);
+    assert.deepEqual(pauses[0]!.actor, { role: "runner", id: "build-runtime" });
+    const detail = String(pauses[0]!.payload.detail);
+    assert.match(detail, /tsc \(needed by mandatory check "typecheck", aiboard-validation\.json line 9\)/);
+    assert.doesNotMatch(detail, /eslint/, "a non-mandatory check's missing tool is no reason to stop");
+    // Stepping the paused run does nothing more.
+    assert.equal((await runtime.step()).status, "paused");
+    assert.deepEqual(triggers, ["planning"]);
+    assert.equal(store.readRun("run_vf4").filter((event) => event.type === "run.paused").length, 1);
+
+    // A resume with the tool still missing records a new inventory and pauses again, before any work.
+    runtime.resume("vf4-resume-1");
+    assert.deepEqual(await runtime.step(), { status: "paused", action: "mandatory_check_tool_missing" });
+    assert.deepEqual(triggers, ["planning", "resume"]);
+    assert.equal(architectTurns, 0);
+
+    // Once it is installed, the resume's inventory finds it and the Architect plans.
+    tscInstalled = true;
+    runtime.resume("vf4-resume-2");
+    await assert.rejects(() => runtime.step(), /without a typed action/i);
+    assert.deepEqual(triggers, ["planning", "resume", "resume"]);
+    assert.equal(architectTurns, 1);
+    assert.equal(runtime.projection().environmentInventory?.mandatoryChecks?.[0]?.missing.length, 0);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function vf4Inventory(trigger: "planning" | "resume", extra: Partial<EnvironmentInventory>): EnvironmentInventory {
+  return { ...vf1Inventory(trigger, "git version 2.47.1"), ...extra };
+}
+
+const VF4_MISSING_TSC: Partial<EnvironmentInventory> = {
+  mandatoryChecks: [{ checkId: "typecheck", label: "Type-check", configLine: 9, tools: ["tsc"], missing: ["tsc"] }],
+};
+
+function vf4Runtime(store: SchedulerStore, runId: string, options: {
+  inventory: (trigger: "planning" | "resume") => EnvironmentInventory;
+  onArchitect: () => void;
+  onInventory?: () => void;
+}): BuildRuntime {
+  return new BuildRuntime({
+    runId,
+    store,
+    workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+    architectDriver: { run: async () => { options.onArchitect(); } },
+    integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+    maxConcurrency: 1,
+    workspaceFor: async () => "C:/unused",
+    clock: () => "2026-11-13T00:00:00.000Z",
+    environmentInventory: async ({ trigger }) => {
+      options.onInventory?.();
+      return options.inventory(trigger);
+    },
+  });
+}
+
+function initializeV2(store: SchedulerStore, runId: string): void {
+  store.append({ runId, type: "run.initialized", occurredAt: "2026-11-13T00:00:00.000Z", actor: { role: "runner", id: "runner" }, idempotencyKey: "init", payload: { verificationContractVersion: 2 } });
+}
+
+test("VF4 the gate pauses ahead of an owner note sent while paused, and again on a resume with the tool still missing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf4-guidance-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  let architectTurns = 0;
+  let installed = false;
+  try {
+    initializeV2(store, "run_vf4_guidance");
+    const runtime = vf4Runtime(store, "run_vf4_guidance", {
+      inventory: (trigger) => vf4Inventory(trigger, installed
+        ? { mandatoryChecks: [{ checkId: "typecheck", label: "Type-check", configLine: 9, tools: ["tsc"], missing: [] }] }
+        : VF4_MISSING_TSC),
+      onArchitect: () => { architectTurns += 1; },
+    });
+    assert.deepEqual(await runtime.step(), { status: "paused", action: "mandatory_check_tool_missing" });
+    // The owner writes a note while the run waits, then resumes with tsc still missing.
+    runtime.submitUserGuidance({ guidanceId: "note-1", text: "Use the strict tsconfig.", version: 1, idempotencyKey: "note-1" });
+    runtime.resume("vf4-guidance-resume-1");
+    assert.deepEqual(await runtime.step(), { status: "paused", action: "mandatory_check_tool_missing" }, "the pending note does not let the run past the gate");
+    assert.equal(architectTurns, 0, "no guidance turn and no planning while the tool is missing");
+    const events = store.readRun("run_vf4_guidance");
+    assert.equal(events.filter((event) => event.type === "run.paused").length, 2);
+    assert.equal(rebuildSchedulerProjection(events).userGuidance["note-1"]?.status, "submitted", "the note waits for the resume");
+
+    installed = true;
+    runtime.resume("vf4-guidance-resume-2");
+    await assert.rejects(() => runtime.step(), /without a typed action/i);
+    assert.equal(architectTurns, 1, "with the tool installed the Architect takes its turn");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("VF4 a Runner that died between the inventory and its pause still pauses: the gate reads the recorded inventory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf4-restart-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  let architectTurns = 0;
+  let inventories = 0;
+  try {
+    initializeV2(store, "run_vf4_restart");
+    // The previous Runner recorded this epoch's inventory, then died before appending the pause.
+    store.append({
+      runId: "run_vf4_restart",
+      type: "environment.inventory_recorded",
+      occurredAt: "2026-11-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "environment-inventory:0",
+      payload: { ...vf4Inventory("planning", VF4_MISSING_TSC) },
+    });
+    const restarted = vf4Runtime(store, "run_vf4_restart", {
+      inventory: (trigger) => vf4Inventory(trigger, VF4_MISSING_TSC),
+      onArchitect: () => { architectTurns += 1; },
+      onInventory: () => { inventories += 1; },
+    });
+    assert.deepEqual(await restarted.step(), { status: "paused", action: "mandatory_check_tool_missing" });
+    assert.equal(inventories, 0, "the epoch's inventory is not taken twice");
+    assert.equal(architectTurns, 0);
+    const pause = store.readRun("run_vf4_restart").find((event) => event.type === "run.paused")!;
+    assert.match(String(pause.payload.detail), /tsc \(needed by mandatory check "typecheck", aiboard-validation\.json line 9\)/);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("VF4 a gate pause that cannot be recorded fails the step; it never goes on to planning", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf4-append-"));
+  const sqlite = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  let architectTurns = 0;
+  try {
+    initializeV2(sqlite, "run_vf4_append");
+    const store = new Proxy(sqlite, {
+      get(target, property) {
+        if (property === "append") {
+          return (event: Parameters<SchedulerStore["append"]>[0]) => {
+            if (event.type === "run.paused") throw new Error("disk full");
+            return target.append(event);
+          };
+        }
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const runtime = vf4Runtime(store, "run_vf4_append", {
+      inventory: (trigger) => vf4Inventory(trigger, VF4_MISSING_TSC),
+      onArchitect: () => { architectTurns += 1; },
+    });
+    await assert.rejects(() => runtime.step(), /disk full/);
+    await assert.rejects(() => runtime.step(), /disk full/, "every later step stops at the gate too");
+    assert.equal(architectTurns, 0);
+  } finally {
+    sqlite.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("VF4 a malformed aiboard-validation.json stops a v2 run before planning: it names the file and the error and says to start a new Build; a resume stops again and says why", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf4-config-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  let architectTurns = 0;
+  const error = "Project validation config aiboard-validation.json is malformed: checks[0].mandatory must be true or false.";
+  // The run reads the file at its fixed starting revision, so every inventory of this run sees the same error.
+  const broken = { projectConfigError: error, revision: "a".repeat(40) };
+  try {
+    // A v1 run does not read declared checks, so the file is no reason to stop it here.
+    let v1Turns = 0;
+    const v1 = vf4Runtime(store, "run_vf4_config_v1", {
+      inventory: (trigger) => vf4Inventory(trigger, broken),
+      onArchitect: () => { v1Turns += 1; },
+    });
+    await assert.rejects(() => v1.step(), /without a typed action/i);
+    assert.equal(v1Turns, 1);
+
+    initializeV2(store, "run_vf4_config");
+    const triggers: string[] = [];
+    const runtime = vf4Runtime(store, "run_vf4_config", {
+      inventory: (trigger) => {
+        triggers.push(trigger);
+        return vf4Inventory(trigger, broken);
+      },
+      onArchitect: () => { architectTurns += 1; },
+    });
+    assert.deepEqual(await runtime.step(), { status: "paused", action: "project_validation_config_invalid" });
+    assert.equal(architectTurns, 0, "no model call before the pause");
+    assert.equal((await runtime.step()).status, "paused");
+    let pauses = store.readRun("run_vf4_config").filter((event) => event.type === "run.paused");
+    assert.equal(pauses.length, 1, "it pauses once");
+    const detail = String(pauses[0]!.payload.detail);
+    assert.match(detail, /aiboard-validation\.json is malformed: checks\[0\]\.mandatory must be true or false\./);
+    assert.match(detail, /at the revision it started from \(aaaaaaaaaaaa\), so it cannot plan, and a fix made in the project now cannot reach it/);
+    assert.match(detail, /start a new Build/);
+    assert.doesNotMatch(detail, /then resume/, "it never promises a recovery this run cannot make");
+
+    // A resume reads the same revision: it stops again, before any model call, and says resuming cannot fix it.
+    runtime.resume("vf4-config-resume");
+    assert.deepEqual(await runtime.step(), { status: "paused", action: "project_validation_config_invalid" });
+    assert.deepEqual(triggers, ["planning", "resume"]);
+    assert.equal(architectTurns, 0);
+    pauses = store.readRun("run_vf4_config").filter((event) => event.type === "run.paused");
+    assert.equal(pauses.length, 2);
+    assert.match(String(pauses[1]!.payload.detail), /^Resuming cannot fix this, so the Build stopped here again\. /);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

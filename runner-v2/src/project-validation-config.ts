@@ -6,7 +6,7 @@
  *
  * Cross-language JSON schema (all keys strict, no unknown keys):
  *   {
- *     "version": 1,
+ *     "version": 1 | 2,
  *     "validationBudgetMs": 600000,        // optional advisory per-task budget
  *     "tiers": {                            // optional tier -> commands map
  *       "fast":        [{ "label": "...", "executable": "...", "args": [...] }],
@@ -14,11 +14,29 @@
  *       "integration": [...],
  *       "slow":        [...],
  *       "release":     [...]
- *     }
+ *     },
+ *     "checks": [                           // version 2 only (VF4)
+ *       { "id": "typecheck", "label": "...", "kind": "build" | "tests" | "start" | "other",
+ *         "mandatory": true,
+ *         "run": { "executable": "...", "args": [...], "cwd"?: "...", "timeoutMs"?: 1 },
+ *         // or "start": { "executable", "args", "timeoutMs"?,
+ *         //   "ready": { "http": { "path", "status" } } | { "outputLine" } | { "exitCode" },
+ *         //   "steps"?: [{ "label", "executable", "args", "timeoutMs"?, "outputs"? }] },
+ *         "outputs"?: [...], "environment"?: { "NAME": "value" } }   // environment: run checks only
+ *     ]
  *   }
  *
- * - `version` must be 1. Unknown top-level keys, unknown tier keys, empty
- *   tier arrays, shell command strings, and out-of-bound values fail closed.
+ * - `version` is 1 or 2. A version-1 file reads exactly as before VF4; `checks`
+ *   needs version 2. A newer version fails closed and asks for a newer Runner.
+ *   Unknown top-level keys, unknown tier keys, empty tier arrays, shell command
+ *   strings, and out-of-bound values fail closed.
+ * - `checks` (VF4) are the project's own final checks, in the verification plan's
+ *   check shape (verification-plan-v2.ts) with `mandatory`, which only this file
+ *   sets. They become the Runner's suggested checks with origin `project`. When a
+ *   project declares checks they are the whole suggestion list: what the Runner
+ *   detects is a fallback for a project that declares none. The tiers keep
+ *   driving the per-task boundary as before. A `start` server is ready on HTTP on
+ *   the Runner-leased port, which its args take as {port}.
  * - `validationBudgetMs` is an advisory per-task wall-clock budget for
  *   worker `run_evidence_command` time plus integrated delivery-boundary
  *   time. Default {@link DEFAULT_VALIDATION_BUDGET_MS}. It never hard-fails
@@ -36,6 +54,21 @@ import {
   VALIDATION_TIERS,
   type ValidationTier,
 } from "./final-verification-contracts.js";
+import {
+  ENVIRONMENT_NAME_PATTERN,
+  MAX_TIER_ARG_COUNT,
+  MAX_TIER_ENV_VALUE_LENGTH,
+  MAX_TIER_ENV_VARS,
+  MAX_TIER_TIMEOUT_MS,
+} from "./validation-command-limits.js";
+import {
+  cloneProjectCheck,
+  parseProjectVerificationChecks,
+  projectCheckLines,
+  type ProjectVerificationCheck,
+} from "./verification-plan-v2.js";
+
+export { MAX_TIER_ARG_COUNT, MAX_TIER_ENV_VALUE_LENGTH, MAX_TIER_ENV_VARS, MAX_TIER_TIMEOUT_MS };
 
 /** Repository-root relative path of the project validation config. */
 export const PROJECT_VALIDATION_CONFIG_PATH = "aiboard-validation.json";
@@ -48,13 +81,12 @@ export const MAX_VALIDATION_BUDGET_MS = 86_400_000;
 
 /** Bounded tier-map shapes. */
 export const MAX_TIER_COMMANDS_PER_TIER = 8;
-export const MAX_TIER_ARG_COUNT = 100;
 export const MAX_TIER_ARG_LENGTH = 2000;
 export const MAX_TIER_LABEL_LENGTH = 200;
 export const MAX_TIER_EXECUTABLE_LENGTH = 500;
-export const MAX_TIER_TIMEOUT_MS = 1_800_000;
-export const MAX_TIER_ENV_VARS = 100;
-export const MAX_TIER_ENV_VALUE_LENGTH = 4000;
+
+/** The newest aiboard-validation.json version this Runner reads. */
+export const PROJECT_VALIDATION_CONFIG_VERSION = 2;
 
 export interface ProjectValidationTierCommand {
   label: string;
@@ -69,12 +101,16 @@ export type ProjectValidationTiers = Partial<
 >;
 
 export interface ProjectValidationConfig {
-  version: 1;
+  version: 1 | 2;
   validationBudgetMs?: number;
   tiers?: ProjectValidationTiers;
+  /** Version 2 only: the project's own final checks. */
+  checks?: ProjectVerificationCheck[];
 }
 
-const KNOWN_TOP_KEYS = new Set(["version", "validationBudgetMs", "tiers"]);
+export type { ProjectVerificationCheck };
+
+const KNOWN_TOP_KEYS = new Set(["version", "validationBudgetMs", "tiers", "checks"]);
 const KNOWN_COMMAND_KEYS = new Set([
   "label",
   "executable",
@@ -83,7 +119,7 @@ const KNOWN_COMMAND_KEYS = new Set([
   "environment",
 ]);
 const TIER_SET = new Set<string>(VALIDATION_TIERS);
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ENV_NAME = ENVIRONMENT_NAME_PATTERN;
 
 /** Strict parse of the `aiboard-validation.json` bytes (already JSON-parsed). */
 export function parseProjectValidationConfig(
@@ -99,10 +135,13 @@ export function parseProjectValidationConfig(
       );
     }
   }
-  if (value.version !== 1) {
-    throw new Error("Project validation config version must be 1.");
+  if (value.version !== 1 && value.version !== 2) {
+    if (Number.isSafeInteger(value.version) && (value.version as number) > PROJECT_VALIDATION_CONFIG_VERSION) {
+      throw new Error(`Project validation config version ${String(value.version)} is newer than this Runner reads (1 or 2); update the Runner.`);
+    }
+    throw new Error("Project validation config version must be 1 or 2.");
   }
-  const config: ProjectValidationConfig = { version: 1 };
+  const config: ProjectValidationConfig = { version: value.version };
   if (value.validationBudgetMs !== undefined) {
     config.validationBudgetMs = parseValidationBudgetMs(
       value.validationBudgetMs,
@@ -111,6 +150,46 @@ export function parseProjectValidationConfig(
   if (value.tiers !== undefined) {
     const tiers = parseTierMap(value.tiers);
     if (Object.keys(tiers).length > 0) config.tiers = tiers;
+  }
+  if (value.checks !== undefined) {
+    if (config.version !== 2) {
+      throw new Error("Project validation config checks need version 2.");
+    }
+    config.checks = parseProjectVerificationChecks(value.checks);
+  }
+  return config;
+}
+
+/** VF4: the project's aiboard-validation.json is present but not valid; a v2 run pauses on it before planning. */
+export class ProjectValidationConfigError extends Error {
+  override readonly name = "ProjectValidationConfigError";
+}
+
+/**
+ * Parse the file text: JSON, then the strict schema. A leading UTF-8 byte-order mark (Windows
+ * PowerShell 5's `Out-File -Encoding utf8` writes one) is ignored. A declared check also records
+ * the line of its id, so a pause can name it. Errors name the file and what is wrong with it.
+ */
+export function parseProjectValidationConfigText(text: string): ProjectValidationConfig {
+  const source = text.startsWith("\uFEFF") ? text.slice(1) : text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source) as unknown;
+  } catch (error) {
+    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is not valid JSON.`, { cause: error });
+  }
+  let config: ProjectValidationConfig;
+  try {
+    config = parseProjectValidationConfig(parsed);
+  } catch (error) {
+    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is malformed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+  if (config.checks) {
+    const lines = projectCheckLines(source, config.checks.length);
+    config.checks = config.checks.map((check, index) => ({
+      ...check,
+      ...(lines[index] !== undefined ? { line: lines[index] } : {}),
+    }));
   }
   return config;
 }
@@ -267,7 +346,7 @@ function parseTierEnvironment(
 export function cloneProjectValidationConfig(
   config: ProjectValidationConfig,
 ): ProjectValidationConfig {
-  const clone: ProjectValidationConfig = { version: 1 };
+  const clone: ProjectValidationConfig = { version: config.version };
   if (config.validationBudgetMs !== undefined) {
     clone.validationBudgetMs = parseValidationBudgetMs(config.validationBudgetMs);
   }
@@ -286,6 +365,7 @@ export function cloneProjectValidationConfig(
     }
     if (Object.keys(tiers).length > 0) clone.tiers = tiers;
   }
+  if (config.checks !== undefined) clone.checks = config.checks.map(cloneProjectCheck);
   return clone;
 }
 
@@ -388,17 +468,7 @@ export async function readValidationBudgetMsAtRevision(input: {
   if (shown.exitCode !== 0) {
     throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is present but unreadable: ${shown.stderr.trim() || `exit ${shown.exitCode}`}.`);
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(shown.stdout) as unknown;
-  } catch (error) {
-    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is not valid JSON.`, { cause: error });
-  }
-  try {
-    return validationBudgetMsForConfig(parseProjectValidationConfig(parsed));
-  } catch (error) {
-    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is malformed: ${error instanceof Error ? error.message : String(error)}.`, { cause: error });
-  }
+  return validationBudgetMsForConfig(parseProjectValidationConfigText(shown.stdout));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
