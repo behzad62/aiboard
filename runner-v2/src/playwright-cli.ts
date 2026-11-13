@@ -560,8 +560,10 @@ export class PlaywrightCliSessions {
       const current = this.processes.inspect(processes.map((entry) => entry.pid));
       const remaining = processes.filter((entry) => {
         const now = current.get(entry.pid);
-        const leaderGone = now?.state === "absent" || (now?.state === "present" && now.value.birth !== entry.birth);
-        if (!leaderGone) return true;
+        // A PID reused by another process: the kernel never reuses a PID still in use as a group id, so the
+        // browser's group is gone too.
+        if (now?.state === "present") return now.value.birth === entry.birth;
+        if (now?.state !== "absent") return true;
         return entry.pid === entry.groupId ? this.processes.groupAlive(entry.groupId) !== false : false;
       });
       if (remaining.length === 0 || this.now() >= deadline) return remaining;
