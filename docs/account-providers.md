@@ -90,3 +90,5 @@ Current limits:
 - ChatGPT discovery uses the signed-in account's public API catalog, preserving upstream visibility. It is not a guarantee of access to every OpenAI API model. OpenAI checks each request; manually adding an id does not extend account permissions.
 - ChatGPT plan mode supports model-compatible images/files, Responses streaming, structured output, reasoning effort, and native Build function calls grouped in a namespace. It omits temperature and max-token caps, which are unsupported on this subscription route. Success requires `response.completed`; failed, incomplete, or interrupted streams are errors.
 - GitHub Copilot account mode uses the official Copilot SDK for discussion calls, including `web_search`/`web_fetch` through Copilot's Bing integration, reasoning effort, and model-owned limits. Structured output and attachments use the compatible raw account route; Build mode always uses that raw route so Runner V2 retains tool and permission ownership. GPT and Gemini 3.5 Flash advertise reasoning; Claude chat-completions does not.
+
+<!-- docs-only CI probe, not for merge -->

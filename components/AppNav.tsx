@@ -57,3 +57,5 @@ export function AppNav() {
     </nav>
   );
 }
+
+// web-only CI probe, not for merge
