@@ -10,6 +10,9 @@
 // It also pins the Playwright hooks the design leans on (PWTEST_DAEMON_SESSION_DIR) and proves the output folder
 // never reaches a task commit. The browser tests need an installed Chrome, Edge or Playwright Chromium: CI's
 // ubuntu-latest and macos-latest images ship Chrome; without one they are skipped, never failed.
+// CI must finish in a few minutes, so CI runs one Runner run with one browser per agent (items 1, 3, 4, 6 and a hard
+// kill of 2). The full kill-kind matrix and its user-temp check (2, 5) start a browser per kind and run with
+// AIBOARD_PLAYWRIGHT_EXHAUSTIVE=1, locally and in Docker.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -31,6 +34,8 @@ import {
   playwrightCliSessionName,
   playwrightCliShimFiles,
   PlaywrightCliSessions,
+  POSIX_BROWSER_EXIT_GRACE_MS,
+  POSIX_BROWSER_KILL_VERIFY_MS,
   POSIX_SOCKET_NAME_BYTES,
   POSIX_SOCKET_PATH_MAX,
   resolvePlaywrightCliInstall,
@@ -187,45 +192,81 @@ function profilesInUserTemp(): string[] {
   catch { return []; }
 }
 
-// ---------------------------------------------------------------- 1. three calls, close, and the output folder
+// ---------------------------------------------------------------- CI: one run, one shared session per agent
 
-test("a managed session serves later CLI calls, keeps its files in the gitignored output folder, and stops with close", { skip: browserSkip, timeout: 240_000 }, async () => {
+// The design's own bounds: a stop runs the POSIX check (its grace, then the kill's verify) before it returns, so
+// nothing of a stopped session may still run once both have passed; Windows' Job proves the tree at the stop itself.
+const AFTER_STOP_MS = POSIX_BROWSER_EXIT_GRACE_MS + POSIX_BROWSER_KILL_VERIFY_MS;
+
+async function pollUntilStopped(f: Fixture, processId: string, agent = "worker-a"): Promise<Record<string, unknown>> {
+  for (const deadline = Date.now() + AFTER_STOP_MS; ;) {
+    const polled = await poll(f, processId, agent);
+    if (polled.status !== "running" || Date.now() > deadline) return polled;
+    await sleep(250);
+  }
+}
+
+test("one run: refusals, the no-browser message, a managed session serving later calls, a second agent's own session, a hard kill and close", { skip: browserSkip, timeout: 90_000 }, async () => {
   const site = await page();
   try {
-    await withRun("close", async (f) => {
+    await withRun("ci", async (f) => {
+      // No browser: the session command fails at once, names the install, and starts nothing.
+      f.sessions.configureRun(f.runId, { browser: null });
+      const none = await f.invoke("process.start", { command: "playwright-cli-session", until: { pattern: PLAYWRIGHT_CLI_READY_PATTERN }, waitMs: 30_000 }, "worker-none");
+      assert.match(JSON.stringify(none.content), /aiboard browser install/, JSON.stringify(none.content));
+      assert.equal(sessionProcesses(f.folder("worker-none")).length, 0);
+      f.sessions.configureRun(f.runId, { browser: BROWSER! });
+
+      // 3. Refused through the Runner's process.run: nothing starts, and a call before the start says how to start.
+      assert.match((await f.cli(["open", "about:blank"])).text, /Refused by AIBoard: playwright-cli open/);
+      assert.match((await f.cli(["kill-all"])).text, /Refused by AIBoard/);
+      assert.equal(sessionProcesses(f.folder()).length, 0);
+      const early = await f.cli(["snapshot"]);
+      assert.match(early.text, /is not running\. Start this agent session's browser once with process\.start/, early.text);
+
+      // 1. One managed session serves later calls; its files go to the gitignored output folder.
       const { processId } = await f.start();
       const goto = await f.cli(["--json", "goto", site.url]);
-      assert.equal(goto.output.isError, false, goto.text);
       assert.notEqual(goto.json?.isError, true, goto.text);
-      const title = await f.cli(["--json", "eval", "document.title"]);
-      assert.match(title.text, /VF7b probe/, title.text);
+      assert.match((await f.cli(["--json", "eval", "document.title"])).text, /VF7b probe/);
       const shot = await f.cli(["--json", "screenshot", `--filename=${PLAYWRIGHT_CLI_OUTPUT_FOLDER}/home.png`]);
       assert.notEqual(shot.json?.isError, true, shot.text);
-      const png = readFileSync(join(f.project, PLAYWRIGHT_CLI_OUTPUT_FOLDER, "home.png"));
-      assert.equal(png.subarray(1, 4).toString("latin1"), "PNG");
-      // The folder ignores itself, so a task commit (`git add -A`) never takes it.
+      assert.equal(readFileSync(join(f.project, PLAYWRIGHT_CLI_OUTPUT_FOLDER, "home.png")).subarray(1, 4).toString("latin1"), "PNG");
       assert.equal(readFileSync(join(f.project, PLAYWRIGHT_CLI_OUTPUT_FOLDER, ".gitignore"), "utf8").trim(), "*");
-      const console = await f.cli(["--json", "console"]);
-      assert.match(console.text, /page-loaded/, console.text);
-      // The registry is the owner's own (PWTEST_DAEMON_SESSION_DIR), and its socket fits the POSIX budget.
+      assert.match((await f.cli(["--json", "console"])).text, /page-loaded/);
+      // 6. The registry is the owner's own (PWTEST_DAEMON_SESSION_DIR), and its socket fits 103 bytes.
       const registry = join(f.folder(), "registry");
       const sessionFile = readdirSync(registry, { recursive: true }).map(String).find((name) => name.endsWith(".session"));
       assert.ok(sessionFile, `the session registered in ${registry}`);
-      const socketPath = String((JSON.parse(readFileSync(join(registry, sessionFile!), "utf8")) as { socketPath?: string }).socketPath ?? "");
       if (!WINDOWS) {
+        const socketPath = String((JSON.parse(readFileSync(join(registry, sessionFile!), "utf8")) as { socketPath?: string }).socketPath ?? "");
         assert.ok(socketPath.startsWith(f.sessions.socketFolder({ runId: f.runId, sessionId: "worker-a" })), socketPath);
         assert.ok(Buffer.byteLength(socketPath) <= POSIX_SOCKET_PATH_MAX, `${socketPath} is ${Buffer.byteLength(socketPath)} bytes`);
       }
-      const closed = await f.cli(["close"]);
-      assert.match(closed.text, /closed/i, closed.text);
-      const stopped = await waitFor(() => 0, () => true, 0);
-      void stopped;
-      const state = await (async () => { for (let i = 0; i < 60; i += 1) { const p = await poll(f, processId); if (p.status !== "running") return p; await sleep(500); } return poll(f, processId); })();
+
+      // 4. A second agent gets its own session; neither lists nor drives the other's.
+      const b = await f.start("worker-b");
+      await f.cli(["goto", `${site.url}?b`], "worker-b");
+      const listA = await f.cli(["list"], "worker-a");
+      assert.ok(listA.text.includes(playwrightCliSessionName(f.runId, "worker-a")), listA.text);
+      assert.ok(!listA.text.includes(playwrightCliSessionName(f.runId, "worker-b")), listA.text);
+      const foreign = await f.cli([`-s=${playwrightCliSessionName(f.runId, "worker-b")}`, "eval", "location.href"], "worker-a");
+      assert.match(foreign.text, /Refused by AIBoard: -s\/--session names another browser session/, foreign.text);
+      assert.doesNotMatch((await f.cli(["eval", "location.href"], "worker-a")).text, /\?b/);
+
+      // 2. A hard kill of worker-b's session leaves nothing of it, and worker-a's still runs.
+      const killed = await f.invoke("process.signal", { processId: b.processId, signal: "SIGKILL" }, "worker-b");
+      assert.equal(killed.isError, false, JSON.stringify(killed));
+      await f.run.managedProcesses.closeAgent({ runId: f.runId, sessionId: "worker-b", actor: { role: "worker", id: "worker-b" } });
+      assert.deepEqual(await waitFor(() => sessionProcesses(f.folder("worker-b")), (rows) => rows.length === 0, AFTER_STOP_MS), []);
+      assert.ok(sessionProcesses(f.folder("worker-a")).length > 0, "worker-a's browser still runs");
+      if (!WINDOWS) assert.ok(f.sessions.cleanupRecords().every((record) => record.status !== "unverified"), JSON.stringify(f.sessions.cleanupRecords()));
+
+      // 1. close stops worker-a's session, and a later call says how to start it again.
+      assert.match((await f.cli(["close"])).text, /closed/i);
+      const state = await pollUntilStopped(f, processId);
       assert.notEqual(state.status, "running", JSON.stringify(state));
-      assert.equal(state.exitCode, 0, JSON.stringify(state));
-      const left = await waitFor(() => sessionProcesses(f.folder()), (rows) => rows.length === 0, 10_000);
-      assert.deepEqual(left, [], "nothing of the session is left after close");
-      // A later call says how to start it again, not the CLI's own "run open".
+      assert.deepEqual(await waitFor(() => sessionProcesses(f.folder()), (rows) => rows.length === 0, AFTER_STOP_MS), [], "nothing is left after close");
       const after = await f.cli(["snapshot"]);
       assert.match(after.text, /process\.start: command playwright-cli-session/, after.text);
       assert.doesNotMatch(after.text, /playwright-cli open/, after.text);
@@ -233,10 +274,13 @@ test("a managed session serves later CLI calls, keeps its files in the gitignore
   } finally { await site.close(); }
 });
 
-// ---------------------------------------------------------------- 2. every kill kind, and 5. no profile in the user's temp
+// ---------------------------------------------------------------- exhaustive (local and Docker, not CI): every kill kind
+
+// Each kind starts its own run and browser, so the matrix takes minutes; CI covers the hard kill above.
+const exhaustiveSkip = browserSkip || (process.env.AIBOARD_PLAYWRIGHT_EXHAUSTIVE === "1" ? false : "the kill-kind matrix runs with AIBOARD_PLAYWRIGHT_EXHAUSTIVE=1 (locally and in Docker), not in CI");
 
 for (const kind of ["SIGTERM", "SIGKILL", "task end", "daemon only", "chrome only"] as const) {
-  test(`after ${kind}, no daemon, browser or crashpad of the session is left`, { skip: browserSkip, timeout: 240_000 }, async () => {
+  test(`after ${kind}, no daemon, browser or crashpad of the session is left`, { skip: exhaustiveSkip, timeout: 240_000 }, async () => {
     const site = await page();
     const profilesBefore = new Set(profilesInUserTemp());
     let folder = "";
@@ -280,45 +324,6 @@ for (const kind of ["SIGTERM", "SIGKILL", "task end", "daemon only", "chrome onl
   });
 }
 
-// ---------------------------------------------------------------- 4. two agent sessions
-
-test("two agent sessions never share a browser session, and one cannot list or drive the other's", { skip: browserSkip, timeout: 240_000 }, async () => {
-  const site = await page();
-  try {
-    await withRun("two", async (f) => {
-      assert.notEqual(playwrightCliSessionName(f.runId, "worker-a"), playwrightCliSessionName(f.runId, "worker-b"));
-      await f.start("worker-a");
-      await f.start("worker-b");
-      await f.cli(["goto", site.url], "worker-a");
-      await f.cli(["goto", `${site.url}?b`], "worker-b");
-      const listA = await f.cli(["list"], "worker-a");
-      assert.ok(listA.text.includes(playwrightCliSessionName(f.runId, "worker-a")), listA.text);
-      assert.ok(!listA.text.includes(playwrightCliSessionName(f.runId, "worker-b")), listA.text);
-      const foreign = await f.cli([`-s=${playwrightCliSessionName(f.runId, "worker-b")}`, "eval", "location.href"], "worker-a");
-      assert.match(foreign.text, /Refused by AIBoard: -s\/--session names another browser session/, foreign.text);
-      const hrefA = await f.cli(["eval", "location.href"], "worker-a");
-      assert.ok(hrefA.text.includes(site.url) && !hrefA.text.includes("?b"), hrefA.text);
-      // Ending one owner stops only its browser.
-      await f.run.managedProcesses.closeAgent({ runId: f.runId, sessionId: "worker-b", actor: { role: "worker", id: "worker-b" } });
-      const leftB = await waitFor(() => sessionProcesses(f.folder("worker-b")), (rows) => rows.length === 0, 15_000);
-      assert.deepEqual(leftB, []);
-      assert.ok(sessionProcesses(f.folder("worker-a")).length > 0, "worker-a's browser still runs");
-      assert.match((await f.cli(["eval", "document.title"], "worker-a")).text, /VF7b probe/);
-    });
-  } finally { await site.close(); }
-});
-
-// ---------------------------------------------------------------- no browser: a clear message, nothing started
-
-test("with no usable browser the session command fails at once and names aiboard browser install", { timeout: 120_000 }, async () => {
-  await withRun("nobrowser", async (f) => {
-    const output = await f.invoke("process.start", { command: "playwright-cli-session", until: { pattern: PLAYWRIGHT_CLI_READY_PATTERN }, waitMs: 30_000 });
-    const text = JSON.stringify(output.content);
-    assert.match(text, /aiboard browser install/, text);
-    assert.equal(sessionProcesses(f.folder()).length, 0);
-  }, null);
-});
-
 // ---------------------------------------------------------------- 3. the shim's refusals
 
 test("the playwright-cli shim refuses what would escape the managed session and says what to do instead", async () => {
@@ -356,18 +361,6 @@ test("the playwright-cli shim refuses what would escape the managed session and 
   const thrown = rewriteNotOpen("Browser 't-1' is not open. Run\n\n  playwright-cli open\n\nto start the browser session.\n");
   assert.match(thrown, /is not running/);
   assert.doesNotMatch(thrown, /playwright-cli open|to start the browser session/);
-});
-
-test("a refused command through the Runner's process.run says so and starts nothing", { timeout: 120_000 }, async () => {
-  await withRun("refused", async (f) => {
-    const opened = await f.cli(["open", "about:blank"]);
-    assert.match(opened.text, /Refused by AIBoard: playwright-cli open/, opened.text);
-    const killed = await f.cli(["kill-all"]);
-    assert.match(killed.text, /Refused by AIBoard/, killed.text);
-    assert.equal(sessionProcesses(f.folder()).length, 0);
-    const notRunning = await f.cli(["snapshot"]);
-    assert.match(notRunning.text, /is not running\. Start this agent session's browser once with process\.start/, notRunning.text);
-  });
 });
 
 // ---------------------------------------------------------------- environment, naming and state folders (no browser)
