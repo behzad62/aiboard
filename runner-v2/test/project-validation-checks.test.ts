@@ -7,7 +7,7 @@
  * the start checks that launch processes are in verification-plan-v2.test.ts.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ import { BuildRuntime, MANDATORY_CHECK_TOOL_MISSING_PAUSE } from "../src/build-r
 import { mandatoryProjectCheckTools, missingCheckTools } from "../src/check-tool-lookup.js";
 import {
   isNextStaticExportConfig,
+  readProjectValidationConfig,
   verificationSuggestionsForProfile,
   withResolvedVerificationPlan,
   type FinalVerificationExecutionProfile,
@@ -24,6 +25,7 @@ import type { FinalVerificationPortLease } from "../src/final-verification-port-
 import {
   parseProjectValidationConfig,
   parseProjectValidationConfigText,
+  ProjectValidationConfigError,
 } from "../src/project-validation-config.js";
 import { buildCompletionReadiness, rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -345,6 +347,83 @@ test("the inventory and the final check look a mandatory tool up where it launch
     assert.deepEqual(await missingCheckTools([{ executable: "rustc", cwd: workspace, environment: { Path: "C:/toolchain" } }], lookup), []);
     assert.deepEqual(await missingCheckTools([{ executable: "x", cwd: workspace }], async () => { throw new Error("boom"); }), []);
     assert.deepEqual(await missingCheckTools([{ executable: "gradlew", cwd: workspace }], lookup), ["gradlew"], "at the root it is missing");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("the inventory's tool list looks a check's tool up where it launches, so it never contradicts the mandatory check", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "runner-v2 project checks tool list "));
+  try {
+    mkdirSync(join(workspace, "android"));
+    const android = join(workspace, "android");
+    const lookup = async (executable: string, { cwd }: { cwd: string }) =>
+      executable === "gradlew" && cwd === android ? { status: "found" as const, path: join(android, "gradlew") }
+        : executable === "git" || executable === "node" ? { status: "found" as const, path: `/usr/bin/${executable}` }
+          : { status: "missing" as const };
+    const projectChecks: ProjectVerificationCheck[] = [
+      { id: "android", label: "Android build", kind: "build", mandatory: true, run: { executable: "gradlew", args: ["assembleDebug"], cwd: "android" }, line: 4 },
+      { id: "toolchain", label: "Pinned toolchain", kind: "build", mandatory: false, run: { executable: "rustc", args: ["--version"] }, environment: { PATH: "/opt/toolchain/bin" } },
+      { id: "lint", label: "Lint", kind: "other", mandatory: false, run: { executable: "eslint", args: ["."] } },
+    ];
+    const profile: FinalVerificationExecutionProfile = { ...emptyFinalVerificationProfile("9".repeat(40)), projectChecks };
+    const checks = inventoryCheckCommands(profile);
+    assert.deepEqual(checks.find((check) => check.executable === "gradlew"), {
+      label: "check android (mandatory): Android build", executable: "gradlew", args: ["assembleDebug"], cwd: "android",
+    });
+    const mandatoryChecks = await mandatoryProjectCheckTools({ checks: projectChecks, workspacePath: workspace, lookup });
+    const inventory = await collectEnvironmentInventory({
+      trigger: "planning",
+      cwd: workspace,
+      checks,
+      mandatoryChecks,
+      lookup,
+      run: async () => ({ outcome: "exited", exitCode: 0, stdout: "1.0.0\n", stderr: "" }),
+      browsers: async () => ({ browsers: [], notes: [] }),
+      platform: "linux",
+    });
+    const tool = (name: string) => inventory.tools.find((record) => record.name === name);
+    assert.deepEqual(inventory.mandatoryChecks?.[0]?.missing, []);
+    assert.equal(tool("gradlew")?.status, "found", "found in android/, as the mandatory check says");
+    assert.equal(tool("gradlew")?.path, join(android, "gradlew"));
+    assert.deepEqual([tool("rustc")?.status, tool("rustc")?.note], ["unknown", "Every check that runs it sets its own PATH, which the Runner does not search."]);
+    assert.equal(tool("eslint")?.status, "missing", "a tool the checkout root lacks is still missing");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("an aiboard-validation.json that is present but unreadable fails closed like a malformed one; only an absent file is no config", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "runner-v2 project checks unreadable "));
+  try {
+    assert.equal(await readProjectValidationConfig(workspace), undefined, "no file: no config");
+    // A folder where the file should be.
+    mkdirSync(join(workspace, "aiboard-validation.json"));
+    await assert.rejects(() => readProjectValidationConfig(workspace), (error: Error) => {
+      assert.ok(error instanceof ProjectValidationConfigError);
+      assert.match(error.message, /aiboard-validation\.json is present but unreadable: it is a folder, not a file\./);
+      return true;
+    });
+    rmSync(join(workspace, "aiboard-validation.json"), { recursive: true });
+    // A link to a file that does not exist: lstat sees it, so it is not "no config".
+    let linked = true;
+    try {
+      symlinkSync(join(workspace, "missing.json"), join(workspace, "aiboard-validation.json"), "file");
+    } catch (error) {
+      // Windows without Developer Mode cannot create symlinks; the folder case above still covers it.
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      linked = false;
+    }
+    if (linked) {
+      await assert.rejects(() => readProjectValidationConfig(workspace), (error: Error) => {
+        assert.ok(error instanceof ProjectValidationConfigError);
+        assert.match(error.message, /present but unreadable: it is a link to a file that does not exist\./);
+        return true;
+      });
+      rmSync(join(workspace, "aiboard-validation.json"));
+    }
+    writeFileSync(join(workspace, "aiboard-validation.json"), JSON.stringify({ version: 2, checks: [TYPECHECK] }));
+    assert.equal((await readProjectValidationConfig(workspace))?.checks?.[0]?.id, "typecheck");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

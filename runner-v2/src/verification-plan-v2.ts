@@ -1550,9 +1550,7 @@ export async function resolvedCheckLaunch(
   provisioning?: { executable: string; environment?: Readonly<Record<string, string | undefined>> },
 ): Promise<{ cwd?: string; cwdIssue?: string; targets: CheckToolLookupTarget[] }> {
   const first = resolved.commands[0];
-  const cwd = resolved.mode !== "program" && first?.cwd ? joinWorkspace(workspacePath, first.cwd) : undefined;
-  const cwdIssue = cwd ? await directoryInsideIssue(workspacePath, cwd, resolved.checkId) : undefined;
-  const folder = cwd && !cwdIssue ? cwd : workspacePath;
+  const { cwd, cwdIssue, folder } = await checkLaunchFolder(workspacePath, resolved.mode !== "program" ? first?.cwd : undefined, resolved.checkId);
   const target = (command: { executable: string; environment?: Readonly<Record<string, string | undefined>> }, at: string): CheckToolLookupTarget => ({
     executable: command.executable,
     cwd: at,
@@ -1566,6 +1564,21 @@ export async function resolvedCheckLaunch(
       ...resolved.commands.map((command) => target(command, folder)),
     ],
   };
+}
+
+/**
+ * The folder a run command with this checkout-relative `cwd` launches in: that folder, or the
+ * checkout root when it has none. A folder that leaves the checkout or does not exist is refused
+ * at launch (`cwdIssue`), and the lookup then searches the root.
+ */
+export async function checkLaunchFolder(
+  workspacePath: string,
+  relativeCwd: string | undefined,
+  checkId: string,
+): Promise<{ cwd?: string; cwdIssue?: string; folder: string }> {
+  const cwd = relativeCwd ? joinWorkspace(workspacePath, relativeCwd) : undefined;
+  const cwdIssue = cwd ? await directoryInsideIssue(workspacePath, cwd, checkId) : undefined;
+  return { ...(cwd ? { cwd } : {}), ...(cwdIssue ? { cwdIssue } : {}), folder: cwd && !cwdIssue ? cwd : workspacePath };
 }
 
 async function directoryInsideIssue(workspacePath: string, cwd: string, checkId: string): Promise<string | undefined> {

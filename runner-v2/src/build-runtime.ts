@@ -4489,10 +4489,14 @@ export class BuildRuntime {
   /**
    * VF4: the pre-planning verification gate. On a v2 run it stops, before planning or any further
    * work and before any model call, when the inventory recorded for this epoch (the run's start,
-   * then each resume) says that the project's aiboard-validation.json is malformed, or that a check
-   * it makes mandatory cannot run because its tool is missing. One pause names every blocked check,
-   * its tools and its config line. The owner fixes it and resumes; the resume's inventory decides
-   * again. It reads the recorded inventory, never this process's memory, so a Runner restart between
+   * then each resume) says that the project's aiboard-validation.json is malformed or unreadable,
+   * or that a check it makes mandatory cannot run because its tool is missing.
+   * - A missing tool lives on this machine: the owner installs it and resumes, and the resume's
+   *   inventory decides again. One pause names every blocked check, its tools and its config line.
+   * - The file is read at the run's fixed starting revision, so no fix reaches this run (the
+   *   scheduler has no terminal stop to take instead): the pause says to start a new Build, and a
+   *   resume reads the same revision and pauses again saying that resuming cannot fix it.
+   * It reads the recorded inventory, never this process's memory, so a Runner restart between
    * the inventory and the pause still pauses. A tool the lookup could not decide about launches as
    * before (VF2). A pause that cannot be recorded throws: the step never goes on to planning.
    */
@@ -4505,7 +4509,13 @@ export class BuildRuntime {
     if (inventory.sequence < lastResume) return undefined;
     const blocked = mandatoryChecksMissingTools(inventory);
     const pause = inventory.projectConfigError
-      ? { reason: PROJECT_VALIDATION_CONFIG_INVALID_PAUSE, detail: projectConfigInvalidDetail(inventory.projectConfigError) }
+      ? {
+        reason: PROJECT_VALIDATION_CONFIG_INVALID_PAUSE,
+        detail: projectConfigInvalidDetail(inventory.projectConfigError, {
+          ...(inventory.revision ? { revision: inventory.revision } : {}),
+          resumed: inventory.trigger === "resume",
+        }),
+      }
       : blocked.length > 0
         ? { reason: MANDATORY_CHECK_TOOL_MISSING_PAUSE, detail: mandatoryToolMissingDetail(blocked) }
         : undefined;

@@ -3,9 +3,10 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 
-import type { CheckToolLookup } from "./check-tool-lookup.js";
+import type { CheckToolLookup, CheckToolLookupResult } from "./check-tool-lookup.js";
 import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
 import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import { checkLaunchFolder } from "./verification-plan-v2.js";
 
 /**
  * VF1: the tool inventory. Before planning, and again on resume, the Runner
@@ -128,6 +129,10 @@ export interface InventoryCheckCommand {
   label: string;
   executable: string;
   args: readonly string[];
+  /** VF4: the checkout-relative folder a declared run check launches in (`android`). */
+  cwd?: string;
+  /** The command's environment overrides; one that sets PATH is not looked up (missingCheckTools). */
+  environment?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface InventoryProbeRequest {
@@ -189,8 +194,14 @@ export function inventoryVersionArgs(name: string): readonly string[] | undefine
 /** Every command a check of this profile would launch, labeled by the check. */
 export function inventoryCheckCommands(profile: FinalVerificationExecutionProfile): InventoryCheckCommand[] {
   const commands: InventoryCheckCommand[] = [];
-  const add = (label: string, command: { executable: string; args: readonly string[] }) => {
-    commands.push({ label, executable: command.executable, args: [...command.args] });
+  const add = (label: string, command: InventoryCheckCommand | { executable: string; args: readonly string[]; environment?: Readonly<Record<string, string | undefined>> }) => {
+    commands.push({
+      label,
+      executable: command.executable,
+      args: [...command.args],
+      ...("cwd" in command && command.cwd ? { cwd: command.cwd } : {}),
+      ...(command.environment ? { environment: { ...command.environment } } : {}),
+    });
   };
   // VF4: the project's declared checks first, mandatory ones before the rest, so the tool cap
   // never drops a tool a mandatory check needs.
@@ -220,7 +231,15 @@ type ProjectCheck = NonNullable<FinalVerificationExecutionProfile["projectChecks
 
 function projectCheckCommands(check: ProjectCheck): InventoryCheckCommand[] {
   const label = `check ${check.id}${check.mandatory ? " (mandatory)" : ""}: ${check.label}`;
-  if (check.run) return [{ label, executable: check.run.executable, args: [...check.run.args] }];
+  if (check.run) {
+    return [{
+      label,
+      executable: check.run.executable,
+      args: [...check.run.args],
+      ...(check.run.cwd ? { cwd: check.run.cwd } : {}),
+      ...(check.environment ? { environment: { ...check.environment } } : {}),
+    }];
+  }
   if (!check.start) return [];
   return [
     { label, executable: check.start.executable, args: [...check.start.args] },
@@ -233,9 +252,20 @@ export function mandatoryChecksMissingTools(inventory: Pick<EnvironmentInventory
   return (inventory.mandatoryChecks ?? []).filter((check) => check.missing.length > 0);
 }
 
-/** VF4: the owner's pause text for a malformed aiboard-validation.json. */
-export function projectConfigInvalidDetail(error: string): string {
-  return `${error} The Build reads its checks from this file, so it cannot plan until the file is valid. Fix aiboard-validation.json in the project, then resume: the resume reads it again.`;
+/**
+ * VF4: the owner's pause text for a malformed or unreadable aiboard-validation.json. A Build reads
+ * the file at the revision it started from, so a fix made in the project now never reaches it:
+ * the honest way on is a new Build. A resume reads the same revision and stops here again, and
+ * says so.
+ */
+export function projectConfigInvalidDetail(error: string, input: { revision?: string; resumed?: boolean } = {}): string {
+  const at = input.revision ? ` (${input.revision.slice(0, 12)})` : "";
+  return [
+    input.resumed ? "Resuming cannot fix this, so the Build stopped here again." : undefined,
+    error,
+    `This Build reads its checks from that file at the revision it started from${at}, so it cannot plan, and a fix made in the project now cannot reach it.`,
+    "Fix aiboard-validation.json in the project and start a new Build. No model was called.",
+  ].filter((part) => part !== undefined).join(" ");
 }
 
 /** VF4: the owner's pause text: each mandatory check that cannot run, its missing tools and its config line. */
@@ -279,6 +309,8 @@ interface ToolTarget {
   /** The executable exactly as the check names it. */
   executable: string;
   usedBy: string[];
+  /** Where each command that runs it launches, with its environment: the lookup follows them. */
+  uses: Array<{ cwd?: string; environment?: Readonly<Record<string, string | undefined>>; label: string }>;
 }
 
 export async function collectEnvironmentInventory(input: CollectEnvironmentInventoryInput): Promise<EnvironmentInventory> {
@@ -294,19 +326,20 @@ export async function collectEnvironmentInventory(input: CollectEnvironmentInven
     const key = `${script ? "script" : isBareCommand(executable) ? "command" : "path"}:${platform === "win32" ? normalizedToolName(name) : name}`;
     return { script, name, key };
   };
-  const addTarget = (executable: string, args: readonly string[], label: string) => {
-    const { script, name, key } = identity(executable, args);
+  const addTarget = (command: Pick<InventoryCheckCommand, "executable" | "args" | "label" | "cwd" | "environment">) => {
+    const { script, name, key } = identity(command.executable, command.args);
     let target = byKey.get(key);
     if (!target) {
-      target = { key, name, executable, usedBy: [], ...(script ? { script } : {}) };
+      target = { key, name, executable: command.executable, usedBy: [], uses: [], ...(script ? { script } : {}) };
       byKey.set(key, target);
       targets.push(target);
     }
-    if (!target.usedBy.includes(label)) target.usedBy.push(label);
+    if (!target.usedBy.includes(command.label)) target.usedBy.push(command.label);
+    target.uses.push({ label: command.label, ...(command.cwd ? { cwd: command.cwd } : {}), ...(command.environment ? { environment: command.environment } : {}) });
   };
-  addTarget("git", [], "runner");
-  addTarget("node", [], "runner");
-  for (const check of input.checks) addTarget(check.executable, check.args, check.label);
+  addTarget({ executable: "git", args: [], label: "runner" });
+  addTarget({ executable: "node", args: [], label: "runner" });
+  for (const check of input.checks) addTarget(check);
   const kept = targets.slice(0, MAX_INVENTORY_TOOLS);
   const tools = await mapConcurrent(kept, PROBE_CONCURRENCY, async (target) => await inventoryTool(target, input, nodeExecPath));
   const mandatoryChecks = (input.mandatoryChecks ?? []).map((check): InventoryMandatoryCheck => ({
@@ -348,6 +381,35 @@ export async function collectEnvironmentInventory(input: CollectEnvironmentInven
   });
 }
 
+/**
+ * VF4: a tool looked up the way the final check looks it up (missingCheckTools): in the folder
+ * each command that runs it launches in, skipping a command that sets its own PATH. Found in
+ * any of those folders, it is found; so a tool a mandatory check finds is never listed missing.
+ */
+async function lookUpWhereLaunched(target: ToolTarget, input: CollectEnvironmentInventoryInput): Promise<CheckToolLookupResult> {
+  const folders: string[] = [];
+  for (const use of target.uses) {
+    if (Object.keys(use.environment ?? {}).some((name) => name.toUpperCase() === "PATH")) continue;
+    const { folder } = await checkLaunchFolder(input.cwd, use.cwd, use.label);
+    if (!folders.includes(folder)) folders.push(folder);
+  }
+  if (folders.length === 0) {
+    return { status: "unknown", reason: "Every check that runs it sets its own PATH, which the Runner does not search." };
+  }
+  let undecided: string | undefined;
+  for (const folder of folders) {
+    let looked: CheckToolLookupResult;
+    try {
+      looked = await input.lookup(target.executable, { cwd: folder });
+    } catch (error) {
+      looked = { status: "unknown", reason: `The lookup failed: ${errorMessage(error)}` };
+    }
+    if (looked.status === "found") return looked;
+    if (looked.status === "unknown") undecided ??= looked.reason;
+  }
+  return undecided ? { status: "unknown", reason: undecided } : { status: "missing" };
+}
+
 async function inventoryTool(target: ToolTarget, input: CollectEnvironmentInventoryInput, nodeExecPath: string): Promise<InventoryToolRecord> {
   const base = { name: target.name, usedBy: target.usedBy };
   let launch: { executable: string; prefix: string[]; path: string };
@@ -357,7 +419,7 @@ async function inventoryTool(target: ToolTarget, input: CollectEnvironmentInvent
     launch = { executable: nodeExecPath, prefix: [target.script], path: target.script };
   } else {
     // VF2's lookup, the one the check makes before it launches: a second resolver would disagree with it.
-    const looked = await input.lookup(target.executable, { cwd: input.cwd });
+    const looked = await lookUpWhereLaunched(target, input);
     if (looked.status === "missing") return { ...base, status: "missing" };
     if (looked.status === "unknown") return { ...base, status: "unknown", note: looked.reason };
     launch = { executable: looked.path, prefix: [], path: looked.path };

@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { FINAL_VERIFICATION_CATEGORIES, VALIDATION_TIERS, type FinalVerificationDetectedSignal, type FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
-import { PROJECT_VALIDATION_CONFIG_PATH, parseProjectValidationConfig, parseProjectValidationConfigText, parseValidationBudgetMs, type ProjectValidationConfig, type ProjectValidationTierCommand, type ProjectValidationTiers } from "./project-validation-config.js";
+import { PROJECT_VALIDATION_CONFIG_PATH, ProjectValidationConfigError, parseProjectValidationConfig, parseProjectValidationConfigText, parseValidationBudgetMs, type ProjectValidationConfig, type ProjectValidationTierCommand, type ProjectValidationTiers } from "./project-validation-config.js";
 import { detectLanguageFamilies, languageReportDescriptors, listLanguageInventoryFiles } from "./language-execution-profile.js";
 import { assertFinalVerificationBrowserPolicy } from "./final-verification-browser-policy.js";
 import type {
@@ -891,15 +891,36 @@ function serverSignal(scripts: Record<string, string>, dependencies: Record<stri
   return Boolean((scripts.preview && dependencies.vite) || (scripts.start && dependencies.next && nextStart));
 }
 
-async function readProjectValidationConfig(repositoryRoot: string): Promise<ProjectValidationConfig | undefined> {
+/**
+ * The project's aiboard-validation.json, or undefined when there is none. Only a path that does
+ * not exist at all is "no config". One that exists but cannot be read (a folder, no permission, a
+ * link to a missing file) fails closed like a malformed file: reading it as absent would silently
+ * drop the checks it makes mandatory.
+ */
+export async function readProjectValidationConfig(repositoryRoot: string): Promise<ProjectValidationConfig | undefined> {
+  const path = join(repositoryRoot, PROJECT_VALIDATION_CONFIG_PATH);
+  try {
+    await lstat(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} could not be inspected: ${unreadableReason(error)}.`, { cause: error });
+  }
   let text: string;
   try {
-    text = await readFile(join(repositoryRoot, PROJECT_VALIDATION_CONFIG_PATH), "utf8");
+    text = await readFile(path, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
+    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is present but unreadable: ${unreadableReason(error)}.`, { cause: error });
   }
   return parseProjectValidationConfigText(text);
+}
+
+function unreadableReason(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "ENOENT") return "it is a link to a file that does not exist";
+  if (code === "EISDIR") return "it is a folder, not a file";
+  if (code === "EACCES" || code === "EPERM") return "the Runner has no permission to read it";
+  return code ?? (error instanceof Error ? error.message : String(error));
 }
 
 /** The Next.js config files `next` reads, in its own order. */

@@ -2726,17 +2726,18 @@ test("VF4 a gate pause that cannot be recorded fails the step; it never goes on 
   }
 });
 
-test("VF4 a malformed aiboard-validation.json pauses a v2 run once before planning, naming the file and the error; the resume reads it again", async () => {
+test("VF4 a malformed aiboard-validation.json stops a v2 run before planning: it names the file and the error and says to start a new Build; a resume stops again and says why", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf4-config-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
   let architectTurns = 0;
-  let fixed = false;
   const error = "Project validation config aiboard-validation.json is malformed: checks[0].mandatory must be true or false.";
+  // The run reads the file at its fixed starting revision, so every inventory of this run sees the same error.
+  const broken = { projectConfigError: error, revision: "a".repeat(40) };
   try {
     // A v1 run does not read declared checks, so the file is no reason to stop it here.
     let v1Turns = 0;
     const v1 = vf4Runtime(store, "run_vf4_config_v1", {
-      inventory: (trigger) => vf4Inventory(trigger, { projectConfigError: error }),
+      inventory: (trigger) => vf4Inventory(trigger, broken),
       onArchitect: () => { v1Turns += 1; },
     });
     await assert.rejects(() => v1.step(), /without a typed action/i);
@@ -2747,23 +2748,29 @@ test("VF4 a malformed aiboard-validation.json pauses a v2 run once before planni
     const runtime = vf4Runtime(store, "run_vf4_config", {
       inventory: (trigger) => {
         triggers.push(trigger);
-        return vf4Inventory(trigger, fixed ? {} : { projectConfigError: error });
+        return vf4Inventory(trigger, broken);
       },
       onArchitect: () => { architectTurns += 1; },
     });
     assert.deepEqual(await runtime.step(), { status: "paused", action: "project_validation_config_invalid" });
     assert.equal(architectTurns, 0, "no model call before the pause");
     assert.equal((await runtime.step()).status, "paused");
-    const pauses = store.readRun("run_vf4_config").filter((event) => event.type === "run.paused");
+    let pauses = store.readRun("run_vf4_config").filter((event) => event.type === "run.paused");
     assert.equal(pauses.length, 1, "it pauses once");
-    assert.match(String(pauses[0]!.payload.detail), /aiboard-validation\.json is malformed: checks\[0\]\.mandatory must be true or false\./);
-    assert.match(String(pauses[0]!.payload.detail), /the resume reads it again/);
+    const detail = String(pauses[0]!.payload.detail);
+    assert.match(detail, /aiboard-validation\.json is malformed: checks\[0\]\.mandatory must be true or false\./);
+    assert.match(detail, /at the revision it started from \(aaaaaaaaaaaa\), so it cannot plan, and a fix made in the project now cannot reach it/);
+    assert.match(detail, /start a new Build/);
+    assert.doesNotMatch(detail, /then resume/, "it never promises a recovery this run cannot make");
 
-    fixed = true;
+    // A resume reads the same revision: it stops again, before any model call, and says resuming cannot fix it.
     runtime.resume("vf4-config-resume");
-    await assert.rejects(() => runtime.step(), /without a typed action/i);
-    assert.deepEqual(triggers, ["planning", "resume"], "the resume took a fresh inventory, which read the file again");
-    assert.equal(architectTurns, 1);
+    assert.deepEqual(await runtime.step(), { status: "paused", action: "project_validation_config_invalid" });
+    assert.deepEqual(triggers, ["planning", "resume"]);
+    assert.equal(architectTurns, 0);
+    pauses = store.readRun("run_vf4_config").filter((event) => event.type === "run.paused");
+    assert.equal(pauses.length, 2);
+    assert.match(String(pauses[1]!.payload.detail), /^Resuming cannot fix this, so the Build stopped here again\. /);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
