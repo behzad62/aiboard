@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import ts from "typescript";
 
@@ -1429,7 +1431,7 @@ test("C4 POSIX child consumes an anchor release only under captured current auth
   }]);
 });
 
-test("C4 POSIX child-crash anchor release records its own holder so a live supervisor cannot wedge C1 reclamation", () => {
+test("C4 POSIX child-crash anchor release records its own holder so a live supervisor cannot wedge C1 reclamation", { timeout: 15_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-c4-anchor-lock-holder-"));
   const childSource = readFileSync(new URL("../src/portable-process-child.mjs", import.meta.url), "utf8");
   const nonce = "anchor-lock-holder";
@@ -1475,38 +1477,35 @@ test("C4 POSIX child-crash anchor release records its own holder so a live super
       holderPid: supervisorPid,
       holderBirth: supervisorBirth,
     }));
-    const childContext = vm.createContext({
-      Error,
-      JSON,
+    // The anchor child runs the production consume in a real process that is killed right after its
+    // durable C1 claim. A fault thrown in-process would not do: the owned fence lock releases a
+    // claimed holder whose effect never started, so only a dead process leaves its holder behind.
+    const specPath = join(root, "crash-spec.json");
+    const claimedPath = join(root, "claimed");
+    writeFileSync(specPath, JSON.stringify({
+      childFunctions,
       config: { anchorReleasePath, fenceLockPath: lockPath, fencePath, lockHolderPath, nonce, statusPath },
       expectedSupervisor,
       workloadGroup,
-      process: { pid: childPid },
-      readFileSync,
-      writeFileSync,
-      renameSync: (from: string, to: string) => { renameSync(from, to); },
-      inspectPosixProcessIdentity: (pid: number) => pid === supervisorPid
-        ? { state: "present", value: { pid, groupId: pid, birth: supervisorBirth } }
-        : { state: "absent" },
-      isExactPosixAnchorRelease,
-      runPortableFenceEffectSync: (options: Parameters<typeof runPortableFenceEffectSync>[0]) => runPortableFenceEffectSync({
-        ...options,
-        lockOptions: {
-          ...options.lockOptions,
-          afterClaim: () => { throw new Error("synthetic child crash after durable C1 claim"); },
-          deadlineMs: 40,
-          inspectHolder,
-          retryDelayMs: 1,
-        },
-      }),
+      childPid,
+      claimedPath,
+    }));
+    const crashed = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolveExit, reject) => {
+      const child = spawn(process.execPath, [
+        fileURLToPath(new URL("./fixtures/posix-anchor-release-crash.mjs", import.meta.url)),
+        specPath,
+      ], { stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+      child.on("error", reject);
+      child.on("close", (code, signal) => resolveExit({ code, signal, stdout, stderr }));
     });
-    vm.runInContext(childFunctions, childContext);
 
-    assert.equal(
-      vm.runInContext("consumeExactPosixAnchorRelease(workloadGroup, expectedSupervisor)", childContext),
-      false,
-      "the interrupted child must not publish a completed release effect",
-    );
+    assert.equal(existsSync(claimedPath), true, `the anchor child must reach its durable C1 claim: ${crashed.stderr}`);
+    assert.equal(crashed.stdout, "", "the killed child must not return from the release");
+    assert.notEqual(crashed.code, 0, "the anchor child must die at the claim boundary");
     assert.equal(existsSync(statusPath), false, "the crash boundary is before the child status effect");
 
     const database = new DatabaseSync(lockPath, { readOnly: true });
@@ -1521,8 +1520,10 @@ test("C4 POSIX child-crash anchor release records its own holder so a live super
       expectedFence: currentFence,
       readCurrentFence: () => currentFence,
       effect: () => "reclaimed",
+      // The product's default acquisition bound. This is the first claim this process makes on the lock
+      // file, and a cold open plus its claim commits can take tens of milliseconds on a slow disk; a
+      // holder that wrongly names the live supervisor still fails this whole bound and the assertions below.
       lockOptions: {
-        deadlineMs: 40,
         holderPid: reclaimerPid,
         holderBirth: "reclaimer-birth",
         inspectHolder,

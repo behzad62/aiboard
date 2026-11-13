@@ -34,11 +34,11 @@ const deterministicPrTests = [
 const posixHostedTests = [
   "runner-v2/test/portable-process-protocol.test.ts",
   "runner-v2/test/portable-process-channel.test.ts",
+  "runner-v2/test/posix-process-backend.test.ts",
 ] as const;
 
 const targetedLegacyRepairTests = [
   "runner-v2/test/cli-capabilities-config.test.ts",
-  "runner-v2/test/posix-process-backend.test.ts",
 ] as const;
 
 /** Former giant mixed qualification invocations — must not remain as hosted qualification entrypoints. */
@@ -119,9 +119,13 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   assert.match(portable,
     /--test-name-pattern=[^\n]*active legacy Build[^\n]*unsupported persisted execution-safety[\s\S]*?cli-capabilities-config\.test\.ts/,
     "Legacy CLI repairs must stay targeted instead of restoring the giant file as a full gate.");
-  assert.match(portable,
-    /if:\s*runner\.os\s*!=\s*'Windows'[\s\S]*?--test-name-pattern=[^\n]*POSIX native session fixture owns descendants after launcher exit[\s\S]*?posix-process-backend\.test\.ts/,
-    "The repaired POSIX observation must run only as a targeted POSIX regression.");
+  const backendStep = portable.indexOf("      - name: Run POSIX process backend contracts on POSIX hosts");
+  assert.ok(backendStep > 0, "Required POSIX PR CI must run the POSIX process backend contracts.");
+  const backendBlock = portable.slice(backendStep, portable.indexOf("\n      - name:", backendStep + 1));
+  assert.match(backendBlock, /if:\s*runner\.os\s*!=\s*'Windows'/);
+  assert.match(backendBlock, /--test --test-concurrency=1\s+runner-v2\/test\/posix-process-backend\.test\.ts/);
+  assert.doesNotMatch(backendBlock, /--test-name-pattern/,
+    "The whole POSIX backend file runs: under one name pattern the rest of it went stale unseen.");
   const inputWaitStep = portable.indexOf("      - name: Run T1 input-wait evidence and acceptance on POSIX hosts");
   assert.ok(inputWaitStep > 0, "T1 acceptance is the only proof of POSIX CPU evidence on Linux and macOS.");
   const inputWaitBlock = portable.slice(inputWaitStep);
