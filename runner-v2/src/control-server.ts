@@ -43,6 +43,7 @@ import {
 } from "./planning-controls.js";
 import { assertBudgetLimits } from "./budget-policy.js";
 import { type GitPreflightResult } from "./git-preflight.js";
+import type { BrowserInstallService } from "./browser-install.js";
 import {
   validateProviderConfigs,
   type ProviderConfigStore,
@@ -100,6 +101,8 @@ export interface ControlServerOptions {
   home?: AiboardHomeLocation;
   /** The model proxy on its own port (HM3); `/v2/home/proxy-session` issues its tokens. */
   modelProxy?: ModelProxy;
+  /** VF7b: `/v2/browser` (installed browsers) and `POST /v2/browser/install`, the Settings > Tools button. */
+  browserInstall?: BrowserInstallService;
 }
 
 export interface RunBootstrapInput {
@@ -274,6 +277,7 @@ export class ControlServer {
   private readonly buildPathProblem?: string;
   private readonly home?: AiboardHomeLocation;
   private readonly modelProxy?: ModelProxy;
+  private readonly browserInstall?: BrowserInstallService;
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
@@ -308,6 +312,7 @@ export class ControlServer {
     this.remoteStatus = options.remoteStatus;
     this.home = options.home;
     this.modelProxy = options.modelProxy;
+    this.browserInstall = options.browserInstall;
     // Revoking a paired session revokes its proxy token (§9 "Proxy token").
     const proxy = this.modelProxy;
     if (proxy) this.localPairing?.onSessionEnded((sessionId) => proxy.endSession(`paired:${sessionId}`));
@@ -548,6 +553,14 @@ export class ControlServer {
       await this.routeHome(request, response, segments);
       return;
     }
+    if (segments[1] === "browser") {
+      // VF7b (VD-4): only the owner's button reaches this; nothing in a Build calls it.
+      const install = this.browserInstall;
+      if (!install) throw new HttpError(404, "browser_install_unavailable", "This Runner cannot install a browser; update AI Board.");
+      if (segments.length === 2 && request.method === "GET") { sendJson(response, 200, install.view()); return; }
+      if (segments.length === 3 && segments[2] === "install" && request.method === "POST") { sendJson(response, 202, install.start()); return; }
+      throw new HttpError(404, "not_found", "Unknown browser endpoint.");
+    }
     if (segments.length === 3 && segments[1] === "remote" && segments[2] === "status" && request.method === "GET") {
       const status = this.remoteStatus?.();
       if (status === undefined) throw new HttpError(503, "remote_unavailable", "Remote service is unavailable.");
@@ -568,6 +581,7 @@ export class ControlServer {
           home: Boolean(this.home),
           modelProxy: Boolean(this.home && this.modelProxy?.url),
           secretlessProviderConfigs: Boolean(this.home && this.providerConfigs),
+          browserInstall: Boolean(this.browserInstall),
         },
         catalogVersion,
         ...(this.localAgentsUnavailableNestedState ? { localAgents: "unavailable_nested_state" } : {}),

@@ -1,4 +1,6 @@
 import { configureMcpServers, mcpConfigurationDigest } from "./mcp-configuration.js";
+import { installPlaywrightCliShims, PlaywrightCliSessions, resolvePlaywrightCliInstall } from "./playwright-cli.js";
+import { BrowserInstallService } from "./browser-install.js";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
@@ -368,6 +370,27 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       join(options.stateDirectory, "permissions.sqlite")
     );
     resources.permissions = permissions;
+    // VF7b: the playwright-cli commands for the processes the Runner starts, written next to the Runner's state.
+    // A machine where they cannot be written keeps building; its runs just have no CLI browsing.
+    let playwrightCli: PlaywrightCliSessions | undefined;
+    try {
+      const browsingRoot = join(options.stateDirectory, "pw");
+      const binDirectory = installPlaywrightCliShims(join(browsingRoot, "bin"), resolvePlaywrightCliInstall());
+      playwrightCli = new PlaywrightCliSessions({
+        stateRoot: browsingRoot,
+        binDirectory,
+        // The POSIX browser check's outcomes that are not clean go to the Runner's log with their PIDs.
+        onCleanup: (record) => {
+          if (record.status === "none" || record.status === "exited") return;
+          process.stderr.write(`AIBoard: browser session cleanup ${record.status} for run ${record.runId}, session ${record.sessionId}`
+            + ` (${record.processId}): ${record.status === "escaped"
+              ? `still running outside its process group, recorded and not signalled [${record.alive.join(", ")}]`
+              : "the browser could not be read, so its state folder stays"}\n`);
+        },
+      });
+    } catch (error) {
+      process.stderr.write(`AIBoard: the Playwright CLI commands could not be prepared, so Builds browse without them: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
     const buildFactory = new NativeBuildFactory({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,
@@ -382,6 +405,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       extensions: { service: extensions, bindings: extensionBindings, managedMcp },
       closeProviderConfigs: false,
       environmentInventory: true,
+      ...(playwrightCli ? { playwrightCli } : {}),
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
         if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);
@@ -446,6 +470,11 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
           `The run stays paused; a fixed runner recovers it, or start with ${[...new Set(report.failures.map((failure) => `--set-aside-run ${failure.runId}`))].join(" ")} to leave it untouched.`,
         );
       },
+    }, {
+      // VF7b: Playwright CLI state folders a crashed Runner left; after build recovery stopped every owned process.
+      resource: "playwrightCliState",
+      covers: ["tempRoots"],
+      reconcile: () => { playwrightCli?.reconcileStartup(); },
     }]);
     const toolBench = new ToolBenchSessions({ projectRoot: options.projectPath, stateDirectory: options.stateDirectory, providerConfigs, executionHost, capabilitiesConfig, localAgentsUnavailableNestedState: remoteOnly });
     await toolBench.recover();
@@ -521,6 +550,12 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       : undefined;
     const server = new ControlServer({
       ...(homeLocation ? { home: homeLocation } : {}),
+      // VF7b: the Settings > Tools button runs `aiboard browser install` as a Runner-internal command.
+      browserInstall: new BrowserInstallService({
+        processKernel: executionHost.internalProcesses,
+        environment: executionHost.filteredEnvironmentSource(),
+        workingDirectory: options.stateDirectory,
+      }),
       ...(modelProxy ? { modelProxy } : {}),
       localAgentsUnavailableNestedState: remoteOnly,
       remoteStatus: () => remote.current()?.status(),

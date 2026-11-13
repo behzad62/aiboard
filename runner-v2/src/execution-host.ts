@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ArtifactStore } from "./artifact-store.js";
 import type { GitCommandRunner } from "./git-runtime-runner.js";
 import { BoundedOutputSpool } from "./bounded-output-spool.js";
-import { createChildEnvironmentFactory } from "./child-environment.js";
+import { createChildEnvironmentFactory, type RunnerProcessEnvironmentResolver } from "./child-environment.js";
 import type { PermissionProfile } from "./contracts.js";
 import { createRunGitExecutionContext, type RunGitExecutionContext } from "./git-run-context.js";
 import {
@@ -22,6 +22,7 @@ import {
 } from "./execution-host-streaming.js";
 import { ManagedProcessService } from "./managed-process.js";
 import { createExecutionHostManagedRuntime } from "./execution-host-managed-transport.js";
+import type { ManagedProcessLaunchRequest, ManagedProcessRunRuntime, ManagedProcessTarget } from "./managed-process-transport.js";
 import { createWindowsJobProcessHost, type WindowsJobProcessHost, type WindowsJobSpareOptions } from "./windows-job-process-host.js";
 import {
   createBoundedProcessOutputFactory,
@@ -128,6 +129,52 @@ export interface ExecutionHostRunBindingInput {
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
   /** Trusted ancestry of the local MCP proxy, if this is its private binding. */
   readonly localMcpDepth?: number;
+  /** VF7b: Runner-set values for every process this run starts for one owner (playwright-cli.ts). */
+  readonly processEnvironment?: RunnerProcessEnvironmentResolver;
+  /** VF7b: told before and after each managed stop of this run (playwright-cli.ts's browser cleanup). */
+  readonly managedStopObserver?: ManagedProcessStopObserver;
+}
+
+/**
+ * VF7b: a run's hook around every managed stop. `beforeStop` records; it never blocks or fails the stop.
+ * `afterStop` runs once the owned process is proven stopped; a throw leaves the stop unverified (fail closed).
+ * playwright-cli.ts never throws there: a browser it cannot prove gone is recorded and blocks the run's release.
+ */
+export interface ManagedProcessStopObserver {
+  /** The Runner's own launch request, before the launch (never a model's text about it). Never blocks or fails it. */
+  launching?(identity: Readonly<ManagedProcessLaunchIdentity>): void;
+  beforeStop(target: Readonly<ManagedProcessTarget>): Promise<unknown> | unknown;
+  afterStop(target: Readonly<ManagedProcessTarget>, recorded: unknown): Promise<void>;
+}
+
+/** VF7b: who launches what, from the managed launch request itself. */
+export interface ManagedProcessLaunchIdentity {
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly processId: string;
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+/** Wraps a managed runtime's launch and stop with the observer; every other operation is the runtime's own. */
+export function observeManagedStops(runtime: ManagedProcessRunRuntime, observer: ManagedProcessStopObserver): ManagedProcessRunRuntime {
+  return Object.freeze({
+    ...runtime,
+    async start(request: ManagedProcessLaunchRequest) {
+      try {
+        observer.launching?.(Object.freeze({ runId: request.identity.runId, sessionId: request.identity.sessionId, processId: request.identity.processId,
+          command: request.command, args: Object.freeze([...request.args]) }));
+      } catch { /* the observer never blocks a launch */ }
+      return await runtime.start(request);
+    },
+    async stop(target: ManagedProcessTarget, context?: Readonly<import("./agent-contracts.js").ToolExecutionContext>, signal?: NodeJS.Signals, timeoutMs?: number) {
+      let recorded: unknown;
+      try { recorded = await observer.beforeStop(target); } catch { recorded = undefined; }
+      const snapshot = await runtime.stop(target, context, signal, timeoutMs);
+      if (snapshot.status === "stopped") await observer.afterStop(target, recorded);
+      return snapshot;
+    },
+  });
 }
 
 export interface ExecutionHostRunBindingSnapshot {
@@ -283,6 +330,8 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           capabilitiesConfig: input.capabilitiesConfig,
           ambientEnvironment,
           ...(input.localMcpDepth !== undefined ? { mcpChildDepth: input.localMcpDepth + 1 } : {}),
+          ...(input.processEnvironment ? { processEnvironment: input.processEnvironment } : {}),
+          ...(input.managedStopObserver ? { managedStopObserver: input.managedStopObserver } : {}),
           artifacts: input.artifacts ?? options.artifacts,
           managedProcesses,
           windowsJobHost,
@@ -478,6 +527,8 @@ interface CreateRunBindingInput {
   readonly capabilitiesConfig: RunnerCapabilitiesConfig;
   readonly ambientEnvironment: Readonly<Record<string, string>>;
   readonly mcpChildDepth?: number;
+  readonly processEnvironment?: RunnerProcessEnvironmentResolver;
+  readonly managedStopObserver?: ManagedProcessStopObserver;
   readonly artifacts: ArtifactStore;
   readonly managedProcesses: ManagedProcessService;
   readonly windowsJobHost: WindowsJobProcessHost;
@@ -509,6 +560,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
     });
     const childEnvironments = createChildEnvironmentFactory({
       ...(input.mcpChildDepth !== undefined ? { mcpChildDepth: input.mcpChildDepth } : {}),
+      ...(input.processEnvironment ? { processEnvironment: input.processEnvironment } : {}),
       credentialResolver: {
         consume: () => {
           throw new Error("No Runner child-environment credential grant is configured.");
@@ -784,9 +836,13 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
         }
       },
     });
-    managedRuntimeRegistration.detach = input.managedProcesses.registerRuntime(createExecutionHostManagedRuntime({
+    const managedRuntime = createExecutionHostManagedRuntime({
       run: binding, permissionProfile: input.permissionProfile, environment: input.ambientEnvironment, artifacts: input.artifacts,
-    }));
+      ...(input.processEnvironment ? { processEnvironment: input.processEnvironment } : {}),
+    });
+    managedRuntimeRegistration.detach = input.managedProcesses.registerRuntime(
+      input.managedStopObserver ? observeManagedStops(managedRuntime, input.managedStopObserver) : managedRuntime,
+    );
     constructionOwner.transfer();
     return binding;
   } catch (error) {

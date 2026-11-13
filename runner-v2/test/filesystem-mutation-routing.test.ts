@@ -58,6 +58,10 @@ const privateOwners = new Set([
   "self-update.ts", // managed install (versions, bin, staging, lock); on uninstall removes only its own marked profile block and fish file.
   "storage-key.ts", // state/storage-key via exclusive temp plus hard link.
   "toolbench-session.ts", // ToolBench session snapshots/manifests/transcripts and exclusive temporary cleanup under state/toolbench.
+  // Reviewed 2026-11-13 (docs/runner-v2/filesystem-owner-review-2026-11-13-vf7b.md): the Playwright CLI shims under
+  // state/pw/bin and the owner state folders state/pw/r-<hex>/t-<hex> (plus a POSIX <tmp>/aib-<hex> socket folder),
+  // all derived from Runner ids, never model-selected.
+  "playwright-cli.ts",
 ]);
 // Read-handle-only owners: exact reviewed mutation-capable import per module.
 // Async open owners keep ["open"]; the sync report reader keeps ["openSync"].

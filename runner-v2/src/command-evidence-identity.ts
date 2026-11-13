@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, realpath, rm } from "node:fs/promises";
 import { join, relative, isAbsolute, sep } from "node:path";
 import type { GitRunner } from "./git-repository.js";
+import { PLAYWRIGHT_CLI_OWNER_VARIABLES } from "./playwright-cli.js";
 
 export type WorkingTreeIdentity =
   | { readonly status: "known"; readonly treeId: string }
@@ -63,7 +64,12 @@ export async function fingerprintChildEnvironment(input: {
   provider?: ChildEnvironmentIdentity["provider"];
 }): Promise<ChildEnvironmentIdentity> {
   const unavailable: string[] = [];
-  const pairs = Object.entries(input.environment).map(([name, value]) => [process.platform === "win32" ? name.toUpperCase() : name, value]).sort(([a], [b]) => a!.localeCompare(b!));
+  // VF7b: the Runner's per-owner browsing names (session, state folders) differ between agent sessions and say
+  // nothing about the command's result, so they stay out of the digest and evidence still matches across owners.
+  // Exact names only (case-insensitive only where the platform's names are); the run's browser stays in.
+  const ownerScoped = new Set<string>(PLAYWRIGHT_CLI_OWNER_VARIABLES);
+  const ownerScopedName = (name: string) => ownerScoped.has(process.platform === "win32" ? name.toUpperCase() : name);
+  const pairs = Object.entries(input.environment).filter(([name]) => !ownerScopedName(name)).map(([name, value]) => [process.platform === "win32" ? name.toUpperCase() : name, value]).sort(([a], [b]) => a!.localeCompare(b!));
   const environmentDigest = createHash("sha256").update(JSON.stringify(pairs)).digest("hex");
   let runtime: ChildEnvironmentIdentity["runtime"];
   try {

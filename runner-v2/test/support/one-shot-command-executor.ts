@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { TestContext } from "node:test";
 
 import { ArtifactStore } from "../../src/artifact-store.js";
-import { createChildEnvironmentFactory } from "../../src/child-environment.js";
+import { createChildEnvironmentFactory, type RunnerProcessEnvironmentResolver } from "../../src/child-environment.js";
 import type { PermissionProfile } from "../../src/contracts.js";
 import { createExecutionGrantAuthority } from "../../src/execution-grants.js";
 import { createExecutionIsolationRegistry, createExecutionIsolationSelector } from "../../src/execution-isolation-provider.js";
@@ -47,6 +47,8 @@ export interface ProductionOneShotCommandFixtureOptions {
   readonly managedProcessStartDeadlineMs?: number;
   readonly managedProcessCleanupDeadlineMs?: number;
   readonly backendDecorator?: (backend: ProcessBackend) => ProcessBackend;
+  /** VF7b: the Runner's per-owner values (the Playwright CLI session), as runner-start wires them. */
+  readonly processEnvironment?: RunnerProcessEnvironmentResolver;
 }
 
 /** Test-scoped instance of the production grant/isolation/runtime/backend/output graph. */
@@ -60,6 +62,7 @@ export function createProductionOneShotCommandFixture(
   mkdirSync(projectBoundary);
   const environments = createChildEnvironmentFactory({
     credentialResolver: { consume: () => { throw new Error("Unexpected credential grant."); } },
+    ...(options.processEnvironment ? { processEnvironment: options.processEnvironment } : {}),
   });
   const managed = process.platform === "win32"
     ? createWindowsJobProcessHost({

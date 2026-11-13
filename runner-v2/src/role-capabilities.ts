@@ -175,7 +175,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "git.status",
     "inspect_evidence",
     "run_evidence_command",
-  ], [...LIVE_PROCESS_TOOLS, "submit_verifier_verdict"]),
+  ], [...LIVE_PROCESS_TOOLS, "list_skills", "read_skill", "submit_verifier_verdict"]),
   "verifier:expectations": surface("verifier", "expectations", "none", [
     "artifact.read",
     "fs.list",
@@ -255,7 +255,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "git.status",
     "inspect_evidence",
     "run_evidence_command",
-  ], [...LIVE_PROCESS_TOOLS, "record_deliverable_findings"]),
+  ], [...LIVE_PROCESS_TOOLS, "list_skills", "read_skill", "record_deliverable_findings"]),
   "plan-critic:inspection": surface("plan-critic", "inspection", "none", [
     "artifact.read",
     "fs.list",

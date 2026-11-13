@@ -234,6 +234,8 @@ export interface DeliveryDepthRunner {
 }
 
 export interface NativeDeliverableReviewRuntimeOptions {
+  /** VF7b: offered with the live process tools (list_skills, read_skill). */
+  skillCatalog?: import("./skill-catalog.js").SkillCatalog;
   store: SchedulerStore;
   architectRuntimeId: string;
   git?: RunGitExecutionContext;
@@ -1023,6 +1025,7 @@ export class NativeDeliverableReviewRuntime {
             ...(this.options.execution ? { execution: this.options.execution } : {}),
             ...(this.options.permissionProfile ? { permissionProfile: this.options.permissionProfile } : {}),
             ...(this.options.managedProcesses ? { managedProcesses: this.options.managedProcesses } : {}),
+            ...(this.options.skillCatalog ? { skillCatalog: this.options.skillCatalog } : {}),
           }))
         : inspection;
     }

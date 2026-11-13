@@ -660,6 +660,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         ambient: request.ambientEnvironment,
         explicitOverrides: request.explicitEnvironment,
         runId: request.intent.runId,
+        ...(request.intent.sessionId ? { sessionId: request.intent.sessionId } : {}),
         invocationId: request.intent.invocationId,
         credentialGrantId: request.credentialGrantId,
       });

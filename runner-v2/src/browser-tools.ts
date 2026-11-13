@@ -384,6 +384,18 @@ async function settlePage(page: Page): Promise<void> {
   }
 }
 
+/**
+ * VF7b (plan §4.5): a run that recorded `run.browsing_configured` browses with the Playwright CLI, so its
+ * agents get no `browser.*` tools. A run without that event (every run from before VF7b, on resume and
+ * replay alike) keeps them. The browser-tools code stays for those runs.
+ */
+export function activeBrowserBackend(
+  backend: BrowserBackend | undefined,
+  retired: (() => boolean) | undefined,
+): { browserBackend: BrowserBackend } | Record<string, never> {
+  return backend && !retired?.() ? { browserBackend: backend } : {};
+}
+
 export interface BrowserToolsOptions {
   backend: BrowserBackend;
   artifacts: ArtifactStore;

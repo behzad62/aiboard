@@ -37,6 +37,8 @@ import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
 import type { ManagedProcessService } from "./managed-process.js";
+import { createSkillTools } from "./skill-tools.js";
+import type { SkillCatalog } from "./skill-catalog.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
@@ -190,6 +192,8 @@ export interface VerifierWorkspaceProvider {
 }
 
 export interface NativeVerifierRuntimeOptions {
+  /** VF7b: offered with the live process tools (list_skills, read_skill). */
+  skillCatalog?: SkillCatalog;
   git?: RunGitExecutionContext;
   executionGrants?: ExecutionGrantAuthority;
   router: RuntimeRouter;
@@ -512,6 +516,7 @@ export class NativeVerifierRuntime {
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       ...(this.options.execution ? { execution: this.options.execution } : {}),
       ...(this.options.managedProcesses ? { managedProcesses: this.options.managedProcesses } : {}),
+      ...(this.options.skillCatalog ? { skillCatalog: this.options.skillCatalog } : {}),
       ...(durableReview && this.options.verdictAuthority
         ? {
             lifecycleTool: createSubmitVerifierVerdictTool({
@@ -933,6 +938,11 @@ export interface InspectionToolsInput {
   /** Registers process.start/poll/list/signal so the verifier can run the product live. */
   managedProcesses?: ManagedProcessService;
   /**
+   * VF7b: with the process tools, list_skills and read_skill, so a verifier that runs the product live can read
+   * the AIBoard browser skill (playwright-cli) like the workers and the Architect.
+   */
+  skillCatalog?: SkillCatalog;
+  /**
    * The evidence scope this session records into and lists by default. A deliverable review uses
    * `delivery:<task>`, which its verdict pass can inspect and cite; the generic "verifier" scope was
    * invisible to it, so a citation of the review's own command was refused (tunnel run).
@@ -981,6 +991,7 @@ export function createVerifierCommandBroker(
   broker.register(tool);
   if (input.managedProcesses) {
     for (const processTool of createManagedProcessTools(input.managedProcesses)) broker.register(processTool);
+    if (input.skillCatalog) for (const skillTool of createSkillTools(input.skillCatalog)) broker.register(skillTool);
   }
   return broker;
 }

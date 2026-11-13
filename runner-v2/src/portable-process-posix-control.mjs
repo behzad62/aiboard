@@ -101,6 +101,80 @@ export function parsePosixGroupMembers(output, groupId) {
   return sawSnapshotRow ? members : undefined;
 }
 
+/**
+ * VF7b: one process's command line, read by its PID only (Linux: /proc/<pid>/cmdline; elsewhere `ps -p`). The
+ * Playwright CLI session's browser check reads the PID Chrome wrote into the session's own profile and confirms it
+ * here; nothing lists the host's processes. Undefined when it cannot be read.
+ */
+export function readPosixProcessCommandLine(pid) {
+  if (!positivePid(pid)) return undefined;
+  if (process.platform === "linux") {
+    try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean).join(" "); }
+    catch { return undefined; }
+  }
+  const ran = spawnSync("ps", ["-ww", "-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: POSIX_CPU_INSPECTION_DEADLINE_MS, env: { ...process.env, LC_ALL: "C" } });
+  if (ran.error || ran.status !== 0 || typeof ran.stdout !== "string") return undefined;
+  const line = ran.stdout.trim();
+  return line || undefined;
+}
+
+/**
+ * VF7b: whether a process group still has a live member, by the group alone: kill(-group, 0), then, when that finds
+ * one, the zombie-aware membership snapshot this module already uses for owned groups. False only on proof of
+ * emptiness; undefined when it cannot be told (EPERM, an unreadable snapshot).
+ */
+export function posixProcessGroupAlive(groupId, confirm = true, listMembers = listOwnedPosixGroupMembers) {
+  if (!positivePid(groupId) || groupId <= 1) return undefined;
+  try { process.kill(-groupId, 0); }
+  catch (error) { return error?.code === "ESRCH" ? false : undefined; }
+  if (!confirm) return true;
+  const members = listMembers(groupId);
+  if (!Array.isArray(members)) return undefined;
+  return members.length > 0;
+}
+
+function linuxProcState(stat) {
+  const close = typeof stat === "string" ? stat.lastIndexOf(")") : -1;
+  return close < 0 ? undefined : stat.slice(close + 1).trim().split(/\s+/)[0];
+}
+
+/**
+ * VF7b: the identities of several PIDs in one bounded read (Linux: their /proc stat; elsewhere one `ps -p a,b,c`
+ * with a 2 s limit). A PID the snapshot does not show is absent, and so is a zombie (it has exited: it cannot run
+ * and only waits for its parent to reap it); an unreadable snapshot makes every one unknown.
+ */
+export function inspectPosixProcessIdentities(pids) {
+  const result = new Map();
+  const wanted = [...new Set(pids)].filter(positivePid);
+  if (wanted.length === 0) return result;
+  if (process.platform === "linux") {
+    for (const pid of wanted) {
+      let stat;
+      try { stat = readFileSync(`/proc/${pid}/stat`, "utf8"); }
+      catch (error) { result.set(pid, error?.code === "ENOENT" ? { state: "absent" } : { state: "unknown" }); continue; }
+      const value = parseLinuxProcStatIdentity(pid, stat);
+      result.set(pid, linuxProcState(stat) === "Z" ? { state: "absent" } : value ? { state: "present", value } : { state: "unknown" });
+    }
+    return result;
+  }
+  const ran = spawnSync("ps", ["-o", "pid=,pgid=,stat=,lstart=", "-p", wanted.join(",")], { encoding: "utf8", timeout: POSIX_CPU_INSPECTION_DEADLINE_MS, env: { ...process.env, LC_ALL: "C" } });
+  // ps exits 1 when a listed PID is gone; it still prints the others.
+  if (ran.error || (ran.status !== 0 && ran.status !== 1) || typeof ran.stdout !== "string") {
+    for (const pid of wanted) result.set(pid, { state: "unknown" });
+    return result;
+  }
+  const seen = new Map();
+  for (const line of ran.stdout.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/.exec(line);
+    const pid = Number(match?.[1]);
+    if (!match || !positivePid(pid)) continue;
+    const value = parsePosixPsIdentity(pid, `${match[1]} ${match[2]} ${match[4].trim()}`);
+    seen.set(pid, match[3].startsWith("Z") ? { state: "absent" } : value ? { state: "present", value } : { state: "unknown" });
+  }
+  for (const pid of wanted) result.set(pid, seen.get(pid) ?? (ran.status === 0 && seen.size === 0 ? { state: "unknown" } : { state: "absent" }));
+  return result;
+}
+
 export function reattestOwnedPosixAnchor(workloadGroup, inspect = inspectPosixProcessIdentity, listMembers = listOwnedPosixGroupMembers) {
   if (!validWorkloadGroup(workloadGroup)) return { state: "identity_mismatch" };
   const inspection = inspect(workloadGroup.leaderPid);

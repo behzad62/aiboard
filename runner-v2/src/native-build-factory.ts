@@ -95,6 +95,7 @@ import {
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
 import { createCheckToolLookup } from "./check-tool-lookup.js";
+import { isPlaywrightCliBrowser } from "./playwright-cli.js";
 import {
   collectEnvironmentInventory,
   inventoryCheckCommands,
@@ -401,6 +402,14 @@ export interface NativeBuildFactoryOptions {
    * count commands leave it off.
    */
   environmentInventory?: boolean;
+  /**
+   * VF7b: browsing through the Playwright CLI. A fresh run records it before
+   * planning and registers no browser.* tools; every process the Runner
+   * starts for one of its agent sessions gets that session's CLI variables
+   * and the playwright-cli commands on PATH, and a managed stop runs the
+   * POSIX browser check. The CLI turns it on; focused tests leave it off.
+   */
+  playwrightCli?: import("./playwright-cli.js").PlaywrightCliSessions;
   /** Injected only by focused construction-order tests. */
   providerModelFactory?: (
     config: RunnerProviderConfig,
@@ -553,6 +562,9 @@ export class NativeBuildFactory {
         permissionProfile: spec.permissionProfile,
         capabilityContract: spec.capabilityContract,
         capabilitiesConfig,
+        ...(this.options.playwrightCli
+          ? { processEnvironment: this.options.playwrightCli.environmentFor, managedStopObserver: this.options.playwrightCli.stopObserver() }
+          : {}),
       });
       if (relative(runRoot, executionHostBinding.runRoot) !== "") {
         throw new Error("ExecutionHost returned a mismatched run root.");
@@ -563,7 +575,11 @@ export class NativeBuildFactory {
         true,
       );
       ownedExecutionHostBindingCleanup = retryableNativeBuildCleanup(
-        () => executionHostBinding!.close(),
+        async () => {
+          await executionHostBinding!.close();
+          // VF7b: every owned process has stopped; the run's CLI state folders go with it.
+          await this.options.playwrightCli?.removeRun(spec.runId);
+        },
       );
       const hostRecovery = await executionHostBinding.recover({
         maxRecords: 1_024,
@@ -1285,6 +1301,7 @@ export class NativeBuildFactory {
       modelCostEstimators,
       modelCostBases,
       browserBackend: this.browserBackend,
+      ...(this.options.playwrightCli ? { browserToolsRetired: () => this.options.playwrightCli!.isEnabled(spec.runId) } : {}),
       ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
       ...(managedBuildTools ? { managedBuildTools } : {}),
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
@@ -1338,6 +1355,7 @@ export class NativeBuildFactory {
       ledger,
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       browserBackend: this.browserBackend,
+      ...(this.options.playwrightCli ? { browserToolsRetired: () => this.options.playwrightCli!.isEnabled(spec.runId) } : {}),
       ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
       ...(managedBuildTools ? { managedBuildTools } : {}),
       contextManifests,
@@ -1389,6 +1407,8 @@ export class NativeBuildFactory {
       cleanupBaseline: () => verifierBaselineWorkspace.cleanup(),
     };
     const nativeVerifier = new NativeVerifierRuntime({
+      // VF7b: the verifiers can read the AIBoard browser skill wherever they can run the product.
+      ...(this.options.playwrightCli ? { skillCatalog } : {}),
       git: gitContext,
       executionGrants,
       router: verifierRouter,
@@ -1714,6 +1734,7 @@ export class NativeBuildFactory {
       return name ? source[name] : undefined;
     };
     const nativeDeliverableReview = new NativeDeliverableReviewRuntime({
+      ...(this.options.playwrightCli ? { skillCatalog } : {}),
       store: schedulerStore,
       architectRuntimeId: spec.architectRuntimeId,
       git: gitContext,
@@ -2292,6 +2313,16 @@ export class NativeBuildFactory {
       // disposable checkout (the profile slot, never the project), looks each
       // executable up with VF2's lookup and runs its version probe as a
       // Runner-internal one-shot command.
+      ...(this.options.playwrightCli
+        ? {
+            browsing: {
+              configure: ({ cli, browser }: { cli: boolean; browser: string | null }) => {
+                if (cli) this.options.playwrightCli!.configureRun(spec.runId, { browser: isPlaywrightCliBrowser(browser) ? browser : null });
+                else this.options.playwrightCli!.forgetRun(spec.runId);
+              },
+            },
+          }
+        : {}),
       ...(this.options.environmentInventory
         ? {
             environmentInventory: async ({ trigger }) => {

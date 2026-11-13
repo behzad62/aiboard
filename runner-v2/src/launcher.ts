@@ -30,6 +30,7 @@ import { commandApprovalsMessage, promptCommandApproval } from "./remote-approva
 import { pairingRelayConfiguration } from "./remote-pairing.js";
 import { runDoctorCommand, runUninstallCommand, runUpdateCommand } from "./self-update.js";
 import { gitUnavailableNotice, type GitUnavailableCode } from "./git-preflight.js";
+import { runBrowserCommand } from "./browser-install.js";
 import { HOME_COMMANDS, parseHomeCommand, runHomeCommand, type HomeCommand, type HomeCommandName } from "./home-cli.js";
 import { formatCliError, PLAIN_STYLE, styleFor, terminalStyle, type TerminalStyle } from "./terminal-style.js";
 
@@ -207,6 +208,8 @@ export async function runLauncher(raw: string[], runtime: LauncherRuntime = {}):
   // Managed-install lifecycle (L2) never starts a Runner and has its own options.
   if (raw[0] === "update") return runUpdateCommand(raw.slice(1));
   if (raw[0] === "uninstall") return runUninstallCommand(raw.slice(1));
+  // VF7b (VD-4): the owner's own browser download; it never starts a Runner.
+  if (raw[0] === "browser") return await runBrowserCommand(raw.slice(1), runtime.write ? { write: runtime.write } : {});
   if (raw[0] === "doctor") {
     if (raw.length > 1) throw new Error("invalid_arguments: aiboard doctor takes no options.");
     return runDoctorCommand(await readRunnerVersion());
@@ -1232,6 +1235,7 @@ function help(): string {
     "       aiboard config [--json] | config set defaults.reasoningEffort <effort>",
     "       aiboard keys set <provider> [--stdin] | keys remove <provider> | keys reset [--yes]",
     "       aiboard models [--json] | models enable <provider:model> | models disable <provider:model>",
+    "       aiboard browser install  Download Playwright's Chromium for Builds that browse (Chrome or Edge is used first).",
     "  The AIBoard home (~/.aiboard, or AIBOARD_HOME) holds your settings and keys for every AI Board surface.",
     "  keys set prompts with your typing hidden, or reads one line from a pipe with --stdin; a key is never an argument.", "",
     "Runs the selected runners for the current directory in the foreground, or reuses healthy ones.",

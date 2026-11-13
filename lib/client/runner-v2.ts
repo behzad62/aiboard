@@ -84,8 +84,30 @@ export interface NativeRunnerHealth {
     home?: boolean;
     modelProxy?: boolean;
     secretlessProviderConfigs?: boolean;
+    /** VF7b: `/v2/browser` and `POST /v2/browser/install` (Settings > Tools). */
+    browserInstall?: boolean;
   };
   catalogVersion?: string;
+}
+
+/** VF7b: the browsers the Playwright CLI can use on the Runner's machine, and the owner's install. */
+export interface NativeBrowserInstallState {
+  status: "idle" | "running" | "succeeded" | "failed";
+  startedAt?: string;
+  finishedAt?: string;
+  exitCode?: number | null;
+  output: string[];
+  browsers: { id: string; installed: boolean; path?: string }[];
+  linuxLibraries?: { note: string; command: string };
+}
+
+export async function getNativeBrowserInstall(connection: NativeRunnerConnection, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<NativeBrowserInstallState> {
+  return await request(connection, "/v2/browser", { signal }, fetchImpl);
+}
+
+/** Only the owner's button calls this: a Build never downloads a browser (VD-4). */
+export async function startNativeBrowserInstall(connection: NativeRunnerConnection, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<NativeBrowserInstallState> {
+  return await request(connection, "/v2/browser/install", { method: "POST", body: "{}", signal }, fetchImpl);
 }
 
 export interface NativeProviderConfig {

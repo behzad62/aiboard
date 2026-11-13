@@ -7,6 +7,7 @@ import { CustomModelsManager } from "@/components/CustomModelsManager";
 import { CapabilityLab } from "@/components/CapabilityLab";
 import { StorageSettings } from "@/components/StorageSettings";
 import { ToolRuntimeSettingsPanel } from "@/components/ToolRuntimeSettingsPanel";
+import { BrowserInstallSettings } from "@/components/BrowserInstallSettings";
 import { ExtensionsSettings } from "@/components/extensions/ExtensionsSettings";
 import { ensureReady, saveSettings } from "@/lib/client/api";
 import { loadProviders } from "@/lib/client/settings-api";
@@ -409,6 +410,9 @@ export default function SettingsPage() {
               onOpenExtensions={() => setTab("extensions")}
             />
           </HomeGate>
+          <div className="mt-4">
+            <BrowserInstallSettings />
+          </div>
         </TabsContent>
 
         {/* ── Extensions ────────────────────────────────────────── */}

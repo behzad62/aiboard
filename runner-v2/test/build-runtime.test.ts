@@ -2542,3 +2542,66 @@ test("VF1 an inventory probe that throws is recorded as unavailable and never fa
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("VF7b a new run records Playwright CLI browsing before its first plan; a run from before keeps browser tools", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf7b-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const configured: Array<{ runId: string; cli: boolean; browser: string | null }> = [];
+  const open = (runId: string, browsing: boolean) => new BuildRuntime({
+    runId,
+    store,
+    workerDriver: { run: async () => ({ type: "failed", reason: "unused" }) },
+    architectDriver: { run: async () => {} },
+    integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+    maxConcurrency: 1,
+    workspaceFor: async () => "C:/unused",
+    clock: () => "2026-11-13T00:00:00.000Z",
+    environmentInventory: async ({ trigger }) => ({ ...vf1Inventory(trigger, "git version 2.47.1"), playwrightBrowser: "chromium" }),
+    ...(browsing ? { browsing: { configure: (input: { cli: boolean; browser: string | null }) => { configured.push({ runId, ...input }); } } } : {}),
+  });
+  try {
+    // A new run: the flag comes first, then the inventory, and the CLI is configured with its browser.
+    const fresh = open("run_vf7b_new", true);
+    await assert.rejects(() => fresh.step(), /without a typed action/i);
+    const events = store.readRun("run_vf7b_new");
+    const flag = events.find((event) => event.type === "run.browsing_configured")!;
+    assert.ok(flag, "the run records how it browses");
+    assert.deepEqual(flag.payload, { version: 1, surface: "playwright_cli" });
+    assert.deepEqual(flag.actor, { role: "runner", id: "build-runtime" });
+    assert.ok(flag.sequence < events.find((event) => event.type === "environment.inventory_recorded")!.sequence);
+    assert.deepEqual(configured.at(-1), { runId: "run_vf7b_new", cli: true, browser: "chromium" });
+    assert.deepEqual(rebuildSchedulerProjection(events).browsing, { version: 1, surface: "playwright_cli", sequence: flag.sequence });
+    // A resume keeps the flag; it is never recorded twice.
+    fresh.pause("user", "vf7b-pause");
+    await fresh.step();
+    fresh.resume("vf7b-resume");
+    await assert.rejects(() => fresh.step(), /without a typed action/i);
+    assert.equal(store.readRun("run_vf7b_new").filter((event) => event.type === "run.browsing_configured").length, 1);
+    assert.deepEqual(configured.at(-1), { runId: "run_vf7b_new", cli: true, browser: "chromium" });
+    // The reducer refuses a second flag and a flag from anyone but the build runtime.
+    assert.throws(() => store.append({
+      runId: "run_vf7b_new", type: "run.browsing_configured", occurredAt: "2026-11-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "second-flag", payload: { version: 1, surface: "playwright_cli" },
+    }), /already configured/);
+
+    // A run started by a Runner before VF7b, then resumed by this one: no flag, browser.* stay.
+    const old = open("run_vf7b_old", false);
+    await assert.rejects(() => old.step(), /without a typed action/i);
+    old.pause("user", "old-pause");
+    await old.step();
+    old.resume("old-resume");
+    const upgraded = open("run_vf7b_old", true);
+    await assert.rejects(() => upgraded.step(), /without a typed action/i);
+    const oldEvents = store.readRun("run_vf7b_old");
+    assert.equal(oldEvents.some((event) => event.type === "run.browsing_configured"), false);
+    assert.equal(rebuildSchedulerProjection(oldEvents).browsing, undefined);
+    assert.deepEqual(configured.at(-1), { runId: "run_vf7b_old", cli: false, browser: "chromium" });
+    assert.throws(() => store.append({
+      runId: "run_vf7b_old", type: "run.browsing_configured", occurredAt: "2026-11-13T00:00:00.000Z",
+      actor: { role: "user", id: "owner" }, idempotencyKey: "user-flag", payload: { version: 1, surface: "playwright_cli" },
+    }), /Only the build runtime/);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

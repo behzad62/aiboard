@@ -153,6 +153,15 @@ jobs:
           runner-v2/test/managed-process-wait.test.ts
           runner-v2/test/managed-process-wait-tracker.test.ts
           runner-v2/test/managed-interaction-native.test.ts
+      # VF7b: one browser run (the images ship Chrome; the switch fails instead of skipping if one ever does not).
+      # The kill-kind matrix runs locally and in Docker with AIBOARD_PLAYWRIGHT_EXHAUSTIVE=1, not here.
+      - name: Run VF7b Playwright CLI session contracts on POSIX hosts
+        if: runner.os != 'Windows'
+        env:
+          AIBOARD_TEST_REQUIRE_PLAYWRIGHT_BROWSER: "1"
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/playwright-cli-session.test.ts
 
   package-gate:
     name: Package parity (${{ matrix.os }}, Node ${{ matrix.node-version }}, ${{ matrix.part }})

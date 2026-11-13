@@ -9,6 +9,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { BrowserInstallService, runBrowserCommand } from "../src/browser-install.js";
 import { parseLauncherArguments, runLauncher, type RunnerKind } from "../src/launcher.js";
 import {
   assertDefaultStateOutsideProject, assertExternalState, canonicalFuturePath, projectDataDirectory, projectIdentity,
@@ -1201,4 +1202,91 @@ test("a Remote notice reaches the terminal once, before and after the Runner is 
     await running.catch(() => undefined);
     await f.cleanup();
   }
+});
+
+test("VF7b aiboard browser install is the owner's own download: help, refused arguments, and the install through Playwright's registry", async () => {
+  let output = "";
+  const write = (text: string) => { output += text; };
+  await runLauncher(["--help"], { write });
+  assert.match(output, /aiboard browser install/);
+  output = "";
+  await runLauncher(["browser", "--help"], { write });
+  assert.match(output, /^Usage: aiboard browser install/);
+  assert.match(output, /A Build never downloads a browser itself/);
+  await assert.rejects(runLauncher(["browser", "install", "--with-deps"], { write }), /invalid_arguments/);
+  await assert.rejects(runLauncher(["browser", "download"], { write }), /invalid_arguments/);
+
+  // The install itself, with a stand-in for Playwright's registry (no download in tests).
+  const root = await mkdtemp(join(tmpdir(), "aiboard-browser-install-"));
+  try {
+    const chrome = join(root, "chrome.exe");
+    const chromium = join(root, "chromium.exe");
+    await writeFile(chrome, "");
+    const installs: Array<{ executables: unknown[]; options: { force?: boolean } }> = [];
+    const registry = () => ({
+      findExecutable: (name: string) => ({
+        executablePath: () => (name === "chrome" ? chrome : name === "chromium" ? chromium : undefined),
+      }),
+      resolveBrowsers: (aliases: string[]) => aliases.map((alias) => ({ alias })),
+      install: async (executables: unknown[], options: { force?: boolean }) => {
+        installs.push({ executables, options });
+        await writeFile(chromium, "");
+      },
+    });
+    output = "";
+    await runBrowserCommand(["install"], { write, registry, platform: "linux" });
+    assert.deepEqual(installs, [{ executables: [{ alias: "chromium" }], options: { force: false } }]);
+    assert.match(output, /Google Chrome is installed already; Builds use Google Chrome first/);
+    assert.match(output, /Playwright's Chromium is installed: /);
+    assert.match(output, /needs root, so AIBoard never does it/);
+    assert.match(output, /sudo ".+" ".+cli\.js" install-deps chromium/);
+    output = "";
+    await runBrowserCommand(["install"], { write, registry, platform: "win32" });
+    assert.doesNotMatch(output, /install-deps/, "the root-only note is for Linux");
+    const failing = () => ({ ...registry(), install: async () => {} , findExecutable: () => ({ executablePath: () => join(root, "missing.exe") }) });
+    await assert.rejects(runBrowserCommand(["install"], { write, registry: failing }), /browser_install_failed/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("VF7b the Settings button runs aiboard browser install as a Runner-internal process and reports its output and result", async () => {
+  const launches: Array<{ executable: string; arguments: readonly string[]; runId: string }> = [];
+  let sink: ((metadata: { stream: string }, chunk: Uint8Array) => void) | undefined;
+  let polls = 0;
+  const service = new BrowserInstallService({
+    processKernel: {
+      launch: async (input: { executable: string; arguments: readonly string[]; runId: string }) => {
+        launches.push({ executable: input.executable, arguments: input.arguments, runId: input.runId });
+        return {
+          setOutputSink: (next: typeof sink) => { sink = next; },
+          reconcile: async () => {
+            polls += 1;
+            if (polls === 1) sink?.({ stream: "stdout" }, new TextEncoder().encode("Installing Playwright's Chromium...\n|■■   | 20% of 150 MiB\r|■■■■■| 100% of 150 MiB\n"));
+            return { state: polls >= 2 ? "exited" : "running" };
+          },
+          closeVerified: async () => ({ exitCode: 0 }),
+        };
+      },
+    } as never,
+    environment: {},
+    workingDirectory: tmpdir(),
+    platform: "linux",
+    node: "/usr/bin/node",
+    launcher: "/opt/aiboard/bin/aiboard.mjs",
+    browsers: () => [{ id: "chromium", installed: polls >= 2 }],
+  });
+  assert.equal(service.view().status, "idle");
+  const started = service.start();
+  assert.equal(started.status, "running");
+  assert.equal(service.start().status, "running", "a second press while one runs starts nothing");
+  await service.settled();
+  assert.equal(launches.length, 1);
+  assert.deepEqual(launches[0], { executable: "/usr/bin/node", arguments: ["/opt/aiboard/bin/aiboard.mjs", "browser", "install"], runId: "runner-browser-install" });
+  const done = service.view();
+  assert.equal(done.status, "succeeded");
+  assert.equal(done.exitCode, 0);
+  assert.deepEqual(done.output, ["Installing Playwright's Chromium...", "|■■■■■| 100% of 150 MiB"], "a progress bar keeps its newest line");
+  assert.deepEqual(done.browsers, [{ id: "chromium", installed: true }]);
+  assert.match(done.linuxLibraries?.command ?? "", /^sudo "\/usr\/bin\/node" ".+cli\.js" install-deps chromium$/);
 });

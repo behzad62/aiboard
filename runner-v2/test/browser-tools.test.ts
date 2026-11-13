@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import {
+  activeBrowserBackend,
   createBrowserTools,
   PlaywrightBrowserBackend,
   type BrowserBackend,
@@ -450,3 +451,11 @@ function jsonValue(result: Awaited<ReturnType<ToolBroker["invoke"]>>): unknown {
   assert.ok(block?.type === "json");
   return block.value;
 }
+
+test("VF7b a run that browses with the Playwright CLI gets no browser tools; a run from before keeps them", () => {
+  const backend = new FakeBrowserBackend();
+  assert.deepEqual(activeBrowserBackend(backend, () => true), {}, "a new run's agents use the Playwright CLI");
+  assert.deepEqual(activeBrowserBackend(backend, () => false), { browserBackend: backend }, "an old run keeps browser.*");
+  assert.deepEqual(activeBrowserBackend(backend, undefined), { browserBackend: backend });
+  assert.deepEqual(activeBrowserBackend(undefined, () => false), {});
+});
