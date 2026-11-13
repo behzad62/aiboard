@@ -154,6 +154,46 @@ test("VF7b process.run gets the Runner's per-owner values: the owner's browser s
   }
 });
 
+test("VF7b item 8: a final check's workflow step gets the task's browser session and playwright-cli first on PATH", async (t) => {
+  // final-verification-runtime.ts runSmokeStep sends each step of a `start` check through the run's command
+  // execution with this context: the run and the task as the owner, Runner-internal, the step's tool name.
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-final-step-env-"));
+  const shims = join(workspace, "..", "aiboard-final-step-env-bin");
+  const owners: Array<{ runId: string; sessionId: string }> = [];
+  const graph = createProductionOneShotCommandFixture(t, {
+    processEnvironment: (owner) => {
+      owners.push(owner);
+      return { values: { PLAYWRIGHT_CLI_SESSION: "t-0000f1a1" }, pathPrepend: [shims] };
+    },
+  });
+  try {
+    const result = await graph.execution.execute({
+      executable: process.execPath,
+      arguments: ["-e", "const path = process.env.PATH ?? process.env.Path ?? ''; console.log(JSON.stringify({ session: process.env.PLAYWRIGHT_CLI_SESSION ?? null, first: path.split(require('node:path').delimiter)[0] }))"],
+      workingDirectory: workspace,
+      timeoutMs: 25_000,
+      captureOutputBytes: 64 * 1024,
+      freshExecution: true,
+      context: {
+        runId: "run_1",
+        sessionId: "task_7",
+        actor: { role: "verifier" as const, id: "final-verification" },
+        callId: "generation-1:check-ui:step0:1",
+        toolName: "final-verification.runtime_smoke_step",
+        runnerInternal: true as const,
+      },
+    });
+    assert.deepEqual(owners.at(-1), { runId: "run_1", sessionId: "task_7" });
+    const captured = (result as { capturedOutput?: { stdout?: Uint8Array } }).capturedOutput;
+    const stdout = captured?.stdout ? Buffer.from(captured.stdout).toString("utf8") : "";
+    const line = stdout.split(/\r?\n/u).find((entry) => entry.startsWith('{"session"'));
+    assert.ok(line, stdout);
+    assert.deepEqual(JSON.parse(line), { session: "t-0000f1a1", first: shims });
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("process.run records stdout, stderr, and exit code without semantic verdicts", async (t) => {
   const workspace = mkdtempSync(join(tmpdir(), "aiboard-process-run-"));
   const broker = brokerWithProcesses(workspace, t);
