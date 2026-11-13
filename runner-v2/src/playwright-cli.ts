@@ -13,10 +13,10 @@
 //   stop, PlaywrightCliSessions checks the browser processes it can attribute to the owner exactly (PID and birth),
 //   kills the ones still alive, verifies, and fails the stop closed when one survives (spike §9.6).
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { hostname, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { RunnerProcessEnvironment } from "./child-environment.js";
@@ -25,8 +25,8 @@ import { ManagedProcessError } from "./managed-process-contracts.js";
 import type { ManagedProcessTarget } from "./managed-process-transport.js";
 import {
   inspectPosixProcessIdentities,
-  listPosixProcessCommands,
-  type PosixProcessCommandRow,
+  posixProcessGroupAlive,
+  readPosixProcessCommandLine,
   type PosixProcessIdentityInspection,
 } from "./portable-process-posix-control.mjs";
 
@@ -210,35 +210,42 @@ export function installPlaywrightCliShims(directory: string, install: Playwright
 
 // ---------------------------------------------------------------- sessions, state folders and the stop check
 
-/** The pieces of a POSIX process table this module reads. Tests inject fakes; production reads the OS. */
+/** The process reads and signals this module uses, each by PID or group only. Tests inject fakes. */
 export interface PosixProcessTable {
-  /** Every visible process, each row's group and birth read with its command line; undefined when unreadable. */
-  list(): readonly PosixProcessCommandRow[] | undefined;
-  /** The current identities of these PIDs, in one bounded read. */
+  /** The current identities of these PIDs, in one bounded read (a zombie is absent). */
   inspect(pids: readonly number[]): ReadonlyMap<number, PosixProcessIdentityInspection>;
+  /** One process's command line, by its PID. */
+  commandLine(pid: number): string | undefined;
+  /** Whether the group still has a live member: false only on proof of emptiness, undefined when unknown. */
+  groupAlive(groupId: number): boolean | undefined;
   kill(pid: number, signal: NodeJS.Signals): void;
-  /** The Runner's own effective uid; only that user's processes are ever attributed. */
-  uid(): number;
+  hostname(): string;
 }
 
 const OS_PROCESS_TABLE: PosixProcessTable = Object.freeze({
-  list: () => listPosixProcessCommands(),
   inspect: (pids: readonly number[]) => inspectPosixProcessIdentities(pids),
+  commandLine: (pid: number) => readPosixProcessCommandLine(pid),
+  groupAlive: (groupId: number) => posixProcessGroupAlive(groupId),
   kill: (pid: number, signal: NodeJS.Signals) => { process.kill(pid, signal); },
-  uid: () => (typeof process.geteuid === "function" ? process.geteuid() : -1),
+  hostname: () => hostname(),
 });
 
-/** A process whose command line named the session's state folder, by PID, group and birth from one read. */
+/**
+ * The session's browser, attributed through the session's own profile: Chrome writes `SingletonLock -> <host>-<pid>`
+ * into its user-data-dir, which Playwright creates inside the owner's state folder. The PID is confirmed by its
+ * command line naming that profile, with the same birth and group read before and after.
+ */
 export interface AttributedBrowserProcess {
   readonly pid: number;
   readonly groupId: number;
   readonly birth: string;
+  readonly profile: string;
 }
 
 export interface BrowserCleanupRecord {
   readonly runId: string;
   readonly sessionId: string;
-  /** The stopped session process, or `run` for the sweep when the run's folders are removed. */
+  /** The stopped session process, or `run` when the run's folders are removed. */
   readonly processId: string;
   readonly status: "none" | "exited" | "killed" | "unverified" | "unknown";
   readonly attributed: readonly AttributedBrowserProcess[];
@@ -267,22 +274,30 @@ interface RunBrowsing {
   readonly browser: PlaywrightCliBrowser | null;
 }
 
-type StopRecord =
-  | { readonly kind: "session"; readonly folder: string; readonly launches: number; readonly before: readonly AttributedBrowserProcess[] | undefined };
+interface StopRecord {
+  readonly kind: "session";
+  readonly folder: string;
+  readonly launches: number;
+  readonly before: readonly AttributedBrowserProcess[] | undefined;
+}
+
+type Owner = { readonly runId: string; readonly sessionId: string; readonly processId: string };
 
 /**
  * The Runner's Playwright CLI sessions. A run opts in with `configureRun` (a run that records the CLI tool surface
  * at its start); every other run gets nothing from here, so runs from before VF7b keep their environment.
  *
- * POSIX stop check (spike §9.5, §9.6). The Runner's stop proves only the managed process group, and Chrome leaves
- * it (setsid). A session process is one the Runner itself launched as `playwright-cli-session` (its own launch
- * record, never a command line a model could write). When one is stopped, the Runner records, before the stop,
- * every process of its own user whose command line names the owner's state folder as a path (Chrome's profile,
- * crashpad's database and the daemon's config all live there), each with the PID, group and birth read together
- * with that command line. After the stop it waits a short grace, kills what still matches exactly (birth checked
- * again right before the signal), verifies, records the outcome, and fails the stop closed when a process survives
- * or nothing could be read. Other processes' stops are not checked: they leave the session alone. Windows does
- * nothing here: the Job proves the whole tree.
+ * POSIX stop check (spike §9.5, §9.6; DECISION 2026-09-19 §8). The Runner's stop proves only the managed process
+ * group, and Chrome leaves it (setsid). This is that one workload's narrow exception, not an escape killer: no
+ * process table is listed, nothing is matched by name or ancestry, and only the session's own browser is signalled.
+ * A session process is one the Runner itself launched as `playwright-cli-session` (its launch record). When one is
+ * stopped, the Runner reads, before and after the stop, the browser PIDs Chrome wrote into the profiles in the
+ * owner's state folder, confirms each (command line naming that profile; birth and group unchanged around the
+ * read), waits a short grace, kills a browser that is still there through its own group while its leader is
+ * re-attested, verifies the group is empty, records the outcome, and fails the stop closed when a browser
+ * survives, cannot be re-attested, or cannot be read. Crashpad handlers leave Chrome's group too and are not
+ * attributable without listing processes; they exit with Chrome (spike §5), and this check does not claim them.
+ * Windows does nothing here: the Job proves the whole tree.
  */
 export class PlaywrightCliSessions {
   private readonly runs = new Map<string, RunBrowsing>();
@@ -292,7 +307,7 @@ export class PlaywrightCliSessions {
   private readonly now: () => number;
   private readonly cleanups: BrowserCleanupRecord[] = [];
   /** Managed process ids the Runner launched as the session command, per owner key. */
-  private readonly sessionProcesses = new Map<string, string>();
+  private readonly sessionProcesses = new Set<string>();
   /** Session launches per owner key; a change between a stop's two halves means a new session started. */
   private readonly launches = new Map<string, number>();
   private readonly socketNames = new Map<string, string>();
@@ -362,20 +377,29 @@ export class PlaywrightCliSessions {
   }
 
   /**
-   * Removes a finished run's state folders, after every managed process of the run stopped. On POSIX it first
-   * sweeps what still names the run's folder (a session that ended by itself, so no stop of it was checked) the
-   * same way as a stop, and keeps the folder when something survives.
+   * Removes a finished run's state folders, after every managed process of the run stopped. On POSIX it first runs
+   * the browser check for each owner folder (a session that ended by itself was never stopped, so never checked),
+   * and throws, keeping the folder, when a browser survives or cannot be read; the run's cleanup retries it.
    */
   async removeRun(runId: string): Promise<void> {
     const enabled = this.runs.has(runId);
     this.runs.delete(runId);
-    for (const key of [...this.sessionProcesses.keys()]) if (key.startsWith(`${runId}\0`)) this.sessionProcesses.delete(key);
+    for (const key of [...this.sessionProcesses]) if (key.startsWith(`${runId}\0`)) this.sessionProcesses.delete(key);
     const folder = this.runFolder(runId);
     if (this.platform !== "win32" && enabled && existsSync(folder)) {
-      const owner = { runId, sessionId: "run", processId: "run" };
-      let survived = true;
-      try { survived = (await this.clean(owner, folder, this.scan(folder), true)) !== "clean"; } catch { survived = true; }
-      if (survived) return;
+      const survivors: number[] = [];
+      let unknown = false;
+      for (const name of safeReaddir(folder).filter((entry) => /^t-[0-9a-f]{8}$/.test(entry))) {
+        const outcome = await this.clean({ runId, sessionId: name, processId: "run" }, join(folder, name), this.leaders(join(folder, name)), false);
+        if (outcome === "unknown") unknown = true;
+        else if (outcome !== "clean") survivors.push(...outcome);
+      }
+      if (unknown || survivors.length > 0) {
+        this.runs.set(runId, Object.freeze({ browser: null }));
+        throw new ManagedProcessError("process_cleanup_unverified", unknown
+          ? `The browser of a session of run ${runId} could not be read, so its state folder stays.`
+          : `The browser of a session of run ${runId} is still running after SIGKILL (PIDs ${survivors.join(", ")}).`);
+      }
     }
     try { rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
     catch { /* a held file on Windows; the next removal or the state directory's own cleanup takes it */ }
@@ -387,20 +411,21 @@ export class PlaywrightCliSessions {
   }
 
   /**
-   * Startup: a Runner that stopped without its own cleanup (a crash, a kill) leaves run folders behind. Each one no
-   * live process names is removed. One a live process still names is kept and reported, never killed: no PID and
-   * birth were recorded for it by this Runner (the general POSIX detached-process gap, spike §7.1). Never throws:
-   * it is cleanup, not a gate.
+   * Startup: a Runner that stopped without its own cleanup (a crash, a kill) leaves run folders behind. A folder
+   * whose sessions' profiles name no live browser is removed; one that still does, or that cannot be read, is kept
+   * and reported, never signalled (no stop of it was recorded by this Runner). Never throws: cleanup, not a gate.
    */
   reconcileStartup(): { readonly removed: readonly string[]; readonly kept: readonly string[] } {
     const root = resolve(this.options.stateRoot);
-    let entries: string[];
-    try { entries = readdirSync(root).filter((name) => /^r-[0-9a-f]{12}$/.test(name)); } catch { return { removed: [], kept: [] }; }
-    const rows = this.platform === "win32" ? [] : this.processes.list();
+    const entries = safeReaddir(root).filter((name) => /^r-[0-9a-f]{12}$/.test(name));
     const removed: string[] = [], kept: string[] = [];
     for (const name of entries) {
       const folder = join(root, name);
-      if (this.platform !== "win32" && (!rows || rows.some((row) => namesFolder(row.command, folder)))) { kept.push(folder); continue; }
+      const live = this.platform !== "win32" && safeReaddir(folder).some((owner) => {
+        const leaders = this.leaders(join(folder, owner));
+        return leaders === undefined || leaders.length > 0;
+      });
+      if (live) { kept.push(folder); continue; }
       try { rmSync(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); removed.push(folder); }
       catch { kept.push(folder); }
     }
@@ -419,81 +444,93 @@ export class PlaywrightCliSessions {
   private launching(identity: Readonly<ManagedProcessLaunchIdentity>): void {
     if (!this.runs.has(identity.runId) || identity.command !== PLAYWRIGHT_CLI_SESSION_COMMAND || identity.args.length !== 0) return;
     const key = ownerKey(identity);
-    this.sessionProcesses.set(`${key}\0${identity.processId}`, identity.processId);
+    this.sessionProcesses.add(`${key}\0${identity.processId}`);
     this.launches.set(key, (this.launches.get(key) ?? 0) + 1);
   }
 
-  private isSessionProcess(target: Readonly<ManagedProcessTarget>): boolean {
-    return this.sessionProcesses.has(`${ownerKey(target)}\0${target.processId}`);
-  }
-
-  /** Processes of the Runner's user whose command line names `folder` as a path, from one table read. */
-  private scan(folder: string): AttributedBrowserProcess[] | undefined {
-    const rows = this.processes.list();
-    if (!rows) return undefined;
-    const uid = this.processes.uid();
-    return rows
-      .filter((row) => row.uid === uid && row.pid > 1 && row.pid !== process.pid && namesFolder(row.command, folder))
-      .map((row) => Object.freeze({ pid: row.pid, groupId: row.groupId, birth: row.birth }));
+  /**
+   * The browsers Chrome recorded in the owner's profiles, each confirmed by PID: same birth and group before and
+   * after reading a command line that names that profile. A lock naming another host, a PID that is gone, or a PID
+   * now running something else is not the session's browser. Undefined when a recorded PID cannot be read.
+   */
+  private leaders(folder: string): AttributedBrowserProcess[] | undefined {
+    const host = this.processes.hostname();
+    const found: AttributedBrowserProcess[] = [];
+    let unknown = false;
+    for (const name of safeReaddir(join(folder, "tmp"))) {
+      const profile = join(folder, "tmp", name);
+      let lock: string;
+      try { lock = readlinkSync(join(profile, "SingletonLock")); } catch { continue; }
+      const match = /^(.*)-(\d+)$/.exec(lock);
+      if (!match || match[1] !== host) continue;
+      const pid = Number(match[2]);
+      if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) continue;
+      const first = this.processes.inspect([pid]).get(pid);
+      if (first?.state === "absent") continue;
+      if (first?.state !== "present") { unknown = true; continue; }
+      const command = this.processes.commandLine(pid);
+      const second = this.processes.inspect([pid]).get(pid);
+      if (second?.state === "absent") continue;
+      if (command === undefined || second?.state !== "present") { unknown = true; continue; }
+      if (second.value.birth !== first.value.birth || second.value.groupId !== first.value.groupId) continue;
+      if (!command.includes(`--user-data-dir=${profile}`)) continue;
+      found.push(Object.freeze({ pid, groupId: first.value.groupId, birth: first.value.birth, profile }));
+    }
+    return unknown ? undefined : found;
   }
 
   private beforeStop(target: Readonly<ManagedProcessTarget>): StopRecord | undefined {
-    if (this.platform === "win32" || !this.runs.has(target.runId) || !this.isSessionProcess(target)) return undefined;
+    if (this.platform === "win32" || !this.runs.has(target.runId) || !this.sessionProcesses.has(`${ownerKey(target)}\0${target.processId}`)) return undefined;
     const folder = this.ownerFolder(target);
-    return { kind: "session", folder, launches: this.launches.get(ownerKey(target)) ?? 0, before: existsSync(folder) ? this.scan(folder) : [] };
+    return { kind: "session", folder, launches: this.launches.get(ownerKey(target)) ?? 0, before: this.leaders(folder) };
   }
 
   private async afterStop(target: Readonly<ManagedProcessTarget>, recorded: unknown): Promise<void> {
     if (!recorded || typeof recorded !== "object" || (recorded as StopRecord).kind !== "session") return;
     const stop = recorded as StopRecord;
     this.sessionProcesses.delete(`${ownerKey(target)}\0${target.processId}`);
-    // A session the owner started again in the meantime names the same folder: only what was recorded before the
-    // stop is this session's, and the folder stays.
+    // A session the owner started again in the meantime writes its own profile into the same folder: only what was
+    // recorded before the stop is this session's browser, and the folder stays.
     const restarted = (this.launches.get(ownerKey(target)) ?? 0) !== stop.launches;
-    const now = restarted ? [] : this.scan(stop.folder);
-    if (stop.before === undefined && now === undefined) {
-      this.record(target, "unknown", [], [], []);
-      throw new ManagedProcessError("process_cleanup_unverified",
-        "The browser session's processes outside the owned process group could not be listed after its stop.");
-    }
+    const now = restarted ? [] : this.leaders(stop.folder);
     const all = new Map<string, AttributedBrowserProcess>();
     for (const entry of [...(stop.before ?? []), ...(now ?? [])]) all.set(`${entry.pid}:${entry.birth}`, entry);
-    const outcome = await this.clean(target, stop.folder, [...all.values()], !restarted);
+    const outcome = await this.clean(target, stop.folder, stop.before === undefined && now === undefined ? undefined : [...all.values()], !restarted);
+    if (outcome === "unknown") {
+      throw new ManagedProcessError("process_cleanup_unverified", "The browser session's browser could not be read after its stop.");
+    }
     if (outcome !== "clean") {
       throw new ManagedProcessError("process_cleanup_unverified",
-        `The browser session's processes outside the owned process group are still running after SIGKILL (PIDs ${outcome.join(", ")}).`);
+        `The browser session's browser is still running outside the owned process group after its stop (PIDs ${outcome.join(", ")}).`);
     }
   }
 
-  /** Waits, kills what still matches exactly, verifies and records. Returns "clean" or the surviving PIDs. */
-  private async clean(owner: { readonly runId: string; readonly sessionId: string; readonly processId: string }, folder: string,
-    attributed: readonly AttributedBrowserProcess[] | undefined, removeFolder: boolean): Promise<"clean" | number[]> {
+  /** Waits, kills what is still the session's browser, verifies and records. "clean", "unknown" or the survivors. */
+  private async clean(owner: Owner, folder: string, attributed: readonly AttributedBrowserProcess[] | undefined, removeFolder: boolean): Promise<"clean" | "unknown" | number[]> {
     if (attributed === undefined) {
       this.record(owner, "unknown", [], [], []);
-      return [];
+      return "unknown";
     }
     const done = (status: BrowserCleanupRecord["status"], killed: readonly number[]): "clean" => {
       this.record(owner, status, attributed, killed, []);
-      if (removeFolder) this.removeOwnerFolder(owner, folder);
+      if (removeFolder) { try { rmSync(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* removed with the run */ } }
       return "clean";
     };
     if (attributed.length === 0) return done("none", []);
     const lingering = await this.waitGone(attributed, this.options.graceMs ?? POSIX_BROWSER_EXIT_GRACE_MS);
     if (lingering.length === 0) return done("exited", []);
-    const ownGroup = this.processes.inspect([process.pid]).get(process.pid);
-    const ownGroupId = ownGroup?.state === "present" ? ownGroup.value.groupId : undefined;
+    const own = this.processes.inspect([process.pid]).get(process.pid);
+    const ownGroupId = own?.state === "present" ? own.value.groupId : undefined;
     const current = this.processes.inspect(lingering.map((entry) => entry.pid));
     const killed: number[] = [];
-    const killedGroups = new Set<number>();
     for (const entry of lingering) {
-      // Exact identity, read again right before the signal: a reused PID or a changed group is never signalled.
+      // Re-attested right before the signal: the recorded leader, same birth and group. A gone leader whose group
+      // still has members cannot be re-attested, so it is never signalled and the stop stays unverified.
       const now = current.get(entry.pid);
       if (now?.state !== "present" || now.value.birth !== entry.birth || now.value.groupId !== entry.groupId) continue;
-      if (killedGroups.has(entry.groupId)) continue; // signalled with its group leader just now
       const leadsGroup = ownGroupId !== undefined && entry.pid === entry.groupId && entry.groupId > 1 && entry.groupId !== ownGroupId;
       try {
         this.processes.kill(leadsGroup ? -entry.groupId : entry.pid, "SIGKILL");
-        if (leadsGroup) killedGroups.add(entry.groupId);
         killed.push(entry.pid);
       } catch { /* already gone */ }
     }
@@ -505,8 +542,7 @@ export class PlaywrightCliSessions {
     return done("killed", killed);
   }
 
-  private record(owner: { readonly runId: string; readonly sessionId: string; readonly processId: string }, status: BrowserCleanupRecord["status"],
-    attributed: readonly AttributedBrowserProcess[], killed: readonly number[], alive: readonly number[]): void {
+  private record(owner: Owner, status: BrowserCleanupRecord["status"], attributed: readonly AttributedBrowserProcess[], killed: readonly number[], alive: readonly number[]): void {
     const entry: BrowserCleanupRecord = Object.freeze({ runId: owner.runId, sessionId: owner.sessionId, processId: owner.processId, status,
       attributed: Object.freeze([...attributed]), killed: Object.freeze([...killed]), alive: Object.freeze([...alive]), at: new Date(this.now()).toISOString() });
     this.cleanups.push(entry);
@@ -514,29 +550,22 @@ export class PlaywrightCliSessions {
     try { this.options.onCleanup?.(entry); } catch { /* a logging failure never changes the outcome */ }
   }
 
-  /** The processes still alive with the same birth (an unreadable identity counts as alive). Bounded by `ms`. */
+  /**
+   * The browsers not yet gone: a leader still present with its birth, or (when it leads its group) a group not yet
+   * proven empty. Unreadable counts as not gone. Bounded by `ms`.
+   */
   private async waitGone(processes: readonly AttributedBrowserProcess[], ms: number): Promise<AttributedBrowserProcess[]> {
     const deadline = this.now() + ms;
     for (;;) {
       const current = this.processes.inspect(processes.map((entry) => entry.pid));
       const remaining = processes.filter((entry) => {
         const now = current.get(entry.pid);
-        return !(now?.state === "absent" || (now?.state === "present" && now.value.birth !== entry.birth));
+        const leaderGone = now?.state === "absent" || (now?.state === "present" && now.value.birth !== entry.birth);
+        if (!leaderGone) return true;
+        return entry.pid === entry.groupId ? this.processes.groupAlive(entry.groupId) !== false : false;
       });
       if (remaining.length === 0 || this.now() >= deadline) return remaining;
       await this.sleep(100);
-    }
-  }
-
-  /** Only after the session's own stop and when nothing names the folder any more. */
-  private removeOwnerFolder(owner: { readonly runId: string; readonly sessionId: string }, folder: string): void {
-    const rows = this.processes.list();
-    if (!rows || rows.some((row) => row.pid !== process.pid && namesFolder(row.command, folder))) return;
-    try { rmSync(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* removed with the run */ }
-    if (owner.sessionId === "run") return;
-    const sockets = this.socketFolder(owner);
-    if (!sockets.startsWith(`${folder}${sep}`)) {
-      try { rmSync(sockets, { recursive: true, force: true }); } catch { /* removed with the run */ }
     }
   }
 }
@@ -545,7 +574,6 @@ function ownerKey(owner: { readonly runId: string; readonly sessionId: string })
   return `${owner.runId}\0${owner.sessionId}`;
 }
 
-/** A command line names `folder` as a path: the folder followed by a separator, never a longer sibling's prefix. */
-function namesFolder(command: string, folder: string): boolean {
-  return command.includes(`${folder}${sep}`);
+function safeReaddir(folder: string): string[] {
+  try { return readdirSync(folder); } catch { return []; }
 }

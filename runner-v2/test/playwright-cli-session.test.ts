@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -44,7 +44,7 @@ import {
   type PosixProcessTable,
 } from "../src/playwright-cli.js";
 import { refusalFor, rewriteNotOpen } from "../src/playwright-cli-guard.mjs";
-import { listPosixProcessCommands } from "../src/portable-process-posix-control.mjs";
+import type { PosixProcessIdentityInspection } from "../src/portable-process-posix-control.mjs";
 import { createProcessTools, processRunSupport } from "../src/process-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { ToolBroker } from "../src/tool-broker.js";
@@ -80,7 +80,12 @@ test("a browser is installed when CI requires one", { skip: REQUIRE_BROWSER ? fa
 
 interface Row { pid: number; command: string }
 function processTable(): Row[] {
-  if (!WINDOWS) return (listPosixProcessCommands() ?? []).map((row) => ({ pid: row.pid, command: row.command }));
+  if (!WINDOWS) {
+    // The test's own census of the session's processes (the product never lists processes).
+    const out = execFileSync("ps", ["-A", "-ww", "-o", "pid=,stat=,command="], { encoding: "utf8", maxBuffer: 64 << 20 });
+    return out.split(/\r?\n/).map((line) => /^\s*(\d+)\s+(\S+)\s?(.*)$/.exec(line)).filter((m): m is RegExpExecArray => !!m && !m[2]!.startsWith("Z"))
+      .map((m) => ({ pid: Number(m[1]), command: m[3] ?? "" }));
+  }
   const script = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress";
   const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", maxBuffer: 64 << 20, windowsHide: true }).trim();
   const rows = out ? JSON.parse(out) : [];
@@ -462,29 +467,32 @@ test("the shims run the bundled CLI and daemon in the foreground: an exec-ing sh
   assert.match(cli!.content, /"C:\\AIBoard\\node\.exe" "C:\\AIBoard\\guard\.mjs" %\*/);
 });
 
-// ---------------------------------------------------------------- the POSIX post-stop check (fake process table)
+// ---------------------------------------------------------------- the POSIX post-stop check (fake processes)
 
-test("the POSIX post-stop check runs on the session's own stop, kills only exact matches of the Runner's user, and fails closed", async () => {
+test("the POSIX post-stop check reads the session's browser from its own profile, kills only that group, and fails closed", { skip: WINDOWS ? "the check is POSIX-only and its fake profiles need symlinks" : false }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pw-check-"));
   try {
-    type Proc = { pid: number; pgid: number; birth: string; uid: number; command: string; alive: boolean; immortal?: boolean };
+    type Proc = { pid: number; pgid: number; birth: string; command: string; alive: boolean; immortal?: boolean };
     const table = new Map<number, Proc>();
     const kills: string[] = [];
-    let lists = 0;
-    let listable = true;
-    const add = (proc: Omit<Proc, "alive" | "uid"> & { uid?: number }) => table.set(proc.pid, { uid: 1000, ...proc, alive: true });
+    let reads = 0;
+    let readable = true;
+    const add = (proc: Omit<Proc, "alive">) => table.set(proc.pid, { ...proc, alive: true });
     const processes: PosixProcessTable = {
-      list: () => { lists += 1; return listable ? [...table.values()].filter((p) => p.alive).map((p) => ({ pid: p.pid, groupId: p.pgid, birth: p.birth, uid: p.uid, command: p.command })) : undefined; },
-      inspect: (pids) => new Map(pids.map((pid) => {
-        if (pid === process.pid) return [pid, { state: "present", value: { pid, groupId: 4242, birth: "self" } }] as const;
+      inspect: (pids) => new Map<number, PosixProcessIdentityInspection>(pids.map((pid): [number, PosixProcessIdentityInspection] => {
+        reads += 1;
+        if (pid === process.pid) return [pid, { state: "present", value: { pid, groupId: 4242, birth: "self" } }];
+        if (!readable) return [pid, { state: "unknown" }];
         const p = table.get(pid);
-        return [pid, p?.alive ? { state: "present", value: { pid, groupId: p.pgid, birth: p.birth } } : { state: "absent" }] as const;
+        return [pid, p?.alive ? { state: "present", value: { pid, groupId: p.pgid, birth: p.birth } } : { state: "absent" }];
       })),
+      commandLine: (pid) => (table.get(pid)?.alive ? table.get(pid)!.command : undefined),
+      groupAlive: (groupId) => [...table.values()].some((p) => p.alive && p.pgid === groupId),
       kill: (pid, signal) => {
         kills.push(`${pid}:${signal}`);
         for (const p of table.values()) if ((pid < 0 ? p.pgid === -pid : p.pid === pid) && !p.immortal) p.alive = false;
       },
-      uid: () => 1000,
+      hostname: () => "box",
     };
     const records: string[] = [];
     const sessions = new PlaywrightCliSessions({ stateRoot: join(root, "pw"), binDirectory: join(root, "bin"), platform: "linux", processes,
@@ -492,7 +500,13 @@ test("the POSIX post-stop check runs on the session's own stop, kills only exact
     const owner = { runId: "run-1", sessionId: "worker-a", actor: { role: "worker" as const, id: "worker-a" } };
     sessions.configureRun(owner.runId, { browser: "chromium" });
     const folder = sessions.ownerFolder(owner);
-    await mkdir(folder, { recursive: true });
+    // Chrome's profile in the owner's folder, with the lock Chrome writes: SingletonLock -> <host>-<pid>.
+    const profile = async (name: string, lock: string) => {
+      const dir = join(folder, "tmp", name);
+      await mkdir(dir, { recursive: true });
+      await symlink(lock, join(dir, "SingletonLock"));
+      return dir;
+    };
     const observer = sessions.stopObserver();
     // In production the stop target's pid is the POSIX supervisor's, never the daemon's: the check must not depend on it.
     const target = (processId: string) => ({ ...owner, processId, pid: 99, status: "running" as const, exitCode: null, signal: null, startedAt: "", updatedAt: "", stdout: "", stderr: "" });
@@ -502,88 +516,105 @@ test("the POSIX post-stop check runs on the session's own stop, kills only exact
     launch("mp-session");
     launch("mp-dev", "npm", ["run", "dev"]);
     launch("mp-forged", "sh", ["-c", "playwright-cli-session"]);
-    add({ pid: 100, pgid: 100, birth: "b100", command: `node /app/cliDaemon.js t-1 --browser=chromium --config=${folder}${sep}cli.config.json` });
-    add({ pid: 200, pgid: 200, birth: "b200", command: `/chrome --user-data-dir=${folder}${sep}tmp/playwright_chromiumdev_profile-x --remote-debugging-pipe` });
-    add({ pid: 201, pgid: 200, birth: "b201", command: `/chrome --type=renderer --user-data-dir=${folder}${sep}tmp/p` });
-    add({ pid: 300, pgid: 299, birth: "b300", command: `/chrome_crashpad_handler --database=${folder}${sep}xdg/Crash Reports` });
+    const p1 = await profile("playwright_chromiumdev_profile-a", "box-200");
+    add({ pid: 200, pgid: 200, birth: "b200", command: `/chrome --user-data-dir=${p1} --remote-debugging-pipe` });
+    add({ pid: 201, pgid: 200, birth: "b201", command: `/chrome --type=renderer --user-data-dir=${p1}` });
     add({ pid: 400, pgid: 400, birth: "b400", command: "/usr/bin/google-chrome --user-data-dir=/home/u/.config/google-chrome" });
-    add({ pid: 410, pgid: 410, birth: "b410", command: `/chrome --user-data-dir=${folder}x${sep}tmp/p`, });
-    add({ pid: 420, pgid: 420, birth: "b420", uid: 0, command: `less ${folder}${sep}cli.config.json` });
+    // A lock from another host (a synced folder) and one whose PID now runs something else are not the session's.
+    await profile("playwright_chromiumdev_profile-b", "otherbox-400");
+    await profile("playwright_chromiumdev_profile-c", "box-400");
 
-    // A stop of anything but the session process (a dev server, a forged `sh -c`) is not checked and lists nothing.
+    // A stop of anything but the session process (a dev server, a forged `sh -c`) is not checked and reads nothing.
     await stop("mp-dev");
     await stop("mp-forged");
-    assert.equal(lists, 0, "no process listing on other processes' stops");
+    assert.equal(reads, 0, "no process is read on other processes' stops");
     assert.deepEqual(kills, []);
 
-    // The session's stop (its group dies with the daemon); Chrome and crashpad linger outside the group.
-    await stop("mp-session", () => { table.get(100)!.alive = false; });
-    assert.deepEqual(kills.sort(), ["-200:SIGKILL", "300:SIGKILL"], "Chrome's own group by its leader, crashpad by PID");
-    assert.equal(table.get(400)!.alive, true, "the user's own Chrome is never matched by name");
-    assert.equal(table.get(410)!.alive, true, "a longer sibling folder is not the owner's folder");
-    assert.equal(table.get(420)!.alive, true, "another user's process is never attributed");
+    // The session's stop (the daemon's group dies); Chrome lingers in its own group.
+    await stop("mp-session");
+    assert.deepEqual(kills, ["-200:SIGKILL"], "only the session's browser, through its own group");
+    assert.equal(table.get(201)!.alive, false);
+    assert.equal(table.get(400)!.alive, true, "the user's own Chrome is never touched");
     const last = sessions.cleanupRecords().at(-1)!;
     assert.equal(last.status, "killed");
-    assert.deepEqual([...last.killed].sort(), [200, 300]);
+    assert.deepEqual(last.attributed.map((entry) => entry.pid), [200]);
     assert.deepEqual(records, ["killed"], "every outcome reaches onCleanup");
-    table.get(410)!.alive = false; // inside the run folder, so the run's own removal would sweep it
-    table.get(420)!.alive = false; // the other user's `less` ends, so nothing names the folder any more
-    await mkdir(folder, { recursive: true });
+    assert.equal(existsSync(folder), false, "the owner's folder goes with a clean stop");
 
-    // A recorded PID reused by another program (new birth) is never signalled.
+    // The recorded PID reused by another program (new birth) between the two halves is never signalled.
     kills.length = 0;
     launch("mp-session-2");
-    add({ pid: 700, pgid: 700, birth: "b700", command: `/chrome --user-data-dir=${folder}${sep}tmp/p` });
-    await stop("mp-session-2", () => { table.set(700, { pid: 700, pgid: 700, birth: "reused", uid: 1000, command: "/bin/other", alive: true }); });
-    assert.deepEqual(kills, [], "a PID whose birth changed is not the recorded process");
+    const p2 = await profile("playwright_chromiumdev_profile-d", "box-700");
+    add({ pid: 700, pgid: 700, birth: "b700", command: `/chrome --user-data-dir=${p2}` });
+    await stop("mp-session-2", () => { table.set(700, { pid: 700, pgid: 700, birth: "reused", command: "/bin/other", alive: true }); });
+    assert.deepEqual(kills, [], "a PID whose birth changed is not the recorded browser");
 
-    // A session started again between the two halves of a stop: only what was recorded before is killed; the new
-    // session's browser and the folder stay.
+    // A session started again between the two halves: only the browser recorded before is killed; the new one and
+    // the folder stay.
     launch("mp-session-3");
-    add({ pid: 710, pgid: 710, birth: "b710", command: `/chrome --user-data-dir=${folder}${sep}tmp/old` });
-    await mkdir(folder, { recursive: true });
+    const p3 = await profile("playwright_chromiumdev_profile-e", "box-710");
+    add({ pid: 710, pgid: 710, birth: "b710", command: `/chrome --user-data-dir=${p3}` });
     await stop("mp-session-3", () => {
       launch("mp-session-4");
-      add({ pid: 720, pgid: 720, birth: "b720", command: `/chrome --user-data-dir=${folder}${sep}tmp/new` });
+      add({ pid: 720, pgid: 720, birth: "b720", command: `/chrome --user-data-dir=${p3}-new` });
     });
     assert.deepEqual(kills, ["-710:SIGKILL"]);
     assert.equal(table.get(720)!.alive, true, "the restarted session's browser is left alone");
     assert.equal(existsSync(folder), true);
     table.get(720)!.alive = false;
 
-    // Nothing could be listed before or after the stop: unknown, and the stop fails closed.
-    listable = false;
-    await assert.rejects(stop("mp-session-4"), /could not be listed/);
+    // A leader that died while its group still has a member cannot be re-attested: no signal, and the stop fails closed.
+    kills.length = 0;
+    const p4 = await profile("playwright_chromiumdev_profile-f", "box-730");
+    add({ pid: 730, pgid: 730, birth: "b730", command: `/chrome --user-data-dir=${p4}` });
+    add({ pid: 731, pgid: 730, birth: "b731", command: "/chrome --type=gpu-process" });
+    await assert.rejects(stop("mp-session-4", () => { table.get(730)!.alive = false; }), /still running outside the owned process group/);
+    assert.deepEqual(kills, [], "a group whose leader is gone is never signalled");
+    assert.equal(sessions.cleanupRecords().at(-1)!.status, "unverified");
+    table.get(731)!.alive = false;
+
+    // Nothing could be read: unknown, and the stop fails closed.
+    launch("mp-session-5");
+    const p5 = await profile("playwright_chromiumdev_profile-g", "box-740");
+    add({ pid: 740, pgid: 740, birth: "b740", command: `/chrome --user-data-dir=${p5}` });
+    readable = false;
+    await assert.rejects(stop("mp-session-5"), /could not be read/);
     assert.equal(sessions.cleanupRecords().at(-1)!.status, "unknown");
-    listable = true;
+    readable = true;
 
     // A survivor of SIGKILL leaves the stop unverified and keeps the folder.
-    launch("mp-session-5");
-    add({ pid: 800, pgid: 800, birth: "b800", command: `/chrome --user-data-dir=${folder}${sep}tmp/p`, immortal: true });
-    await assert.rejects(stop("mp-session-5"), /still running after SIGKILL/);
+    launch("mp-session-6");
+    table.get(740)!.immortal = true;
+    await assert.rejects(stop("mp-session-6"), /still running outside the owned process group/);
     assert.equal(sessions.cleanupRecords().at(-1)!.status, "unverified");
     assert.equal(existsSync(folder), true, "an unverified stop keeps the folder");
-    table.get(800)!.alive = false;
+    table.get(740)!.immortal = false;
 
-    // A session that ended by itself was never stopped: the run's removal sweeps what still names its folder.
-    add({ pid: 900, pgid: 900, birth: "b900", command: `/chrome_crashpad_handler --database=${folder}${sep}xdg/Crash Reports` });
+    // A session that ended by itself was never stopped: the run's removal checks its browser, kills it, removes the folder.
     kills.length = 0;
     await sessions.removeRun(owner.runId);
-    assert.deepEqual(kills, ["-900:SIGKILL"]);
+    assert.deepEqual(kills, ["-740:SIGKILL"]);
     assert.equal(sessions.cleanupRecords().at(-1)!.processId, "run");
     assert.equal(existsSync(sessions.runFolder(owner.runId)), false);
 
     // Windows has the Job's proof: the check does nothing there.
     const windows = new PlaywrightCliSessions({ stateRoot: join(root, "pw"), binDirectory: join(root, "bin"), platform: "win32", processes });
     windows.configureRun(owner.runId, { browser: "chrome" });
-    kills.length = 0; lists = 0;
+    kills.length = 0; reads = 0;
     const w = windows.stopObserver();
     w.launching!({ runId: owner.runId, sessionId: owner.sessionId, processId: "mp-w", command: "playwright-cli-session", args: [] });
     await w.afterStop(target("mp-w"), await w.beforeStop(target("mp-w")));
     assert.deepEqual(kills, []);
-    assert.equal(lists, 0);
+    assert.equal(reads, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the check never lists the host's processes: the control module reads one PID or one group (DECISION §8)", () => {
+  const source = readFileSync(join(process.cwd(), "runner-v2", "src", "playwright-cli.ts"), "utf8");
+  for (const forbidden of ["listPosixProcessCommands", "readdirSync(\"/proc\")", "\"-A\"", "\"-e\"", "ppid"]) {
+    assert.equal(source.includes(forbidden), false, `playwright-cli.ts must not use ${forbidden}`);
   }
 });
 
@@ -616,14 +647,4 @@ test("the output folder never lands in a task commit: the Runner's git add -A ta
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
-
-test("the POSIX process table reads birth with the command line, leaves zombies out, and matches inspect's birth", async () => {
-  const { parsePosixPsCommands, parsePosixPsIdentity } = await import("../src/portable-process-posix-control.mjs");
-  const rows = parsePosixPsCommands("  501   501   501 Ss   Thu Nov  3 10:00:00 2026 /bin/zsh -l\n  777   700   501 Z    Thu Nov 13 10:00:00 2026 (chrome)\n");
-  assert.deepEqual(rows, [{ pid: 501, groupId: 501, uid: 501, birth: "Thu Nov  3 10:00:00 2026", command: "/bin/zsh -l" }]);
-  assert.equal(parsePosixPsIdentity(501, "  501   501 Thu Nov  3 10:00:00 2026")?.birth, rows![0]!.birth, "the same fingerprint as the stop check's re-read");
-  assert.deepEqual(parsePosixPsCommands("  777   700   501 Z    Thu Nov 13 10:00:00 2026 (chrome)\n"), [], "only zombies: an empty table, not an unreadable one");
-  assert.equal(parsePosixPsCommands(""), undefined);
-  assert.equal(parsePosixPsCommands("garbage"), undefined);
 });

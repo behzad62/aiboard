@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -148,35 +148,39 @@ function reconciler(name: string, events: string[], covers: readonly ("processes
   };
 }
 
-test("VF7b startup removes the Playwright CLI state a crashed Runner left, keeps a folder a live process still names, and never throws", () => {
+test("VF7b startup removes the Playwright CLI state a crashed Runner left, keeps a folder whose browser still runs, and never throws", { skip: process.platform === "win32" ? "profiles are read through Chrome's SingletonLock symlink (POSIX)" : false }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-pw-reconcile-"));
   try {
     const stale = join(root, "r-aaaaaaaaaaaa");
     const live = join(root, "r-bbbbbbbbbbbb");
     const other = join(root, "bin");
-    for (const folder of [join(stale, "t-00000001", "tmp"), join(live, "t-00000002", "tmp"), other]) mkdirSync(folder, { recursive: true });
-    let rows: Array<{ pid: number; groupId: number; birth: string; uid: number; command: string }> | undefined = [
-      { pid: 41, groupId: 41, birth: "b41", uid: 1000, command: `/usr/bin/chrome --user-data-dir=${join(live, "t-00000002", "tmp", "profile")}` },
-    ];
+    const staleProfile = join(stale, "t-00000001", "tmp", "playwright_chromiumdev_profile-x");
+    const liveProfile = join(live, "t-00000002", "tmp", "playwright_chromiumdev_profile-y");
+    for (const folder of [staleProfile, liveProfile, other]) mkdirSync(folder, { recursive: true });
+    symlinkSync("box-40", join(staleProfile, "SingletonLock"));
+    symlinkSync("box-41", join(liveProfile, "SingletonLock"));
+    let readable = true;
     const sessions = (platform: NodeJS.Platform) => new PlaywrightCliSessions({
       stateRoot: root,
       binDirectory: other,
       platform,
       processes: {
-        list: () => rows,
-        inspect: () => { throw new Error("startup does not signal"); },
+        inspect: (pids) => new Map(pids.map((pid) => [pid, !readable ? { state: "unknown" as const } : pid === 41
+          ? { state: "present" as const, value: { pid, groupId: 41, birth: "b41" } } : { state: "absent" as const }])),
+        commandLine: (pid) => (pid === 41 ? `/usr/bin/chrome --user-data-dir=${liveProfile}` : undefined),
+        groupAlive: () => { throw new Error("startup does not signal"); },
         kill: () => { throw new Error("startup does not signal"); },
-        uid: () => 1000,
+        hostname: () => "box",
       },
     });
     const result = sessions("linux").reconcileStartup();
     assert.deepEqual(result.removed, [stale]);
     assert.deepEqual(result.kept, [live]);
     assert.equal(existsSync(stale), false);
-    assert.equal(existsSync(live), true, "a live process still names it");
+    assert.equal(existsSync(live), true, "its browser still runs");
     assert.equal(existsSync(other), true, "only the Runner's own r-<hex> run folders are touched");
-    // A process table that cannot be read keeps every folder.
-    rows = undefined;
+    // A browser that cannot be read keeps its folder.
+    readable = false;
     assert.deepEqual(sessions("linux").reconcileStartup(), { removed: [], kept: [live] });
     // A missing state root is nothing to do.
     assert.deepEqual(new PlaywrightCliSessions({ stateRoot: join(root, "absent"), binDirectory: other }).reconcileStartup(), { removed: [], kept: [] });

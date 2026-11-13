@@ -15,15 +15,8 @@ export type PosixAnchorAttestation =
   | { readonly state: "ready"; readonly members: readonly number[] }
   | { readonly state: "identity_mismatch" | "outcome_unknown" };
 
-export interface PosixProcessCommandRow {
-  readonly pid: number;
-  readonly groupId: number;
-  readonly birth: string;
-  readonly uid: number;
-  readonly command: string;
-}
-export function listPosixProcessCommands(): readonly PosixProcessCommandRow[] | undefined;
-export function parsePosixPsCommands(output: string): readonly PosixProcessCommandRow[] | undefined;
+export function readPosixProcessCommandLine(pid: number): string | undefined;
+export function posixProcessGroupAlive(groupId: number, listMembers?: (groupId: number) => readonly number[] | undefined): boolean | undefined;
 export function inspectPosixProcessIdentities(pids: readonly number[]): Map<number, PosixProcessIdentityInspection>;
 export function parseLinuxProcStatIdentity(pid: number, stat: string): PosixProcessIdentity | undefined;
 export function inspectPosixProcessIdentity(pid: number): PosixProcessIdentityInspection;
