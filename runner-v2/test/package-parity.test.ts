@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
 
@@ -11,6 +11,21 @@ const runnerRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(runnerRoot, "..");
 const publisher = join(repoRoot, "scripts", "publish-downloads.mjs");
 const expectedEngine = ">=24.0.0 <25";
+
+// One publish serves every test here that only reads the published archives (a publish takes about 30 s on a
+// hosted Windows runner). The reproducibility test still makes a second, separate publish and compares the two.
+let sharedPublish: string | undefined;
+after(() => {
+  if (sharedPublish !== undefined) rmSync(sharedPublish, { recursive: true, force: true });
+});
+function publishedArchives(): string {
+  if (sharedPublish === undefined) {
+    const temp = mkdtempSync(join(tmpdir(), "aiboard-runner-package-parity-"));
+    sharedPublish = temp;
+    execFileSync(process.execPath, [publisher, "--output-dir", temp], { cwd: repoRoot, stdio: "pipe" });
+  }
+  return sharedPublish;
+}
 
 test("account-provider publishing stays dependency-isolated from Runner V2 optional dependencies", () => {
   const source = readFileSync(publisher, "utf8");
@@ -21,26 +36,19 @@ test("account-provider publishing stays dependency-isolated from Runner V2 optio
   assert.doesNotMatch(section, /runnerPackage\.optionalDependencies/);
 });
 test("published Runner normalizes script line endings for cross-platform reproducibility", async () => {
-  const temp = mkdtempSync(join(tmpdir(), "aiboard-runner-line-endings-"));
-  try {
-    execFileSync(process.execPath, [publisher, "--output-dir", temp], { cwd: repoRoot, stdio: "pipe" });
-    const zip = await JSZip.loadAsync(readFileSync(join(temp, "aiboard-runner-v2.zip")));
-    const archived = await required(zip, "src/managed-process-supervisor.mjs").async("string");
-    const source = readFileSync(join(runnerRoot, "src", "managed-process-supervisor.mjs"), "utf8")
-      .replaceAll("\r\n", "\n")
-      .replaceAll("\r", "\n");
-    assert.equal(archived, source);
-    assert.doesNotMatch(archived, /\r/);
-  } finally {
-    rmSync(temp, { recursive: true, force: true });
-  }
+  const zip = await JSZip.loadAsync(readFileSync(join(publishedArchives(), "aiboard-runner-v2.zip")));
+  const archived = await required(zip, "src/managed-process-supervisor.mjs").async("string");
+  const source = readFileSync(join(runnerRoot, "src", "managed-process-supervisor.mjs"), "utf8")
+    .replaceAll("\r\n", "\n")
+    .replaceAll("\r", "\n");
+  assert.equal(archived, source);
+  assert.doesNotMatch(archived, /\r/);
 });
 test("published Runner archives are byte-for-byte reproducible", () => {
   const temp = mkdtempSync(join(tmpdir(), "aiboard-runner-reproducible-"));
   try {
-    const first = join(temp, "first");
+    const first = publishedArchives();
     const second = join(temp, "second");
-    execFileSync(process.execPath, [publisher, "--output-dir", first], { cwd: repoRoot, stdio: "pipe" });
     execFileSync(process.execPath, [publisher, "--output-dir", second], { cwd: repoRoot, stdio: "pipe" });
     const archives = readdirSync(first).filter((name) => name.endsWith(".zip")).sort();
     assert.deepEqual(archives, [
@@ -60,12 +68,11 @@ test("published Runner archives are byte-for-byte reproducible", () => {
 });
 test("cross-host package hash verifier rejects a mismatched host archive", () => {
   const temp = mkdtempSync(join(tmpdir(), "aiboard-runner-cross-host-hashes-"));
-  const archiveDir = join(temp, "archives");
+  const archiveDir = publishedArchives();
   const reportsDir = join(temp, "reports");
   const hashTool = join(repoRoot, "scripts", "runner-v2-package-hashes.mjs");
   try {
     mkdirSync(reportsDir, { recursive: true });
-    execFileSync(process.execPath, [publisher, "--output-dir", archiveDir], { cwd: repoRoot, stdio: "pipe" });
     for (const label of ["windows-latest", "ubuntu-latest", "macos-latest"]) {
       execFileSync(process.execPath, [hashTool, "write", "--input-dir", archiveDir, "--output", join(reportsDir, `${label}.json`), "--label", label], { cwd: repoRoot, stdio: "pipe" });
     }
@@ -83,10 +90,8 @@ test("cross-host package hash verifier rejects a mismatched host archive", () =>
   }
 });
 test("published Runner archive contains the complete runtime and preserves installed package contracts", async () => {
-  const temp = mkdtempSync(join(tmpdir(), "aiboard-runner-package-parity-"));
-  try {
-    execFileSync(process.execPath, [publisher, "--output-dir", temp], { cwd: repoRoot, stdio: "pipe" });
-    const zip = await JSZip.loadAsync(readFileSync(join(temp, "aiboard-runner-v2.zip")));
+  {
+    const zip = await JSZip.loadAsync(readFileSync(join(publishedArchives(), "aiboard-runner-v2.zip")));
     const packaged = JSON.parse(await required(zip, "package.json").async("string")) as {
       engines?: { node?: string };
       optionalDependencies?: Record<string, string>;
@@ -106,8 +111,6 @@ test("published Runner archive contains the complete runtime and preserves insta
     assert.deepEqual(actualFiles.filter((name) => name.startsWith("bin/")), expectedBin);
     assert.deepEqual(actualFiles.filter((name) => name.startsWith("skills/")), expectedSkills);
     assert.equal(actualFiles.some((name) => name.startsWith("test/") || name.startsWith(".github/") || name.startsWith(".superpowers/")), false);
-  } finally {
-    rmSync(temp, { recursive: true, force: true });
   }
 });
 

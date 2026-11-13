@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -241,6 +241,81 @@ test("package parity remains cross-host and reproducible on Node 24", () => {
   assert.match(crossHost, /actions\/download-artifact@v8/);
   assert.match(crossHost, /runner-v2-package-hashes\.mjs\s+compare/);
 });
+
+test("the pull_request path filter skips docs-only and web-only changes but never a file a portable test reads", () => {
+  const source = readFileSync(workflowPath, "utf8");
+  const patterns = pullRequestPaths(source);
+  assert.ok(patterns.length > 0, "The pull_request trigger lists its paths.");
+  const runs = (file: string) => patterns.reduce((included, pattern) =>
+    pattern.startsWith("!") ? (globMatches(pattern.slice(1), file) ? false : included) : (globMatches(pattern, file) ? true : included), false);
+
+  for (const file of ["runner-v2/src/build-runtime.ts", "runner-v2/test/package-parity.test.ts", "runner-v2/skills/tdd/SKILL.md",
+    "runner-v2/MCP.md", "package.json", "package-lock.json", "scripts/publish-downloads.mjs", "public/aiboard-runner-v2.zip",
+    "release/channel.json", ".github/workflows/runner-v2-portable-execution.yml", ".github/workflows/runner-v2-qualification.yml"]) {
+    assert.equal(runs(file), true, `A pull request that changes ${file} must run the portable workflow.`);
+  }
+  for (const file of ["docs/plans/plan.md", "README.md", "AGENTS.md", "app/page.tsx", "components/DashboardPage.tsx",
+    "lib/client/engine.ts", "tests/e2e/catalog-model-metadata.spec.ts", ".github/workflows/benchmark-tests.yml"]) {
+    assert.equal(runs(file), false, `A pull request that only changes ${file} should skip the portable workflow.`);
+  }
+
+  // Every repository file outside runner-v2 that a workflow test or script names by a relative path (../../x), by
+  // join(repoRoot | runnerRoot, ...), or as a published legal file, must be one this filter runs for.
+  const readers = [...new Set(source.match(/(?:runner-v2\/test|scripts)\/[A-Za-z0-9_./-]+\.(?:test\.ts|mts|mjs)/g) ?? [])];
+  const inputs = new Set<string>();
+  for (const reader of readers) {
+    const text = readFileSync(join(repoRoot, reader), "utf8");
+    const base = dirname(join(repoRoot, reader));
+    for (const match of text.matchAll(/["'`]((?:\.\.\/)+[A-Za-z0-9_][^"'`$]*)["'`]/g)) inputs.add(relativeToRepo(join(base, match[1]!)));
+    const rootNames = reader.startsWith("scripts/") ? "repoRoot|root" : "repoRoot|runnerRoot";
+    for (const match of text.matchAll(new RegExp(`join\\((${rootNames})((?:,\\s*"[^"]+")+)\\)`, "g"))) {
+      const parts = [...match[2]!.matchAll(/"([^"]+)"/g)].map((part) => part[1]!);
+      inputs.add(relativeToRepo(join(match[1] === "runnerRoot" ? join(repoRoot, "runner-v2") : repoRoot, ...parts)));
+    }
+    for (const match of text.matchAll(/legalFile of \[([^\]]+)\]/g)) {
+      for (const name of match[1]!.matchAll(/"([^"]+)"/g)) inputs.add(name[1]!);
+    }
+  }
+  const checked = [...inputs].filter((file) => !file.startsWith("..") && existsSync(join(repoRoot, file)));
+  assert.ok(checked.includes("lib/db/schema.ts") && checked.includes("TRADEMARKS.md"), `The input scan found ${JSON.stringify(checked)}.`);
+  for (const file of checked) {
+    assert.equal(runs(file), true, `A portable test or the publisher reads ${file}; add it after the exclusions in the pull_request paths.`);
+  }
+});
+
+function pullRequestPaths(source: string): string[] {
+  const lines = source.split(/\r?\n/);
+  const trigger = lines.findIndex((line) => line === "  pull_request:");
+  assert.notEqual(trigger, -1, "Missing the pull_request trigger.");
+  const paths = lines.findIndex((line, index) => index > trigger && line === "    paths:");
+  const patterns: string[] = [];
+  for (let index = paths + 1; paths !== -1 && index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (/^\s*#/.test(line)) continue;
+    const entry = line.match(/^      - "([^"]+)"$/);
+    if (!entry) break;
+    patterns.push(entry[1]!);
+  }
+  return patterns;
+}
+
+/** GitHub's path filter globs: `*` stays inside one folder, `**` crosses folders, `**\/` may match no folder. */
+function globMatches(glob: string, file: string): boolean {
+  let pattern = "";
+  for (let index = 0; index < glob.length; index += 1) {
+    const char = glob[index]!;
+    if (char === "*" && glob[index + 1] === "*") {
+      if (glob[index + 2] === "/") { pattern += "(?:.*/)?"; index += 2; } else { pattern += ".*"; index += 1; }
+    } else if (char === "*") pattern += "[^/]*";
+    else if (char === "?") pattern += "[^/]";
+    else pattern += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${pattern}$`).test(file);
+}
+
+function relativeToRepo(path: string): string {
+  return relative(repoRoot, path).replaceAll("\\", "/");
+}
 
 function jobBlock(source: string, name: string): string {
   const lines = source.split(/\r?\n/);

@@ -42,12 +42,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Setup Node (release builder pin)
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: 24.18.0
-          cache: npm
+      # node_modules exactly as npm ci left it, keyed by OS, CPU, Node version and lockfile. npm ci runs only when
+      # no saved copy matches, and its result is saved before any check runs.
+      - name: Restore installed dependencies
+        id: deps
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
         run: npm ci
+      - name: Save installed dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules
+          key: ${{ steps.deps.outputs.cache-primary-key }}
       - name: Every shipped import is shipped
         run: node node_modules/tsx/dist/cli.mjs scripts/release/test-bundle-closure.mts
       - name: The Runner's model catalog snapshot is current

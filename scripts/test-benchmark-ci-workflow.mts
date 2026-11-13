@@ -1,6 +1,7 @@
 /* Benchmark CI workflow checks (run: npx tsx scripts/test-benchmark-ci-workflow.mts) */
 import { readFileSync } from "node:fs";
 import { existsSync } from "node:fs";
+import { assignShards, expandScript } from "./ci-npm-script-shard.mjs";
 
 let failures = 0;
 
@@ -45,7 +46,7 @@ check(
 for (const expected of [
   "npm ci",
   "npm run publish-downloads",
-  "npm run test:benchmark",
+  "scripts/ci-npm-script-shard.mjs test:benchmark --shard",
   "npm run test:benchmark:rjs-qualification",
   "npm run build",
   "actions/upload-artifact",
@@ -65,8 +66,20 @@ check(
 
 check("benchmark CI skips Runner-only changes on pull requests and main pushes, and runs nightly to catch what they break",
   workflow.split('- "runner-v2/**"').length === 3 && /schedule:\s+- cron:/.test(workflow));
-check("benchmark CI runs the suite and the qualification half in parallel jobs",
-  workflow.includes("part: [suite, qualification]") && /if: matrix\.part == 'suite'[\s\S]*npm run test:benchmark 2>&1/.test(workflow));
+const parts = workflow.match(/part: \[([^\]]*)\]/)?.[1]?.split(",").map((part) => part.trim()) ?? [];
+const suiteShards = parts.filter((part) => part.startsWith("suite-"));
+const shardCount = Number(workflow.match(/--shard "\$\{SHARD#suite-\}\/(\d+)"/)?.[1]);
+check("benchmark CI runs the suite shards and the qualification half in parallel jobs",
+  parts.includes("qualification") && suiteShards.length > 1 && shardCount === suiteShards.length &&
+    suiteShards.every((part, index) => part === `suite-${index + 1}`) &&
+    /if: startsWith\(matrix\.part, 'suite-'\)[\s\S]*ci-npm-script-shard\.mjs test:benchmark --shard[^\n]*2>&1/.test(workflow),
+  { parts, shardCount });
+const benchmarkCommands = expandScript(JSON.parse(readFileSync("package.json", "utf8")).scripts, "test:benchmark");
+const sharded = assignShards(benchmarkCommands, shardCount).flatMap((shard) => shard.commands);
+check("the suite shards together run every test:benchmark command exactly once",
+  benchmarkCommands.length > 50 && sharded.length === benchmarkCommands.length &&
+    benchmarkCommands.every((entry) => sharded.filter((other) => other === entry).length === 1),
+  { commands: benchmarkCommands.length, sharded: sharded.length });
 check("benchmark CI publishes the downloads once per job, not again through the prebuild hook",
   workflow.includes("npm run build --ignore-scripts"));
 check("benchmark CI installs Linux system packages for the browser, never Windows Server features",

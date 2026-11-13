@@ -24,6 +24,11 @@ on:
     - cron: "41 2 * * *"
   workflow_dispatch:
 
+# A newer push to the same pull request cancels the run it replaces; other runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   benchmark:
     name: Certified benchmark checks (${{ matrix.os }}, ${{ matrix.part }})
@@ -34,26 +39,45 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         node-version: [24.18.0]
-        # Two halves run in parallel: suite is npm run test:benchmark; qualification is the RJS qualification, the site
-        # build and the native browser profile. One job did both in about 14 minutes on Windows.
-        part: [suite, qualification]
+        # These run in parallel. suite-1..3 together run npm run test:benchmark: scripts/ci-npm-script-shard.mjs gives
+        # each of its commands to exactly one shard (the RJS bundle test, about 2.5 minutes, gets one to itself).
+        # qualification is the RJS qualification, the site build and the native browser profile.
+        part: [suite-1, suite-2, suite-3, qualification]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Setup Node
+        id: node
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
 
       - name: Acquire pinned Recoverable Job Service Runner source
         shell: bash
         run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
 
+      # node_modules exactly as npm ci left it, keyed by OS, CPU, Node version and lockfile. npm ci runs only when
+      # no saved copy matches, and its result is saved before any test runs.
+      - name: Restore installed dependencies
+        id: deps
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
         run: npm ci
+
+      - name: Save installed dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules
+          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Read the Playwright version
         id: playwright
@@ -74,14 +98,16 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi
 
-      - name: Run benchmark suite
-        if: matrix.part == 'suite'
+      - name: Run benchmark suite shard
+        if: startsWith(matrix.part, 'suite-')
         shell: bash
+        env:
+          SHARD: ${{ matrix.part }}
         run: |
           set -o pipefail
           mkdir -p benchmark-results
           npm run publish-downloads 2>&1 | tee benchmark-results/publish-downloads.log
-          npm run test:benchmark 2>&1 | tee benchmark-results/test-benchmark.log
+          node scripts/ci-npm-script-shard.mjs test:benchmark --shard "${SHARD#suite-}/3" 2>&1 | tee benchmark-results/test-benchmark.log
 
       - name: Run RJS qualification and build
         if: matrix.part == 'qualification'
