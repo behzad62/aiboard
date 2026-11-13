@@ -39,10 +39,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         node-version: [24.18.0]
-        # These run in parallel. suite-1..3 together run npm run test:benchmark: scripts/ci-npm-script-shard.mjs gives
-        # each of its commands to exactly one shard (the RJS bundle test, about 2.5 minutes, gets one to itself).
-        # qualification is the RJS qualification, the site build and the native browser profile.
+        # These run in parallel. On Windows suite-1..3 together run npm run test:benchmark: scripts/ci-npm-script-shard.mjs
+        # gives each of its commands to exactly one shard (the RJS bundle test, about 2.5 minutes there, gets one to
+        # itself). Ubuntu is fast enough to run the whole suite as one shard (suite-1 of 1). qualification is the RJS
+        # qualification, the site build and the native browser profile.
         part: [suite-1, suite-2, suite-3, qualification]
+        exclude:
+          - os: ubuntu-latest
+            part: suite-2
+          - os: ubuntu-latest
+            part: suite-3
 
     steps:
       - name: Checkout
@@ -103,11 +109,12 @@ jobs:
         shell: bash
         env:
           SHARD: ${{ matrix.part }}
+          SHARD_COUNT: ${{ runner.os == 'Windows' && '3' || '1' }}
         run: |
           set -o pipefail
           mkdir -p benchmark-results
           npm run publish-downloads 2>&1 | tee benchmark-results/publish-downloads.log
-          node scripts/ci-npm-script-shard.mjs test:benchmark --shard "${SHARD#suite-}/3" 2>&1 | tee benchmark-results/test-benchmark.log
+          node scripts/ci-npm-script-shard.mjs test:benchmark --shard "${SHARD#suite-}/${SHARD_COUNT}" 2>&1 | tee benchmark-results/test-benchmark.log
 
       - name: Run RJS qualification and build
         if: matrix.part == 'qualification'
