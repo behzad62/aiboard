@@ -89,7 +89,9 @@ test("evidence family production graph scrubs inherited secrets and survives out
   const secretName = "RUNNER_MATRIX_INHERITED_SECRET";
   const previous = process.env[secretName];
   process.env[secretName] = "must-not-reach-evidence-child";
-  const graph = createProductionOneShotCommandFixture(t, { artifacts });
+  // Beyond the spill cap is what matters, not the production cap's 64 MiB: the POSIX portable channel moves
+  // output at about 1 MiB/s (16 KiB chunks, one fenced ack each), so 65 MiB could not finish inside the deadline there.
+  const graph = createProductionOneShotCommandFixture(t, { artifacts, spillBytes: 64 * 1024 });
   let observedCommandTimeoutMs: number | undefined;
   const guardedExecution = {
     execute: async (request: Parameters<typeof graph.execution.execute>[0]) => {
@@ -107,7 +109,7 @@ test("evidence family production graph scrubs inherited secrets and survives out
       type: "tool_call", callId: "evidence-production-large", name: "run_evidence_command",
       arguments: {
         label: "large", command: process.execPath, timeoutMs: 25_000,
-        args: ["-e", `const marker=String(process.env.${secretName} ?? "absent"); process.stdout.write(marker+"|"); process.stdout.write("x".repeat(65*1024*1024)); process.stdout.write("|"+marker);`],
+        args: ["-e", `const marker=String(process.env.${secretName} ?? "absent"); process.stdout.write(marker+"|"); process.stdout.write("x".repeat(512*1024)); process.stdout.write("|"+marker);`],
       },
     }, { runId: "run_1", sessionId: "worker_session", actor: { role: "worker", id: "worker_1" } });
     assert.equal(result.isError, false, result.error?.message ?? "evidence command unexpectedly failed");

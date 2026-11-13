@@ -892,7 +892,6 @@ test("a verifier call cancelled by a pause the owner already resumed retries, ne
   const fixture = createFixture("runtime-pause-resumed-during-verifier");
   let calls = 0;
   try {
-    let runtime!: ReturnType<typeof createRuntime>;
     const verifier: IndependentVerifierDriver = {
       candidateRuntimeIds: ["google:verifier"],
       assessRisk: async () => highRiskInput(),
@@ -905,7 +904,7 @@ test("a verifier call cancelled by a pause the owner already resumed retries, ne
         return { status: "suspended", reason: "cancelled", runtimeId: "google:verifier" };
       },
     };
-    runtime = createRuntime(fixture.store, verifier, async () => {
+    const runtime = createRuntime(fixture.store, verifier, async () => {
       assert.fail("Completion must not run without a verdict.");
     });
 

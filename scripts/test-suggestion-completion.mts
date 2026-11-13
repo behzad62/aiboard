@@ -48,7 +48,7 @@ assert.equal(
 );
 
 assert.equal(PROVIDER_DEFINITIONS.chatgpt.baseURLField?.suggestedValue, "http://127.0.0.1:1455");
-assert.equal(PROVIDER_DEFINITIONS.chatgpt.modelIdsField?.suggestedValue, "gpt-5.7");
+assert.equal(PROVIDER_DEFINITIONS.chatgpt.modelIdsField?.suggestedValue, "gpt-6.1-sol");
 assert.equal(PROVIDER_DEFINITIONS.foundry.baseURLField?.suggestedValue, undefined);
 
 const formSource = fs.readFileSync("components/ApiKeyForm.tsx", "utf8");

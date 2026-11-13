@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { withCompletedResultSetFixtures } from "../../scripts/benchmark-result-set-test-fixtures";
 import type {
   BenchmarkAttemptV2,
@@ -163,6 +163,7 @@ test("imported snapshot history supports real keyboard, pagination, profile, and
 
   await page.reload();
   await page.getByRole("tab", { name: "Results" }).click();
+  await showToolBench(page);
   await expect(page.getByText("History Model", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("max 4,096 tokens").first()).toBeVisible();
   await expect(page.getByText(/case-v3/).first()).toBeVisible();
@@ -278,6 +279,7 @@ test("deleting a sole latest snapshot does not claim predecessor promotion", asy
   await expect(page.getByText(/Imported \d+ run\(s\)/)).toBeVisible();
   await page.reload();
   await page.getByRole("tab", { name: "Results" }).click();
+  await showToolBench(page);
 
   let dialogCount = 0;
   page.on("dialog", async (dialog) => {
@@ -301,6 +303,11 @@ test("deleting a sole latest snapshot does not claim predecessor promotion", asy
   ).toHaveCount(0);
   expect(dialogCount).toBe(1);
 });
+
+// The leaderboard opens on HarnessBench (959805e6); these fixtures are ToolBench results.
+async function showToolBench(page: Page): Promise<void> {
+  await page.getByRole("combobox", { name: "Track" }).selectOption({ label: "ToolBench — native tools" });
+}
 
 function visible(locator: Locator): Locator {
   return locator.filter({ visible: true }).first();

@@ -137,36 +137,29 @@ const calibrationBundle: BenchmarkReportBundleV2 = {
   resultSets: calibrationFixture.resultSets,
 };
 
-test("Recoverable Job Service pack exposes its exact public scope and readiness gate", async ({
+// Recoverable Job Service runs as the HarnessBench preset since 959805e6; 516c7b6e removed the Advanced
+// single-pack picker this test used to open.
+test("Recoverable Job Service runs as the HarnessBench preset behind its readiness gate", async ({
   page,
 }) => {
   await page.goto("/benchmark");
   await page.getByRole("tab", { name: "Run" }).click();
-  await page.getByText("Advanced: run a single suite or pack", { exact: true }).click();
 
-  await page.getByRole("combobox", { name: "Track" }).click();
-  await page.getByRole("option", { name: "WorkBench" }).click();
-  await page.getByRole("combobox", { name: "WorkBench case pack" }).click();
-  await page
-    .getByRole("option", { name: "Recoverable Job Service", exact: true })
-    .focus();
-  await page.keyboard.press("Enter");
-
-  await expect(page.getByText("Published evaluation scope", { exact: true })).toBeVisible();
-  await expect(page.getByText(/69 mandatory families/)).toBeVisible();
-  await expect(page.getByText(/302 variants/)).toBeVisible();
-  await expect(page.getByText(/11 model-visible files/)).toBeVisible();
-  await expect(page.getByText(/Binary scoring/)).toBeVisible();
-  await expect(page.getByText("node verify.mjs", { exact: true })).toBeVisible();
+  const preset = page.getByRole("radio", { name: /^HarnessBench / });
+  await expect(preset).toBeChecked();
+  await expect(preset).toHaveAccessibleName(/Recoverable Job Service through the full Build workflow/);
+  await expect(preset).toHaveAccessibleName(/All 69 modeled families and 302 variants must pass/);
   await expect(page.getByText("Recoverable Job Service runtime not checked", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("link", { name: "Download Recoverable Job Service runner" })
   ).toHaveAttribute("href", "/aiboard-rjs-workbench-runner.zip");
   await expect(page.getByText(/Requires Node\.js 24\.18\.0/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Run selected benchmark" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Run HarnessBench" })).toBeDisabled();
 });
 
-test("qualified calibration evidence survives import, reload, history, clause display, and export", async ({ page }) => {
+// WorkBench Recoverable Job Service evidence is historical since HarnessBench replaced it (959805e6,
+// lib/benchmark/retired.ts): it stays stored and exportable but never feeds a leaderboard.
+test("qualified calibration evidence survives import, reload, and export but stays out of results", async ({ page }) => {
   await page.goto("/benchmark");
   await page.getByRole("tab", { name: "Data" }).click();
   await page.locator('input[type="file"][accept="application/json,.json"]').setInputFiles({
@@ -177,19 +170,11 @@ test("qualified calibration evidence survives import, reload, history, clause di
   await expect(page.getByText(/Imported 2 run\(s\)/)).toBeVisible();
   await page.reload();
   await page.getByRole("tab", { name: "Results" }).click();
-  await expect(page.getByText("Qualified calibration fixture — not a model score", { exact: true }).first()).toBeVisible();
-  const historyButton = page.getByRole("button", { name: "2 runs" }).filter({ visible: true }).first();
-  await historyButton.click();
-  await expect(historyButton).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator('tbody tr[data-result-set-id]')).toHaveCount(1);
-  const profileButton = page.getByRole("button", { name: "View profile" }).filter({ visible: true }).first();
-  await profileButton.click();
-  const profileId = await profileButton.getAttribute("aria-controls");
-  const profile = page.locator(`#${profileId}`);
-  await expect(profile.getByText("Recoverable Job Service evidence", { exact: true })).toBeVisible();
-  await expect(profile.getByText(/69\/69 mandatory families passed/)).toBeVisible();
-  await expect(profile.getByText(/302\/302 variants passed/)).toBeVisible();
-  await expect(profile.getByText(/A01/).first()).toBeVisible();
+  // Both runs stay visible as recorded outcomes, not ranked; nothing is published as a ranking.
+  const outcomes = page.getByRole("region", { name: "Recorded benchmark outcomes" });
+  await expect(outcomes.getByText(/Qualified calibration fixture — not a model score/).first()).toBeVisible();
+  await expect(outcomes.getByText(/not ranked/).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No published ranking" })).toBeVisible();
 
   await page.getByRole("tab", { name: "Data" }).click();
   const download = page.waitForEvent("download");

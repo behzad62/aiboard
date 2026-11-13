@@ -1998,7 +1998,9 @@ test("the next Architect context contains the committed STATE.md text and stateC
     const text = String(context?.content);
     assert.match(text, /PF1_COMMITTED_STATE_MARKER/);
     assert.match(text, /stateCurrent: true/);
-    assert.match(text, /entryPoint: readme=true agentsMarkedSection=true claudePointer=false/);
+    // The entry point is shown twice: at the STATE.md commit (what the completion gate reads) and at the latest document commit.
+    assert.match(text, /entryPoint at STATE commit \(completion gate\): readme=true agentsMarkedSection=true claudePointer=false/);
+    assert.match(text, /entryPoint at latest document commit: readme=true agentsMarkedSection=true claudePointer=false/);
     assert.match(text, /docs\/project\/STATE.md sequence=\d+/);
   } finally {
     sessions.close();

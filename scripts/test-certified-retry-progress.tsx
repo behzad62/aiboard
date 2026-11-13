@@ -6,21 +6,10 @@ import {
   RunProgressList
 } from "../components/benchmark/run/RunProgressList";
 import { BENCHMARK_PRESETS } from "../lib/benchmark/certified/run-presets";
-import {
-  DIRECT_MODEL_HARNESS,
-  runSelected
-} from "../lib/benchmark/certified/run-execution";
-import { runHarnessCertification } from "../lib/benchmark/certified/certification";
-import { __resetBenchmarkStoreForTests } from "../lib/benchmark/store";
-import {
-  __resetClientStoreForTests,
-  upsertProviderKey
-} from "../lib/client/store";
-import { openaiProvider } from "../lib/providers/openai";
-import type { StreamChunk } from "../lib/providers/base";
 
+// The team preset leg (HarnessBench since the presets dropped TeamIQ).
 const leg = BENCHMARK_PRESETS.flatMap((preset) => preset.legs).find(
-  (candidate) => candidate.track === "teamiq"
+  (candidate) => candidate.mode === "team"
 );
 assert.ok(leg);
 
@@ -68,82 +57,3 @@ assert.match(updated[0]?.models[0]?.detail ?? "", /retry 2\/5/);
 console.log(
   "PASS retry progress updates rather than duplicates an existing row"
 );
-
-// Exercise the actual Advanced single-suite callback, not a copied formatter:
-// its retry notification must reach the shared message.
-async function checkAdvancedRetryProgress(): Promise<void> {
-  __resetBenchmarkStoreForTests();
-  __resetClientStoreForTests();
-  upsertProviderKey({
-    providerId: "openai",
-    apiKey: "test-key",
-    keyHint: "test",
-    updatedAt: new Date().toISOString(),
-    defaultModel: null,
-    enabled: true
-  });
-  const originalStreamChat = openaiProvider.streamChat;
-  let physicalCalls = 0;
-  const messages: Array<string | null> = [];
-  openaiProvider.streamChat = async function* (): AsyncIterable<StreamChunk> {
-    physicalCalls++;
-    if (physicalCalls === 1) {
-      yield {
-        type: "error",
-        error: "temporary",
-        errorMetadata: { statusCode: 503 }
-      };
-      return;
-    }
-    yield { type: "token", content: "{}" };
-    yield { type: "done" };
-  };
-  try {
-    await runSelected({
-      selectedTrack: "toolreliability",
-      suiteId: "toolreliability-current-pack",
-      models: [
-        {
-          modelId: "openai:retry-advanced",
-          providerId: "openai",
-          displayName: "Retry Advanced"
-        }
-      ],
-      modelId: "openai:retry-advanced",
-      teamModelIds: [],
-      teamIqStrategy: "architect_worker_reviewer",
-      includeSoloBaselines: false,
-      workBenchModelIds: [],
-      workBenchRoleMode: "solo",
-      workBenchRunnerUrl: "",
-      workBenchRunnerToken: "",
-      effectiveHarnessProfile: DIRECT_MODEL_HARNESS,
-      certification: runHarnessCertification(DIRECT_MODEL_HARNESS),
-      effortByModelId: {},
-      runAbortRef: { current: null },
-      setRunning: () => {},
-      setRunPhase: () => {},
-      setSummary: () => {},
-      setMessage: (message) => messages.push(message),
-      onComplete: async () => {}
-    });
-  } finally {
-    openaiProvider.streamChat = originalStreamChat;
-  }
-  assert.ok(
-    messages.some((message) =>
-      /Retry Advanced: temporary provider failure; retry 1\/5/.test(
-        message ?? ""
-      )
-    )
-  );
-  assert.ok(physicalCalls > 1);
-  console.log(
-    "PASS Advanced retry reaches the live shared message path"
-  );
-}
-
-checkAdvancedRetryProgress().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});

@@ -180,14 +180,25 @@ test.describe("Runner V2 durable user steering", () => {
       await expect(page.getByRole("heading", { name: "Architect needs your decision" })).toHaveCount(0);
 
       const guidanceText = "Include the restart-safe edge case.";
+      // A build message is first classified by the Architect's model through the Runner (158c558a). This
+      // fixture has no model, so that one call answers "change"; the guidance itself goes to the real Runner.
+      let classified = 0;
+      await page.route(`${address.url}/v2/runs/${RUN_ID}/build/user-message`, async (route) => {
+        classified += 1;
+        expect(JSON.parse(route.request().postData() ?? "{}").text).toBe(guidanceText);
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ intent: "change", attachments: [] }) });
+      });
       await page.getByRole("textbox", { name: "Guidance text" }).fill(guidanceText);
-      await page.getByRole("button", { name: "Send guidance" }).click();
+      await page.getByRole("button", { name: "Send build message" }).click();
+      // The guidance receipt is in the workspace's Activity view (2ff73ece).
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
       const receipt = page.getByLabel("Durable guidance receipt");
       await expect(receipt).toBeVisible();
       await expect(receipt.getByText("Sent to Runner", { exact: true })).toBeVisible();
       await expect(receipt.getByText("Waiting for Architect", { exact: true })).toBeVisible();
       await expect(receipt.getByText("Acknowledged", { exact: true })).toBeVisible();
       await expect(page.getByText("The durable UI evidence proves this guidance is semantically represented.")).toBeVisible();
+      expect(classified).toBe(1);
 
       expect(scheduler.readRun(RUN_ID).filter((event) => event.type === "user.guidance_submitted")).toHaveLength(1);
       expect(scheduler.readRun(RUN_ID).filter((event) => event.type === "architect.question_answered")).toHaveLength(1);

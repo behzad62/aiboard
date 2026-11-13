@@ -275,6 +275,13 @@ export class T8JourneyWorker implements AgentModel {
         criterionEvidenceLinks: [
           { criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] },
         ],
+        // A submission reports its validation scope (22fdaddd).
+        validationScope: {
+          changed: ["src/value.mjs"],
+          verified: ["value exports 2"],
+          testsRun: [{ command: "node --test", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }],
+          notRun: [],
+        },
       },
       "submit-1",
     );

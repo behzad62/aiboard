@@ -39,7 +39,6 @@ function probeControl(overrides: { errorFor?: (context: vm.Context, actual: unkn
     supervisorBirth: "2026-10-14T15:16:33.936340Z", fence: { ownerId: "windows-semantic-probe", fencingToken: 1 } };
   const launch = { opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"), rootPid: 4242,
     birthFingerprint: { observedAt: identity.supervisorBirth, discriminator: createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}`).digest("hex") }, startedAt: identity.supervisorBirth };
-  let primary: unknown;
   const ownerText = readSource("src/inspection-cleanup.ts");
   const parser = readSource("src/process-backend.ts");
   const context = execute([
@@ -69,7 +68,7 @@ function probeControl(overrides: { errorFor?: (context: vm.Context, actual: unkn
     },
   });
   const actual = vm.runInContext("new NativeProcessLaunchBlockedError([], " + JSON.stringify(directory) + ", JSON.parse(" + JSON.stringify(JSON.stringify(launch)) + "), 'controlled blocked launch')", context);
-  primary = overrides.errorFor ? overrides.errorFor(context, actual) : actual;
+  const primary: unknown = overrides.errorFor ? overrides.errorFor(context, actual) : actual;
   return { context, primary, observed, launch, directory, workspace, request: context.makeProbeRequest(workspace, "node.exe", [], {}) };
 }
 

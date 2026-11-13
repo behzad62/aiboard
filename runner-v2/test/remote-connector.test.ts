@@ -742,10 +742,10 @@ test("the relay hears readiness only after the handshake, never before the proof
   assert.equal(calls, 2);
 
   // The shells arrive later (shell-inventory.ts): refreshStatus sends the status again with them, state unchanged.
-  let shells: readonly string[] | undefined;
-  const later = await stubHarness(t, { statusReport: () => ({ ...report, ...(shells ? { shells } : {}) }) });
+  const inventory: { shells?: readonly string[] } = {};
+  const later = await stubHarness(t, { statusReport: () => ({ ...report, ...(inventory.shells ? { shells: inventory.shells } : {}) }) });
   await handshake(later);
-  shells = ["cmd", "powershell 5.1", "bash"];
+  inventory.shells = ["cmd", "powershell 5.1", "bash"];
   later.connector.refreshStatus();
   assert.deepEqual(later.transport.sent.filter((message) => message.type === "status").at(-1),
     { type: "status", state: "tool-ready", reasonCode: "ready", ...report, shells: ["cmd", "powershell 5.1", "bash"] });

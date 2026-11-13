@@ -187,7 +187,9 @@ test("T10 M8: run_evidence_command description states the no-shell contract", ()
 test("T10 M9: fs.search and fs.list describe literal search and skipped outputs", () => {
   assert.match(FS_SEARCH_DESCRIPTION, /literal, case-insensitive/);
   assert.match(FS_SEARCH_DESCRIPTION, /build-output/);
-  assert.match(FS_SEARCH_DESCRIPTION, /narrow `path`/);
+  // Large repos are handled by include/exclude globs and cursor paging (the old "narrow `path`" hint moved to the capped-search note).
+  assert.match(FS_SEARCH_DESCRIPTION, /include\/exclude globs/);
+  assert.match(FS_SEARCH_DESCRIPTION, /returned cursor/);
   assert.match(FS_LIST_DESCRIPTION, /build-output/);
   const tools = createFilesystemTools({});
   assert.equal(tools.find((tool) => tool.definition.name === "fs.search")?.definition.description, FS_SEARCH_DESCRIPTION);
