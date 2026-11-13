@@ -53,7 +53,9 @@ test("process family production graph scrubs inherited secrets and continues bey
   const secretName = "RUNNER_MATRIX_INHERITED_SECRET";
   const previous = process.env[secretName];
   process.env[secretName] = "must-not-reach-child";
-  const graph = createProductionOneShotCommandFixture(t);
+  // Beyond the spill cap is what matters, not the production cap's 64 MiB: the POSIX portable channel moves
+  // output at about 1 MiB/s (16 KiB chunks, one fenced ack each), so 65 MiB could not finish inside the deadline there.
+  const graph = createProductionOneShotCommandFixture(t, { spillBytes: 64 * 1024 });
   const broker = new ToolBroker({
     permissionProfile: "full", workspacePath: workspace, toolTimeoutMs: 30_000,
     executionGrants: graph.executionGrants,
@@ -62,9 +64,9 @@ test("process family production graph scrubs inherited secrets and continues bey
   try {
     const result = await invoke(broker, "production-large-output", {
       command: process.execPath,
-      args: ["-e", `const marker=String(process.env.${secretName} ?? "absent"); process.stdout.write(marker + "|"); process.stdout.write("x".repeat(65 * 1024 * 1024)); process.stdout.write("|" + marker);`],
+      args: ["-e", `const marker=String(process.env.${secretName} ?? "absent"); process.stdout.write(marker + "|"); process.stdout.write("x".repeat(512 * 1024)); process.stdout.write("|" + marker);`],
       timeoutMs: 25_000,
-      // The raw tail, which is what is bounded; a summary would clip this one 65 MiB line to its start.
+      // The raw tail, which is what is bounded; a summary would clip this one long line to its start.
       render: "raw",
     });
     assert.equal(result.isError, false, result.error?.message ?? "process command unexpectedly failed");

@@ -3310,9 +3310,9 @@ test("T9 repair B3-r2: guidance under clarify is acknowledged without evidence a
     assert.equal(guided.action, "user_guidance_required");
     assert.equal(projectionOf(store, runId).userGuidance["g1"]?.status, "acknowledged");
     // The run proceeds past the acknowledgement with no pump error: the
-    // clarify turn asks the user and blocks on the open question.
+    // clarify turn asks the user, and that turn reports the open question.
     const asking = await runtime.step();
-    assert.equal(asking.status, "progressed");
+    assert.deepEqual(asking, { status: "blocked", action: "architect_question_pending" });
     const blocked = await runtime.step();
     assert.equal(blocked.status, "blocked");
     assert.equal(blocked.action, "architect_question_pending");
@@ -3908,8 +3908,8 @@ test("T9 repair N1: clarify without a user reply is refused; a reply unlocks re-
       projectDocs: stubProjectDocsPort(),
     });
     assert.equal((await runtime.step()).status, "progressed"); // clarify
-    const asking = await runtime.step();
-    assert.equal(asking.status, "progressed"); // refused re-clarify, asked q1
+    const asking = await runtime.step(); // refused re-clarify, asked q1: the turn reports the open question
+    assert.deepEqual(asking, { status: "blocked", action: "architect_question_pending" });
     const blocked = await runtime.step();
     assert.equal(blocked.status, "blocked");
     assert.equal(blocked.action, "architect_question_pending");

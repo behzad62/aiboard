@@ -37,6 +37,8 @@ export interface ProductionOneShotCommandFixture {
 export interface ProductionOneShotCommandFixtureOptions {
   readonly artifacts?: ArtifactStore;
   readonly spillFault?: boolean;
+  /** Spill cap for each output stream (production default 64 MiB). */
+  readonly spillBytes?: number;
   readonly permissionProfile?: PermissionProfile;
   readonly backend?: ProcessBackend;
   readonly backendId?: string;
@@ -106,6 +108,7 @@ export function createProductionOneShotCommandFixture(
       spillRoot: options.spillFault ? join(projectBoundary, "spill") : join(root, "spill"),
       projectRoot: projectBoundary,
       artifacts,
+      ...(options.spillBytes === undefined ? {} : { spillBytes: options.spillBytes }),
     }),
     ...(options.leaseDurationMs ? { leaseDurationMs: options.leaseDurationMs } : {}),
     ...(options.leaseHeartbeatMs ? { leaseHeartbeatMs: options.leaseHeartbeatMs } : {}),

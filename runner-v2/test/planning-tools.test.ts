@@ -2700,8 +2700,9 @@ test("T3a repair B2: a stale-only state wakes the Architect instead of idling (p
     });
     const result = await runtime.step();
     assert.deepEqual(architectReasons, ["plan_required"]);
-    assert.equal(result.status, "progressed");
-    assert.equal(result.action, "plan_required");
+    // The stand-in action is a blocking question, so the woken turn ends blocked on it (not idle).
+    assert.deepEqual(result, { status: "blocked", action: "architect_question_pending" });
+    assert.equal(projectionOf(store, runId).blockingArchitectQuestionId, "q-stale");
   } finally {
     store.close();
   }

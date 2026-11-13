@@ -65,6 +65,8 @@ export function createBoundedProcessOutputFactory(input: {
   readonly projectRoot: string;
   readonly allowNestedRunnerState?: boolean;
   readonly artifacts: ArtifactStore;
+  /** Per-stream spill cap; the spool's 64 MiB default when absent. */
+  readonly spillBytes?: number;
 }): ProcessOutputFactory {
   const sessions = new Map<string, ProcessOutputSession>();
   const create = (ownerId: string): ProcessOutputSession => {
@@ -79,6 +81,7 @@ export function createBoundedProcessOutputFactory(input: {
       allowNestedRunnerState: input.allowNestedRunnerState,
       ownershipId: `process-output-${ownerDigest}`,
       artifactStore: input.artifacts,
+      ...(input.spillBytes === undefined ? {} : { spillBytes: input.spillBytes }),
     });
     const session: ProcessOutputSession = Object.freeze({
       ownerId,
