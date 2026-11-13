@@ -156,6 +156,123 @@ test("supervisor ACK pass defers without a second mutation attempt when intent c
   assert.deepEqual({ commits, retirements }, { commits: 1, retirements: 0 });
 });
 
+function chunkMetadata(stream: "stdout" | "stderr", sequence: number) {
+  const bytes = Buffer.from(`${stream}-${sequence}`);
+  return { stream, sequence, startOffset: (sequence - 1) * bytes.byteLength, endOffset: sequence * bytes.byteLength,
+    byteLength: bytes.byteLength, digest: createHash("sha256").update(bytes).digest("hex") };
+}
+
+function batchRetirementContext(options: {
+  readonly retained: ReadonlyArray<readonly [string, ReturnType<typeof chunkMetadata>]>;
+  readonly acks: readonly string[];
+  readonly ackFence?: { ownerId: string; fencingToken: number };
+  readonly failOn?: string;
+}) {
+  const retired: string[] = [];
+  let effects = 0;
+  const retained = new Map(options.retained);
+  const context = vm.createContext({
+    channelAckDirectory: "ack",
+    channelDirectory: "channel",
+    config: { nonce: "nonce" },
+    retained,
+    retainedBytes: options.retained.reduce((total, [, metadata]) => total + metadata.byteLength, 0),
+    readCurrentFence: () => oldFence,
+    existsSync: () => false,
+    readdirSync: () => [...options.acks],
+    readFileSync: (path: string) => {
+      const key = path.split(/[\\/]/).at(-1)!.slice(0, -5);
+      return JSON.stringify({ nonce: "nonce", ...(options.ackFence ?? oldFence), metadata: retained.get(key) });
+    },
+    join,
+    writeAtomic: () => assert.fail("retirement is stubbed; nothing else may write"),
+    resumePortableOutputRetirement: () => undefined,
+    retirePortableOutputAcknowledgement: (retirement: { name: string; fence: typeof oldFence }) => {
+      assert.deepEqual({ ...retirement.fence }, oldFence);
+      if (retirement.name === options.failOn) throw new PortableOutputRetirementBlockedError("synthetic retirement failure");
+      retired.push(retirement.name);
+    },
+    // Mirrors runPortableFenceEffectSync: a throw after the effect started is outcome_unknown.
+    withCurrentFenceEffect: (ownerId: string, fencingToken: number, effect: () => unknown) => {
+      effects += 1;
+      assert.deepEqual({ ownerId, fencingToken }, oldFence);
+      try { return { status: "applied", value: effect() }; }
+      catch (error) { return { status: "outcome_unknown", error }; }
+    },
+    PortableAuthorityUnavailableError,
+  });
+  vm.runInContext(`${extractFunction(supervisorSource, "forgetRetiredOutput")}
+${extractFunction(supervisorSource, "handleChannelAcks")}`, context);
+  return { context, retained, retired, effects: () => effects };
+}
+
+test("supervisor retires every contiguous ACK in one fenced effect, oldest first, whatever the directory order", () => {
+  const fixture = batchRetirementContext({
+    retained: [
+      ["stdout-000000000001", chunkMetadata("stdout", 1)],
+      ["stdout-000000000002", chunkMetadata("stdout", 2)],
+      ["stdout-000000000003", chunkMetadata("stdout", 3)],
+      ["stderr-000000000001", chunkMetadata("stderr", 1)],
+    ],
+    acks: ["stdout-000000000003.json", "stderr-000000000001.json", "stdout-000000000002.json", "stdout-000000000001.json"],
+  });
+  vm.runInContext("handleChannelAcks()", fixture.context);
+  assert.equal(fixture.effects(), 1, "one fenced effect retires the whole batch");
+  assert.deepEqual(fixture.retired, [
+    "stdout-000000000001.json", "stdout-000000000002.json", "stdout-000000000003.json", "stderr-000000000001.json",
+  ]);
+  assert.equal(fixture.retained.size, 0);
+  assert.equal(vm.runInContext("retainedBytes", fixture.context), 0);
+});
+
+test("supervisor stops a stream at its first chunk without an ACK, as when a batch is seen half-written", () => {
+  const fixture = batchRetirementContext({
+    retained: [
+      ["stdout-000000000001", chunkMetadata("stdout", 1)],
+      ["stdout-000000000002", chunkMetadata("stdout", 2)],
+      ["stdout-000000000003", chunkMetadata("stdout", 3)],
+      ["stderr-000000000001", chunkMetadata("stderr", 1)],
+      ["stderr-000000000002", chunkMetadata("stderr", 2)],
+    ],
+    acks: ["stdout-000000000001.json", "stdout-000000000003.json", "stderr-000000000002.json"],
+  });
+  vm.runInContext("handleChannelAcks()", fixture.context);
+  assert.deepEqual(fixture.retired, ["stdout-000000000001.json"],
+    "an ACK after a gap cannot continue its stream's checkpoint and must wait");
+  assert.deepEqual([...fixture.retained.keys()].sort(), [
+    "stderr-000000000001", "stderr-000000000002", "stdout-000000000002", "stdout-000000000003",
+  ]);
+});
+
+test("supervisor takes no fenced effect when no retained chunk carries the current fence's ACK", () => {
+  const fixture = batchRetirementContext({
+    retained: [["stdout-000000000001", chunkMetadata("stdout", 1)]],
+    acks: ["stdout-000000000001.json"],
+    ackFence: currentFence,
+  });
+  vm.runInContext("handleChannelAcks()", fixture.context);
+  assert.deepEqual({ effects: fixture.effects(), retired: fixture.retired }, { effects: 0, retired: [] });
+  assert.equal(fixture.retained.size, 1);
+});
+
+test("supervisor batch retirement failing midway forgets only finished retirements and still fails closed", () => {
+  const fixture = batchRetirementContext({
+    retained: [
+      ["stdout-000000000001", chunkMetadata("stdout", 1)],
+      ["stdout-000000000002", chunkMetadata("stdout", 2)],
+      ["stdout-000000000003", chunkMetadata("stdout", 3)],
+    ],
+    acks: ["stdout-000000000001.json", "stdout-000000000002.json", "stdout-000000000003.json"],
+    failOn: "stdout-000000000002.json",
+  });
+  assert.throws(() => vm.runInContext("handleChannelAcks()", fixture.context),
+    (error: unknown) => error instanceof PortableOutputRetirementBlockedError);
+  assert.deepEqual(fixture.retired, ["stdout-000000000001.json"]);
+  assert.deepEqual([...fixture.retained.keys()], ["stdout-000000000002", "stdout-000000000003"]);
+  assert.equal(vm.runInContext("retainedBytes", fixture.context),
+    chunkMetadata("stdout", 2).byteLength + chunkMetadata("stdout", 3).byteLength);
+});
+
 test("supervisor resume blocks a post-ACK intent whose filename is not bound to its metadata", () => {
   const fixture = outputFixture("mismatched-intent-name");
   const retained = new Map([["stdout-000000000001", fixture.retirement.metadata]]);

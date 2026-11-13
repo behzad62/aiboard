@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { getDefaultHighWaterMark, setDefaultHighWaterMark } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
   createPosixCpuSampler,
@@ -51,6 +52,10 @@ for (const directory of [channelDirectory, channelOutputDirectory, channelInputD
 if (!existsSync(outputCheckpointPath)) writeAtomic(outputCheckpointPath, JSON.stringify({ nonce: config.nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
 const replayCapacityChunks = config.replayCapacityChunks ?? 16;
 const replayCapacityBytes = config.replayCapacityBytes ?? 256 * 1024;
+// One retained chunk is at most one streaming frame (STREAMING_FRAME_BYTES in execution-host.ts), so
+// any consumer queue accepts it. Each chunk costs a file, a digest and a retirement, and the window
+// holds a fixed number of chunks, so 16 KiB chunks capped the window at 256 KiB whatever its byte bound.
+const OUTPUT_CHUNK_MAX_BYTES = 256 * 1024;
 const WINDOWS_TREE_FAILURE_LIMIT = 3;
 const WINDOWS_TREE_REFRESH_INTERVAL_MS = 250;
 const WINDOWS_TREE_INSPECTION_MIN_DEADLINE_MS = 2_000;
@@ -160,7 +165,7 @@ child = config.platform === "windows"
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     })
-  : spawn(process.execPath, [fileURLToPath(childBootstrap), Buffer.from(JSON.stringify({
+  : spawnWithOutputChunkBuffers(() => spawn(process.execPath, [fileURLToPath(childBootstrap), Buffer.from(JSON.stringify({
       platform: "posix",
       nonce: config.nonce,
       executable: config.executable,
@@ -183,7 +188,7 @@ child = config.platform === "windows"
       env: config.environment,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
-    });
+    }));
 // Retain error and output observers before any post-spawn await or early unwind.
 child.stdin?.on("error", () => {});
 child.once("error", (error) => { void fail(error.message); });
@@ -485,7 +490,13 @@ function tickPosix() {
 
 function installOutput(stream, readable, evidencePath) {
   readable.on("readable", () => {
-    if (config.platform !== "windows") { drainOutput(stream, readable, evidencePath); return; }
+    if (config.platform !== "windows") {
+      // libuv delivers a pipe 64 KiB at a time, and draining on each delivery made every chunk at most
+      // that big. Below one full chunk the bytes stay buffered (Node keeps reading up to the raised
+      // high-water mark) and the next tick drains them, along with any EOF: at most one poll interval.
+      if (readable.readableLength >= OUTPUT_CHUNK_MAX_BYTES) drainOutput(stream, readable, evidencePath);
+      return;
+    }
     try {
       if (terminalRequested) {
         if (readable.readableLength > 0) void fail("Windows output arrived during supervisor retirement.");
@@ -507,9 +518,19 @@ function installWindowsOutputLifecycle(stream, readable) {
   });
 }
 
+// Node buffers at most one high-water mark per pipe, 64 KiB by default, so no read could fill a
+// whole output chunk. spawn() creates the child's pipe streams synchronously, so raising the default
+// for that one call and restoring it at once gives exactly those pipes a chunk-sized buffer.
+function spawnWithOutputChunkBuffers(launch) {
+  const previous = getDefaultHighWaterMark(false);
+  setDefaultHighWaterMark(false, Math.max(previous, OUTPUT_CHUNK_MAX_BYTES));
+  try { return launch(); }
+  finally { setDefaultHighWaterMark(false, previous); }
+}
+
 function drainOutput(stream, readable, evidencePath) {
   while (retained.size < replayCapacityChunks && retainedBytes < replayCapacityBytes) {
-    const maximum = Math.min(16 * 1024, replayCapacityBytes - retainedBytes);
+    const maximum = Math.min(OUTPUT_CHUNK_MAX_BYTES, replayCapacityBytes - retainedBytes);
     if (maximum < 1) break;
     // read(size) waits for that many bytes while a live pipe remains open. A
     // persistent process may produce only short frames, so consume the exact
@@ -562,27 +583,48 @@ function handleChannelAcks() {
       throw resumed.error;
     else if (resumed.status === "stale" || (resumed.status === "unavailable" && resumed.cause === "coordination")) return;
   }
-  for (const name of ackNames) {
-    let ack;
-    try { ack = JSON.parse(readFileSync(join(channelAckDirectory, name), "utf8")); } catch { continue; }
-    const key = name.slice(0, -5);
-    const expected = retained.get(key);
-    if (!expected || ack.nonce !== config.nonce || JSON.stringify(ack.metadata) !== JSON.stringify(expected)) continue;
-    const fence = readCurrentFence();
-    if (!fence || ack.ownerId !== fence.ownerId || ack.fencingToken !== fence.fencingToken) continue;
-    const outcome = withCurrentFenceEffect(ack.ownerId, ack.fencingToken, () => retirePortableOutputAcknowledgement({
-      channelDirectory,
-      nonce: config.nonce,
-      fence: { ownerId: ack.ownerId, fencingToken: ack.fencingToken },
-      name,
-      metadata: expected,
-      atomicWrite: writeAtomic,
-    }));
-    if (outcome.status === "applied") forgetRetiredOutput(name, expected);
-    else if ((outcome.status === "unavailable" && outcome.cause === "authority") || outcome.status === "outcome_unknown")
-      throw outcome.error;
-    else return;
+  // One fenced effect retires every ACK that continues a stream's checkpoint, oldest first. Each
+  // retirement still runs the full intent/checkpoint protocol on its own, so a crash between two of
+  // them leaves at most one resumable intent; only the per-chunk SQLite claim and release are shared.
+  // A stream stops at its first retained chunk with no exact current-fence ACK: a later ACK cannot
+  // continue the checkpoint (and may be a half-published batch observed mid-write), so it waits.
+  const fence = readCurrentFence();
+  if (!fence) return;
+  const present = new Set(ackNames);
+  const batch = [];
+  for (const stream of ["stdout", "stderr"]) {
+    const keys = [...retained.keys()].filter((key) => key.startsWith(`${stream}-`)).sort();
+    for (const key of keys) {
+      const name = `${key}.json`;
+      if (!present.has(name)) break;
+      let ack;
+      try { ack = JSON.parse(readFileSync(join(channelAckDirectory, name), "utf8")); } catch { break; }
+      const expected = retained.get(key);
+      if (ack.nonce !== config.nonce || JSON.stringify(ack.metadata) !== JSON.stringify(expected) ||
+          ack.ownerId !== fence.ownerId || ack.fencingToken !== fence.fencingToken) break;
+      batch.push({ name, metadata: expected });
+    }
   }
+  if (batch.length === 0) return;
+  const retiredInEffect = [];
+  const outcome = withCurrentFenceEffect(fence.ownerId, fence.fencingToken, () => {
+    for (const entry of batch) {
+      retirePortableOutputAcknowledgement({
+        channelDirectory,
+        nonce: config.nonce,
+        fence: { ownerId: fence.ownerId, fencingToken: fence.fencingToken },
+        name: entry.name,
+        metadata: entry.metadata,
+        atomicWrite: writeAtomic,
+      });
+      retiredInEffect.push(entry);
+    }
+  });
+  // Every retirement that returned removed its exact chunk, ACK and intent, so forget it even when a
+  // later one in the batch failed; the failure itself is still reported exactly as before.
+  for (const entry of retiredInEffect) forgetRetiredOutput(entry.name, entry.metadata);
+  if ((outcome.status === "unavailable" && outcome.cause === "authority") || outcome.status === "outcome_unknown")
+    throw outcome.error;
 }
 
 function forgetRetiredOutput(name, metadata) {
@@ -1528,6 +1570,10 @@ function publish(status, error = config.platform === "posix" ? posixTerminalErro
         windowsBirthInspectionDeadlineMs,
         error,
       };
+  // Tells the Runner this supervisor retires ACKs as per-stream prefixes in retained order, so a whole
+  // pass of ACKs may be published at once. A supervisor without it walks ACKs in directory order, so
+  // the Runner keeps publishing one ACK per chunk for it (a supervisor that outlived a Runner upgrade).
+  semanticState.outputAcknowledgement = "prefix-batch";
   const signature = JSON.stringify(semanticState);
   if (signature === lastPublishedSignature) return;
   const nextRevision = revision + 1;

@@ -590,6 +590,113 @@ test("round5 a fresh channel still replays retained output even when an old exac
   }
 });
 
+function batchChunkMetadata(sequence: number): { metadata: BackpressuredOutputMetadata; bytes: Buffer } {
+  const bytes = Buffer.from(`chunk-${sequence}`);
+  return { bytes, metadata: {
+    stream: "stdout", sequence, startOffset: (sequence - 1) * bytes.byteLength, endOffset: sequence * bytes.byteLength,
+    byteLength: bytes.byteLength, digest: createHash("sha256").update(bytes).digest("hex"),
+  } };
+}
+
+async function batchAcknowledgementFixture(
+  supervisorState: Record<string, unknown>,
+  options: { readonly chunks?: number; readonly onSink?: (sequence: number) => void } = {},
+) {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-ack-batch-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  const chunkName = (sequence: number) => `stdout-${String(sequence).padStart(12, "0")}.json`;
+  const writeChunk = (sequence: number) => {
+    const { metadata, bytes } = batchChunkMetadata(sequence);
+    writeFileSync(join(root, "channel/output", chunkName(sequence)), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  };
+  for (let sequence = 1; sequence <= (options.chunks ?? 3); sequence++) writeChunk(sequence);
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running", ...supervisorState }));
+  const events: string[] = [];
+  let snapshots = 0;
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 16, replayCapacityBytes: 1024, pollIntervalMs: 5,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence,
+      reattest: () => "live",
+      effect: async (kind, effect) => {
+        if (kind !== "output_ack") return effect();
+        const value = effect();
+        events.push(`ack:${readdirSync(join(root, "channel/ack")).length}`);
+        return value;
+      },
+      snapshot: (read) => { snapshots += 1; return { status: "applied", value: read() }; },
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => {
+    events.push(`sink:${entry.sequence}`);
+    options.onSink?.(entry.sequence);
+    return entry;
+  });
+  return {
+    root, channel, events, snapshots: () => snapshots, writeChunk, chunkName,
+    retire: (sequence: number) => retirePortableOutputAcknowledgement({ channelDirectory: join(root, "channel"), nonce: "nonce", fence,
+      name: chunkName(sequence), metadata: batchChunkMetadata(sequence).metadata }),
+    stop: () => writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0, ...supervisorState })),
+    close: async () => { unsubscribe(); await channel.detach(); rmSync(root, { recursive: true, force: true }); },
+  };
+}
+
+for (const [mode, supervisorState] of [["prefix-batch", { outputAcknowledgement: "prefix-batch" }], ["per-chunk", {}]] as const) {
+  test(`portable output ACKs (${mode}) never republish an ACK for a chunk retired while a later sink call was pending`, async () => {
+    let fixture!: Awaited<ReturnType<typeof batchAcknowledgementFixture>>;
+    fixture = await batchAcknowledgementFixture(supervisorState, {
+      chunks: 1,
+      // The supervisor retires chunk 1 (ACKed in the first pass) while this pass awaits the sink for chunk 2.
+      onSink: (sequence) => { if (sequence === 2) fixture.retire(1); },
+    });
+    try {
+      await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).includes(fixture.chunkName(1)));
+      fixture.writeChunk(2);
+      await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).includes(fixture.chunkName(2)));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepEqual(readdirSync(join(fixture.root, "channel/ack")), [fixture.chunkName(2)],
+        "a retired chunk must not get its ACK back, or no later snapshot can validate the window");
+      fixture.retire(2);
+      fixture.stop();
+      assert.deepEqual(await fixture.channel.settleBackpressuredOutput(Date.now() + 2_000), { status: "settled" });
+      assert.deepEqual(fixture.events.filter((event) => event.startsWith("sink:")), ["sink:1", "sink:2"]);
+    } finally { await fixture.close(); }
+  });
+}
+
+test("portable output ACKs for a prefix-batch supervisor publish one pass in one fenced effect, after its deliveries", async () => {
+  const fixture = await batchAcknowledgementFixture({ outputAcknowledgement: "prefix-batch" });
+  try {
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 3);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(fixture.events, ["sink:1", "sink:2", "sink:3", "ack:3"]);
+  } finally { await fixture.close(); }
+});
+
+test("portable output ACKs stay one fenced effect per chunk for a supervisor that does not advertise prefix-batch", async () => {
+  const fixture = await batchAcknowledgementFixture({});
+  try {
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 3);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(fixture.events, ["sink:1", "ack:1", "sink:2", "ack:2", "sink:3", "ack:3"],
+      "an older supervisor walks ACK files in directory order, so each one is published alone after its delivery");
+  } finally { await fixture.close(); }
+});
+
+test("portable output polling takes no fenced snapshot while a fully delivered and ACKed window awaits retirement", async () => {
+  const fixture = await batchAcknowledgementFixture({ outputAcknowledgement: "prefix-batch" });
+  try {
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 3);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const settled = fixture.snapshots();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(fixture.snapshots(), settled, "nothing is left to deliver or ACK, so polling stays off the fence lock");
+    assert.deepEqual(fixture.events, ["sink:1", "sink:2", "sink:3", "ack:3"], "and nothing is delivered or ACKed twice");
+  } finally { await fixture.close(); }
+});
+
 test("round5 portable output ACK recognizes an exact durable ACK after post-effect contention without replay", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-ack-posteffect-"));
   for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
