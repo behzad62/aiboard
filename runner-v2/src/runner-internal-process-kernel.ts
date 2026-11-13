@@ -87,11 +87,7 @@ export function createRunnerInternalProcessKernel(options: {
           replayCapacityChunks: 16,
           replayCapacityBytes: 256 * 1024,
         })
-      : createPosixProcessBackend({
-          stateDirectory,
-          replayCapacityChunks: 16,
-          replayCapacityBytes: 256 * 1024,
-        })
+      : createPosixProcessBackend({ stateDirectory })
   );
   let closeInspection: (() => Promise<void>) | undefined;
   if (options.backend === undefined && rawBackend instanceof NativeOwnedProcessBackend) {

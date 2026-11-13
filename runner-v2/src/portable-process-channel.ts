@@ -98,6 +98,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   private outputSettlementDeadlineAt?: number;
   private outputSettlement?: Promise<BackpressuredOutputSettlement>;
   private liveStoppedObserved = false;
+  private acknowledgementBatches = false;
 
   constructor(private readonly authority: PortableChannelAuthority, private readonly pollIntervalMs: number, private readonly clock: () => number) {
     this.channelDirectory = join(authority.directory, "channel");
@@ -356,28 +357,48 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       const entries = this.requireSnapshot(snapshot).output;
       const present = new Set(entries.map((entry) => entry.name));
       for (const name of this.deliveredOutput) if (!present.has(name)) this.deliveredOutput.delete(name);
-      const acknowledgeOutput = async (entry: (typeof entries)[number]) => {
-        if (this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)) return;
+      // One fenced effect publishes the ACKs for every chunk this pass delivered. Each fenced effect is
+      // a durable SQLite claim plus release that the supervisor contends for, so one per chunk held POSIX
+      // output to a fraction of a MiB/s. The entries arrive in retained order, so the published set is
+      // always a per-stream prefix of the retained window, and delaying an ACK only delays retirement:
+      // a chunk without a durable ACK is still replayed to a later channel (at-least-once).
+      const acknowledgeOutput = async (pending: ReadonlyArray<(typeof entries)[number]>) => {
+        const batch = pending.filter((entry) => !this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata));
+        if (batch.length === 0) return;
         this.assertOutputDeadline();
         try {
           await this.authority.effect("output_ack", () => {
             this.assertOutputDeadline();
-            writeAtomic(join(this.ackDirectory, entry.name), JSON.stringify({
-              nonce: this.authority.nonce,
-              ownerId: this.authority.fence.ownerId,
-              fencingToken: this.authority.fence.fencingToken,
-              metadata: entry.metadata,
-            }));
+            for (const entry of batch) {
+              // The supervisor retires under this same lock and may have retired an entry ACKed in an
+              // earlier pass while this pass awaited its sink. Its chunk file is gone, and an ACK written
+              // now would have no retained chunk and break every later snapshot. Retirement removes the
+              // chunk before its ACK, so a present chunk with no ACK still needs one; names never repeat.
+              if (!existsSync(join(this.channelDirectory, "output", entry.name)) ||
+                  this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)) continue;
+              writeAtomic(join(this.ackDirectory, entry.name), JSON.stringify({
+                nonce: this.authority.nonce,
+                ownerId: this.authority.fence.ownerId,
+                fencingToken: this.authority.fence.fencingToken,
+                metadata: entry.metadata,
+              }));
+            }
           });
         } catch (error) {
-          if (isRetryablePortableCoordination(error) && this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)) return;
+          if (isRetryablePortableCoordination(error) &&
+              batch.every((entry) => this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata))) return;
           throw error;
         }
       };
+      // A supervisor that does not advertise prefix-batch retirement (one started before this Runner)
+      // walks ACK files in directory order, so it gets one ACK per chunk, right after its delivery.
+      const batched = this.supervisorRetiresAcknowledgementBatches();
+      const delivered: Array<(typeof entries)[number]> = [];
       for (const entry of entries) {
         if (sink !== this.outputSink || this.detached) return;
         if (this.deliveredOutput.has(entry.name)) {
-          await acknowledgeOutput(entry);
+          delivered.push(entry);
+          if (!batched) await acknowledgeOutput([entry]);
           continue;
         }
         this.assertOutputDeadline();
@@ -393,8 +414,11 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         // channel intentionally starts without this set and therefore retains
         // at-least-once replay after detach/restart when no ACK survived.
         this.deliveredOutput.add(entry.name);
-        await acknowledgeOutput(entry);
+        delivered.push(entry);
+        if (!batched) await acknowledgeOutput([entry]);
       }
+      if (sink !== this.outputSink || this.detached || !batched) return;
+      await acknowledgeOutput(delivered);
     }).catch((error) => {
       if (isRetryablePortableCoordination(error)) return;
       this.channelFailure = error instanceof Error ? error : new Error("Portable output channel failed.");
@@ -402,6 +426,16 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       this.deliverTerminal({ state: "outcome_unknown" });
       this.scheduleTerminal();
     }).finally(() => { this.outputTasks--; });
+  }
+
+  /** Read-only capability probe; any doubt keeps one ACK per chunk. A supervisor never withdraws it. */
+  private supervisorRetiresAcknowledgementBatches(): boolean {
+    if (this.acknowledgementBatches) return true;
+    try {
+      const state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
+      this.acknowledgementBatches = state.nonce === this.authority.nonce && state.outputAcknowledgement === "prefix-batch";
+    } catch { this.acknowledgementBatches = false; }
+    return this.acknowledgementBatches;
   }
 
   private hasExactDurableOutputAcknowledgement(name: string, metadata: BackpressuredOutputMetadata): boolean {
@@ -423,10 +457,17 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   // inventory to report this process's exit. So run the same validating read without the lock first, and skip the
   // lock only when that read is clean and completely empty. Any anomaly, and all delivery, still takes the fenced
   // path, and the caller has already re-checked the fence for this tick.
+  //
+  // The same holds when every retained chunk was already delivered by this channel and carries this fence's exact
+  // durable ACK: the window is only waiting for the supervisor to retire it, and a fenced snapshot would deliver and
+  // publish nothing. Taking it on every poll anyway cost two durable commits per tick and contended with the
+  // supervisor's own retirement effect, which is most of what held POSIX output to a fraction of a MiB/s.
   private outputIsIdle(): boolean {
     try {
       const { output, acknowledgements } = this.readOutputSnapshot();
-      return output.length === 0 && acknowledgements.length === 0;
+      if (output.length === 0 && acknowledgements.length === 0) return true;
+      return output.length > 0 && output.every((entry) =>
+        this.deliveredOutput.has(entry.name) && this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata));
     } catch { return false; }
   }
   private outputSnapshot(): PortableFenceSnapshotOutcome<PortableOutputSnapshot> {
