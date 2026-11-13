@@ -1,18 +1,21 @@
 /**
- * VF4 tests that run in memory (no process, no checkout): aiboard-validation.json version 2
- * with `checks` and `mandatory`, project checks as suggestions, environment overrides a changed
- * tier suggestion keeps, the inventory's mandatory-check record, and the final check refusing a
- * mandatory check that could not run. Required PR CI runs this file (Portable contract job);
+ * VF4 tests that run in memory (no process; a temporary folder at most): aiboard-validation.json
+ * version 2 with `checks` and `mandatory`, project checks as suggestions, environment overrides a
+ * changed tier suggestion keeps, the inventory's mandatory-check record and the tool lookup it
+ * shares with the final check, the config text, the Next.js static-export reading, and the final
+ * check refusing a mandatory check that could not run. Required PR CI runs this file (Portable contract job);
  * the start checks that launch processes are in verification-plan-v2.test.ts.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { BuildRuntime, MANDATORY_CHECK_TOOL_MISSING_PAUSE } from "../src/build-runtime.js";
+import { mandatoryProjectCheckTools, missingCheckTools } from "../src/check-tool-lookup.js";
 import {
+  isNextStaticExportConfig,
   verificationSuggestionsForProfile,
   withResolvedVerificationPlan,
   type FinalVerificationExecutionProfile,
@@ -28,13 +31,14 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
   collectEnvironmentInventory,
   inventoryCheckCommands,
-  inventoryMandatoryChecks,
   mandatoryChecksMissingTools,
   mandatoryToolMissingDetail,
   parseEnvironmentInventory,
 } from "../src/verification-inventory.js";
 import {
   completeVerificationPlanV2,
+  resolvedCheckLaunch,
+  resolveProjectCheckForLookup,
   resolveVerificationPlanV2,
   verificationPlanNeedsPort,
   type ProjectVerificationCheck,
@@ -248,45 +252,131 @@ test("a changed tier suggestion keeps its environment; the Architect can neither
 
 test("the inventory records which mandatory check a missing tool blocks, naming the tool and the config line", async () => {
   const revision = "d".repeat(40);
-  const profile: FinalVerificationExecutionProfile = {
-    ...emptyFinalVerificationProfile(revision),
-    projectChecks: [
+  const workspace = mkdtempSync(join(tmpdir(), "runner-v2 project checks inventory "));
+  try {
+    mkdirSync(join(workspace, "android"));
+    const projectChecks: ProjectVerificationCheck[] = [
       { id: "lint", label: "Lint", kind: "other", mandatory: false, run: { executable: "eslint", args: ["."] } },
       { ...TYPECHECK, line: 7 },
       { id: "selftest", label: "Self-test", kind: "start", mandatory: true, start: { executable: "node", args: ["selftest.js"], ready: { exitCode: 0 } }, line: 15 },
-    ],
-  };
-  const mandatory = inventoryMandatoryChecks(profile);
-  assert.deepEqual(mandatory, [
-    { checkId: "typecheck", label: "Type-check", configLine: 7, commands: [{ executable: "tsc", args: ["--noEmit"] }] },
-    { checkId: "selftest", label: "Self-test", configLine: 15, commands: [] },
-  ], "node is the Runner's own Node, never looked up on PATH");
-  const checks = inventoryCheckCommands(profile);
-  assert.deepEqual(checks.slice(0, 2).map((check) => check.label), ["check typecheck (mandatory): Type-check", "check selftest (mandatory): Self-test"], "mandatory checks come first");
+    ];
+    const profile: FinalVerificationExecutionProfile = { ...emptyFinalVerificationProfile(revision), projectChecks };
+    const lookedUp: Array<[string, string]> = [];
+    const mandatory = await mandatoryProjectCheckTools({
+      checks: projectChecks,
+      workspacePath: workspace,
+      nodeExecutable: process.execPath,
+      lookup: async (executable, { cwd }) => {
+        lookedUp.push([executable, cwd]);
+        return executable === "tsc" || executable === "eslint" ? { status: "missing" } : { status: "found", path: `/usr/bin/${executable}` };
+      },
+    });
+    assert.deepEqual(mandatory, [
+      { checkId: "typecheck", label: "Type-check", configLine: 7, tools: ["tsc"], missing: ["tsc"] },
+      { checkId: "selftest", label: "Self-test", configLine: 15, tools: [], missing: [] },
+    ], "node is the Runner's own Node, never looked up on PATH; a non-mandatory check is not listed");
+    // Exactly the final check's lookups: eslint's check is not mandatory, and the Runner's Node is
+    // a path, which the real lookup never searches PATH for.
+    assert.deepEqual(lookedUp, [["tsc", workspace], [process.execPath, workspace]]);
+    const checks = inventoryCheckCommands(profile);
+    assert.deepEqual(checks.slice(0, 2).map((check) => check.label), ["check typecheck (mandatory): Type-check", "check selftest (mandatory): Self-test"], "mandatory checks come first");
 
-  const inventory = await collectEnvironmentInventory({
-    trigger: "planning",
-    revision,
-    cwd: tmpdir(),
-    checks,
-    mandatoryChecks: mandatory,
-    lookup: async (executable) => executable === "tsc" || executable === "eslint" ? { status: "missing" } : { status: "found", path: `/usr/bin/${executable}` },
-    run: async () => ({ outcome: "exited", exitCode: 0, stdout: "1.0.0\n", stderr: "" }),
-    browsers: async () => ({ browsers: [], notes: [] }),
-    platform: "linux",
+    const inventory = await collectEnvironmentInventory({
+      trigger: "planning",
+      revision,
+      cwd: tmpdir(),
+      checks,
+      mandatoryChecks: mandatory,
+      lookup: async (executable) => executable === "tsc" || executable === "eslint" ? { status: "missing" } : { status: "found", path: `/usr/bin/${executable}` },
+      run: async () => ({ outcome: "exited", exitCode: 0, stdout: "1.0.0\n", stderr: "" }),
+      browsers: async () => ({ browsers: [], notes: [] }),
+      platform: "linux",
+    });
+    assert.deepEqual(inventory.mandatoryChecks, mandatory);
+    assert.deepEqual(parseEnvironmentInventory(JSON.parse(JSON.stringify(inventory))), inventory, "the record replays");
+    const blocked = mandatoryChecksMissingTools(inventory);
+    assert.deepEqual(blocked.map((check) => check.checkId), ["typecheck"], "a missing tool of a non-mandatory check (eslint) blocks nothing");
+    assert.match(mandatoryToolMissingDetail(blocked), /tsc \(needed by mandatory check "typecheck", aiboard-validation\.json line 7\)/);
+    assert.throws(() => parseEnvironmentInventory({ ...JSON.parse(JSON.stringify(inventory)), mandatoryChecks: [{ checkId: "x", label: "X", tools: [], missing: ["tsc"] }] }), /names a missing tool it does not use/);
+    // An inventory from before VF4 has no mandatory checks and blocks nothing.
+    const { mandatoryChecks: _mandatory, ...older } = inventory;
+    assert.deepEqual(mandatoryChecksMissingTools(parseEnvironmentInventory(JSON.parse(JSON.stringify(older)))), []);
+    // A malformed file is recorded with the inventory, so the gate can pause on it after a restart.
+    const withError = await collectEnvironmentInventory({
+      trigger: "planning", revision, cwd: tmpdir(), checks: [], projectConfigError: "Project validation config aiboard-validation.json is not valid JSON.",
+      lookup: async () => ({ status: "missing" }), run: async () => ({ outcome: "exited", exitCode: 0, stdout: "", stderr: "" }),
+      browsers: async () => ({ browsers: [], notes: [] }), platform: "linux",
+    });
+    assert.equal(parseEnvironmentInventory(JSON.parse(JSON.stringify(withError))).projectConfigError, "Project validation config aiboard-validation.json is not valid JSON.");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("the inventory and the final check look a mandatory tool up where it launches, and skip a command that sets PATH", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "runner-v2 project checks lookup "));
+  try {
+    mkdirSync(join(workspace, "android"));
+    const android = join(workspace, "android");
+    // gradlew lives only in android/: found there, missing at the root.
+    const lookup = async (executable: string, { cwd }: { cwd: string }) =>
+      executable === "gradlew" && cwd === android ? { status: "found" as const, path: join(android, "gradlew") } : { status: "missing" as const };
+    const gradle: ProjectVerificationCheck = {
+      id: "android", label: "Android build", kind: "build", mandatory: true, run: { executable: "gradlew", args: ["assembleDebug"], cwd: "android" }, line: 4,
+    };
+    const pathSet: ProjectVerificationCheck = {
+      id: "toolchain", label: "Pinned toolchain", kind: "build", mandatory: true, run: { executable: "rustc", args: ["--version"] },
+      environment: { PATH: "/opt/toolchain/bin" }, line: 12,
+    };
+    const checks = await mandatoryProjectCheckTools({ checks: [gradle, pathSet], workspacePath: workspace, lookup });
+    assert.deepEqual(checks, [
+      { checkId: "android", label: "Android build", configLine: 4, tools: ["gradlew"], missing: [] },
+      { checkId: "toolchain", label: "Pinned toolchain", configLine: 12, tools: ["rustc"], missing: [] },
+    ], "gradlew is found in its own folder; a command that sets PATH searches folders the Runner did not");
+
+    // The final check decides from the same launch targets with the same rule.
+    for (const check of [gradle, pathSet]) {
+      const launch = await resolvedCheckLaunch(resolveProjectCheckForLookup(check, process.execPath), workspace);
+      assert.deepEqual(await missingCheckTools(launch.targets, lookup), [], check.id);
+    }
+    const launch = await resolvedCheckLaunch(resolveProjectCheckForLookup(gradle, process.execPath), workspace);
+    assert.deepEqual([launch.cwd, launch.cwdIssue, launch.targets.map((target) => target.cwd)], [android, undefined, [android]]);
+    // Lower-case Path (Windows) is a PATH too; a failed lookup launches as before.
+    assert.deepEqual(await missingCheckTools([{ executable: "rustc", cwd: workspace, environment: { Path: "C:/toolchain" } }], lookup), []);
+    assert.deepEqual(await missingCheckTools([{ executable: "x", cwd: workspace }], async () => { throw new Error("boom"); }), []);
+    assert.deepEqual(await missingCheckTools([{ executable: "gradlew", cwd: workspace }], lookup), ["gradlew"], "at the root it is missing");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("the config text: one message per unknown field, a BOM, minified JSON and lone CR line breaks", () => {
+  assert.throws(() => parseProjectValidationConfig({ version: 2, checks: [{ ...TYPECHECK, shell: "tsc" }] }), (error: Error) => {
+    assert.equal(error.message.match(/shell/g)?.length, 1, error.message);
+    return true;
   });
-  assert.deepEqual(inventory.mandatoryChecks, [
-    { checkId: "typecheck", label: "Type-check", configLine: 7, tools: ["tsc"], missing: ["tsc"] },
-    { checkId: "selftest", label: "Self-test", configLine: 15, tools: [], missing: [] },
-  ]);
-  assert.deepEqual(parseEnvironmentInventory(JSON.parse(JSON.stringify(inventory))), inventory, "the record replays");
-  const blocked = mandatoryChecksMissingTools(inventory);
-  assert.deepEqual(blocked.map((check) => check.checkId), ["typecheck"], "a missing tool of a non-mandatory check (eslint) blocks nothing");
-  assert.match(mandatoryToolMissingDetail(blocked), /tsc \(needed by mandatory check "typecheck", aiboard-validation\.json line 7\)/);
-  assert.throws(() => parseEnvironmentInventory({ ...JSON.parse(JSON.stringify(inventory)), mandatoryChecks: [{ checkId: "x", label: "X", tools: [], missing: ["tsc"] }] }), /names a missing tool it does not use/);
-  // An inventory from before VF4 has no mandatory checks and blocks nothing.
-  const { mandatoryChecks: _mandatory, ...older } = inventory;
-  assert.deepEqual(mandatoryChecksMissingTools(parseEnvironmentInventory(JSON.parse(JSON.stringify(older)))), []);
+  const bom = parseProjectValidationConfigText(`\uFEFF${JSON.stringify({ version: 2, checks: [TYPECHECK] })}`);
+  assert.equal(bom.checks?.[0]?.id, "typecheck", "a leading BOM is not an error");
+  assert.equal(bom.checks?.[0]?.line, 1);
+  // Minified: every check is on line 1. An "id" inside an environment is not a check's id.
+  const decoy: ProjectVerificationCheck = { id: "lint", label: "Lint", kind: "other", mandatory: false, run: { executable: "eslint", args: ["."] }, environment: { id: "x" } };
+  const minified = parseProjectValidationConfigText(JSON.stringify({ version: 2, checks: [decoy, TYPECHECK] }));
+  assert.deepEqual(minified.checks?.map((check) => check.line), [1, 1]);
+  // Lone CR breaks, and the environment's "id" first in the object.
+  const text = ["{", '"version": 2,', '"checks": [', "{", '"environment": { "id": "decoy" },', '"id": "lint",', '"label": "Lint", "kind": "other", "mandatory": false,', '"run": { "executable": "eslint", "args": ["."] }', "},", "{", '"id": "typecheck", "label": "Type-check", "kind": "build", "mandatory": true,', '"run": { "executable": "tsc", "args": ["--noEmit"] }', "}", "]", "}"].join("\r");
+  assert.deepEqual(parseProjectValidationConfigText(text).checks?.map((check) => check.line), [6, 11]);
+  assert.deepEqual(parseProjectValidationConfigText(text.replace(/\r/g, "\r\n")).checks?.map((check) => check.line), [6, 11]);
+});
+
+test("a Next.js static export gets no next start; comments and quoted keys are read, unclear forms keep the suggestion", () => {
+  assert.equal(isNextStaticExportConfig('module.exports = { output: "export" };'), true);
+  assert.equal(isNextStaticExportConfig('export default { "output": "export" };'), true, "a quoted key");
+  assert.equal(isNextStaticExportConfig("const config = { 'output': 'export', images: { unoptimized: true } };"), true);
+  assert.equal(isNextStaticExportConfig('module.exports = {\n  // output: "export",\n};'), false, "a commented-out line");
+  assert.equal(isNextStaticExportConfig('module.exports = { /* output: "export" */ };'), false, "a block comment");
+  assert.equal(isNextStaticExportConfig('module.exports = { output: process.env.EXPORT ? "export" : undefined };'), false, "unclear: keep next start");
+  assert.equal(isNextStaticExportConfig('module.exports = { output: "standalone" };'), false);
+  assert.equal(isNextStaticExportConfig('const url = "http://x//"; module.exports = { output: "export" };'), true, "// inside a string is not a comment");
 });
 
 test("a mandatory check that could not run is never recorded, and completion never accepts one", () => {

@@ -3,7 +3,7 @@ import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentit
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
 import type { TempRecordSink } from "./cleanup-ownership.js";
 import { existsSync } from "node:fs";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
@@ -23,7 +23,7 @@ import {
   type FinalVerificationStatus,
   type VerificationNotRun,
 } from "./final-verification-contracts.js";
-import type { CheckToolLookup } from "./check-tool-lookup.js";
+import { missingCheckTools, type CheckToolLookup, type CheckToolLookupTarget } from "./check-tool-lookup.js";
 import {
   captureCommandOutputs,
   outputCaptureBlocker,
@@ -31,7 +31,7 @@ import {
   type CommandOutputCapture,
 } from "./command-output-files.js";
 import {
-  joinWorkspace,
+  resolvedCheckLaunch,
   type ResolvedVerificationCheckV2,
   type VerificationCheckResultV2,
 } from "./verification-plan-v2.js";
@@ -736,12 +736,10 @@ export class FinalVerificationRuntime {
     // check launch at the checkout root. A folder that leaves the checkout is
     // refused at launch; its tools are looked up at the root.
     const first = resolved.commands[0];
-    const cwd = resolved.mode !== "program" && first?.cwd ? joinWorkspace(input.workspace.path, first.cwd) : undefined;
-    const cwdIssue = cwd ? await directoryInsideIssue(input.workspace.path, cwd, resolved.checkId) : undefined;
-    const notRun = await this.missingTool([
-      ...(provisioning ? [{ command: provisioning.command, cwd: input.workspace.path }] : []),
-      ...resolved.commands.map((command) => ({ command, cwd: cwd && !cwdIssue ? cwd : input.workspace.path })),
-    ]);
+    // VF4: the same launch folders and lookup rule the pre-planning inventory uses.
+    const launch = await resolvedCheckLaunch(resolved, input.workspace.path, provisioning?.command);
+    const { cwd, cwdIssue } = launch;
+    const notRun = await this.missingToolAt(launch.targets);
     if (notRun) {
       return {
         ...identity,
@@ -1290,23 +1288,17 @@ export class FinalVerificationRuntime {
       cwd: string;
     }[],
   ): Promise<VerificationNotRun | undefined> {
+    return await this.missingToolAt(lookups.map(({ command, cwd }) => ({
+      executable: command.executable,
+      cwd,
+      ...(command.environment ? { environment: command.environment } : {}),
+    })));
+  }
+
+  /** VF2/VF4: the shared lookup rule (missingCheckTools) as a not-run record. */
+  private async missingToolAt(targets: readonly CheckToolLookupTarget[]): Promise<VerificationNotRun | undefined> {
     if (!this.toolLookup) return undefined;
-    const missing: string[] = [];
-    const seen = new Set<string>();
-    for (const { command, cwd } of lookups) {
-      // A command that sets its own PATH searches directories the Runner did not look in.
-      if (Object.keys(command.environment ?? {}).some((name) => name.toUpperCase() === "PATH")) continue;
-      const key = `${cwd}\u0000${command.executable}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      let found;
-      try {
-        found = await this.toolLookup(command.executable, { cwd });
-      } catch {
-        continue; // An undecided lookup launches as before.
-      }
-      if (found.status === "missing") missing.push(command.executable);
-    }
+    const missing = await missingCheckTools(targets, this.toolLookup);
     if (missing.length === 0) return undefined;
     return {
       reason: "tool_missing",
@@ -2106,21 +2098,6 @@ function cwdRefused(issue: string): ProcessResult {
     outputTruncated: false,
     startError: Object.assign(new Error(issue), { code: "cwd_not_in_checkout" }),
   };
-}
-
-/** VF3: why a v2 command's working directory is unusable, or undefined when it is a directory inside the checkout. */
-async function directoryInsideIssue(workspacePath: string, cwd: string, checkId: string): Promise<string | undefined> {
-  try {
-    const [root, target] = await Promise.all([realpath(workspacePath), realpath(cwd)]);
-    const inside = relative(root, target);
-    if (inside.startsWith("..") || resolve(root, inside) !== target) {
-      return `check ${checkId} working directory leaves the verification checkout`;
-    }
-    if (!(await stat(target)).isDirectory()) return `check ${checkId} working directory is not a directory`;
-    return undefined;
-  } catch {
-    return `check ${checkId} working directory does not exist in the verification checkout`;
-  }
 }
 
 /** VF3: the trusted report descriptors for a v2 tests command that is one of the profile's own. */

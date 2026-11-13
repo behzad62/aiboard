@@ -918,9 +918,49 @@ async function nextStaticExport(repositoryRoot: string): Promise<{ path: string 
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
     }
-    return /\boutput\s*:\s*["'`]export["'`]/.test(text) ? { path: name } : undefined;
+    return isNextStaticExportConfig(text) ? { path: name } : undefined;
   }
   return undefined;
+}
+
+/**
+ * VF4: the config sets `output: "export"` (or `"output": "export"`) outside a comment. A form that
+ * cannot be read from the text, such as `output: isExport ? "export" : undefined`, is not a
+ * static export: the `next start` suggestion stays, and the Architect can skip it with a reason.
+ */
+export function isNextStaticExportConfig(text: string): boolean {
+  return /(?:^|[^\w$.])(["'`]?)output\1\s*:\s*(["'`])export\2(?=\s*[,}\n\r]|\s*$)/.test(withoutJsComments(text));
+}
+
+/** The text with `//` and `/* *\/` comments removed; quoted strings are kept as they are. */
+function withoutJsComments(text: string): string {
+  let out = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (char === "\"" || char === "'" || char === "`") {
+      const end = closingQuote(text, index, char);
+      out += text.slice(index, end + 1);
+      index = end;
+    } else if (char === "/" && text[index + 1] === "/") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+      out += "\n";
+    } else if (char === "/" && text[index + 1] === "*") {
+      const end = text.indexOf("*/", index + 2);
+      index = end < 0 ? text.length : end + 1;
+      out += " ";
+    } else {
+      out += char;
+    }
+  }
+  return out;
+}
+
+function closingQuote(text: string, start: number, quote: string): number {
+  for (let index = start + 1; index < text.length; index += 1) {
+    if (text[index] === "\\") { index += 1; continue; }
+    if (text[index] === quote) return index;
+  }
+  return text.length - 1;
 }
 function cloneProjectTiers(tiers: import("./project-validation-config.js").ProjectValidationTiers): ProjectValidationTiers {
   const clone: ProjectValidationTiers = {};

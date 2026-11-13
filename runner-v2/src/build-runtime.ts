@@ -187,15 +187,17 @@ import {
 import { describeFailureChain, describeFailureWithCauses, lifecycleTrace } from "./lifecycle-diagnostics.js";
 import {
   boundEnvironmentInventory,
+  MANDATORY_CHECK_TOOL_MISSING_PAUSE,
   mandatoryChecksMissingTools,
   mandatoryToolMissingDetail,
+  PROJECT_VALIDATION_CONFIG_INVALID_PAUSE,
+  projectConfigInvalidDetail,
   unavailableEnvironmentInventory,
   type EnvironmentInventory,
   type InventoryTrigger,
 } from "./verification-inventory.js";
 
-/** VF4: the run's pause while a mandatory check's tool is missing. */
-export const MANDATORY_CHECK_TOOL_MISSING_PAUSE = "mandatory_check_tool_missing";
+export { MANDATORY_CHECK_TOOL_MISSING_PAUSE, PROJECT_VALIDATION_CONFIG_INVALID_PAUSE };
 export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
@@ -1860,10 +1862,12 @@ export class BuildRuntime {
     if (projection.status === "running" && await this.recordEnvironmentInventoryIfDue(events)) {
       events = this.store.readRun(this.runId);
       projection = rebuildSchedulerProjection(events);
-      // VF4: a mandatory check's missing tool stops the run before any work.
-      if (projection.status === "paused") {
-        return { status: "paused", action: projection.pauseReason?.reason };
-      }
+    }
+    // VF4: a malformed aiboard-validation.json or a mandatory check's missing tool stops the run
+    // here, ahead of any guidance turn, planning or other work.
+    if (projection.status === "running") {
+      const gate = this.verificationGatePause(events, projection);
+      if (gate) return gate;
     }
     this.browsing?.configure({
       cli: projection.browsing?.surface === "playwright_cli",
@@ -4479,37 +4483,42 @@ export class BuildRuntime {
     } catch {
       return false;
     }
-    this.pauseIfMandatoryToolMissing(inventory, lastResume);
     return true;
   }
 
   /**
-   * VF4: the one pause the verification plan adds. A check the project's aiboard-validation.json
-   * makes mandatory cannot run without its tool, so when the inventory finds one missing the run
-   * stops here, before planning or any further work and before any model call, naming the tool
-   * and the config line. The owner installs it and resumes; the resume's own inventory checks
-   * again. A tool the lookup could not decide about launches as before (VF2).
+   * VF4: the pre-planning verification gate. On a v2 run it stops, before planning or any further
+   * work and before any model call, when the inventory recorded for this epoch (the run's start,
+   * then each resume) says that the project's aiboard-validation.json is malformed, or that a check
+   * it makes mandatory cannot run because its tool is missing. One pause names every blocked check,
+   * its tools and its config line. The owner fixes it and resumes; the resume's inventory decides
+   * again. It reads the recorded inventory, never this process's memory, so a Runner restart between
+   * the inventory and the pause still pauses. A tool the lookup could not decide about launches as
+   * before (VF2). A pause that cannot be recorded throws: the step never goes on to planning.
    */
-  private pauseIfMandatoryToolMissing(inventory: EnvironmentInventory, epoch: number): void {
+  private verificationGatePause(events: readonly SchedulerEvent[], projection: SchedulerProjection): BuildStepResult | undefined {
     // A run on the v1 contract (started before VF3) never runs project checks.
-    if (this.projection().verificationContractVersion !== 2) return;
+    if (projection.verificationContractVersion !== 2) return undefined;
+    const inventory = projection.environmentInventory;
+    if (!inventory) return undefined;
+    const lastResume = events.reduce((latest, event) => event.type === "run.resumed" ? event.sequence : latest, 0);
+    if (inventory.sequence < lastResume) return undefined;
     const blocked = mandatoryChecksMissingTools(inventory);
-    if (blocked.length === 0) return;
-    try {
-      this.store.append({
-        runId: this.runId,
-        type: "run.paused",
-        occurredAt: this.clock(),
-        actor: { role: "runner", id: "build-runtime" },
-        idempotencyKey: `mandatory-check-tool-missing:${epoch}`,
-        payload: {
-          reason: MANDATORY_CHECK_TOOL_MISSING_PAUSE,
-          detail: mandatoryToolMissingDetail(blocked),
-        },
-      });
-    } catch {
-      // A refused pause leaves the run as it was; the final check still refuses a mandatory check it could not run.
-    }
+    const pause = inventory.projectConfigError
+      ? { reason: PROJECT_VALIDATION_CONFIG_INVALID_PAUSE, detail: projectConfigInvalidDetail(inventory.projectConfigError) }
+      : blocked.length > 0
+        ? { reason: MANDATORY_CHECK_TOOL_MISSING_PAUSE, detail: mandatoryToolMissingDetail(blocked) }
+        : undefined;
+    if (!pause) return undefined;
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `${pause.reason}:${inventory.sequence}`,
+      payload: pause,
+    });
+    return { status: "paused", action: pause.reason };
   }
 
   /**

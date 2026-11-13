@@ -129,6 +129,14 @@ export function nativeBuildPauseDescription(
         ?? "A check your aiboard-validation.json makes mandatory cannot run on this machine. Install its tool, then resume.",
     };
   }
+  if (reason === "project_validation_config_invalid") {
+    return {
+      waitingForOwner: true,
+      title: "Waiting for you: aiboard-validation.json is malformed",
+      detail: projection.pauseReason?.detail
+        ?? "The project's aiboard-validation.json could not be read. Fix the file, then resume.",
+    };
+  }
   if (reason === "verifier.selection_required") {
     return { waitingForOwner: true, title: "Waiting for you: choose a verifier", detail: "Pick an independent verifier below to continue." };
   }

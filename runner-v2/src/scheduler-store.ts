@@ -185,6 +185,7 @@ import {
 } from "./planning-projection.js";
 import {
   parseEnvironmentInventory,
+  VERIFICATION_GATE_PAUSE_REASONS,
   type EnvironmentInventoryProjection,
 } from "./verification-inventory.js";
 
@@ -2191,6 +2192,7 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "provider.health_changed" ||
     // VF1: a Runner fact about this machine; it never advances the run.
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
+    isVerificationGatePause(event) ||
     // VF7b: the run's tool surface, recorded before planning; it never advances the run.
     (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
     event.type === "architect.runtime_assigned" ||
@@ -2224,6 +2226,16 @@ export function assertPendingUserGuidanceAllowsEvent(
   }
 }
 
+/**
+ * VF4: the pre-planning verification gate (a malformed aiboard-validation.json, or a mandatory
+ * check's missing tool) pauses ahead of the guidance turn and of an open question's answer; the
+ * owner's note or answer waits for the resume. A pause never advances work.
+ */
+function isVerificationGatePause(event: Pick<SchedulerEvent, "type" | "actor" | "payload">): boolean {
+  return event.type === "run.paused" && event.actor.role === "runner" && event.actor.id === "build-runtime" &&
+    VERIFICATION_GATE_PAUSE_REASONS.has(String(event.payload.reason));
+}
+
 const OWNER_REPAIR_ANSWERS: ReadonlySet<string> = new Set([
   "repair.issue_budget_extended",
   "repair.external_blocker_cleared",
@@ -2252,6 +2264,7 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "provider.health_changed" ||
     // VF1: a Runner fact about this machine; it never advances the run.
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
+    isVerificationGatePause(event) ||
     // VF7b: the run's tool surface, recorded before planning; it never advances the run.
     (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
     event.type === "architect.runtime_assigned" ||

@@ -160,25 +160,32 @@ export function parseProjectValidationConfig(
   return config;
 }
 
+/** VF4: the project's aiboard-validation.json is present but not valid; a v2 run pauses on it before planning. */
+export class ProjectValidationConfigError extends Error {
+  override readonly name = "ProjectValidationConfigError";
+}
+
 /**
- * Parse the file text: JSON, then the strict schema. A declared check also records the line of
- * its id, so a pause can name it. Errors name the file and what is wrong with it.
+ * Parse the file text: JSON, then the strict schema. A leading UTF-8 byte-order mark (Windows
+ * PowerShell 5's `Out-File -Encoding utf8` writes one) is ignored. A declared check also records
+ * the line of its id, so a pause can name it. Errors name the file and what is wrong with it.
  */
 export function parseProjectValidationConfigText(text: string): ProjectValidationConfig {
+  const source = text.startsWith("\uFEFF") ? text.slice(1) : text;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text) as unknown;
+    parsed = JSON.parse(source) as unknown;
   } catch (error) {
-    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is not valid JSON.`, { cause: error });
+    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is not valid JSON.`, { cause: error });
   }
   let config: ProjectValidationConfig;
   try {
     config = parseProjectValidationConfig(parsed);
   } catch (error) {
-    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is malformed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is malformed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   if (config.checks) {
-    const lines = projectCheckLines(text, config.checks.map((check) => check.id));
+    const lines = projectCheckLines(source, config.checks.length);
     config.checks = config.checks.map((check, index) => ({
       ...check,
       ...(lines[index] !== undefined ? { line: lines[index] } : {}),

@@ -94,15 +94,13 @@ import {
 } from "./native-planning-provisioner.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
-import { createCheckToolLookup } from "./check-tool-lookup.js";
+import { createCheckToolLookup, mandatoryProjectCheckTools, type MandatoryCheckTools } from "./check-tool-lookup.js";
 import { isPlaywrightCliBrowser } from "./playwright-cli.js";
 import {
   collectEnvironmentInventory,
   inventoryCheckCommands,
-  inventoryMandatoryChecks,
   oneShotInventoryRunner,
   type InventoryCheckCommand,
-  type InventoryMandatoryCheckCommands,
 } from "./verification-inventory.js";
 import { flakyRerunPattern, isPackageRunTestCommand, judgeFlakyRerun, narrowNodeTestCommand } from "./flaky-rerun.js";
 import { topDefectClasses } from "./defect-history.js";
@@ -233,7 +231,7 @@ import type {
 import { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "./sqlite-budget-ledger.js";
 import { isRunValidationBudgetScope } from "./validation-budget.js";
-import { readValidationBudgetMsAtRevision } from "./project-validation-config.js";
+import { ProjectValidationConfigError, readValidationBudgetMsAtRevision } from "./project-validation-config.js";
 import { SqliteEvidenceStore } from "./sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "./sqlite-project-memory.js";
 import { rebuildProjectMemories } from "./project-memory.js";
@@ -2332,8 +2330,9 @@ export class NativeBuildFactory {
               const workspace = await finalVerificationProfileWorkspace.create(revision);
               try {
                 let checks: InventoryCheckCommand[] = [];
-                let mandatoryChecks: InventoryMandatoryCheckCommands[] = [];
+                let mandatoryChecks: MandatoryCheckTools[] = [];
                 let checksNote: string | undefined;
+                let projectConfigError: string | undefined;
                 try {
                   const profile = await inspectFinalVerificationExecutionProfile({
                     repositoryRoot: workspace.path,
@@ -2342,10 +2341,18 @@ export class NativeBuildFactory {
                     ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
                   });
                   checks = inventoryCheckCommands(profile);
-                  // VF4: the record says which mandatory check a missing tool blocks; the runtime pauses on it.
-                  mandatoryChecks = inventoryMandatoryChecks(profile);
+                  // VF4: which mandatory check a missing tool blocks, decided by the final check's own
+                  // lookup (same folders, same PATH rule); the runtime pauses on it before planning.
+                  mandatoryChecks = await mandatoryProjectCheckTools({
+                    checks: profile.projectChecks ?? [],
+                    ...(profile.provisioning ? { provisioning: profile.provisioning.command } : {}),
+                    workspacePath: workspace.path,
+                    lookup: checkToolLookup,
+                  });
                 } catch (error) {
                   checksNote = `The checks of this revision could not be read: ${error instanceof Error ? error.message : String(error)}`;
+                  // VF4: a malformed aiboard-validation.json stops a v2 run before planning.
+                  if (error instanceof ProjectValidationConfigError) projectConfigError = error.message;
                 }
                 return await collectEnvironmentInventory({
                   trigger,
@@ -2353,6 +2360,7 @@ export class NativeBuildFactory {
                   cwd: workspace.path,
                   checks,
                   ...(mandatoryChecks.length ? { mandatoryChecks } : {}),
+                  ...(projectConfigError ? { projectConfigError } : {}),
                   ...(checksNote ? { checksNote } : {}),
                   lookup: checkToolLookup,
                   run: oneShotInventoryRunner(commandExecution, { runId: spec.runId }),

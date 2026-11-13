@@ -13,7 +13,10 @@
  * A run records `verificationContractVersion: 2` when it starts. A run started before VF3 keeps
  * the four fixed categories (final-verification-contracts.ts) to the end.
  */
-import { resolve as resolvePath } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { relative as relativePath, resolve as resolvePath } from "node:path";
+
+import type { CheckToolLookupTarget } from "./check-tool-lookup.js";
 
 import { normalizeOutputPatterns } from "./command-output-files.js";
 import {
@@ -670,8 +673,9 @@ export function projectVerificationCheckIssues(candidate: unknown, index: number
   if (unknown.length) {
     issues.push(`${at} has unknown fields: ${unknown.join(", ")}${unknown.includes("origin") ? " (the Runner records a declared check's origin as project)" : ""}.`);
   }
-  const { origin: _origin, ...rest } = candidate;
-  issues.push(...checkIssues(rest, index, false, PROJECT_COMMAND_LIMITS));
+  // Unknown fields are reported once, above; the check's own rules see only the known ones.
+  const known = Object.fromEntries(Object.entries(candidate).filter(([key]) => PROJECT_CHECK_KEYS.includes(key)));
+  issues.push(...checkIssues(known, index, false, PROJECT_COMMAND_LIMITS));
   if (typeof candidate.mandatory !== "boolean") {
     issues.push(`${at}.mandatory must be true or false: a mandatory check stops the Build when it cannot run or still fails after its repairs.`);
   }
@@ -733,22 +737,54 @@ export function projectCheckLocation(check: Pick<ProjectVerificationCheck, "id" 
 }
 
 /**
- * The 1-based line of each declared check's `"id"` in the file text, in declaration order. A check
- * whose id cannot be found gets none.
+ * The 1-based line of each declared check's `"id"` key in the file text, in declaration order:
+ * the key of `checks[i].id` itself, found by walking the JSON (strings, nesting, any line breaks),
+ * so a minified file, `\r` line breaks or an `"id"` inside an environment map all give the right
+ * line. A check whose id key is not found gets none. The text must already parse as JSON.
  */
-export function projectCheckLines(text: string, ids: readonly string[]): Array<number | undefined> {
-  const lines = text.split(/\r?\n/);
-  let from = 0;
-  return ids.map((id) => {
-    const pattern = new RegExp(`"id"\\s*:\\s*${JSON.stringify(id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
-    for (let index = from; index < lines.length; index += 1) {
-      if (pattern.test(lines[index]!)) {
-        from = index + 1;
-        return index + 1;
+export function projectCheckLines(text: string, count: number): Array<number | undefined> {
+  const found: Array<number | undefined> = Array.from({ length: count }, () => undefined);
+  // Each open container: an object (with the key of the value being read) or an array (with the index).
+  const stack: Array<{ kind: "object"; key?: string } | { kind: "array"; index: number }> = [];
+  let line = 1;
+  let pendingKey: string | undefined;
+  const path = () => stack.map((frame) => frame.kind === "object" ? frame.key : frame.index);
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (char === "\r") { if (text[index + 1] !== "\n") line += 1; continue; }
+    if (char === "\n") { line += 1; continue; }
+    if (char === "\"") {
+      let value = "";
+      for (index += 1; index < text.length && text[index] !== "\""; index += 1) {
+        if (text[index] === "\\") index += 1;
+        value += text[index];
       }
+      const top = stack.at(-1);
+      // A string right after `{` or `,` inside an object is a key.
+      if (top?.kind === "object" && top.key === undefined) {
+        pendingKey = value;
+        const keyPath = [...path().slice(0, -1), value];
+        if (keyPath.length === 3 && keyPath[0] === "checks" && typeof keyPath[1] === "number" && keyPath[2] === "id" &&
+          keyPath[1] < count && found[keyPath[1]] === undefined) {
+          found[keyPath[1]] = line;
+        }
+      }
+      continue;
     }
-    return undefined;
-  });
+    if (char === ":") { const top = stack.at(-1); if (top?.kind === "object") top.key = pendingKey; continue; }
+    if (char === "{") { stack.push({ kind: "object" }); continue; }
+    if (char === "[") { stack.push({ kind: "array", index: 0 }); continue; }
+    if (char === "}" || char === "]") {
+      stack.pop();
+      continue;
+    }
+    if (char === ",") {
+      const top = stack.at(-1);
+      if (top?.kind === "object") top.key = undefined;
+      else if (top?.kind === "array") top.index += 1;
+    }
+  }
+  return found;
 }
 
 /**
@@ -1499,6 +1535,67 @@ function normalizeRelative(value: string): string {
 /** The absolute directory a resolved command's relative cwd names inside the checkout. */
 export function joinWorkspace(workspacePath: string, cwd: string): string {
   return resolvePath(workspacePath, ...normalizeRelative(cwd).split("/"));
+}
+
+/**
+ * Where a resolved check's commands launch, and so where their tools are looked up (VF2): a run
+ * check in its own folder (gradlew with cwd android), provisioning and a start check at the
+ * checkout root. A folder that leaves the checkout or does not exist is refused at launch
+ * (`cwdIssue`), and its tools are looked up at the root. The final check and the pre-planning
+ * inventory (VF4) both use this, so they always look in the same places.
+ */
+export async function resolvedCheckLaunch(
+  resolved: ResolvedVerificationCheckV2,
+  workspacePath: string,
+  provisioning?: { executable: string; environment?: Readonly<Record<string, string | undefined>> },
+): Promise<{ cwd?: string; cwdIssue?: string; targets: CheckToolLookupTarget[] }> {
+  const first = resolved.commands[0];
+  const cwd = resolved.mode !== "program" && first?.cwd ? joinWorkspace(workspacePath, first.cwd) : undefined;
+  const cwdIssue = cwd ? await directoryInsideIssue(workspacePath, cwd, resolved.checkId) : undefined;
+  const folder = cwd && !cwdIssue ? cwd : workspacePath;
+  const target = (command: { executable: string; environment?: Readonly<Record<string, string | undefined>> }, at: string): CheckToolLookupTarget => ({
+    executable: command.executable,
+    cwd: at,
+    ...(command.environment ? { environment: command.environment } : {}),
+  });
+  return {
+    ...(cwd ? { cwd } : {}),
+    ...(cwdIssue ? { cwdIssue } : {}),
+    targets: [
+      ...(provisioning ? [target(provisioning, workspacePath)] : []),
+      ...resolved.commands.map((command) => target(command, folder)),
+    ],
+  };
+}
+
+async function directoryInsideIssue(workspacePath: string, cwd: string, checkId: string): Promise<string | undefined> {
+  try {
+    const [root, target] = await Promise.all([realpath(workspacePath), realpath(cwd)]);
+    const inside = relativePath(root, target);
+    if (inside.startsWith("..") || resolvePath(root, inside) !== target) {
+      return `check ${checkId} working directory leaves the verification checkout`;
+    }
+    if (!(await stat(target)).isDirectory()) return `check ${checkId} working directory is not a directory`;
+    return undefined;
+  } catch {
+    return `check ${checkId} working directory does not exist in the verification checkout`;
+  }
+}
+
+/**
+ * VF4: one declared check as the commands the Runner would launch: resolved alone, as written
+ * (`node` is the Runner's own Node). A server's {port} becomes a stand-in port: only the
+ * executables and folders matter to a tool lookup.
+ */
+export function resolveProjectCheckForLookup(check: ProjectVerificationCheck, nodeExecutable: string): ResolvedVerificationCheckV2 {
+  const { line: _line, ...declared } = cloneProjectCheck(check);
+  const [resolved] = resolveVerificationPlanV2({
+    plan: { version: 2, checks: [{ ...declared, origin: "project" }], skipped: [] },
+    suggestions: [],
+    port: 1,
+    nodeExecutable,
+  });
+  return resolved!;
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
