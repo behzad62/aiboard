@@ -47,8 +47,11 @@ import { FINAL_TASK_ID, GENERATION_ID, REVIEW_ID, WHEN, seedTasks, v1NotApplicab
 
 type ToolResult = { isError: boolean; error?: { message?: string; code?: string } };
 type Call = (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
-/** `unproven`: the check's program was started, but its stop did not prove it stopped. */
-type Outcome = "passed" | "failed" | "unproven";
+/**
+ * `unproven`: the check's program was started, but its stop did not prove it stopped.
+ * `start_unverified`: its start failed and the cleanup of what it launched was not verified.
+ */
+type Outcome = "passed" | "failed" | "unproven" | "start_unverified";
 /** VF4: the check's tool is missing on this machine. */
 type Result = Outcome | "tool_missing";
 
@@ -197,7 +200,7 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
         }
         // A passed check carries one recorded command fact per planned command; an unproven one
         // the same facts, with the cleanup not proven.
-        const unproven = result === "unproven";
+        const unproven = result === "unproven" || result === "start_unverified";
         const program = resolved.mode === "program";
         const stdout = await artifacts.put(Buffer.from("ok" + String.fromCharCode(10)), "text/plain", "stdout");
         const stderr = await artifacts.put(Buffer.from(""), "text/plain", "stderr");
@@ -225,7 +228,7 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
           endState: { revision, status: "clean" },
           ...(index > 0 ? { workflowStep: true as const } : {}),
           ...(program ? { endpoint: resolved.endpoint } : {}),
-          ...(program && index === 0 ? { readinessSatisfied: true, cleanupRequested: true, cleanupSucceeded: !unproven } : {}),
+          ...(program && index === 0 ? { readinessSatisfied: result !== "start_unverified", cleanupRequested: true, cleanupSucceeded: !unproven } : {}),
         }));
         const evidenceIds = facts.map((fact, index) => evidence.record({
           runId, taskId: FINAL_TASK_ID, actor: { role: "worker", id: "final-verification" }, fact,
@@ -696,6 +699,10 @@ test("a start check whose program was not proven stopped ends the generation the
     ["before another check", [
       { id: "relay", label: "relay server", kind: "start", outcome: "unproven" },
       { id: "py-tests", label: "tests", kind: "tests", outcome: "failed", run: { executable: "python", args: ["-m", "pytest"] } },
+    ], ["execute:relay", "cleanup"]],
+    ["after a start whose cleanup is unverified", [
+      { id: "relay", label: "relay server", kind: "start", outcome: "start_unverified" },
+      { id: "relay2", label: "second relay", kind: "start", outcome: "passed" },
     ], ["execute:relay", "cleanup"]],
     ["as the last check", [
       { id: "py-tests", label: "tests", kind: "tests", outcome: "failed", run: { executable: "python", args: ["-m", "pytest"] } },

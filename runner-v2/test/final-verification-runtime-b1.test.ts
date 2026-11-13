@@ -18,7 +18,12 @@ import { createExecutionHost } from "../src/execution-host.js";
 import { minimalWindowsSemanticProbeEnvironment } from "../src/windows-process-semantic-probes.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
-import { type FinalVerificationPlan, type FinalVerificationRuntimeSmokeInput } from "../src/final-verification-runtime.js";
+import {
+  FinalVerificationStartFailedCleanly,
+  FinalVerificationStartUnverified,
+  type FinalVerificationPlan,
+  type FinalVerificationRuntimeSmokeInput,
+} from "../src/final-verification-runtime.js";
 import { FinalVerificationRuntime } from "./support/git-fixture.js";
 import { assertFinalVerificationCheckSemantics } from "../src/final-verification-semantics.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -168,6 +173,68 @@ for (const status of ["running", "exited_unknown"] as const) test(`runtime smoke
     assert.equal(fact.cleanupRequested, true);
     assert.equal(fact.cleanupSucceeded, false);
     assert.ok(check.issues.some((issue) => issue.includes(`process was not proven stopped (status ${status})`)), check.issues.join(" "));
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
+// VF8: a start error proves nothing was left running only when the managed adapter says so.
+for (const [name, error, expected] of [
+  ["the service's unverified cleanup (AggregateError)", new AggregateError([new Error("spawn failed"), new Error("cleanup failed")], "Managed failed start retains unverified exact cleanup."), "unproven"],
+  ["an error the Runner cannot classify", new Error("something else"), "unproven"],
+  ["a start that failed after it resolved (snapshot kept)", "snapshot", "unproven"],
+  ["a clean failed start", "clean", "clean"],
+] as const) test(`runtime smoke after ${name}`, async (t) => {
+  const fixture = await createFixture(`smoke start ${expected} ${name.length}`);
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = workspaceFor(fixture);
+  const running = { processId: "p1", status: "running" as const, exitCode: null, signal: null, stdout: "", stderr: "" };
+  const calls: string[] = [];
+  const runtime = new FinalVerificationRuntime({
+    execution: createTestOneShotCommandExecutor(t),
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    integrationRevision: () => fixture.integration.revision,
+    managedProcess: {
+      start: async () => {
+        calls.push("start");
+        if (error === "snapshot") throw new FinalVerificationStartUnverified(new Error("grant revoke failed"), running);
+        if (error === "clean") throw new FinalVerificationStartFailedCleanly(new Error("spawn failed"));
+        throw error;
+      },
+      poll: async () => running,
+      stop: async () => { calls.push("stop"); return { ...running, status: "stopped" as const }; },
+    },
+  });
+  try {
+    const smoke = smokeInput(0, {
+      readiness: { timeoutMs: 1_000, pollIntervalMs: 10, healthCheck: async () => true },
+      releasePort: () => { calls.push("release"); },
+    });
+    const run = await runtime.run({
+      plan: smokePlan(),
+      executionProfile: smokeProfile(fixture.integration.revision, smoke),
+      runtimeSmoke: smoke,
+    });
+    const check = runtimeCheck(run);
+    const fact = check.facts[0] as typeof check.facts[number] & { cleanupRequested: boolean; cleanupSucceeded: boolean; readinessSatisfied: boolean };
+    assert.equal(check.green, false);
+    assert.equal(fact.readinessSatisfied, false);
+    // A program left by the failed call is still stopped; the port is released as before.
+    assert.deepEqual(calls, error === "snapshot" ? ["start", "stop", "release"] : ["start", "release"]);
+    if (expected === "unproven") {
+      assert.equal(fact.cleanupRequested, true, "the program is not proven stopped");
+      assert.equal(fact.cleanupSucceeded, false);
+      assert.ok(check.issues.some((issue) => issue.includes("failed to start and its cleanup was not verified")), check.issues.join(" "));
+    } else {
+      assert.equal(fact.cleanupRequested, false, "nothing was left running");
+      assert.ok(check.issues.some((issue) => issue.includes("could not start: spawn failed")), check.issues.join(" "));
+    }
   } finally {
     evidence.close();
     await workspace.cleanup().catch(() => undefined);
