@@ -166,6 +166,10 @@ import {
   type PlanningEventType,
   type PlanningProjection,
 } from "./planning-projection.js";
+import {
+  parseEnvironmentInventory,
+  type EnvironmentInventoryProjection,
+} from "./verification-inventory.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -293,6 +297,7 @@ export type SchedulerEventType =
   | "answer.review_prior_findings_released"
   | "answer.review_recorded"
   | "answer.review_unavailable"
+  | "environment.inventory_recorded"
   | PlanningEventType;
 
 export interface SchedulerEvent {
@@ -976,6 +981,12 @@ export interface SchedulerProjection {
   /** Set when an abort resolution fails the scheduler run. */
   failureReason?: string;
   contextRecording?: ContextRecordingProjection;
+  /**
+   * VF1: the latest tool inventory the Runner recorded (before planning, and
+   * again after each resume). Facts only; nothing in the kernel reads it to
+   * decide anything. Absent on every run recorded before VF1.
+   */
+  environmentInventory?: EnvironmentInventoryProjection;
   /**
    * Legacy plans remain readable, but an active plan without criteria must
    * pass through one append-only Architect upgrade before it can proceed.
@@ -2093,6 +2104,8 @@ export function assertPendingUserGuidanceAllowsEvent(
     (OWNER_REPAIR_ANSWERS.has(event.type) && event.actor.role === "user") ||
     event.type === "provider.retry_scheduled" ||
     event.type === "provider.health_changed" ||
+    // VF1: a Runner fact about this machine; it never advances the run.
+    (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
     event.type === "architect.runtime_assigned" ||
     event.type === "architect.handoff_required" ||
     event.type === "architect.handoff_selected" ||
@@ -2150,6 +2163,8 @@ export function assertOpenArchitectQuestionAllowsEvent(
     (OWNER_REPAIR_ANSWERS.has(event.type) && event.actor.role === "user") ||
     event.type === "provider.retry_scheduled" ||
     event.type === "provider.health_changed" ||
+    // VF1: a Runner fact about this machine; it never advances the run.
+    (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
     event.type === "architect.runtime_assigned" ||
     event.type === "architect.handoff_required" ||
     event.type === "architect.handoff_selected" ||
@@ -4799,6 +4814,22 @@ export function reduceSchedulerEvent(
         delete records[key];
         next.tempRecords = records;
       }
+      break;
+    }
+    case "environment.inventory_recorded": {
+      // VF1: the Runner records what this machine has. Facts only: the
+      // projection keeps the latest record and nothing reads it to decide.
+      if (event.actor.role !== "runner" || event.actor.id !== "build-runtime") {
+        throw new Error("Only the build runtime may record the environment inventory.");
+      }
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record an environment inventory.");
+      }
+      next.environmentInventory = {
+        ...parseEnvironmentInventory(event.payload),
+        sequence: event.sequence,
+        recordedAt: event.occurredAt,
+      };
       break;
     }
     case "cleanup.checked": {

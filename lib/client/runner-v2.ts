@@ -705,6 +705,87 @@ export function contextRecordingView(
   };
 }
 
+/** VF1: one tool of the Runner's inventory (runner-v2/src/verification-inventory.ts). */
+export interface NativeEnvironmentInventoryTool {
+  name: string;
+  status: "found" | "missing" | "unknown";
+  path?: string;
+  version?: string;
+  versionNote?: string;
+  note?: string;
+  usedBy: string[];
+}
+
+export interface NativeEnvironmentInventoryBrowser {
+  id: "chrome" | "msedge" | "chromium";
+  status: "found" | "missing" | "unknown";
+  path?: string;
+  version?: string;
+  missingLibraries?: string[];
+  note?: string;
+}
+
+/** VF1: what the Runner recorded about this machine before planning, or on the latest resume. Facts only. */
+export interface NativeEnvironmentInventory {
+  version: 1;
+  trigger: "planning" | "resume";
+  platform: string;
+  arch: string;
+  runnerNode: string;
+  revision?: string;
+  tools: NativeEnvironmentInventoryTool[];
+  toolsOmitted: number;
+  browsers: NativeEnvironmentInventoryBrowser[];
+  playwrightBrowser: "chrome" | "msedge" | "chromium" | null;
+  notes: string[];
+  sequence: number;
+  recordedAt: string;
+}
+
+export interface EnvironmentInventoryView {
+  heading: string;
+  recordedAt: string;
+  tools: Array<{ name: string; status: "found" | "missing" | "unknown"; detail: string; usedBy: string }>;
+  omitted?: string;
+  browser: string;
+  notes: string[];
+}
+
+const BROWSER_NAMES: Record<NativeEnvironmentInventoryBrowser["id"], string> = {
+  chrome: "Chrome",
+  msedge: "Edge",
+  chromium: "Playwright's Chromium",
+};
+
+/** Run details: the Runner's tool inventory as display rows; undefined for a run recorded before VF1. */
+export function environmentInventoryView(
+  projection: Pick<NativeBuildProjection, "environmentInventory"> | null | undefined,
+): EnvironmentInventoryView | undefined {
+  const inventory = projection?.environmentInventory;
+  if (!inventory) return undefined;
+  const chosen = inventory.browsers.find((browser) => browser.id === inventory.playwrightBrowser);
+  const unusable = inventory.browsers.find((browser) => browser.missingLibraries && browser.missingLibraries.length > 0);
+  return {
+    heading: `${inventory.trigger === "resume" ? "Recorded on resume" : "Recorded before planning"} · ${inventory.platform} ${inventory.arch} · Node ${inventory.runnerNode}`,
+    recordedAt: inventory.recordedAt,
+    tools: inventory.tools.map((tool) => ({
+      name: tool.name,
+      status: tool.status,
+      detail: tool.status === "found"
+        ? tool.version ?? tool.versionNote ?? "found"
+        : tool.status === "missing" ? "not found on PATH" : tool.note ?? "could not be checked",
+      usedBy: tool.usedBy.join(", "),
+    })),
+    ...(inventory.toolsOmitted > 0 ? { omitted: `${inventory.toolsOmitted} more not recorded` } : {}),
+    browser: chosen
+      ? `${BROWSER_NAMES[chosen.id]}${chosen.version ? ` ${chosen.version}` : ""}`
+      : unusable
+        ? `None usable: ${BROWSER_NAMES[unusable.id]} is missing ${unusable.missingLibraries!.join(", ")}`
+        : "None found",
+    notes: [...inventory.notes],
+  };
+}
+
 export interface NativeBuildProjection {
   /** Read-only mirrors of scheduler authority; no browser-side reducers. */
   planningPolicyVersion?: 1;
@@ -729,6 +810,8 @@ export interface NativeBuildProjection {
     detail?: string;
   };
   contextRecording?: NativeContextRecordingState;
+  /** VF1: absent on runs recorded before the Runner took a tool inventory. */
+  environmentInventory?: NativeEnvironmentInventory;
   runPolicy?: BuildRunPolicy;
   planRevision: number;
   acceptanceContractStatus?: NativeAcceptanceContractStatus;

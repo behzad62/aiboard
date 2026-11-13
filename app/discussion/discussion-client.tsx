@@ -197,6 +197,7 @@ import {
 } from "@/components/BuildTaskBoard";
 import { NativePlanningPanel, NativePlanStartCard } from "@/components/NativePlanningPanel";
 import { LoadingNotice } from "@/components/build/LoadingNotice";
+import { EnvironmentInventoryPanel } from "@/components/build/EnvironmentInventoryPanel";
 import { buildCrewFromDiscussion, selectBuildCrewRuntimes } from "@/lib/client/build-crew";
 import { requestSpecificationSource } from "@/lib/client/native-planning-view";
 import {
@@ -3084,6 +3085,7 @@ function DiscussionPageInner() {
                 </button>
               )}
             </section>
+            <EnvironmentInventoryPanel projection={nativeProjection} />
             <BuildRunStats
               status={status}
               policy={discussion.buildRunPolicy ?? "finish"}

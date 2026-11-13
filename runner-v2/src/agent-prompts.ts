@@ -32,6 +32,7 @@ import type { ValidationScope } from "./validation-scope.js";
 import { PLAN_CRITIQUE_CATEGORIES } from "./plan-critique-contracts.js";
 import { TASK_COHESION_GUIDELINE, TASK_COHESION_REVIEW_INSTRUCTIONS } from "./task-cohesion.js";
 import { PLANNING_FINDING_GROUNDING_INSTRUCTIONS, type PlanningFindingEvidence } from "./planning-finding-evidence.js";
+import { renderEnvironmentInventory } from "./verification-inventory.js";
 
 export const RUNNER_KERNEL_INVARIANTS = [
   "Use native tools for actions and lifecycle changes.",
@@ -635,6 +636,13 @@ export const ARCHITECT_BASE_SNAPSHOT_CAP_BYTES = 4096;
  * completion turns never carry it, whatever the caller supplied: the durable
  * planning state plus the reason decides, never the reason alone.
  */
+export const ARCHITECT_ENVIRONMENT_INVENTORY_SECTION_ID = "environment-inventory";
+
+/** VF1: triage and planning turns, and the final-verification plan turn. */
+export function architectEnvironmentInventoryEligible(reason: unknown): boolean {
+  return isReasonType(reason, "plan_required") || isReasonType(reason, "final_verification_plan_required");
+}
+
 export function architectBaseSnapshotEligible(reason: unknown, projection: SchedulerProjection): boolean {
   if (projection.projectDocsPolicyVersion !== 2) return false;
   if (!isPlanningState(projection)) return false;
@@ -1073,6 +1081,16 @@ export function architectContextSections(
       ? [required("repair-issues", "repair", renderRepairIssues(input.projection))]
       : []),
   ];
+  // VF1: the Runner's tool inventory on the turns that decide what to plan
+  // and what to verify. Facts about this machine; the Architect decides.
+  if (input.projection.environmentInventory && architectEnvironmentInventoryEligible(input.reason)) {
+    sections.push(optional(
+      ARCHITECT_ENVIRONMENT_INVENTORY_SECTION_ID,
+      "environment",
+      950,
+      renderEnvironmentInventory(input.projection.environmentInventory),
+    ));
+  }
   if (input.finalVerificationPrefill && input.finalVerificationPrefill.targetRevision === input.projection.integrationRevision) {
     sections.push(required("final-verification-prefill", "final-verification", finalVerificationPrefillLines(input.finalVerificationPrefill, docsV2).join("\n")));
   }
