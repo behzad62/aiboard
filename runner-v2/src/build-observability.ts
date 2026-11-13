@@ -96,6 +96,8 @@ export interface FinalVerificationObservabilityGeneration {
     evidenceIds: string[];
     issues: string[];
     notRun?: VerificationNotRunV2;
+    /** VF8: a non-mandatory check that still failed at the repair limit; the Build went on without it. */
+    knownDefect?: { reason: string };
   }>;
   submission: { status: "pending" | "submitted"; submissionId?: string; green?: boolean };
   mechanicalFailure?: {
@@ -623,8 +625,10 @@ function projectV2Checks(
   const completed = new Map((generation.completedChecks ?? []).flatMap((check) =>
     "checkId" in check ? [[check.checkId, check as VerificationCheckResultV2] as const] : []));
   const suggestions = new Map((generation.executionProfile.verification?.suggestions ?? []).map((check) => [check.id, check]));
+  const knownDefects = new Map((generation.knownDefects ?? []).map((defect) => [defect.checkId, defect]));
   const planned = generation.plan.checks.map((check) => {
     const result = completed.get(check.id);
+    const knownDefect = knownDefects.get(check.id);
     return {
       checkId: check.id,
       label: check.label,
@@ -635,6 +639,7 @@ function projectV2Checks(
       evidenceIds: [...(result?.evidenceIds ?? [])],
       issues: [...(result?.issues ?? [])],
       ...(result?.notRun ? { notRun: { ...result.notRun } } : {}),
+      ...(knownDefect ? { knownDefect: { reason: knownDefect.reason } } : {}),
     };
   });
   const skipped = generation.plan.skipped.flatMap((entry) => {

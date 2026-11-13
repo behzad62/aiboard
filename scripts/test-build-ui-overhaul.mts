@@ -7,6 +7,8 @@ import { buildCrewFromDiscussion, selectBuildCrewRuntimes } from "../lib/client/
 import { BuildWorkspace } from "../components/build/BuildWorkspace";
 import { BuildEventCenter, alertsFromDiagnostics } from "../components/build/BuildEventCenter";
 import { EnvironmentInventoryPanel } from "../components/build/EnvironmentInventoryPanel";
+import { VerificationSummary } from "../components/build/VerificationSummary";
+import { FinalVerificationManifest } from "../components/RunnerV2ObservabilityPanel";
 import type { DiagnosticEntry } from "../components/DiscussionDiagnostics";
 
 const messages = [
@@ -150,3 +152,44 @@ assert.ok(inventoryPanel.includes("pytest") && inventoryPanel.includes(": Missin
 assert.ok(inventoryPanel.includes("Used by tests: pytest"));
 assert.ok(inventoryPanel.includes("Playwright&#x27;s Chromium 149.0"));
 console.log("PASS build UI overhaul: Run details tool inventory");
+
+// VF8: Run details says how many checks passed and lists what was not verified; a not-run check
+// reads "Not run" and a check that failed at its repair limit reads "Known defect", never "Failed".
+{
+  const generation = {
+    generationId: "g-vf8", taskId: "fv", targetRevision: "a".repeat(40), revisionStatus: "current" as const, categories: [],
+    checks: [
+      { checkId: "build", label: "package build", kind: "build" as const, origin: "detected" as const, mandatory: true, status: "passed" as const, evidenceIds: ["ev"], issues: [] },
+      { checkId: "lint", label: "lint", kind: "other" as const, origin: "architect" as const, mandatory: false, status: "failed" as const, evidenceIds: [], issues: ["lint exited 1"], knownDefect: { reason: "still failing at the repair limit: issue final-verification:lint used 3/3 repair cycles" } },
+      { checkId: "cargo", label: "cargo tests", kind: "tests" as const, origin: "detected" as const, mandatory: false, status: "not_run" as const, evidenceIds: [], issues: [], notRun: { reason: "tool_missing" as const, tool: "cargo", detail: "" } },
+      { checkId: "start", label: "package start", kind: "start" as const, origin: "detected" as const, mandatory: false, status: "not_run" as const, evidenceIds: [], issues: [], notRun: { reason: "skipped" as const, detail: "A static export has no server." } },
+    ],
+    submission: { status: "submitted" as const, green: true }, cleanup: { status: "succeeded" as const, diagnosticsAvailable: true },
+    review: { status: "approved" as const }, repairs: [],
+  };
+  const manifest = renderToStaticMarkup(createElement(FinalVerificationManifest, { verification: { current: generation, history: [] } }));
+  assert.ok(manifest.includes("1 of 3 final-verification checks passed."), manifest);
+  assert.ok(manifest.includes("Not verified (3):"));
+  assert.ok(manifest.includes("Known defect") && manifest.includes("issue final-verification:lint used 3/3 repair cycles"));
+  assert.ok(manifest.includes("Not run: cargo is not installed on this machine"));
+  assert.ok(manifest.includes("Skipped: A static export has no server."));
+  assert.equal(manifest.includes(">Failed<"), false, "neither a not-run check nor a known defect reads as failed");
+
+  // A run started before VF3 renders its four categories the same way.
+  const v1 = renderToStaticMarkup(createElement(FinalVerificationManifest, { verification: { current: {
+    ...generation, checks: undefined,
+    categories: [
+      { category: "build" as const, applicability: "required" as const, status: "passed" as const, evidenceIds: ["ev"], issues: [] },
+      { category: "tests" as const, applicability: "required" as const, status: "failed" as const, evidenceIds: [], issues: [], notRun: { reason: "tool_missing" as const, tool: "pytest", detail: "" } },
+      { category: "runtime_smoke" as const, applicability: "not_applicable" as const, rationale: "A library.", status: "not_applicable" as const, evidenceIds: [], issues: [] },
+      { category: "browser" as const, applicability: "not_applicable" as const, rationale: "No UI.", status: "not_applicable" as const, evidenceIds: [], issues: [] },
+    ],
+  }, history: [] } }));
+  assert.ok(v1.includes("1 of 2 final-verification checks passed."), v1);
+  assert.ok(v1.includes("Not run: pytest is not installed"));
+  assert.ok(v1.includes("Not applicable: A library."));
+
+  const clean = renderToStaticMarkup(createElement(VerificationSummary, { summary: { total: 2, passed: 2, notVerified: [] } }));
+  assert.ok(clean.includes("2 of 2 final-verification checks passed.") && clean.includes("Nothing was left unverified."));
+  console.log("PASS build UI overhaul: Run details verification summary (VF8)");
+}

@@ -239,6 +239,10 @@ export type OrchestratorEvent =
       summary: string;
       options: Array<"keep_integration_branch" | "apply_to_project">;
       knownDefects?: Array<{ taskId: string; findingId: string; claim: string; location?: string; rationale: string }>;
+      /** VF8: final-verification checks that still failed at the repair limit. */
+      verificationKnownDefects?: Array<{ checkId: string; label: string; reason: string }>;
+      /** VF8: how many final-verification checks passed and what was not verified. */
+      verification?: { total: number; passed: number; notVerified: Array<{ key: string; label: string; reason: string }> };
     }
   | {
       type: "native_permission_required";

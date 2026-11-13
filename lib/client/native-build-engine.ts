@@ -49,6 +49,7 @@ import { followUpObjective } from "./build-notes";
 import { initialBuildVisualInputs } from "./build-user-attachments";
 import { buildCrewFromDiscussion, runtimeModelId, selectBuildCrewRuntimes } from "./build-crew";
 import {
+  buildVerificationSummary,
   nativeBuildAttachmentIdentityPatch,
   nativeBuildTaskStatus,
   nativeTaskVerificationState,
@@ -899,6 +900,12 @@ function completionSummary(events: NativeBuildEvent[]): string | undefined {
     : undefined;
 }
 
+/** VF8: the final card's count of passed checks and its Not verified list, when a generation exists. */
+function verificationSummaryEventField(projection: NativeBuildProjection) {
+  const verification = buildVerificationSummary(projection);
+  return verification ? { verification } : {};
+}
+
 function emitProjectHandoffPause(
   discussion: Discussion,
   projection: NativeBuildProjection,
@@ -911,6 +918,10 @@ function emitProjectHandoffPause(
     summary: handoff.summary,
     options: [...handoff.options],
     ...(handoff.knownDefects?.length ? { knownDefects: handoff.knownDefects.map((defect) => ({ ...defect })) } : {}),
+    ...(handoff.verificationKnownDefects?.length
+      ? { verificationKnownDefects: handoff.verificationKnownDefects.map((defect) => ({ ...defect })) }
+      : {}),
+    ...verificationSummaryEventField(projection),
   });
   const now = new Date().toISOString();
   updateDiscussion(discussion.id, {

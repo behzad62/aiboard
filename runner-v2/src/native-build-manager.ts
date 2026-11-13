@@ -41,7 +41,7 @@ import type {
   FinalVerificationGenerationProjection,
   SchedulerProjection,
 } from "./scheduler-store.js";
-import { assertProjectHandoffSelectionAccepted, handoffSnapshotAtCurrentStop } from "./scheduler-store.js";
+import { assertProjectHandoffSelectionAccepted, handoffSnapshotAtCurrentStop, projectHandoffHasKnownDefects } from "./scheduler-store.js";
 import type {
   IntegrationFileSnapshot,
   ProjectHandoffResult,
@@ -1145,8 +1145,9 @@ export class NativeBuildManager implements BuildControlPlane {
     if (
       projection.projectHandoff?.status === "requested" &&
       (projection.runPolicy === "finish" || projection.runPolicy === "budgeted") &&
-      // A build completed with known defects waits for the owner instead of applying itself.
-      !projection.projectHandoff.knownDefects?.length
+      // A build completed with known defects (review findings, or VF8 final-verification checks
+      // that failed at the repair limit) waits for the owner instead of applying itself.
+      !projectHandoffHasKnownDefects(projection.projectHandoff)
     ) {
       if (this.settledRuns.has(runId)) {
         return {

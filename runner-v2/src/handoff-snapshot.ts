@@ -88,6 +88,7 @@ import { createHash } from "node:crypto";
 import type { FinalVerificationCompletedCheckProjection, ProjectHandoffChoice, SchedulerProjection } from "./scheduler-store.js";
 // C1: this module imports only pure modules at runtime, so the v2 helpers it needs are inlined.
 import type { AnyFinalVerificationPlan, VerificationPlanV2 } from "./verification-plan-v2.js";
+import type { EnvironmentInventoryProjection } from "./verification-inventory.js";
 
 function isVerificationPlanV2(plan: AnyFinalVerificationPlan | undefined): plan is VerificationPlanV2 {
   return (plan as { version?: unknown } | undefined)?.version === 2;
@@ -155,12 +156,36 @@ export interface HandoffSnapshotVerificationEntry {
   readonly command: string;
   readonly revision: string;
   /**
+   * VF8: the Runner's inventory line for each tool the check used (VF1), for
+   * example "npm found (10.8.2)". Absent when no inventory was recorded or the
+   * check named no command; the line then renders as before.
+   */
+  readonly tools?: string;
+  /**
    * True when this boundary line belongs to a task with a durable task
    * acceptance. The renderer collapses accepted-task boundaries into one
    * summary line before truncating anything else. Final-verification lines
    * never carry this flag and never collapse.
    */
   readonly taskAccepted?: boolean;
+}
+
+/**
+ * VF8: one thing the Build did not verify, and why. Kinds, in render order: a
+ * check the Runner did not run because its tool is missing; a check the
+ * Architect skipped with a reason; a non-mandatory check that still failed at
+ * the repair limit (a known defect); a criterion the Architect accepted on an
+ * override without Runner evidence; an item the Architect left for the owner
+ * to check (`leftToVerify`).
+ */
+export type HandoffNotVerifiedKind = "not_run" | "skipped" | "known_defect" | "override" | "left_to_verify";
+
+export interface HandoffSnapshotNotVerifiedItem {
+  readonly kind: HandoffNotVerifiedKind;
+  /** What was not verified, for example "final verification tests" or "task T1 criterion C2". */
+  readonly subject: string;
+  /** Why: the missing tool, the skip reason, the limit reached, the override reason. Empty for leftToVerify. */
+  readonly detail: string;
 }
 
 export interface HandoffSnapshotPlanTask {
@@ -201,6 +226,12 @@ export interface HandoffSnapshotInput {
   readonly externalBlockers: readonly HandoffSnapshotBlocker[];
   readonly exhaustedRepairIssues: readonly HandoffSnapshotExhaustedIssue[];
   readonly verification: readonly HandoffSnapshotVerificationEntry[];
+  /**
+   * VF8: the `## Not verified` section. Absent renders no section, so an input
+   * built before VF8 renders byte-identical; the projection builder always sets
+   * it. Each (kind, subject) renders once.
+   */
+  readonly notVerified?: readonly HandoffSnapshotNotVerifiedItem[];
   /** planningDecisions plus acknowledged owner guidance, one line each. */
   readonly decisions: readonly string[];
   /** Architect notes (the complete_run summary at handoff). */
@@ -377,6 +408,8 @@ interface TruncationBudgets {
   unacceptedBoundaries: number;
   tasks: number;
   notesLines: number;
+  /** VF8: Not verified items shown; their count line never truncates. */
+  notVerified: number;
   /** 1 keeps the long caps on the source, spec, pause-reason, notes-absent and next-action fields; 0 uses short caps. */
   fullFixedFields: number;
   /** Never-truncated items: they shrink only after every earlier stage is at 0. */
@@ -401,6 +434,7 @@ const SHRINK_STAGES: readonly (keyof TruncationBudgets)[] = [
   "unacceptedBoundaries",
   "tasks",
   "notesLines",
+  "notVerified",
   "fullFixedFields",
   "finalVerification",
   "blockers",
@@ -444,6 +478,7 @@ function initialBudgets(input: HandoffSnapshotInput): TruncationBudgets {
     unacceptedBoundaries,
     tasks: input.tasks.length,
     notesLines: HANDOFF_SNAPSHOT_NOTES_MAX_LINES,
+    notVerified: notVerifiedItems(input).length,
     fullFixedFields: 1,
     finalVerification,
     blockers: input.externalBlockers.length,
@@ -468,7 +503,44 @@ function verificationKeepRank(entry: HandoffSnapshotVerificationEntry): number {
 }
 
 function verificationLine(entry: HandoffSnapshotVerificationEntry): string {
-  return `- ${singleLine(entry.label, 200)}: ${singleLine(entry.result, 200)}; counts: ${singleLine(entry.counts)}; command: ${singleLine(entry.command)}; revision: ${singleLine(entry.revision, 120)}`;
+  const tools = entry.tools !== undefined ? `; tools: ${singleLine(entry.tools)}` : "";
+  return `- ${singleLine(entry.label, 200)}: ${singleLine(entry.result, 200)}; counts: ${singleLine(entry.counts)}; command: ${singleLine(entry.command)}${tools}; revision: ${singleLine(entry.revision, 120)}`;
+}
+
+const NOT_VERIFIED_KIND_ORDER: readonly HandoffNotVerifiedKind[] = ["not_run", "skipped", "known_defect", "override", "left_to_verify"];
+
+const NOT_VERIFIED_KIND_LABEL: Record<HandoffNotVerifiedKind, string> = {
+  not_run: "not run",
+  skipped: "skipped",
+  known_defect: "known defect",
+  override: "accepted on an Architect override without Runner evidence",
+  left_to_verify: "left for the owner to verify",
+};
+
+/** VF8: the Not verified items in render order, each (kind, subject) once. */
+function notVerifiedItems(input: HandoffSnapshotInput): HandoffSnapshotNotVerifiedItem[] {
+  const seen = new Set<string>();
+  const items: HandoffSnapshotNotVerifiedItem[] = [];
+  for (const item of input.notVerified ?? []) {
+    const key = `${item.kind}\u0000${item.subject}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(item);
+  }
+  return items.sort((a, b) =>
+    NOT_VERIFIED_KIND_ORDER.indexOf(a.kind) - NOT_VERIFIED_KIND_ORDER.indexOf(b.kind) ||
+    (a.subject < b.subject ? -1 : a.subject > b.subject ? 1 : 0));
+}
+
+function notVerifiedCounts(items: readonly HandoffSnapshotNotVerifiedItem[]): string {
+  const count = (kind: HandoffNotVerifiedKind) => items.filter((item) => item.kind === kind).length;
+  return `${items.length} total (${count("not_run")} not run, ${count("skipped")} skipped, ${count("known_defect")} known defects, ` +
+    `${count("override")} Architect overrides, ${count("left_to_verify")} left for the owner)`;
+}
+
+function notVerifiedLine(item: HandoffSnapshotNotVerifiedItem): string {
+  const detail = item.detail.trim().length > 0 ? ` — ${singleLine(item.detail)}` : "";
+  return `- ${NOT_VERIFIED_KIND_LABEL[item.kind]}: ${singleLine(item.subject, 200)}${detail}`;
 }
 
 function byId<T extends { id: string }>(items: readonly T[]): T[] {
@@ -643,6 +715,22 @@ function buildBody(input: HandoffSnapshotInput, budgets: TruncationBudgets): str
     if (unacceptedMore !== undefined) lines.push(unacceptedMore);
   }
   lines.push(``);
+  // VF8: what the Build did not verify. The count line never truncates; the
+  // items truncate with an exact N-more line.
+  if (input.notVerified !== undefined) {
+    lines.push(`## Not verified`);
+    const items = notVerifiedItems(input);
+    if (items.length === 0) {
+      lines.push(`not verified: none`);
+    } else {
+      lines.push(`not verified: ${notVerifiedCounts(items)}`);
+      const shown = items.slice(0, budgets.notVerified);
+      for (const item of shown) lines.push(notVerifiedLine(item));
+      const more = truncatedLine(shown, items.length, input.runId);
+      if (more !== undefined) lines.push(more);
+    }
+    lines.push(``);
+  }
   // Decisions (lowest value: truncated first).
   lines.push(`## Decisions`);
   const orderedDecisions = [...input.decisions].sort();
@@ -945,11 +1033,21 @@ function acceptedTaskIds(projection: SchedulerProjection): Set<string> {
  * `failed` with its rationale, never hidden (n8). Counts stay aligned with
  * their command: each command shows its own counts or `not recorded` (n10).
  */
+/** VF8: what the verification lines of one generation know besides the check itself. */
+interface VerificationEntryContext {
+  /** Check ids the Runner recorded as known defects on this generation. */
+  readonly knownDefects: ReadonlySet<string>;
+  readonly inventory?: EnvironmentInventoryProjection;
+}
+
 function verificationEntryForCheck(
   check: FinalVerificationCompletedCheckProjection,
   suffix: string,
   revision: string,
+  context: VerificationEntryContext = { knownDefects: new Set() },
 ): HandoffSnapshotVerificationEntry {
+  const tools = inventoryToolsText(check, context.inventory);
+  const withTools = tools !== undefined ? { tools } : {};
   // VF3: a v2 check is named by its label; not run (tool missing or skipped) is not a failure.
   if ("checkId" in check) {
     const notRun = check.notRun;
@@ -959,9 +1057,13 @@ function verificationEntryForCheck(
         ? notRun.reason === "tool_missing"
           ? `not run (tool missing: ${notRun.tool})`
           : `not run (skipped: ${notRun.detail})`
-        : check.outcome === "passed" ? "passed" : "failed",
+        : check.outcome === "passed"
+          ? "passed"
+          // VF8: a non-mandatory check that still failed at the repair limit.
+          : context.knownDefects.has(check.checkId) ? "failed (known defect at the repair limit)" : "failed",
       ...verificationCommandAndCounts(check.facts),
       revision,
+      ...withTools,
     };
   }
   if (check.status === "not_applicable" && check.green) {
@@ -981,6 +1083,7 @@ function verificationEntryForCheck(
       counts: NOT_RECORDED,
       command: NOT_RECORDED,
       revision,
+      ...withTools,
     };
   }
   const { command, counts } = verificationCommandAndCounts(check.facts);
@@ -995,7 +1098,46 @@ function verificationEntryForCheck(
     counts,
     command,
     revision,
+    ...withTools,
   };
+}
+
+/**
+ * VF8: the inventory line (VF1) of each tool a check used: its commands'
+ * executables (a Node script such as npm-cli.js is the tool `npm`, as VF1
+ * names it) and the tool a not-run check found missing. Inlined so this module
+ * stays pure. Undefined when no inventory was recorded or nothing matches.
+ */
+function inventoryToolsText(
+  check: FinalVerificationCompletedCheckProjection,
+  inventory: EnvironmentInventoryProjection | undefined,
+): string | undefined {
+  if (inventory === undefined) return undefined;
+  const names = new Set<string>();
+  for (const fact of check.facts) {
+    const command = (fact as { kind?: unknown; command?: unknown }).command;
+    if ((fact as { kind?: unknown }).kind !== "command" || typeof command !== "string") continue;
+    const args = (fact as { args?: unknown }).args;
+    const base = inventoryToolName(command);
+    names.add(base);
+    const script = Array.isArray(args) && typeof args[0] === "string" ? args[0] : undefined;
+    if (base === "node" && script !== undefined && /\.(?:c|m)?js$/i.test(script)) {
+      names.add(inventoryToolName(script).replace(/\.(?:c|m)?js$/i, "").replace(/-cli$/i, ""));
+    }
+  }
+  if (check.notRun?.reason === "tool_missing") names.add(inventoryToolName(check.notRun.tool));
+  const lines = inventory.tools
+    .filter((tool) => names.has(inventoryToolName(tool.name)))
+    .map((tool) => tool.status === "found"
+      ? `${tool.name} found (${tool.version ?? tool.versionNote ?? "no version line"})`
+      : tool.status === "missing" ? `${tool.name} missing` : `${tool.name} unknown (${tool.note ?? "the lookup could not decide"})`);
+  return lines.length > 0 ? lines.join(", ") : undefined;
+}
+
+/** `C:\nodejs\npm.cmd` → npm, `/usr/bin/python3` → python3. */
+function inventoryToolName(executable: string): string {
+  const base = executable.split(/[\\/]/).pop() ?? executable;
+  return base.toLowerCase().replace(/\.(?:exe|cmd|bat|com|ps1)$/i, "");
 }
 
 function verificationCommandAndCounts(facts: FinalVerificationCompletedCheckProjection["facts"]): { command: string; counts: string } {
@@ -1247,10 +1389,15 @@ export function handoffSnapshotInputFromProjection(
   const verification: HandoffSnapshotVerificationEntry[] = [];
   const current = projection.finalVerification?.current;
   const history = projection.finalVerification?.history ?? [];
+  const inventory = projection.environmentInventory;
+  const entryContext = (generation: { knownDefects?: readonly { checkId: string }[] }): VerificationEntryContext => ({
+    knownDefects: new Set((generation.knownDefects ?? []).map((defect) => defect.checkId)),
+    ...(inventory !== undefined ? { inventory } : {}),
+  });
   if (current !== undefined) {
     const covered = new Set<string>();
     for (const check of current.completedChecks ?? []) {
-      verification.push(verificationEntryForCheck(check, "", current.targetRevision));
+      verification.push(verificationEntryForCheck(check, "", current.targetRevision, entryContext(current)));
       covered.add(verificationCheckKey(check));
     }
     // Planned categories with no completed check render pending (n9).
@@ -1275,7 +1422,7 @@ export function handoffSnapshotInputFromProjection(
       for (const check of past.completedChecks ?? []) {
         if (covered.has(verificationCheckKey(check))) continue;
         covered.add(verificationCheckKey(check));
-        verification.push(verificationEntryForCheck(check, suffix, past.targetRevision));
+        verification.push(verificationEntryForCheck(check, suffix, past.targetRevision, entryContext(past)));
       }
     }
   } else if (history.length > 0) {
@@ -1283,7 +1430,7 @@ export function handoffSnapshotInputFromProjection(
     const suffix = ` (stale (invalidated) at ${generation.invalidatedByRevision ?? generation.targetRevision})`;
     const covered = new Set<string>();
     for (const check of generation.completedChecks ?? []) {
-      verification.push(verificationEntryForCheck(check, suffix, generation.targetRevision));
+      verification.push(verificationEntryForCheck(check, suffix, generation.targetRevision, entryContext(generation)));
       covered.add(verificationCheckKey(check));
     }
     for (const planned of plannedVerificationChecks(generation.plan)) {
@@ -1324,6 +1471,8 @@ export function handoffSnapshotInputFromProjection(
       }
     }
   }
+
+  const notVerified = notVerifiedFromProjection(projection);
 
   const decisions: string[] = [];
   for (const decision of revisionRecord?.planningDecisions ?? []) {
@@ -1388,6 +1537,7 @@ export function handoffSnapshotInputFromProjection(
     externalBlockers,
     exhaustedRepairIssues,
     verification,
+    notVerified,
     decisions,
     ...(notes !== undefined ? { notes } : {}),
     notesAbsentReason: facts.notesAbsentReason
@@ -1417,6 +1567,68 @@ export function handoffSnapshotInputFromProjection(
       }
       : {}),
   };
+}
+
+/**
+ * VF8: what the Build did not verify, from the generation it hands off (the
+ * current one, else the last history one), the latest delivery boundary of
+ * each task, the approved task reviews and the requested handoff:
+ * - a check the Runner did not run because its tool is missing (final
+ *   verification and boundary checks);
+ * - a suggested check the Architect skipped with a reason (v2), or a v1
+ *   category it marked not applicable;
+ * - a non-mandatory check that still failed at the repair limit (known defect);
+ * - a criterion an approved review accepted on an Architect override of the
+ *   Runner's prefilled verdict, that is, without Runner evidence;
+ * - the Architect's `leftToVerify` items.
+ */
+function notVerifiedFromProjection(projection: SchedulerProjection): HandoffSnapshotNotVerifiedItem[] {
+  const items: HandoffSnapshotNotVerifiedItem[] = [];
+  const history = projection.finalVerification?.history ?? [];
+  const generation = projection.finalVerification?.current ?? history[history.length - 1];
+  if (generation !== undefined) {
+    const knownDefects = new Map((generation.knownDefects ?? []).map((defect) => [defect.checkId, defect]));
+    for (const check of generation.completedChecks ?? []) {
+      const name = "checkId" in check ? check.label : check.category;
+      if (check.notRun?.reason === "tool_missing") {
+        items.push({ kind: "not_run", subject: `final verification ${name}`, detail: `tool missing: ${check.notRun.tool}` });
+      } else if (!("checkId" in check) && check.status === "not_applicable" && check.green) {
+        items.push({ kind: "skipped", subject: `final verification ${name}`, detail: `not applicable: ${check.rationale ?? NOT_RECORDED}` });
+      }
+      const defect = "checkId" in check ? knownDefects.get(check.checkId) : undefined;
+      if (defect !== undefined) {
+        items.push({ kind: "known_defect", subject: `final verification ${name}`, detail: defect.reason });
+      }
+    }
+    if (isVerificationPlanV2(generation.plan)) {
+      const suggestions = new Map((generation.executionProfile.verification?.suggestions ?? []).map((check) => [check.id, check]));
+      for (const entry of generation.plan.skipped) {
+        items.push({
+          kind: "skipped",
+          subject: `final verification ${suggestions.get(entry.checkId)?.label ?? entry.checkId}`,
+          detail: entry.reason,
+        });
+      }
+    }
+  }
+  for (const [taskId, records] of Object.entries(projection.delivery?.boundaries ?? {})) {
+    const latest = records[records.length - 1];
+    for (const check of latest?.checks ?? []) {
+      if (check.outcome !== "not_run") continue;
+      items.push({ kind: "not_run", subject: `boundary ${taskId} ${check.checkId}`, detail: `tool missing: ${check.notRun?.tool ?? NOT_RECORDED}` });
+    }
+  }
+  for (const [taskId, review] of Object.entries(projection.reviews ?? {})) {
+    if (review.status !== "approved") continue;
+    for (const verdict of review.criterionVerdicts ?? []) {
+      if (verdict.verdict !== "satisfied" || verdict.overrideReason === undefined) continue;
+      items.push({ kind: "override", subject: `task ${taskId} criterion ${verdict.criterionId}`, detail: verdict.overrideReason });
+    }
+  }
+  for (const item of projection.projectHandoff?.leftToVerify ?? []) {
+    items.push({ kind: "left_to_verify", subject: item, detail: "" });
+  }
+  return items;
 }
 
 /** Next action once the owner has chosen a handoff option (n2). */

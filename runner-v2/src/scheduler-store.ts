@@ -239,6 +239,7 @@ export type SchedulerEventType =
   | "final_verification.generation_created"
   | "final_verification.check_completed"
   | "final_verification.failure_reported"
+  | "final_verification.known_defects_recorded"
   | "final_verification.submitted"
   | "final_verification.cleanup_started"
   | "final_verification.cleanup_succeeded"
@@ -545,6 +546,22 @@ export interface ProjectHandoffProjection {
   projectRevision?: string;
   /** Review findings the Architect completed with unrepaired; the owner decides, so the result is never applied automatically. */
   knownDefects?: ProjectHandoffKnownDefect[];
+  /**
+   * VF8 (VD-3): non-mandatory final-verification checks that still failed at the repair limit. Like
+   * `knownDefects`, they hold the result for the owner instead of applying it automatically.
+   */
+  verificationKnownDefects?: FinalVerificationKnownDefectProjection[];
+  /** VF8: what the Architect says only the owner can check (complete_run `leftToVerify`). */
+  leftToVerify?: string[];
+}
+
+/** VF8: the most `leftToVerify` items complete_run takes, and the longest one. */
+export const LEFT_TO_VERIFY_MAX_ITEMS = 20;
+export const LEFT_TO_VERIFY_MAX_LENGTH = 500;
+
+/** VF8: whether a requested handoff holds known defects of either kind for the owner. */
+export function projectHandoffHasKnownDefects(handoff: Pick<ProjectHandoffProjection, "knownDefects" | "verificationKnownDefects">): boolean {
+  return (handoff.knownDefects?.length ?? 0) > 0 || (handoff.verificationKnownDefects?.length ?? 0) > 0;
 }
 
 export interface ProjectHandoffKnownDefect {
@@ -652,6 +669,38 @@ export interface FinalVerificationGenerationProjection {
   cleanup?: FinalVerificationCleanupProjection;
   review?: FinalVerificationReviewReference;
   repairTaskIds?: string[];
+  /**
+   * VF8 (VD-3): failed non-mandatory v2 checks the Runner recorded as known defects at the repair
+   * limit. They need no repair and no review; the Build goes on to its handoff, which lists them.
+   */
+  knownDefects?: FinalVerificationKnownDefectProjection[];
+}
+
+/** VF8: one non-mandatory v2 check that still failed at the repair limit. */
+export interface FinalVerificationKnownDefectProjection {
+  checkId: string;
+  label: string;
+  /** The limit the check reached, for example "issue final-verification:tests used 3/3 repair cycles". */
+  reason: string;
+}
+
+/** VF8: the ids of a generation's checks recorded as known defects. */
+export function finalVerificationKnownDefectIds(
+  generation: Pick<FinalVerificationGenerationProjection, "knownDefects">,
+): Set<string> {
+  return new Set((generation.knownDefects ?? []).map((defect) => defect.checkId));
+}
+
+/**
+ * VF8: the failed checks still waiting for a repair: a failed check that is not a recorded known
+ * defect. A check the Runner did not run is not a failure (VF2).
+ */
+export function unresolvedFailedVerificationChecks(
+  generation: Pick<FinalVerificationGenerationProjection, "completedChecks" | "knownDefects">,
+): FinalVerificationCompletedCheckProjection[] {
+  const known = finalVerificationKnownDefectIds(generation);
+  return (generation.completedChecks ?? []).filter((check) =>
+    verificationCheckFailed(check) && !known.has(verificationCheckKey(check)));
 }
 
 export interface FinalVerificationFailureProjection {
@@ -4527,6 +4576,13 @@ export function reduceSchedulerEvent(
       recordFinalVerificationFailure(next, event.payload, event.occurredAt);
       break;
     }
+    case "final_verification.known_defects_recorded": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may record final verification known defects.");
+      }
+      recordFinalVerificationKnownDefects(next, event.payload);
+      break;
+    }
     case "final_verification.submitted": {
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may submit final verification.");
@@ -5989,12 +6045,18 @@ export function reduceSchedulerEvent(
         assertBuildCompletionReady(current);
       }
       const knownDefects = projectHandoffKnownDefects(current, event.payload.findingDispositions);
+      const verificationKnownDefects = current.finalVerification?.current?.knownDefects ?? [];
+      const leftToVerify = projectHandoffLeftToVerify(event.payload.leftToVerify);
       next.projectHandoff = {
         status: "requested",
         summary: requiredString(event.payload, "summary"),
         requestedSequence: event.sequence,
         options: ["keep_integration_branch", "apply_to_project"],
         ...(knownDefects.length ? { knownDefects } : {}),
+        ...(verificationKnownDefects.length
+          ? { verificationKnownDefects: verificationKnownDefects.map((defect) => ({ ...defect })) }
+          : {}),
+        ...(leftToVerify.length ? { leftToVerify } : {}),
       };
       next.status = "paused";
       delete next.pauseReason;
@@ -6856,6 +6918,57 @@ function recordFinalVerificationFailure(
     throw new Error("Final verification generation already has a conflicting failure report.");
   }
   current.failure = { ...expected, reportedAt: occurredAt };
+}
+
+/**
+ * VF8 (VD-3): a failed non-mandatory v2 check that reached its repair limit becomes a known
+ * defect. The Runner records the limit it reached; the kernel checks that each check really
+ * failed on this generation, is not mandatory, and is not already recorded. A mandatory check is
+ * never a known defect: it still pauses at the limit.
+ */
+function recordFinalVerificationKnownDefects(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+): void {
+  const current = requireCurrentFinalVerification(projection, payload);
+  if (!isVerificationPlanV2(current.plan)) {
+    throw new Error("Only a v2 final verification records known defects; a v1 run pauses at the repair limit.");
+  }
+  if (!current.failure || current.submission || current.review) {
+    throw new Error("Known defects are recorded on a reported mechanical failure, before any submission.");
+  }
+  if (!Array.isArray(payload.checks) || payload.checks.length === 0) {
+    throw new Error("Final verification known defects need at least one check.");
+  }
+  const existing = finalVerificationKnownDefectIds(current);
+  const incoming: FinalVerificationKnownDefectProjection[] = [];
+  for (const raw of payload.checks) {
+    if (!isRecord(raw)) throw new Error("Final verification known defect is invalid.");
+    const checkId = requiredString(raw, "checkId");
+    const reason = requiredString(raw, "reason").slice(0, 1_000);
+    const check = (current.completedChecks as FinalVerificationCompletedCheckProjectionV2[] | undefined)
+      ?.find((candidate) => candidate.checkId === checkId);
+    if (!check || !verificationCheckFailed(check)) {
+      throw new Error(`Final verification check ${checkId} did not fail, so it is not a known defect.`);
+    }
+    if (check.mandatory) {
+      throw new Error(`Final verification check ${checkId} is mandatory, so it pauses at the repair limit instead.`);
+    }
+    if (incoming.some((defect) => defect.checkId === checkId)) {
+      throw new Error(`Final verification known defect ${checkId} is listed twice.`);
+    }
+    incoming.push({ checkId, label: check.label, reason });
+  }
+  if (incoming.every((defect) => existing.has(defect.checkId))) {
+    const same = incoming.every((defect) =>
+      sameValue(current.knownDefects?.find((known) => known.checkId === defect.checkId), defect));
+    if (same) return;
+    throw new Error("Final verification known defects conflict with the recorded ones.");
+  }
+  if (incoming.some((defect) => existing.has(defect.checkId))) {
+    throw new Error("Final verification known defects repeat a recorded one.");
+  }
+  current.knownDefects = [...(current.knownDefects ?? []).map((defect) => ({ ...defect })), ...incoming];
 }
 
 function recordFinalVerificationReviewDecision(
@@ -8267,6 +8380,24 @@ function validatedW3ReadProofs(value: unknown, runId: string, sessionId: string,
   });
 }
 
+/** VF8: the Architect's optional list of what only the owner can check. Absent on older logs. */
+function projectHandoffLeftToVerify(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > LEFT_TO_VERIFY_MAX_ITEMS) {
+    throw new Error(`Completion leftToVerify must be an array of at most ${LEFT_TO_VERIFY_MAX_ITEMS} items.`);
+  }
+  const items: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim() || item.length > LEFT_TO_VERIFY_MAX_LENGTH) {
+      throw new Error(`Each leftToVerify item must be a non-empty string of at most ${LEFT_TO_VERIFY_MAX_LENGTH} characters.`);
+    }
+    const trimmed = item.trim();
+    if (items.includes(trimmed)) throw new Error(`leftToVerify lists "${trimmed}" twice.`);
+    items.push(trimmed);
+  }
+  return items;
+}
+
 /**
  * The Architect's completion dispositions of review findings, as known defects for the handoff.
  * Absent on logs written before completion asked for them; coverage is the complete_run tool's gate.
@@ -8914,9 +9045,11 @@ function createFinalVerificationRepairTasks(
   }
   // VF3: a v2 repair is keyed by the failed checks' ids instead of categories.
   const v2 = isVerificationPlanV2(current.plan);
+  // VF8: a known defect reached its repair limit, so no repair task covers it.
+  const knownDefects = finalVerificationKnownDefectIds(current);
   const failedKeys = source.type === "semantic_review"
     ? reviewFailedCheckKeys(current.review!.decision!)
-    : failureFailedCheckKeys(current.failure!);
+    : failureFailedCheckKeys(current.failure!).filter((key) => !knownDefects.has(key));
   const failed = new Set(failedKeys);
   const assigned = new Set<string>();
   const tasks = payload.tasks.map((candidate) => {
@@ -9319,9 +9452,16 @@ function assertFinalVerificationSubmissionResultV2(
   if (completed.length !== plan.checks.length) {
     throw new Error("Final verification submission requires every completed check.");
   }
+  // VF8: a failed check goes into the submission only as a recorded known defect.
+  const knownDefects = finalVerificationKnownDefectIds(current);
+  const expectedKnown = plan.checks.map((check) => check.id).filter((id) => knownDefects.has(id));
+  if (!sameValue(result.knownDefectCheckIds ?? [], expectedKnown)) {
+    throw new Error("Final verification submission known defects conflict with the recorded ones.");
+  }
   for (const [index, planned] of plan.checks.entries()) {
     const durable = completed.find((entry) => entry.checkId === planned.id);
-    if (!durable || verificationCheckFailed(durable) || durable.issues.length > 0) {
+    const knownDefect = knownDefects.has(planned.id);
+    if (!durable || (!knownDefect && (verificationCheckFailed(durable) || durable.issues.length > 0))) {
       throw new Error(`Final verification submission check ${planned.id} is not durably green.`);
     }
     if (!sameValue(projectVerificationCheckResultV2(durable), result.checks[index])) {
@@ -9354,11 +9494,16 @@ function parseFinalVerificationReviewDecisionV2(
   if (!Array.isArray(payload.checkReviews)) {
     throw new Error("Final verification review requires check reviews.");
   }
-  const executed = new Set(plan.checks.map((check) => check.id));
+  // VF8: a known defect already failed at its repair limit, so it is not reviewed.
+  const knownDefects = finalVerificationKnownDefectIds(current);
+  const executed = new Set(plan.checks.map((check) => check.id).filter((id) => !knownDefects.has(id)));
   const checkReviews: FinalVerificationCheckReviewProjection[] = payload.checkReviews.map((candidate) => {
     if (!isRecord(candidate)) throw new Error("Final verification check review is invalid.");
     const checkId = requiredString(candidate, "checkId");
     const verdict = requiredString(candidate, "verdict");
+    if (knownDefects.has(checkId)) {
+      throw new Error(`Final verification check ${checkId} is a known defect, so it is not reviewed.`);
+    }
     if (!executed.has(checkId) || (verdict !== "approved" && verdict !== "repair_required")) {
       throw new Error(`Final verification check review ${checkId} is invalid.`);
     }
@@ -9430,6 +9575,8 @@ function finalVerificationV2ReadinessIssues(
     issues.push(`Current final-verification plan is invalid: ${planValidation.issues.join(" ")}`);
   }
   const completed = (current.completedChecks ?? []) as FinalVerificationCompletedCheckProjectionV2[];
+  const knownDefects = finalVerificationKnownDefectIds(current);
+  const reviewedChecks = plan.checks.filter((check) => !knownDefects.has(check.id));
   if (
     completed.length !== plan.checks.length ||
     new Set(completed.map((check) => check.checkId)).size !== plan.checks.length
@@ -9457,6 +9604,13 @@ function finalVerificationV2ReadinessIssues(
         check.evidenceIds.length > 0 || check.facts.length > 0
       ) {
         issues.push(`Not-run final-verification check ${planned.id} carries a result.`);
+      }
+      continue;
+    }
+    // VF8 (VD-3): a non-mandatory check that failed at its repair limit ships as a known defect.
+    if (knownDefects.has(planned.id)) {
+      if (check.outcome !== "failed" || check.mandatory) {
+        issues.push(`Known-defect final-verification check ${planned.id} is not a failed non-mandatory check.`);
       }
       continue;
     }
@@ -9530,12 +9684,12 @@ function finalVerificationV2ReadinessIssues(
   } else if (result) {
     const checkReviews = review.decision.checkReviews;
     if (
-      checkReviews.length !== plan.checks.length ||
-      new Set(checkReviews.map((entry) => entry.checkId)).size !== plan.checks.length
+      checkReviews.length !== reviewedChecks.length ||
+      new Set(checkReviews.map((entry) => entry.checkId)).size !== reviewedChecks.length
     ) {
       issues.push("Final-verification review must represent every executed check exactly once.");
     }
-    for (const planned of plan.checks) {
+    for (const planned of reviewedChecks) {
       const checkReview = checkReviews.find((candidate) => candidate.checkId === planned.id);
       const submitted = (result.checks ?? []).find((candidate) => candidate.checkId === planned.id);
       if (
@@ -9836,6 +9990,9 @@ function cloneFinalVerificationGeneration(
       : {}),
     ...(generation.repairTaskIds
       ? { repairTaskIds: [...generation.repairTaskIds] }
+      : {}),
+    ...(generation.knownDefects
+      ? { knownDefects: generation.knownDefects.map((defect) => ({ ...defect })) }
       : {}),
   };
 }

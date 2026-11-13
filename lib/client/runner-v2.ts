@@ -231,7 +231,10 @@ export interface NativeVerificationRepairProvenance {
   sourceGenerationId: string;
   finalVerificationTaskId: string;
   targetRevision: string;
+  /** A pre-VF3 run's failed categories; empty on a v2 run, which names `checkIds`. */
   categories: NativeFinalVerificationCategory[];
+  /** VF3: the failed v2 checks this repair covers. */
+  checkIds?: string[];
   evidenceIds: string[];
   source:
     | { type: "semantic_review"; submissionId: string; reviewId: string }
@@ -267,6 +270,15 @@ export interface NativeFinalVerificationCheckObservation {
   evidenceIds: string[];
   issues: string[];
   notRun?: NativeVerificationNotRun;
+  /** VF8: a non-mandatory check that still failed at the repair limit; the Build went on without it. */
+  knownDefect?: { reason: string };
+}
+
+/** VF8: a non-mandatory final-verification check that still failed at the repair limit. */
+export interface NativeVerificationKnownDefect {
+  checkId: string;
+  label: string;
+  reason: string;
 }
 
 export interface NativeFinalVerificationGenerationObservability {
@@ -337,6 +349,8 @@ export interface NativeCriterionReviewVerdict {
   evidenceIds: string[];
   artifactHashes?: string[];
   acceptedFailures?: Array<{ evidenceId: string; rationale: string }>;
+  /** W3: why the Architect's verdict differs from the Runner's prefill; on a satisfied verdict, accepted without Runner evidence. */
+  overrideReason?: string;
 }
 
 export interface NativeCriterionSubmissionProjection {
@@ -447,6 +461,8 @@ export type NativeArchitectActionReason =
         | { type: "semantic_review"; submissionId: string; reviewId: string }
         | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
       failedCategories: string[];
+      /** VF3: a v2 run names the failed checks by id. */
+      failedCheckIds?: string[];
       evidenceIds: string[];
     }
   | {
@@ -897,6 +913,10 @@ export interface NativeBuildProjection {
     projectRevision?: string;
     /** Review findings the Architect completed with unrepaired; the runner then never applies the result itself. */
     knownDefects?: NativeProjectHandoffKnownDefect[];
+    /** VF8: final-verification checks that still failed at the repair limit; they hold the result for the owner too. */
+    verificationKnownDefects?: NativeVerificationKnownDefect[];
+    /** VF8: what the Architect says only the owner can check. */
+    leftToVerify?: string[];
   };
   verifierPolicy?: NativeIndependentVerifierObservability["policy"];
   buildRisk?: {
@@ -953,11 +973,13 @@ export interface NativeBuildProjection {
       invalidatedByRevision?: string;
       invalidatedByGuidanceId?: string;
       cleanup?: { generationId: string; taskId: string; targetRevision: string; attempt: number; status: "started" | "succeeded" | "failed"; startedAt: string; finishedAt?: string; error?: string; diagnosticsPath?: string };
-      failure?: { failureId: string; generationId: string; taskId: string; targetRevision: string; attempt: number; failedCategories: NativeFinalVerificationCategory[]; issueIds: string[]; factIds: string[]; evidenceIds: string[]; reportedAt: string };
+      failure?: { failureId: string; generationId: string; taskId: string; targetRevision: string; attempt: number; failedCategories: NativeFinalVerificationCategory[]; failedCheckIds?: string[]; issueIds: string[]; factIds: string[]; evidenceIds: string[]; reportedAt: string };
       submission?: { submissionId: string; generationId: string; targetRevision: string; attempt: number };
-      submissionResult?: { kind: "final_verification_submission"; generationId: string; runId: string; taskId: string; attempt: number; targetRevision: string; evidenceIds: string[]; submittedAt: string; green: boolean };
-      review?: { reviewId: string; submissionId: string; generationId: string; targetRevision: string; attempt: number; status: "requested" | "approved" | "repair_required" | "rejected"; decision?: { decision: "approved" | "repair_required"; summary: string; targetRevision: string; architectRisk: { risk: "low" | "high"; rationale?: string; source: "architect" | "legacy_default" }; failedCategories: NativeFinalVerificationCategory[]; categoryReviews: Array<{ category: NativeFinalVerificationCategory; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }> } };
+      submissionResult?: { kind: "final_verification_submission"; generationId: string; runId: string; taskId: string; attempt: number; targetRevision: string; evidenceIds: string[]; submittedAt: string; green: boolean; knownDefectCheckIds?: string[] };
+      review?: { reviewId: string; submissionId: string; generationId: string; targetRevision: string; attempt: number; status: "requested" | "approved" | "repair_required" | "rejected"; decision?: { decision: "approved" | "repair_required"; summary: string; targetRevision: string; architectRisk: { risk: "low" | "high"; rationale?: string; source: "architect" | "legacy_default" }; failedCategories: NativeFinalVerificationCategory[]; categoryReviews: Array<{ category: NativeFinalVerificationCategory; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }>; /** VF3: a v2 review names checks by id; categoryReviews is then empty. */ checkReviews?: Array<{ checkId: string; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }>; failedCheckIds?: string[] } };
       repairTaskIds?: string[];
+      /** VF8: failed non-mandatory checks recorded as known defects at the repair limit. */
+      knownDefects?: NativeVerificationKnownDefect[];
       /** A v1 check carries its category; a v2 check (VF3) its id, label, kind and outcome. */
       completedChecks?: Array<{ category?: NativeFinalVerificationCategory; status?: "required" | "not_applicable"; rationale?: string; checkId?: string; label?: string; kind?: NativeFinalVerificationCheckObservation["kind"]; outcome?: "passed" | "failed" | "not_run"; green: boolean; evidenceIds: string[]; issues: string[]; notRun?: NativeVerificationNotRun; attempt: number; startedAt: string; finishedAt: string }>;
     };

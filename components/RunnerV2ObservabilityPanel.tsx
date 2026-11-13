@@ -30,7 +30,13 @@ import {
   type NativePlanCritiqueState,
 } from "@/lib/client/runner-v2";
 import { projectNativeAcceptanceContract } from "@/lib/client/runner-v2";
-import { finalVerificationCheckRows, finalVerificationNotRunText } from "@/lib/client/discussion-live-state";
+import {
+  finalVerificationCheckRows,
+  finalVerificationKnownDefectText,
+  finalVerificationNotRunText,
+  finalVerificationRowsSummary,
+} from "@/lib/client/discussion-live-state";
+import { VerificationSummary } from "@/components/build/VerificationSummary";
 import { formatTokenCount } from "@/lib/client/token-usage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -768,6 +774,8 @@ export function runnerUserFacingObservability(
             ? row.rationale ?? "Repository inspection found no applicable surface."
             : row.status === "not_run"
               ? finalVerificationNotRunText(row.notRun)
+              : row.knownDefect
+                ? finalVerificationKnownDefectText(row.knownDefect)
               : row.status === "failed"
                 ? row.issues.join(" ") || "This check did not pass; Runner will preserve diagnostics and schedule repair."
                 : "The current integrated revision passed this mechanical check.",
@@ -1705,6 +1713,8 @@ export function FinalVerificationManifest({
   }
   const label = (status: string) => status === "not_applicable" ? "N/A" : status === "not_run" ? "Not run" : status[0].toUpperCase() + status.slice(1);
   const rows = finalVerificationCheckRows(current);
+  // VF8: how many checks passed and what was not verified, above the per-check cards.
+  const summary = finalVerificationRowsSummary(rows);
   const seal = current.review.status === "approved" ? "Architect approved"
     : current.review.status === "repair_required" || current.repairs.length > 0 ? "Repair required"
     : current.review.status === "requested" ? "Architect review in progress"
@@ -1718,11 +1728,12 @@ export function FinalVerificationManifest({
         </div>
         <Badge variant={current.revisionStatus === "current" ? "secondary" : "warning"}>{current.revisionStatus === "current" ? "Exact revision" : "Stale revision"}</Badge>
       </div>
+      <VerificationSummary summary={summary} className="border-b border-primary/15 py-3 text-[0.7rem]" />
       <div className="grid gap-2 py-3 sm:grid-cols-2 lg:grid-cols-4">
         {rows.map((row) => (
           <div key={row.key} className="rounded-md border bg-card px-3 py-2.5">
-            <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold">{row.label}</p><span className={`text-[0.68rem] font-semibold ${verificationStatusClass(row.status)}`}>{label(row.status)}</span></div>
-            <p className="mt-1.5 text-[0.68rem] leading-relaxed text-muted-foreground">{row.status === "pending" ? "Waiting for the exact revision check." : row.status === "not_applicable" ? row.rationale : row.status === "not_run" ? finalVerificationNotRunText(row.notRun) : row.status === "failed" ? row.issues.join(" ") || "Check failed." : "Current revision passed."}</p>
+            <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold">{row.label}</p><span className={`text-[0.68rem] font-semibold ${row.knownDefect ? "text-amber-600 dark:text-amber-400" : verificationStatusClass(row.status)}`}>{row.knownDefect ? "Known defect" : label(row.status)}</span></div>
+            <p className="mt-1.5 text-[0.68rem] leading-relaxed text-muted-foreground">{row.status === "pending" ? "Waiting for the exact revision check." : row.status === "not_applicable" ? row.rationale : row.status === "not_run" ? finalVerificationNotRunText(row.notRun) : row.knownDefect ? finalVerificationKnownDefectText(row.knownDefect) : row.status === "failed" ? row.issues.join(" ") || "Check failed." : "Current revision passed."}</p>
           </div>
         ))}
       </div>
