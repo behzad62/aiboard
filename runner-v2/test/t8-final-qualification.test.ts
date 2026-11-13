@@ -738,6 +738,8 @@ import {
   inspectFinalVerificationExecutionProfile,
 } from "../src/final-verification-profile.js";
 import type { FinalVerificationPlan } from "../src/final-verification-contracts.js";
+import type { FinalVerificationSubmissionV2 } from "../src/final-verification-submission.js";
+import type { VerificationCheckV2, VerificationPlanPrefillV2 } from "../src/verification-plan-v2.js";
 import {
   detectLanguageFamilies,
   planLanguageTestReport,
@@ -2439,21 +2441,36 @@ class T8SpineReviewer implements AgentModel {
   }
 }
 
-function t8SpineFvPlan(): FinalVerificationPlan {
-  const na = (category: "build" | "runtime_smoke" | "browser"): FinalVerificationPlan["checks"][number] => ({
-    category,
-    status: "not_applicable",
-    rationale: `The fixture has no ${category} entry point.`,
-    repositoryInspection: { paths: ["package.json"], summary: `The fixture package has no ${category} entry point.` },
-  });
-  return {
-    checks: [
-      na("build"),
-      { category: "tests", status: "required" },
-      na("runtime_smoke"),
-      na("browser"),
-    ],
-  };
+/**
+ * VF3: the spine run is created through the control server with a planning
+ * policy, so its final verification is the Architect's list of checks. The
+ * scripted Architect reads the Runner's suggested checks from its prompt, as a
+ * model does, and keeps each one unchanged.
+ */
+function t8SpineSuggestedChecks(request: AgentModelRequest): VerificationCheckV2[] {
+  const text = t8RequestText(request);
+  const marker = text.lastIndexOf("Runner-suggested final-verification checks");
+  assert.ok(marker >= 0, "the v2 final-verification plan turn carries the Runner's suggested checks");
+  const start = text.indexOf("{", marker);
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index >= 0 && index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === "\"") inString = false;
+    } else if (char === "\"") {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return (JSON.parse(text.slice(start, index + 1)) as VerificationPlanPrefillV2).suggestedChecks;
+    }
+  }
+  throw new Error("The Runner's suggested checks are not complete JSON in the Architect prompt.");
 }
 
 interface T8SpineScenario {
@@ -2593,10 +2610,20 @@ class T8SpineArchitect implements AgentModel {
     if (["T-A", "T-B", "T-C"].every((taskId) => projection.tasks[taskId]?.status === "integrated")) {
       const current = projection.finalVerification?.current;
       if (!current) {
-        return this.call("plan_final_verification", { plan: t8SpineFvPlan() });
+        assert.equal(projection.verificationContractVersion, 2, "a new planning run records the v2 final-verification contract");
+        const suggested = t8SpineSuggestedChecks(request);
+        assert.ok(suggested.some((check) => check.kind === "tests"), "the spine fixture's tests are a suggested check");
+        return this.call("plan_final_verification", {
+          plan: {
+            version: 2,
+            checks: suggested.map(({ origin: _origin, mandatory: _mandatory, ...check }) => check),
+            skipped: [],
+          },
+        });
       }
       if (current.review?.status === "requested" && current.submission && current.submissionResult) {
-        const submission = current.submissionResult;
+        const submission = current.submissionResult as FinalVerificationSubmissionV2;
+        const executed = new Set(submission.plan.checks.map((check) => check.id));
         return this.call("review_final_verification", {
           taskId: current.taskId,
           generationId: current.generationId,
@@ -2607,12 +2634,15 @@ class T8SpineArchitect implements AgentModel {
           summary: "Final verification is green on the integrated revision.",
           architectRisk: "low",
           architectRiskRationale: "Three small modules with passing tests.",
-          categoryReviews: submission.checks.map((check) => ({
-            category: check.category,
-            verdict: "approved",
-            rationale: check.status === "required" ? "Executed green with evidence." : "Not applicable to this fixture.",
-            evidenceIds: [...check.evidenceIds],
-          })),
+          checkReviews: submission.checks
+            .filter((check) => executed.has(check.checkId))
+            .map((check) => ({
+              checkId: check.checkId,
+              verdict: "approved",
+              rationale: check.outcome === "passed" ? "Executed green with evidence." : "Not run on this machine; nothing to repair.",
+              evidenceIds: [...check.evidenceIds],
+            }))
+            .sort((left, right) => left.checkId.localeCompare(right.checkId)),
         });
       }
     }
@@ -2781,8 +2811,9 @@ test("T8-A1 synthetic complete-spec build spine with restart, correction, reuse,
     const taskBranches = [...worktreeList.matchAll(/^branch (.+)$/gm)].map((match) => match[1]!);
     assert.ok(taskBranches.length >= taskWorktrees.length, "each task worktree tracks its own branch");
     // Restart mid-validation behind an owner pause: the pause snapshot
-    // carries the stop and the Architect notes, and the reopened run
-    // resumes without duplicating work.
+    // carries the stop, and the reopened run resumes without duplicating
+    // work. An owner pause asks the Architect for no stop notes (72425614):
+    // the owner's reason is the note.
     await t8StepUntil("T-A submitted", served.runtime, (projection) => ["submitted", "architect_review"].includes(projection.tasks["T-A"]?.status ?? ""), 300);
     const pausedTask = served.runtime().projection().tasks["T-A"];
     const paused = await served.manager.pause(runId, "user", "pause:t8-spine-midrun");
@@ -2794,7 +2825,11 @@ test("T8-A1 synthetic complete-spec build spine with restart, correction, reuse,
     const repoPath = t8IntegrationRepoPath(state);
     const pauseBody = await t8GitText(repoPath, ["show", `${String(pauseSnapshot.payload.commit)}:${HANDOFF_STATE_PATH}`]);
     assert.ok(pauseBody.includes("T-A"), "the pause snapshot names the in-flight work");
-    assert.ok(pauseBody.includes(T8S_NOTES), "the pause snapshot carries the Architect notes");
+    assert.ok(!pauseBody.includes(T8S_NOTES), "an owner pause asks the Architect for no stop notes");
+    assert.ok(
+      pauseBody.includes("No Architect notes for this stop: the owner paused the run; the reason above is the note"),
+      "the pause snapshot says why it carries no Architect notes",
+    );
     await served.close();
     served = await serve();
     const recovery = await served.manager.recover();

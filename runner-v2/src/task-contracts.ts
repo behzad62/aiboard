@@ -2,10 +2,8 @@ import type {
   AcceptanceCriterion,
   CriterionEvidenceLink,
 } from "./acceptance-contracts.js";
-import type {
-  FinalVerificationCategory,
-  FinalVerificationPlan,
-} from "./final-verification-contracts.js";
+import type { FinalVerificationCategory } from "./final-verification-contracts.js";
+import type { AnyFinalVerificationPlan } from "./verification-plan-v2.js";
 import type { SubmissionScopeRecord } from "./submission-scope-contracts.js";
 import type { ValidationScope } from "./validation-scope.js";
 import type { ValidationBudgetSubmission } from "./validation-budget.js";
@@ -50,7 +48,10 @@ export interface VerificationRepairProvenance {
   sourceGenerationId: string;
   finalVerificationTaskId: string;
   targetRevision: string;
+  /** v1: the failed categories it repairs. Empty on v2, which names checks in `checkIds`. */
   categories: FinalVerificationCategory[];
+  /** VF3: the failed v2 checks it repairs. */
+  checkIds?: string[];
   evidenceIds: string[];
   source:
     | { type: "semantic_review"; submissionId: string; reviewId: string }
@@ -128,7 +129,7 @@ export interface BuildTask {
   generationId?: string;
   targetRevision?: string;
   planVersion?: number;
-  verificationPlan?: FinalVerificationPlan;
+  verificationPlan?: AnyFinalVerificationPlan;
   verificationSubmissionId?: string;
   verificationReviewId?: string;
   verificationRepair?: VerificationRepairProvenance;
@@ -144,7 +145,7 @@ export type FinalVerificationTask = Omit<
   generationId: string;
   targetRevision: string;
   planVersion: number;
-  verificationPlan: FinalVerificationPlan;
+  verificationPlan: AnyFinalVerificationPlan;
   changeSetId?: never;
 };
 

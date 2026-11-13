@@ -86,6 +86,16 @@
  */
 import { createHash } from "node:crypto";
 import type { FinalVerificationCompletedCheckProjection, ProjectHandoffChoice, SchedulerProjection } from "./scheduler-store.js";
+// C1: this module imports only pure modules at runtime, so the v2 helpers it needs are inlined.
+import type { AnyFinalVerificationPlan, VerificationPlanV2 } from "./verification-plan-v2.js";
+
+function isVerificationPlanV2(plan: AnyFinalVerificationPlan | undefined): plan is VerificationPlanV2 {
+  return (plan as { version?: unknown } | undefined)?.version === 2;
+}
+
+function verificationCheckKey(check: FinalVerificationCompletedCheckProjection): string {
+  return "checkId" in check ? check.checkId : check.category;
+}
 
 export type HandoffStopKind =
   | "completed"
@@ -940,6 +950,20 @@ function verificationEntryForCheck(
   suffix: string,
   revision: string,
 ): HandoffSnapshotVerificationEntry {
+  // VF3: a v2 check is named by its label; not run (tool missing or skipped) is not a failure.
+  if ("checkId" in check) {
+    const notRun = check.notRun;
+    return {
+      label: `final verification ${check.label}${suffix}`,
+      result: notRun
+        ? notRun.reason === "tool_missing"
+          ? `not run (tool missing: ${notRun.tool})`
+          : `not run (skipped: ${notRun.detail})`
+        : check.outcome === "passed" ? "passed" : "failed",
+      ...verificationCommandAndCounts(check.facts),
+      revision,
+    };
+  }
   if (check.status === "not_applicable" && check.green) {
     return {
       label: `final verification ${check.category}${suffix}`,
@@ -953,25 +977,13 @@ function verificationEntryForCheck(
   if (check.notRun) {
     return {
       label: `final verification ${check.category}${suffix}`,
-      result: `not run (tool missing: ${check.notRun.tool})`,
+      result: `not run (tool missing: ${check.notRun.reason === "tool_missing" ? check.notRun.tool : NOT_RECORDED})`,
       counts: NOT_RECORDED,
       command: NOT_RECORDED,
       revision,
     };
   }
-  const commandFacts = check.facts.filter((fact): fact is typeof fact & { command: string; args: string[] } =>
-    (fact as { kind: string }).kind === "command" &&
-    typeof (fact as { command?: unknown }).command === "string");
-  const command = commandFacts.length > 0
-    ? commandFacts.map((fact) => `${fact.command} ${(fact.args ?? []).join(" ")}`.trim()).join("; ")
-    : NOT_RECORDED;
-  const counts = commandFacts.length === 0
-    ? NOT_RECORDED
-    : commandFacts.map((fact) => {
-      const report = (fact as { report?: { executed?: number; failed?: number } }).report;
-      if (report?.executed === undefined || report.failed === undefined) return NOT_RECORDED;
-      return `${report.executed} run, ${report.failed} failed`;
-    }).join("; ");
+  const { command, counts } = verificationCommandAndCounts(check.facts);
   const result = check.green
     ? "passed"
     : check.status === "not_applicable"
@@ -984,6 +996,51 @@ function verificationEntryForCheck(
     command,
     revision,
   };
+}
+
+function verificationCommandAndCounts(facts: FinalVerificationCompletedCheckProjection["facts"]): { command: string; counts: string } {
+  const commandFacts = facts.filter((fact): fact is typeof fact & { command: string; args: string[] } =>
+    (fact as { kind: string }).kind === "command" &&
+    typeof (fact as { command?: unknown }).command === "string");
+  const command = commandFacts.length > 0
+    ? commandFacts.map((fact) => `${fact.command} ${(fact.args ?? []).join(" ")}`.trim()).join("; ")
+    : NOT_RECORDED;
+  const counts = commandFacts.length === 0
+    ? NOT_RECORDED
+    : commandFacts.map((fact) => {
+      const report = (fact as { report?: { executed?: number; failed?: number } }).report;
+      if (report?.executed === undefined || report.failed === undefined) return NOT_RECORDED;
+      return `${report.executed} run, ${report.failed} failed`;
+    }).join("; ");
+  return { command, counts };
+}
+
+/** The planned checks of a generation by key (v1 category, v2 check id) and display name. */
+function plannedVerificationChecks(plan: AnyFinalVerificationPlan | undefined): Array<{ key: string; name: string }> {
+  if (!plan) return [];
+  return isVerificationPlanV2(plan)
+    ? plan.checks.map((check) => ({ key: check.id, name: check.label }))
+    : plan.checks.map((check) => ({ key: check.category, name: check.category }));
+}
+
+/** VF3: the suggested checks a v2 plan skipped, each with the Architect's reason. */
+function skippedVerificationEntries(
+  generation: NonNullable<SchedulerProjection["finalVerification"]>["history"][number],
+  covered: Set<string>,
+): HandoffSnapshotVerificationEntry[] {
+  if (!isVerificationPlanV2(generation.plan)) return [];
+  const suggestions = new Map((generation.executionProfile.verification?.suggestions ?? []).map((check) => [check.id, check]));
+  return generation.plan.skipped.flatMap((entry) => {
+    if (covered.has(entry.checkId)) return [];
+    covered.add(entry.checkId);
+    return [{
+      label: `final verification ${suggestions.get(entry.checkId)?.label ?? entry.checkId}`,
+      result: `not run (skipped: ${entry.reason})`,
+      counts: NOT_RECORDED,
+      command: NOT_RECORDED,
+      revision: generation.targetRevision,
+    }];
+  });
 }
 
 /** The ready-plan identity the kernel gates on (inlined to stay pure). */
@@ -1194,20 +1251,21 @@ export function handoffSnapshotInputFromProjection(
     const covered = new Set<string>();
     for (const check of current.completedChecks ?? []) {
       verification.push(verificationEntryForCheck(check, "", current.targetRevision));
-      covered.add(check.category);
+      covered.add(verificationCheckKey(check));
     }
     // Planned categories with no completed check render pending (n9).
-    for (const planned of current.plan?.checks ?? []) {
-      if (covered.has(planned.category)) continue;
-      covered.add(planned.category);
+    for (const planned of plannedVerificationChecks(current.plan)) {
+      if (covered.has(planned.key)) continue;
+      covered.add(planned.key);
       verification.push({
-        label: `final verification ${planned.category}`,
+        label: `final verification ${planned.name}`,
         result: "pending",
         counts: NOT_RECORDED,
         command: NOT_RECORDED,
         revision: current.targetRevision,
       });
     }
+    verification.push(...skippedVerificationEntries(current, covered));
     // A partial current generation must not hide the other categories' last
     // history result (n9): backfill uncovered categories from history, last
     // result first, marked with that generation's stale marker.
@@ -1215,8 +1273,8 @@ export function handoffSnapshotInputFromProjection(
       const past = history[index]!;
       const suffix = ` (stale (invalidated) at ${past.invalidatedByRevision ?? past.targetRevision})`;
       for (const check of past.completedChecks ?? []) {
-        if (covered.has(check.category)) continue;
-        covered.add(check.category);
+        if (covered.has(verificationCheckKey(check))) continue;
+        covered.add(verificationCheckKey(check));
         verification.push(verificationEntryForCheck(check, suffix, past.targetRevision));
       }
     }
@@ -1226,13 +1284,13 @@ export function handoffSnapshotInputFromProjection(
     const covered = new Set<string>();
     for (const check of generation.completedChecks ?? []) {
       verification.push(verificationEntryForCheck(check, suffix, generation.targetRevision));
-      covered.add(check.category);
+      covered.add(verificationCheckKey(check));
     }
-    for (const planned of generation.plan?.checks ?? []) {
-      if (covered.has(planned.category)) continue;
-      covered.add(planned.category);
+    for (const planned of plannedVerificationChecks(generation.plan)) {
+      if (covered.has(planned.key)) continue;
+      covered.add(planned.key);
       verification.push({
-        label: `final verification ${planned.category}`,
+        label: `final verification ${planned.name}`,
         result: "pending",
         counts: NOT_RECORDED,
         command: NOT_RECORDED,

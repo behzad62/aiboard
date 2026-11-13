@@ -112,6 +112,12 @@ export interface NativeBuildSpec {
    * Amendments travel as planning events, never as a second manifest here.
    */
   approvedSource?: ApprovedSourceManifest;
+  /**
+   * VF3: the final-verification contract the run uses. The Runner sets 2 on every new
+   * evidence-gated run it creates (the Architect's list of checks); a run created before VF3
+   * omits it and keeps the four fixed categories to the end.
+   */
+  verificationContractVersion?: 2;
 }
 
 export type LegacyNativeBuildSpec = Omit<
@@ -246,6 +252,10 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     if (extraKeys.length > 0) {
       throw new Error(`Build spec planningPolicy has unknown fields: ${extraKeys.join(", ")}.`);
     }
+  }
+  if (spec.verificationContractVersion !== undefined &&
+    (spec.verificationContractVersion !== 2 || spec.planningPolicy?.version !== 1)) {
+    throw new Error("Build spec verificationContractVersion must be 2, on a planningPolicy version 1 run.");
   }
   if (spec.approvedSource !== undefined) {
     if (spec.planningPolicy?.version !== 1) {
@@ -412,6 +422,9 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
       : {}),
     ...(spec.approvedSource !== undefined
       ? { approvedSource: structuredClone(spec.approvedSource) }
+      : {}),
+    ...(spec.verificationContractVersion !== undefined
+      ? { verificationContractVersion: spec.verificationContractVersion }
       : {}),
     ...(spec.benchmark
       ? {

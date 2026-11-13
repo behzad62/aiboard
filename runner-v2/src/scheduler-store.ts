@@ -74,12 +74,25 @@ import { validateEncodingSubmission, encodingFindingFacts } from "./encoding-saf
 import type { ExecutionPlanRevision, ExecutionTaskContract, PlanningFinding } from "./planning-contracts.js";
 import {
   parseVerificationNotRun,
-  planFinalVerification,
   validateFinalVerificationPlan,
   verificationCheckFailed,
   type FinalVerificationCategory,
   type FinalVerificationPlan,
 } from "./final-verification-contracts.js";
+import {
+  assertVerificationCheckV2Semantics,
+  assertVerificationFactV2Schema,
+  isVerificationCheckResultV2,
+  isVerificationPlanV2,
+  parseVerificationCheckResultV2,
+  planAnyFinalVerification,
+  skippedVerificationResults,
+  validateVerificationPlanV2,
+  verificationCheckKey,
+  type AnyFinalVerificationPlan,
+  type VerificationCheckResultV2,
+  type VerificationPlanV2,
+} from "./verification-plan-v2.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import {
   assertSatisfiedVerdictsCiteGreenEvidence,
@@ -99,7 +112,11 @@ import type {
   FinalVerificationCheckResult,
   FinalVerificationFact,
 } from "./final-verification-runtime.js";
-import type { FinalVerificationSubmission } from "./final-verification-submission.js";
+import type {
+  AnyFinalVerificationSubmission,
+  FinalVerificationSubmission,
+  FinalVerificationSubmissionV2,
+} from "./final-verification-submission.js";
 import {
   assertFinalVerificationExecutionProfile,
   cloneFinalVerificationExecutionProfile,
@@ -575,6 +592,14 @@ export interface FinalVerificationCategoryReviewProjection {
   evidenceIds: string[];
 }
 
+/** VF3: the Architect's verdict on one executed v2 check. */
+export interface FinalVerificationCheckReviewProjection {
+  checkId: string;
+  verdict: "approved" | "repair_required";
+  rationale: string;
+  evidenceIds: string[];
+}
+
 export interface FinalVerificationReviewDecisionProjection {
   decision: "approved" | "repair_required";
   summary: string;
@@ -584,8 +609,25 @@ export interface FinalVerificationReviewDecisionProjection {
     rationale?: string;
     source: "architect" | "legacy_default";
   };
+  /** v1 only; empty on v2. */
   categoryReviews: FinalVerificationCategoryReviewProjection[];
+  /** v1 only; empty on v2, which keys failures by check id. */
   failedCategories: FinalVerificationCategory[];
+  /** VF3: one review per executed v2 check. */
+  checkReviews?: FinalVerificationCheckReviewProjection[];
+  /** VF3: the v2 checks the review sends to repair. */
+  failedCheckIds?: string[];
+}
+
+/** The failed check keys of a review decision: check ids on v2, categories on v1. */
+export function reviewFailedCheckKeys(decision: FinalVerificationReviewDecisionProjection): string[] {
+  return decision.failedCheckIds ? [...decision.failedCheckIds] : [...decision.failedCategories];
+}
+
+/** The evidence a repair-required review cites for its failed checks, on either contract. */
+export function reviewRepairEvidenceIds(decision: FinalVerificationReviewDecisionProjection): string[] {
+  const reviews: Array<{ verdict: string; evidenceIds: string[] }> = decision.checkReviews ?? decision.categoryReviews;
+  return [...new Set(reviews.flatMap((review) => review.verdict === "repair_required" ? review.evidenceIds : []))];
 }
 
 export interface FinalVerificationGenerationProjection {
@@ -593,7 +635,8 @@ export interface FinalVerificationGenerationProjection {
   generationId: string;
   targetRevision: string;
   planVersion: number;
-  plan: FinalVerificationPlan;
+  /** v1: the four categories. VF3 (v2): the Architect's list of checks. */
+  plan: AnyFinalVerificationPlan;
   executionProfile: FinalVerificationExecutionProfile;
   state: "current" | "invalidated";
   invalidatedByRevision?: string;
@@ -603,7 +646,7 @@ export interface FinalVerificationGenerationProjection {
   completedChecks?: FinalVerificationCompletedCheckProjection[];
   failure?: FinalVerificationFailureProjection;
   submission?: FinalVerificationSubmissionReference;
-  submissionResult?: FinalVerificationSubmission;
+  submissionResult?: AnyFinalVerificationSubmission;
   cleanup?: FinalVerificationCleanupProjection;
   review?: FinalVerificationReviewReference;
   repairTaskIds?: string[];
@@ -615,11 +658,19 @@ export interface FinalVerificationFailureProjection {
   taskId: string;
   targetRevision: string;
   attempt: number;
+  /** v1 only; empty on v2. */
   failedCategories: FinalVerificationCategory[];
+  /** VF3: the failed v2 checks. */
+  failedCheckIds?: string[];
   issueIds: string[];
   factIds: string[];
   evidenceIds: string[];
   reportedAt: string;
+}
+
+/** The failed check keys of a mechanical failure: check ids on v2, categories on v1. */
+export function failureFailedCheckKeys(failure: Pick<FinalVerificationFailureProjection, "failedCategories" | "failedCheckIds">): string[] {
+  return failure.failedCheckIds ? [...failure.failedCheckIds] : [...failure.failedCategories];
 }
 
 export function deriveFinalVerificationFailure(
@@ -628,17 +679,19 @@ export function deriveFinalVerificationFailure(
 ): Omit<FinalVerificationFailureProjection, "reportedAt"> {
   // VF2: a check the Runner did not run (tool missing) is not a failure.
   const failed = (generation.completedChecks ?? []).filter(verificationCheckFailed);
-  const failedCategories = failed.map((check) => check.category);
+  const v2 = isVerificationPlanV2(generation.plan);
+  const keys = failed.map((check) => verificationCheckKey(check));
   const issueIds = failed.flatMap((check) => {
+    const key = verificationCheckKey(check);
     const issues = check.issues.length > 0
       ? check.issues
-      : [`${check.category} is mechanically non-green without issue detail.`];
+      : [`${key} is mechanically non-green without issue detail.`];
     return issues.map(
-      (issue, index) => failureReference("issue", check.category, index, issue),
+      (issue, index) => failureReference("issue", key, index, issue),
     );
   });
   const factIds = failed.flatMap((check) => check.facts.map(
-    (fact, index) => failureReference("fact", check.category, index, canonicalJson(fact)),
+    (fact, index) => failureReference("fact", verificationCheckKey(check), index, canonicalJson(fact)),
   ));
   const evidenceIds = [...new Set(failed.flatMap((check) => check.evidenceIds))].sort();
   const identity = {
@@ -646,7 +699,8 @@ export function deriveFinalVerificationFailure(
     taskId: generation.taskId,
     targetRevision: generation.targetRevision,
     attempt,
-    failedCategories,
+    failedCategories: v2 ? [] : keys as FinalVerificationCategory[],
+    ...(v2 ? { failedCheckIds: keys } : {}),
     issueIds,
     factIds,
     evidenceIds,
@@ -669,12 +723,33 @@ export interface FinalVerificationCleanupProjection {
   error?: string;
 }
 
-export interface FinalVerificationCompletedCheckProjection
-  extends FinalVerificationCheckResult {
+interface FinalVerificationCompletedCheckRun {
   attempt: number;
   workspacePath: string;
   startedAt: string;
   finishedAt: string;
+}
+
+export type FinalVerificationCompletedCheckProjectionV1 = FinalVerificationCheckResult & FinalVerificationCompletedCheckRun;
+/** VF3: a completed v2 check, keyed by its id. */
+export type FinalVerificationCompletedCheckProjectionV2 = VerificationCheckResultV2 & FinalVerificationCompletedCheckRun;
+export type FinalVerificationCompletedCheckProjection =
+  | FinalVerificationCompletedCheckProjectionV1
+  | FinalVerificationCompletedCheckProjectionV2;
+
+/** A v1 generation as the v1 paths read it: the four categories. */
+export type FinalVerificationGenerationProjectionV1 =
+  Omit<FinalVerificationGenerationProjection, "plan" | "completedChecks" | "submissionResult"> & {
+    plan: FinalVerificationPlan;
+    completedChecks?: FinalVerificationCompletedCheckProjectionV1[];
+    submissionResult?: FinalVerificationSubmission;
+  };
+
+/** A v1 completed check (it has a category); a v2 one has a check id. */
+export function isV1CompletedCheck(
+  check: FinalVerificationCompletedCheckProjection,
+): check is FinalVerificationCompletedCheckProjectionV1 {
+  return !isVerificationCheckResultV2(check);
 }
 
 export interface FinalVerificationProjection {
@@ -1010,6 +1085,8 @@ export interface SchedulerProjection {
   reviewEvidencePolicyVersion?: 1;
   /** IV-1 activation, stamped only on fresh runs; old logs retain absent shape and replay unchanged. */
   validationScopePolicyVersion?: 1;
+  /** VF3: set when the run started on the v2 final-verification contract. Runs started before VF3 omit it. */
+  verificationContractVersion?: 2;
   guidance: Record<string, GuidanceProjection>;
   userGuidance: Record<string, UserGuidanceItem>;
   userGuidanceVersion: number;
@@ -2593,141 +2670,146 @@ export function buildCompletionReadiness(
   ) {
     issues.push("Current final-verification task binding is invalid.");
   }
-  const planValidation = validateFinalVerificationPlan(current.plan);
-  if (!planValidation.valid) {
-    issues.push(`Current final-verification plan is invalid: ${planValidation.issues.join(" ")}`);
-  }
-  const plannedCategories = current.plan.checks.map((check) => check.category);
-  const completed = current.completedChecks ?? [];
-  if (
-    completed.length !== plannedCategories.length ||
-    new Set(completed.map((check) => check.category)).size !== plannedCategories.length
-  ) {
-    issues.push("Completed final-verification facts must represent every planned category exactly once.");
-  }
-  for (const planned of current.plan.checks) {
-    const check = completed.find((candidate) => candidate.category === planned.category);
-    if (!check || !sameValue(projectFinalVerificationCheck(check), planned)) {
-      issues.push(`Completed final-verification category ${planned.category} is missing or conflicts with the plan.`);
-      continue;
-    }
-    // VF2: a check the Runner did not run (tool missing) is not a failure and carries no result.
-    if (check.notRun) {
-      if (
-        planned.status !== "required" || check.green !== false || check.issues.length > 0 ||
-        check.evidenceIds.length > 0 || check.facts.length > 0
-      ) {
-        issues.push(`Not-run final-verification category ${planned.category} carries a result.`);
-      }
-      continue;
-    }
-    if (check.green !== true || check.issues.length > 0) {
-      issues.push(`Completed final-verification category ${planned.category} is not mechanically green.`);
-    }
-    if (planned.status === "required") {
-      if (check.evidenceIds.length === 0 || check.facts.length === 0 || check.evidenceIds.length !== check.facts.length) {
-        issues.push(`Required final-verification category ${planned.category} is missing evidence.`);
-      }
-    } else if (check.evidenceIds.length > 0 || check.facts.length > 0) {
-      issues.push(`Not-applicable final-verification category ${planned.category} carries executable evidence.`);
-    }
-  }
-
-  const submission = current.submission;
-  const result = current.submissionResult;
-  if (!submission || !result) {
-    issues.push("A complete persisted final-verification submission result is required.");
+  if (isVerificationPlanV2(current.plan)) {
+    issues.push(...finalVerificationV2ReadinessIssues(current, current.plan, projection.runId));
   } else {
-    if (
-      submission.generationId !== current.generationId ||
-      submission.targetRevision !== current.targetRevision ||
-      result.kind !== "final_verification_submission" ||
-      result.runId !== projection.runId ||
-      result.taskId !== current.taskId ||
-      result.generationId !== current.generationId ||
-      result.targetRevision !== current.targetRevision ||
-      result.attempt !== submission.attempt ||
-      result.green !== true ||
-      !sameValue(result.plan, current.plan)
-    ) {
-      issues.push("Final-verification submission is stale, foreign, incomplete, or non-green.");
+    const v1Current = current as FinalVerificationGenerationProjectionV1;
+    const planValidation = validateFinalVerificationPlan(v1Current.plan);
+    if (!planValidation.valid) {
+      issues.push(`Current final-verification plan is invalid: ${planValidation.issues.join(" ")}`);
     }
+    const plannedCategories = v1Current.plan.checks.map((check) => check.category);
+    const completed = v1Current.completedChecks ?? [];
     if (
-      result.checks.length !== plannedCategories.length ||
-      new Set(result.checks.map((check) => check.category)).size !== plannedCategories.length
+      completed.length !== plannedCategories.length ||
+      new Set(completed.map((check) => check.category)).size !== plannedCategories.length
     ) {
-      issues.push("Final-verification submission must represent every planned category exactly once.");
+      issues.push("Completed final-verification facts must represent every planned category exactly once.");
     }
-    for (const planned of current.plan.checks) {
-      const submitted = result.checks.find((check) => check.category === planned.category);
-      const checkpoint = completed.find((check) => check.category === planned.category);
+    for (const planned of v1Current.plan.checks) {
+      const check = completed.find((candidate) => candidate.category === planned.category);
+      if (!check || !sameValue(projectFinalVerificationCheck(check), planned)) {
+        issues.push(`Completed final-verification category ${planned.category} is missing or conflicts with the plan.`);
+        continue;
+      }
+      // VF2: a check the Runner did not run (tool missing) is not a failure and carries no result.
+      if (check.notRun) {
+        if (
+          planned.status !== "required" || check.green !== false || check.issues.length > 0 ||
+          check.evidenceIds.length > 0 || check.facts.length > 0
+        ) {
+          issues.push(`Not-run final-verification category ${planned.category} carries a result.`);
+        }
+        continue;
+      }
+      if (check.green !== true || check.issues.length > 0) {
+        issues.push(`Completed final-verification category ${planned.category} is not mechanically green.`);
+      }
+      if (planned.status === "required") {
+        if (check.evidenceIds.length === 0 || check.facts.length === 0 || check.evidenceIds.length !== check.facts.length) {
+          issues.push(`Required final-verification category ${planned.category} is missing evidence.`);
+        }
+      } else if (check.evidenceIds.length > 0 || check.facts.length > 0) {
+        issues.push(`Not-applicable final-verification category ${planned.category} carries executable evidence.`);
+      }
+    }
+
+    const submission = current.submission;
+    const result = v1Current.submissionResult;
+    if (!submission || !result) {
+      issues.push("A complete persisted final-verification submission result is required.");
+    } else {
       if (
-        // VF2: a submitted check is green unless the Runner recorded it as not run.
-        !submitted || submitted.green !== (checkpoint?.notRun === undefined) ||
-        !sameValue(submitted.notRun, checkpoint?.notRun) ||
-        !sameValue({
-          category: submitted.category,
-          status: submitted.status,
-          ...(submitted.rationale !== undefined ? { rationale: submitted.rationale } : {}),
-          ...(submitted.repositoryInspection
-            ? { repositoryInspection: submitted.repositoryInspection }
-            : {}),
-        }, planned) ||
-        !checkpoint || checkpoint.attempt !== submission.attempt ||
-        !sameValue(submitted.evidenceIds, checkpoint.evidenceIds) ||
-        !sameValue(submitted.facts, checkpoint.facts)
+        submission.generationId !== current.generationId ||
+        submission.targetRevision !== current.targetRevision ||
+        result.kind !== "final_verification_submission" ||
+        result.runId !== projection.runId ||
+        result.taskId !== current.taskId ||
+        result.generationId !== current.generationId ||
+        result.targetRevision !== current.targetRevision ||
+        result.attempt !== submission.attempt ||
+        result.green !== true ||
+        !sameValue(result.plan, v1Current.plan)
       ) {
-        issues.push(`Submitted final-verification category ${planned.category} is incomplete or conflicts with persisted facts.`);
+        issues.push("Final-verification submission is stale, foreign, incomplete, or non-green.");
+      }
+      if (
+        result.checks.length !== plannedCategories.length ||
+        new Set(result.checks.map((check) => check.category)).size !== plannedCategories.length
+      ) {
+        issues.push("Final-verification submission must represent every planned category exactly once.");
+      }
+      for (const planned of v1Current.plan.checks) {
+        const submitted = result.checks.find((check) => check.category === planned.category);
+        const checkpoint = completed.find((check) => check.category === planned.category);
+        if (
+          // VF2: a submitted check is green unless the Runner recorded it as not run.
+          !submitted || submitted.green !== (checkpoint?.notRun === undefined) ||
+          !sameValue(submitted.notRun, checkpoint?.notRun) ||
+          !sameValue({
+            category: submitted.category,
+            status: submitted.status,
+            ...(submitted.rationale !== undefined ? { rationale: submitted.rationale } : {}),
+            ...(submitted.repositoryInspection
+              ? { repositoryInspection: submitted.repositoryInspection }
+              : {}),
+          }, planned) ||
+          !checkpoint || checkpoint.attempt !== submission.attempt ||
+          !sameValue(submitted.evidenceIds, checkpoint.evidenceIds) ||
+          !sameValue(submitted.facts, checkpoint.facts)
+        ) {
+          issues.push(`Submitted final-verification category ${planned.category} is incomplete or conflicts with persisted facts.`);
+        }
+      }
+    }
+
+    const cleanup = current.cleanup;
+    if (
+      !cleanup || cleanup.status !== "succeeded" ||
+      cleanup.generationId !== current.generationId ||
+      cleanup.taskId !== current.taskId ||
+      cleanup.targetRevision !== current.targetRevision ||
+      !cleanup.finishedAt
+    ) {
+      issues.push("Current final-verification owned cleanup has not durably succeeded.");
+    }
+
+    const review = current.review;
+    if (
+      !review || review.status !== "approved" || !review.decision ||
+      review.decision.decision !== "approved" ||
+      review.generationId !== current.generationId ||
+      review.targetRevision !== current.targetRevision ||
+      review.submissionId !== submission?.submissionId ||
+      review.attempt !== submission?.attempt ||
+      review.decision.targetRevision !== current.targetRevision ||
+      review.decision.failedCategories.length > 0
+    ) {
+      issues.push("A current structured approved final-verification review is required.");
+    } else if (result) {
+      const categoryReviews = review.decision.categoryReviews;
+      if (
+        categoryReviews.length !== plannedCategories.length ||
+        new Set(categoryReviews.map((category) => category.category)).size !== plannedCategories.length
+      ) {
+        issues.push("Final-verification review must represent every planned category exactly once.");
+      }
+      for (const planned of v1Current.plan.checks) {
+        const categoryReview = categoryReviews.find((candidate) => candidate.category === planned.category);
+        const submitted = result.checks.find((candidate) => candidate.category === planned.category);
+        if (
+          !categoryReview || categoryReview.verdict !== "approved" ||
+          !categoryReview.rationale.trim() || !submitted ||
+          !sameValue([...categoryReview.evidenceIds].sort(), [...submitted.evidenceIds].sort())
+        ) {
+          issues.push(`Approved final-verification review for ${planned.category} is missing or cites invalid evidence.`);
+        }
       }
     }
   }
-
-  const cleanup = current.cleanup;
   if (
-    !cleanup || cleanup.status !== "succeeded" ||
-    cleanup.generationId !== current.generationId ||
-    cleanup.taskId !== current.taskId ||
-    cleanup.targetRevision !== current.targetRevision ||
-    !cleanup.finishedAt
-  ) {
-    issues.push("Current final-verification owned cleanup has not durably succeeded.");
-  }
-
-  const review = current.review;
-  if (
-    !review || review.status !== "approved" || !review.decision ||
-    review.decision.decision !== "approved" ||
-    review.generationId !== current.generationId ||
-    review.targetRevision !== current.targetRevision ||
-    review.submissionId !== submission?.submissionId ||
-    review.attempt !== submission?.attempt ||
-    review.decision.targetRevision !== current.targetRevision ||
-    review.decision.failedCategories.length > 0
-  ) {
-    issues.push("A current structured approved final-verification review is required.");
-  } else if (result) {
-    const categoryReviews = review.decision.categoryReviews;
-    if (
-      categoryReviews.length !== plannedCategories.length ||
-      new Set(categoryReviews.map((category) => category.category)).size !== plannedCategories.length
-    ) {
-      issues.push("Final-verification review must represent every planned category exactly once.");
-    }
-    for (const planned of current.plan.checks) {
-      const categoryReview = categoryReviews.find((candidate) => candidate.category === planned.category);
-      const submitted = result.checks.find((candidate) => candidate.category === planned.category);
-      if (
-        !categoryReview || categoryReview.verdict !== "approved" ||
-        !categoryReview.rationale.trim() || !submitted ||
-        !sameValue([...categoryReview.evidenceIds].sort(), [...submitted.evidenceIds].sort())
-      ) {
-        issues.push(`Approved final-verification review for ${planned.category} is missing or cites invalid evidence.`);
-      }
-    }
-  }
-  if (
-    task?.verificationSubmissionId !== submission?.submissionId ||
-    task?.verificationReviewId !== review?.reviewId
+    task?.verificationSubmissionId !== current.submission?.submissionId ||
+    task?.verificationReviewId !== current.review?.reviewId
   ) {
     issues.push("Final-verification task submission/review references are invalid.");
   }
@@ -3007,6 +3089,27 @@ export function validateSchedulerEvidenceEvent(
     assertEvidenceResolved("Final verification repair plan", evidenceIds, records, "this final-verification task");
     return;
   }
+  if (event.type === "final_verification.review_decided" && Array.isArray(event.payload.checkReviews)) {
+    const current = projection.finalVerification?.current;
+    if (!current?.submissionResult || current.submissionResult.green !== true) {
+      throw new Error("Final verification review requires a durable submission result.");
+    }
+    const submittedChecks = current.submissionResult.checks as readonly VerificationCheckResultV2[];
+    const evidenceIds = event.payload.checkReviews.flatMap((candidate) => {
+      if (!isRecord(candidate)) throw new Error("Final verification check review is invalid.");
+      const checkId = requiredString(candidate, "checkId");
+      const cited = stringArray(candidate, "evidenceIds");
+      const submitted = submittedChecks.find((check) => check.checkId === checkId);
+      if (!submitted || submitted.outcome === "failed" ||
+        !sameValue([...submitted.evidenceIds].sort(), [...new Set(cited)].sort())) {
+        throw new Error(`Final verification check ${checkId} review conflicts with submitted evidence.`);
+      }
+      return cited;
+    });
+    const records = evidenceStore.getByIds({ runId: event.runId, taskId: current.taskId, ids: [...new Set(evidenceIds)] });
+    assertEvidenceResolved("Final verification review", evidenceIds, records, "this final-verification task");
+    return;
+  }
   if (
     event.type === "final_verification.review_decided" &&
     Array.isArray(event.payload.categoryReviews)
@@ -3021,7 +3124,7 @@ export function validateSchedulerEvidenceEvent(
       }
       const category = requiredString(candidate, "category");
       const cited = stringArray(candidate, "evidenceIds");
-      const submitted = current.submissionResult!.checks.find(
+      const submitted = (current.submissionResult!.checks as FinalVerificationSubmission["checks"]).find(
         (check) => check.category === category,
       );
       if (
@@ -3216,6 +3319,10 @@ function validateFinalVerificationEvidenceSet(input: {
   attempt: number;
 }): void {
   if (!isRecord(input.check)) throw new Error("Final verification check evidence is invalid.");
+  if (isVerificationCheckResultV2(input.check)) {
+    validateFinalVerificationEvidenceSetV2(input);
+    return;
+  }
   const category = requiredString(input.check, "category");
   if (!["build", "tests", "runtime_smoke", "browser"].includes(category)) {
     throw new Error(`Final verification fact category ${category} is invalid.`);
@@ -3254,7 +3361,7 @@ function validateFinalVerificationEvidenceSet(input: {
   if (!current || current.generationId !== input.generationId || current.targetRevision !== input.targetRevision) {
     throw new Error("Final verification evidence is not bound to the current execution profile.");
   }
-  const completedWorkspace = current.completedChecks?.find(
+  const completedWorkspace = (current.completedChecks as FinalVerificationCompletedCheckProjectionV1[] | undefined)?.find(
     (completed) => completed.category === category,
   )?.workspacePath;
   assertFinalVerificationCheckSemantics({
@@ -3314,7 +3421,11 @@ export function finalVerificationEventArtifactHashes(event: SchedulerEvent): str
   return checks.flatMap((check) => {
     if (!isRecord(check) || !Array.isArray(check.facts)) return [];
     return check.facts.flatMap((fact) => {
-      assertFinalVerificationFactSchema(fact, requiredString(check, "category"), requiredString(event.payload, "targetRevision"));
+      if (isVerificationCheckResultV2(check)) {
+        assertVerificationFactV2Schema(fact, check.checkId, requiredString(event.payload, "targetRevision"));
+      } else {
+        assertFinalVerificationFactSchema(fact, requiredString(check, "category"), requiredString(event.payload, "targetRevision"));
+      }
       return evidenceFactArtifactHashes(fact as FinalVerificationFact);
     });
   });
@@ -3465,7 +3576,9 @@ export function reduceSchedulerEvent(
       if (event.payload.reviewEvidencePolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.reviewEvidencePolicyVersion !== 1)) throw new Error("Invalid review-evidence initialization authority or version.");
       if (event.payload.encodingSafetyPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.encodingSafetyPolicyVersion !== 1)) throw new Error("Invalid encoding-safety initialization authority or version.");
       if (event.payload.validationScopePolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.validationScopePolicyVersion !== 1)) throw new Error("Invalid validation-scope initialization authority or version.");
-      return { ...emptySchedulerProjection(event), ...(event.payload.reviewEvidencePolicyVersion === 1 ? { reviewEvidencePolicyVersion: 1 as const } : {}), ...(event.payload.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1 as const } : {}), ...(event.payload.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 as const } : {}), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}), ...(event.payload.validationScopePolicyVersion === 1 ? { validationScopePolicyVersion: 1 as const } : {}) };
+      // VF3: a new run records the final-verification contract it uses; a run started before VF3 omits it.
+      if (event.payload.verificationContractVersion !== undefined && (event.actor.role !== "runner" || event.payload.verificationContractVersion !== 2)) throw new Error("Invalid final-verification contract initialization authority or version.");
+      return { ...emptySchedulerProjection(event), ...(event.payload.reviewEvidencePolicyVersion === 1 ? { reviewEvidencePolicyVersion: 1 as const } : {}), ...(event.payload.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1 as const } : {}), ...(event.payload.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 as const } : {}), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}), ...(event.payload.validationScopePolicyVersion === 1 ? { validationScopePolicyVersion: 1 as const } : {}), ...(event.payload.verificationContractVersion === 2 ? { verificationContractVersion: 2 as const } : {}) };
     }
     if (event.type === "run.policy_configured") {
       if (event.actor.role !== "runner") {
@@ -3793,6 +3906,11 @@ export function reduceSchedulerEvent(
         if (event.payload.validationScopePolicyVersion !== undefined) {
           if (event.actor.role !== "runner" || event.payload.validationScopePolicyVersion !== 1) throw new Error("Invalid validation-scope initialization authority or version.");
           next.validationScopePolicyVersion = 1;
+        }
+        // VF3: a new run records the final-verification contract it uses.
+        if (event.payload.verificationContractVersion !== undefined) {
+          if (event.actor.role !== "runner" || event.payload.verificationContractVersion !== 2) throw new Error("Invalid final-verification contract initialization authority or version.");
+          next.verificationContractVersion = 2;
         }
         if (event.payload.testIntegrityPolicyVersion !== undefined) {
           if (event.actor.role !== "runner" || event.payload.testIntegrityPolicyVersion !== 1) throw new Error("Invalid test-integrity initialization authority or version.");
@@ -6289,7 +6407,7 @@ function recordBuildRiskAssessment(
     finalVerification.cleanup?.status !== "succeeded" ||
     finalVerification.review?.status !== "approved" ||
     finalVerification.review.decision?.decision !== "approved" ||
-    finalVerification.review.decision.failedCategories.length > 0
+    reviewFailedCheckKeys(finalVerification.review.decision).length > 0
   ) {
     throw new Error(
       "Build risk assessment requires current green final verification and structured Architect approval.",
@@ -6431,13 +6549,25 @@ function createFinalVerificationGeneration(
       `Final verification generation targets stale integration revision ${generation.targetRevision}.`,
     );
   }
-  const authoritativePlan = validateFinalVerificationPlan(generation.plan, {
-    detectedSignals: generation.executionProfile.detectedSignals,
-  });
-  if (!authoritativePlan.valid) {
+  // VF3: a run keeps the contract it started with to the end.
+  if (isVerificationPlanV2(generation.plan) !== (projection.verificationContractVersion === 2)) {
     throw new Error(
-      `Final verification plan conflicts with runner-detected signals: ${authoritativePlan.issues.join(" ")}`,
+      projection.verificationContractVersion === 2
+        ? "This run uses the v2 final-verification contract: the plan must be a list of checks (version 2)."
+        : "This run started before the v2 final-verification contract and keeps the four fixed categories.",
     );
+  }
+  if (isVerificationPlanV2(generation.plan)) {
+    assertVerificationPlanMatchesResolution(generation.plan, generation.executionProfile);
+  } else {
+    const authoritativePlan = validateFinalVerificationPlan(generation.plan, {
+      detectedSignals: generation.executionProfile.detectedSignals,
+    });
+    if (!authoritativePlan.valid) {
+      throw new Error(
+        `Final verification plan conflicts with runner-detected signals: ${authoritativePlan.issues.join(" ")}`,
+      );
+    }
   }
   const existing = projection.finalVerification?.current;
   if (existing) {
@@ -6466,7 +6596,7 @@ function createFinalVerificationGeneration(
     generationId: generation.generationId,
     targetRevision: generation.targetRevision,
     planVersion: generation.planVersion,
-    verificationPlan: planFinalVerification(generation.plan),
+    verificationPlan: planAnyFinalVerification(generation.plan),
   };
   const validation = validateTaskGraph([...Object.values(projection.tasks), task]);
   if (!validation.valid) {
@@ -6483,7 +6613,7 @@ function createFinalVerificationGeneration(
       generationId: generation.generationId,
       targetRevision: generation.targetRevision,
       planVersion: generation.planVersion,
-      plan: planFinalVerification(generation.plan),
+      plan: planAnyFinalVerification(generation.plan),
       executionProfile: cloneFinalVerificationExecutionProfile(generation.executionProfile),
       state: "current",
     },
@@ -6521,9 +6651,13 @@ function recordFinalVerificationCheck(
   payload: Record<string, unknown>,
 ): void {
   const current = requireCurrentFinalVerification(projection, payload);
+  if (isVerificationPlanV2(current.plan)) {
+    recordFinalVerificationCheckV2(current, current.plan, payload);
+    return;
+  }
   const completed = parseFinalVerificationCompletedCheck(payload);
   assertFinalVerificationBinding(current, completed);
-  const planned = current.plan.checks.find(
+  const planned = (current.plan as FinalVerificationPlan).checks.find(
     (check) => check.category === completed.category,
   );
   if (!planned) {
@@ -6540,7 +6674,7 @@ function recordFinalVerificationCheck(
     targetRevision: current.targetRevision,
     workspacePath: completed.workspacePath,
   });
-  const existing = current.completedChecks?.find(
+  const existing = (current.completedChecks as FinalVerificationCompletedCheckProjectionV1[] | undefined)?.find(
     (check) => check.category === completed.category,
   );
   if (existing) {
@@ -6656,7 +6790,7 @@ function recordFinalVerificationFailure(
   }
   const attempt = requiredNumber(payload, "attempt");
   const expected = deriveFinalVerificationFailure(current, attempt);
-  if (expected.failedCategories.length === 0) {
+  if (failureFailedCheckKeys(expected).length === 0) {
     throw new Error("Final verification failure requires a persisted non-green check.");
   }
   const incoming = {
@@ -6666,6 +6800,7 @@ function recordFinalVerificationFailure(
     targetRevision: requiredString(payload, "targetRevision"),
     attempt,
     failedCategories: stringArray(payload, "failedCategories"),
+    ...(payload.failedCheckIds !== undefined ? { failedCheckIds: stringArray(payload, "failedCheckIds") } : {}),
     issueIds: stringArray(payload, "issueIds"),
     factIds: stringArray(payload, "factIds"),
     evidenceIds: stringArray(payload, "evidenceIds"),
@@ -6702,9 +6837,11 @@ function recordFinalVerificationReviewDecision(
   if (!current.review || !sameFinalVerificationReviewIdentity(current.review, review)) {
     throw new Error("Final verification review decision is stale or foreign.");
   }
-  const decisionProjection = payload.categoryReviews === undefined
-    ? undefined
-    : parseFinalVerificationReviewDecision(payload, current);
+  const decisionProjection = isVerificationPlanV2(current.plan)
+    ? parseFinalVerificationReviewDecisionV2(payload, current, current.plan)
+    : payload.categoryReviews === undefined
+      ? undefined
+      : parseFinalVerificationReviewDecision(payload, current);
   if (current.review.status !== "requested" && current.review.status !== review.status) {
     throw new Error("Final verification review was already decided differently.");
   }
@@ -6754,7 +6891,7 @@ function recordVerifierReviewRequest(
     finalVerification.cleanup?.status !== "succeeded" ||
     finalVerification.review?.status !== "approved" ||
     finalVerification.review.decision?.decision !== "approved" ||
-    finalVerification.review.decision.failedCategories.length > 0
+    reviewFailedCheckKeys(finalVerification.review.decision).length > 0
   ) {
     throw new Error(
       "Independent verifier review requires current green final verification and structured Architect approval.",
@@ -8732,18 +8869,20 @@ function createFinalVerificationRepairTasks(
   if (!Array.isArray(payload.tasks) || payload.tasks.length === 0) {
     throw new Error("Final verification repairs require at least one task.");
   }
-  const failedCategories = source.type === "semantic_review"
-    ? current.review!.decision!.failedCategories
-    : current.failure!.failedCategories;
-  const failed = new Set(failedCategories);
-  const assigned = new Set<FinalVerificationCategory>();
+  // VF3: a v2 repair is keyed by the failed checks' ids instead of categories.
+  const v2 = isVerificationPlanV2(current.plan);
+  const failedKeys = source.type === "semantic_review"
+    ? reviewFailedCheckKeys(current.review!.decision!)
+    : failureFailedCheckKeys(current.failure!);
+  const failed = new Set(failedKeys);
+  const assigned = new Set<string>();
   const tasks = payload.tasks.map((candidate) => {
     if (!isRecord(candidate)) throw new Error("Final verification repair task is invalid.");
-    const categories = stringArray(candidate, "categories") as FinalVerificationCategory[];
-    if (categories.length === 0) throw new Error("Repair task requires failed categories.");
+    const categories = stringArray(candidate, v2 ? "checkIds" : "categories") as FinalVerificationCategory[];
+    if (categories.length === 0) throw new Error(v2 ? "Repair task requires failed check ids." : "Repair task requires failed categories.");
     for (const category of categories) {
       if (!failed.has(category) || assigned.has(category)) {
-        throw new Error(`Repair category ${category} is unrelated or duplicated.`);
+        throw new Error(v2 ? `Repair check ${category} is unrelated or duplicated.` : `Repair category ${category} is unrelated or duplicated.`);
       }
       assigned.add(category);
     }
@@ -8756,14 +8895,15 @@ function createFinalVerificationRepairTasks(
       throw new Error(`Repair task acceptance criteria are invalid: ${criteriaValidation.issues.join(" ")}`);
     }
     const evidenceIds = stringArray(candidate, "evidenceIds");
+    const reviewed: Array<{ key: string; evidenceIds: string[] }> = (current.review?.decision?.checkReviews ?? [])
+      .map((review) => ({ key: review.checkId, evidenceIds: review.evidenceIds }))
+      .concat((current.review?.decision?.categoryReviews ?? []).map((review) => ({ key: review.category, evidenceIds: review.evidenceIds })));
     const expectedEvidence = source.type === "semantic_review"
       ? [...new Set(categories.flatMap((category) =>
-          current.review!.decision!.categoryReviews.find(
-            (review) => review.category === category,
-          )?.evidenceIds ?? []
+          reviewed.find((review) => review.key === category)?.evidenceIds ?? []
         ))].sort()
       : [...new Set(categories.flatMap((category) =>
-          current.completedChecks?.find((check) => check.category === category)?.evidenceIds ?? []
+          current.completedChecks?.find((check) => verificationCheckKey(check) === category)?.evidenceIds ?? []
         ))].sort();
     if (!sameValue([...evidenceIds].sort(), expectedEvidence)) {
       throw new Error("Repair task cites missing or unknown final-verification evidence.");
@@ -8782,14 +8922,15 @@ function createFinalVerificationRepairTasks(
         sourceGenerationId: current.generationId,
         finalVerificationTaskId: current.taskId,
         targetRevision: current.targetRevision,
-        categories: [...categories],
+        categories: v2 ? [] : [...categories],
+        ...(v2 ? { checkIds: [...categories] as string[] } : {}),
         evidenceIds: [...evidenceIds],
         source,
       },
     } satisfies BuildTask;
   });
   if (assigned.size !== failed.size) {
-    throw new Error("Repair tasks must cover every failed category exactly once.");
+    throw new Error(v2 ? "Repair tasks must cover every failed check exactly once." : "Repair tasks must cover every failed category exactly once.");
   }
   if (current.repairTaskIds) {
     const existing = current.repairTaskIds.map((id) => projection.tasks[id]);
@@ -8839,25 +8980,7 @@ function parseFinalVerificationReviewDecision(
     throw new Error("Structured final verification review decision is invalid.");
   }
   const summary = requiredString(payload, "summary");
-  const rawArchitectRisk = payload.architectRisk;
-  const rawArchitectRiskRationale = payload.architectRiskRationale;
-  const architectRisk: FinalVerificationReviewDecisionProjection["architectRisk"] =
-    rawArchitectRisk === undefined && rawArchitectRiskRationale === undefined
-      ? {
-          risk: "low" as const,
-          source: "legacy_default" as const,
-        }
-      : rawArchitectRisk === "low" || rawArchitectRisk === "high"
-        ? {
-            risk: rawArchitectRisk,
-            rationale: requiredString(payload, "architectRiskRationale"),
-            source: "architect" as const,
-          }
-        : (() => {
-            throw new Error(
-              "Final verification review Architect risk declaration is invalid.",
-            );
-          })();
+  const architectRisk = parseFinalVerificationArchitectRisk(payload);
   if (!Array.isArray(payload.categoryReviews)) {
     throw new Error("Final verification review requires category reviews.");
   }
@@ -8868,7 +8991,7 @@ function parseFinalVerificationReviewDecision(
     const category = requiredString(candidate, "category") as FinalVerificationCategory;
     const verdict = requiredString(candidate, "verdict");
     if (
-      !current.plan.checks.some((check) => check.category === category) ||
+      !(current.plan as FinalVerificationPlan).checks.some((check) => check.category === category) ||
       (verdict !== "approved" && verdict !== "repair_required")
     ) {
       throw new Error(`Final verification category review ${category} is invalid.`);
@@ -8896,7 +9019,7 @@ function parseFinalVerificationReviewDecision(
     throw new Error("Final verification review decision conflicts with category verdicts.");
   }
   for (const review of categoryReviews) {
-    const submitted = current.submissionResult.checks.find(
+    const submitted = (current.submissionResult.checks as FinalVerificationSubmission["checks"]).find(
       (check) => check.category === review.category,
     );
     if (
@@ -8927,6 +9050,452 @@ function parseFinalVerificationReviewDecision(
     })),
     failedCategories,
   };
+}
+
+function parseFinalVerificationArchitectRisk(
+  payload: Record<string, unknown>,
+): FinalVerificationReviewDecisionProjection["architectRisk"] {
+  const rawArchitectRisk = payload.architectRisk;
+  const rawArchitectRiskRationale = payload.architectRiskRationale;
+  if (rawArchitectRisk === undefined && rawArchitectRiskRationale === undefined) {
+    return { risk: "low", source: "legacy_default" };
+  }
+  if (rawArchitectRisk === "low" || rawArchitectRisk === "high") {
+    return {
+      risk: rawArchitectRisk,
+      rationale: requiredString(payload, "architectRiskRationale"),
+      source: "architect",
+    };
+  }
+  throw new Error("Final verification review Architect risk declaration is invalid.");
+}
+
+// ---------------------------------------------------------------------------
+// VF3: the v2 contract (a list of checks keyed by id). The v1 paths above stay unchanged.
+// ---------------------------------------------------------------------------
+
+/** A v2 plan must be the one the Runner resolved into the runner-owned execution profile. */
+function assertVerificationPlanMatchesResolution(
+  plan: VerificationPlanV2,
+  profile: FinalVerificationExecutionProfile,
+): void {
+  const resolution = profile.verification;
+  if (!resolution) {
+    throw new Error("A v2 final-verification plan needs its resolution in the runner-owned execution profile.");
+  }
+  const validation = validateVerificationPlanV2(plan, { suggestions: resolution.suggestions });
+  if (!validation.valid) {
+    throw new Error(
+      `Final verification plan conflicts with the Runner's suggested checks: ${validation.issues.join(" ")}`,
+    );
+  }
+  if (
+    resolution.checks.length !== plan.checks.length ||
+    plan.checks.some((check, index) => {
+      const resolved = resolution.checks[index]!;
+      return resolved.checkId !== check.id || resolved.label !== check.label ||
+        resolved.kind !== check.kind || resolved.origin !== check.origin ||
+        resolved.mandatory !== check.mandatory;
+    })
+  ) {
+    throw new Error("Final verification plan does not match the Runner's resolved checks.");
+  }
+}
+
+function recordFinalVerificationCheckV2(
+  current: FinalVerificationGenerationProjection,
+  plan: VerificationPlanV2,
+  payload: Record<string, unknown>,
+): void {
+  const binding = {
+    generationId: requiredString(payload, "generationId"),
+    targetRevision: requiredString(payload, "targetRevision"),
+    attempt: requiredPositiveNumber(payload, "attempt"),
+  };
+  assertFinalVerificationBinding(current, binding);
+  const result = parseVerificationCheckResultV2(payload.result);
+  if (!plan.checks.some((check) => check.id === result.checkId)) {
+    throw new Error(`Final verification check ${result.checkId} is not planned.`);
+  }
+  if (result.notRun?.reason === "skipped") {
+    throw new Error(`Final verification check ${result.checkId} is planned, so it is not skipped.`);
+  }
+  const resolution = current.executionProfile.verification;
+  if (!resolution) throw new Error("A v2 final verification needs its resolved plan in the execution profile.");
+  const completed: FinalVerificationCompletedCheckProjectionV2 = {
+    ...result,
+    attempt: binding.attempt,
+    workspacePath: requiredString(payload, "workspacePath"),
+    startedAt: requiredString(payload, "startedAt"),
+    finishedAt: requiredString(payload, "finishedAt"),
+  };
+  assertVerificationCheckV2Semantics({
+    check: result,
+    resolution,
+    ...(current.executionProfile.provisioning
+      ? { provisioning: current.executionProfile.provisioning.command }
+      : {}),
+    targetRevision: current.targetRevision,
+    workspacePath: completed.workspacePath,
+  });
+  const existing = current.completedChecks?.find(
+    (check) => verificationCheckKey(check) === result.checkId,
+  );
+  if (existing) {
+    if (sameValue(existing, completed)) return;
+    throw new Error(`Final verification check ${result.checkId} already has a conflicting result.`);
+  }
+  current.completedChecks = [
+    ...(current.completedChecks ?? []).map(cloneFinalVerificationCompletedCheck),
+    cloneFinalVerificationCompletedCheck(completed),
+  ];
+}
+
+function projectVerificationCheckResultV2(
+  check: FinalVerificationCompletedCheckProjectionV2,
+): VerificationCheckResultV2 {
+  return {
+    checkId: check.checkId,
+    kind: check.kind,
+    label: check.label,
+    origin: check.origin,
+    mandatory: check.mandatory,
+    outcome: check.outcome,
+    green: check.green,
+    evidenceIds: [...check.evidenceIds],
+    facts: cloneJson(check.facts),
+    issues: [...check.issues],
+    ...(check.notRun ? { notRun: cloneJson(check.notRun) } : {}),
+  };
+}
+
+function validateFinalVerificationEvidenceSetV2(input: {
+  projection: SchedulerProjection;
+  event: SchedulerEvent;
+  evidenceStore: EvidenceStore;
+  check: unknown;
+  targetRevision: string;
+  taskId: string;
+  generationId: string;
+  attempt: number;
+}): void {
+  const check = parseVerificationCheckResultV2(input.check);
+  const current = input.projection.finalVerification?.current;
+  if (
+    !current || current.generationId !== input.generationId ||
+    current.targetRevision !== input.targetRevision || !isVerificationPlanV2(current.plan)
+  ) {
+    throw new Error("Final verification evidence is not bound to the current execution profile.");
+  }
+  const resolution = current.executionProfile.verification;
+  if (!resolution) throw new Error("A v2 final verification needs its resolved plan in the execution profile.");
+  if (check.notRun?.reason === "skipped") {
+    const expected = input.event.type === "final_verification.submitted"
+      ? skippedVerificationResults(current.plan, resolution.suggestions)
+        .find((candidate) => candidate.checkId === check.checkId)
+      : undefined;
+    if (!expected || !sameValue(expected, check)) {
+      throw new Error(`Final verification check ${check.checkId} is not a skipped check of this plan.`);
+    }
+    return;
+  }
+  const completedWorkspace = current.completedChecks?.find(
+    (completed) => verificationCheckKey(completed) === check.checkId,
+  )?.workspacePath;
+  assertVerificationCheckV2Semantics({
+    check,
+    resolution,
+    ...(current.executionProfile.provisioning
+      ? { provisioning: current.executionProfile.provisioning.command }
+      : {}),
+    targetRevision: input.targetRevision,
+    workspacePath: input.event.type === "final_verification.check_completed"
+      ? requiredString(input.event.payload, "workspacePath")
+      : completedWorkspace ?? "",
+  });
+  const evidenceIds = check.evidenceIds;
+  if (check.facts.length !== evidenceIds.length || new Set(evidenceIds).size !== evidenceIds.length) {
+    throw new Error(`Final verification check ${check.checkId} facts do not correspond exactly to evidence records.`);
+  }
+  const records = input.evidenceStore.getByIds({
+    runId: input.event.runId,
+    taskId: input.taskId,
+    ids: evidenceIds,
+  });
+  if (records.length !== evidenceIds.length) {
+    throw new Error(`Final verification check ${check.checkId} cites missing or foreign evidence records.`);
+  }
+  for (let index = 0; index < check.facts.length; index += 1) {
+    const fact = check.facts[index];
+    assertVerificationFactV2Schema(fact, check.checkId, input.targetRevision);
+    const record = records[index];
+    if (
+      record.id !== evidenceIds[index] ||
+      record.runId !== input.event.runId ||
+      record.taskId !== input.taskId ||
+      record.attempt !== input.attempt ||
+      record.status !== "observed" ||
+      !record.idempotencyKey.startsWith(`${input.generationId}:`) ||
+      !sameValue(record.fact, fact)
+    ) {
+      throw new Error(
+        `Final verification check ${check.checkId} fact does not match authoritative evidence ${evidenceIds[index]}.`,
+      );
+    }
+  }
+}
+
+function assertFinalVerificationSubmissionResultV2(
+  current: FinalVerificationGenerationProjection,
+  plan: VerificationPlanV2,
+  reference: FinalVerificationSubmissionReference,
+  result: FinalVerificationSubmissionV2,
+): void {
+  const resolution = current.executionProfile.verification;
+  if (
+    !resolution ||
+    result.kind !== "final_verification_submission" ||
+    result.green !== true ||
+    result.generationId !== current.generationId ||
+    result.taskId !== current.taskId ||
+    result.targetRevision !== current.targetRevision ||
+    result.attempt !== reference.attempt ||
+    result.runId === undefined ||
+    !sameValue(result.executionProfile, current.executionProfile) ||
+    !sameValue(result.plan, plan) ||
+    !Array.isArray(result.checks) ||
+    result.checks.length !== plan.checks.length + plan.skipped.length
+  ) {
+    throw new Error("Final verification submission result is stale or malformed.");
+  }
+  const completed = (current.completedChecks ?? []) as FinalVerificationCompletedCheckProjectionV2[];
+  if (completed.length !== plan.checks.length) {
+    throw new Error("Final verification submission requires every completed check.");
+  }
+  for (const [index, planned] of plan.checks.entries()) {
+    const durable = completed.find((entry) => entry.checkId === planned.id);
+    if (!durable || verificationCheckFailed(durable) || durable.issues.length > 0) {
+      throw new Error(`Final verification submission check ${planned.id} is not durably green.`);
+    }
+    if (!sameValue(projectVerificationCheckResultV2(durable), result.checks[index])) {
+      throw new Error(`Final verification submission check ${planned.id} conflicts with durable execution.`);
+    }
+  }
+  if (!sameValue(result.checks.slice(plan.checks.length), skippedVerificationResults(plan, resolution.suggestions))) {
+    throw new Error("Final verification submission skipped checks conflict with the plan.");
+  }
+}
+
+function parseFinalVerificationReviewDecisionV2(
+  payload: Record<string, unknown>,
+  current: FinalVerificationGenerationProjection,
+  plan: VerificationPlanV2,
+): FinalVerificationReviewDecisionProjection | undefined {
+  if (payload.checkReviews === undefined && payload.categoryReviews === undefined) return undefined;
+  if (payload.categoryReviews !== undefined) {
+    throw new Error("A v2 final-verification review names checks by id, not categories.");
+  }
+  if (!current.submissionResult || current.submissionResult.green !== true) {
+    throw new Error("Structured final verification review requires a green submission result.");
+  }
+  const decision = requiredString(payload, "decision");
+  if (decision !== "approved" && decision !== "repair_required") {
+    throw new Error("Structured final verification review decision is invalid.");
+  }
+  const summary = requiredString(payload, "summary");
+  const architectRisk = parseFinalVerificationArchitectRisk(payload);
+  if (!Array.isArray(payload.checkReviews)) {
+    throw new Error("Final verification review requires check reviews.");
+  }
+  const executed = new Set(plan.checks.map((check) => check.id));
+  const checkReviews: FinalVerificationCheckReviewProjection[] = payload.checkReviews.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Final verification check review is invalid.");
+    const checkId = requiredString(candidate, "checkId");
+    const verdict = requiredString(candidate, "verdict");
+    if (!executed.has(checkId) || (verdict !== "approved" && verdict !== "repair_required")) {
+      throw new Error(`Final verification check review ${checkId} is invalid.`);
+    }
+    return {
+      checkId,
+      verdict,
+      rationale: requiredString(candidate, "rationale"),
+      evidenceIds: stringArray(candidate, "evidenceIds"),
+    };
+  });
+  if (
+    checkReviews.length !== executed.size ||
+    new Set(checkReviews.map((review) => review.checkId)).size !== executed.size
+  ) {
+    throw new Error("Final verification review must represent every executed check exactly once.");
+  }
+  const failedCheckIds = checkReviews
+    .filter((review) => review.verdict === "repair_required")
+    .map((review) => review.checkId);
+  if (
+    (decision === "approved" && failedCheckIds.length > 0) ||
+    (decision === "repair_required" && failedCheckIds.length === 0)
+  ) {
+    throw new Error("Final verification review decision conflicts with check verdicts.");
+  }
+  const submittedChecks = current.submissionResult.checks as readonly VerificationCheckResultV2[];
+  for (const review of checkReviews) {
+    const submitted = submittedChecks.find((check) => check.checkId === review.checkId);
+    if (
+      !submitted ||
+      verificationCheckFailed(submitted) ||
+      (submitted.outcome === "passed" && submitted.evidenceIds.length === 0) ||
+      !sameValue([...submitted.evidenceIds].sort(), [...new Set(review.evidenceIds)].sort())
+    ) {
+      throw new Error(`Final verification check ${review.checkId} review conflicts with submitted evidence.`);
+    }
+    // VF2: a missing tool is not repaired by a task.
+    if (submitted.notRun && review.verdict === "repair_required") {
+      throw new Error(
+        `Final verification check ${review.checkId} was not run, so it needs no repair.`,
+      );
+    }
+  }
+  return {
+    decision,
+    summary,
+    targetRevision: current.targetRevision,
+    architectRisk,
+    categoryReviews: [],
+    failedCategories: [],
+    checkReviews: checkReviews.map((review) => ({ ...review, evidenceIds: [...review.evidenceIds] })),
+    failedCheckIds,
+  };
+}
+
+/** The completion gate for a v2 generation: every planned check ran, was submitted and approved. */
+function finalVerificationV2ReadinessIssues(
+  current: FinalVerificationGenerationProjection,
+  plan: VerificationPlanV2,
+  runId: string,
+): string[] {
+  const issues: string[] = [];
+  const resolution = current.executionProfile.verification;
+  if (!resolution) {
+    issues.push("Current final-verification plan has no runner-owned resolution.");
+  }
+  const planValidation = validateVerificationPlanV2(plan, resolution ? { suggestions: resolution.suggestions } : {});
+  if (!planValidation.valid) {
+    issues.push(`Current final-verification plan is invalid: ${planValidation.issues.join(" ")}`);
+  }
+  const completed = (current.completedChecks ?? []) as FinalVerificationCompletedCheckProjectionV2[];
+  if (
+    completed.length !== plan.checks.length ||
+    new Set(completed.map((check) => check.checkId)).size !== plan.checks.length
+  ) {
+    issues.push("Completed final-verification facts must represent every planned check exactly once.");
+  }
+  for (const planned of plan.checks) {
+    const check = completed.find((candidate) => candidate.checkId === planned.id);
+    if (
+      !check || check.kind !== planned.kind || check.label !== planned.label ||
+      check.origin !== planned.origin || check.mandatory !== planned.mandatory
+    ) {
+      issues.push(`Completed final-verification check ${planned.id} is missing or conflicts with the plan.`);
+      continue;
+    }
+    // VF2: a check the Runner did not run (tool missing) is not a failure and carries no result.
+    if (check.outcome === "not_run") {
+      if (
+        check.notRun?.reason !== "tool_missing" || check.green !== false || check.issues.length > 0 ||
+        check.evidenceIds.length > 0 || check.facts.length > 0
+      ) {
+        issues.push(`Not-run final-verification check ${planned.id} carries a result.`);
+      }
+      continue;
+    }
+    if (check.outcome !== "passed" || check.green !== true || check.issues.length > 0) {
+      issues.push(`Completed final-verification check ${planned.id} is not mechanically green.`);
+    }
+    if (check.evidenceIds.length === 0 || check.facts.length === 0 || check.evidenceIds.length !== check.facts.length) {
+      issues.push(`Final-verification check ${planned.id} is missing evidence.`);
+    }
+  }
+
+  const submission = current.submission;
+  const result = current.submissionResult as FinalVerificationSubmissionV2 | undefined;
+  if (!submission || !result) {
+    issues.push("A complete persisted final-verification submission result is required.");
+  } else {
+    if (
+      submission.generationId !== current.generationId ||
+      submission.targetRevision !== current.targetRevision ||
+      result.kind !== "final_verification_submission" ||
+      result.runId !== runId ||
+      result.taskId !== current.taskId ||
+      result.generationId !== current.generationId ||
+      result.targetRevision !== current.targetRevision ||
+      result.attempt !== submission.attempt ||
+      result.green !== true ||
+      !sameValue(result.plan, plan)
+    ) {
+      issues.push("Final-verification submission is stale, foreign, incomplete, or non-green.");
+    }
+    const expected = [
+      ...plan.checks.flatMap((planned) => {
+        const checkpoint = completed.find((check) => check.checkId === planned.id);
+        if (!checkpoint || checkpoint.attempt !== submission.attempt) {
+          issues.push(`Submitted final-verification check ${planned.id} has no checkpoint for the submitted attempt.`);
+          return [];
+        }
+        return [projectVerificationCheckResultV2(checkpoint)];
+      }),
+      ...(resolution ? skippedVerificationResults(plan, resolution.suggestions) : []),
+    ];
+    if (!Array.isArray(result.checks) || !sameValue(result.checks, expected)) {
+      issues.push("Final-verification submission must carry every planned check and every skipped check as persisted.");
+    }
+  }
+
+  const cleanup = current.cleanup;
+  if (
+    !cleanup || cleanup.status !== "succeeded" ||
+    cleanup.generationId !== current.generationId ||
+    cleanup.taskId !== current.taskId ||
+    cleanup.targetRevision !== current.targetRevision ||
+    !cleanup.finishedAt
+  ) {
+    issues.push("Current final-verification owned cleanup has not durably succeeded.");
+  }
+
+  const review = current.review;
+  if (
+    !review || review.status !== "approved" || !review.decision ||
+    review.decision.decision !== "approved" ||
+    review.generationId !== current.generationId ||
+    review.targetRevision !== current.targetRevision ||
+    review.submissionId !== submission?.submissionId ||
+    review.attempt !== submission?.attempt ||
+    review.decision.targetRevision !== current.targetRevision ||
+    reviewFailedCheckKeys(review.decision).length > 0 ||
+    !review.decision.checkReviews
+  ) {
+    issues.push("A current structured approved final-verification review is required.");
+  } else if (result) {
+    const checkReviews = review.decision.checkReviews;
+    if (
+      checkReviews.length !== plan.checks.length ||
+      new Set(checkReviews.map((entry) => entry.checkId)).size !== plan.checks.length
+    ) {
+      issues.push("Final-verification review must represent every executed check exactly once.");
+    }
+    for (const planned of plan.checks) {
+      const checkReview = checkReviews.find((candidate) => candidate.checkId === planned.id);
+      const submitted = (result.checks ?? []).find((candidate) => candidate.checkId === planned.id);
+      if (
+        !checkReview || checkReview.verdict !== "approved" ||
+        !checkReview.rationale.trim() || !submitted ||
+        !sameValue([...checkReview.evidenceIds].sort(), [...submitted.evidenceIds].sort())
+      ) {
+        issues.push(`Approved final-verification review for check ${planned.id} is missing or cites invalid evidence.`);
+      }
+    }
+  }
+  return issues;
 }
 
 function requireCurrentFinalVerification(
@@ -8986,7 +9555,7 @@ function parseFinalVerificationGeneration(payload: Record<string, unknown>): {
   generationId: string;
   targetRevision: string;
   planVersion: number;
-  plan: FinalVerificationPlan;
+  plan: AnyFinalVerificationPlan;
   executionProfile: FinalVerificationExecutionProfile;
 } {
   const planVersion = requiredNumber(payload, "planVersion");
@@ -8998,7 +9567,7 @@ function parseFinalVerificationGeneration(payload: Record<string, unknown>): {
     generationId: requiredString(payload, "generationId"),
     targetRevision,
     planVersion,
-    plan: planFinalVerification(payload.plan),
+    plan: planAnyFinalVerification(payload.plan),
     executionProfile: cloneFinalVerificationExecutionProfile(payload.executionProfile),
   };
 }
@@ -9016,7 +9585,7 @@ function parseFinalVerificationSubmission(
 
 function parseFinalVerificationCompletedCheck(
   payload: Record<string, unknown>,
-): FinalVerificationCompletedCheckProjection & {
+): FinalVerificationCompletedCheckProjectionV1 & {
   generationId: string;
   targetRevision: string;
 } {
@@ -9063,7 +9632,7 @@ function parseFinalVerificationCompletedCheck(
     ...(isRecord(result.repositoryInspection)
       ? {
           repositoryInspection: result.repositoryInspection as unknown as
-            FinalVerificationCompletedCheckProjection["repositoryInspection"],
+            FinalVerificationCompletedCheckProjectionV1["repositoryInspection"],
         }
       : {}),
     evidenceIds,
@@ -9078,18 +9647,23 @@ function parseFinalVerificationCompletedCheck(
 
 function parseFinalVerificationSubmissionResult(
   payload: Record<string, unknown>,
-): FinalVerificationSubmission {
+): AnyFinalVerificationSubmission {
   if (!isRecord(payload.submissionResult)) {
     throw new Error("Final verification submission requires its validated result.");
   }
-  return cloneJson(payload.submissionResult) as unknown as FinalVerificationSubmission;
+  return cloneJson(payload.submissionResult) as unknown as AnyFinalVerificationSubmission;
 }
 
 function assertFinalVerificationSubmissionResult(
   current: FinalVerificationGenerationProjection,
   reference: FinalVerificationSubmissionReference,
-  result: FinalVerificationSubmission,
+  anyResult: AnyFinalVerificationSubmission,
 ): void {
+  if (isVerificationPlanV2(current.plan)) {
+    assertFinalVerificationSubmissionResultV2(current, current.plan, reference, anyResult as FinalVerificationSubmissionV2);
+    return;
+  }
+  const result = anyResult as FinalVerificationSubmission;
   if (
     result.kind !== "final_verification_submission" ||
     result.green !== true ||
@@ -9104,7 +9678,7 @@ function assertFinalVerificationSubmissionResult(
   ) {
     throw new Error("Final verification submission result is stale or malformed.");
   }
-  const completed = current.completedChecks ?? [];
+  const completed = (current.completedChecks ?? []) as FinalVerificationCompletedCheckProjectionV1[];
   if (completed.length !== current.plan.checks.length) {
     throw new Error("Final verification submission requires every completed check.");
   }
@@ -9146,7 +9720,7 @@ function sameFinalVerificationGeneration(
     generationId: string;
     targetRevision: string;
     planVersion: number;
-    plan: FinalVerificationPlan;
+    plan: AnyFinalVerificationPlan;
     executionProfile: FinalVerificationExecutionProfile;
   },
 ): boolean {
@@ -9185,7 +9759,7 @@ function cloneFinalVerificationGeneration(
 ): FinalVerificationGenerationProjection {
   return {
     ...generation,
-    plan: planFinalVerification(generation.plan),
+    plan: planAnyFinalVerification(generation.plan),
     executionProfile: cloneFinalVerificationExecutionProfile(generation.executionProfile),
     ...(generation.completedChecks
       ? { completedChecks: generation.completedChecks.map(cloneFinalVerificationCompletedCheck) }
@@ -9221,7 +9795,7 @@ function cloneFinalVerificationCompletedCheck(
 }
 
 function projectFinalVerificationCheck(
-  check: FinalVerificationCompletedCheckProjection,
+  check: FinalVerificationCompletedCheckProjectionV1,
 ): FinalVerificationPlan["checks"][number] {
   return {
     category: check.category,
@@ -9234,8 +9808,9 @@ function projectFinalVerificationCheck(
 }
 
 function projectFinalVerificationSubmissionCheck(
-  check: FinalVerificationCompletedCheckProjection,
+  check: FinalVerificationCompletedCheckProjectionV1,
 ): FinalVerificationSubmission["checks"][number] {
+  if (check.notRun && check.notRun.reason !== "tool_missing") throw new Error("A v1 check is never skipped.");
   return {
     category: check.category,
     status: check.status,
@@ -9247,7 +9822,7 @@ function projectFinalVerificationSubmissionCheck(
       : {}),
     evidenceIds: [...check.evidenceIds],
     facts: cloneJson(check.facts),
-    ...(check.notRun ? { notRun: { ...check.notRun } } : {}),
+    ...(check.notRun ? { notRun: parseVerificationNotRun(check.notRun, `Final verification ${check.category}`) } : {}),
   };
 }
 
@@ -9281,7 +9856,8 @@ function canonicalJson(value: unknown): string {
 
 function failureReference(
   kind: "issue" | "fact",
-  category: FinalVerificationCategory,
+  /** The v1 category, or the v2 check id. */
+  category: string,
   index: number,
   value: string,
 ): string {
@@ -11832,7 +12408,7 @@ function cloneBuildTask(task: BuildTask): BuildTask {
         }
       : {}),
     ...(task.verificationPlan
-      ? { verificationPlan: planFinalVerification(task.verificationPlan) }
+      ? { verificationPlan: planAnyFinalVerification(task.verificationPlan) }
       : {}),
     ...(task.verifierRepair
       ? {

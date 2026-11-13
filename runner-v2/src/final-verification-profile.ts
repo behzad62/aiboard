@@ -19,6 +19,17 @@ import {
   FinalVerificationPortAuthority,
   type FinalVerificationPortLease,
 } from "./final-verification-port-authority.js";
+import {
+  assertVerificationPlanResolution,
+  cloneVerificationPlanResolution,
+  detectedVerificationSuggestions,
+  resolveVerificationPlanV2,
+  verificationPlanNeedsPort,
+  type VerificationPlanPrefillV2,
+  type VerificationPlanResolution,
+  type VerificationPlanV2,
+  type VerificationSuggestion,
+} from "./verification-plan-v2.js";
 
 export type FinalVerificationPackageManager = "npm" | "pnpm" | "yarn";
 
@@ -59,6 +70,11 @@ export interface FinalVerificationExecutionProfile {
   browser?: FinalVerificationBrowserInput;
   tiers?: ProjectValidationTiers;
   validationBudgetMs?: number;
+  /**
+   * VF3: on a v2 run, the Architect's plan resolved into the exact commands the Runner launches,
+   * with the suggestions it was offered. Absent on v1 runs.
+   */
+  verification?: VerificationPlanResolution;
 }
 
 interface FinalVerificationProfileArchive {
@@ -223,6 +239,33 @@ export class FinalVerificationProfileAuthority {
     }
   }
 
+  /**
+   * VF3: the inspected profile plus the Architect's v2 plan resolved into the exact commands the
+   * Runner launches, on a runner-leased port when a check needs one, archived like any inspected
+   * profile so the generation event validates against it.
+   */
+  async withVerificationPlan(
+    profile: FinalVerificationExecutionProfile,
+    plan: VerificationPlanV2,
+  ): Promise<FinalVerificationExecutionProfile> {
+    if (profile.verification) throw new Error("The execution profile already carries a resolved verification plan.");
+    const suggestions = verificationSuggestionsForProfile(profile);
+    let created: FinalVerificationPortLease | undefined;
+    try {
+      let lease = profile.portLease;
+      if (!lease && verificationPlanNeedsPort(plan, suggestions)) {
+        if (!this.options.portAuthority) throw new Error("A check that needs a port needs the runner-owned port authority.");
+        const reservation = await this.options.portAuthority.reserveDetailed(this.options.runId, profile.targetRevision);
+        if (reservation.created) created = reservation.lease;
+        lease = reservation.lease;
+      }
+      return await this.persistInspected(withResolvedVerificationPlan(profile, plan, suggestions, lease));
+    } catch (error) {
+      if (created) await this.options.portAuthority!.release(created, this.options.runId, profile.targetRevision).catch(() => undefined);
+      throw error;
+    }
+  }
+
   private async persistInspected(
     profile: FinalVerificationExecutionProfile,
   ): Promise<FinalVerificationExecutionProfile> {
@@ -260,7 +303,7 @@ export class FinalVerificationProfileAuthority {
     assertFinalVerificationExecutionProfile(profile, targetRevision);
     const durable = cloneFinalVerificationExecutionProfile(profile);
     if (this.options.portAuthority) {
-      if ((durable.runtimeSmoke || durable.browser?.server) && !durable.portLease) {
+      if ((durable.runtimeSmoke || durable.browser?.server || durable.verification?.checks.some((check) => check.endpoint !== undefined)) && !durable.portLease) {
         throw new Error("Runner-owned final verification port lease is required for a local application server.");
       }
       if (durable.portLease) {
@@ -304,6 +347,54 @@ export class FinalVerificationProfileAuthority {
       `${digest}.json`,
     );
   }
+}
+
+/**
+ * VF3: the Runner's detected commands as suggested checks for a v2 plan. Tests come from the
+ * project's release tier when it declares one (as the v1 tests category ran it), otherwise from
+ * the detected test commands; a detected Vite or Next server becomes a start check.
+ */
+export function verificationSuggestionsForProfile(profile: FinalVerificationExecutionProfile): VerificationSuggestion[] {
+  const releaseTier = profile.tiers?.release;
+  return detectedVerificationSuggestions({
+    ...(profile.commands.build?.length ? { build: profile.commands.build } : {}),
+    ...(releaseTier?.length
+      ? { tests: projectTierCommandsToRuntimeCommands(releaseTier) }
+      : profile.commands.tests?.length ? { tests: profile.commands.tests } : {}),
+    ...(profile.runtimeSmoke ? { server: profile.runtimeSmoke } : {}),
+    ...(profile.portLease ? { port: profile.portLease.port } : {}),
+  });
+}
+
+/** VF3: the profile with the v2 plan resolved against its suggestions and port lease. */
+export function withResolvedVerificationPlan(
+  profile: FinalVerificationExecutionProfile,
+  plan: VerificationPlanV2,
+  suggestions: readonly VerificationSuggestion[] = verificationSuggestionsForProfile(profile),
+  lease: FinalVerificationPortLease | undefined = profile.portLease,
+): FinalVerificationExecutionProfile {
+  const checks = resolveVerificationPlanV2({
+    plan,
+    suggestions,
+    ...(lease ? { port: lease.port } : {}),
+    // node is the runner's own executable, so the check runs on the runtime the evidence identifies.
+    nodeExecutable: process.execPath,
+  });
+  return cloneFinalVerificationExecutionProfile({
+    ...profile,
+    ...(lease ? { portLease: lease } : {}),
+    verification: { version: 2, suggestions: suggestions.map((suggestion) => suggestion.check), checks },
+  });
+}
+
+/** VF3: the runner-owned v2 prefill: the suggested checks, bound to the revision and profile digest. */
+export function buildVerificationPlanPrefillV2(runId: string, profile: FinalVerificationExecutionProfile): VerificationPlanPrefillV2 {
+  return {
+    version: 2,
+    targetRevision: profile.targetRevision,
+    profileDigest: finalVerificationProfileDigest(runId, profile),
+    suggestedChecks: verificationSuggestionsForProfile(profile).map((suggestion) => suggestion.check),
+  };
 }
 
 /**
@@ -516,6 +607,7 @@ export function cloneFinalVerificationExecutionProfile(
     ...(profile.browser ? { browser: cloneBrowser(profile.browser) } : {}),
     ...(profile.tiers ? { tiers: cloneTiers(profile.tiers) } : {}),
     ...(profile.validationBudgetMs !== undefined ? { validationBudgetMs: profile.validationBudgetMs } : {}),
+    ...(profile.verification ? { verification: cloneVerificationPlanResolution(profile.verification) } : {}),
   };
 }
 
@@ -568,6 +660,9 @@ export function assertFinalVerificationExecutionProfile(
     } catch {
       throw new Error("Final verification execution validation budget is invalid.");
     }
+  }
+  if (profile.verification !== undefined) {
+    assertVerificationPlanResolution(profile.verification, profile.portLease?.port);
   }
   if (detected.has("build") !== Boolean(profile.commands.build?.length)) throw new Error("Build signal and exact commands disagree.");
   if (detected.has("tests") !== Boolean(profile.commands.tests?.length)) throw new Error("Test signal and exact commands disagree.");

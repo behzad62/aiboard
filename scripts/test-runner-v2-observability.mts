@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   ContextRecordingLines,
   filterRunnerObservability,
+  FinalVerificationManifest,
   IndependentVerifierManifest,
   RunnerV2ObservabilityPanel,
   runnerAcceptanceContractSummary,
@@ -368,6 +369,47 @@ const cleanupFailed = runnerUserFacingObservability({
 } as NativeBuildObservability, canonicalProjection);
 assert.equal(cleanupFailed.verificationSeal?.status, "failed");
 assert.ok(cleanupFailed.problems.some((problem) => problem.key === "final-verification:cleanup"));
+
+// VF3: a v2 run lists the Architect's checks by label; a check the Runner did not run (its tool is
+// missing, or the plan skipped it) reads not run, never failed, and does not block the seal.
+const v2Snapshot = {
+  ...canonicalSnapshot,
+  finalVerification: {
+    ...canonicalSnapshot.finalVerification,
+    current: {
+      ...canonicalSnapshot.finalVerification.current,
+      categories: [],
+      checks: [
+        { checkId: "build", label: "npm run build", kind: "build", origin: "detected", mandatory: false, status: "passed", evidenceIds: ["build-evidence"], issues: [] },
+        { checkId: "relay", label: "relay server", kind: "start", origin: "architect", mandatory: false, status: "not_run", evidenceIds: [], issues: [], notRun: { reason: "tool_missing", tool: "docker", detail: "docker is not on PATH" } },
+        { checkId: "tests", label: "npm test", kind: "tests", origin: "detected", mandatory: false, status: "not_run", evidenceIds: [], issues: [], notRun: { reason: "skipped", detail: "The tests need a database this machine does not have." } },
+      ],
+      mechanicalFailure: undefined,
+      cleanup: { status: "succeeded", diagnosticsAvailable: false },
+      review: { status: "pending" },
+      repairs: [],
+    },
+  },
+} as unknown as NativeBuildObservability;
+const v2View = runnerUserFacingObservability(v2Snapshot, canonicalProjection);
+assert.deepEqual(v2View.verification.map((item) => [item.category, item.status]), [
+  ["npm run build", "passed"], ["relay server", "not_run"], ["npm test", "not_run"],
+]);
+assert.match(v2View.verification[1]!.detail, /docker is not installed on this machine/);
+assert.match(v2View.verification[2]!.detail, /^Skipped: The tests need a database/);
+assert.equal(v2View.verificationSeal?.status, "review_pending", "a not-run check is not a failure");
+assert.ok(!v2View.problems.some((problem) => problem.key === "final-verification:failure"));
+const v2Manifest = renderToStaticMarkup(createElement(FinalVerificationManifest, { verification: v2Snapshot.finalVerification! }));
+assert.match(v2Manifest, /relay server/);
+assert.match(v2Manifest, /Not run/);
+assert.doesNotMatch(v2Manifest, /Failed/);
+// A pre-VF3 check whose tool was missing reads not run too.
+const v1NotRun = runnerUserFacingObservability({
+  ...canonicalSnapshot,
+  finalVerification: { ...canonicalSnapshot.finalVerification, current: { ...canonicalSnapshot.finalVerification.current, mechanicalFailure: undefined, repairs: [], cleanup: { status: "succeeded", diagnosticsAvailable: false }, review: { status: "pending" }, categories: canonicalSnapshot.finalVerification.current.categories.map((category) => category.category === "tests" ? { ...category, status: "failed", notRun: { reason: "tool_missing", tool: "dotnet", detail: "dotnet is not on PATH" } } : { ...category, status: category.applicability === "not_applicable" ? "not_applicable" : "passed" }) } },
+} as unknown as NativeBuildObservability, canonicalProjection);
+assert.equal(v1NotRun.verification.find((item) => item.category === "Tests")?.status, "not_run");
+assert.equal(v1NotRun.verificationSeal?.status, "review_pending");
 
 assert.equal(runnerVerificationTone([{ status: "failed" }, { status: "passed" }]), "error");
 assert.equal(runnerVerificationTone([{ status: "passed" }, { status: "recorded" }]), "success");

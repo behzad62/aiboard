@@ -49,7 +49,7 @@ test("restart reuses completed checks and executes only pending categories befor
     });
     assert.deepEqual(calls, ["build"]);
     assert.deepEqual(
-      runtime.projection().finalVerification?.current?.completedChecks?.map((entry) => entry.category),
+      runtime.projection().finalVerification?.current?.completedChecks?.map((entry) => (entry as import("../src/scheduler-store.js").FinalVerificationCompletedCheckProjectionV1).category),
       ["build"],
     );
 

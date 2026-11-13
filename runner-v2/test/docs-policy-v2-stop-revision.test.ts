@@ -409,7 +409,7 @@ class ArchitectModel implements AgentModel {
         return call("plan_final_verification", { plan: fvPlan() }, `fv-plan-${request.messages.length}-${tools}`);
       }
       if (current.review?.status === "requested" && current.submission && current.submissionResult) {
-        const submission = current.submissionResult;
+        const submission = current.submissionResult as import("../src/final-verification-submission.js").FinalVerificationSubmission;
         return call("review_final_verification", {
           taskId: current.taskId,
           generationId: current.generationId,
@@ -681,7 +681,7 @@ test("C3c: pause/snapshot/resume/task integration/final verification/handoff tar
     assert.equal(finished.submission?.targetRevision, canonical);
     assert.equal(finished.submissionResult?.targetRevision, canonical);
     assert.equal(finished.review?.status, "approved");
-    for (const check of finished.completedChecks ?? []) {
+    for (const check of (finished.completedChecks ?? []) as import("../src/scheduler-store.js").FinalVerificationCompletedCheckProjectionV1[]) {
       for (const fact of check.facts) {
         if (fact.kind === "command" && "repositoryRevision" in fact) {
           assert.equal(

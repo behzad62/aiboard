@@ -709,7 +709,11 @@ export class ControlServer {
             // this explicit field; a missing field keeps the current default.
             // The manifest itself is kernel-derived â€” never caller-chosen.
             ...(body.build.planningPolicy !== undefined
-              ? { planningPolicy: { version: 1 as const } }
+              ? {
+                  planningPolicy: { version: 1 as const },
+                  // VF3: every new evidence-gated run uses the v2 final verification.
+                  verificationContractVersion: 2 as const,
+                }
               : {}),
             createdAt: projection.createdAt,
             idempotencyKey: `build:${body.idempotencyKey}`,

@@ -107,7 +107,12 @@ export type ArchitectActionReason =
     }
   | { type: "integration_approval_required"; taskId: string; changeSetId: string }
   | { type: "completion_decision_required"; runPolicy?: "plan_only" }
-  | { type: "final_verification_plan_required"; integrationRevision: string; planPrefill?: FinalVerificationPlanPrefill }
+  | {
+      type: "final_verification_plan_required";
+      integrationRevision: string;
+      /** The v1 required categories, or (VF3) the v2 suggested checks. */
+      planPrefill?: FinalVerificationPlanPrefill | VerificationPlanPrefillV2;
+    }
   | {
       type: "final_verification_review_required";
       taskId: string;
@@ -123,7 +128,10 @@ export type ArchitectActionReason =
       source:
         | { type: "semantic_review"; submissionId: string; reviewId: string }
         | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
+      /** v1: the failed categories. Empty on v2, which names the failed checks in `failedCheckIds`. */
       failedCategories: string[];
+      /** VF3: the failed v2 checks. */
+      failedCheckIds?: string[];
       evidenceIds: string[];
     }
   | {
@@ -461,7 +469,14 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
       return {
         type,
         integrationRevision: text("integrationRevision"),
-        ...(reason.planPrefill === undefined ? {} : { planPrefill: parseFinalVerificationPlanPrefill(reason.planPrefill) }),
+        ...(reason.planPrefill === undefined
+          ? {}
+          : {
+              planPrefill: typeof reason.planPrefill === "object" && reason.planPrefill !== null &&
+                  (reason.planPrefill as Record<string, unknown>).version === 2
+                ? parseVerificationPlanPrefillV2(reason.planPrefill)
+                : parseFinalVerificationPlanPrefill(reason.planPrefill),
+            }),
       };
     case "final_verification_review_required":
       exact(["taskId", "generationId", "submissionId", "targetRevision"]);
@@ -473,15 +488,23 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
         targetRevision: text("targetRevision"),
       };
     case "final_verification_repair_plan_required": {
-      exact(["finalVerificationTaskId", "generationId", "targetRevision", "source", "failedCategories", "evidenceIds"]);
+      exact(["finalVerificationTaskId", "generationId", "targetRevision", "source", "failedCategories", "failedCheckIds", "evidenceIds"]);
       const source = parseRepairSource(reason.source);
+      // VF3: a v2 reason names its failed checks by id and carries no category.
+      const failedCheckIds = reason.failedCheckIds === undefined
+        ? undefined
+        : requiredTextArray(reason, "failedCheckIds");
+      if (failedCheckIds && (!Array.isArray(reason.failedCategories) || reason.failedCategories.length !== 0)) {
+        throw new Error("failedCategories must be empty when failedCheckIds names the failed checks.");
+      }
       return {
         type,
         finalVerificationTaskId: text("finalVerificationTaskId"),
         generationId: text("generationId"),
         targetRevision: text("targetRevision"),
         source,
-        failedCategories: requiredTextArray(reason, "failedCategories"),
+        failedCategories: failedCheckIds ? [] : requiredTextArray(reason, "failedCategories"),
+        ...(failedCheckIds ? { failedCheckIds } : {}),
         evidenceIds: requiredTextArray(reason, "evidenceIds"),
       };
     }
@@ -618,3 +641,4 @@ function parseRepairSource(value: unknown): Extract<
 }
 import type { PlanReconciliation } from "./task-contracts.js";
 import { FINAL_VERIFICATION_CATEGORIES, type FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
+import { parseVerificationPlanPrefillV2, type VerificationPlanPrefillV2 } from "./verification-plan-v2.js";

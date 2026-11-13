@@ -103,6 +103,8 @@ import {
 } from "./verification-inventory.js";
 import { flakyRerunPattern, isPackageRunTestCommand, judgeFlakyRerun, narrowNodeTestCommand } from "./flaky-rerun.js";
 import { topDefectClasses } from "./defect-history.js";
+import { isVerificationPlanV2 } from "./verification-plan-v2.js";
+import type { FinalVerificationPlan } from "./final-verification-contracts.js";
 import {
   finalVerificationProfileDigest,
   inspectFinalVerificationExecutionProfile,
@@ -2026,13 +2028,28 @@ export class NativeBuildFactory {
           execution: commandExecution,
           toolLookup: checkToolLookup,
         });
+        // VF3: a v2 check runs the commands resolved for it in the execution profile.
+        if (input.checkId !== undefined) {
+          const run = await verification.runCheckV2({
+            executionProfile: input.executionProfile,
+            checkId: input.checkId,
+            ...(input.signal ? { signal: input.signal } : {}),
+          });
+          return {
+            workspacePath: run.workspacePath,
+            startedAt: run.startedAt,
+            finishedAt: run.finishedAt,
+            check: run.check,
+          };
+        }
+        if (isVerificationPlanV2(input.plan)) throw new Error("A v2 final verification names the check to run.");
         const releaseTier = input.category === "tests" ? input.executionProfile?.tiers?.release : undefined;
         const effectiveProfile = releaseTier?.length
           ? { ...input.executionProfile, commands: { ...input.executionProfile.commands, tests: projectTierCommandsToRuntimeCommands(releaseTier) }, reports: undefined }
           : input.executionProfile;
         const result = await verification.runCategory(
           {
-            plan: input.plan,
+            plan: input.plan as FinalVerificationPlan,
             executionProfile: effectiveProfile,
             ...(effectiveProfile?.commands
               ? { commands: effectiveProfile.commands }
@@ -2059,8 +2076,96 @@ export class NativeBuildFactory {
     // category with directly invoked node --test commands can be narrowed
     // mechanically; anything else reports unsupported with its reason, and
     // the pump charges the cycle instead of claiming an unperformed rerun.
+    type FlakyRerunRequest = Parameters<FlakyIsolationDriver["rerunFailingTests"]>[0];
+    const flakyRerunRuntime = (input: FlakyRerunRequest, testNamePattern: string | undefined): FinalVerificationRuntime =>
+      new FinalVerificationRuntime({
+        git: requireGitRunner(gitContext).lifecycle("verification").run,
+        activity: runActivity,
+        workspaceManager: new VerificationWorkspaceManager({
+          execute: requireGitRunner(gitContext).lifecycle("verification").run,
+          repositoryRoot: integrationManager.path,
+          stateDirectory: this.options.stateDirectory,
+          runId: spec.runId,
+          targetRevision: input.targetRevision,
+          ...snapshotVerificationOptions,
+        }),
+        artifacts: this.artifacts,
+        evidenceStore,
+        runId: input.runId,
+        taskId: input.taskId,
+        attempt: input.attempt,
+        generationId: `${input.generationId}:flaky-rerun`,
+        ambientNodeOptions: ambientNodeOptions(),
+        ...(testNamePattern !== undefined ? { testNamePattern } : {}),
+        ...policyTempRecorders(),
+        checkCategory: "tests",
+        currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return canonicalIntegrationRevision(); },
+        managedProcessService: this.liveManagedProcesses(),
+        managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
+        browserBackend: this.browserBackend,
+        validatePortLease: async (lease) => await finalVerificationPorts.validate(
+          lease,
+          spec.runId,
+          input.targetRevision,
+        ),
+        execution: commandExecution,
+      });
+    // T6b repair (B2): the owner real-counts verdict (see judgeFlakyRerun).
+    const flakyVerdict = (
+      check: { green: boolean; evidenceIds: readonly string[]; facts: readonly import("./final-verification-runtime.js").FinalVerificationFact[] },
+      failingTestIds: readonly string[],
+    ) => {
+      const rerunReports = check.facts.flatMap((fact) => fact.kind === "command" && fact.report ? [fact.report] : []);
+      const verdict = judgeFlakyRerun({ checkGreen: check.green, reports: rerunReports, failingTestIds: [...failingTestIds] });
+      return {
+        status: "rerun" as const,
+        green: check.green && verdict.flaky,
+        evidenceIds: [...check.evidenceIds],
+        note: verdict.note,
+      };
+    };
+    // VF3: a v2 tests check reruns only its failing tests through the same resolved commands.
+    const rerunFailingTestsV2 = async (input: FlakyRerunRequest) => {
+      const resolution = input.executionProfile.verification;
+      const resolved = resolution?.checks.find((check) => check.checkId === input.category);
+      if (!resolution || !resolved || resolved.mode !== "tests") {
+        return { status: "unsupported" as const, note: `Flaky rerun supports only tests checks, not ${input.category}.` };
+      }
+      const narrowed: typeof resolved.commands = [];
+      let testNamePattern: string | undefined;
+      for (const command of resolved.commands) {
+        const { outputs: _outputs, ...plain } = command;
+        const filtered = narrowNodeTestCommand(plain, input.failingTestIds);
+        if (filtered) {
+          narrowed.push({ ...plain, ...filtered });
+          continue;
+        }
+        if (isPackageRunTestCommand(plain)) {
+          narrowed.push(plain);
+          testNamePattern = flakyRerunPattern(input.failingTestIds);
+          continue;
+        }
+        return { status: "unsupported" as const, note: `Flaky rerun cannot filter ${command.label}: only node --test commands (direct or the package test script) support failing-test selection.` };
+      }
+      assertCurrentVerificationGeneration(input);
+      const { outputs: _checkOutputs, ...plainCheck } = resolved;
+      const narrowedProfile = {
+        ...input.executionProfile,
+        verification: {
+          ...resolution,
+          checks: resolution.checks.map((check) => check.checkId === resolved.checkId ? { ...plainCheck, commands: narrowed } : check),
+        },
+      };
+      const run = await flakyRerunRuntime(input, testNamePattern).runCheckV2({
+        executionProfile: narrowedProfile,
+        checkId: resolved.checkId,
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+      return flakyVerdict(run.check, input.failingTestIds);
+    };
     const flakyIsolation: FlakyIsolationDriver = {
       rerunFailingTests: async (input) => {
+        if (isVerificationPlanV2(input.plan)) return await rerunFailingTestsV2(input);
         if (input.category !== "tests") {
           return { status: "unsupported", note: `Flaky rerun supports only the tests category, not ${input.category}.` };
         }
@@ -2087,41 +2192,10 @@ export class NativeBuildFactory {
           return { status: "unsupported", note: `Flaky rerun cannot filter ${command.label}: only node --test commands (direct or the package test script) support failing-test selection.` };
         }
         assertCurrentVerificationGeneration(input);
-        const rerunVerification = new FinalVerificationRuntime({
-          git: requireGitRunner(gitContext).lifecycle("verification").run,
-          activity: runActivity,
-          workspaceManager: new VerificationWorkspaceManager({
-            execute: requireGitRunner(gitContext).lifecycle("verification").run,
-            repositoryRoot: integrationManager.path,
-            stateDirectory: this.options.stateDirectory,
-            runId: spec.runId,
-            targetRevision: input.targetRevision,
-            ...snapshotVerificationOptions,
-          }),
-          artifacts: this.artifacts,
-          evidenceStore,
-          runId: input.runId,
-          taskId: input.taskId,
-          attempt: input.attempt,
-          generationId: `${input.generationId}:flaky-rerun`,
-          ambientNodeOptions: ambientNodeOptions(),
-          ...(testNamePattern !== undefined ? { testNamePattern } : {}),
-          ...policyTempRecorders(),
-          checkCategory: "tests",
-          currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return canonicalIntegrationRevision(); },
-          managedProcessService: this.liveManagedProcesses(),
-          managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
-          browserBackend: this.browserBackend,
-          validatePortLease: async (lease) => await finalVerificationPorts.validate(
-            lease,
-            spec.runId,
-            input.targetRevision,
-          ),
-          execution: commandExecution,
-        });
+        const rerunVerification = flakyRerunRuntime(input, testNamePattern);
         const result = await rerunVerification.runCategory(
           {
-            plan: input.plan,
+            plan: input.plan as FinalVerificationPlan,
             executionProfile: { ...input.executionProfile, commands: { ...input.executionProfile.commands, tests: narrowed } },
             commands: { ...input.executionProfile.commands, tests: narrowed },
             ...(input.signal ? { signal: input.signal } : {}),
@@ -2259,6 +2333,11 @@ export class NativeBuildFactory {
               await finalVerificationProfiles.withArchitectRuntimeSmoke(profile, request),
           }
         : {}),
+      // VF3: the Runner resolves a v2 plan into the exact commands it launches. A check whose
+      // commands the Architect wrote runs without a per-command approval, so only on full access.
+      finalVerificationWithPlan: async (profile, plan) =>
+        await finalVerificationProfiles.withVerificationPlan(profile, plan),
+      finalVerificationArchitectCommands: spec.permissionProfile === "full",
       independentVerifier,
       planCritic: planCriticDriver,
       coverageReview: coverageReviewDriver,
@@ -2279,6 +2358,9 @@ export class NativeBuildFactory {
       },
       ...(spec.planningPolicy !== undefined
         ? { planningPolicy: { version: spec.planningPolicy.version } }
+        : {}),
+      ...(spec.verificationContractVersion !== undefined
+        ? { verificationContractVersion: spec.verificationContractVersion }
         : {}),
       repairPlanLimit: spec.repairPlanLimit,
       projectId: spec.projectId,

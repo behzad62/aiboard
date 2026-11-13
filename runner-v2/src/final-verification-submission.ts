@@ -32,6 +32,13 @@ import {
   type FinalVerificationExecutionProfile,
 } from "./final-verification-profile.js";
 import { assertFinalVerificationCheckSemantics } from "./final-verification-semantics.js";
+import {
+  assertVerificationCheckV2Semantics,
+  planVerificationV2,
+  skippedVerificationResults,
+  type VerificationCheckResultV2,
+  type VerificationPlanV2,
+} from "./verification-plan-v2.js";
 
 export interface FinalVerificationSubmissionInput {
   plan: unknown;
@@ -92,6 +99,134 @@ export interface FinalVerificationSubmission {
    * run because the Runner found its tool missing (VF2). Not semantic completion.
    */
   green: true;
+}
+
+/** VF3: the v2 submission: every executed check, then every check the plan skipped, all not failed. */
+export interface FinalVerificationSubmissionV2 {
+  kind: "final_verification_submission";
+  generationId: string;
+  runId: string;
+  taskId: string;
+  attempt: number;
+  targetRevision: string;
+  plan: VerificationPlanV2;
+  executionProfile: FinalVerificationExecutionProfile;
+  /** Each executed check passed or was not run (tool missing); each skipped one is not run (skipped). */
+  checks: readonly VerificationCheckResultV2[];
+  evidenceIds: readonly string[];
+  submittedAt: string;
+  green: true;
+}
+
+export type AnyFinalVerificationSubmission = FinalVerificationSubmission | FinalVerificationSubmissionV2;
+
+export interface FinalVerificationRunV2 {
+  generationId: string;
+  runId: string;
+  taskId: string;
+  attempt: number;
+  plan: VerificationPlanV2;
+  executionProfile: FinalVerificationExecutionProfile;
+  targetRevision: string;
+  /** Each executed check's own checkout; the Runner reuses one checkout across checks. */
+  workspacePaths: Readonly<Record<string, string>>;
+  checks: readonly VerificationCheckResultV2[];
+}
+
+/**
+ * VF3: submit one executed v2 generation after re-reading the current integration revision and
+ * resolving every cited evidence ID. Mechanical only: no check failed.
+ */
+export async function submitFinalVerificationV2(
+  run: FinalVerificationRunV2,
+  options: FinalVerificationSubmissionOptions,
+): Promise<FinalVerificationSubmissionV2> {
+  if (!options?.evidenceStore) throw new Error("Final verification submission requires an EvidenceStore.");
+  assertFinalVerificationExecutionProfile(run.executionProfile, run.targetRevision);
+  const resolution = run.executionProfile.verification;
+  if (!resolution) throw new Error("A v2 final verification needs its resolved plan in the execution profile.");
+  const plan = planVerificationV2(run.plan, { suggestions: resolution.suggestions });
+  if (!isRevision(run.targetRevision)) throw new Error("Final verification targetRevision is invalid.");
+  if (!Number.isSafeInteger(run.attempt) || run.attempt < 1) {
+    throw new Error("Final verification submission requires a positive attempt identity.");
+  }
+  if (run.checks.length !== plan.checks.length) {
+    throw new Error("Final verification submission must carry every planned check exactly once.");
+  }
+  const checks: VerificationCheckResultV2[] = [];
+  for (const planned of plan.checks) {
+    const check = run.checks.find((candidate) => candidate.checkId === planned.id);
+    if (!check) throw new Error(`Final verification run is missing check ${planned.id}.`);
+    if (check.outcome === "failed" || (check.outcome === "not_run" && check.notRun?.reason !== "tool_missing")) {
+      throw new Error(`Final verification check ${planned.id} did not pass.`);
+    }
+    if (check.outcome === "passed" && (check.evidenceIds.length === 0 || check.facts.length === 0)) {
+      throw new Error(`Final verification check ${planned.id} is missing evidence.`);
+    }
+    const workspacePath = run.workspacePaths[planned.id];
+    if (!workspacePath) throw new Error(`Final verification check ${planned.id} has no recorded checkout.`);
+    assertVerificationCheckV2Semantics({
+      check,
+      resolution,
+      ...(run.executionProfile.provisioning ? { provisioning: run.executionProfile.provisioning.command } : {}),
+      targetRevision: run.targetRevision,
+      workspacePath,
+    });
+    checks.push(check);
+  }
+  const evidenceIds = checks.flatMap((check) => [...check.evidenceIds]);
+  assertUnique(evidenceIds, "final verification evidence IDs");
+  const records = options.evidenceStore.getByIds({ runId: run.runId, taskId: run.taskId, ids: evidenceIds });
+  if (records.length !== evidenceIds.length) {
+    throw new Error("Final verification submission cites missing or foreign evidence records.");
+  }
+  const recordsById = new Map(records.map((record) => [record.id, record]));
+  for (const check of checks) {
+    for (const [index, fact] of check.facts.entries()) {
+      const evidenceId = check.evidenceIds[index]!;
+      const record = recordsById.get(evidenceId);
+      if (!record) throw new Error(`Final verification evidence ${evidenceId} is missing.`);
+      if (record.runId !== run.runId || record.taskId !== run.taskId || record.attempt !== run.attempt) {
+        throw new Error(`Final verification evidence ${evidenceId} is foreign to this generation/task/attempt.`);
+      }
+      if (record.status !== "observed" || !record.idempotencyKey.startsWith(`${run.generationId}:`)) {
+        throw new Error(`Final verification evidence ${evidenceId} is not authoritative current-generation evidence.`);
+      }
+      if (stableJson(record.fact) !== stableJson(fact)) {
+        throw new Error(`Final verification evidence ${evidenceId} does not match the cited authoritative fact.`);
+      }
+      const artifactHashes = evidenceFactArtifactHashes(fact);
+      if (artifactHashes.length > 0 && !options.artifacts) {
+        throw new Error("Final verification submission requires an ArtifactStore for cited artifacts.");
+      }
+      for (const hash of artifactHashes) await options.artifacts!.verify(hash);
+    }
+  }
+  const currentRevision = await readRevision(options.currentIntegrationRevision ?? options.integrationRevision);
+  if (currentRevision !== run.targetRevision) {
+    throw new Error(
+      `Final verification submission is stale: target revision ${run.targetRevision} ` +
+        `does not match current integration revision ${currentRevision}.`,
+    );
+  }
+  const submittedAt = options.clock?.() ?? new Date().toISOString();
+  if (typeof submittedAt !== "string" || !submittedAt.trim()) {
+    throw new Error("Final verification submission clock must return a timestamp.");
+  }
+  return deepFreeze(cloneValue({
+    kind: "final_verification_submission" as const,
+    generationId: run.generationId,
+    runId: run.runId,
+    taskId: run.taskId,
+    attempt: run.attempt,
+    targetRevision: run.targetRevision,
+    plan,
+    executionProfile: cloneFinalVerificationExecutionProfile(run.executionProfile),
+    checks: [...checks, ...skippedVerificationResults(plan, resolution.suggestions)],
+    evidenceIds,
+    submittedAt,
+    green: true as const,
+  }));
 }
 
 export type FinalVerificationSubmissionToolOptions = FinalVerificationSubmissionOptions;

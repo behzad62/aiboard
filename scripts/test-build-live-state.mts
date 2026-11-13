@@ -287,6 +287,18 @@ assert.equal(nativeBuildTaskStatus("planned", {
   } as unknown as Parameters<typeof nativeTaskVerificationState>[0];
   const task = (id: string) => (projection.tasks as Record<string, Parameters<typeof nativeTaskVerificationState>[1]>)[id]!;
   assert.equal(nativeBuildTaskStatus("planned", nativeTaskVerificationState(projection, task("fv-2"))), "done");
+  // VF3: a v2 check the Runner did not run is not a failure; a failed one is.
+  const v2 = (completedChecks: unknown[]) => ({
+    ...projection,
+    finalVerification: { ...projection.finalVerification, current: { ...projection.finalVerification!.current!, completedChecks, review: { status: "requested" } } },
+  }) as unknown as Parameters<typeof nativeTaskVerificationState>[0];
+  assert.equal(nativeBuildTaskStatus("planned", nativeTaskVerificationState(v2([
+    { checkId: "build", outcome: "passed", green: true },
+    { checkId: "relay", outcome: "not_run", green: false, notRun: { reason: "tool_missing", tool: "docker", detail: "" } },
+  ]), task("fv-2"))), "review");
+  assert.equal(nativeBuildTaskStatus("planned", nativeTaskVerificationState(v2([
+    { checkId: "build", outcome: "failed", green: false },
+  ]), task("fv-2"))), "failed");
   assert.equal(nativeTaskRetirement(projection as never, task("fv-2")), undefined);
   assert.equal(nativeTaskRetirement(projection as never, task("fv-1")), "superseded");
   assert.equal(nativeTaskRetirement(projection as never, task("split")), "cancelled");

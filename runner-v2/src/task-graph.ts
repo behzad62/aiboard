@@ -6,7 +6,7 @@ import type {
 } from "./task-contracts.js";
 import { isFinalVerificationTask } from "./task-contracts.js";
 import { validateAcceptanceCriteria } from "./acceptance-contracts.js";
-import { planFinalVerification } from "./final-verification-contracts.js";
+import { planAnyFinalVerification } from "./verification-plan-v2.js";
 
 const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   planned: ["assigned", "cancelled"],
@@ -54,7 +54,7 @@ export function validateTaskGraph(
         if (Object.hasOwn(task, "changeSetId") && task.changeSetId !== undefined) {
           throw new Error("final verification tasks cannot carry a ChangeSet");
         }
-        planFinalVerification(task.verificationPlan);
+        planAnyFinalVerification(task.verificationPlan);
       } catch (error) {
         issues.push({
           code: "invalid_final_verification_task",
@@ -75,9 +75,14 @@ export function validateTaskGraph(
         task.verificationRepair.finalVerificationTaskId.trim() &&
         validVerificationRepairSource(task.verificationRepair.source) &&
         task.verificationRepair.targetRevision.trim() &&
-        task.verificationRepair.categories.length > 0 &&
-        new Set(task.verificationRepair.categories).size ===
-          task.verificationRepair.categories.length,
+        // VF3: a v2 repair names its failed checks; a v1 repair its categories.
+        (task.verificationRepair.checkIds !== undefined
+          ? task.verificationRepair.categories.length === 0 &&
+            task.verificationRepair.checkIds.length > 0 &&
+            new Set(task.verificationRepair.checkIds).size === task.verificationRepair.checkIds.length
+          : task.verificationRepair.categories.length > 0 &&
+            new Set(task.verificationRepair.categories).size ===
+              task.verificationRepair.categories.length),
       );
       const hasVerifierProvenance = Boolean(
         task.verifierRepair &&

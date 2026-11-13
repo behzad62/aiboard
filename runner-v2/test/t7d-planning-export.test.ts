@@ -455,7 +455,8 @@ test("T7d product: real factory planning and delivery export canonical C1 state,
       "planning-policy",
     ]);
     assert.deepEqual(events[0]!.payload, { version: 2 });
-    assert.deepEqual(events[1]!.payload, { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: "Deliver the value module." });
+    // VF3: a run the product route creates records the v2 final-verification contract.
+    assert.deepEqual(events[1]!.payload, { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, verificationContractVersion: 2, objective: "Deliver the value module." });
     assert.deepEqual(events[2]!.payload, { version: 1 });
     assert.ok(!events.some((event) => event.type === "planning.source_registered"));
     const control = (path: string, input?: unknown, token = "t7d-control-token") => fetch(`${address.url}/v2/runs/${T7D_RUN}/build/${path}`, { method: input === undefined ? "GET" : "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(input !== undefined ? { body: JSON.stringify(input) } : {}) });

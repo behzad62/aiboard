@@ -1137,7 +1137,7 @@ test("three real fixes on the same failing test charge once each, then the fourt
         // Non-tests categories are not applicable: mirror the plan entry
         // and answer green with no executable evidence.
         if (input.category !== "tests") {
-          const planned = input.plan.checks.find((check) => check.category === input.category)!;
+          const planned = (input.plan as import("../src/final-verification-contracts.js").FinalVerificationPlan).checks.find((check) => check.category === input.category)!;
           return {
             workspacePath: "C:/verification-workspace",
             startedAt: fixture.clock(),
@@ -1460,7 +1460,7 @@ test("a decision recorded only in round 1 refuses the round-2 dispatch until a n
     const planned: Array<{ round: number; decided: boolean; planIsError?: boolean; planCode?: string }> = [];
     const executeCheck: FinalVerificationCheckDriver["executeCheck"] = async (input) => {
       if (input.category !== "tests") {
-        const plannedCheck = input.plan.checks.find((check) => check.category === input.category)!;
+        const plannedCheck = (input.plan as import("../src/final-verification-contracts.js").FinalVerificationPlan).checks.find((check) => check.category === input.category)!;
         return {
           workspacePath: "C:/verification-workspace",
           startedAt: fixture.clock(),

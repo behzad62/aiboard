@@ -41,7 +41,11 @@ function finalReference(generation: FinalVerificationGenerationProjection) {
     plan: generation.plan, failure: generation.failure, submission: generation.submission, review: generation.review,
     repairTaskIds: generation.repairTaskIds,
     completedChecks: generation.completedChecks?.map((check) => ({
-      category: check.category, status: check.status, green: check.green, attempt: check.attempt,
+      // VF3: a v2 check by its id, kind and outcome; a v1 check by its category.
+      ...("checkId" in check
+        ? { checkId: check.checkId, kind: check.kind, outcome: check.outcome, ...(check.notRun ? { notRun: check.notRun.reason } : {}) }
+        : { category: check.category, status: check.status }),
+      green: check.green, attempt: check.attempt,
       evidenceIds: check.evidenceIds, startedAt: check.startedAt, finishedAt: check.finishedAt,
       factCount: check.facts.length, issueCount: check.issues.length,
     })),

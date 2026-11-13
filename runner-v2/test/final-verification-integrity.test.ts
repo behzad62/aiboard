@@ -376,7 +376,7 @@ test("a forged end-to-end event chain cannot claim cleanup without an authentic 
           startedAt: "2026-08-26T00:00:03.000Z",
           finishedAt: "2026-08-26T00:00:04.000Z",
           check: {
-            ...plan.checks.find((check) => check.category === category)!,
+            ...(plan as import("../src/final-verification-contracts.js").FinalVerificationPlan).checks.find((check) => check.category === category)!,
             green: true,
             evidenceIds: [],
             facts: [],

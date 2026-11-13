@@ -56,9 +56,19 @@ import {
 } from "./final-verification-contracts.js";
 import {
   cloneFinalVerificationExecutionProfile,
+  verificationSuggestionsForProfile,
   type ArchitectRuntimeSmokeRequest,
   type FinalVerificationExecutionProfile,
 } from "./final-verification-profile.js";
+import {
+  completeVerificationPlanV2,
+  isVerificationPlanV2,
+  verificationCheckNamesArchitectCommands,
+  verificationPlanV2Schema,
+  type VerificationCheckResultV2,
+  type VerificationPlanV2,
+} from "./verification-plan-v2.js";
+import type { FinalVerificationSubmission } from "./final-verification-submission.js";
 import type {
   ArchitectActionReason,
   ArchitectQuestionDecisionKind,
@@ -146,6 +156,15 @@ export interface ArchitectToolsOptions {
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
   /** Present only when the run may launch an Architect-named program (full access). */
   finalVerificationRuntimeSmoke?: (profile: FinalVerificationExecutionProfile, request: ArchitectRuntimeSmokeRequest) => Promise<FinalVerificationExecutionProfile>;
+  /**
+   * VF3: the run's final-verification contract. On 2 the final-verification tools plan, review
+   * and repair the Architect's list of checks; absent keeps the four categories (pre-VF3 runs).
+   */
+  verificationContractVersion?: 2;
+  /** VF3: resolves a v2 plan into the runner-owned execution profile. */
+  finalVerificationWithPlan?: (profile: FinalVerificationExecutionProfile, plan: VerificationPlanV2) => Promise<FinalVerificationExecutionProfile>;
+  /** VF3: a v2 check may launch commands the Architect wrote (full access only). */
+  finalVerificationArchitectCommands?: boolean;
 }
 
 interface PlanTaskInput {
@@ -230,10 +249,23 @@ interface ReviewFinalVerificationInput {
   architectRiskRationale: string;
   categoryReviews: FinalVerificationCategoryReviewInput[];
 }
+interface FinalVerificationCheckReviewInput {
+  checkId: string;
+  verdict: "approved" | "repair_required";
+  rationale: string;
+  evidenceIds: string[];
+}
+interface ReviewFinalVerificationV2Input extends Omit<ReviewFinalVerificationInput, "categoryReviews"> {
+  checkReviews: FinalVerificationCheckReviewInput[];
+}
+interface PlanFinalVerificationV2Input { plan: Record<string, unknown> }
 interface VerificationRepairTaskInput {
   id: string;
   objective: string;
+  /** v1: the failed categories; empty on v2. */
   categories: FinalVerificationCategory[];
+  /** VF3: the failed v2 checks. */
+  checkIds?: string[];
   evidenceIds: string[];
   dependencies: string[];
   requiredCapabilities: string[];
@@ -648,24 +680,37 @@ export function createArchitectTools(
         ),
       ]
     : withQuestion;
+  // VF3: a v2 run plans, reviews and repairs the Architect's list of checks.
+  const verificationV2 = options.verificationContractVersion === 2;
   const planning = options.finalVerificationPlanAvailable && !answerPath
-    ? [...core, planFinalVerificationTool(
-        options.store,
-        clock,
-        options.finalVerificationProfileFor,
-        options.discardFinalVerificationProfile,
-        options.finalVerificationRuntimeSmoke,
-      )]
+    ? [...core, verificationV2
+      ? planFinalVerificationV2Tool(
+          options.store,
+          clock,
+          options.finalVerificationProfileFor,
+          options.discardFinalVerificationProfile,
+          options.finalVerificationWithPlan,
+          options.finalVerificationArchitectCommands === true,
+        )
+      : planFinalVerificationTool(
+          options.store,
+          clock,
+          options.finalVerificationProfileFor,
+          options.discardFinalVerificationProfile,
+          options.finalVerificationRuntimeSmoke,
+        )]
     : core;
   const verification = options.finalVerificationReviewAvailable && !answerPath
-    ? [...planning, reviewFinalVerificationTool(
-        options.store,
-        clock,
-        options.evidenceStore,
-      )]
+    ? [...planning, verificationV2
+      ? reviewFinalVerificationV2Tool(options.store, clock, options.evidenceStore)
+      : reviewFinalVerificationTool(
+          options.store,
+          clock,
+          options.evidenceStore,
+        )]
     : planning;
   const repairPlanning = options.finalVerificationRepairPlanAvailable && !answerPath
-    ? [...verification, planVerificationRepairsTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore })]
+    ? [...verification, planVerificationRepairsTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore }, verificationV2)]
     : verification;
   const verifierRepairPlanning = options.verifierRepairPlanAvailable && !answerPath
     ? [...repairPlanning, planVerifierRepairsTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore })]
@@ -732,10 +777,13 @@ function planVerificationRepairsTool(
   store: SchedulerStore,
   clock: () => string,
   toolOptions?: RepairPlanningToolOptions,
+  v2 = false,
 ): NativeTool<PlanVerificationRepairsInput> {
   return lifecycleTool({
     name: "plan_verification_repairs",
-    description: "Atomically create narrowly scoped worker tasks for every failed final-verification review category",
+    description: v2
+      ? "Atomically create narrowly scoped worker tasks for every failed final-verification check, named by its check id"
+      : "Atomically create narrowly scoped worker tasks for every failed final-verification review category",
     schema: objectSchema({
       finalVerificationTaskId: { type: "string", minLength: 1 },
       generationId: { type: "string", minLength: 1 },
@@ -754,11 +802,15 @@ function planVerificationRepairsTool(
         items: objectSchema({
           id: { type: "string", minLength: 1 },
           objective: { type: "string", minLength: 1 },
-          categories: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string", enum: [...FINAL_VERIFICATION_CATEGORIES] },
-          },
+          ...(v2
+            ? { checkIds: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "The failed checks this task repairs, by id." } }
+            : {
+                categories: {
+                  type: "array",
+                  minItems: 1,
+                  items: { type: "string", enum: [...FINAL_VERIFICATION_CATEGORIES] },
+                },
+              }),
           evidenceIds: { type: "array", items: { type: "string", minLength: 1 } },
           dependencies: { type: "array", items: { type: "string", minLength: 1 } },
           requiredCapabilities: { type: "array", items: { type: "string", minLength: 1 } },
@@ -768,14 +820,14 @@ function planVerificationRepairsTool(
             items: criterionSchema(),
           },
         }, [
-          "id", "objective", "categories", "evidenceIds", "dependencies",
+          "id", "objective", v2 ? "checkIds" : "categories", "evidenceIds", "dependencies",
           "requiredCapabilities", "acceptanceCriteria",
         ]),
       },
     }, [
       "finalVerificationTaskId", "generationId", "targetRevision", "source", "tasks",
     ]),
-    validate: validateVerificationRepairPlan,
+    validate: (input) => validateVerificationRepairPlan(input, v2),
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
@@ -827,7 +879,7 @@ function planVerificationRepairsTool(
             `Repair ${orphans.map((task) => task.id).join(", ")} must list in dependencies the integrated task(s) whose delivered work it repairs (for example ${integratedTaskExamples(projection)}); a repair runs under that task's contract.`,
           );
         }
-        const members = repairMemberIssues(toolProjectId(toolOptions, context.runId), input.tasks.flatMap((task) => task.categories.map((category) => withFailingIds(category, failingTestIdsByCategory(projection.finalVerification?.current?.completedChecks ?? [])))));
+        const members = repairMemberIssues(toolProjectId(toolOptions, context.runId), input.tasks.flatMap((task) => (task.checkIds ?? task.categories).map((category) => withFailingIds(category, failingTestIdsByCategory(projection.finalVerification?.current?.completedChecks ?? [])))));
         const taskEvidence = [...new Set(input.tasks.flatMap((task) => task.evidenceIds))];
         // T6b repair (N7): repair tasks cite durable evidence.
         if (toolOptions?.evidenceStore) {
@@ -879,9 +931,10 @@ function planVerificationRepairsTool(
           targetRevision: input.targetRevision,
           source: input.source,
           revision: projection.planRevision + 1,
-          tasks: input.tasks.map((task) => ({
+          tasks: input.tasks.map(({ categories, checkIds, ...task }) => ({
             ...task,
-            categories: [...task.categories],
+            // VF3: a v2 repair names its checks; a v1 repair its categories.
+            ...(checkIds !== undefined ? { checkIds: [...checkIds] } : { categories: [...categories] }),
             evidenceIds: [...task.evidenceIds],
             dependencies: [...task.dependencies],
             requiredCapabilities: [...task.requiredCapabilities],
@@ -899,6 +952,7 @@ function planVerificationRepairsTool(
 
 function validateVerificationRepairPlan(
   input: unknown,
+  v2 = false,
 ): ValidationResult<PlanVerificationRepairsInput> {
   return validateObject(input, (value) => {
     if (
@@ -931,11 +985,31 @@ function validateVerificationRepairPlan(
     const tasks: VerificationRepairTaskInput[] = [];
     for (const candidate of value.tasks) {
       if (!isRecord(candidate) || !nonEmpty(candidate.id) || !nonEmpty(candidate.objective)) return null;
-      const categories = stringList(candidate.categories) as FinalVerificationCategory[] | null;
       const evidenceIds = stringList(candidate.evidenceIds);
       const dependencies = stringList(candidate.dependencies);
       const requiredCapabilities = stringList(candidate.requiredCapabilities);
       const acceptanceCriteria = parseAcceptanceCriteria(candidate.acceptanceCriteria);
+      if (v2) {
+        const checkIds = stringList(candidate.checkIds);
+        if (
+          candidate.categories !== undefined ||
+          !checkIds || checkIds.length === 0 || new Set(checkIds).size !== checkIds.length ||
+          !evidenceIds || new Set(evidenceIds).size !== evidenceIds.length ||
+          !dependencies || !requiredCapabilities || !acceptanceCriteria
+        ) return null;
+        tasks.push({
+          id: candidate.id,
+          objective: candidate.objective,
+          categories: [],
+          checkIds: [...checkIds].sort(),
+          evidenceIds: [...evidenceIds].sort(),
+          dependencies: [...dependencies].sort(),
+          requiredCapabilities: [...requiredCapabilities].sort(),
+          acceptanceCriteria,
+        });
+        continue;
+      }
+      const categories = stringList(candidate.categories) as FinalVerificationCategory[] | null;
       if (
         !categories || categories.length === 0 ||
         categories.some((category) => !FINAL_VERIFICATION_CATEGORIES.includes(category)) ||
@@ -961,7 +1035,9 @@ function validateVerificationRepairPlan(
       source,
       tasks: tasks.sort((left, right) => left.id.localeCompare(right.id)),
     };
-  }, "current repair provenance and at least one valid scoped repair task are required");
+  }, v2
+    ? "current repair provenance and at least one valid scoped repair task, each naming its failed checks in checkIds, are required"
+    : "current repair provenance and at least one valid scoped repair task are required");
 }
 
 function repairSourceMatchesCurrent(
@@ -997,6 +1073,7 @@ function repairPlanMatches(
       JSON.stringify(task.requiredCapabilities) === JSON.stringify(candidate.requiredCapabilities) &&
       JSON.stringify(task.acceptanceCriteria) === JSON.stringify(candidate.acceptanceCriteria) &&
       JSON.stringify(task.verificationRepair?.categories) === JSON.stringify(candidate.categories) &&
+      JSON.stringify(task.verificationRepair?.checkIds) === JSON.stringify(candidate.checkIds) &&
       JSON.stringify(task.verificationRepair?.evidenceIds) === JSON.stringify(candidate.evidenceIds);
   });
 }
@@ -1772,8 +1849,14 @@ function reviewFinalVerificationTool(
           "Final verification review is not currently requested or was already decided differently.",
         );
       }
+      if (isVerificationPlanV2(current.plan)) {
+        return errorOutput(
+          "final_verification_contract_mismatch",
+          "This generation is a list of checks: review each check by its checkId.",
+        );
+      }
       const checks = new Map(
-        current.submissionResult.checks.map((check) => [check.category, check]),
+        (current.submissionResult as FinalVerificationSubmission).checks.map((check) => [check.category, check]),
       );
       for (const review of input.categoryReviews) {
         const check = checks.get(review.category);
@@ -1935,6 +2018,371 @@ function validSmokeStep(value: unknown): boolean {
   const step = value as Record<string, unknown>;
   return nonEmpty(step.label) && nonEmpty(step.executable) && Array.isArray(step.args) &&
     step.args.every((arg) => typeof arg === "string") && (step.timeoutMs === undefined || Number.isSafeInteger(step.timeoutMs));
+}
+
+const PLAN_FINAL_VERIFICATION_V2_DESCRIPTION = [
+  "Create the kernel-owned final verification for the current canonical integration revision as your list of checks.",
+  "The Runner suggests checks from what it detected (the prefill): keep each one, change it, or list it in skipped with a reason; then add checks of your own for what the acceptance criteria and README say a user does.",
+  "Each check has an id (lowercase, no colon), a label, a kind (build, tests, start or other) and either run {executable, args, cwd?, timeoutMs?} or start {executable, args, ready, steps?}.",
+  "start runs the program the user runs: ready is {http: {path, status}} on the Runner-leased port ({port} in args), {outputLine} the program prints, or {exitCode} for a CLI that runs and exits; steps then run in order against it and each must exit 0.",
+  "outputs keeps files the commands write (screenshots, reports) as evidence. origin and mandatory are the Runner's; a mandatory check cannot be skipped or changed.",
+  "Checks whose commands you wrote need full access.",
+].join(" ");
+
+function planFinalVerificationV2Tool(
+  store: SchedulerStore,
+  clock: () => string,
+  profileFor: ArchitectToolsOptions["finalVerificationProfileFor"],
+  discardProfile: ArchitectToolsOptions["discardFinalVerificationProfile"],
+  withPlan: ArchitectToolsOptions["finalVerificationWithPlan"],
+  architectCommands: boolean,
+): NativeTool<PlanFinalVerificationV2Input> {
+  return lifecycleTool({
+    name: "plan_final_verification",
+    description: PLAN_FINAL_VERIFICATION_V2_DESCRIPTION,
+    schema: objectSchema({ plan: verificationPlanV2Schema() }, ["plan"]),
+    validate: (input) => validateObject(
+      input,
+      (value) => isRecord(value.plan) ? { plan: value.plan } : null,
+      "plan must be { version: 2, checks, skipped }",
+    ),
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      if (projection.verificationContractVersion !== 2) {
+        return errorOutput(
+          "final_verification_contract_mismatch",
+          "This run started before the list of checks and keeps the four fixed categories.",
+        );
+      }
+      const implementationTasks = Object.values(projection.tasks).filter(
+        (task) => task.kind !== "final_verification",
+      );
+      if (implementationTasks.some((task) => task.status !== "integrated" && task.status !== "cancelled")) {
+        return errorOutput(
+          "implementation_tasks_not_terminal",
+          "Final verification cannot be planned until every implementation task is integrated or cancelled.",
+        );
+      }
+      if (!projection.integrationRevision) {
+        return errorOutput("integration_revision_required", "Final verification requires a canonical integration revision.");
+      }
+      if (!profileFor || !withPlan) {
+        return errorOutput(
+          "final_verification_profile_unavailable",
+          "Final verification requires a runner-owned exact-revision execution profile authority.",
+        );
+      }
+      let inspected: FinalVerificationExecutionProfile;
+      try {
+        inspected = cloneFinalVerificationExecutionProfile(await profileFor(projection.integrationRevision));
+      } catch (error) {
+        return errorOutput("final_verification_profile_unavailable", error instanceof Error ? error.message : String(error));
+      }
+      const refuse = async (
+        profile: FinalVerificationExecutionProfile,
+        code: string,
+        message: string,
+        issues?: string[],
+      ): Promise<ToolExecutionOutput> => {
+        if (discardProfile) {
+          try { await discardProfile(profile); }
+          catch (error) {
+            return errorOutput("final_verification_profile_cleanup_failed", error instanceof Error ? error.message : String(error));
+          }
+        }
+        return errorOutput(code, message, issues);
+      };
+      const suggestions = verificationSuggestionsForProfile(inspected).map((suggestion) => suggestion.check);
+      const completed = completeVerificationPlanV2(input.plan, suggestions);
+      if (!completed.ok) {
+        return await refuse(inspected, "final_verification_plan_invalid", completed.issues.join(" "), completed.issues);
+      }
+      if (!architectCommands) {
+        const named = completed.plan.checks.filter((check) => verificationCheckNamesArchitectCommands(
+          check,
+          suggestions.find((suggestion) => suggestion.id === check.id),
+        ));
+        if (named.length > 0) {
+          return await refuse(
+            inspected,
+            "final_verification_commands_need_full_access",
+            `Checks ${named.map((check) => check.id).join(", ")} run commands you wrote. That needs full access, where the Runner may launch them without a per-command approval. Keep the Runner's suggested commands, or skip a suggestion with a reason.`,
+          );
+        }
+      }
+      let executionProfile: FinalVerificationExecutionProfile;
+      try {
+        executionProfile = cloneFinalVerificationExecutionProfile(await withPlan(inspected, completed.plan));
+      } catch (error) {
+        return await refuse(inspected, "final_verification_plan_unresolvable", error instanceof Error ? error.message : String(error));
+      }
+      const revisionKey = shortHash(projection.integrationRevision);
+      const planVersion = (projection.finalVerification?.history.length ?? 0) + 1;
+      const generationSuffix = planVersion === 1 ? "" : `-${planVersion}`;
+      try {
+        const output = appendEvent(store, {
+          runId: context.runId,
+          type: "final_verification.generation_created",
+          occurredAt: clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `final-verification-plan:${projection.integrationRevision}${generationSuffix}`,
+          payload: {
+            taskId: `final-verification-${revisionKey}${generationSuffix}`,
+            generationId: `final-verification-generation-${revisionKey}${generationSuffix}`,
+            targetRevision: projection.integrationRevision,
+            planVersion,
+            plan: completed.plan,
+            executionProfile,
+          },
+        }, {
+          type: "architect_action",
+          action: "final_verification_planned",
+          referenceId: projection.integrationRevision,
+        });
+        if (output.isError && discardProfile) {
+          try { await discardProfile(executionProfile); }
+          catch (error) {
+            return errorOutput("final_verification_profile_cleanup_failed", error instanceof Error ? error.message : String(error));
+          }
+        }
+        return output;
+      } catch (error) {
+        if (discardProfile) await discardProfile(executionProfile);
+        throw error;
+      }
+    },
+  });
+}
+
+function reviewFinalVerificationV2Tool(
+  store: SchedulerStore,
+  clock: () => string,
+  evidenceStore?: EvidenceStore,
+): NativeTool<ReviewFinalVerificationV2Input> {
+  return lifecycleTool({
+    name: "review_final_verification",
+    description: "Record the Architect's decision on each executed final-verification check for the current verified integration revision",
+    schema: objectSchema({
+      taskId: { type: "string", minLength: 1 },
+      generationId: { type: "string", minLength: 1 },
+      targetRevision: { type: "string", minLength: 1 },
+      submissionId: { type: "string", minLength: 1 },
+      attempt: { type: "integer", minimum: 1 },
+      decision: { type: "string", enum: ["approved", "repair_required"] },
+      summary: { type: "string", minLength: 1 },
+      architectRisk: { type: "string", enum: ["low", "high"] },
+      architectRiskRationale: { type: "string", minLength: 1 },
+      // A plan whose suggestions were all skipped, or that had none, runs no check
+      // and has nothing to review: the list may be empty. execute still needs one
+      // review per executed check.
+      checkReviews: {
+        type: "array",
+        items: objectSchema({
+          checkId: { type: "string", minLength: 1 },
+          verdict: { type: "string", enum: ["approved", "repair_required"] },
+          rationale: { type: "string", minLength: 1 },
+          evidenceIds: { type: "array", items: { type: "string", minLength: 1 } },
+        }, ["checkId", "verdict", "rationale", "evidenceIds"]),
+      },
+    }, [
+      "taskId", "generationId", "targetRevision", "submissionId", "attempt", "decision",
+      "summary", "architectRisk", "architectRiskRationale", "checkReviews",
+    ]),
+    validate: validateFinalVerificationReviewV2,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const current = projection.finalVerification?.current;
+      if (
+        !current ||
+        current.taskId !== input.taskId ||
+        current.generationId !== input.generationId ||
+        current.targetRevision !== input.targetRevision ||
+        current.targetRevision !== projection.integrationRevision
+      ) {
+        return errorOutput(
+          "stale_final_verification_review",
+          "Final verification review must reference the current generation and integration revision.",
+        );
+      }
+      if (!isVerificationPlanV2(current.plan)) {
+        return errorOutput(
+          "final_verification_contract_mismatch",
+          "This generation keeps the four fixed categories: review each category.",
+        );
+      }
+      if (
+        !current.submission ||
+        current.submission.submissionId !== input.submissionId ||
+        current.submission.attempt !== input.attempt ||
+        !current.submissionResult ||
+        current.submissionResult.green !== true
+      ) {
+        return errorOutput(
+          "final_verification_submission_not_green",
+          "Final verification review requires the current fully executed mechanically green submission.",
+        );
+      }
+      if (!current.review || current.review.status !== "requested") {
+        if (
+          current.review?.status === input.decision &&
+          current.review.decision &&
+          sameSemanticReviewV2(current.review.decision, input)
+        ) {
+          return {
+            content: [{ type: "json", value: current.review }],
+            isError: false,
+            lifecycle: {
+              type: "architect_action",
+              action: "final_verification_review_decided",
+              referenceId: input.generationId,
+            },
+          };
+        }
+        return errorOutput(
+          "final_verification_review_unavailable",
+          "Final verification review is not currently requested or was already decided differently.",
+        );
+      }
+      const executed = current.plan.checks.map((check) => check.id);
+      const skipped = new Set(current.plan.skipped.map((entry) => entry.checkId));
+      const reviewed = new Set(input.checkReviews.map((review) => review.checkId));
+      const missing = executed.filter((id) => !reviewed.has(id));
+      if (missing.length > 0) {
+        return errorOutput(
+          "final_verification_review_incomplete",
+          `Review every executed check exactly once; missing: ${missing.join(", ")}.`,
+        );
+      }
+      const checks = new Map(
+        (current.submissionResult.checks as readonly VerificationCheckResultV2[]).map((check) => [check.checkId, check]),
+      );
+      for (const review of input.checkReviews) {
+        if (skipped.has(review.checkId)) {
+          return errorOutput(
+            "final_verification_check_skipped",
+            `Check ${review.checkId} was skipped in the plan, so it has no result to review.`,
+          );
+        }
+        const check = checks.get(review.checkId);
+        if (!check || !executed.includes(review.checkId) || check.outcome === "failed") {
+          return errorOutput(
+            "final_verification_check_not_green",
+            `Final verification check ${review.checkId} is not planned or not mechanically green.`,
+          );
+        }
+        // VF2: the Runner recorded the check as not run because its tool is missing.
+        if (check.outcome === "not_run" && review.verdict === "repair_required") {
+          const tool = check.notRun?.reason === "tool_missing" ? check.notRun.tool : "its tool";
+          return errorOutput(
+            "final_verification_check_not_run",
+            `Final verification check ${review.checkId} was not run because ${tool} is missing; a task cannot repair a missing tool. Approve it and say what was not verified.`,
+          );
+        }
+        const expected = [...check.evidenceIds].sort();
+        const cited = [...new Set(review.evidenceIds)].sort();
+        if (check.outcome === "passed" && expected.length === 0) {
+          return errorOutput(
+            "missing_final_verification_evidence",
+            `Final verification check ${review.checkId} has no persisted evidence.`,
+          );
+        }
+        if (JSON.stringify(expected) !== JSON.stringify(cited)) {
+          return errorOutput(
+            "invalid_final_verification_evidence",
+            `Final verification check ${review.checkId} cites unknown or incomplete evidence.`,
+          );
+        }
+      }
+      const evidenceIds = input.checkReviews.flatMap((review) => review.evidenceIds);
+      if (evidenceIds.length > 0) {
+        if (!evidenceStore) {
+          return errorOutput("evidence_store_required", "Final verification review requires the durable evidence store.");
+        }
+        const records = evidenceStore.getByIds({ runId: context.runId, taskId: current.taskId, ids: [...new Set(evidenceIds)] });
+        if (records.length !== new Set(evidenceIds).size) {
+          return errorOutput("invalid_final_verification_evidence", "Final verification review cites missing or foreign evidence.");
+        }
+      }
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "final_verification.review_decided",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `final-verification-review:${input.generationId}`,
+        payload: {
+          ...input,
+          reviewId: `final-verification-review:${input.generationId}`,
+          checkReviews: input.checkReviews.map((review) => ({ ...review, evidenceIds: [...review.evidenceIds] })),
+        },
+      }, {
+        type: "architect_action",
+        action: "final_verification_review_decided",
+        referenceId: input.generationId,
+      });
+    },
+  });
+}
+
+function validateFinalVerificationReviewV2(input: unknown): ValidationResult<ReviewFinalVerificationV2Input> {
+  return validateObject(input, (value) => {
+    if (
+      !nonEmpty(value.taskId) ||
+      !nonEmpty(value.generationId) ||
+      !nonEmpty(value.targetRevision) ||
+      !nonEmpty(value.submissionId) ||
+      !positiveInteger(value.attempt) ||
+      (value.decision !== "approved" && value.decision !== "repair_required") ||
+      !nonEmpty(value.summary) ||
+      (value.architectRisk !== "low" && value.architectRisk !== "high") ||
+      !nonEmpty(value.architectRiskRationale) ||
+      !Array.isArray(value.checkReviews) ||
+      value.categoryReviews !== undefined
+    ) return null;
+    const checkReviews: FinalVerificationCheckReviewInput[] = [];
+    for (const candidate of value.checkReviews) {
+      if (!isRecord(candidate) || !nonEmpty(candidate.checkId)) return null;
+      if (candidate.verdict !== "approved" && candidate.verdict !== "repair_required") return null;
+      if (!nonEmpty(candidate.rationale)) return null;
+      const evidenceIds = stringList(candidate.evidenceIds);
+      if (!evidenceIds || new Set(evidenceIds).size !== evidenceIds.length) return null;
+      checkReviews.push({ checkId: candidate.checkId, verdict: candidate.verdict, rationale: candidate.rationale, evidenceIds });
+    }
+    if (new Set(checkReviews.map((review) => review.checkId)).size !== checkReviews.length) return null;
+    const repairCount = checkReviews.filter((review) => review.verdict === "repair_required").length;
+    if (
+      (value.decision === "approved" && repairCount > 0) ||
+      (value.decision === "repair_required" && repairCount === 0)
+    ) return null;
+    return {
+      taskId: value.taskId,
+      generationId: value.generationId,
+      targetRevision: value.targetRevision,
+      submissionId: value.submissionId,
+      attempt: value.attempt,
+      decision: value.decision,
+      summary: value.summary,
+      architectRisk: value.architectRisk,
+      architectRiskRationale: value.architectRiskRationale,
+      checkReviews: checkReviews.sort((left, right) => left.checkId.localeCompare(right.checkId)),
+    };
+  }, "current final verification identity, decision, summary, and exactly one valid review per executed check are required");
+}
+
+function sameSemanticReviewV2(
+  decision: import("./scheduler-store.js").FinalVerificationReviewDecisionProjection,
+  input: ReviewFinalVerificationV2Input,
+): boolean {
+  return decision.decision === input.decision &&
+    decision.summary === input.summary &&
+    decision.targetRevision === input.targetRevision &&
+    decision.architectRisk.risk === input.architectRisk &&
+    decision.architectRisk.rationale === input.architectRiskRationale &&
+    decision.architectRisk.source === "architect" &&
+    JSON.stringify(decision.checkReviews) === JSON.stringify(input.checkReviews);
 }
 
 function planFinalVerificationTool(

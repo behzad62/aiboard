@@ -158,7 +158,7 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
       "final_verification_cleanup_succeeded",
     ], JSON.stringify(handle.runtime.projection().finalVerification?.current?.cleanup));
     const current = handle.runtime.projection().finalVerification?.current;
-    assert.deepEqual(current?.completedChecks?.map((check) => [check.category, check.green]), [
+    assert.deepEqual((current?.completedChecks as import("../src/scheduler-store.js").FinalVerificationCompletedCheckProjectionV1[] | undefined)?.map((check) => [check.category, check.green]), [
       ["build", true], ["tests", true], ["runtime_smoke", true], ["browser", true],
     ]);
     assert.equal(existsSync(join(project, "dist", "index.html")), false);
