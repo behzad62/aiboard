@@ -69,7 +69,12 @@ function installedBrowser(): PlaywrightCliBrowser | undefined {
   return undefined;
 }
 const BROWSER = installedBrowser();
-const browserSkip = BROWSER ? false : "no Chrome, Edge or Playwright Chromium on this machine";
+// CI sets AIBOARD_TEST_REQUIRE_PLAYWRIGHT_BROWSER=1, so a runner image without a browser fails instead of skipping.
+const REQUIRE_BROWSER = process.env.AIBOARD_TEST_REQUIRE_PLAYWRIGHT_BROWSER === "1";
+const browserSkip = BROWSER || REQUIRE_BROWSER ? false : "no Chrome, Edge or Playwright Chromium on this machine";
+test("a browser is installed when CI requires one", { skip: REQUIRE_BROWSER ? false : "only when AIBOARD_TEST_REQUIRE_PLAYWRIGHT_BROWSER=1" }, () => {
+  assert.ok(BROWSER, "CI's runner image has no Chrome, Edge or Playwright Chromium, so the browser tests cannot run");
+});
 
 // ---------------------------------------------------------------- a process census keyed on the owner's folder
 
