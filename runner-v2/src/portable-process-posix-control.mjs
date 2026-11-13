@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 // RUNNER_RAW_PROCESS_BOUNDARY: POSIX process/group identity inspection for owned-tree lifecycle enforcement.
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 
 const POSIX_INSPECTION_DEADLINE_MS = 15_000;
 const POSIX_CPU_INSPECTION_DEADLINE_MS = 2_000;
@@ -102,9 +102,11 @@ export function parsePosixGroupMembers(output, groupId) {
 }
 
 /**
- * VF7b: a read-only table of every visible process (pid, parent and full command line), for the Playwright CLI
- * session's attributable-browser check after a managed stop. Linux reads /proc; macOS and other POSIX systems run
- * one `ps -A -ww`. Undefined when no snapshot could be read: callers treat that as unknown, never as empty.
+ * VF7b: a read-only table of every visible process (pid, group, birth, uid and full command line), for the
+ * Playwright CLI session's attributable-browser check after a managed stop. Each row's group and birth come from
+ * the same read as its command line (Linux: /proc stat, cmdline, stat again; elsewhere one `ps -A -ww`), so a
+ * reused PID never carries another process's command line. No parent PIDs: nothing here derives ownership from
+ * ancestry. Undefined when no snapshot could be read: callers treat that as unknown, never as empty.
  */
 export function listPosixProcessCommands() {
   if (process.platform === "linux") {
@@ -113,20 +115,23 @@ export function listPosixProcessCommands() {
     const rows = [];
     for (const entry of entries) {
       if (!/^\d+$/.test(entry)) continue;
+      const pid = Number(entry);
       try {
-        const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
-        const close = stat.lastIndexOf(")");
-        const ppid = Number(stat.slice(close + 1).trim().split(/\s+/)[1]);
+        const first = parseLinuxProcStatIdentity(pid, readFileSync(`/proc/${entry}/stat`, "utf8"));
+        const uid = statSync(`/proc/${entry}`).uid;
         const command = readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0").filter(Boolean).join(" ");
-        if (positivePid(Number(entry)) && Number.isSafeInteger(ppid) && ppid >= 0) rows.push({ pid: Number(entry), ppid, command });
+        const second = parseLinuxProcStatIdentity(pid, readFileSync(`/proc/${entry}/stat`, "utf8"));
+        if (first && second && first.birth === second.birth && first.groupId === second.groupId) {
+          rows.push({ pid, groupId: first.groupId, birth: first.birth, uid, command });
+        }
       } catch { /* exited while listing */ }
     }
     return rows.length > 0 ? rows : undefined;
   }
   try {
-    return parsePosixPsCommands(execFileSync("ps", ["-A", "-ww", "-o", "pid=,ppid=,command="], {
+    return parsePosixPsCommands(execFileSync("ps", ["-A", "-ww", "-o", "pid=,pgid=,uid=,lstart=,command="], {
       encoding: "utf8",
-      timeout: POSIX_INSPECTION_DEADLINE_MS,
+      timeout: POSIX_CPU_INSPECTION_DEADLINE_MS,
       maxBuffer: 64 * 1024 * 1024,
     }));
   } catch {
@@ -134,16 +139,46 @@ export function listPosixProcessCommands() {
   }
 }
 
+/** `ps -o pid=,pgid=,uid=,lstart=,command=` rows; lstart is the same fingerprint as inspectPosixProcessIdentity's. */
 export function parsePosixPsCommands(output) {
   if (typeof output !== "string") return undefined;
   const rows = [];
   for (const line of output.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    const match = /^\s*(\d+)\s+(\d+)\s?(.*)$/.exec(line);
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})(?:\s(.*))?$/.exec(line);
     if (!match) return undefined;
-    rows.push({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" });
+    rows.push({ pid: Number(match[1]), groupId: Number(match[2]), uid: Number(match[3]), birth: match[4], command: match[5] ?? "" });
   }
   return rows.length > 0 ? rows : undefined;
+}
+
+/**
+ * VF7b: the identities of several PIDs in one bounded read (Linux: their /proc stat; elsewhere one `ps -p a,b,c`
+ * with a 2 s limit). A PID the snapshot does not show is absent; an unreadable snapshot makes every one unknown.
+ */
+export function inspectPosixProcessIdentities(pids) {
+  const result = new Map();
+  const wanted = [...new Set(pids)].filter(positivePid);
+  if (wanted.length === 0) return result;
+  if (process.platform === "linux") {
+    for (const pid of wanted) result.set(pid, inspectPosixProcessIdentity(pid));
+    return result;
+  }
+  const ran = spawnSync("ps", ["-o", "pid=,pgid=,lstart=", "-p", wanted.join(",")], { encoding: "utf8", timeout: POSIX_CPU_INSPECTION_DEADLINE_MS });
+  // ps exits 1 when a listed PID is gone; it still prints the others.
+  if (ran.error || (ran.status !== 0 && ran.status !== 1) || typeof ran.stdout !== "string") {
+    for (const pid of wanted) result.set(pid, { state: "unknown" });
+    return result;
+  }
+  const seen = new Map();
+  for (const line of ran.stdout.split(/\r?\n/)) {
+    const pid = Number(/^\s*(\d+)/.exec(line)?.[1]);
+    if (!positivePid(pid)) continue;
+    const value = parsePosixPsIdentity(pid, line);
+    seen.set(pid, value ? { state: "present", value } : { state: "unknown" });
+  }
+  for (const pid of wanted) result.set(pid, seen.get(pid) ?? (ran.status === 0 && seen.size === 0 ? { state: "unknown" } : { state: "absent" }));
+  return result;
 }
 
 export function reattestOwnedPosixAnchor(workloadGroup, inspect = inspectPosixProcessIdentity, listMembers = listOwnedPosixGroupMembers) {

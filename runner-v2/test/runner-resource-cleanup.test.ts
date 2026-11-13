@@ -155,8 +155,8 @@ test("VF7b startup removes the Playwright CLI state a crashed Runner left, keeps
     const live = join(root, "r-bbbbbbbbbbbb");
     const other = join(root, "bin");
     for (const folder of [join(stale, "t-00000001", "tmp"), join(live, "t-00000002", "tmp"), other]) mkdirSync(folder, { recursive: true });
-    let rows: Array<{ pid: number; ppid: number; command: string }> | undefined = [
-      { pid: 41, ppid: 1, command: `/usr/bin/chrome --user-data-dir=${join(live, "t-00000002", "tmp", "profile")}` },
+    let rows: Array<{ pid: number; groupId: number; birth: string; uid: number; command: string }> | undefined = [
+      { pid: 41, groupId: 41, birth: "b41", uid: 1000, command: `/usr/bin/chrome --user-data-dir=${join(live, "t-00000002", "tmp", "profile")}` },
     ];
     const sessions = (platform: NodeJS.Platform) => new PlaywrightCliSessions({
       stateRoot: root,
@@ -166,6 +166,7 @@ test("VF7b startup removes the Playwright CLI state a crashed Runner left, keeps
         list: () => rows,
         inspect: () => { throw new Error("startup does not signal"); },
         kill: () => { throw new Error("startup does not signal"); },
+        uid: () => 1000,
       },
     });
     const result = sessions("linux").reconcileStartup();

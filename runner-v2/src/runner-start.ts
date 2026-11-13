@@ -376,7 +376,16 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     try {
       const browsingRoot = join(options.stateDirectory, "pw");
       const binDirectory = installPlaywrightCliShims(join(browsingRoot, "bin"), resolvePlaywrightCliInstall());
-      playwrightCli = new PlaywrightCliSessions({ stateRoot: browsingRoot, binDirectory });
+      playwrightCli = new PlaywrightCliSessions({
+        stateRoot: browsingRoot,
+        binDirectory,
+        // The POSIX browser check's outcomes that are not clean go to the Runner's log with their PIDs.
+        onCleanup: (record) => {
+          if (record.status === "none" || record.status === "exited") return;
+          process.stderr.write(`AIBoard: browser session cleanup ${record.status} for run ${record.runId}, session ${record.sessionId}`
+            + ` (${record.processId}): killed [${record.killed.join(", ")}], still running [${record.alive.join(", ")}]\n`);
+        },
+      });
     } catch (error) {
       process.stderr.write(`AIBoard: the Playwright CLI commands could not be prepared, so Builds browse without them: ${error instanceof Error ? error.message : String(error)}\n`);
     }

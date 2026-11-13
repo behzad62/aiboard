@@ -17,11 +17,14 @@ export type PosixAnchorAttestation =
 
 export interface PosixProcessCommandRow {
   readonly pid: number;
-  readonly ppid: number;
+  readonly groupId: number;
+  readonly birth: string;
+  readonly uid: number;
   readonly command: string;
 }
 export function listPosixProcessCommands(): readonly PosixProcessCommandRow[] | undefined;
 export function parsePosixPsCommands(output: string): readonly PosixProcessCommandRow[] | undefined;
+export function inspectPosixProcessIdentities(pids: readonly number[]): Map<number, PosixProcessIdentityInspection>;
 export function parseLinuxProcStatIdentity(pid: number, stat: string): PosixProcessIdentity | undefined;
 export function inspectPosixProcessIdentity(pid: number): PosixProcessIdentityInspection;
 export function parsePosixPsIdentity(pid: number, row: string): PosixProcessIdentity | undefined;
