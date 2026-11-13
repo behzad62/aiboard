@@ -1,4 +1,5 @@
 import type { AgentActor } from "./agent-contracts.js";
+import type { ExecutionLifecycleScope } from "./execution-safety-contracts.js";
 
 /** Public snapshot/legacy historical schemas. Legacy endpoint data is never active execution authority. */
 export type ManagedProcessStatus = "running" | "stopped" | "exited_unknown";
@@ -54,6 +55,11 @@ export interface ManagedProcessSnapshot {
   updatedAt: string;
   stdout: string;
   stderr: string;
+  /**
+   * The lifecycle scope the backend that ran it attested: what a verified stop proves. Carried on live snapshots
+   * only, never persisted; absent (a legacy binding, a historical record) proves no more than the process group.
+   */
+  lifecycleScope?: ExecutionLifecycleScope;
 }
 
 export interface ManagedProcessObservation extends ManagedProcessSnapshot {

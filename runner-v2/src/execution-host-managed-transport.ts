@@ -67,7 +67,8 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       exitCode: terminal?.exitCode ?? target.exitCode, signal: terminal?.signal ?? target.signal,
       startedAt: target.startedAt, updatedAt: new Date().toISOString(),
       stdout: tail(observation.output.streams.find(s => s.stream === "stdout")?.tail ?? "", maximum),
-      stderr: tail(observation.output.streams.find(s => s.stream === "stderr")?.tail ?? "", maximum) });
+      stderr: tail(observation.output.streams.find(s => s.stream === "stderr")?.tail ?? "", maximum),
+      ...(observation.record.backendBinding.lifecycle ? { lifecycleScope: observation.record.backendBinding.lifecycle.scope } : {}) });
   };
   const cleanup = async (target: ManagedProcessIdentity, timeoutMs: number): Promise<void> => {
     const entry = entries.get(target.processId);
