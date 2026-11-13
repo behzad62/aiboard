@@ -20,6 +20,7 @@ import {
   nativeTaskRetirement,
   nativeTaskVerificationState,
   orderVerifierCandidates,
+  reviewAcceptedWithKnownDefects,
   shouldShowBuildPauseAction,
   nativeBuildRunPolicy,
   nativeBuildPolicyChange,
@@ -321,6 +322,42 @@ assert.notEqual(
     "Not applicable: No UI.",
   ]);
   assert.equal(buildVerificationSummary({}), undefined, "no generation, no summary");
+
+  // A skipped check takes its label from the Runner's suggestions, not its id.
+  const fvCurrent = (withCheckDefect as { finalVerification: { current: object } }).finalVerification.current;
+  const labelled = buildVerificationSummary({ ...(withCheckDefect as object), finalVerification: { current: {
+    ...fvCurrent,
+    executionProfile: { verification: { suggestions: [{ id: "start", label: "dev server" }] } },
+  }, history: [] } } as never);
+  assert.ok(labelled?.notVerified.some((item) => item.label === "dev server"), "the skipped check reads by its label");
+  // A Runner that records the snapshot's Not verified items: the card lists exactly those, in order.
+  const runnerItems = [
+    { kind: "not_run", key: "check:cargo", subject: "final verification cargo tests", detail: "tool missing: cargo" },
+    { kind: "skipped", key: "check:start", subject: "final verification dev server", detail: "A static export has no server." },
+    { kind: "known_defect", key: "check:py-tests", subject: "final verification tests (py-tests)", detail: "still failing at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)" },
+    { kind: "known_defect", key: "check:rs-tests", subject: "final verification tests (rs-tests)", detail: "the Architect's review still asks for a repair at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)" },
+    { kind: "not_run", key: "boundary:T2:lint", subject: "boundary T2 lint", detail: "tool missing: eslint" },
+    { kind: "override", key: "override:T1:AC-2", subject: "task T1 criterion AC-2", detail: "The tray icon cannot be driven by a test." },
+    { kind: "left_to_verify", key: "left:the installer on macOS", subject: "the installer on macOS", detail: "" },
+  ];
+  const fromRunner = buildVerificationSummary({ ...(withCheckDefect as object), projectHandoff: { ...(withCheckDefect as { projectHandoff: object }).projectHandoff, notVerified: runnerItems } } as never);
+  assert.equal(fromRunner?.total, 3);
+  assert.equal(fromRunner?.passed, 1);
+  assert.deepEqual(fromRunner?.notVerified.map((item) => item.label), [
+    "Final verification cargo tests", "Final verification dev server", "Final verification tests (py-tests)",
+    "Final verification tests (rs-tests)", "Boundary T2 lint", "Task T1 criterion AC-2", "The installer on macOS",
+  ], "the same items as the snapshot, each once");
+  assert.equal(new Set(fromRunner?.notVerified.map((item) => item.key)).size, runnerItems.length);
+  assert.match(fromRunner!.notVerified[3]!.reason, /^Known defect: the Architect's review still asked for a repair of this check after its repairs \(the run's repair-plan budget/);
+  assert.match(fromRunner!.notVerified[5]!.reason, /^Accepted on the Architect's judgement without Runner evidence: The tray icon/);
+  // A review that only asks to repair known defects at the limit counts as approval.
+  const reviewDefect = { checkId: "lint", label: "lint", reason: "the Architect's review still asks for a repair at the repair limit: x", source: "review" };
+  const reviewed = { review: { status: "repair_required", decision: { checkReviews: [{ checkId: "lint", verdict: "repair_required" }, { checkId: "build", verdict: "approved" }] } }, knownDefects: [reviewDefect] };
+  assert.equal(reviewAcceptedWithKnownDefects(reviewed as never), true);
+  assert.equal(reviewAcceptedWithKnownDefects({ ...reviewed, knownDefects: [{ ...reviewDefect, source: "failure" }] } as never), false);
+  const reviewedState = nativeTaskVerificationState({ tasks: { fv: fvTask }, finalVerification: { current: { ...fvCurrent, ...reviewed, completedChecks: [], cleanup: { status: "succeeded" } }, history: [] } } as never, fvTask);
+  assert.equal(reviewedState.generation?.review.status, "approved");
+  assert.equal(nativeBuildTaskStatus("planned", reviewedState), "done");
 }
 assert.equal(nativeBuildTaskStatus("integrated"), "done");
 assert.equal(nativeBuildTaskStatus("running"), "in_progress");

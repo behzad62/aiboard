@@ -241,9 +241,20 @@ export interface NativeVerificationRepairProvenance {
     | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
 }
 
+/** VF8: one item of the handoff snapshot's Not verified section, as the Runner lists it. */
+export interface NativeNotVerifiedItem {
+  kind: "not_run" | "skipped" | "known_defect" | "override" | "left_to_verify";
+  /** What makes the item distinct (a check id, a task and check, a criterion); absent from older Runners. */
+  key?: string;
+  subject: string;
+  detail: string;
+}
+
 export interface NativeFinalVerificationObservability {
   canonicalRevision?: string;
   current?: NativeFinalVerificationGenerationObservability;
+  /** VF8: the handoff snapshot's Not verified items for the run as it stands. */
+  notVerified?: NativeNotVerifiedItem[];
   history: Array<{
     generationId: string;
     taskId: string;
@@ -279,6 +290,8 @@ export interface NativeVerificationKnownDefect {
   checkId: string;
   label: string;
   reason: string;
+  /** `failure`: the check failed when it ran. `review`: the Architect's review asked to repair it. */
+  source?: "failure" | "review";
 }
 
 export interface NativeFinalVerificationGenerationObservability {
@@ -320,8 +333,15 @@ export interface NativeFinalVerificationGenerationObservability {
       logs: string[];
     };
   };
-  review: { status: "pending" | "requested" | "approved" | "repair_required" | "rejected"; summary?: string };
+  review: {
+    status: "pending" | "requested" | "approved" | "repair_required" | "rejected";
+    summary?: string;
+    /** VF8: the review asks only for repairs of known defects at the repair limit, so it counts as approval. */
+    acceptedWithKnownDefects?: true;
+  };
   repairs: Array<{ taskId: string; status: string }>;
+  /** VF8: the checks recorded as known defects at the repair limit. */
+  knownDefects?: NativeVerificationKnownDefect[];
 }
 
 export type NativeAcceptanceContractStatus =
@@ -917,6 +937,8 @@ export interface NativeBuildProjection {
     verificationKnownDefects?: NativeVerificationKnownDefect[];
     /** VF8: what the Architect says only the owner can check. */
     leftToVerify?: string[];
+    /** VF8: the handoff snapshot's Not verified items when the handoff was requested. */
+    notVerified?: NativeNotVerifiedItem[];
   };
   verifierPolicy?: NativeIndependentVerifierObservability["policy"];
   buildRisk?: {
@@ -969,6 +991,8 @@ export interface NativeBuildProjection {
       plan:
         | { version?: undefined; checks: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; repositoryInspection?: { paths: string[]; summary: string } }> }
         | { version: 2; checks: Array<{ id: string; label: string; kind: NativeFinalVerificationCheckObservation["kind"]; origin: NativeFinalVerificationCheckObservation["origin"]; mandatory: boolean }>; skipped: Array<{ checkId: string; reason: string }> };
+      /** The checks the Runner suggested; a skipped v2 check takes its label from here. */
+      executionProfile?: { verification?: { suggestions?: Array<{ id: string; label: string }> } };
       state: "current" | "invalidated";
       invalidatedByRevision?: string;
       invalidatedByGuidanceId?: string;

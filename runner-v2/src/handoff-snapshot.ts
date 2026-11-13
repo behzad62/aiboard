@@ -182,6 +182,12 @@ export type HandoffNotVerifiedKind = "not_run" | "skipped" | "known_defect" | "o
 
 export interface HandoffSnapshotNotVerifiedItem {
   readonly kind: HandoffNotVerifiedKind;
+  /**
+   * What makes the item distinct (a check id, a task and check, a criterion).
+   * Two checks can share a label, so items are deduplicated on this; the
+   * subject is used when it is absent.
+   */
+  readonly key?: string;
   /** What was not verified, for example "final verification tests" or "task T1 criterion C2". */
   readonly subject: string;
   /** Why: the missing tool, the skip reason, the limit reached, the override reason. Empty for leftToVerify. */
@@ -517,12 +523,12 @@ const NOT_VERIFIED_KIND_LABEL: Record<HandoffNotVerifiedKind, string> = {
   left_to_verify: "left for the owner to verify",
 };
 
-/** VF8: the Not verified items in render order, each (kind, subject) once. */
-function notVerifiedItems(input: HandoffSnapshotInput): HandoffSnapshotNotVerifiedItem[] {
+/** VF8: the Not verified items in render order, each (kind, key) once; the key is the subject when absent. */
+function notVerifiedItems(input: Pick<HandoffSnapshotInput, "notVerified">): HandoffSnapshotNotVerifiedItem[] {
   const seen = new Set<string>();
   const items: HandoffSnapshotNotVerifiedItem[] = [];
   for (const item of input.notVerified ?? []) {
-    const key = `${item.kind}\u0000${item.subject}`;
+    const key = `${item.kind}\u0000${item.key ?? item.subject}`;
     if (seen.has(key)) continue;
     seen.add(key);
     items.push(item);
@@ -1058,7 +1064,10 @@ function verificationEntryForCheck(
           ? `not run (tool missing: ${notRun.tool})`
           : `not run (skipped: ${notRun.detail})`
         : check.outcome === "passed"
-          ? "passed"
+          // VF8: a review can still send a mechanically passing check to repair.
+          ? context.knownDefects.has(check.checkId)
+            ? "passed; the Architect's review asked for a repair (known defect at the repair limit)"
+            : "passed"
           // VF8: a non-mandatory check that still failed at the repair limit.
           : context.knownDefects.has(check.checkId) ? "failed (known defect at the repair limit)" : "failed",
       ...verificationCommandAndCounts(check.facts),
@@ -1171,7 +1180,7 @@ function skippedVerificationEntries(
   covered: Set<string>,
 ): HandoffSnapshotVerificationEntry[] {
   if (!isVerificationPlanV2(generation.plan)) return [];
-  const suggestions = new Map((generation.executionProfile.verification?.suggestions ?? []).map((check) => [check.id, check]));
+  const suggestions = new Map((generation.executionProfile?.verification?.suggestions ?? []).map((check) => [check.id, check]));
   return generation.plan.skipped.flatMap((entry) => {
     if (covered.has(entry.checkId)) return [];
     covered.add(entry.checkId);
@@ -1588,24 +1597,37 @@ function notVerifiedFromProjection(projection: SchedulerProjection): HandoffSnap
   const generation = projection.finalVerification?.current ?? history[history.length - 1];
   if (generation !== undefined) {
     const knownDefects = new Map((generation.knownDefects ?? []).map((defect) => [defect.checkId, defect]));
+    // Labels are not unique, ids are: a label two checks share is followed by the check's id.
+    const suggestions = new Map((generation.executionProfile?.verification?.suggestions ?? []).map((check) => [check.id, check]));
+    const v2Labels = isVerificationPlanV2(generation.plan)
+      ? [
+        ...generation.plan.checks.map((check) => check.label),
+        ...generation.plan.skipped.map((entry) => suggestions.get(entry.checkId)?.label ?? entry.checkId),
+      ]
+      : [];
+    const subject = (id: string, label: string) =>
+      v2Labels.filter((candidate) => candidate === label).length > 1
+        ? `final verification ${label} (${id})`
+        : `final verification ${label}`;
     for (const check of generation.completedChecks ?? []) {
-      const name = "checkId" in check ? check.label : check.category;
+      const id = "checkId" in check ? check.checkId : check.category;
+      const name = subject(id, "checkId" in check ? check.label : check.category);
       if (check.notRun?.reason === "tool_missing") {
-        items.push({ kind: "not_run", subject: `final verification ${name}`, detail: `tool missing: ${check.notRun.tool}` });
+        items.push({ kind: "not_run", key: `check:${id}`, subject: name, detail: `tool missing: ${check.notRun.tool}` });
       } else if (!("checkId" in check) && check.status === "not_applicable" && check.green) {
-        items.push({ kind: "skipped", subject: `final verification ${name}`, detail: `not applicable: ${check.rationale ?? NOT_RECORDED}` });
+        items.push({ kind: "skipped", key: `check:${id}`, subject: name, detail: `not applicable: ${check.rationale ?? NOT_RECORDED}` });
       }
       const defect = "checkId" in check ? knownDefects.get(check.checkId) : undefined;
       if (defect !== undefined) {
-        items.push({ kind: "known_defect", subject: `final verification ${name}`, detail: defect.reason });
+        items.push({ kind: "known_defect", key: `check:${id}`, subject: name, detail: defect.reason });
       }
     }
     if (isVerificationPlanV2(generation.plan)) {
-      const suggestions = new Map((generation.executionProfile.verification?.suggestions ?? []).map((check) => [check.id, check]));
       for (const entry of generation.plan.skipped) {
         items.push({
           kind: "skipped",
-          subject: `final verification ${suggestions.get(entry.checkId)?.label ?? entry.checkId}`,
+          key: `check:${entry.checkId}`,
+          subject: subject(entry.checkId, suggestions.get(entry.checkId)?.label ?? entry.checkId),
           detail: entry.reason,
         });
       }
@@ -1615,20 +1637,38 @@ function notVerifiedFromProjection(projection: SchedulerProjection): HandoffSnap
     const latest = records[records.length - 1];
     for (const check of latest?.checks ?? []) {
       if (check.outcome !== "not_run") continue;
-      items.push({ kind: "not_run", subject: `boundary ${taskId} ${check.checkId}`, detail: `tool missing: ${check.notRun?.tool ?? NOT_RECORDED}` });
+      items.push({
+        kind: "not_run",
+        key: `boundary:${taskId}:${check.checkId}`,
+        subject: `boundary ${taskId} ${check.checkId}`,
+        detail: `tool missing: ${check.notRun?.tool ?? NOT_RECORDED}`,
+      });
     }
   }
   for (const [taskId, review] of Object.entries(projection.reviews ?? {})) {
     if (review.status !== "approved") continue;
     for (const verdict of review.criterionVerdicts ?? []) {
       if (verdict.verdict !== "satisfied" || verdict.overrideReason === undefined) continue;
-      items.push({ kind: "override", subject: `task ${taskId} criterion ${verdict.criterionId}`, detail: verdict.overrideReason });
+      items.push({
+        kind: "override",
+        key: `override:${taskId}:${verdict.criterionId}`,
+        subject: `task ${taskId} criterion ${verdict.criterionId}`,
+        detail: verdict.overrideReason,
+      });
     }
   }
   for (const item of projection.projectHandoff?.leftToVerify ?? []) {
-    items.push({ kind: "left_to_verify", subject: item, detail: "" });
+    items.push({ kind: "left_to_verify", key: `left:${item}`, subject: item, detail: "" });
   }
   return items;
+}
+
+/**
+ * VF8: the snapshot's Not verified items for a projection, in render order and
+ * each once. Run details and the handoff card show this same list.
+ */
+export function handoffNotVerifiedItems(projection: SchedulerProjection): HandoffSnapshotNotVerifiedItem[] {
+  return notVerifiedItems({ notVerified: notVerifiedFromProjection(projection) });
 }
 
 /** Next action once the owner has chosen a handoff option (n2). */

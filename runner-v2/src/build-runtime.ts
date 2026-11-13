@@ -64,6 +64,8 @@ import {
   deriveFinalVerificationFailure,
   failureFailedCheckKeys,
   finalVerificationKnownDefectIds,
+  finalVerificationKnownDefectReason,
+  finalVerificationReviewAccepted,
   reviewFailedCheckKeys,
   reviewRepairEvidenceIds,
   unresolvedFailedVerificationChecks,
@@ -2288,7 +2290,8 @@ export class BuildRuntime {
       if (generation.cleanup?.status !== "succeeded") {
         return await this.advanceFinalVerificationCleanup(generation);
       }
-      if (generation.review?.status === "approved") {
+      // VF8: a review whose only repairs are known defects at the limit lets the Build finish.
+      if (finalVerificationReviewAccepted(generation)) {
         const verifierResult = await this.advanceIndependentVerification();
         if (verifierResult) return verifierResult;
         await this.runArchitect(
@@ -2317,15 +2320,23 @@ export class BuildRuntime {
         if (!decision) {
           throw new Error("Final verification repair review lacks a structured decision.");
         }
+        // VF8 (VD-3): a non-mandatory check the review sends to repair at its limit is a known defect.
+        const reviewKnownDefects = this.recordKnownDefectsAtRepairLimit(generation, "review");
+        if (reviewKnownDefects) return reviewKnownDefects;
         const pausedForRepair = this.pauseIfRepairCyclesExhausted(
           this.projection(),
           "final_verification",
           generation.targetRevision,
         );
         if (pausedForRepair) return pausedForRepair;
-        // VF3: a v2 review names its failed checks by id.
-        const reviewEvidenceIds = reviewRepairEvidenceIds(decision);
-        const reviewDispatch = await this.prepareRepairDispatch(reviewFailedCheckKeys(decision), { taskId: generation.taskId, evidenceIds: reviewEvidenceIds, failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
+        // VF3: a v2 review names its failed checks by id. VF8: known defects get no repair.
+        const reviewKnown = finalVerificationKnownDefectIds(generation);
+        const reviewKeys = reviewFailedCheckKeys(decision).filter((key) => !reviewKnown.has(key));
+        const reviewEvidenceIds = reviewKnown.size === 0
+          ? reviewRepairEvidenceIds(decision)
+          : [...new Set((decision.checkReviews ?? []).flatMap((review) =>
+            review.verdict === "repair_required" && !reviewKnown.has(review.checkId) ? review.evidenceIds : []))];
+        const reviewDispatch = await this.prepareRepairDispatch(reviewKeys, { taskId: generation.taskId, evidenceIds: reviewEvidenceIds, failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
         if (reviewDispatch.paused) return reviewDispatch.paused;
         await this.runArchitect({
           type: "final_verification_repair_plan_required",
@@ -2399,9 +2410,22 @@ export class BuildRuntime {
       }
       return this.afterArchitect("final_verification_review_required");
     }
+    // VF3: a v2 plan's checks are keyed by id; a v1 plan's by category.
+    const plannedKeys = isVerificationPlanV2(generation.plan)
+      ? generation.plan.checks.map((check) => check.id)
+      : generation.plan.checks.map((check) => check.category);
+    const pendingKey = plannedKeys.find(
+      (key) => !generation.completedChecks?.some((completed) => verificationCheckKey(completed) === key),
+    );
     // VF2: a check the Runner did not run (tool missing) is no failure and asks for no repair.
     // VF8: neither is a recorded known defect; with only those left, the generation is submitted.
-    if (unresolvedFailedVerificationChecks(generation).length > 0) {
+    // VF8: a v2 generation runs every planned check before it reports a failure, so the failure
+    // names every failed check and no check runs after the generation's cleanup. A v1 generation
+    // still stops at its first failed category, and a failure already reported stays reported.
+    if (
+      unresolvedFailedVerificationChecks(generation).length > 0 &&
+      (generation.failure !== undefined || !isVerificationPlanV2(generation.plan) || pendingKey === undefined)
+    ) {
       if (!generation.failure) {
         const failure = deriveFinalVerificationFailure(generation, 1);
         this.store.append({
@@ -2422,7 +2446,7 @@ export class BuildRuntime {
       }
       if (generation.repairTaskIds?.length) return this.supersedeAfterFinishedRepairs(generation);
       // VF8 (VD-3): a non-mandatory check at its repair limit becomes a known defect, not a pause.
-      const knownDefects = this.recordKnownDefectsAtRepairLimit(generation);
+      const knownDefects = this.recordKnownDefectsAtRepairLimit(generation, "failure");
       if (knownDefects) return knownDefects;
       const pausedForRepair = this.pauseIfRepairCyclesExhausted(
         this.projection(),
@@ -2464,13 +2488,6 @@ export class BuildRuntime {
       }
       return this.afterArchitect("final_verification_repair_plan_required");
     }
-    // VF3: a v2 plan's checks are keyed by id; a v1 plan's by category.
-    const plannedKeys = isVerificationPlanV2(generation.plan)
-      ? generation.plan.checks.map((check) => check.id)
-      : generation.plan.checks.map((check) => check.category);
-    const pendingKey = plannedKeys.find(
-      (key) => !generation.completedChecks?.some((completed) => verificationCheckKey(completed) === key),
-    );
     if (pendingKey !== undefined) {
       if (!this.finalVerificationDriver) {
         throw new Error("Final verification execution requires a FinalVerificationCheckDriver.");
@@ -5685,56 +5702,41 @@ export class BuildRuntime {
   }
 
   /**
-   * VF8 (VD-3): every failed non-mandatory v2 check that has reached a repair limit is recorded as
-   * a known defect instead of pausing the Build. The limits are the ones the repair gates pause
-   * on: the run's repair-plan budget, the check's own repair issue, and the final-verification
-   * task's attempts. A recorded external blocker still pauses for the owner's action, and a
-   * mandatory check still pauses at its limit. A v1 run keeps pausing.
+   * VF8 (VD-3): every non-mandatory v2 check at its repair limit is recorded as a known defect
+   * instead of pausing the Build: a check that failed when it ran (`failure`), or one the
+   * Architect's review sends to repair (`review`). The limit is the kernel's own rule
+   * (`finalVerificationKnownDefectReason`): the run's repair-plan budget, the check's repair
+   * issue, the verification task's attempt limit. A recorded external blocker, a mandatory check
+   * and a v1 run still pause.
    */
   private recordKnownDefectsAtRepairLimit(
     generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+    source: "failure" | "review",
   ): BuildStepResult | undefined {
-    if (!isVerificationPlanV2(generation.plan) || !generation.failure) return undefined;
-    const candidates = (unresolvedFailedVerificationChecks(generation) as VerificationCheckResultV2[])
-      .filter((check) => !check.mandatory);
-    if (candidates.length === 0) return undefined;
+    if (!isVerificationPlanV2(generation.plan)) return undefined;
+    const known = finalVerificationKnownDefectIds(generation);
+    const keys = source === "failure"
+      ? (generation.failure ? failureFailedCheckKeys(generation.failure) : [])
+      : (generation.review?.decision ? reviewFailedCheckKeys(generation.review.decision) : []);
     const projection = this.projection();
-    const newPolicy = projection.planningPolicyVersion === 1;
-    const planLimit = effectiveRepairPlanLimit(projection) ?? (newPolicy ? this.repairPlanLimit : undefined);
-    const plansUsed = projection.repairCycles?.used ?? 0;
-    const runReason = repairCyclesExhausted(projection) || (planLimit !== undefined && plansUsed >= planLimit)
-      ? `the run's repair-plan budget is used up (${plansUsed} of ${planLimit ?? plansUsed} repair plans)`
-      : undefined;
-    const task = projection.tasks[generation.taskId];
-    const taskReason = newPolicy &&
-        (task?.attemptLimit ?? this.maxTaskAttempts) - (task?.attempt ?? 0) <= 0
-      ? `final verification task ${generation.taskId} has no attempts left`
-      : undefined;
-    const failingIds = failingTestIdsByCategory(generation.completedChecks ?? []);
-    const checks: Array<{ checkId: string; reason: string }> = [];
-    for (const check of candidates) {
-      const [member] = this.repairMembers([check.checkId], failingIds);
-      const issue = member ? projection.repairIssues?.[member.issueId] : undefined;
-      if (issue?.externalBlocker) continue;
-      const issueReason = issue && issue.used >= issue.limit
-        ? `issue ${member!.rootCause} used ${issue.used}/${issue.limit} repair cycles`
-        : undefined;
-      const reason = issueReason ?? runReason ?? taskReason;
-      if (reason) {
-        checks.push({ checkId: check.checkId, reason: `still failing at the repair limit: ${reason}` });
-      }
-    }
+    const checks = keys
+      .filter((checkId) => !known.has(checkId))
+      .flatMap((checkId) => {
+        const reason = finalVerificationKnownDefectReason(projection, generation, checkId, source);
+        return reason === undefined ? [] : [{ checkId, reason }];
+      });
     if (checks.length === 0) return undefined;
     this.store.append({
       runId: this.runId,
       type: "final_verification.known_defects_recorded",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "build-runtime" },
-      idempotencyKey: `${generation.generationId}:known-defects:${checks.map((check) => check.checkId).join(",")}`,
+      idempotencyKey: `${generation.generationId}:known-defects:${source}:${checks.map((check) => check.checkId).join(",")}`,
       payload: {
         taskId: generation.taskId,
         generationId: generation.generationId,
         targetRevision: generation.targetRevision,
+        source,
         checks,
       },
     });

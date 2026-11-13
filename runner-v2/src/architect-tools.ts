@@ -12,7 +12,7 @@ import {
   assertOpenArchitectQuestionAllowsEvent,
   assertCritiqueReconciledByPlanRevision,
   buildCompletionReadiness,
-  finalVerificationKnownDefectIds,
+  finalVerificationKnownDefectIdsFrom,
   LEFT_TO_VERIFY_MAX_ITEMS,
   LEFT_TO_VERIFY_MAX_LENGTH,
   latestUnresolvedContextRecordingNote,
@@ -2251,7 +2251,7 @@ function reviewFinalVerificationV2Tool(
         );
       }
       // VF8: a known defect failed at its repair limit; the handoff lists it, so it is not reviewed.
-      const knownDefects = finalVerificationKnownDefectIds(current);
+      const knownDefects = finalVerificationKnownDefectIdsFrom(current, "failure");
       const executed = current.plan.checks.map((check) => check.id).filter((id) => !knownDefects.has(id));
       const skipped = new Set(current.plan.skipped.map((entry) => entry.checkId));
       const reviewed = new Set(input.checkReviews.map((review) => review.checkId));

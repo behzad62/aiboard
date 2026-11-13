@@ -724,7 +724,7 @@ export function runnerUserFacingObservability(
   verificationSeal?: {
     generationId: string;
     targetRevision: string;
-    status: "checks_pending" | "cleanup_pending" | "review_pending" | "repair_required" | "approved" | "failed" | "stale";
+    status: "checks_pending" | "cleanup_pending" | "review_pending" | "repair_required" | "approved" | "approved_with_known_defects" | "failed" | "stale";
   };
   problems: UserFacingProblem[];
 } {
@@ -862,22 +862,31 @@ export function runnerUserFacingObservability(
   let verificationSeal: {
     generationId: string;
     targetRevision: string;
-    status: "checks_pending" | "cleanup_pending" | "review_pending" | "repair_required" | "approved" | "failed" | "stale";
+    status: "checks_pending" | "cleanup_pending" | "review_pending" | "repair_required" | "approved" | "approved_with_known_defects" | "failed" | "stale";
   } | undefined;
   if (canonical) {
+    // VF8: a known defect reached its repair limit; Runner does not repair it, and the Build goes on.
+    const knownDefectIds = new Set((canonical.knownDefects ?? []).map((defect) => defect.checkId));
+    const failedRows = checkRows.filter((row) => row.status === "failed" && !row.knownDefect);
+    const failedCheckIds = canonical.mechanicalFailure?.failedCheckIds ?? [];
+    const unresolvedFailure = canonical.mechanicalFailure !== undefined &&
+      !(failedCheckIds.length > 0 && failedCheckIds.every((checkId) => knownDefectIds.has(checkId)));
+    const reviewRepair = canonical.review.status === "repair_required" && !canonical.review.acceptedWithKnownDefects;
+    const reviewAccepted = canonical.review.status === "approved" || canonical.review.acceptedWithKnownDefects === true;
     const status = canonical.revisionStatus === "stale" ? "stale"
       : canonical.cleanup.status === "failed" ? "failed"
-      : canonical.mechanicalFailure || canonical.review.status === "repair_required" || canonical.repairs.length > 0 ? "repair_required"
-      : checkRows.some((row) => row.status === "failed") ? "failed"
+      : unresolvedFailure || reviewRepair || canonical.repairs.length > 0 ? "repair_required"
+      : failedRows.length > 0 ? "failed"
       : checkRows.some((row) => row.status === "pending") ? "checks_pending"
       : canonical.cleanup.status !== "succeeded" ? "cleanup_pending"
-      : canonical.review.status === "approved" ? "approved"
+      : reviewAccepted ? knownDefectIds.size > 0 ? "approved_with_known_defects" : "approved"
       : "review_pending";
     verificationSeal = { generationId: canonical.generationId, targetRevision: canonical.targetRevision, status };
     if (canonical.revisionStatus === "stale") problems.push({ key: "final-verification:stale", title: "Verification is stale", detail: "The integrated revision changed. Runner must verify the new exact revision before completion." });
-    if (canonical.mechanicalFailure || checkRows.some((row) => row.status === "failed")) problems.push({ key: "final-verification:failure", title: "Final verification found a problem", detail: canonical.cleanup.diagnosticsAvailable ? "Diagnostics were saved. Runner will repair the failed checks and verify the next integrated revision." : "Runner will preserve diagnostics, repair the failed checks, and verify again." });
+    if (unresolvedFailure || failedRows.length > 0) problems.push({ key: "final-verification:failure", title: "Final verification found a problem", detail: canonical.cleanup.diagnosticsAvailable ? "Diagnostics were saved. Runner will repair the failed checks and verify the next integrated revision." : "Runner will preserve diagnostics, repair the failed checks, and verify again." });
+    if (knownDefectIds.size > 0) problems.push({ key: "final-verification:known-defects", title: knownDefectIds.size === 1 ? "A check is a known defect" : `${knownDefectIds.size} checks are known defects`, detail: `${(canonical.knownDefects ?? []).map((defect) => defect.label).join(", ")} still ${knownDefectIds.size === 1 ? "fails" : "fail"} after the repairs the run allows. The checks are not mandatory, so the Build goes on without them; the handoff lists them under Not verified.` });
     if (canonical.cleanup.status === "failed") problems.push({ key: "final-verification:cleanup", title: "Verification cleanup failed", detail: "Completion is blocked until Runner safely closes verification resources and removes only its owned workspace." });
-    if (canonical.repairs.length > 0 || canonical.review.status === "repair_required") problems.push({ key: "final-verification:repair", title: canonical.repairs.some((repair) => !["integrated", "cancelled"].includes(repair.status)) ? "Verification repair is in progress" : "Verification repair required", detail: "Runner is fixing the failed check. A fresh verification generation will check the repaired revision." });
+    if (canonical.repairs.length > 0 || reviewRepair) problems.push({ key: "final-verification:repair", title: canonical.repairs.some((repair) => !["integrated", "cancelled"].includes(repair.status)) ? "Verification repair is in progress" : "Verification repair required", detail: "Runner is fixing the failed check. A fresh verification generation will check the repaired revision." });
   } else if (snapshot.finalVerification && projection && projection.status !== "completed" && projection.runPolicy !== "plan_only") {
     problems.push({ key: "final-verification:missing", title: "Final verification has not started", detail: "Runner waits for all implementation work, then checks the exact integrated revision before completion." });
   }
@@ -1714,8 +1723,10 @@ export function FinalVerificationManifest({
   const label = (status: string) => status === "not_applicable" ? "N/A" : status === "not_run" ? "Not run" : status[0].toUpperCase() + status.slice(1);
   const rows = finalVerificationCheckRows(current);
   // VF8: how many checks passed and what was not verified, above the per-check cards.
-  const summary = finalVerificationRowsSummary(rows);
-  const seal = current.review.status === "approved" ? "Architect approved"
+  // The Runner's list is the handoff snapshot's Not verified section; an older Runner sends none.
+  const summary = finalVerificationRowsSummary(rows, [], verification.notVerified);
+  const seal = current.review.status === "approved" || current.review.acceptedWithKnownDefects
+    ? (current.knownDefects?.length ? "Architect approved, with known defects" : "Architect approved")
     : current.review.status === "repair_required" || current.repairs.length > 0 ? "Repair required"
     : current.review.status === "requested" ? "Architect review in progress"
     : "Architect review pending";

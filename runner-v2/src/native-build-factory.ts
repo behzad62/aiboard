@@ -4027,12 +4027,21 @@ export function buildNativeVerifierInspectionRequest(input: {
       generationId: finalVerification.generationId,
       targetRevision: finalVerification.targetRevision,
       green: finalVerification.submissionResult.green,
-      checks: finalVerification.submissionResult.checks.map((check) => ({
-        ...check,
-        evidenceIds: [...check.evidenceIds],
-        facts: check.facts.map((fact) => structuredClone(fact)),
-        issues: [],
-      })),
+      // VF8: the verifier reads each check's recorded issues, and which failed checks are known defects.
+      checks: finalVerification.submissionResult.checks.map((check) => {
+        const key = "checkId" in check ? check.checkId : check.category;
+        const completed = (finalVerification.completedChecks ?? []).find((candidate) =>
+          ("checkId" in candidate ? candidate.checkId : candidate.category) === key);
+        return {
+          ...check,
+          evidenceIds: [...check.evidenceIds],
+          facts: check.facts.map((fact) => structuredClone(fact)),
+          issues: [...(completed?.issues ?? [])],
+        };
+      }),
+      ...(finalVerification.knownDefects?.length
+        ? { knownDefectCheckIds: finalVerification.knownDefects.map((defect) => defect.checkId) }
+        : {}),
     },
     riskReasons: input.risk.assessment.reasons.map((reason) => ({
       ...reason,

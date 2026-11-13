@@ -410,6 +410,48 @@ const v1NotRun = runnerUserFacingObservability({
 } as unknown as NativeBuildObservability, canonicalProjection);
 assert.equal(v1NotRun.verification.find((item) => item.category === "Tests")?.status, "not_run");
 assert.equal(v1NotRun.verificationSeal?.status, "review_pending");
+// VF8: a known defect at the repair limit is not a repair: the seal and problems say so.
+const knownDefectSnapshot = {
+  ...v2Snapshot,
+  finalVerification: {
+    ...v2Snapshot.finalVerification,
+    current: {
+      ...v2Snapshot.finalVerification!.current!,
+      checks: [
+        { checkId: "build", label: "npm run build", kind: "build", origin: "detected", mandatory: false, status: "passed", evidenceIds: ["build-evidence"], issues: [] },
+        { checkId: "tests", label: "npm test", kind: "tests", origin: "detected", mandatory: false, status: "failed", evidenceIds: [], issues: ["npm test exited 1"], knownDefect: { reason: "still failing at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)" } },
+        { checkId: "lint", label: "lint", kind: "other", origin: "architect", mandatory: false, status: "passed", evidenceIds: ["lint-evidence"], issues: [], knownDefect: { reason: "the Architect's review still asks for a repair at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)" } },
+      ],
+      mechanicalFailure: { failureId: "f", failedCategories: [], failedCheckIds: ["tests"], evidenceIds: [] },
+      review: { status: "repair_required", acceptedWithKnownDefects: true },
+      knownDefects: [
+        { checkId: "tests", label: "npm test", reason: "still failing at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)", source: "failure" },
+        { checkId: "lint", label: "lint", reason: "the Architect's review still asks for a repair at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)", source: "review" },
+      ],
+    },
+    notVerified: [
+      { kind: "known_defect", key: "check:tests", subject: "final verification npm test", detail: "still failing at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)" },
+      { kind: "known_defect", key: "check:lint", subject: "final verification lint", detail: "the Architect's review still asks for a repair at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)" },
+      { kind: "left_to_verify", key: "left:the installer on macOS", subject: "the installer on macOS", detail: "" },
+    ],
+  },
+} as unknown as NativeBuildObservability;
+const knownDefectView = runnerUserFacingObservability(knownDefectSnapshot, canonicalProjection);
+assert.equal(knownDefectView.verificationSeal?.status, "approved_with_known_defects");
+assert.ok(!knownDefectView.problems.some((problem) => problem.key === "final-verification:failure" || problem.key === "final-verification:repair"), "nothing says Runner will repair a known defect");
+assert.match(knownDefectView.problems.find((problem) => problem.key === "final-verification:known-defects")?.detail ?? "", /npm test, lint still fail after the repairs the run allows/);
+const knownDefectManifest = renderToStaticMarkup(createElement(FinalVerificationManifest, { verification: knownDefectSnapshot.finalVerification! }));
+assert.match(knownDefectManifest, /Architect approved, with known defects/);
+assert.doesNotMatch(knownDefectManifest, /Repair required/);
+assert.match(knownDefectManifest, /2 of 3 final-verification checks passed\./);
+assert.match(knownDefectManifest, /Not verified \(3\):/);
+assert.match(knownDefectManifest, /The installer on macOS/, "the Runner's list, including what was left to the owner");
+// A known defect alongside a check that still needs its repair keeps the repair.
+const mixedView = runnerUserFacingObservability({
+  ...knownDefectSnapshot,
+  finalVerification: { ...knownDefectSnapshot.finalVerification, current: { ...knownDefectSnapshot.finalVerification!.current!, mechanicalFailure: { failureId: "f", failedCategories: [], failedCheckIds: ["tests", "build"], evidenceIds: [] }, review: { status: "pending" } } },
+} as unknown as NativeBuildObservability, canonicalProjection);
+assert.equal(mixedView.verificationSeal?.status, "repair_required");
 
 assert.equal(runnerVerificationTone([{ status: "failed" }, { status: "passed" }]), "error");
 assert.equal(runnerVerificationTone([{ status: "passed" }, { status: "recorded" }]), "success");

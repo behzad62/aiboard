@@ -127,6 +127,11 @@ export interface VerifierFinalVerificationSnapshot {
   readonly green: boolean;
   /** The four v1 categories, or (VF3) the v2 checks including the skipped ones. */
   readonly checks: readonly (FinalVerificationCheckResult | VerificationCheckResultV2)[];
+  /**
+   * VF8: the non-mandatory checks recorded as known defects at the repair limit. They may fail; the
+   * Build went on without them and the handoff lists them under Not verified.
+   */
+  readonly knownDefectCheckIds?: readonly string[];
 }
 
 export interface NativeVerifierInspectionRequest {
