@@ -139,11 +139,11 @@ jobs:
           node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/portable-process-protocol.test.ts
           runner-v2/test/portable-process-channel.test.ts
-      - name: Run targeted legacy POSIX lifecycle observation regression
+      # The whole file (about 10 s): a single name pattern here let a stale C4 test fail unseen on main.
+      - name: Run POSIX process backend contracts on POSIX hosts
         if: runner.os != 'Windows'
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
-          --test-name-pattern="POSIX native session fixture owns descendants after launcher exit"
           runner-v2/test/posix-process-backend.test.ts
       - name: Run T1 input-wait evidence and acceptance on POSIX hosts
         if: runner.os != 'Windows'
