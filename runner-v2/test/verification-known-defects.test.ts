@@ -28,6 +28,7 @@ import {
 import { repairMemberIssues, withFailingIds } from "../src/repair-budget-contracts.js";
 import {
   buildCompletionReadiness,
+  finalVerificationKnownDefectLimits,
   finalVerificationKnownDefectReason,
   finalVerificationReviewAccepted,
   rebuildSchedulerProjection,
@@ -48,6 +49,8 @@ type ToolResult = { isError: boolean; error?: { message?: string; code?: string 
 type Call = (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
 /** `unproven`: the check's program was started, but its stop did not prove it stopped. */
 type Outcome = "passed" | "failed" | "unproven";
+/** VF4: the check's tool is missing on this machine. */
+type Result = Outcome | "tool_missing";
 
 /** An Architect-named check: `tests` runs a command, `start` starts a server on a leased port. */
 interface ArchitectCheck {
@@ -83,6 +86,10 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
   /** The run's repair-plan limit; null leaves the default. */
   repairPlanLimit?: number | null;
   v1?: boolean;
+  /** With `checks`: the suggested `tests` check (mandatory per `mandatory`) runs after them. */
+  suggestedAfter?: boolean;
+  /** A check's result on its nth run (from 1); overrides `outcome` and the checks' outcomes. */
+  resultFor?: (checkId: string, run: number) => Result | undefined;
   /** v1 only: every category is not applicable, so the generation goes green to its review. */
   v1NotApplicable?: boolean;
   seed?: (store: SqliteSchedulerStore, checkId: string) => void;
@@ -104,7 +111,7 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
   // Only the Runner sets mandatory (VF4 reads it from aiboard-validation.json); here the suggestion carries it.
   const suggestions = verificationSuggestionsForProfile(base).map((suggestion) => ({
     check: { ...suggestion.check, mandatory: options.mandatory === true },
-    resolved: { ...suggestion.resolved, mandatory: options.mandatory === true },
+    ...(suggestion.resolved ? { resolved: { ...suggestion.resolved, mandatory: options.mandatory === true } } : {}),
   }));
   let plan: VerificationPlanV2 | FinalVerificationPlan;
   let profile: FinalVerificationExecutionProfile;
@@ -114,15 +121,20 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
       : { checks: v1NotApplicablePlan().checks.map((check) => check.category === "tests" ? { category: "tests" as const, status: "required" as const } : check) };
     profile = options.v1NotApplicable ? emptyFinalVerificationProfile(revision) : base;
   } else if (options.checks) {
-    plan = (completeVerificationPlanV2({
-      checks: options.checks.map((check) => check.kind === "tests"
-        ? { id: check.id, label: check.label, kind: "tests", run: check.run ?? { executable: "fixture", args: [check.id] } }
-        : { id: check.id, label: check.label, kind: "start", start: { executable: "node", args: ["relay.js", "{port}"], ready: { http: { path: "/healthz", status: 200 } } } }),
+    const planned = completeVerificationPlanV2({
+      checks: [
+        ...options.checks.map((check) => check.kind === "tests"
+          ? { id: check.id, label: check.label, kind: "tests", run: check.run ?? { executable: "fixture", args: [check.id] } }
+          : { id: check.id, label: check.label, kind: "start", start: { executable: "node", args: ["relay.js", "{port}"], ready: { http: { path: "/healthz", status: 200 } } } }),
+        ...(options.suggestedAfter ? suggestions.map((suggestion) => keep(suggestion.check)) : []),
+      ],
       skipped: [],
-    }, []) as { plan: VerificationPlanV2 }).plan;
+    }, options.suggestedAfter ? suggestions.map((suggestion) => suggestion.check) : []);
+    assert.equal(planned.ok, true, planned.ok ? "" : planned.issues.join(" "));
+    plan = (planned as { plan: VerificationPlanV2 }).plan;
     // A start check's {port} comes from the Runner's port lease for this run and revision.
-    const empty = emptyFinalVerificationProfile(revision);
-    profile = withResolvedVerificationPlan(empty, plan, verificationSuggestionsForProfile(empty), { version: 1, runId, targetRevision: revision, port: 41234, leaseId: "lease-relay" });
+    const start = options.suggestedAfter ? base : emptyFinalVerificationProfile(revision);
+    profile = withResolvedVerificationPlan(start, plan, options.suggestedAfter ? suggestions : verificationSuggestionsForProfile(start), { version: 1, runId, targetRevision: revision, port: 41234, leaseId: "lease-relay" });
   } else {
     plan = (completeVerificationPlanV2(
       { checks: suggestions.map((suggestion) => keep(suggestion.check)), skipped: [] },
@@ -131,7 +143,12 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
     profile = withResolvedVerificationPlan(base, plan, suggestions);
   }
   const checkId = "version" in plan ? plan.checks[0]!.id : "tests";
-  const outcomeOf = (id: string): Outcome => options.checks?.find((check) => check.id === id)?.outcome ?? options.outcome ?? "failed";
+  const runs = new Map<string, number>();
+  const outcomeOf = (id: string): Result => {
+    const run = (runs.get(id) ?? 0) + 1;
+    runs.set(id, run);
+    return options.resultFor?.(id, run) ?? options.checks?.find((check) => check.id === id)?.outcome ?? options.outcome ?? "failed";
+  };
   store.append({ runId, type: "run.initialized", occurredAt: WHEN, actor: { role: "runner", id: "runner" }, idempotencyKey: "init", payload: options.v1 ? {} : { verificationContractVersion: 2 } });
   if (options.repairPlanLimit !== null) {
     store.append({ runId, type: "repair.policy_configured", occurredAt: WHEN, actor: { role: "runner", id: "runner" }, idempotencyKey: "repair-policy", payload: { repairPlanLimit: options.repairPlanLimit ?? 0 } });
@@ -170,12 +187,17 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
           throw new Error(`the port lease for ${key} was released with the generation's cleanup`);
         }
         const identity = { checkId: key, kind: resolved.kind, label: resolved.label, origin: resolved.origin, mandatory: resolved.mandatory };
-        if (outcomeOf(key) === "failed") {
+        const result = outcomeOf(key);
+        if (result === "tool_missing") {
+          const tool = resolved.commands[0]!.executable;
+          return { ...timing, check: { ...identity, outcome: "not_run", green: false, evidenceIds: [], facts: [], issues: [], notRun: { reason: "tool_missing", tool, detail: `${tool} is not on PATH` } } };
+        }
+        if (result === "failed") {
           return { ...timing, check: { ...identity, outcome: "failed", green: false, evidenceIds: [], facts: [], issues: [`${resolved.label} exited 1`] } };
         }
         // A passed check carries one recorded command fact per planned command; an unproven one
         // the same facts, with the cleanup not proven.
-        const unproven = outcomeOf(key) === "unproven";
+        const unproven = result === "unproven";
         const program = resolved.mode === "program";
         const stdout = await artifacts.put(Buffer.from("ok" + String.fromCharCode(10)), "text/plain", "stdout");
         const stderr = await artifacts.put(Buffer.from(""), "text/plain", "stderr");
@@ -739,6 +761,63 @@ test("a legacy v1 approval with no structured decision still reaches the complet
     assert.equal(current.review?.decision, undefined, "the approval is the legacy unstructured one");
     assert.deepEqual(reasons, ["final_verification_review_required", "completion_decision_required"], `${run.error} / ${run.actions.join(", ")}`);
     assert.doesNotMatch(run.error ?? "", /review request was not durably recorded/);
+  } finally {
+    fixture.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a mandatory check whose tool is missing pauses mid-generation; after the resume only it runs, then a known defect is possible", async () => {
+  const root = mkdtempSync(join(tmpdir(), "runner-v2 vf8 mandatory tool missing "));
+  const runId = "run-vf8-mandatory-tool-missing";
+  const revision = "5".repeat(40);
+  const reasons: string[] = [];
+  const fixture = knownDefectRun(root, runId, revision, {
+    // A non-mandatory check that fails at the limit (a known-defect candidate), then the project's
+    // mandatory tests check, whose tool is missing until the owner installs it.
+    checks: [{ id: "lint", label: "lint", kind: "tests", outcome: "failed", run: { executable: "eslint", args: ["."] } }],
+    suggestedAfter: true,
+    mandatory: true,
+    resultFor: (checkId, run) => checkId === "lint" ? undefined : run === 1 ? "tool_missing" : "passed",
+    reasons,
+    onReview: async (call, reason) => {
+      const projection = rebuildSchedulerProjection(fixture.store.readRun(runId));
+      const reviewed = await call("review_final_verification", {
+        ...reviewArgs(projection, reason, "approved", "The mandatory tests pass; lint ships as a known defect."),
+        checkReviews: [{ checkId: (fixture.plan as VerificationPlanV2).checks[1]!.id, verdict: "approved", rationale: "The tests pass.", evidenceIds: evidenceOf(projection, (fixture.plan as VerificationPlanV2).checks[1]!.id) }],
+      });
+      assert.equal(reviewed.isError, false, reviewed.error?.message ?? "");
+    },
+  });
+  try {
+    const { store, runtime, calls } = fixture;
+    const testsId = (fixture.plan as VerificationPlanV2).checks[1]!.id;
+    assert.equal((fixture.plan as VerificationPlanV2).checks[1]!.mandatory, true);
+    const paused = await stepUntil(runtime, () => false, 8);
+    assert.deepEqual(paused.last, { status: "paused", action: "mandatory_check_tool_missing" }, `${paused.error} / ${paused.actions.join(", ")}`);
+    let projection = rebuildSchedulerProjection(store.readRun(runId));
+    let current = projection.finalVerification!.current!;
+    // The pause keeps the check already completed and records nothing for the mandatory one.
+    assert.deepEqual(current.completedChecks?.map((check) => "checkId" in check ? check.checkId : check.category), ["lint"]);
+    assert.equal(current.failure, undefined);
+    assert.equal(current.cleanup, undefined);
+    assert.equal(current.knownDefects, undefined);
+    assert.deepEqual(finalVerificationKnownDefectLimits(projection, current, "lint", "failure"), [], "no known defect before every planned check ran");
+    assert.throws(() => store.append({ ...forge(revision, "failure", "lint"), runId }), /recorded on a reported mechanical failure/);
+    assert.deepEqual(calls, ["execute:lint", `execute:${testsId}`]);
+
+    // The owner installs the tool and resumes: only the unrecorded check runs, then the generation
+    // reports lint's failure, cleans up once and records lint as a known defect.
+    store.append({ runId, type: "run.resumed", occurredAt: WHEN, actor: { role: "user", id: "owner" }, idempotencyKey: "owner-resume", payload: {} });
+    const approved = () => rebuildSchedulerProjection(store.readRun(runId)).finalVerification?.current?.review?.status === "approved";
+    const resumed = await stepUntil(runtime, approved, 16);
+    assert.equal(approved(), true, `${resumed.error} / ${resumed.actions.join(", ")} / ${reasons.join(", ")}`);
+    assert.deepEqual(calls, ["execute:lint", `execute:${testsId}`, `execute:${testsId}`, "cleanup"]);
+    projection = rebuildSchedulerProjection(store.readRun(runId));
+    current = projection.finalVerification!.current!;
+    assert.deepEqual(current.failure?.failedCheckIds, ["lint"]);
+    assert.deepEqual(current.knownDefects?.map((defect) => [defect.checkId, defect.limit.kind]), [["lint", "run_budget"]]);
+    assert.deepEqual(buildCompletionReadiness(projection).issues, [], "the mandatory check ran and passed; lint is a known defect");
   } finally {
     fixture.close();
     rmSync(root, { recursive: true, force: true });
