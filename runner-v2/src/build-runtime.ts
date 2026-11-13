@@ -187,10 +187,15 @@ import {
 import { describeFailureChain, describeFailureWithCauses, lifecycleTrace } from "./lifecycle-diagnostics.js";
 import {
   boundEnvironmentInventory,
+  mandatoryChecksMissingTools,
+  mandatoryToolMissingDetail,
   unavailableEnvironmentInventory,
   type EnvironmentInventory,
   type InventoryTrigger,
 } from "./verification-inventory.js";
+
+/** VF4: the run's pause while a mandatory check's tool is missing. */
+export const MANDATORY_CHECK_TOOL_MISSING_PAUSE = "mandatory_check_tool_missing";
 export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
@@ -1855,6 +1860,10 @@ export class BuildRuntime {
     if (projection.status === "running" && await this.recordEnvironmentInventoryIfDue(events)) {
       events = this.store.readRun(this.runId);
       projection = rebuildSchedulerProjection(events);
+      // VF4: a mandatory check's missing tool stops the run before any work.
+      if (projection.status === "paused") {
+        return { status: "paused", action: projection.pauseReason?.reason };
+      }
     }
     this.browsing?.configure({
       cli: projection.browsing?.surface === "playwright_cli",
@@ -2499,6 +2508,30 @@ export class BuildRuntime {
         throw new Error(
           `Final verification driver returned ${verificationCheckKey(result.check)} for ${pendingKey}.`,
         );
+      }
+      // VF4: a mandatory check that cannot run is never recorded as done. The run pauses for the
+      // owner instead, and the check runs again after the resume (whose inventory checks first).
+      const check = result.check;
+      if ("checkId" in check && check.mandatory && check.notRun?.reason === "tool_missing") {
+        const declared = generation.executionProfile.projectChecks?.find((candidate) => candidate.id === check.checkId);
+        this.store.append({
+          runId: this.runId,
+          type: "run.paused",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `mandatory-check-tool-missing:${generation.generationId}:${check.checkId}:${this.projection().lastSequence}`,
+          payload: {
+            reason: MANDATORY_CHECK_TOOL_MISSING_PAUSE,
+            detail: mandatoryToolMissingDetail([{
+              checkId: check.checkId,
+              label: check.label,
+              ...(declared?.line !== undefined ? { configLine: declared.line } : {}),
+              tools: [check.notRun.tool],
+              missing: [check.notRun.tool],
+            }]),
+          },
+        });
+        return { status: "paused", action: MANDATORY_CHECK_TOOL_MISSING_PAUSE };
       }
       this.store.append({
         runId: this.runId,
@@ -4446,7 +4479,37 @@ export class BuildRuntime {
     } catch {
       return false;
     }
+    this.pauseIfMandatoryToolMissing(inventory, lastResume);
     return true;
+  }
+
+  /**
+   * VF4: the one pause the verification plan adds. A check the project's aiboard-validation.json
+   * makes mandatory cannot run without its tool, so when the inventory finds one missing the run
+   * stops here, before planning or any further work and before any model call, naming the tool
+   * and the config line. The owner installs it and resumes; the resume's own inventory checks
+   * again. A tool the lookup could not decide about launches as before (VF2).
+   */
+  private pauseIfMandatoryToolMissing(inventory: EnvironmentInventory, epoch: number): void {
+    // A run on the v1 contract (started before VF3) never runs project checks.
+    if (this.projection().verificationContractVersion !== 2) return;
+    const blocked = mandatoryChecksMissingTools(inventory);
+    if (blocked.length === 0) return;
+    try {
+      this.store.append({
+        runId: this.runId,
+        type: "run.paused",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `mandatory-check-tool-missing:${epoch}`,
+        payload: {
+          reason: MANDATORY_CHECK_TOOL_MISSING_PAUSE,
+          detail: mandatoryToolMissingDetail(blocked),
+        },
+      });
+    } catch {
+      // A refused pause leaves the run as it was; the final check still refuses a mandatory check it could not run.
+    }
   }
 
   /**

@@ -82,7 +82,35 @@ export interface EnvironmentInventory {
   playwrightBrowser: PlaywrightBrowserId | null;
   /** Parts that could not be inspected, such as the checks of a revision that has no readable profile. */
   notes: string[];
+  /**
+   * VF4: the checks aiboard-validation.json marks mandatory, with the tools they launch and
+   * which of those the lookup found missing. Absent when the project declares none.
+   */
+  mandatoryChecks?: InventoryMandatoryCheck[];
 }
+
+/** VF4: a mandatory check and the tools it needs, as the inventory found them. */
+export interface InventoryMandatoryCheck {
+  checkId: string;
+  label: string;
+  /** The line of the check's id in aiboard-validation.json. */
+  configLine?: number;
+  /** The inventory names of the tools it launches (provisioning included). */
+  tools: string[];
+  /** Those of them the Runner's lookup found missing. */
+  missing: string[];
+}
+
+/** The commands of one mandatory check, as inventoryMandatoryChecks lists them. */
+export interface InventoryMandatoryCheckCommands {
+  checkId: string;
+  label: string;
+  configLine?: number;
+  commands: Array<{ executable: string; args: readonly string[] }>;
+}
+
+export const MAX_INVENTORY_MANDATORY_CHECKS = 32;
+const MAX_INVENTORY_MANDATORY_TOOLS = 10;
 
 /** The projection keeps the latest inventory with the sequence that recorded it. */
 export interface EnvironmentInventoryProjection extends EnvironmentInventory {
@@ -159,6 +187,12 @@ export function inventoryCheckCommands(profile: FinalVerificationExecutionProfil
   const add = (label: string, command: { executable: string; args: readonly string[] }) => {
     commands.push({ label, executable: command.executable, args: [...command.args] });
   };
+  // VF4: the project's declared checks first, mandatory ones before the rest, so the tool cap
+  // never drops a tool a mandatory check needs.
+  const declared = [...(profile.projectChecks ?? [])].sort((left, right) => Number(right.mandatory) - Number(left.mandatory));
+  for (const check of declared) {
+    for (const command of projectCheckCommands(check)) add(command.label, command);
+  }
   if (profile.provisioning) add("provisioning", profile.provisioning.command);
   for (const command of profile.commands.build ?? []) add(`build: ${command.label}`, command);
   for (const command of profile.commands.tests ?? []) add(`tests: ${command.label}`, command);
@@ -175,6 +209,47 @@ export function inventoryCheckCommands(profile: FinalVerificationExecutionProfil
     for (const command of tierCommands ?? []) add(`tier ${tier}: ${command.label}`, command);
   }
   return commands;
+}
+
+type ProjectCheck = NonNullable<FinalVerificationExecutionProfile["projectChecks"]>[number];
+
+function projectCheckCommands(check: ProjectCheck): InventoryCheckCommand[] {
+  const label = `check ${check.id}${check.mandatory ? " (mandatory)" : ""}: ${check.label}`;
+  if (check.run) return [{ label, executable: check.run.executable, args: [...check.run.args] }];
+  if (!check.start) return [];
+  return [
+    { label, executable: check.start.executable, args: [...check.start.args] },
+    ...(check.start.steps ?? []).map((step) => ({ label: `check ${check.id} step: ${step.label}`, executable: step.executable, args: [...step.args] })),
+  ];
+}
+
+/**
+ * VF4: the checks aiboard-validation.json marks mandatory, with every command each would
+ * launch: the dependency provisioning that runs before any check, then its own. `node` is left
+ * out: the Runner runs it with its own Node, never one from PATH.
+ */
+export function inventoryMandatoryChecks(profile: FinalVerificationExecutionProfile): InventoryMandatoryCheckCommands[] {
+  return (profile.projectChecks ?? []).filter((check) => check.mandatory).map((check) => ({
+    checkId: check.id,
+    label: check.label,
+    ...(check.line !== undefined ? { configLine: check.line } : {}),
+    commands: [
+      ...(profile.provisioning ? [profile.provisioning.command] : []),
+      ...projectCheckCommands(check).filter((command) => command.executable !== "node"),
+    ].map((command) => ({ executable: command.executable, args: [...command.args] })),
+  }));
+}
+
+/** VF4: the mandatory checks a missing tool keeps from running. */
+export function mandatoryChecksMissingTools(inventory: Pick<EnvironmentInventory, "mandatoryChecks">): InventoryMandatoryCheck[] {
+  return (inventory.mandatoryChecks ?? []).filter((check) => check.missing.length > 0);
+}
+
+/** VF4: the owner's pause text: each mandatory check that cannot run, its missing tools and its config line. */
+export function mandatoryToolMissingDetail(blocked: readonly InventoryMandatoryCheck[]): string {
+  const lines = blocked.map((check) =>
+    `${check.missing.join(", ")} (needed by mandatory check "${check.checkId}", aiboard-validation.json${check.configLine !== undefined ? ` line ${check.configLine}` : ""})`);
+  return `A mandatory check cannot run because a tool is missing on this machine: ${lines.join("; ")}. Install it so the Runner finds it on PATH, then resume. The project's aiboard-validation.json makes the check mandatory; a Build cannot finish without it.`;
 }
 
 export interface CollectEnvironmentInventoryInput {
@@ -194,6 +269,8 @@ export interface CollectEnvironmentInventoryInput {
   runnerNode?: string;
   /** The Runner's Node: a check that runs a Node script (npm-cli.js) is recorded as that script's tool. */
   nodeExecPath?: string;
+  /** VF4: the mandatory checks, so the record says which of their tools are missing. */
+  mandatoryChecks?: readonly InventoryMandatoryCheckCommands[];
 }
 
 interface ToolTarget {
@@ -213,10 +290,14 @@ export async function collectEnvironmentInventory(input: CollectEnvironmentInven
   if (input.checksNote) notes.push(input.checksNote);
   const targets: ToolTarget[] = [];
   const byKey = new Map<string, ToolTarget>();
-  const addTarget = (executable: string, args: readonly string[], label: string) => {
+  const identity = (executable: string, args: readonly string[]) => {
     const script = nodeScriptOf(executable, args, nodeExecPath, platform);
     const name = script ? scriptToolName(script) : isBareCommand(executable) ? executable : basename(executable) || executable;
     const key = `${script ? "script" : isBareCommand(executable) ? "command" : "path"}:${platform === "win32" ? normalizedToolName(name) : name}`;
+    return { script, name, key };
+  };
+  const addTarget = (executable: string, args: readonly string[], label: string) => {
+    const { script, name, key } = identity(executable, args);
     let target = byKey.get(key);
     if (!target) {
       target = { key, name, executable, usedBy: [], ...(script ? { script } : {}) };
@@ -230,6 +311,24 @@ export async function collectEnvironmentInventory(input: CollectEnvironmentInven
   for (const check of input.checks) addTarget(check.executable, check.args, check.label);
   const kept = targets.slice(0, MAX_INVENTORY_TOOLS);
   const tools = await mapConcurrent(kept, PROBE_CONCURRENCY, async (target) => await inventoryTool(target, input, nodeExecPath));
+  const statusByKey = new Map(kept.map((target, index) => [target.key, tools[index]!]));
+  const mandatoryChecks = (input.mandatoryChecks ?? []).map((check): InventoryMandatoryCheck => {
+    const names: string[] = [];
+    const missing: string[] = [];
+    for (const command of check.commands) {
+      const { name, key } = identity(command.executable, command.args);
+      if (!names.includes(name)) names.push(name);
+      // A tool the cap left out was never looked up, so it is not known to be missing.
+      if (statusByKey.get(key)?.status === "missing" && !missing.includes(name)) missing.push(name);
+    }
+    return {
+      checkId: check.checkId,
+      label: check.label,
+      ...(check.configLine !== undefined ? { configLine: check.configLine } : {}),
+      tools: names,
+      missing,
+    };
+  });
   let browserPart: { browsers: InventoryBrowserRecord[]; notes: string[] };
   try {
     browserPart = await (input.browsers ?? (() => playwrightBrowserInventory({
@@ -257,6 +356,7 @@ export async function collectEnvironmentInventory(input: CollectEnvironmentInven
     browsers: browserPart.browsers,
     playwrightBrowser: selectPlaywrightBrowser(browserPart.browsers),
     notes,
+    ...(mandatoryChecks.length ? { mandatoryChecks } : {}),
   });
 }
 
@@ -511,6 +611,16 @@ export function boundEnvironmentInventory(inventory: EnvironmentInventory): Envi
     })),
     playwrightBrowser: inventory.playwrightBrowser,
     notes: inventory.notes.slice(0, MAX_INVENTORY_NOTES).map((note) => truncate(note, MAX_INVENTORY_NOTE_LENGTH)),
+    ...(inventory.mandatoryChecks?.length ? {
+      mandatoryChecks: inventory.mandatoryChecks.slice(0, MAX_INVENTORY_MANDATORY_CHECKS).map((check) => ({
+        checkId: truncate(check.checkId, 64),
+        label: truncate(check.label, MAX_INVENTORY_LABEL_LENGTH),
+        ...(check.configLine !== undefined ? { configLine: check.configLine } : {}),
+        // Missing tools first, so the cap never keeps a missing tool out of the list it belongs to.
+        tools: [...new Set([...check.missing, ...check.tools])].slice(0, MAX_INVENTORY_MANDATORY_TOOLS).map((name) => truncate(name, MAX_INVENTORY_NAME_LENGTH)),
+        missing: check.missing.slice(0, MAX_INVENTORY_MANDATORY_TOOLS).map((name) => truncate(name, MAX_INVENTORY_NAME_LENGTH)),
+      })),
+    } : {}),
   };
 }
 
@@ -530,7 +640,8 @@ export function unavailableEnvironmentInventory(trigger: InventoryTrigger, reaso
   });
 }
 
-const TOP_KEYS = new Set(["version", "trigger", "platform", "arch", "runnerNode", "revision", "tools", "toolsOmitted", "browsers", "playwrightBrowser", "notes"]);
+const TOP_KEYS = new Set(["version", "trigger", "platform", "arch", "runnerNode", "revision", "tools", "toolsOmitted", "browsers", "playwrightBrowser", "notes", "mandatoryChecks"]);
+const MANDATORY_CHECK_KEYS = new Set(["checkId", "label", "configLine", "tools", "missing"]);
 const TOOL_KEYS = new Set(["name", "status", "path", "version", "versionNote", "note", "usedBy"]);
 const BROWSER_KEYS = new Set(["id", "status", "path", "version", "missingLibraries", "note"]);
 const STATUSES = new Set<InventoryStatus>(["found", "missing", "unknown"]);
@@ -598,6 +709,29 @@ export function parseEnvironmentInventory(value: unknown): EnvironmentInventory 
     playwrightBrowser: selected as PlaywrightBrowserId | null,
     notes: boundedArray(record.notes, MAX_INVENTORY_NOTES, "Environment inventory notes")
       .map((note) => boundedString(note, MAX_INVENTORY_NOTE_LENGTH, "Environment inventory note")),
+    ...(record.mandatoryChecks !== undefined ? {
+      mandatoryChecks: boundedArray(record.mandatoryChecks, MAX_INVENTORY_MANDATORY_CHECKS, "Environment inventory mandatory checks").map((entry) => {
+        const check = closedRecord(entry, MANDATORY_CHECK_KEYS, "Environment inventory mandatory check");
+        const configLine = check.configLine;
+        if (configLine !== undefined && (typeof configLine !== "number" || !Number.isSafeInteger(configLine) || configLine < 1)) {
+          throw new Error("Environment inventory mandatory check configLine is invalid.");
+        }
+        const names = (value: unknown, label: string) => boundedArray(value, MAX_INVENTORY_MANDATORY_TOOLS, label)
+          .map((name) => boundedString(name, MAX_INVENTORY_NAME_LENGTH, label, true));
+        const tools = names(check.tools, "Environment inventory mandatory check tools");
+        const missing = names(check.missing, "Environment inventory mandatory check missing tools");
+        if (missing.some((name) => !tools.includes(name))) {
+          throw new Error("Environment inventory mandatory check names a missing tool it does not use.");
+        }
+        return {
+          checkId: boundedString(check.checkId, 64, "Environment inventory mandatory check id", true),
+          label: boundedString(check.label, MAX_INVENTORY_LABEL_LENGTH, "Environment inventory mandatory check label", true),
+          ...(configLine !== undefined ? { configLine: configLine as number } : {}),
+          tools,
+          missing,
+        };
+      }),
+    } : {}),
   };
 }
 

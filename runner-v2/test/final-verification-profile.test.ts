@@ -11,7 +11,7 @@ import { createArchitectTools } from "../src/architect-tools.js";
 import type { FinalVerificationBrowserPolicy } from "../src/final-verification-browser-policy.js";
 import { captureGitBaseline } from "./support/git-fixture.js";
 import { IntegrationManager } from "./support/git-fixture.js";
-import { assertFinalVerificationExecutionProfile, cloneFinalVerificationExecutionProfile, finalVerificationProfileDigest } from "../src/final-verification-profile.js";
+import { assertFinalVerificationExecutionProfile, cloneFinalVerificationExecutionProfile, finalVerificationProfileDigest, verificationSuggestionsForProfile } from "../src/final-verification-profile.js";
 import { FinalVerificationProfileAuthority } from "./support/git-fixture.js";
 import { FinalVerificationPortAuthority } from "../src/final-verification-port-authority.js";
 import { rebuildSchedulerProjection, type SchedulerStore } from "../src/scheduler-store.js";
@@ -789,6 +789,114 @@ async function createManagerFixture(
     },
   };
 }
+
+/** A project with exactly these files at its baseline, checked out as the integration revision. */
+async function createFilesFixture(name: string, files: Record<string, string>) {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-verification-files-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const runId = `files-${name}`;
+  mkdirSync(project, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(join(project, path, ".."), { recursive: true });
+    writeFileSync(join(project, path), text);
+  }
+  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
+  const integration = new IntegrationManager({ repositoryRoot: project, stateDirectory: state, runId, baselineRevision: baseline.revision });
+  await integration.initialize();
+  const inspect = async () => await new FinalVerificationProfileAuthority({ stateDirectory: state, runId })
+    .inspectAndPersist({ repositoryRoot: integration.path, targetRevision: integration.revision });
+  return {
+    inspect,
+    close: async () => {
+      await integration.cleanup().catch(() => undefined);
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+function nextAppFiles(nextConfig: string | undefined): Record<string, string> {
+  return {
+    "package.json": JSON.stringify({
+      name: "next-fixture",
+      packageManager: "npm@11.0.0",
+      scripts: { build: "next build", start: "next start" },
+      dependencies: { next: "file:./local-next" },
+    }, null, 2),
+    "package-lock.json": JSON.stringify({ name: "next-fixture", lockfileVersion: 3, packages: {} }),
+    "local-next/package.json": JSON.stringify({ name: "next", version: "1.0.0" }),
+    ...(nextConfig !== undefined ? { "next.config.ts": nextConfig } : {}),
+  };
+}
+
+test("VF4: a Next app with output: \"export\" gets no next start suggestion; a served Next app still does", async () => {
+  const exported = await createFilesFixture("next-export", nextAppFiles(
+    "import type { NextConfig } from \"next\";\nconst nextConfig: NextConfig = {\n  output: \"export\",\n  images: { unoptimized: true },\n};\nexport default nextConfig;\n",
+  ));
+  try {
+    const profile = await exported.inspect();
+    assert.equal(profile.runtimeSmoke, undefined);
+    assert.equal(profile.browser, undefined);
+    assert.equal(profile.portLease, undefined, "no port is leased for a server that will not run");
+    assert.ok(profile.inspectedPaths.includes("next.config.ts"), "the config that decided it is an inspected path");
+    assert.deepEqual(profile.detectedSignals.map((signal) => signal.category), ["build"]);
+    assert.deepEqual(verificationSuggestionsForProfile(profile).map((suggestion) => suggestion.check.id), ["build"]);
+  } finally {
+    await exported.close();
+  }
+  const served = await createFilesFixture("next-served", nextAppFiles("module.exports = { reactStrictMode: true };\n"));
+  try {
+    const profile = await served.inspect();
+    assert.equal(profile.runtimeSmoke?.label, "package start");
+    assert.deepEqual(verificationSuggestionsForProfile(profile).map((suggestion) => suggestion.check.id), ["build", "start"]);
+  } finally {
+    await served.close();
+  }
+});
+
+test("VF4: a version-2 aiboard-validation.json puts its checks, with their lines, in the profile; a malformed one fails closed", async () => {
+  const config = JSON.stringify({
+    version: 2,
+    tiers: { fast: [{ label: "lint", executable: "npm", args: ["run", "lint"] }] },
+    checks: [
+      { id: "typecheck", label: "Type-check", kind: "build", mandatory: true, run: { executable: "tsc", args: ["--noEmit"] } },
+      { id: "cli", label: "CLI help", kind: "start", mandatory: false, start: { executable: "node", args: ["cli.js", "--help"], ready: { exitCode: 0 } } },
+    ],
+  }, null, 2);
+  const declared = await createFilesFixture("project-checks", {
+    "package.json": JSON.stringify({ name: "checks-fixture", scripts: { build: "node build.mjs" } }),
+    "aiboard-validation.json": config,
+  });
+  try {
+    const profile = await declared.inspect();
+    const lines = config.split("\n");
+    assert.deepEqual(profile.projectChecks?.map((check) => [check.id, check.mandatory, lines[check.line! - 1]!.trim()]), [
+      ["typecheck", true, '"id": "typecheck",'],
+      ["cli", false, '"id": "cli",'],
+    ]);
+    assert.ok(profile.inspectedPaths.includes("aiboard-validation.json"));
+    assert.deepEqual(profile.tiers?.fast?.map((command) => command.label), ["lint"], "the tiers are read as before");
+    assert.deepEqual(
+      verificationSuggestionsForProfile(profile).map((suggestion) => [suggestion.check.id, suggestion.check.origin, suggestion.check.mandatory]),
+      [["typecheck", "project", true], ["cli", "project", false]],
+      "the declared checks replace the detected build",
+    );
+    // The archived profile replays: the project checks are part of its digest.
+    assert.deepEqual(cloneFinalVerificationExecutionProfile(profile), profile);
+  } finally {
+    await declared.close();
+  }
+  const malformed = await createFilesFixture("project-checks-malformed", {
+    "package.json": JSON.stringify({ name: "checks-fixture" }),
+    "aiboard-validation.json": JSON.stringify({ version: 2, checks: [{ id: "typecheck", label: "Type-check", kind: "build", run: { executable: "tsc", args: [] } }] }),
+  });
+  try {
+    await assert.rejects(() => malformed.inspect(), /aiboard-validation\.json is malformed: checks\[0\]\.mandatory must be true or false/);
+  } finally {
+    await malformed.close();
+  }
+});
 
 async function createServerManagerFixture(name: string) {
   const root = mkdtempSync(join(tmpdir(), "aiboard-verification-server-manager-"));

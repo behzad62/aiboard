@@ -112,6 +112,7 @@ jobs:
           runner-v2/test/windows-job-active-probe.test.ts
           runner-v2/test/native-build-rollback-order.test.ts
           runner-v2/test/verification-plan-v2-contract.test.ts
+          runner-v2/test/project-validation-checks.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1

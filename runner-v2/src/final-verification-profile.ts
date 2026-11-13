@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { FINAL_VERIFICATION_CATEGORIES, VALIDATION_TIERS, type FinalVerificationDetectedSignal, type FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
-import { PROJECT_VALIDATION_CONFIG_PATH, parseProjectValidationConfig, parseValidationBudgetMs, type ProjectValidationTierCommand, type ProjectValidationTiers } from "./project-validation-config.js";
+import { PROJECT_VALIDATION_CONFIG_PATH, parseProjectValidationConfig, parseProjectValidationConfigText, parseValidationBudgetMs, type ProjectValidationConfig, type ProjectValidationTierCommand, type ProjectValidationTiers } from "./project-validation-config.js";
 import { detectLanguageFamilies, languageReportDescriptors, listLanguageInventoryFiles } from "./language-execution-profile.js";
 import { assertFinalVerificationBrowserPolicy } from "./final-verification-browser-policy.js";
 import type {
@@ -20,9 +20,13 @@ import {
   type FinalVerificationPortLease,
 } from "./final-verification-port-authority.js";
 import {
+  assertProjectVerificationChecks,
   assertVerificationPlanResolution,
+  cloneProjectCheck,
   cloneVerificationPlanResolution,
   detectedVerificationSuggestions,
+  projectVerificationSuggestions,
+  type ProjectVerificationCheck,
   resolveVerificationPlanV2,
   verificationPlanNeedsPort,
   type VerificationPlanPrefillV2,
@@ -70,6 +74,11 @@ export interface FinalVerificationExecutionProfile {
   browser?: FinalVerificationBrowserInput;
   tiers?: ProjectValidationTiers;
   validationBudgetMs?: number;
+  /**
+   * VF4: the checks a version-2 aiboard-validation.json declares, with the line of each id.
+   * When present they are the v2 plan's suggestions (origin project); absent on older profiles.
+   */
+  projectChecks?: ProjectVerificationCheck[];
   /**
    * VF3: on a v2 run, the Architect's plan resolved into the exact commands the Runner launches,
    * with the suggestions it was offered. Absent on v1 runs.
@@ -350,11 +359,15 @@ export class FinalVerificationProfileAuthority {
 }
 
 /**
- * VF3: the Runner's detected commands as suggested checks for a v2 plan. Tests come from the
- * project's release tier when it declares one (as the v1 tests category ran it), otherwise from
- * the detected test commands; a detected Vite or Next server becomes a start check.
+ * VF3/VF4: the suggested checks for a v2 plan. A project that declares checks in
+ * aiboard-validation.json (version 2) gets exactly those, origin `project`, `mandatory` from the
+ * file. Otherwise detection is the fallback: tests come from the project's release tier when it
+ * declares one (as the v1 tests category ran it), otherwise from the detected test commands; a
+ * detected Vite or Next server becomes a start check. Declared and detected checks are never
+ * mixed, so a project that declares its checks is not handed guesses beside them.
  */
 export function verificationSuggestionsForProfile(profile: FinalVerificationExecutionProfile): VerificationSuggestion[] {
+  if (profile.projectChecks?.length) return projectVerificationSuggestions(profile.projectChecks);
   const releaseTier = profile.tiers?.release;
   return detectedVerificationSuggestions({
     ...(profile.commands.build?.length ? { build: profile.commands.build } : {}),
@@ -537,11 +550,17 @@ export async function inspectFinalVerificationExecutionProfile(options: {
       if (!profileInspectedPaths.includes(path)) profileInspectedPaths.push(path);
     }
   }
-  const serverPortLease = serverSignal(scripts, dependencies)
+  // VF4: `next start` refuses a static export, so such an app gets no start check.
+  const staticExport = scripts.start && dependencies.next && !(scripts.preview && dependencies.vite)
+    ? await nextStaticExport(repositoryRoot)
+    : undefined;
+  if (staticExport && !profileInspectedPaths.includes(staticExport.path)) profileInspectedPaths.push(staticExport.path);
+  const nextStart = !staticExport;
+  const serverPortLease = serverSignal(scripts, dependencies, nextStart)
     ? await (options.reservePort?.() ?? reserveUnownedPort(options.targetRevision))
     : undefined;
   const server = serverPortLease
-    ? serverProfile(scripts, dependencies, packageManager, serverPortLease.port)
+    ? serverProfile(scripts, dependencies, packageManager, serverPortLease.port, nextStart)
     : undefined;
   if (server) {
     detectedSignals.push({ category: "runtime_smoke", source: `package.json#scripts.${server.script}`, detail: scripts[server.script]! });
@@ -563,6 +582,7 @@ export async function inspectFinalVerificationExecutionProfile(options: {
     ...(serverPortLease ? { portLease: serverPortLease } : {}),
     ...(projectConfig?.tiers ? { tiers: cloneProjectTiers(projectConfig.tiers) } : {}),
     ...(projectConfig?.validationBudgetMs !== undefined ? { validationBudgetMs: projectConfig.validationBudgetMs } : {}),
+    ...(projectConfig?.checks?.length ? { projectChecks: projectConfig.checks.map(cloneProjectCheck) } : {}),
     ...(server ? {
       runtimeSmoke: server.smoke,
       browser: {
@@ -607,6 +627,7 @@ export function cloneFinalVerificationExecutionProfile(
     ...(profile.browser ? { browser: cloneBrowser(profile.browser) } : {}),
     ...(profile.tiers ? { tiers: cloneTiers(profile.tiers) } : {}),
     ...(profile.validationBudgetMs !== undefined ? { validationBudgetMs: profile.validationBudgetMs } : {}),
+    ...(profile.projectChecks ? { projectChecks: profile.projectChecks.map(cloneProjectCheck) } : {}),
     ...(profile.verification ? { verification: cloneVerificationPlanResolution(profile.verification) } : {}),
   };
 }
@@ -659,6 +680,13 @@ export function assertFinalVerificationExecutionProfile(
       parseValidationBudgetMs(profile.validationBudgetMs);
     } catch {
       throw new Error("Final verification execution validation budget is invalid.");
+    }
+  }
+  if (profile.projectChecks !== undefined) {
+    try {
+      assertProjectVerificationChecks(profile.projectChecks);
+    } catch {
+      throw new Error("Final verification execution project checks are invalid.");
     }
   }
   if (profile.verification !== undefined) {
@@ -827,6 +855,7 @@ function serverProfile(
   dependencies: Record<string, string>,
   packageManager: { executable: string; args: string[] },
   port: number,
+  nextStart: boolean,
 ): { script: string; smoke: FinalVerificationRuntimeSmokeInput } | undefined {
   const endpoint = `http://127.0.0.1:${port}/`;
   if (scripts.preview && dependencies.vite) {
@@ -842,7 +871,7 @@ function serverProfile(
       },
     };
   }
-  if (scripts.start && dependencies.next) {
+  if (scripts.start && dependencies.next && nextStart) {
     return {
       script: "start",
       smoke: {
@@ -858,11 +887,11 @@ function serverProfile(
   return undefined;
 }
 
-function serverSignal(scripts: Record<string, string>, dependencies: Record<string, string>): boolean {
-  return Boolean((scripts.preview && dependencies.vite) || (scripts.start && dependencies.next));
+function serverSignal(scripts: Record<string, string>, dependencies: Record<string, string>, nextStart: boolean): boolean {
+  return Boolean((scripts.preview && dependencies.vite) || (scripts.start && dependencies.next && nextStart));
 }
 
-async function readProjectValidationConfig(repositoryRoot: string): Promise<import("./project-validation-config.js").ProjectValidationConfig | undefined> {
+async function readProjectValidationConfig(repositoryRoot: string): Promise<ProjectValidationConfig | undefined> {
   let text: string;
   try {
     text = await readFile(join(repositoryRoot, PROJECT_VALIDATION_CONFIG_PATH), "utf8");
@@ -870,17 +899,28 @@ async function readProjectValidationConfig(repositoryRoot: string): Promise<impo
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text) as unknown;
-  } catch (error) {
-    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is not valid JSON.`, { cause: error });
+  return parseProjectValidationConfigText(text);
+}
+
+/** The Next.js config files `next` reads, in its own order. */
+const NEXT_CONFIG_FILES = ["next.config.js", "next.config.mjs", "next.config.ts", "next.config.mts", "next.config.cjs"];
+
+/**
+ * VF4: a Next app built as a static export (`output: "export"`) cannot be served by `next start`,
+ * which Next refuses for it, so it gets no start suggestion. Read from the config text, never run.
+ */
+async function nextStaticExport(repositoryRoot: string): Promise<{ path: string } | undefined> {
+  for (const name of NEXT_CONFIG_FILES) {
+    let text: string;
+    try {
+      text = await readFile(join(repositoryRoot, name), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    return /\boutput\s*:\s*["'`]export["'`]/.test(text) ? { path: name } : undefined;
   }
-  try {
-    return parseProjectValidationConfig(parsed);
-  } catch (error) {
-    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is malformed: ${error instanceof Error ? error.message : String(error)}.`, { cause: error });
-  }
+  return undefined;
 }
 function cloneProjectTiers(tiers: import("./project-validation-config.js").ProjectValidationTiers): ProjectValidationTiers {
   const clone: ProjectValidationTiers = {};

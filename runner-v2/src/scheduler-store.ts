@@ -9150,6 +9150,10 @@ function recordFinalVerificationCheckV2(
   if (result.notRun?.reason === "skipped") {
     throw new Error(`Final verification check ${result.checkId} is planned, so it is not skipped.`);
   }
+  // VF4: a mandatory check that could not run is not a result; the Runner pauses for the owner instead.
+  if (result.mandatory && result.outcome === "not_run") {
+    throw new Error(`Mandatory final verification check ${result.checkId} cannot be recorded as not run.`);
+  }
   const resolution = current.executionProfile.verification;
   if (!resolution) throw new Error("A v2 final verification needs its resolved plan in the execution profile.");
   const completed: FinalVerificationCompletedCheckProjectionV2 = {
@@ -9429,7 +9433,12 @@ function finalVerificationV2ReadinessIssues(
       continue;
     }
     // VF2: a check the Runner did not run (tool missing) is not a failure and carries no result.
+    // VF4: but a mandatory check must run: completion never accepts one that did not.
     if (check.outcome === "not_run") {
+      if (planned.mandatory) {
+        issues.push(`Mandatory final-verification check ${planned.id} was not run; a mandatory check must run and pass.`);
+        continue;
+      }
       if (
         check.notRun?.reason !== "tool_missing" || check.green !== false || check.issues.length > 0 ||
         check.evidenceIds.length > 0 || check.facts.length > 0

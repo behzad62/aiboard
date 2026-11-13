@@ -13,7 +13,7 @@ import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { CheckToolLookup } from "../src/check-tool-lookup.js";
 import { createExecutionHost } from "../src/execution-host.js";
-import { withResolvedVerificationPlan } from "../src/final-verification-profile.js";
+import { verificationSuggestionsForProfile, withResolvedVerificationPlan } from "../src/final-verification-profile.js";
 import { submitFinalVerificationV2 } from "../src/final-verification-submission.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -23,6 +23,7 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
   assertVerificationCheckV2Semantics,
   completeVerificationPlanV2,
+  type ProjectVerificationCheck,
   type VerificationPlanV2,
 } from "../src/verification-plan-v2.js";
 import { minimalWindowsSemanticProbeEnvironment } from "../src/windows-process-semantic-probes.js";
@@ -186,6 +187,71 @@ test("a start check proves a server ready on HTTP on the leased port, then runs 
     assert.doesNotThrow(() => assertVerificationCheckV2Semantics({
       check: run.check, resolution: profile.verification!, targetRevision: revision, workspacePath: run.workspacePath,
     }));
+    await assertPortReusable(port);
+  } finally {
+    await managed.close();
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeGitFixture(fixture);
+  }
+});
+
+test("VF4: project checks run as declared: a CLI on its exit code, a server on HTTP, a desktop test mode on an output line, and a run check with its environment", async (t) => {
+  const fixture = await createGitFixture("project checks", {
+    "cli.js": "console.log('usage: tool <file>');\n",
+    "server.js": "require('node:http').createServer((req,res)=>{res.statusCode=req.url==='/healthz'?204:404;res.end();}).listen(Number(process.argv[2]),'127.0.0.1');\n",
+    "desktop.js": "setTimeout(()=>console.log('SELF-TEST READY'),200);setInterval(()=>{},1000);\n",
+    "drive.js": "require('node:fs').mkdirSync('out',{recursive:true});require('node:fs').writeFileSync('out/shot.png','png');\n",
+    "env.js": "process.exit(process.env.AIBOARD_VF4 === 'yes' ? 0 : 3);\n",
+  });
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = workspaceFor(fixture);
+  const managed = await createManagedExecution(fixture);
+  const port = await freePort();
+  try {
+    const revision = fixture.integration.revision;
+    const projectChecks: ProjectVerificationCheck[] = [
+      { id: "cli", label: "CLI prints usage", kind: "start", mandatory: true, start: { executable: "node", args: ["cli.js"], ready: { exitCode: 0 } } },
+      { id: "server", label: "Server answers", kind: "start", mandatory: false, start: { executable: "node", args: ["server.js", "{port}"], ready: { http: { path: "/healthz", status: 204 } } } },
+      {
+        id: "desktop", label: "Desktop self-test", kind: "start", mandatory: false,
+        start: {
+          executable: "node", args: ["desktop.js"], ready: { outputLine: "SELF-TEST READY" },
+          steps: [{ label: "drive it", executable: "node", args: ["drive.js"], outputs: ["out/shot.png"] }],
+        },
+      },
+      { id: "env", label: "Environment", kind: "other", mandatory: false, run: { executable: "node", args: ["env.js"] }, environment: { AIBOARD_VF4: "yes" } },
+    ];
+    const base = { ...emptyFinalVerificationProfile(revision), projectChecks };
+    const suggestions = verificationSuggestionsForProfile(base);
+    const plan = (completeVerificationPlanV2({
+      checks: suggestions.map(({ check }) => ({ id: check.id, label: check.label, kind: check.kind, ...(check.run ? { run: check.run } : {}), ...(check.start ? { start: check.start } : {}) })),
+      skipped: [],
+    }, suggestions.map(({ check }) => check)) as { plan: VerificationPlanV2 }).plan;
+    const lease = { version: 1 as const, runId: fixture.runId, targetRevision: revision, port, leaseId: "lease-project" };
+    const profile = withResolvedVerificationPlan(base, plan, suggestions, lease);
+    const runtime = new FinalVerificationRuntime({
+      execution: createTestOneShotCommandExecutor(t), workspaceManager: workspace, artifacts, evidenceStore: evidence,
+      runId: fixture.runId, taskId: FINAL_TASK_ID, attempt: 1, generationId: GENERATION_ID, integrationRevision: () => revision,
+      managedProcessService: managed.service, managedProcessAuthority: managed.authority,
+    });
+    for (const checkId of ["cli", "server", "desktop", "env"]) {
+      const run = await runtime.runCheckV2({ executionProfile: profile, checkId });
+      assert.equal(run.check.outcome, "passed", `${checkId}: ${run.check.issues.join("\n")}`);
+      assert.equal(run.check.origin, "project");
+      assert.equal(run.check.mandatory, checkId === "cli");
+      assert.doesNotThrow(() => assertVerificationCheckV2Semantics({
+        check: run.check, resolution: profile.verification!, targetRevision: revision, workspacePath: run.workspacePath,
+      }));
+      if (checkId === "server") {
+        assert.equal((run.check.facts[0] as unknown as { endpoint?: string }).endpoint, `http://127.0.0.1:${port}/healthz`);
+      }
+      if (checkId === "desktop") {
+        assert.equal(run.check.facts.length, 2, "the program, then its step");
+        assert.ok(JSON.stringify(run.check.facts[1]).includes("out/shot.png"), "the step's output file is kept as evidence");
+      }
+    }
     await assertPortReusable(port);
   } finally {
     await managed.close();

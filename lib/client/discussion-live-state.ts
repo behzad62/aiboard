@@ -121,6 +121,14 @@ export function nativeBuildPauseDescription(
       detail: "This Build plans only from an approved specification. Approve the exact document in Overview to let the Architect plan.",
     };
   }
+  if (reason === "mandatory_check_tool_missing") {
+    return {
+      waitingForOwner: true,
+      title: "Waiting for you: a mandatory check's tool is missing",
+      detail: projection.pauseReason?.detail
+        ?? "A check your aiboard-validation.json makes mandatory cannot run on this machine. Install its tool, then resume.",
+    };
+  }
   if (reason === "verifier.selection_required") {
     return { waitingForOwner: true, title: "Waiting for you: choose a verifier", detail: "Pick an independent verifier below to continue." };
   }

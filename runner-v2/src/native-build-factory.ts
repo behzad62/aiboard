@@ -99,8 +99,10 @@ import { isPlaywrightCliBrowser } from "./playwright-cli.js";
 import {
   collectEnvironmentInventory,
   inventoryCheckCommands,
+  inventoryMandatoryChecks,
   oneShotInventoryRunner,
   type InventoryCheckCommand,
+  type InventoryMandatoryCheckCommands,
 } from "./verification-inventory.js";
 import { flakyRerunPattern, isPackageRunTestCommand, judgeFlakyRerun, narrowNodeTestCommand } from "./flaky-rerun.js";
 import { topDefectClasses } from "./defect-history.js";
@@ -2330,14 +2332,18 @@ export class NativeBuildFactory {
               const workspace = await finalVerificationProfileWorkspace.create(revision);
               try {
                 let checks: InventoryCheckCommand[] = [];
+                let mandatoryChecks: InventoryMandatoryCheckCommands[] = [];
                 let checksNote: string | undefined;
                 try {
-                  checks = inventoryCheckCommands(await inspectFinalVerificationExecutionProfile({
+                  const profile = await inspectFinalVerificationExecutionProfile({
                     repositoryRoot: workspace.path,
                     targetRevision: revision,
                     execute: requireGitRunner(gitContext).lifecycle("verification").run,
                     ambientEnvironment: this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
-                  }));
+                  });
+                  checks = inventoryCheckCommands(profile);
+                  // VF4: the record says which mandatory check a missing tool blocks; the runtime pauses on it.
+                  mandatoryChecks = inventoryMandatoryChecks(profile);
                 } catch (error) {
                   checksNote = `The checks of this revision could not be read: ${error instanceof Error ? error.message : String(error)}`;
                 }
@@ -2346,6 +2352,7 @@ export class NativeBuildFactory {
                   revision,
                   cwd: workspace.path,
                   checks,
+                  ...(mandatoryChecks.length ? { mandatoryChecks } : {}),
                   ...(checksNote ? { checksNote } : {}),
                   lookup: checkToolLookup,
                   run: oneShotInventoryRunner(commandExecution, { runId: spec.runId }),

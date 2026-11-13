@@ -94,7 +94,8 @@ test("a detected check is skipped with a reason; one left out without a reason i
 });
 
 test("a mandatory check can be neither skipped nor changed, and only the Runner sets mandatory", () => {
-  // VF4 will read mandatory from aiboard-validation.json; until then the contract alone refuses it.
+  // Detected suggestions are never mandatory (VF4 reads mandatory from aiboard-validation.json, see
+  // project-validation-checks.test.ts); flipping one here tests the contract's own rules.
   const suggestions = detectedSuggestions().map((check) => check.id === "build" ? { ...check, mandatory: true } : check);
   const build = suggestions.find((check) => check.id === "build")!;
   const tests = suggestions.find((check) => check.id === "tests")!;

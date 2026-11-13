@@ -72,7 +72,14 @@ test("IV-3: budget defaults to 600000; bounded overrides accepted, malformed ref
       }),
     /validationBudgetMs/,
   );
-  assert.throws(() => parseProjectValidationConfig({ version: 2 }), /version/);
+  // VF4: version 2 is read; a newer one asks for a newer Runner, and checks need version 2.
+  assert.deepEqual(parseProjectValidationConfig({ version: 2 }), { version: 2 });
+  assert.throws(() => parseProjectValidationConfig({ version: 3 }), /version 3 is newer than this Runner reads.*update the Runner/);
+  assert.throws(() => parseProjectValidationConfig({ version: 0 }), /version must be 1 or 2/);
+  assert.throws(
+    () => parseProjectValidationConfig({ version: 1, checks: [] }),
+    /checks need version 2/,
+  );
   assert.throws(
     () => parseProjectValidationConfig({ version: 1, unknown: true }),
     /unknown field/,

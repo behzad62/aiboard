@@ -23,6 +23,8 @@ const deterministicPrTests = [
   "runner-v2/test/native-build-manager-readers.test.ts",
   // VF3: the v1/v2 final-verification contract gate, in memory (about 1 s).
   "runner-v2/test/verification-plan-v2-contract.test.ts",
+  // VF4: aiboard-validation.json checks, mandatory and the missing-tool pause, in memory (about 1 s).
+  "runner-v2/test/project-validation-checks.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",
