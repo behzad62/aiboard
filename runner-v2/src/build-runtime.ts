@@ -64,7 +64,9 @@ import {
   deriveFinalVerificationFailure,
   failureFailedCheckKeys,
   finalVerificationKnownDefectIds,
-  finalVerificationKnownDefectReason,
+  finalVerificationKnownDefectLimits,
+  finalVerificationKnownDefectText,
+  finalVerificationProgramUnproven,
   finalVerificationReviewAccepted,
   reviewFailedCheckKeys,
   reviewRepairEvidenceIds,
@@ -2290,8 +2292,10 @@ export class BuildRuntime {
       if (generation.cleanup?.status !== "succeeded") {
         return await this.advanceFinalVerificationCleanup(generation);
       }
-      // VF8: a review whose only repairs are known defects at the limit lets the Build finish.
-      if (finalVerificationReviewAccepted(generation)) {
+      // VF8: a review whose only repairs are known defects at the limit lets the Build finish. An
+      // approved review takes the completion turn as before, a legacy v1 approval with no
+      // structured decision included (readiness still judges it there).
+      if (generation.review?.status === "approved" || finalVerificationReviewAccepted(generation)) {
         const verifierResult = await this.advanceIndependentVerification();
         if (verifierResult) return verifierResult;
         await this.runArchitect(
@@ -2422,9 +2426,12 @@ export class BuildRuntime {
     // VF8: a v2 generation runs every planned check before it reports a failure, so the failure
     // names every failed check and no check runs after the generation's cleanup. A v1 generation
     // still stops at its first failed category, and a failure already reported stays reported.
+    // A check whose program was not proven stopped (or whose port cleanup failed) also stops the
+    // generation there: no later check may run beside a program that may still hold its port.
     if (
       unresolvedFailedVerificationChecks(generation).length > 0 &&
-      (generation.failure !== undefined || !isVerificationPlanV2(generation.plan) || pendingKey === undefined)
+      (generation.failure !== undefined || !isVerificationPlanV2(generation.plan) || pendingKey === undefined ||
+        finalVerificationProgramUnproven(generation))
     ) {
       if (!generation.failure) {
         const failure = deriveFinalVerificationFailure(generation, 1);
@@ -5722,8 +5729,13 @@ export class BuildRuntime {
     const checks = keys
       .filter((checkId) => !known.has(checkId))
       .flatMap((checkId) => {
-        const reason = finalVerificationKnownDefectReason(projection, generation, checkId, source);
-        return reason === undefined ? [] : [{ checkId, reason }];
+        // The kernel checks the limit's kind and identity; the text is for the reader of the log.
+        const limit = finalVerificationKnownDefectLimits(projection, generation, checkId, source)[0];
+        if (!limit) return [];
+        const claim = limit.kind === "issue"
+          ? { kind: limit.kind, issueId: limit.issueId }
+          : limit.kind === "task_attempts" ? { kind: limit.kind, taskId: limit.taskId } : { kind: limit.kind };
+        return [{ checkId, limit: claim, reason: finalVerificationKnownDefectText(limit, source) }];
       });
     if (checks.length === 0) return undefined;
     this.store.append({

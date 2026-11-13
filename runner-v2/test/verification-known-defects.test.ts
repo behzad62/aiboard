@@ -42,11 +42,12 @@ import {
   type VerificationPlanV2,
 } from "../src/verification-plan-v2.js";
 import { acceptFinalVerificationProfile, emptyFinalVerificationProfile } from "./support/final-verification-profile.js";
-import { FINAL_TASK_ID, GENERATION_ID, WHEN, seedTasks, v1NotApplicablePlan } from "./support/verification-plan-v2-fixtures.js";
+import { FINAL_TASK_ID, GENERATION_ID, REVIEW_ID, WHEN, seedTasks, v1NotApplicablePlan } from "./support/verification-plan-v2-fixtures.js";
 
 type ToolResult = { isError: boolean; error?: { message?: string; code?: string } };
 type Call = (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
-type Outcome = "passed" | "failed";
+/** `unproven`: the check's program was started, but its stop did not prove it stopped. */
+type Outcome = "passed" | "failed" | "unproven";
 
 /** An Architect-named check: `tests` runs a command, `start` starts a server on a leased port. */
 interface ArchitectCheck {
@@ -82,6 +83,8 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
   /** The run's repair-plan limit; null leaves the default. */
   repairPlanLimit?: number | null;
   v1?: boolean;
+  /** v1 only: every category is not applicable, so the generation goes green to its review. */
+  v1NotApplicable?: boolean;
   seed?: (store: SqliteSchedulerStore, checkId: string) => void;
   reasons: string[];
   onReview?: (call: Call, reason: Record<string, unknown>) => Promise<void>;
@@ -106,8 +109,10 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
   let plan: VerificationPlanV2 | FinalVerificationPlan;
   let profile: FinalVerificationExecutionProfile;
   if (options.v1) {
-    plan = { checks: v1NotApplicablePlan().checks.map((check) => check.category === "tests" ? { category: "tests" as const, status: "required" as const } : check) };
-    profile = base;
+    plan = options.v1NotApplicable
+      ? v1NotApplicablePlan()
+      : { checks: v1NotApplicablePlan().checks.map((check) => check.category === "tests" ? { category: "tests" as const, status: "required" as const } : check) };
+    profile = options.v1NotApplicable ? emptyFinalVerificationProfile(revision) : base;
   } else if (options.checks) {
     plan = (completeVerificationPlanV2({
       checks: options.checks.map((check) => check.kind === "tests"
@@ -168,7 +173,9 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
         if (outcomeOf(key) === "failed") {
           return { ...timing, check: { ...identity, outcome: "failed", green: false, evidenceIds: [], facts: [], issues: [`${resolved.label} exited 1`] } };
         }
-        // A passed check carries one recorded command fact per planned command.
+        // A passed check carries one recorded command fact per planned command; an unproven one
+        // the same facts, with the cleanup not proven.
+        const unproven = outcomeOf(key) === "unproven";
         const program = resolved.mode === "program";
         const stdout = await artifacts.put(Buffer.from("ok" + String.fromCharCode(10)), "text/plain", "stdout");
         const stderr = await artifacts.put(Buffer.from(""), "text/plain", "stderr");
@@ -196,12 +203,15 @@ function knownDefectRun(root: string, runId: string, revision: string, options: 
           endState: { revision, status: "clean" },
           ...(index > 0 ? { workflowStep: true as const } : {}),
           ...(program ? { endpoint: resolved.endpoint } : {}),
-          ...(program && index === 0 ? { readinessSatisfied: true, cleanupRequested: true, cleanupSucceeded: true } : {}),
+          ...(program && index === 0 ? { readinessSatisfied: true, cleanupRequested: true, cleanupSucceeded: !unproven } : {}),
         }));
         const evidenceIds = facts.map((fact, index) => evidence.record({
           runId, taskId: FINAL_TASK_ID, actor: { role: "worker", id: "final-verification" }, fact,
           createdAt: WHEN, idempotencyKey: `${GENERATION_ID}:${key}:${index}`, attempt: 1,
         }).id);
+        if (unproven) {
+          return { ...timing, check: { ...identity, outcome: "failed", green: false, evidenceIds, facts, issues: [`${resolved.label} process cleanup failed: the stop did not prove it stopped.`] } };
+        }
         return { ...timing, check: { ...identity, outcome: "passed", green: true, evidenceIds, facts, issues: [] } };
       },
     },
@@ -270,10 +280,16 @@ function evidenceOf(projection: SchedulerProjection, checkId: string): string[] 
   return [...(completed.find((check) => "checkId" in check && check.checkId === checkId)?.evidenceIds ?? [])];
 }
 
-const forge = (revision: string, source: "failure" | "review", checkId: string, actor: "runner" | "architect" = "runner") => ({
+const forge = (
+  revision: string,
+  source: "failure" | "review",
+  checkId: string,
+  actor: "runner" | "architect" = "runner",
+  limit: Record<string, unknown> = { kind: "run_budget" },
+) => ({
   runId: "", type: "final_verification.known_defects_recorded" as const, occurredAt: WHEN,
   actor: { role: actor, id: actor === "runner" ? "build-runtime" : "architect" }, idempotencyKey: `forged-${source}-${actor}`,
-  payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: revision, source, checks: [{ checkId, reason: "forged" }] },
+  payload: { taskId: FINAL_TASK_ID, generationId: GENERATION_ID, targetRevision: revision, source, checks: [{ checkId, limit, reason: "forged" }] },
 });
 
 test("a non-mandatory check failing at the repair limit becomes a known defect, and the Build goes on to its handoff", async () => {
@@ -322,6 +338,7 @@ test("a non-mandatory check failing at the repair limit becomes a known defect, 
       checkId, label: (fixture.plan as VerificationPlanV2).checks[0]!.label,
       reason: `still failing at the repair limit: ${LIMIT_REASON}`,
       source: "failure",
+      limit: { kind: "run_budget", used: 0, limit: 0 },
     }]);
     assert.deepEqual((current.submissionResult as { knownDefectCheckIds?: string[] }).knownDefectCheckIds, [checkId]);
     assert.deepEqual(current.review?.decision?.checkReviews, []);
@@ -348,6 +365,26 @@ test("a non-mandatory check failing at the repair limit becomes a known defect, 
     assert.deepEqual(handoff.projectHandoff?.notVerified, handoffNotVerifiedItems(handoff));
     assert.deepEqual(projectFinalVerificationObservability(handoff).notVerified, handoff.projectHandoff?.notVerified);
     assert.deepEqual(handoff.projectHandoff?.notVerified?.map((item) => item.kind), ["known_defect", "left_to_verify"]);
+
+    // Replay compares the limit's kind and identity, never its display text: a recorded event
+    // whose wording differs from today's replays to the same known defect.
+    const events = store.readRun(runId);
+    const reworded = events.map((event) => event.type !== "final_verification.known_defects_recorded" ? event : {
+      ...event,
+      payload: { ...event.payload, checks: (event.payload.checks as Array<Record<string, unknown>>).map((check) => ({ ...check, reason: "an older wording of the limit" })) },
+    });
+    assert.deepEqual(rebuildSchedulerProjection(reworded).finalVerification?.current?.knownDefects, current.knownDefects);
+    const unworded = events.map((event) => event.type !== "final_verification.known_defects_recorded" ? event : {
+      ...event,
+      payload: { ...event.payload, checks: (event.payload.checks as Array<Record<string, unknown>>).map(({ reason: _reason, ...check }) => check) },
+    });
+    assert.deepEqual(rebuildSchedulerProjection(unworded).finalVerification?.current?.knownDefects, current.knownDefects);
+    // It still fails closed: a limit the check did not reach does not replay.
+    const forged = events.map((event) => event.type !== "final_verification.known_defects_recorded" ? event : {
+      ...event,
+      payload: { ...event.payload, checks: (event.payload.checks as Array<Record<string, unknown>>).map((check) => ({ ...check, limit: { kind: "task_attempts", taskId: FINAL_TASK_ID } })) },
+    });
+    assert.throws(() => rebuildSchedulerProjection(forged), /has not reached a repair limit \(task_attempts\)/);
   } finally {
     fixture.close();
     rmSync(root, { recursive: true, force: true });
@@ -450,6 +487,7 @@ test("a check whose own repair issue is used up is a known defect, while a later
     assert.deepEqual(current.knownDefects, [{
       checkId: "py-tests", label: "tests", source: "failure",
       reason: `still failing at the repair limit: issue ${rootCauseOf("py-tests")} used 1/1 repair cycles`,
+      limit: { kind: "issue", issueId: "issue-py", rootCause: rootCauseOf("py-tests"), used: 1, limit: 1 },
     }]);
     // The kernel's rule, for the check that still has repairs: no limit yet, until the
     // verification task's recorded attempt limit is used up.
@@ -462,7 +500,9 @@ test("a check whose own repair issue is used up is a known defect, while a later
     );
     assert.equal(finalVerificationKnownDefectReason(attemptsUsed, current, "relay", "failure"), undefined, "a passed check is no known defect");
     assert.equal(finalVerificationKnownDefectReason(attemptsUsed, current, "rs-tests", "review"), undefined, "there is no review yet");
-    assert.throws(() => store.append({ ...forge(revision, "failure", "rs-tests"), runId }), /has not reached a repair limit/);
+    assert.throws(() => store.append({ ...forge(revision, "failure", "rs-tests"), runId }), /has not reached a repair limit \(run_budget\)/);
+    assert.throws(() => store.append({ ...forge(revision, "failure", "rs-tests", "runner", { kind: "issue", issueId: "issue-py" }), runId }), /has not reached a repair limit \(issue\)/, "py-tests' issue is not rs-tests' limit");
+    assert.throws(() => store.append({ ...forge(revision, "failure", "rs-tests", "runner", { kind: "nonsense" }), runId }), /must name the repair limit/);
   } finally {
     fixture.close();
     rmSync(root, { recursive: true, force: true });
@@ -558,6 +598,7 @@ test("a review that asks to repair a non-mandatory check at the repair limit rec
     assert.deepEqual(current.knownDefects, [{
       checkId, label: (fixture.plan as VerificationPlanV2).checks[0]!.label, source: "review",
       reason: `the Architect's review still asks for a repair at the repair limit: ${LIMIT_REASON}`,
+      limit: { kind: "run_budget", used: 0, limit: 0 },
     }]);
     assert.deepEqual(handoff.projectHandoff?.verificationKnownDefects, current.knownDefects);
     assert.equal(projectFinalVerificationObservability(handoff).current?.review.acceptedWithKnownDefects, true);
@@ -566,8 +607,8 @@ test("a review that asks to repair a non-mandatory check at the repair limit rec
     const label = (fixture.plan as VerificationPlanV2).checks[0]!.label;
     assert.ok(snapshot.includes(`- final verification ${label}: passed; the Architect's review asked for a repair (known defect at the repair limit)`), snapshot);
     assert.equal(snapshot.split(`- known defect: final verification ${label} — the Architect's review still asks for a repair`).length, 2, snapshot);
-    // A review-source known defect is recorded only once, before any repair.
-    assert.throws(() => store.append({ ...forge(revision, "review", checkId), runId }), /conflicts with the recorded one/);
+    // A review-source known defect is recorded once; a different limit for it conflicts.
+    assert.throws(() => store.append({ ...forge(revision, "review", checkId, "runner", { kind: "issue", issueId: "another" }), runId }), /conflicts with the recorded one/);
   } finally {
     fixture.close();
     rmSync(root, { recursive: true, force: true });
@@ -622,6 +663,82 @@ test("a v1 run at the repair limit pauses as before, and the kernel takes no kno
     const projection = rebuildSchedulerProjection(store.readRun(runId));
     assert.equal(projection.finalVerification?.current?.knownDefects, undefined);
     assert.throws(() => store.append({ ...forge(revision, "failure", "tests"), runId }), /Only a v2 final verification/);
+  } finally {
+    fixture.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a start check whose program was not proven stopped ends the generation there: no later check, no known defect", async () => {
+  for (const [name, checks, ran] of [
+    ["before another check", [
+      { id: "relay", label: "relay server", kind: "start", outcome: "unproven" },
+      { id: "py-tests", label: "tests", kind: "tests", outcome: "failed", run: { executable: "python", args: ["-m", "pytest"] } },
+    ], ["execute:relay", "cleanup"]],
+    ["as the last check", [
+      { id: "py-tests", label: "tests", kind: "tests", outcome: "failed", run: { executable: "python", args: ["-m", "pytest"] } },
+      { id: "relay", label: "relay server", kind: "start", outcome: "unproven" },
+    ], ["execute:py-tests", "execute:relay", "cleanup"]],
+  ] as Array<[string, ArchitectCheck[], string[]]>) {
+    const root = mkdtempSync(join(tmpdir(), "runner-v2 vf8 unproven "));
+    const runId = `run-vf8-unproven-${ran.length}`;
+    const revision = "7".repeat(40);
+    const reasons: string[] = [];
+    const fixture = knownDefectRun(root, runId, revision, { checks, reasons });
+    try {
+      const { store, runtime, calls } = fixture;
+      const run = await stepUntil(runtime, () => false, 12);
+      assert.deepEqual(run.last, { status: "paused", action: "repair_cycle_limit_reached" }, `${name}: ${run.error} / ${run.actions.join(", ")}`);
+      // No check ran beside the program that may still be running, and the generation was cleaned up.
+      assert.deepEqual(calls, ran, name);
+      assert.deepEqual(reasons, [], name);
+      const projection = rebuildSchedulerProjection(store.readRun(runId));
+      const current = projection.finalVerification!.current!;
+      assert.equal(current.cleanup?.status, "succeeded", name);
+      assert.equal(current.knownDefects, undefined, `${name}: a generation with an unproven program records no known defect`);
+      for (const checkId of current.failure?.failedCheckIds ?? []) {
+        assert.equal(finalVerificationKnownDefectReason(projection, current, checkId, "failure"), undefined, `${name}: ${checkId}`);
+        assert.throws(() => store.append({ ...forge(revision, "failure", checkId), runId }), /has not reached a repair limit/, `${name}: ${checkId}`);
+      }
+    } finally {
+      fixture.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a legacy v1 approval with no structured decision still reaches the completion turn", async () => {
+  const root = mkdtempSync(join(tmpdir(), "runner-v2 vf8 v1 legacy approval "));
+  const runId = "run-vf8-v1-legacy-approval";
+  const revision = "6".repeat(40);
+  const reasons: string[] = [];
+  const fixture = knownDefectRun(root, runId, revision, {
+    v1: true,
+    v1NotApplicable: true,
+    reasons,
+    onReview: async (_call, reason) => {
+      // Before VF3, a v1 review could approve without categoryReviews: no structured decision.
+      fixture.store.append({
+        runId, type: "final_verification.review_decided", occurredAt: WHEN, actor: { role: "architect", id: "architect" },
+        idempotencyKey: "legacy-approval",
+        payload: {
+          taskId: reason.taskId, generationId: reason.generationId, targetRevision: reason.targetRevision,
+          submissionId: reason.submissionId, reviewId: REVIEW_ID, attempt: 1, decision: "approved",
+          summary: "Nothing applies to this revision.",
+        },
+      });
+    },
+    // The completion turn is reached; this fixture's Architect takes no action there.
+    onCompletion: async () => undefined,
+  });
+  try {
+    const { store, runtime } = fixture;
+    const run = await stepUntil(runtime, () => reasons.includes("completion_decision_required"), 12);
+    const current = rebuildSchedulerProjection(store.readRun(runId)).finalVerification!.current!;
+    assert.equal(current.review?.status, "approved", `${run.error} / ${run.actions.join(", ")}`);
+    assert.equal(current.review?.decision, undefined, "the approval is the legacy unstructured one");
+    assert.deepEqual(reasons, ["final_verification_review_required", "completion_decision_required"], `${run.error} / ${run.actions.join(", ")}`);
+    assert.doesNotMatch(run.error ?? "", /review request was not durably recorded/);
   } finally {
     fixture.close();
     rmSync(root, { recursive: true, force: true });

@@ -129,6 +129,52 @@ test("runtime smoke timeout is non-green and cleans up the owned process", async
   }
 });
 
+// VF8: a stop that does not prove the program stopped is a failed cleanup, so the generation runs
+// no further check beside it. The stop path and the port release are unchanged.
+for (const status of ["running", "exited_unknown"] as const) test(`runtime smoke whose stop leaves the program ${status} records a failed cleanup`, async (t) => {
+  const fixture = await createFixture(`smoke unproven ${status}`);
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.root, "evidence.sqlite"));
+  const workspace = workspaceFor(fixture);
+  const observation = { processId: "p1", status: "running" as const, exitCode: null, signal: null, stdout: "server ready", stderr: "" };
+  const calls: string[] = [];
+  const runtime = new FinalVerificationRuntime({
+    execution: createTestOneShotCommandExecutor(t),
+    workspaceManager: workspace,
+    artifacts,
+    evidenceStore: evidence,
+    runId: fixture.runId,
+    integrationRevision: () => fixture.integration.revision,
+    managedProcess: {
+      start: async () => { calls.push("start"); return observation; },
+      poll: async () => observation,
+      stop: async () => { calls.push("stop"); return { ...observation, status }; },
+    },
+  });
+  try {
+    const smoke = smokeInput(0, {
+      readiness: { timeoutMs: 1_000, pollIntervalMs: 10, healthCheck: async () => true },
+      releasePort: () => { calls.push("release"); },
+    });
+    const run = await runtime.run({
+      plan: smokePlan(),
+      executionProfile: smokeProfile(fixture.integration.revision, smoke),
+      runtimeSmoke: smoke,
+    });
+    const check = runtimeCheck(run);
+    const fact = check.facts[0] as typeof check.facts[number] & { cleanupRequested: boolean; cleanupSucceeded: boolean };
+    assert.deepEqual(calls, ["start", "stop", "release"]);
+    assert.equal(check.green, false);
+    assert.equal(fact.cleanupRequested, true);
+    assert.equal(fact.cleanupSucceeded, false);
+    assert.ok(check.issues.some((issue) => issue.includes(`process was not proven stopped (status ${status})`)), check.issues.join(" "));
+  } finally {
+    evidence.close();
+    await workspace.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
 test("runtime smoke marks an unhealthy process exit non-green and still stops it", async (t) => {
   const fixture = await createFixture("smoke unhealthy exit");
   const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));

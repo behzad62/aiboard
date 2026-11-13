@@ -1423,7 +1423,12 @@ export class FinalVerificationRuntime {
       if (observation) {
         try {
           observation = (await this.managedProcess.stop(observation.processId)) ?? observation;
-          cleanupSucceeded = true;
+          // VF8: the cleanup succeeded only when the stop proves the program stopped. A program left
+          // running or in an unknown state keeps the generation from running further checks.
+          cleanupSucceeded = observation.status === "stopped";
+          if (!cleanupSucceeded) {
+            input.base.issues.push(`${name} process was not proven stopped (status ${observation.status}).`);
+          }
         } catch (error) {
           input.base.issues.push(`${name} process cleanup failed: ${asError(error).message}.`);
         }

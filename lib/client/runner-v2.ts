@@ -292,6 +292,8 @@ export interface NativeVerificationKnownDefect {
   reason: string;
   /** `failure`: the check failed when it ran. `review`: the Architect's review asked to repair it. */
   source?: "failure" | "review";
+  /** The limit it reached: its kind, identity and counters. */
+  limit?: { kind: "issue" | "run_budget" | "task_attempts"; issueId?: string; taskId?: string; used?: number; limit?: number; attempt?: number; attemptLimit?: number };
 }
 
 export interface NativeFinalVerificationGenerationObservability {
