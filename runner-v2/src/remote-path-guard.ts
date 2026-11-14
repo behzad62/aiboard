@@ -191,6 +191,22 @@ export class RemotePathGuard {
     }
   }
 
+  /**
+   * Only the syntax refusals (UNC, device namespaces, drive-relative paths, alternate data streams, trailing dots or
+   * spaces, device names), which need no filesystem call. Run it before anything that touches a remote path: on
+   * Windows a realpath, stat or open of a UNC path connects to the host it names and can send it the user's NTLM
+   * credentials, so a path refused here must never reach one.
+   */
+  assertSyntaxAllowed(target: string, mode: RemotePathMode, context: RemotePathCheckContext = {}): void {
+    try {
+      this.checkSyntax(target);
+      this.checkSyntax(this.paths.resolve(target));
+    } catch (error) {
+      if (error instanceof RemotePathDeniedError) this.record(context, mode, error);
+      throw error;
+    }
+  }
+
   /** Post-create re-check: the object now exists, so identity checks see it. */
   async assertAllowedAfterCreate(target: string, mode: RemotePathMode, context: RemotePathCheckContext = {}): Promise<string> {
     return await this.assertAllowed(target, mode, context);
