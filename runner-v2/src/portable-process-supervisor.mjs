@@ -73,6 +73,7 @@ let handledInput = 0;
 let pendingChannelInput;
 let revision = 0;
 let lastPublishedSignature;
+let lastPublishedStatus;
 let handledControl = 0;
 let targetExited = false;
 let targetExitCode = null;
@@ -732,6 +733,7 @@ function completeControl(request, apply) {
       if (value === Symbol.for("aiboard.runner-v2.posix-control-deferred"))
         return { disposition: "deferred" };
       handledControl = request.sequence;
+      publishHandledControl();
       return { disposition: "applied", value };
     },
     retireStale: () => {
@@ -739,6 +741,7 @@ function completeControl(request, apply) {
       unlinkSync(controlPath);
       if (existsSync(controlPath)) throw new Error("Portable stale control command could not be retired.");
       handledControl = request.sequence;
+      publishHandledControl();
       return true;
     },
   });
@@ -1583,6 +1586,16 @@ function publish(status, error = config.platform === "posix" ? posixTerminalErro
   replaceAtomic(temporary, statePath, STATE_PUBLICATION_MAX_RETRY_MS);
   revision = nextRevision;
   lastPublishedSignature = signature;
+  lastPublishedStatus = { status, error };
+}
+
+// The Runner numbers its next control request from the handledControl it reads in state.json inside its own fenced
+// effect, and this supervisor accepts only handledControl + 1. So a control's handledControl is published inside
+// the fenced effect that handled it, with the status last published: were it published only at the end of the
+// tick, a request written in between would reuse the sequence just handled and be dropped as already handled
+// (a force after a terminate, on a loaded macOS host: the workload kept running).
+function publishHandledControl() {
+  if (lastPublishedStatus) publish(lastPublishedStatus.status, lastPublishedStatus.error);
 }
 
 function replaceAtomic(temporary, destination, maximumRetryMs) {
