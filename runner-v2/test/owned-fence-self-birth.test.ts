@@ -81,7 +81,7 @@ function loadModule(options: { coldStartMs: number | ((call: number) => number);
     .replace(/^export (?=(?:async )?function |class |const |let )/gm, "");
   assert.doesNotMatch(body, /^(?:import|export)\b/m, "the whole module loads");
   vm.runInContext(`${body}\nglobalThis.__module = { withOwnedFenceLock, prepareCurrentProcessBirthFingerprint, currentProcessBirthPreparation, parseWindowsBirthProbe };`, context);
-  const module = context.__module as {
+  const lockModule = context.__module as {
     withOwnedFenceLock<T>(path: string, effect: () => T, options?: Record<string, unknown>): Promise<T>;
     prepareCurrentProcessBirthFingerprint(waitUntil?: number): Promise<string | undefined>;
     currentProcessBirthPreparation(): string;
@@ -121,7 +121,7 @@ function loadModule(options: { coldStartMs: number | ((call: number) => number);
     clock.now = until;
     await settle();
   }
-  return { module, clock, children, syncCalls, exitListeners, pending, drive, advance };
+  return { module: lockModule, clock, children, syncCalls, exitListeners, pending, drive, advance };
 }
 
 function withLockFolder<T>(body: (lockPath: string) => Promise<T>): Promise<T> {
@@ -241,12 +241,12 @@ test("with no claim waiting, the background attempts keep their 2, 4, 8 and 16 s
 });
 
 test("the Windows birth probe output is accepted only in the round-trip format", () => {
-  const { module } = loadModule({ coldStartMs: 0 });
-  assert.deepEqual({ ...module.parseWindowsBirthProbe("PRESENT:2026-10-31T00:43:01.1234567Z") }, { state: "same", fingerprint: BIRTH });
-  assert.deepEqual({ ...module.parseWindowsBirthProbe("PRESENT:2026-10-31T00:43:01Z") }, { state: "same", fingerprint: "2026-10-31T00:43:01Z" });
-  assert.deepEqual({ ...module.parseWindowsBirthProbe("ABSENT") }, { state: "absent" });
+  const { module: lockModule } = loadModule({ coldStartMs: 0 });
+  assert.deepEqual({ ...lockModule.parseWindowsBirthProbe("PRESENT:2026-10-31T00:43:01.1234567Z") }, { state: "same", fingerprint: BIRTH });
+  assert.deepEqual({ ...lockModule.parseWindowsBirthProbe("PRESENT:2026-10-31T00:43:01Z") }, { state: "same", fingerprint: "2026-10-31T00:43:01Z" });
+  assert.deepEqual({ ...lockModule.parseWindowsBirthProbe("ABSENT") }, { state: "absent" });
   for (const garbled of ["PRESENT:garbage", "PRESENT:2026-10-31", "PRESENT:2026-10-31T00:43:01.12345678Z", "PRESENT:2026-10-31T00:43:01.1234567", "PRESENT:2026-10-31 00:43:01Z", "PRESENT: 2026-10-31T00:43:01Z", "present:2026-10-31T00:43:01Z"])
-    assert.deepEqual({ ...module.parseWindowsBirthProbe(garbled) }, { state: "unknown" }, garbled);
+    assert.deepEqual({ ...lockModule.parseWindowsBirthProbe(garbled) }, { state: "unknown" }, garbled);
 });
 
 // Review N5: what acquire refuses, it still refuses with its own error, and without starting a probe.
