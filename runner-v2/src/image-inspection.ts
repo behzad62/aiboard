@@ -73,10 +73,12 @@ export function probeImage(bytes: Uint8Array): ImageProbe {
 
 /**
  * Validate, optionally crop/downscale (PNG), and bound an image for model delivery. Source bytes are never modified.
- * maxBytes is Runner-set, never a tool argument: a surface that carries the image in the tool result itself (AIBoard
- * Remote) delivers less than a provider accepts. It defaults to IMAGE_LIMITS.maxDeliveredBytes.
+ * maxBytes and complete are Runner-set, never tool arguments. A surface that carries the image in the tool result
+ * itself (AIBoard Remote) delivers less than a provider accepts (maxBytes, default IMAGE_LIMITS.maxDeliveredBytes),
+ * and hands the file to a cloud client as it is, so it first proves the whole file is there (complete): a truncated
+ * image, such as one a command is still writing, is refused rather than sent to break the client's conversation.
  */
-export function prepareImageForModel(bytes: Uint8Array, options: Readonly<{ crop?: ImageCrop; maxDimension?: number; maxBytes?: number }> = {}): PreparedImage {
+export function prepareImageForModel(bytes: Uint8Array, options: Readonly<{ crop?: ImageCrop; maxDimension?: number; maxBytes?: number; complete?: boolean }> = {}): PreparedImage {
   const source = Buffer.from(bytes);
   const probe = probeImage(source);
   const maxDimension = options.maxDimension ?? IMAGE_LIMITS.defaultMaxDimension;
@@ -92,20 +94,31 @@ export function prepareImageForModel(bytes: Uint8Array, options: Readonly<{ crop
   if (probe.orientation && probe.orientation !== 1) notes.push(`EXIF orientation ${probe.orientation} was not applied (${orientationHint(probe.orientation)}).`);
   if (probe.mediaType !== "image/png") {
     if (options.crop) throw new ImageInspectionError("image_transform_unsupported", `Cropping ${probe.mediaType} is not supported (only PNG is decoded locally). Inspect the whole image or use a PNG.`);
-    if (source.byteLength > maxBytes || Math.max(probe.width, probe.height) > IMAGE_LIMITS.maxDeliveredSide)
-      throw new ImageInspectionError("image_too_large", `This ${probe.mediaType} (${probe.width}x${probe.height}, ${source.byteLength} bytes) exceeds delivery limits and cannot be downscaled locally; use a smaller or PNG image.`);
+    if (source.byteLength > maxBytes)
+      throw new ImageInspectionError("image_too_large", `This ${probe.mediaType} (${probe.width}x${probe.height}) is ${source.byteLength} bytes, over the ${maxBytes}-byte limit for an image here, and only PNG is resized locally; use a smaller image or a PNG.`);
+    if (Math.max(probe.width, probe.height) > IMAGE_LIMITS.maxDeliveredSide)
+      throw new ImageInspectionError("image_too_large", `This ${probe.mediaType} is ${probe.width}x${probe.height}, over the ${IMAGE_LIMITS.maxDeliveredSide}px side limit, and only PNG is resized locally; use a smaller image or a PNG.`);
+    if (options.complete) assertCompleteEncoded(source, probe.mediaType);
     if (needsResize) notes.push(`Delivered at original ${probe.width}x${probe.height}; ${probe.mediaType} is not resized locally and the provider may downscale it.`);
     return Object.freeze({ bytes: source, mediaType: probe.mediaType, width: probe.width, height: probe.height, sourceDigest, digest: sourceDigest,
       source: Object.freeze({ ...probe, byteLength: source.byteLength }), transforms: Object.freeze([]), notes: Object.freeze(notes) });
   }
   if (!options.crop && !needsResize && source.byteLength <= maxBytes) {
+    if (options.complete) assertCompletePng(source, probe);
     return Object.freeze({ bytes: source, mediaType: "image/png", width: probe.width, height: probe.height, sourceDigest, digest: sourceDigest,
       source: Object.freeze({ ...probe, byteLength: source.byteLength }), transforms: Object.freeze([]), notes: Object.freeze(notes) });
   }
+  if (probe.interlaced) {
+    throw new ImageInspectionError("image_transform_unsupported", options.crop
+      ? "Interlaced PNG cannot be cropped locally; re-save it non-interlaced to crop it."
+      : `This interlaced PNG (${probe.width}x${probe.height}, ${source.byteLength} bytes) is over the ${maxDimension}px side or the ${maxBytes}-byte limit for an image here, and interlaced PNG cannot be resized locally; re-save it non-interlaced or smaller.`);
+  }
+  // Decoding checks every chunk's CRC, IEND and the exact pixel data length: a derivative is only made from a whole PNG.
   let image = decodePng(source);
   const transforms: string[] = [];
   if (options.crop) { image = cropRgba(image, options.crop); transforms.push(`crop ${options.crop.x},${options.crop.y} ${options.crop.width}x${options.crop.height}`); }
-  let limit = maxDimension, encoded: Buffer;
+  // Start at the image's own size when it is already within maxDimension: steps above it would re-encode the same pixels.
+  let limit = Math.min(maxDimension, Math.max(image.width, image.height)), encoded: Buffer;
   for (;;) {
     let current = image;
     if (Math.max(current.width, current.height) > limit) {
@@ -119,9 +132,46 @@ export function prepareImageForModel(bytes: Uint8Array, options: Readonly<{ crop
     }
     limit = Math.max(IMAGE_LIMITS.minMaxDimension, Math.floor(limit * 0.75));
   }
-  if (encoded.byteLength > maxBytes) throw new ImageInspectionError("image_too_large", "The image cannot be reduced below the delivery byte limit.");
+  if (encoded.byteLength > maxBytes) throw new ImageInspectionError("image_too_large", `The image cannot be reduced below the ${maxBytes}-byte limit for an image here.`);
   return Object.freeze({ bytes: encoded, mediaType: "image/png", width: image.width, height: image.height, sourceDigest, digest: sha256(encoded),
     source: Object.freeze({ ...probe, byteLength: source.byteLength }), transforms: Object.freeze(transforms), notes: Object.freeze(notes) });
+}
+
+/** A refusal of an image that is not whole, with what to do about the likely cause. */
+function incomplete(detail: string): ImageInspectionError {
+  return new ImageInspectionError("image_corrupt", `${detail} The image is truncated or corrupt, so it was not sent; if a command is still writing it, inspect it again once that command has finished.`);
+}
+
+/** The whole PNG is there: every chunk's length and CRC, IHDR first and IEND, and for a non-interlaced PNG pixel data of exactly the header's size. */
+function assertCompletePng(bytes: Buffer, probe: ImageProbe): void {
+  try {
+    if (!probe.interlaced) { decodePng(bytes); return; }
+    // Interlaced pixel data is not decoded here; its chunks and their CRCs still show a cut file.
+    let offset = 8, ended = false;
+    while (offset + 12 <= bytes.length) {
+      const length = bytes.readUInt32BE(offset), type = ascii(bytes, offset + 4, offset + 8);
+      if (offset === 8 && type !== "IHDR") throw new ImageInspectionError("image_corrupt", "PNG does not start with IHDR.");
+      if (offset + 12 + length > bytes.length) throw new ImageInspectionError("image_corrupt", "PNG chunk is truncated.");
+      if ((crc32(bytes.subarray(offset + 4, offset + 8 + length)) >>> 0) !== bytes.readUInt32BE(offset + 8 + length)) throw new ImageInspectionError("image_corrupt", `PNG ${type} chunk checksum is invalid.`);
+      offset += 12 + length;
+      if (type === "IEND") { ended = true; break; }
+    }
+    if (!ended) throw new ImageInspectionError("image_corrupt", "PNG is incomplete.");
+  } catch (error) {
+    if (error instanceof ImageInspectionError && error.code === "image_corrupt") throw incomplete(error.message);
+    throw error;
+  }
+}
+
+/** A JPEG ends with its end-of-image marker, and a WebP's RIFF header gives the file's own length. */
+function assertCompleteEncoded(bytes: Buffer, mediaType: InspectableImageType): void {
+  if (mediaType === "image/jpeg" && !(bytes.length >= 4 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9)) {
+    throw incomplete("JPEG does not end with its end-of-image marker (FFD9).");
+  }
+  if (mediaType === "image/webp") {
+    const riff = bytes.readUInt32LE(4);
+    if (bytes.length !== riff + 8 && bytes.length !== riff + 8 + (riff % 2)) throw incomplete(`WebP's RIFF header gives ${riff + 8} bytes, but the file has ${bytes.length}.`);
+  }
 }
 
 // ---------------------------------------------------------------- probes

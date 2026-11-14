@@ -68,7 +68,8 @@ export function createImageTools(options: ImageToolsOptions): NativeTool<unknown
         const prepared = prepareImageForModel(loaded.bytes, {
           ...(input.crop ? { crop: input.crop as ImageCrop } : {}),
           ...(input.maxDimension !== undefined ? { maxDimension: input.maxDimension as number } : {}),
-          ...(options.inlineDelivery ? { maxBytes: options.inlineDelivery.maxBytes } : {}),
+          // The file goes to a cloud client as it is, so it must be whole.
+          ...(options.inlineDelivery ? { maxBytes: options.inlineDelivery.maxBytes, complete: true } : {}),
         });
         const sourceFacts = { ...loaded.reference, mediaType: prepared.source.mediaType, width: prepared.source.width, height: prepared.source.height,
           byteLength: prepared.source.byteLength, sha256: prepared.sourceDigest, ...(prepared.source.orientation ? { exifOrientation: prepared.source.orientation } : {}) };
@@ -86,7 +87,7 @@ export function createImageTools(options: ImageToolsOptions): NativeTool<unknown
           Math.max(crop?.width ?? prepared.source.width, crop?.height ?? prepared.source.height));
         const reduced = Math.max(prepared.width, prepared.height) < wanted
           ? [`Reduced to ${prepared.width}x${prepared.height} to fit the ${options.inlineDelivery.maxBytes}-byte limit for an image in a tool result; inspect a crop of a region to see it in more detail.`] : [];
-        return await deliver(options.artifacts, prepared, sourceFacts, loaded.label, "image content in this result", reduced);
+        return await deliver(options.artifacts, prepared, sourceFacts, loaded.label, true, reduced);
       } catch (error) {
         const code = error instanceof RemotePathDeniedError ? error.code : error instanceof ImageInspectionError ? error.code : "image_unreadable";
         const message = error instanceof Error ? error.message : String(error);
@@ -113,6 +114,7 @@ export async function visualArtifactOutput(artifacts: ArtifactStore, bytes: Uint
  * A tool result's model-visible images as MCP image content, for a surface that returns the image in the result itself.
  * At most maxImages are converted, each only when it is at most maxBytes and its bytes still match their content address
  * and media type; every other block, and an image past a limit, stays as it is. Undefined when nothing was converted.
+ * With an image in it, image.inspect's "not attached" JSON says the image is in this result.
  */
 export async function mcpImageContent(content: readonly ToolContentBlock[], read: (hash: string) => Promise<Uint8Array | undefined>,
   limits: Readonly<{ maxBytes: number; maxImages: number }>): Promise<Array<ToolContentBlock | McpImageContent> | undefined> {
@@ -127,20 +129,31 @@ export async function mcpImageContent(content: readonly ToolContentBlock[], read
     out.push({ type: "image", data: Buffer.from(bytes).toString("base64"), mimeType: block.mediaType as InspectableImageType });
     converted += 1;
   }
-  return converted ? out : undefined;
+  if (!converted) return undefined;
+  return out.map((block) => {
+    if (block.type !== "json" || !block.value || typeof block.value !== "object" || (block.value as { reason?: unknown }).reason !== IMAGE_NOT_ATTACHED) return block;
+    const { shown: _shown, reason: _reason, ...rest } = block.value as Record<string, unknown>;
+    return { type: "json", value: { shown: true, delivery: IMAGE_ATTACHED, ...rest } };
+  });
 }
 const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg", "image/webp"]);
 
+/**
+ * An MCP surface's image.inspect result says the image is not attached until mcpImageContent puts the image block in
+ * it: only the code that attaches the image may say it is there.
+ */
+const IMAGE_NOT_ATTACHED = "image_not_attached";
+const IMAGE_ATTACHED = "image content in this result";
+
 async function deliver(artifacts: ArtifactStore, prepared: PreparedImage, source: Record<string, unknown>, label: string,
-  delivery = "native image input in your next turn", extraNotes: readonly string[] = []): Promise<ToolExecutionOutput> {
+  inline = false, extraNotes: readonly string[] = []): Promise<ToolExecutionOutput> {
   // The derivative is a new artifact; the source file or artifact is never modified.
   const stored = await artifacts.put(prepared.bytes, prepared.mediaType, label);
   const notes = [...prepared.notes, ...extraNotes];
   return {
     content: [
       { type: "json", value: {
-        shown: true,
-        delivery,
+        ...(inline ? { shown: false, reason: IMAGE_NOT_ATTACHED } : { shown: true, delivery: "native image input in your next turn" }),
         source,
         delivered: { artifactHash: stored.hash, mediaType: prepared.mediaType, width: prepared.width, height: prepared.height, byteLength: prepared.bytes.byteLength, transforms: prepared.transforms },
         ...(notes.length ? { notes } : {}),

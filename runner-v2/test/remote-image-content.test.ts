@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { crc32 } from "node:zlib";
 
 import type { ToolContentBlock, ToolResult } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -45,6 +46,20 @@ function jpeg(width: number, height: number, size: number): Buffer {
   const head = Buffer.concat([Buffer.from([0xff, 0xd8]), sof, Buffer.from([0xff, 0xda, 0, 2])]);
   return Buffer.concat([head, Buffer.alloc(Math.max(0, size - head.length - 2), 0x55), Buffer.from([0xff, 0xd9])]);
 }
+/** A minimal WebP (VP8X) whose RIFF header claims `riffBytes` in all; the file itself is 30 bytes. */
+function webp(riffBytes = 30): Buffer {
+  const bytes = Buffer.alloc(30);
+  bytes.write("RIFF", 0, "latin1"); bytes.writeUInt32LE(riffBytes - 8, 4); bytes.write("WEBP", 8, "latin1"); bytes.write("VP8X", 12, "latin1");
+  bytes.writeUIntLE(63, 24, 3); bytes.writeUIntLE(47, 27, 3);
+  return bytes;
+}
+/** The same PNG with its IHDR marked interlaced (and its CRC fixed); its pixel data is not Adam7, which no check here decodes. */
+function interlaced(png: Buffer): Buffer {
+  const bytes = Buffer.from(png);
+  bytes[28] = 1;
+  bytes.writeUInt32BE(crc32(bytes.subarray(12, 29)) >>> 0, 29);
+  return bytes;
+}
 const code = (expected: string) => (error: unknown) => error instanceof ImageInspectionError && error.code === expected;
 
 function json(result: ToolResult): Record<string, unknown> {
@@ -61,12 +76,21 @@ test("a Runner-set byte limit downscales a PNG until it fits; the default limit 
   assert.ok(bounded.width < 400 && bounded.height < 300);
   assert.deepEqual(bounded.transforms, [`resize ${bounded.width}x${bounded.height}`]);
   assert.equal(bounded.sourceDigest, sha256(big));
+  // The steps start at the image's own longest side (400), not at maxDimension (1568), whose steps above 400 would
+  // re-encode the same pixels: the delivered side is on 400's chain, and 1568's chain (371, 278, 208, ...) shares none of it.
+  const chain = [400];
+  while (chain.at(-1)! > IMAGE_LIMITS.minMaxDimension) chain.push(Math.max(IMAGE_LIMITS.minMaxDimension, Math.floor(chain.at(-1)! * 0.75)));
+  assert.ok(chain.slice(1, -1).includes(bounded.width), `${bounded.width} is not on ${chain.join(", ")}`);
   // Without maxBytes the same image is within IMAGE_LIMITS and goes as it is, as before.
   const untouched = prepareImageForModel(big);
   assert.equal(untouched.digest, sha256(big));
   assert.deepEqual(untouched.transforms, []);
-  // JPEG and WebP are not decoded here: over the limit they are refused, never sent anyway.
-  assert.throws(() => prepareImageForModel(jpeg(640, 480, 70_000), { maxBytes: 60_000 }), code("image_too_large"));
+  // JPEG and WebP are not decoded here: over the limit they are refused, never sent anyway, and the refusal names the limit.
+  assert.throws(() => prepareImageForModel(jpeg(640, 480, 70_000), { maxBytes: 60_000 }),
+    (error: unknown) => code("image_too_large")(error) && /70000 bytes, over the 60000-byte limit/.test((error as Error).message));
+  // An interlaced PNG over the limit is not told to inspect it whole, which is what was just done.
+  assert.throws(() => prepareImageForModel(interlaced(big), { maxBytes: 60_000 }),
+    (error: unknown) => code("image_transform_unsupported")(error) && /60000-byte limit/.test((error as Error).message) && !/inspect it whole/.test((error as Error).message));
   assert.equal(prepareImageForModel(jpeg(640, 480, 50_000), { maxBytes: 60_000 }).bytes.byteLength, 50_000);
   for (const maxBytes of [0, 1.5, IMAGE_LIMITS.maxDeliveredBytes + 1]) {
     assert.throws(() => prepareImageForModel(big, { maxBytes }), code("invalid_arguments"), String(maxBytes));
@@ -96,14 +120,16 @@ function workspaceFixture(base = tmpdir()) {
   return { root, workspace, outside, artifacts, mcp, build, invoke, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-test("on an MCP surface image.inspect delivers within the surface's byte limit and says the image is in this result", async () => {
+test("on an MCP surface image.inspect delivers within the surface's byte limit and says it is not attached until it is", async () => {
   const f = workspaceFixture();
   try {
     const result = await f.invoke(f.mcp, { path: "noise.png" });
     assert.equal(result.isError, false, JSON.stringify(result));
-    const meta = json(result) as { shown: boolean; delivery: string; delivered: { artifactHash: string; byteLength: number; width: number; height: number }; notes?: string[] };
-    assert.equal(meta.shown, true);
-    assert.equal(meta.delivery, "image content in this result");
+    const meta = json(result) as { shown: boolean; reason?: string; delivery?: string; delivered: { artifactHash: string; byteLength: number; width: number; height: number }; notes?: string[] };
+    // Only mcpImageContent, which puts the image block in the result, may say the image is there.
+    assert.equal(meta.shown, false);
+    assert.equal(meta.reason, "image_not_attached");
+    assert.equal(meta.delivery, undefined);
     assert.ok(meta.delivered.byteLength <= REMOTE_IMAGE_LIMITS.maxBytes, `${meta.delivered.byteLength} bytes`);
     assert.match((meta.notes ?? []).join(" "), new RegExp(`Reduced to ${meta.delivered.width}x${meta.delivered.height} to fit the ${REMOTE_IMAGE_LIMITS.maxBytes}-byte limit`));
     const visual = result.content.find((block) => block.type === "artifact");
@@ -119,6 +145,28 @@ test("on an MCP surface image.inspect delivers within the surface's byte limit a
     assert.equal(built.delivery, "native image input in your next turn");
     assert.equal(built.delivered.width, 400);
     assert.equal(built.notes, undefined);
+  } finally { f.cleanup(); }
+});
+
+test("on an MCP surface only a whole image is sent: a truncated PNG, JPEG or WebP is refused", async () => {
+  const f = workspaceFixture();
+  try {
+    const whole = noisePng(150, 150);
+    const files: Record<string, Buffer> = {
+      // As a command that is still writing the file leaves it: the first 40 000 bytes, within every size limit.
+      "cut.png": whole.subarray(0, 40_000), "whole.png": whole,
+      "cut-interlaced.png": interlaced(flatPng(32, 32)).subarray(0, 60), "whole-interlaced.png": interlaced(flatPng(32, 32)),
+      "cut.jpg": jpeg(64, 48, 5_000).subarray(0, 4_000), "whole.jpg": jpeg(64, 48, 5_000),
+      "cut.webp": webp(1_000), "whole.webp": webp(),
+    };
+    for (const [name, bytes] of Object.entries(files)) writeFileSync(join(f.workspace, name), bytes);
+    for (const name of Object.keys(files)) {
+      const result = await f.invoke(f.mcp, { path: name });
+      if (name.startsWith("whole")) { assert.equal(result.isError, false, `${name}: ${JSON.stringify(result)}`); continue; }
+      assert.equal(result.error?.code, "image_corrupt", `${name}: ${JSON.stringify(result)}`);
+      assert.match(result.error!.message, /truncated or corrupt, so it was not sent; if a command is still writing it/);
+      assert.equal(result.content.some((block) => block.type === "artifact"), false, name);
+    }
   } finally { f.cleanup(); }
 });
 
@@ -149,6 +197,11 @@ test("mcpImageContent converts at most the limit of verified images and keeps ev
     assert.deepEqual(converted, [meta, { type: "image", data: first.toString("base64"), mimeType: "image/png" } satisfies McpImageContent, visual(b.hash), plain],
       "one image per call; a second visual artifact and a plain artifact stay references");
     assert.equal((await mcpImageContent([meta, visual(a.hash), visual(b.hash)], read, { maxBytes: 1_000, maxImages: 2 }))?.filter((block) => block.type === "image").length, 2);
+    // image.inspect's "not attached" JSON says the image is in the result once it is.
+    const pending: ToolContentBlock = { type: "json", value: { shown: false, reason: "image_not_attached", source: { path: "a.png" } } };
+    assert.deepEqual((await mcpImageContent([pending, visual(a.hash)], read, limits))?.[0],
+      { type: "json", value: { shown: true, delivery: "image content in this result", source: { path: "a.png" } } });
+    assert.equal(await mcpImageContent([pending, visual(a.hash)], async () => second, limits), undefined, "not attached, so the JSON is left as it is");
     // Nothing converted is undefined: over the byte limit, bytes that no longer match the address, a wrong media type, an unreadable artifact.
     assert.equal(await mcpImageContent([visual(a.hash)], read, { maxBytes: first.byteLength - 1, maxImages: 1 }), undefined);
     assert.equal(await mcpImageContent([visual(a.hash)], async () => second, limits), undefined);
@@ -176,9 +229,10 @@ test("the Remote runtime asks image.inspect for MCP delivery within the Remote l
   try {
     const result = await runtime.invoke(alice, "image.inspect", { path: "noise.png" });
     assert.equal(result.isError, false, `a Remote client is not a text-only model: ${JSON.stringify(result)}`);
-    const meta = json(result) as { shown: boolean; delivery: string; delivered: { byteLength: number } };
-    assert.equal(meta.shown, true);
-    assert.equal(meta.delivery, "image content in this result");
+    const meta = json(result) as { shown: boolean; reason?: string; delivered: { byteLength: number } };
+    // Prepared for the connector, which attaches it (the connector tests below).
+    assert.equal(meta.reason, "image_not_attached");
+    assert.ok(result.content.some((block) => block.type === "artifact" && block.visual));
     assert.ok(meta.delivered.byteLength <= REMOTE_IMAGE_LIMITS.maxBytes, `${meta.delivered.byteLength} bytes`);
     assert.equal((await runtime.invoke(alice, "image.inspect", { path: "link/secret.png" })).error?.code, "image_outside_workspace");
     assert.equal((await runtime.invoke(alice, "image.inspect", { artifactHash: "a".repeat(64) })).error?.code, "tool_unavailable");
@@ -313,7 +367,29 @@ test("an image_inspect result reaches the relay as MCP image content in one jobs
   assert.equal(sha256(bytes), delivered.artifactHash, "the client gets exactly the bounded derivative");
   assert.ok(bytes.byteLength <= REMOTE_IMAGE_LIMITS.maxBytes);
   assert.equal(content.some((block) => block.type === "artifact"), false, "no second copy as a reference");
-  assert.equal((content.find((block) => block.type === "json") as { value: { delivery: string } }).value.delivery, "image content in this result");
+  const meta = (content.find((block) => block.type === "json") as { value: Record<string, unknown> }).value;
+  assert.deepEqual([meta.shown, meta.delivery, meta.reason], [true, "image content in this result", undefined], "it says the image is there because it is");
+});
+
+test("a result the image would push over the inline limit keeps its reference and says the image is not attached", async (t) => {
+  // An image of exactly REMOTE_IMAGE_LIMITS.maxBytes and 30 000 bytes of notes: with the image inline, past 256 KiB.
+  const image = flatPng(4, 4);
+  const padded = Buffer.concat([image, Buffer.alloc(REMOTE_IMAGE_LIMITS.maxBytes - image.byteLength, 0x42)]);
+  let hash = "";
+  const h = await connector(t, (name) => ({ callId: "c", toolName: name, isError: false, content: [
+    { type: "json", value: { shown: false, reason: "image_not_attached", source: { path: "shot.png" }, notes: ["n".repeat(30_000)] } },
+    { type: "artifact", hash, mediaType: "image/png", label: "Image shot.png", visual: { width: 4, height: 4, sourceDigest: hash } },
+  ] }));
+  hash = (await h.artifacts.put(padded, "image/png")).hash;
+  const { page, data, stored } = await h.call("image_inspect", { path: "shot.png" });
+  // Stored inline as it was: had the image gone in anyway, the admission store refuses the result and the job is outcome_unknown.
+  assert.equal(page.response.status, "completed");
+  assert.equal(data.nextCursor, undefined);
+  const content = clientContent(stored);
+  assert.equal(content.some((block) => block.type === "image"), false);
+  assert.equal((content.find((block) => block.type === "artifact") as { hash?: string } | undefined)?.hash, hash, "artifacts_read still reads it");
+  const meta = (content.find((block) => block.type === "json") as { value: Record<string, unknown> }).value;
+  assert.deepEqual([meta.shown, meta.reason, meta.delivery], [false, "image_not_attached", undefined]);
 });
 
 test("the largest Remote image still fits one inline result and one frame", async (t) => {
@@ -322,7 +398,7 @@ test("the largest Remote image still fits one inline result and one frame", asyn
   const padded = Buffer.concat([image, Buffer.alloc(REMOTE_IMAGE_LIMITS.maxBytes - image.byteLength, 0x42)]);
   let hash = "";
   const h = await connector(t, (name) => ({ callId: "c", toolName: name, isError: false, content: [
-    { type: "json", value: { shown: true, delivery: "image content in this result", source: { path: "a/".repeat(1_000) + "shot.png" } } },
+    { type: "json", value: { shown: false, reason: "image_not_attached", source: { path: "a/".repeat(1_000) + "shot.png" } } },
     { type: "artifact", hash, mediaType: "image/png", label: "Image shot.png", visual: { width: 4, height: 4, sourceDigest: hash } },
   ] }));
   hash = (await h.artifacts.put(padded, "image/png")).hash;
@@ -332,6 +408,7 @@ test("the largest Remote image still fits one inline result and one frame", asyn
   assert.ok(frameByteLength(page) <= DEFAULT_REMOTE_FRAME_LIMITS.maxFrameBytes);
   const inlined = clientContent(stored).find((block) => block.type === "image") as { data: string } | undefined;
   assert.ok(inlined && Buffer.from(inlined.data, "base64").equals(padded));
+  assert.equal((clientContent(stored)[0] as { value: { delivery?: string } }).value.delivery, "image content in this result");
 });
 
 test("only image_inspect is inlined and paged whole; a changed artifact stays a reference", async (t) => {

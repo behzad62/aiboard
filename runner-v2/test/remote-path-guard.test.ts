@@ -21,7 +21,7 @@ import { ToolBroker } from "../src/tool-broker.js";
 import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 
 const alice = { accountId: "account", clientId: "client-a", deviceId: "device" };
-const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a9sAAAAASUVORK5CYII=", "base64");
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=", "base64");
 
 interface Fixture {
   root: string; home: string; state: string; project: string; allowed: string;
@@ -504,11 +504,11 @@ test("remote runtime denies protected file tools, skips protected children and a
       const result = await runtime.invoke(alice, name, args);
       assert.equal(result.error?.code, "path_denied", `${name} ${JSON.stringify(result)}`);
     }
-    // An allowed image is shown: a Remote client gets it back as image content, never a text-only refusal.
+    // An allowed image is prepared for the connector, which attaches it as image content: never a text-only refusal.
     const image = await runtime.invoke(alice, "image.inspect", { path: "pic.png" });
     assert.equal(image.isError, false, JSON.stringify(image));
-    assert.deepEqual((({ shown, delivery }) => ({ shown, delivery }))(image.content.find((block) => block.type === "json")!.value as { shown: unknown; delivery: unknown }),
-      { shown: true, delivery: "image content in this result" });
+    assert.equal((image.content.find((block) => block.type === "json")!.value as { reason?: unknown }).reason, "image_not_attached");
+    assert.ok(image.content.some((block) => block.type === "artifact" && block.visual), JSON.stringify(image));
     const listed = await runtime.invoke(alice, "fs.list", { path: "." });
     assert.equal(listed.isError, false, JSON.stringify(listed));
     assert.doesNotMatch(JSON.stringify(listed.content), /aiboard-state/);
