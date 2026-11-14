@@ -111,10 +111,16 @@ export interface FinalVerificationSubmissionV2 {
   targetRevision: string;
   plan: VerificationPlanV2;
   executionProfile: FinalVerificationExecutionProfile;
-  /** Each executed check passed or was not run (tool missing); each skipped one is not run (skipped). */
+  /**
+   * Each executed check passed, was not run (tool missing), or (VF8) failed at its repair limit
+   * and is a recorded known defect; each skipped one is not run (skipped).
+   */
   checks: readonly VerificationCheckResultV2[];
+  /** VF8: the failed non-mandatory checks recorded as known defects, in plan order. Absent when none. */
+  knownDefectCheckIds?: readonly string[];
   evidenceIds: readonly string[];
   submittedAt: string;
+  /** No check failed except a recorded known defect, which is never mandatory. */
   green: true;
 }
 
@@ -131,6 +137,8 @@ export interface FinalVerificationRunV2 {
   /** Each executed check's own checkout; the Runner reuses one checkout across checks. */
   workspacePaths: Readonly<Record<string, string>>;
   checks: readonly VerificationCheckResultV2[];
+  /** VF8: the generation's recorded known defects: failed non-mandatory checks that need no repair. */
+  knownDefectCheckIds?: readonly string[];
 }
 
 /**
@@ -153,11 +161,20 @@ export async function submitFinalVerificationV2(
   if (run.checks.length !== plan.checks.length) {
     throw new Error("Final verification submission must carry every planned check exactly once.");
   }
+  const knownDefects = new Set(run.knownDefectCheckIds ?? []);
+  for (const id of knownDefects) {
+    if (!plan.checks.some((check) => check.id === id)) throw new Error(`Known defect ${id} is not a planned check.`);
+  }
   const checks: VerificationCheckResultV2[] = [];
   for (const planned of plan.checks) {
     const check = run.checks.find((candidate) => candidate.checkId === planned.id);
     if (!check) throw new Error(`Final verification run is missing check ${planned.id}.`);
-    if (check.outcome === "failed" || (check.outcome === "not_run" && check.notRun?.reason !== "tool_missing")) {
+    if (knownDefects.has(planned.id)) {
+      // VF8: only a failed non-mandatory check is a known defect.
+      if (check.outcome !== "failed" || check.mandatory) {
+        throw new Error(`Final verification check ${planned.id} is not a failed non-mandatory check, so it is not a known defect.`);
+      }
+    } else if (check.outcome === "failed" || (check.outcome === "not_run" && check.notRun?.reason !== "tool_missing")) {
       throw new Error(`Final verification check ${planned.id} did not pass.`);
     }
     if (check.outcome === "passed" && (check.evidenceIds.length === 0 || check.facts.length === 0)) {
@@ -223,6 +240,9 @@ export async function submitFinalVerificationV2(
     plan,
     executionProfile: cloneFinalVerificationExecutionProfile(run.executionProfile),
     checks: [...checks, ...skippedVerificationResults(plan, resolution.suggestions)],
+    ...(knownDefects.size > 0
+      ? { knownDefectCheckIds: plan.checks.map((check) => check.id).filter((id) => knownDefects.has(id)) }
+      : {}),
     evidenceIds,
     submittedAt,
     green: true as const,

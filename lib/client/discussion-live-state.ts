@@ -15,6 +15,8 @@ import type {
   NativeProjectHandoffChoice,
   NativeProjectHandoffKnownDefect,
   NativeRunProjection,
+  NativeVerificationKnownDefect,
+  NativeNotVerifiedItem,
 } from "@/lib/client/runner-v2";
 import { mapNativeBuildUsageModels } from "@/lib/client/native-model-usage";
 import type { ModelPricing } from "@/lib/providers/pricing";
@@ -55,14 +57,25 @@ export function projectHandoffAppliesAutomatically(
     runState === "running" &&
     (projection.runPolicy === "finish" || projection.runPolicy === "budgeted") &&
     // The runner holds a result with known defects for the owner.
-    !projection.projectHandoff.knownDefects?.length;
+    projectHandoffKnownDefectCount(projection.projectHandoff) === 0;
+}
+
+/** VF8: review findings and final-verification checks the Architect handed off unrepaired. */
+export function projectHandoffKnownDefectCount(
+  handoff: Pick<NonNullable<NativeBuildProjection["projectHandoff"]>, "knownDefects" | "verificationKnownDefects"> | null | undefined,
+): number {
+  return (handoff?.knownDefects?.length ?? 0) + (handoff?.verificationKnownDefects?.length ?? 0);
 }
 
 /** The owner's guidance asking the Architect to repair the known defects it completed with. */
-export function knownDefectRepairNote(defects: readonly NativeProjectHandoffKnownDefect[]): string {
+export function knownDefectRepairNote(
+  defects: readonly NativeProjectHandoffKnownDefect[],
+  verificationDefects: readonly NativeVerificationKnownDefect[] = [],
+): string {
   return [
     "Repair these known defects before handing off, and prove each fix the way a user would hit it:",
     ...defects.map((defect) => `- ${defect.claim}${defect.location ? ` (${defect.location})` : ""}`),
+    ...verificationDefects.map((defect) => `- The final verification check "${defect.label}" still fails.`),
   ].join("\n");
 }
 
@@ -96,7 +109,7 @@ export function nativeBuildPauseDescription(
     return { waitingForOwner: true, title: "Waiting for you: choose the Architect", detail: "The Architect's model call failed. Pick a runtime below to continue." };
   }
   if (projection.projectHandoff?.status === "requested") {
-    const defects = projection.projectHandoff.knownDefects?.length ?? 0;
+    const defects = projectHandoffKnownDefectCount(projection.projectHandoff);
     if (defects > 0) {
       return {
         waitingForOwner: true,
@@ -791,6 +804,9 @@ export function durableBuildHandoffPanels(
     summary: string;
     options: NativeProjectHandoffChoice[];
     knownDefects?: NativeProjectHandoffKnownDefect[];
+    verificationKnownDefects?: NativeVerificationKnownDefect[];
+    /** VF8: how many checks passed and what was not verified. */
+    verification?: BuildVerificationSummary;
   } | null;
 } {
   const projectHandoff = projection.projectHandoff;
@@ -805,6 +821,10 @@ export function durableBuildHandoffPanels(
         summary: projectHandoff.summary,
         options: [...projectHandoff.options],
         ...(projectHandoff.knownDefects?.length ? { knownDefects: projectHandoff.knownDefects.map((defect) => ({ ...defect })) } : {}),
+        ...(projectHandoff.verificationKnownDefects?.length
+          ? { verificationKnownDefects: projectHandoff.verificationKnownDefects.map((defect) => ({ ...defect })) }
+          : {}),
+        ...verificationSummaryField(projection),
       },
     };
   }
@@ -891,6 +911,8 @@ export interface FinalVerificationCheckRow {
   issues: string[];
   rationale?: string;
   notRun?: NativeVerificationNotRun;
+  /** VF8: a failed non-mandatory check the Build went on without, at the repair limit. */
+  knownDefect?: { reason: string };
 }
 
 const FINAL_VERIFICATION_CATEGORY_LABELS: Record<string, string> = {
@@ -911,6 +933,7 @@ export function finalVerificationCheckRows(
       status: check.status,
       issues: [...check.issues],
       ...(check.notRun ? { notRun: check.notRun } : {}),
+      ...(check.knownDefect ? { knownDefect: { ...check.knownDefect } } : {}),
     }));
   }
   return generation.categories.map((category) => ({
@@ -921,6 +944,149 @@ export function finalVerificationCheckRows(
     ...(category.rationale !== undefined ? { rationale: category.rationale } : {}),
     ...(category.notRun ? { notRun: category.notRun } : {}),
   }));
+}
+
+/** VF8: what a check at its repair limit tells the owner, from either source the Runner records. */
+export function finalVerificationKnownDefectText(knownDefect: { reason: string }): string {
+  const review = /^the Architect's review still asks for a repair at the repair limit: /;
+  if (review.test(knownDefect.reason)) {
+    return `Known defect: the Architect's review still asked for a repair of this check after its repairs (${knownDefect.reason.replace(review, "")}), so the Build went on without it.`;
+  }
+  return `Known defect: this check still failed after its repairs (${knownDefect.reason.replace(/^still failing at the repair limit: /, "")}), so the Build went on without it.`;
+}
+
+/**
+ * VF8: the Runner's Not verified items (the handoff snapshot's section) as the owner reads them,
+ * in the Runner's order.
+ */
+export function notVerifiedItemsSummary(items: readonly NativeNotVerifiedItem[]): BuildVerificationSummary["notVerified"] {
+  return items.map((item, index) => ({
+    key: `not-verified:${item.kind}:${item.key ?? item.subject}:${index}`,
+    label: item.subject ? item.subject[0].toUpperCase() + item.subject.slice(1) : item.subject,
+    reason: item.kind === "not_run"
+      ? `Not run: ${item.detail}`
+      : item.kind === "skipped"
+        ? `Skipped: ${item.detail}`
+        : item.kind === "known_defect"
+          ? finalVerificationKnownDefectText({ reason: item.detail })
+          : item.kind === "override"
+            ? `Accepted on the Architect's judgement without Runner evidence: ${item.detail}`
+            : "Left for you to check: the Architect could not verify this.",
+  }));
+}
+
+/** VF8: how many final-verification checks passed, and each thing the Build did not verify. */
+export interface BuildVerificationSummary {
+  /** The checks the plan ran (v2) or required (v1); skipped and not-applicable ones are not counted. */
+  total: number;
+  passed: number;
+  notVerified: Array<{ key: string; label: string; reason: string }>;
+}
+
+/**
+ * VF8: the summary from the rows Run details shows: every not-run, skipped or not-applicable check
+ * and every known defect, each once, plus the Architect's leftToVerify items.
+ */
+export function finalVerificationRowsSummary(
+  rows: readonly FinalVerificationCheckRow[],
+  leftToVerify: readonly string[] = [],
+  /** The Runner's list (the snapshot's section); when given it is the list shown. Older Runners send none. */
+  runnerItems?: readonly NativeNotVerifiedItem[],
+): BuildVerificationSummary {
+  const counted = rows.filter((row) => row.status !== "not_applicable" && row.notRun?.reason !== "skipped");
+  if (runnerItems) {
+    return { total: counted.length, passed: counted.filter((row) => row.status === "passed").length, notVerified: notVerifiedItemsSummary(runnerItems) };
+  }
+  const notVerified: BuildVerificationSummary["notVerified"] = [];
+  for (const row of rows) {
+    if (row.status === "not_run") {
+      notVerified.push({ key: row.key, label: row.label, reason: finalVerificationNotRunText(row.notRun) });
+    } else if (row.status === "not_applicable") {
+      notVerified.push({ key: row.key, label: row.label, reason: `Not applicable: ${row.rationale ?? "no reason recorded"}` });
+    } else if (row.knownDefect) {
+      notVerified.push({ key: row.key, label: row.label, reason: finalVerificationKnownDefectText(row.knownDefect) });
+    }
+  }
+  for (const [index, item] of leftToVerify.entries()) {
+    notVerified.push({ key: `left-to-verify:${index}`, label: item, reason: "Left for you to check: the Architect could not verify this." });
+  }
+  return { total: counted.length, passed: counted.filter((row) => row.status === "passed").length, notVerified };
+}
+
+/**
+ * VF8: the summary for the Build's final card, from the durable projection: the current
+ * generation's checks (either contract), its known defects, the reviews that accepted a criterion
+ * on an Architect override without Runner evidence, and the handoff's leftToVerify items.
+ */
+export function buildVerificationSummary(
+  projection: Partial<Pick<NativeBuildProjection, "finalVerification" | "projectHandoff" | "reviews">>,
+): BuildVerificationSummary | undefined {
+  const current = projection.finalVerification?.current;
+  if (!current) return undefined;
+  const completed = current.completedChecks ?? [];
+  const known = new Map((current.knownDefects ?? []).map((defect) => [defect.checkId, defect]));
+  const rows: FinalVerificationCheckRow[] = [];
+  if (current.plan.version === 2) {
+    for (const planned of current.plan.checks) {
+      const check = completed.find((candidate) => candidate.checkId === planned.id);
+      const defect = known.get(planned.id);
+      rows.push({
+        key: `${current.generationId}:${planned.id}`,
+        label: planned.label,
+        status: !check ? "pending" : check.outcome ?? (check.notRun ? "not_run" : check.green ? "passed" : "failed"),
+        issues: [...(check?.issues ?? [])],
+        ...(check?.notRun ? { notRun: check.notRun } : {}),
+        ...(defect ? { knownDefect: { reason: defect.reason } } : {}),
+      });
+    }
+    const suggestions = new Map((current.executionProfile?.verification?.suggestions ?? []).map((check) => [check.id, check.label]));
+    for (const skipped of current.plan.skipped) {
+      rows.push({
+        key: `${current.generationId}:${skipped.checkId}`,
+        label: suggestions.get(skipped.checkId) ?? skipped.checkId,
+        status: "not_run",
+        issues: [],
+        notRun: { reason: "skipped", detail: skipped.reason },
+      });
+    }
+  } else {
+    for (const planned of current.plan.checks) {
+      const check = completed.find((candidate) => candidate.category === planned.category);
+      rows.push({
+        key: `${current.generationId}:${planned.category}`,
+        label: FINAL_VERIFICATION_CATEGORY_LABELS[planned.category] ?? planned.category,
+        status: planned.status === "not_applicable"
+          ? "not_applicable"
+          : !check ? "pending" : check.notRun ? "not_run" : check.green ? "passed" : "failed",
+        issues: [...(check?.issues ?? [])],
+        ...(planned.rationale !== undefined ? { rationale: planned.rationale } : {}),
+        ...(check?.notRun ? { notRun: check.notRun } : {}),
+      });
+    }
+  }
+  const runnerItems = projection.projectHandoff?.notVerified;
+  const summary = finalVerificationRowsSummary(rows, projection.projectHandoff?.leftToVerify ?? [], runnerItems);
+  // A Runner that lists Not verified items already lists the overrides.
+  if (runnerItems) return summary;
+  for (const [taskId, review] of Object.entries(projection.reviews ?? {})) {
+    if (review.status !== "approved") continue;
+    for (const verdict of review.criterionVerdicts ?? []) {
+      if (verdict.verdict !== "satisfied" || verdict.overrideReason === undefined) continue;
+      summary.notVerified.push({
+        key: `override:${taskId}:${verdict.criterionId}`,
+        label: `Task ${taskId}, criterion ${verdict.criterionId}`,
+        reason: `Accepted on the Architect's judgement without Runner evidence: ${verdict.overrideReason}`,
+      });
+    }
+  }
+  return summary;
+}
+
+function verificationSummaryField(
+  projection: Partial<Pick<NativeBuildProjection, "finalVerification" | "projectHandoff" | "reviews">>,
+): { verification?: BuildVerificationSummary } {
+  const verification = buildVerificationSummary(projection);
+  return verification ? { verification } : {};
 }
 
 /** What a not-run check tells the owner: the missing tool, or the Architect's reason to skip it. */
@@ -941,15 +1107,37 @@ export function nativeTaskVerificationState(
   return {
     kind: task.kind,
     ...(current && current.taskId === task.id ? { generation: {
-      // A check the Runner did not run (its tool is missing, or the plan skipped it) is not a failure.
+      // A check the Runner did not run (its tool is missing, or the plan skipped it) is not a failure,
+      // and neither is a known defect (VF8): the Build went on without it.
       categories: (current.completedChecks ?? []).map((check) => ({
-        status: check.outcome ?? (check.notRun ? "not_run" : check.green ? "passed" : "failed"),
+        status: check.checkId !== undefined && current.knownDefects?.some((defect) => defect.checkId === check.checkId)
+          ? "known_defect"
+          : check.outcome ?? (check.notRun ? "not_run" : check.green ? "passed" : "failed"),
       })),
       cleanup: { status: current.cleanup?.status ?? "pending" },
-      review: { status: current.review?.status ?? "pending" },
+      // VF8: a review that asks only for repairs of known defects at the limit counts as approval.
+      review: { status: reviewAcceptedWithKnownDefects(current) ? "approved" : current.review?.status ?? "pending" },
       repairs: (current.repairTaskIds ?? []).map((taskId) => ({ status: projection.tasks[taskId]?.status ?? "missing" })),
     } } : {}),
   };
+}
+
+/**
+ * VF8: the review is repair_required, but every check it sends to repair is a known defect the
+ * review recorded at the repair limit, so the Build finishes without them (the kernel's
+ * `finalVerificationReviewAccepted`).
+ */
+export function reviewAcceptedWithKnownDefects(
+  current: Pick<NonNullable<NonNullable<NativeBuildProjection["finalVerification"]>["current"]>, "review" | "knownDefects">,
+): boolean {
+  const review = current.review;
+  if (review?.status !== "repair_required" || !review.decision) return false;
+  const failed = [...new Set([
+    ...(review.decision.failedCheckIds ?? []),
+    ...(review.decision.checkReviews ?? []).filter((check) => check.verdict === "repair_required").map((check) => check.checkId),
+  ])];
+  const fromReview = new Set((current.knownDefects ?? []).filter((defect) => defect.source === "review").map((defect) => defect.checkId));
+  return failed.length > 0 && failed.every((checkId) => fromReview.has(checkId));
 }
 
 /**

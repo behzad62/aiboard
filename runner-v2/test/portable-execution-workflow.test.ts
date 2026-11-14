@@ -25,6 +25,11 @@ const deterministicPrTests = [
   "runner-v2/test/verification-plan-v2-contract.test.ts",
   // VF4: aiboard-validation.json checks, mandatory and the missing-tool pause, in memory (about 1 s).
   "runner-v2/test/project-validation-checks.test.ts",
+  // VF8: known defects at the repair limit and the handoff's Not verified section, in memory (about 2 s).
+  "runner-v2/test/verification-known-defects.test.ts",
+  "runner-v2/test/handoff-not-verified.test.ts",
+  // VF8: a failed start leaves its program not proven stopped unless the service cleaned it up (no process, about 1 s).
+  "runner-v2/test/final-verification-managed-authority.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

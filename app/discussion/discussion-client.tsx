@@ -129,6 +129,8 @@ import {
   createNativeBuildFileLoader,
   durableBuildHandoffPanels,
   knownDefectRepairNote,
+  projectHandoffKnownDefectCount,
+  type BuildVerificationSummary,
   nativeSessionIsWorking,
   verifierCandidateCooldown,
   nativeBuildAttachmentIdentityPatch,
@@ -181,6 +183,7 @@ import {
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
   type NativeProjectHandoffKnownDefect,
+  type NativeVerificationKnownDefect,
   type NativeBuildObservability,
   type NativeBuildActivity,
   type NativeBuildProjection,
@@ -198,6 +201,7 @@ import {
 import { NativePlanningPanel, NativePlanStartCard } from "@/components/NativePlanningPanel";
 import { LoadingNotice } from "@/components/build/LoadingNotice";
 import { EnvironmentInventoryPanel } from "@/components/build/EnvironmentInventoryPanel";
+import { VerificationSummary } from "@/components/build/VerificationSummary";
 import { buildCrewFromDiscussion, selectBuildCrewRuntimes } from "@/lib/client/build-crew";
 import { requestSpecificationSource } from "@/lib/client/native-planning-view";
 import {
@@ -366,6 +370,8 @@ function DiscussionPageInner() {
     summary: string;
     options: NativeProjectHandoffChoice[];
     knownDefects?: NativeProjectHandoffKnownDefect[];
+    verificationKnownDefects?: NativeVerificationKnownDefect[];
+    verification?: BuildVerificationSummary;
   } | null>(null);
   const [nativePermissions, setNativePermissions] = useState<Array<{
     requestId: string;
@@ -724,6 +730,10 @@ function DiscussionPageInner() {
             summary: event.summary,
             options: [...event.options],
             ...(event.knownDefects?.length ? { knownDefects: event.knownDefects.map((defect) => ({ ...defect })) } : {}),
+            ...(event.verificationKnownDefects?.length
+              ? { verificationKnownDefects: event.verificationKnownDefects.map((defect) => ({ ...defect })) }
+              : {}),
+            ...(event.verification ? { verification: event.verification } : {}),
           });
           break;
         case "native_permission_required":
@@ -2614,21 +2624,24 @@ function DiscussionPageInner() {
     }
     if (projectHandoff) {
       const knownDefects = projectHandoff.knownDefects ?? [];
+      // VF8: final-verification checks that still failed at the repair limit are known defects too.
+      const verificationDefects = projectHandoff.verificationKnownDefects ?? [];
+      const defectCount = projectHandoffKnownDefectCount(projectHandoff);
       decisions.push({
         id: "project-handoff",
         node: (
           <DecisionCard
-            title={knownDefects.length
-              ? `The Architect has finished with ${knownDefects.length} known defect${knownDefects.length === 1 ? "" : "s"}`
+            title={defectCount
+              ? `The Architect has finished with ${defectCount} known defect${defectCount === 1 ? "" : "s"}`
               : "The Architect has finished — choose the handoff"}
-            tone={knownDefects.length ? "warn" : "success"}
+            tone={defectCount ? "warn" : "success"}
             actions={
               <>
-                {knownDefects.length > 0 && (
+                {defectCount > 0 && (
                   <Button
                     type="button"
                     size="sm"
-                    onClick={() => setNoteDraft(knownDefectRepairNote(knownDefects))}
+                    onClick={() => setNoteDraft(knownDefectRepairNote(knownDefects, verificationDefects))}
                   >
                     Repair first
                   </Button>
@@ -2652,6 +2665,7 @@ function DiscussionPageInner() {
             }
           >
             <p className="whitespace-pre-wrap">{projectHandoff.summary}</p>
+            {projectHandoff.verification && <VerificationSummary summary={projectHandoff.verification} />}
             {knownDefects.length > 0 && (
               <div className="space-y-1">
                 <p className="font-medium">Shipped unrepaired:</p>
@@ -2666,6 +2680,9 @@ function DiscussionPageInner() {
                 </ul>
                 <p className="text-xs">Repair first puts a repair request in the guidance box for you to send.</p>
               </div>
+            )}
+            {knownDefects.length === 0 && verificationDefects.length > 0 && (
+              <p className="text-xs">Repair first puts a repair request in the guidance box for you to send.</p>
             )}
             <p className="text-xs">
               Applying first performs a Git dry run. If your project has conflicting

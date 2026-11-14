@@ -12,6 +12,9 @@ import {
   assertOpenArchitectQuestionAllowsEvent,
   assertCritiqueReconciledByPlanRevision,
   buildCompletionReadiness,
+  finalVerificationKnownDefectIdsFrom,
+  LEFT_TO_VERIFY_MAX_ITEMS,
+  LEFT_TO_VERIFY_MAX_LENGTH,
   latestUnresolvedContextRecordingNote,
   readyPlanIdentity,
   rebuildSchedulerProjection,
@@ -229,7 +232,7 @@ interface ReviewTaskInput {
 }
 
 interface TaskIdInput { taskId: string }
-interface CompleteRunInput { summary: string; findingDispositions?: CompletionFindingDispositionInput[] }
+interface CompleteRunInput { summary: string; findingDispositions?: CompletionFindingDispositionInput[]; leftToVerify?: string[] }
 interface PlanFinalVerificationInput { plan: FinalVerificationPlan; runtimeSmoke?: ArchitectRuntimeSmokeRequest }
 interface FinalVerificationCategoryReviewInput {
   category: FinalVerificationCategory;
@@ -2247,7 +2250,9 @@ function reviewFinalVerificationV2Tool(
           "Final verification review is not currently requested or was already decided differently.",
         );
       }
-      const executed = current.plan.checks.map((check) => check.id);
+      // VF8: a known defect failed at its repair limit; the handoff lists it, so it is not reviewed.
+      const knownDefects = finalVerificationKnownDefectIdsFrom(current, "failure");
+      const executed = current.plan.checks.map((check) => check.id).filter((id) => !knownDefects.has(id));
       const skipped = new Set(current.plan.skipped.map((entry) => entry.checkId));
       const reviewed = new Set(input.checkReviews.map((review) => review.checkId));
       const missing = executed.filter((id) => !reviewed.has(id));
@@ -2261,6 +2266,12 @@ function reviewFinalVerificationV2Tool(
         (current.submissionResult.checks as readonly VerificationCheckResultV2[]).map((check) => [check.checkId, check]),
       );
       for (const review of input.checkReviews) {
+        if (knownDefects.has(review.checkId)) {
+          return errorOutput(
+            "final_verification_check_known_defect",
+            `Check ${review.checkId} still failed at its repair limit and is recorded as a known defect; leave it out of the review. The handoff lists it for the owner.`,
+          );
+        }
         if (skipped.has(review.checkId)) {
           return errorOutput(
             "final_verification_check_skipped",
@@ -3165,13 +3176,23 @@ function completeRunTool(
             rationale: { type: "string", minLength: 1 },
           }, ["taskId", "findingId", "disposition", "rationale"]),
         },
+        leftToVerify: {
+          type: "array",
+          maxItems: LEFT_TO_VERIFY_MAX_ITEMS,
+          description: "Optional: what only the owner can check, such as \"the installer on macOS\". The handoff lists each under Not verified.",
+          items: { type: "string", minLength: 1, maxLength: LEFT_TO_VERIFY_MAX_LENGTH },
+        },
       },
       ["summary"]
     ),
-    validate: (input) => validateObject(input, (value) => {
+    validate: (input) => validateObject(input, (value): CompleteRunInput | null => {
       if (!nonEmpty(value.summary)) return null;
+      const left = value.leftToVerify;
+      if (left !== undefined && (!Array.isArray(left) || left.length > LEFT_TO_VERIFY_MAX_ITEMS ||
+        !left.every((item) => nonEmpty(item) && (item as string).length <= LEFT_TO_VERIFY_MAX_LENGTH))) return null;
+      const leftToVerify = left === undefined ? {} : { leftToVerify: [...new Set((left as string[]).map((item) => item.trim()))] };
       const dispositions = value.findingDispositions;
-      if (dispositions === undefined) return { summary: value.summary };
+      if (dispositions === undefined) return { summary: value.summary, ...leftToVerify };
       if (!Array.isArray(dispositions) || !dispositions.every((entry) => isRecord(entry) &&
         nonEmpty(entry.taskId) && nonEmpty(entry.findingId) && nonEmpty(entry.rationale) &&
         (entry.disposition === "fixed" || entry.disposition === "not_a_defect" || entry.disposition === "known_defect"))) return null;
@@ -3181,8 +3202,9 @@ function completeRunTool(
           taskId: entry.taskId as string, findingId: entry.findingId as string,
           disposition: entry.disposition as CompletionFindingDispositionInput["disposition"], rationale: entry.rationale as string,
         })),
+        ...leftToVerify,
       };
-    }, "summary is required; each findingDispositions entry needs taskId, findingId, disposition (fixed, not_a_defect or known_defect) and rationale"),
+    }, `summary is required; each findingDispositions entry needs taskId, findingId, disposition (fixed, not_a_defect or known_defect) and rationale; leftToVerify, when given, is at most ${LEFT_TO_VERIFY_MAX_ITEMS} non-empty strings of at most ${LEFT_TO_VERIFY_MAX_LENGTH} characters`),
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
@@ -3231,6 +3253,7 @@ function completeRunTool(
         payload: {
           summary: input.summary,
           ...(input.findingDispositions?.length ? { findingDispositions: input.findingDispositions } : {}),
+          ...(input.leftToVerify?.length ? { leftToVerify: input.leftToVerify } : {}),
         },
       }, { type: "architect_action", action: "run_completed" });
     },

@@ -1,4 +1,5 @@
-import { explicitStartBlocked } from "./scheduler-store.js";
+import { explicitStartBlocked, finalVerificationReviewAccepted } from "./scheduler-store.js";
+import { handoffNotVerifiedItems, type HandoffSnapshotNotVerifiedItem } from "./handoff-snapshot.js";
 import { readFile, realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
@@ -96,6 +97,8 @@ export interface FinalVerificationObservabilityGeneration {
     evidenceIds: string[];
     issues: string[];
     notRun?: VerificationNotRunV2;
+    /** VF8: a non-mandatory check that still failed at the repair limit; the Build went on without it. */
+    knownDefect?: { reason: string };
   }>;
   submission: { status: "pending" | "submitted"; submissionId?: string; green?: boolean };
   mechanicalFailure?: {
@@ -106,13 +109,25 @@ export interface FinalVerificationObservabilityGeneration {
     evidenceIds: string[];
   };
   cleanup: { status: "pending" | "started" | "succeeded" | "failed"; attempt?: number; error?: string; diagnosticsAvailable: boolean; diagnosticsPath?: never; diagnostics?: FinalVerificationDiagnosticsManifest };
-  review: { status: "pending" | "requested" | "approved" | "repair_required" | "rejected"; summary?: string };
+  review: {
+    status: "pending" | "requested" | "approved" | "repair_required" | "rejected";
+    summary?: string;
+    /**
+     * VF8: the review asks only for repairs of known defects at the repair limit, so it counts as
+     * approval and the Build finishes without them.
+     */
+    acceptedWithKnownDefects?: true;
+  };
   repairs: Array<{ taskId: string; status: string }>;
+  /** VF8: the checks recorded as known defects at the repair limit. */
+  knownDefects?: Array<{ checkId: string; label: string; reason: string; source: "failure" | "review" }>;
 }
 
 export interface FinalVerificationObservability {
   canonicalRevision?: string;
   current?: FinalVerificationObservabilityGeneration;
+  /** VF8: the handoff snapshot's Not verified items for the run as it stands, in its order. */
+  notVerified?: HandoffSnapshotNotVerifiedItem[];
   history: Array<Pick<FinalVerificationObservabilityGeneration, "generationId" | "taskId" | "targetRevision" | "revisionStatus"> & {
     invalidatedByRevision?: string;
     invalidatedByGuidanceId?: string;
@@ -553,9 +568,11 @@ export function projectFinalVerificationObservability(
 ): FinalVerificationObservability {
   const canonicalRevision = projection.integrationRevision;
   const current = projection.finalVerification?.current;
+  const notVerified = handoffNotVerifiedItems(projection);
   return {
     ...(canonicalRevision ? { canonicalRevision } : {}),
     ...(current ? { current: projectGeneration(current, projection, canonicalRevision, diagnostics) } : {}),
+    ...(notVerified.length ? { notVerified: notVerified.map((item) => ({ ...item })) } : {}),
     history: (projection.finalVerification?.history ?? []).slice(-8).map((generation) => ({
       generationId: generation.generationId,
       taskId: generation.taskId,
@@ -610,8 +627,12 @@ function projectGeneration(
     review: {
       status: generation.review?.status ?? "pending",
       ...(generation.review?.decision?.summary ? { summary: generation.review.decision.summary } : {}),
+      ...(generation.review?.status === "repair_required" && finalVerificationReviewAccepted(generation)
+        ? { acceptedWithKnownDefects: true as const }
+        : {}),
     },
     repairs: (generation.repairTaskIds ?? []).map((taskId) => ({ taskId, status: projection.tasks[taskId]?.status ?? "missing" })),
+    ...(generation.knownDefects?.length ? { knownDefects: generation.knownDefects.map((defect) => ({ ...defect })) } : {}),
   };
 }
 
@@ -623,8 +644,10 @@ function projectV2Checks(
   const completed = new Map((generation.completedChecks ?? []).flatMap((check) =>
     "checkId" in check ? [[check.checkId, check as VerificationCheckResultV2] as const] : []));
   const suggestions = new Map((generation.executionProfile.verification?.suggestions ?? []).map((check) => [check.id, check]));
+  const knownDefects = new Map((generation.knownDefects ?? []).map((defect) => [defect.checkId, defect]));
   const planned = generation.plan.checks.map((check) => {
     const result = completed.get(check.id);
+    const knownDefect = knownDefects.get(check.id);
     return {
       checkId: check.id,
       label: check.label,
@@ -635,6 +658,7 @@ function projectV2Checks(
       evidenceIds: [...(result?.evidenceIds ?? [])],
       issues: [...(result?.issues ?? [])],
       ...(result?.notRun ? { notRun: { ...result.notRun } } : {}),
+      ...(knownDefect ? { knownDefect: { reason: knownDefect.reason } } : {}),
     };
   });
   const skipped = generation.plan.skipped.flatMap((entry) => {

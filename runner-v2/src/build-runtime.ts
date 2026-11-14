@@ -63,8 +63,14 @@ import {
   DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
   failureFailedCheckKeys,
+  finalVerificationKnownDefectIds,
+  finalVerificationKnownDefectLimits,
+  finalVerificationKnownDefectText,
+  finalVerificationProgramUnproven,
+  finalVerificationReviewAccepted,
   reviewFailedCheckKeys,
   reviewRepairEvidenceIds,
+  unresolvedFailedVerificationChecks,
   handoffFilesOf,
   handoffSnapshotRetryPending,
   isAnsweredRun,
@@ -143,10 +149,9 @@ import type {
   ProjectDocCommitRequest,
   ProjectDocCommitResult,
 } from "./project-docs.js";
-import {
-  verificationCheckFailed,
-  type FinalVerificationCategory,
-  type FinalVerificationPlanPrefill,
+import type {
+  FinalVerificationCategory,
+  FinalVerificationPlanPrefill,
 } from "./final-verification-contracts.js";
 import type {
   FinalVerificationCheckResult,
@@ -2287,7 +2292,10 @@ export class BuildRuntime {
       if (generation.cleanup?.status !== "succeeded") {
         return await this.advanceFinalVerificationCleanup(generation);
       }
-      if (generation.review?.status === "approved") {
+      // VF8: a review whose only repairs are known defects at the limit lets the Build finish. An
+      // approved review takes the completion turn as before, a legacy v1 approval with no
+      // structured decision included (readiness still judges it there).
+      if (generation.review?.status === "approved" || finalVerificationReviewAccepted(generation)) {
         const verifierResult = await this.advanceIndependentVerification();
         if (verifierResult) return verifierResult;
         await this.runArchitect(
@@ -2316,15 +2324,23 @@ export class BuildRuntime {
         if (!decision) {
           throw new Error("Final verification repair review lacks a structured decision.");
         }
+        // VF8 (VD-3): a non-mandatory check the review sends to repair at its limit is a known defect.
+        const reviewKnownDefects = this.recordKnownDefectsAtRepairLimit(generation, "review");
+        if (reviewKnownDefects) return reviewKnownDefects;
         const pausedForRepair = this.pauseIfRepairCyclesExhausted(
           this.projection(),
           "final_verification",
           generation.targetRevision,
         );
         if (pausedForRepair) return pausedForRepair;
-        // VF3: a v2 review names its failed checks by id.
-        const reviewEvidenceIds = reviewRepairEvidenceIds(decision);
-        const reviewDispatch = await this.prepareRepairDispatch(reviewFailedCheckKeys(decision), { taskId: generation.taskId, evidenceIds: reviewEvidenceIds, failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
+        // VF3: a v2 review names its failed checks by id. VF8: known defects get no repair.
+        const reviewKnown = finalVerificationKnownDefectIds(generation);
+        const reviewKeys = reviewFailedCheckKeys(decision).filter((key) => !reviewKnown.has(key));
+        const reviewEvidenceIds = reviewKnown.size === 0
+          ? reviewRepairEvidenceIds(decision)
+          : [...new Set((decision.checkReviews ?? []).flatMap((review) =>
+            review.verdict === "repair_required" && !reviewKnown.has(review.checkId) ? review.evidenceIds : []))];
+        const reviewDispatch = await this.prepareRepairDispatch(reviewKeys, { taskId: generation.taskId, evidenceIds: reviewEvidenceIds, failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
         if (reviewDispatch.paused) return reviewDispatch.paused;
         await this.runArchitect({
           type: "final_verification_repair_plan_required",
@@ -2398,8 +2414,25 @@ export class BuildRuntime {
       }
       return this.afterArchitect("final_verification_review_required");
     }
+    // VF3: a v2 plan's checks are keyed by id; a v1 plan's by category.
+    const plannedKeys = isVerificationPlanV2(generation.plan)
+      ? generation.plan.checks.map((check) => check.id)
+      : generation.plan.checks.map((check) => check.category);
+    const pendingKey = plannedKeys.find(
+      (key) => !generation.completedChecks?.some((completed) => verificationCheckKey(completed) === key),
+    );
     // VF2: a check the Runner did not run (tool missing) is no failure and asks for no repair.
-    if (generation.completedChecks?.some(verificationCheckFailed)) {
+    // VF8: neither is a recorded known defect; with only those left, the generation is submitted.
+    // VF8: a v2 generation runs every planned check before it reports a failure, so the failure
+    // names every failed check and no check runs after the generation's cleanup. A v1 generation
+    // still stops at its first failed category, and a failure already reported stays reported.
+    // A check whose program was not proven stopped (or whose port cleanup failed) also stops the
+    // generation there: no later check may run beside a program that may still hold its port.
+    if (
+      unresolvedFailedVerificationChecks(generation).length > 0 &&
+      (generation.failure !== undefined || !isVerificationPlanV2(generation.plan) || pendingKey === undefined ||
+        finalVerificationProgramUnproven(generation))
+    ) {
       if (!generation.failure) {
         const failure = deriveFinalVerificationFailure(generation, 1);
         this.store.append({
@@ -2419,13 +2452,21 @@ export class BuildRuntime {
         return await this.advanceFinalVerificationCleanup(generation);
       }
       if (generation.repairTaskIds?.length) return this.supersedeAfterFinishedRepairs(generation);
+      // VF8 (VD-3): a non-mandatory check at its repair limit becomes a known defect, not a pause.
+      const knownDefects = this.recordKnownDefectsAtRepairLimit(generation, "failure");
+      if (knownDefects) return knownDefects;
       const pausedForRepair = this.pauseIfRepairCyclesExhausted(
         this.projection(),
         "final_verification",
         generation.targetRevision,
       );
       if (pausedForRepair) return pausedForRepair;
-      const mechanicalDispatch = await this.prepareRepairDispatch(failureFailedCheckKeys(generation.failure), { taskId: generation.taskId, evidenceIds: [...generation.failure.evidenceIds], failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
+      const known = finalVerificationKnownDefectIds(generation);
+      const repairKeys = failureFailedCheckKeys(generation.failure).filter((key) => !known.has(key));
+      const repairEvidenceIds = known.size === 0
+        ? [...generation.failure.evidenceIds]
+        : [...new Set(unresolvedFailedVerificationChecks(generation).flatMap((check) => check.evidenceIds))].sort();
+      const mechanicalDispatch = await this.prepareRepairDispatch(repairKeys, { taskId: generation.taskId, evidenceIds: repairEvidenceIds, failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
       if (mechanicalDispatch.paused) return mechanicalDispatch.paused;
       await this.runArchitect({
         type: "final_verification_repair_plan_required",
@@ -2439,7 +2480,7 @@ export class BuildRuntime {
           factIds: [...generation.failure.factIds],
         },
         ...repairReasonKeys(generation.plan, mechanicalDispatch.categories),
-        evidenceIds: [...generation.failure.evidenceIds],
+        evidenceIds: repairEvidenceIds,
       }, this.projection());
       const repaired = this.projection().finalVerification?.current;
       // T6b repair (B3): a pause recorded during the turn returns paused,
@@ -2454,13 +2495,6 @@ export class BuildRuntime {
       }
       return this.afterArchitect("final_verification_repair_plan_required");
     }
-    // VF3: a v2 plan's checks are keyed by id; a v1 plan's by category.
-    const plannedKeys = isVerificationPlanV2(generation.plan)
-      ? generation.plan.checks.map((check) => check.id)
-      : generation.plan.checks.map((check) => check.category);
-    const pendingKey = plannedKeys.find(
-      (key) => !generation.completedChecks?.some((completed) => verificationCheckKey(completed) === key),
-    );
     if (pendingKey !== undefined) {
       if (!this.finalVerificationDriver) {
         throw new Error("Final verification execution requires a FinalVerificationCheckDriver.");
@@ -2592,6 +2626,9 @@ export class BuildRuntime {
           workspacePaths: Object.fromEntries(completedV2.map((check) => [check.checkId, check.workspacePath])),
           checks: completedV2.map(({ attempt: _attempt, workspacePath: _workspacePath,
             startedAt: _startedAt, finishedAt: _finishedAt, ...check }) => check),
+          ...(generation.knownDefects?.length
+            ? { knownDefectCheckIds: generation.knownDefects.map((defect) => defect.checkId) }
+            : {}),
         },
         {
           evidenceStore: this.evidenceStore,
@@ -5669,6 +5706,53 @@ export class BuildRuntime {
       },
     });
     return { status: "paused", action: "verifier_selection_required" };
+  }
+
+  /**
+   * VF8 (VD-3): every non-mandatory v2 check at its repair limit is recorded as a known defect
+   * instead of pausing the Build: a check that failed when it ran (`failure`), or one the
+   * Architect's review sends to repair (`review`). The limit is the kernel's own rule
+   * (`finalVerificationKnownDefectReason`): the run's repair-plan budget, the check's repair
+   * issue, the verification task's attempt limit. A recorded external blocker, a mandatory check
+   * and a v1 run still pause.
+   */
+  private recordKnownDefectsAtRepairLimit(
+    generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+    source: "failure" | "review",
+  ): BuildStepResult | undefined {
+    if (!isVerificationPlanV2(generation.plan)) return undefined;
+    const known = finalVerificationKnownDefectIds(generation);
+    const keys = source === "failure"
+      ? (generation.failure ? failureFailedCheckKeys(generation.failure) : [])
+      : (generation.review?.decision ? reviewFailedCheckKeys(generation.review.decision) : []);
+    const projection = this.projection();
+    const checks = keys
+      .filter((checkId) => !known.has(checkId))
+      .flatMap((checkId) => {
+        // The kernel checks the limit's kind and identity; the text is for the reader of the log.
+        const limit = finalVerificationKnownDefectLimits(projection, generation, checkId, source)[0];
+        if (!limit) return [];
+        const claim = limit.kind === "issue"
+          ? { kind: limit.kind, issueId: limit.issueId }
+          : limit.kind === "task_attempts" ? { kind: limit.kind, taskId: limit.taskId } : { kind: limit.kind };
+        return [{ checkId, limit: claim, reason: finalVerificationKnownDefectText(limit, source) }];
+      });
+    if (checks.length === 0) return undefined;
+    this.store.append({
+      runId: this.runId,
+      type: "final_verification.known_defects_recorded",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `${generation.generationId}:known-defects:${source}:${checks.map((check) => check.checkId).join(",")}`,
+      payload: {
+        taskId: generation.taskId,
+        generationId: generation.generationId,
+        targetRevision: generation.targetRevision,
+        source,
+        checks,
+      },
+    });
+    return { status: "progressed", action: "final_verification_known_defects_recorded" };
   }
 
   private pauseIfRepairCyclesExhausted(

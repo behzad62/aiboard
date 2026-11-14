@@ -1962,7 +1962,12 @@ test("public step auto-applies Finish handoff and finalizes cleanup once", async
   }
 });
 
-test("a Finish handoff with known defects waits for the owner instead of applying itself", async () => {
+const knownDefectHandoffs: Array<[string, Record<string, unknown>]> = [
+  ["review findings", { knownDefects: [{ taskId: "readme", findingId: "pair-hint", claim: "The printed pairing command is not runnable.", rationale: "Owner decides." }] }],
+  // VF8 (VD-3): a non-mandatory final-verification check that still failed at the repair limit.
+  ["a final-verification known defect", { verificationKnownDefects: [{ checkId: "py-tests", label: "tests", reason: "still failing at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)", source: "failure" }] }],
+];
+for (const [name, defects] of knownDefectHandoffs) test(`a Finish handoff with ${name} waits for the owner instead of applying itself`, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-known-defects-"));
   let projection: SchedulerProjection = fakeRuntime("run_1").projection();
   let handoffCalls = 0;
@@ -1979,7 +1984,7 @@ test("a Finish handoff with known defects waits for the owner instead of applyin
             ...requested,
             projectHandoff: {
               ...requested.projectHandoff!,
-              knownDefects: [{ taskId: "readme", findingId: "pair-hint", claim: "The printed pairing command is not runnable.", rationale: "Owner decides." }],
+              ...defects,
             },
           };
           return { status: "paused" as const, action: "completion_decision_required" };

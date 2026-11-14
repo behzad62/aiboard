@@ -231,16 +231,30 @@ export interface NativeVerificationRepairProvenance {
   sourceGenerationId: string;
   finalVerificationTaskId: string;
   targetRevision: string;
+  /** A pre-VF3 run's failed categories; empty on a v2 run, which names `checkIds`. */
   categories: NativeFinalVerificationCategory[];
+  /** VF3: the failed v2 checks this repair covers. */
+  checkIds?: string[];
   evidenceIds: string[];
   source:
     | { type: "semantic_review"; submissionId: string; reviewId: string }
     | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
 }
 
+/** VF8: one item of the handoff snapshot's Not verified section, as the Runner lists it. */
+export interface NativeNotVerifiedItem {
+  kind: "not_run" | "skipped" | "known_defect" | "override" | "left_to_verify";
+  /** What makes the item distinct (a check id, a task and check, a criterion); absent from older Runners. */
+  key?: string;
+  subject: string;
+  detail: string;
+}
+
 export interface NativeFinalVerificationObservability {
   canonicalRevision?: string;
   current?: NativeFinalVerificationGenerationObservability;
+  /** VF8: the handoff snapshot's Not verified items for the run as it stands. */
+  notVerified?: NativeNotVerifiedItem[];
   history: Array<{
     generationId: string;
     taskId: string;
@@ -267,6 +281,19 @@ export interface NativeFinalVerificationCheckObservation {
   evidenceIds: string[];
   issues: string[];
   notRun?: NativeVerificationNotRun;
+  /** VF8: a non-mandatory check that still failed at the repair limit; the Build went on without it. */
+  knownDefect?: { reason: string };
+}
+
+/** VF8: a non-mandatory final-verification check that still failed at the repair limit. */
+export interface NativeVerificationKnownDefect {
+  checkId: string;
+  label: string;
+  reason: string;
+  /** `failure`: the check failed when it ran. `review`: the Architect's review asked to repair it. */
+  source?: "failure" | "review";
+  /** The limit it reached: its kind, identity and counters. */
+  limit?: { kind: "issue" | "run_budget" | "task_attempts"; issueId?: string; taskId?: string; used?: number; limit?: number; attempt?: number; attemptLimit?: number };
 }
 
 export interface NativeFinalVerificationGenerationObservability {
@@ -308,8 +335,15 @@ export interface NativeFinalVerificationGenerationObservability {
       logs: string[];
     };
   };
-  review: { status: "pending" | "requested" | "approved" | "repair_required" | "rejected"; summary?: string };
+  review: {
+    status: "pending" | "requested" | "approved" | "repair_required" | "rejected";
+    summary?: string;
+    /** VF8: the review asks only for repairs of known defects at the repair limit, so it counts as approval. */
+    acceptedWithKnownDefects?: true;
+  };
   repairs: Array<{ taskId: string; status: string }>;
+  /** VF8: the checks recorded as known defects at the repair limit. */
+  knownDefects?: NativeVerificationKnownDefect[];
 }
 
 export type NativeAcceptanceContractStatus =
@@ -337,6 +371,8 @@ export interface NativeCriterionReviewVerdict {
   evidenceIds: string[];
   artifactHashes?: string[];
   acceptedFailures?: Array<{ evidenceId: string; rationale: string }>;
+  /** W3: why the Architect's verdict differs from the Runner's prefill; on a satisfied verdict, accepted without Runner evidence. */
+  overrideReason?: string;
 }
 
 export interface NativeCriterionSubmissionProjection {
@@ -447,6 +483,8 @@ export type NativeArchitectActionReason =
         | { type: "semantic_review"; submissionId: string; reviewId: string }
         | { type: "mechanical_failure"; failureId: string; issueIds: string[]; factIds: string[] };
       failedCategories: string[];
+      /** VF3: a v2 run names the failed checks by id. */
+      failedCheckIds?: string[];
       evidenceIds: string[];
     }
   | {
@@ -897,6 +935,12 @@ export interface NativeBuildProjection {
     projectRevision?: string;
     /** Review findings the Architect completed with unrepaired; the runner then never applies the result itself. */
     knownDefects?: NativeProjectHandoffKnownDefect[];
+    /** VF8: final-verification checks that still failed at the repair limit; they hold the result for the owner too. */
+    verificationKnownDefects?: NativeVerificationKnownDefect[];
+    /** VF8: what the Architect says only the owner can check. */
+    leftToVerify?: string[];
+    /** VF8: the handoff snapshot's Not verified items when the handoff was requested. */
+    notVerified?: NativeNotVerifiedItem[];
   };
   verifierPolicy?: NativeIndependentVerifierObservability["policy"];
   buildRisk?: {
@@ -949,15 +993,19 @@ export interface NativeBuildProjection {
       plan:
         | { version?: undefined; checks: Array<{ category: NativeFinalVerificationCategory; status: "required" | "not_applicable"; rationale?: string; repositoryInspection?: { paths: string[]; summary: string } }> }
         | { version: 2; checks: Array<{ id: string; label: string; kind: NativeFinalVerificationCheckObservation["kind"]; origin: NativeFinalVerificationCheckObservation["origin"]; mandatory: boolean }>; skipped: Array<{ checkId: string; reason: string }> };
+      /** The checks the Runner suggested; a skipped v2 check takes its label from here. */
+      executionProfile?: { verification?: { suggestions?: Array<{ id: string; label: string }> } };
       state: "current" | "invalidated";
       invalidatedByRevision?: string;
       invalidatedByGuidanceId?: string;
       cleanup?: { generationId: string; taskId: string; targetRevision: string; attempt: number; status: "started" | "succeeded" | "failed"; startedAt: string; finishedAt?: string; error?: string; diagnosticsPath?: string };
-      failure?: { failureId: string; generationId: string; taskId: string; targetRevision: string; attempt: number; failedCategories: NativeFinalVerificationCategory[]; issueIds: string[]; factIds: string[]; evidenceIds: string[]; reportedAt: string };
+      failure?: { failureId: string; generationId: string; taskId: string; targetRevision: string; attempt: number; failedCategories: NativeFinalVerificationCategory[]; failedCheckIds?: string[]; issueIds: string[]; factIds: string[]; evidenceIds: string[]; reportedAt: string };
       submission?: { submissionId: string; generationId: string; targetRevision: string; attempt: number };
-      submissionResult?: { kind: "final_verification_submission"; generationId: string; runId: string; taskId: string; attempt: number; targetRevision: string; evidenceIds: string[]; submittedAt: string; green: boolean };
-      review?: { reviewId: string; submissionId: string; generationId: string; targetRevision: string; attempt: number; status: "requested" | "approved" | "repair_required" | "rejected"; decision?: { decision: "approved" | "repair_required"; summary: string; targetRevision: string; architectRisk: { risk: "low" | "high"; rationale?: string; source: "architect" | "legacy_default" }; failedCategories: NativeFinalVerificationCategory[]; categoryReviews: Array<{ category: NativeFinalVerificationCategory; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }> } };
+      submissionResult?: { kind: "final_verification_submission"; generationId: string; runId: string; taskId: string; attempt: number; targetRevision: string; evidenceIds: string[]; submittedAt: string; green: boolean; knownDefectCheckIds?: string[] };
+      review?: { reviewId: string; submissionId: string; generationId: string; targetRevision: string; attempt: number; status: "requested" | "approved" | "repair_required" | "rejected"; decision?: { decision: "approved" | "repair_required"; summary: string; targetRevision: string; architectRisk: { risk: "low" | "high"; rationale?: string; source: "architect" | "legacy_default" }; failedCategories: NativeFinalVerificationCategory[]; categoryReviews: Array<{ category: NativeFinalVerificationCategory; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }>; /** VF3: a v2 review names checks by id; categoryReviews is then empty. */ checkReviews?: Array<{ checkId: string; verdict: "approved" | "repair_required"; rationale: string; evidenceIds: string[] }>; failedCheckIds?: string[] } };
       repairTaskIds?: string[];
+      /** VF8: failed non-mandatory checks recorded as known defects at the repair limit. */
+      knownDefects?: NativeVerificationKnownDefect[];
       /** A v1 check carries its category; a v2 check (VF3) its id, label, kind and outcome. */
       completedChecks?: Array<{ category?: NativeFinalVerificationCategory; status?: "required" | "not_applicable"; rationale?: string; checkId?: string; label?: string; kind?: NativeFinalVerificationCheckObservation["kind"]; outcome?: "passed" | "failed" | "not_run"; green: boolean; evidenceIds: string[]; issues: string[]; notRun?: NativeVerificationNotRun; attempt: number; startedAt: string; finishedAt: string }>;
     };

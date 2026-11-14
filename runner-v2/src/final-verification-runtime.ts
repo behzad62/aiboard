@@ -119,6 +119,31 @@ export interface FinalVerificationManagedProcessObservation {
   stderr: string;
 }
 
+/**
+ * VF8: a managed start that failed with nothing left running: the managed service reported its
+ * own primary error (its exact cleanup verified, or nothing launched) and the call's grant was
+ * revoked. Only this start failure stays a plain failed check; any other start error leaves the
+ * program not proven stopped.
+ */
+export class FinalVerificationStartFailedCleanly extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+    this.name = cause.name;
+  }
+}
+
+/**
+ * VF8: a managed start whose program may still be running: the service's failed start kept an
+ * unverified cleanup, or the call failed after the start resolved (`snapshot` keeps what started,
+ * so the Runner can still try to stop it).
+ */
+export class FinalVerificationStartUnverified extends Error {
+  constructor(cause: unknown, readonly snapshot?: FinalVerificationManagedProcessObservation) {
+    super(`${asError(cause).message} (the program may still be running: its cleanup was not verified)`, { cause });
+    this.name = "FinalVerificationStartUnverified";
+  }
+}
+
 export interface FinalVerificationReadiness {
   timeoutMs?: number;
   pollIntervalMs?: number;
@@ -1377,6 +1402,9 @@ export class FinalVerificationRuntime {
     let timedOut = false;
     let cancelled = false;
     let startError: Error | undefined;
+    // VF8: a start error proves nothing was left running only when the managed service says so.
+    let startUnverified = false;
+    let leftover: FinalVerificationManagedProcessObservation | undefined;
     const steps: Array<{ fact: FinalVerificationCommandFact; issues: string[]; passed: boolean }> = [];
 
     try {
@@ -1391,6 +1419,8 @@ export class FinalVerificationRuntime {
           });
         } catch (error) {
           startError = asError(error);
+          startUnverified = !(error instanceof FinalVerificationStartFailedCleanly);
+          if (error instanceof FinalVerificationStartUnverified) leftover = error.snapshot;
         }
         if (observation) {
           const readiness = await this.waitForRuntimeReadiness({
@@ -1420,10 +1450,17 @@ export class FinalVerificationRuntime {
         }
       }
     } finally {
+      // VF8: a program that started though its start call failed is still stopped where possible.
+      if (!observation && leftover) observation = leftover;
       if (observation) {
         try {
           observation = (await this.managedProcess.stop(observation.processId)) ?? observation;
-          cleanupSucceeded = true;
+          // VF8: the cleanup succeeded only when the stop proves the program stopped. A program left
+          // running or in an unknown state keeps the generation from running further checks.
+          cleanupSucceeded = observation.status === "stopped";
+          if (!cleanupSucceeded) {
+            input.base.issues.push(`${name} process was not proven stopped (status ${observation.status}).`);
+          }
         } catch (error) {
           input.base.issues.push(`${name} process cleanup failed: ${asError(error).message}.`);
         }
@@ -1435,6 +1472,11 @@ export class FinalVerificationRuntime {
           cleanupSucceeded = false;
           input.base.issues.push(`${name} port cleanup failed: ${asError(error).message}.`);
         }
+      }
+      // VF8: after an unverified start, the cleanup is never proven, whatever a later stop said.
+      if (startUnverified) {
+        cleanupSucceeded = false;
+        input.base.issues.push(`${name} command ${smoke.label} failed to start and its cleanup was not verified.`);
       }
     }
 
@@ -1483,7 +1525,7 @@ export class FinalVerificationRuntime {
       endState,
       ...(smoke.endpoint ? { endpoint: smoke.endpoint } : {}),
       readinessSatisfied,
-      cleanupRequested: observation !== undefined,
+      cleanupRequested: observation !== undefined || startUnverified,
       cleanupSucceeded,
       ...(programOutputs ? { outputs: programOutputs } : {}),
     };
@@ -2959,8 +3001,32 @@ export function createFinalVerificationManagedProcessAdapter(options: Readonly<{
   };
   return Object.freeze({
     async start(input: FinalVerificationManagedProcessInput): Promise<ManagedProcessSnapshot> {
-      const snapshot = await invoke({ toolName: "process.start", workspacePath: input.cwd, access: "write" }, context =>
-        options.service.start({ command: input.executable, args: [...input.args], cwd: "." }, context, input.cwd));
+      // VF8: which start failures leave nothing running. The service's own primary error means its
+      // failed start was cleaned up (or never launched); its AggregateError means the cleanup is
+      // unverified; an error after the start resolved (the grant revoke) leaves a live program.
+      let started: ManagedProcessSnapshot | undefined;
+      let serviceError: unknown;
+      let serviceFailed = false;
+      let snapshot: ManagedProcessSnapshot;
+      try {
+        snapshot = await invoke({ toolName: "process.start", workspacePath: input.cwd, access: "write" }, async (context) => {
+          try {
+            started = await options.service.start({ command: input.executable, args: [...input.args], cwd: "." }, context, input.cwd);
+            return started;
+          } catch (error) {
+            serviceFailed = true;
+            serviceError = error;
+            throw error;
+          }
+        });
+      } catch (error) {
+        if (serviceFailed && error === serviceError && !(error instanceof AggregateError)) {
+          throw new FinalVerificationStartFailedCleanly(asError(error));
+        }
+        // The process started though the call failed: keep it so the Runner can still stop it.
+        if (started) workspaces.set(started.processId, input.cwd);
+        throw new FinalVerificationStartUnverified(error, started);
+      }
       workspaces.set(snapshot.processId, input.cwd);
       return snapshot;
     },

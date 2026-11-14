@@ -4,7 +4,9 @@ import { readFileSync } from "node:fs";
 import {
   applyDiscussionLiveStatus,
   applyNativeBuildPolicyEvent,
+  buildVerificationSummary,
   createNativeBuildPolicySynchronizer,
+  projectHandoffAppliesAutomatically,
   buildStopFallbackMessage,
   buildRunWorkflowStatus,
   durableBuildHandoffPanels,
@@ -18,6 +20,7 @@ import {
   nativeTaskRetirement,
   nativeTaskVerificationState,
   orderVerifierCandidates,
+  reviewAcceptedWithKnownDefects,
   shouldShowBuildPauseAction,
   nativeBuildRunPolicy,
   nativeBuildPolicyChange,
@@ -245,6 +248,116 @@ assert.notEqual(
   assert.equal(knownDefectRepairNote([defect]),
     "Repair these known defects before handing off, and prove each fix the way a user would hit it:\n" +
     "- The printed pairing command is not runnable. (packages/relay/src/cli.ts:88)");
+}
+// VF8 (VD-3): a final-verification check that still failed at the repair limit is a known defect
+// too: the result is held for the owner, the card counts it, and Repair first names it.
+{
+  const verificationDefect = { checkId: "lint", label: "lint", reason: "still failing at the repair limit: issue final-verification:lint used 3/3 repair cycles" };
+  const handoff = (automaticHandoffProjection as { projectHandoff: object }).projectHandoff;
+  const withCheckDefect = {
+    ...(automaticHandoffProjection as object),
+    status: "paused",
+    projectHandoff: { ...handoff, verificationKnownDefects: [verificationDefect], leftToVerify: ["the installer on macOS"] },
+    finalVerification: {
+      current: {
+        taskId: "fv", generationId: "g", targetRevision: "r", planVersion: 1, state: "current",
+        plan: {
+          version: 2,
+          checks: [
+            { id: "build", label: "package build", kind: "build", origin: "detected", mandatory: true },
+            { id: "lint", label: "lint", kind: "other", origin: "architect", mandatory: false },
+            { id: "cargo", label: "cargo tests", kind: "tests", origin: "detected", mandatory: false },
+          ],
+          skipped: [{ checkId: "start", reason: "A static export has no server." }],
+        },
+        completedChecks: [
+          { checkId: "build", outcome: "passed", green: true, evidenceIds: ["ev"], issues: [], attempt: 1, startedAt: "t", finishedAt: "t" },
+          { checkId: "lint", outcome: "failed", green: false, evidenceIds: [], issues: ["lint exited 1"], attempt: 1, startedAt: "t", finishedAt: "t" },
+          { checkId: "cargo", outcome: "not_run", green: false, evidenceIds: [], issues: [], notRun: { reason: "tool_missing", tool: "cargo", detail: "" }, attempt: 1, startedAt: "t", finishedAt: "t" },
+        ],
+        knownDefects: [verificationDefect],
+      },
+      history: [],
+    },
+    reviews: {
+      T1: { taskId: "T1", status: "approved", evidenceArtifactHashes: [], criterionVerdicts: [
+        { criterionId: "AC-2", verdict: "satisfied", rationale: "Read the code.", evidenceIds: [], overrideReason: "The tray icon cannot be driven by a test." },
+      ] },
+    },
+  } as never;
+  assert.equal(projectHandoffAppliesAutomatically(withCheckDefect, "running"), false, "a check that failed at its limit holds the result");
+  assert.equal(nativeBuildPauseDescription(withCheckDefect, "running")?.title, "Waiting for you: the Build finished with 1 known defect");
+  const panel = durableBuildHandoffPanels(withCheckDefect, "running").project;
+  assert.deepEqual(panel?.verificationKnownDefects, [verificationDefect]);
+  assert.equal(panel?.verification?.total, 3, "skipped checks are not counted as run");
+  assert.equal(panel?.verification?.passed, 1);
+  assert.deepEqual(panel?.verification?.notVerified.map((item) => item.label), [
+    "lint", "cargo tests", "start", "the installer on macOS", "Task T1, criterion AC-2",
+  ], "each thing not verified appears once");
+  assert.match(panel!.verification!.notVerified[0]!.reason, /^Known defect: this check still failed after its repairs \(issue final-verification:lint used 3\/3 repair cycles\)/);
+  assert.equal(knownDefectRepairNote([], [verificationDefect]),
+    "Repair these known defects before handing off, and prove each fix the way a user would hit it:\n" +
+    "- The final verification check \"lint\" still fails.");
+  // The verification task is not "failed": the Build went on without the known defect.
+  const fvTask = { id: "fv", kind: "final_verification", status: "planned" } as never;
+  const state = nativeTaskVerificationState({ ...(withCheckDefect as object), tasks: { fv: fvTask } } as never, fvTask);
+  assert.notEqual(nativeBuildTaskStatus("planned", { ...state, generation: { ...state.generation!, review: { status: "approved" }, cleanup: { status: "succeeded" } } }), "failed");
+  // A run started before VF3 summarizes its four categories; a not-run one reads as not run.
+  const v1 = buildVerificationSummary({ finalVerification: { current: {
+    taskId: "fv", generationId: "g1", targetRevision: "r", planVersion: 1, state: "current",
+    plan: { checks: [
+      { category: "build", status: "required" }, { category: "tests", status: "required" },
+      { category: "runtime_smoke", status: "not_applicable", rationale: "A library." }, { category: "browser", status: "not_applicable", rationale: "No UI." },
+    ] },
+    completedChecks: [
+      { category: "build", status: "required", green: true, evidenceIds: [], issues: [], attempt: 1, startedAt: "t", finishedAt: "t" },
+      { category: "tests", status: "required", green: false, evidenceIds: [], issues: [], notRun: { reason: "tool_missing", tool: "pytest", detail: "" }, attempt: 1, startedAt: "t", finishedAt: "t" },
+    ],
+  }, history: [] } } as never);
+  assert.equal(v1?.passed, 1);
+  assert.equal(v1?.total, 2);
+  assert.deepEqual(v1?.notVerified.map((item) => item.reason), [
+    "Not run: pytest is not installed on this machine, so this was not verified.",
+    "Not applicable: A library.",
+    "Not applicable: No UI.",
+  ]);
+  assert.equal(buildVerificationSummary({}), undefined, "no generation, no summary");
+
+  // A skipped check takes its label from the Runner's suggestions, not its id.
+  const fvCurrent = (withCheckDefect as { finalVerification: { current: object } }).finalVerification.current;
+  const labelled = buildVerificationSummary({ ...(withCheckDefect as object), finalVerification: { current: {
+    ...fvCurrent,
+    executionProfile: { verification: { suggestions: [{ id: "start", label: "dev server" }] } },
+  }, history: [] } } as never);
+  assert.ok(labelled?.notVerified.some((item) => item.label === "dev server"), "the skipped check reads by its label");
+  // A Runner that records the snapshot's Not verified items: the card lists exactly those, in order.
+  const runnerItems = [
+    { kind: "not_run", key: "check:cargo", subject: "final verification cargo tests", detail: "tool missing: cargo" },
+    { kind: "skipped", key: "check:start", subject: "final verification dev server", detail: "A static export has no server." },
+    { kind: "known_defect", key: "check:py-tests", subject: "final verification tests (py-tests)", detail: "still failing at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)" },
+    { kind: "known_defect", key: "check:rs-tests", subject: "final verification tests (rs-tests)", detail: "the Architect's review still asks for a repair at the repair limit: the run's repair-plan budget is used up (0 of 0 repair plans)" },
+    { kind: "not_run", key: "boundary:T2:lint", subject: "boundary T2 lint", detail: "tool missing: eslint" },
+    { kind: "override", key: "override:T1:AC-2", subject: "task T1 criterion AC-2", detail: "The tray icon cannot be driven by a test." },
+    { kind: "left_to_verify", key: "left:the installer on macOS", subject: "the installer on macOS", detail: "" },
+  ];
+  const fromRunner = buildVerificationSummary({ ...(withCheckDefect as object), projectHandoff: { ...(withCheckDefect as { projectHandoff: object }).projectHandoff, notVerified: runnerItems } } as never);
+  assert.equal(fromRunner?.total, 3);
+  assert.equal(fromRunner?.passed, 1);
+  assert.deepEqual(fromRunner?.notVerified.map((item) => item.label), [
+    "Final verification cargo tests", "Final verification dev server", "Final verification tests (py-tests)",
+    "Final verification tests (rs-tests)", "Boundary T2 lint", "Task T1 criterion AC-2", "The installer on macOS",
+  ], "the same items as the snapshot, each once");
+  assert.equal(new Set(fromRunner?.notVerified.map((item) => item.key)).size, runnerItems.length);
+  assert.match(fromRunner!.notVerified[3]!.reason, /^Known defect: the Architect's review still asked for a repair of this check after its repairs \(the run's repair-plan budget/);
+  assert.match(fromRunner!.notVerified[5]!.reason, /^Accepted on the Architect's judgement without Runner evidence: The tray icon/);
+  // A review that only asks to repair known defects at the limit counts as approval.
+  const reviewDefect = { checkId: "lint", label: "lint", reason: "the Architect's review still asks for a repair at the repair limit: x", source: "review" };
+  const reviewed = { review: { status: "repair_required", decision: { checkReviews: [{ checkId: "lint", verdict: "repair_required" }, { checkId: "build", verdict: "approved" }] } }, knownDefects: [reviewDefect] };
+  assert.equal(reviewAcceptedWithKnownDefects(reviewed as never), true);
+  assert.equal(reviewAcceptedWithKnownDefects({ ...reviewed, knownDefects: [{ ...reviewDefect, source: "failure" }] } as never), false);
+  const reviewedState = nativeTaskVerificationState({ tasks: { fv: fvTask }, finalVerification: { current: { ...fvCurrent, ...reviewed, completedChecks: [], cleanup: { status: "succeeded" } }, history: [] } } as never, fvTask);
+  assert.equal(reviewedState.generation?.review.status, "approved");
+  assert.equal(nativeBuildTaskStatus("planned", reviewedState), "done");
 }
 assert.equal(nativeBuildTaskStatus("integrated"), "done");
 assert.equal(nativeBuildTaskStatus("running"), "in_progress");
