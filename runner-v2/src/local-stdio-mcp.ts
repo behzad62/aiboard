@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,6 +10,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { LOCAL_MCP_DEPTH_LIMIT } from "./child-environment.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionHost } from "./execution-host.js";
+import { IMAGE_LIMITS } from "./image-inspection.js";
+import { mcpImageContent, REMOTE_IMAGE_LIMITS } from "./image-tools.js";
 import { MANAGED_OUTPUT_WAIT_MAX_MS } from "./managed-process-contracts.js";
 import { PROCESS_RUN_DEFAULT_TIMEOUT_MS } from "./process-tools.js";
 import { createLocalMcpOwner, LocalMcpToolSession, type LocalMcpOwner, type LocalMcpPolicyOptions } from "./remote-tool-runtime.js";
@@ -127,12 +129,10 @@ export class LocalMcpSessions {
         const result = await entry.session.invoke(request.name, request.arguments ?? {});
         if (this.closing || this.sessions.get(token) !== entry) throw new Error("Local MCP session is unavailable.");
         if (request.name !== "image_inspect" || result.isError) return result;
-        const content = await Promise.all(result.content.map(async (part) => {
-          if (part.type !== "artifact" || !part.visual || !["image/png", "image/jpeg", "image/webp"].includes(part.mediaType)) return part;
-          const bytes = await this.options.host.artifacts.get(part.hash);
-          if (createHash("sha256").update(bytes).digest("hex") !== part.hash) throw new Error("Local MCP image artifact is invalid.");
-          return { type: "image", mimeType: part.mediaType, data: bytes.toString("base64") };
-        }));
+        // The image goes back in the result, as over AIBoard Remote (remote-connector.ts), within the provider limit.
+        const content = await mcpImageContent(result.content, async (hash) => await this.options.host.artifacts.get(hash),
+          { maxBytes: IMAGE_LIMITS.maxDeliveredBytes, maxImages: REMOTE_IMAGE_LIMITS.maxImagesPerCall });
+        if (!content) throw new Error("Local MCP image artifact is invalid.");
         if (this.closing || this.sessions.get(token) !== entry) throw new Error("Local MCP session is unavailable.");
         return { ...result, content };
       }

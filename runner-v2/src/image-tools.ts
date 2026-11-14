@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { NativeTool, ToolExecutionContext, ToolExecutionOutput, ValidationResult } from "./agent-contracts.js";
+import type { NativeTool, ToolContentBlock, ToolExecutionContext, ToolExecutionOutput, ValidationResult } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { isHiddenWorkspacePath } from "./filesystem-tools.js";
 import { RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
-import { IMAGE_LIMITS, ImageInspectionError, prepareImageForModel, type ImageCrop, type PreparedImage } from "./image-inspection.js";
+import { detectImageType, IMAGE_LIMITS, ImageInspectionError, prepareImageForModel, type ImageCrop, type InspectableImageType, type PreparedImage } from "./image-inspection.js";
 
 /**
  * Runner tools whose artifact blocks may carry model-visible image metadata. The evidence tools
@@ -12,12 +13,31 @@ import { IMAGE_LIMITS, ImageInspectionError, prepareImageForModel, type ImageCro
  */
 export const RUNNER_VISUAL_TOOLS: ReadonlySet<string> = new Set(["image.inspect", "browser.screenshot", "run_evidence_command", "inspect_evidence"]);
 
+/**
+ * Images AIBoard Remote returns in one tool result. The whole stored result has to stay inline (the connector's 256 KiB
+ * INLINE_RESULT_MAX_BYTES), so it comes back in the one jobs_result page the relay decodes into MCP content: base64
+ * makes 180 000 bytes 240 000, which leaves room for the rest of the result. image_inspect reads one image per call.
+ */
+export const REMOTE_IMAGE_LIMITS = Object.freeze({ maxBytes: 180_000, maxImagesPerCall: 1 });
+
+/** MCP image content: the image itself in a tool result, base64 data plus its mimeType. */
+export interface McpImageContent {
+  readonly type: "image";
+  readonly data: string;
+  readonly mimeType: InspectableImageType;
+}
+
 type Input = Record<string, unknown>;
 
 export interface ImageToolsOptions {
   readonly artifacts: ArtifactStore;
   readonly hiddenPaths?: readonly string[];
   readonly pathGuard?: RemotePathGuard;
+  /**
+   * For the MCP surfaces (AIBoard Remote, local MCP), which return the image in the tool result itself as MCP image
+   * content rather than as native image input in the model's next turn: the delivered image is at most maxBytes.
+   */
+  readonly inlineDelivery?: { readonly maxBytes: number };
 }
 
 export function createImageTools(options: ImageToolsOptions): NativeTool<unknown>[] {
@@ -48,6 +68,8 @@ export function createImageTools(options: ImageToolsOptions): NativeTool<unknown
         const prepared = prepareImageForModel(loaded.bytes, {
           ...(input.crop ? { crop: input.crop as ImageCrop } : {}),
           ...(input.maxDimension !== undefined ? { maxDimension: input.maxDimension as number } : {}),
+          // The file goes to a cloud client as it is, so it must be whole.
+          ...(options.inlineDelivery ? { maxBytes: options.inlineDelivery.maxBytes, complete: true } : {}),
         });
         const sourceFacts = { ...loaded.reference, mediaType: prepared.source.mediaType, width: prepared.source.width, height: prepared.source.height,
           byteLength: prepared.source.byteLength, sha256: prepared.sourceDigest, ...(prepared.source.orientation ? { exifOrientation: prepared.source.orientation } : {}) };
@@ -58,7 +80,14 @@ export function createImageTools(options: ImageToolsOptions): NativeTool<unknown
             error: { code: "image_input_unsupported", message: "This model cannot receive image input, so the image was not shown to it. Only metadata is available; do not describe the image's contents." },
           };
         }
-        return await deliver(options.artifacts, prepared, sourceFacts, loaded.label);
+        if (!options.inlineDelivery) return await deliver(options.artifacts, prepared, sourceFacts, loaded.label);
+        // The byte limit can make the image smaller than maxDimension asked for; say so, and how to see detail.
+        const crop = input.crop as ImageCrop | undefined;
+        const wanted = Math.min((input.maxDimension as number | undefined) ?? IMAGE_LIMITS.defaultMaxDimension,
+          Math.max(crop?.width ?? prepared.source.width, crop?.height ?? prepared.source.height));
+        const reduced = Math.max(prepared.width, prepared.height) < wanted
+          ? [`Reduced to ${prepared.width}x${prepared.height} to fit the ${options.inlineDelivery.maxBytes}-byte limit for an image in a tool result; inspect a crop of a region to see it in more detail.`] : [];
+        return await deliver(options.artifacts, prepared, sourceFacts, loaded.label, true, reduced);
       } catch (error) {
         const code = error instanceof RemotePathDeniedError ? error.code : error instanceof ImageInspectionError ? error.code : "image_unreadable";
         const message = error instanceof Error ? error.message : String(error);
@@ -81,17 +110,53 @@ export async function visualArtifactOutput(artifacts: ArtifactStore, bytes: Uint
   };
 }
 
-async function deliver(artifacts: ArtifactStore, prepared: PreparedImage, source: Record<string, unknown>, label: string): Promise<ToolExecutionOutput> {
+/**
+ * A tool result's model-visible images as MCP image content, for a surface that returns the image in the result itself.
+ * At most maxImages are converted, each only when it is at most maxBytes and its bytes still match their content address
+ * and media type; every other block, and an image past a limit, stays as it is. Undefined when nothing was converted.
+ * With an image in it, image.inspect's "not attached" JSON says the image is in this result.
+ */
+export async function mcpImageContent(content: readonly ToolContentBlock[], read: (hash: string) => Promise<Uint8Array | undefined>,
+  limits: Readonly<{ maxBytes: number; maxImages: number }>): Promise<Array<ToolContentBlock | McpImageContent> | undefined> {
+  let converted = 0;
+  const out: Array<ToolContentBlock | McpImageContent> = [];
+  for (const block of content) {
+    if (block.type !== "artifact" || !block.visual || converted >= limits.maxImages || !INLINE_IMAGE_TYPES.has(block.mediaType)) { out.push(block); continue; }
+    let bytes: Uint8Array | undefined;
+    try { bytes = await read(block.hash); } catch { bytes = undefined; }
+    if (!bytes || bytes.byteLength > limits.maxBytes || createHash("sha256").update(bytes).digest("hex") !== block.hash ||
+      detectImageType(bytes) !== block.mediaType) { out.push(block); continue; }
+    out.push({ type: "image", data: Buffer.from(bytes).toString("base64"), mimeType: block.mediaType as InspectableImageType });
+    converted += 1;
+  }
+  if (!converted) return undefined;
+  return out.map((block) => {
+    if (block.type !== "json" || !block.value || typeof block.value !== "object" || (block.value as { reason?: unknown }).reason !== IMAGE_NOT_ATTACHED) return block;
+    const { shown: _shown, reason: _reason, ...rest } = block.value as Record<string, unknown>;
+    return { type: "json", value: { shown: true, delivery: IMAGE_ATTACHED, ...rest } };
+  });
+}
+const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+/**
+ * An MCP surface's image.inspect result says the image is not attached until mcpImageContent puts the image block in
+ * it: only the code that attaches the image may say it is there.
+ */
+const IMAGE_NOT_ATTACHED = "image_not_attached";
+const IMAGE_ATTACHED = "image content in this result";
+
+async function deliver(artifacts: ArtifactStore, prepared: PreparedImage, source: Record<string, unknown>, label: string,
+  inline = false, extraNotes: readonly string[] = []): Promise<ToolExecutionOutput> {
   // The derivative is a new artifact; the source file or artifact is never modified.
   const stored = await artifacts.put(prepared.bytes, prepared.mediaType, label);
+  const notes = [...prepared.notes, ...extraNotes];
   return {
     content: [
       { type: "json", value: {
-        shown: true,
-        delivery: "native image input in your next turn",
+        ...(inline ? { shown: false, reason: IMAGE_NOT_ATTACHED } : { shown: true, delivery: "native image input in your next turn" }),
         source,
         delivered: { artifactHash: stored.hash, mediaType: prepared.mediaType, width: prepared.width, height: prepared.height, byteLength: prepared.bytes.byteLength, transforms: prepared.transforms },
-        ...(prepared.notes.length ? { notes: prepared.notes } : {}),
+        ...(notes.length ? { notes } : {}),
       } },
       { type: "artifact", hash: stored.hash, mediaType: prepared.mediaType, label,
         visual: { width: prepared.width, height: prepared.height, sourceDigest: prepared.sourceDigest, ...(prepared.transforms.length ? { transforms: [...prepared.transforms] } : {}) } },
