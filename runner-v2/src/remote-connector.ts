@@ -5,6 +5,7 @@ import type { ToolResult } from "./agent-contracts.js";
 import { RemoteAdmissionError, parseRemoteRequest, remotePayloadDigest, type RemoteAdmissionStore, type RemoteJob, type RemoteRequest } from "./remote-admission-store.js";
 import { RemoteAuthError, type SignedRelayChallenge, type RemoteAuthorization, type RemoteAuthenticator } from "./remote-auth.js";
 import type { RemoteDeviceSession, RemoteDeviceStore } from "./remote-device-store.js";
+import { mcpImageContent, REMOTE_IMAGE_LIMITS } from "./image-tools.js";
 import { remoteSessionCode, type VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
 import { COMMAND_APPROVAL_WINDOW_MS, type CommandApprovalNotice, type CommandApprovalRequest, type CommandApprovalSummary } from "./remote-approval.js";
@@ -160,7 +161,9 @@ export const REMOTE_TOOL_ID_TO_RUNNER: Readonly<Record<string, string>> = Object
 
 const JOB_TOOL_IDS: ReadonlySet<string> = new Set(["jobs_status", "jobs_events", "jobs_result", "jobs_cancel"]);
 /** Results above this many encoded bytes are stored as an artifact and returned by outputRef. */
-const INLINE_RESULT_MAX_BYTES = 256 * 1024;
+export const INLINE_RESULT_MAX_BYTES = 256 * 1024;
+/** Stored-result bytes in one jobs_result page, except an image_inspect result, which comes back whole when a frame holds it. */
+const RESULT_PAGE_BYTES = 64 * 1024;
 /** Artifact hashes listed directly in a large-result stub. */
 const MAX_STUB_ARTIFACTS = 256;
 const MAX_INDEX_ARTIFACTS = 100_000;
@@ -917,8 +920,11 @@ export class RemoteConnector {
         ...(bytes ? { inline: Buffer.from(bytes.subarray(offset, end)).toString("base64"), encoding: "base64" } : {}),
         ...(bytes && end < bytes.byteLength ? { nextCursor: resultCursor(args.jobId, end) } : {}),
       });
+      // The relay decodes only a result that comes in one page into MCP content, so an image_inspect result, which
+      // carries its image, comes back whole when a frame holds it.
+      const pageBytes = view.job.toolId === "image_inspect" ? INLINE_RESULT_MAX_BYTES : RESULT_PAGE_BYTES;
       let low = 0;
-      let high = Math.min((bytes?.byteLength ?? 0) - offset, args.maxBytes ?? 64 * 1024, 64 * 1024);
+      let high = Math.min((bytes?.byteLength ?? 0) - offset, args.maxBytes ?? pageBytes, pageBytes);
       while (low < high) {
         const length = Math.ceil((low + high) / 2);
         const frame = { type: "response", response: jobResponse(request, view.job), data: makePage(offset + length) };
@@ -1196,13 +1202,13 @@ export class RemoteConnector {
             ...(result.error?.code === WINDOWS_PATH_TOO_LONG ? { message: result.error.message } : {}) }), "utf8") }));
       } else if (entry.controller.signal.aborted && unknown) {
         admission.recordStop(identity, jobId, "unverified");
-        this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown", await this.storedResult(result)));
+        this.finish(entry, admission.settleCancelled(identity, jobId, "effect_outcome_unknown", await this.storedResult(result, entry)));
       } else {
         if (entry.controller.signal.aborted) admission.recordStop(identity, jobId, "unverified");
         const state = unknown ? "outcome_unknown" : result.isError ? "failed" : "completed";
         // An unknown outcome keeps what the tool returned, such as what a timed-out command printed and its processId.
         // It is evidence, not a resolution: the job stays outcome_unknown, and its key returns it and never runs it again.
-        this.finish(entry, admission.settle(identity, jobId, state, await this.storedResult(result)));
+        this.finish(entry, admission.settle(identity, jobId, state, await this.storedResult(result, entry)));
       }
     } catch {
       if (!entry.settled) {
@@ -1220,7 +1226,9 @@ export class RemoteConnector {
    * A result over the inline cap is stored whole as an artifact and returned by
    * outputRef with a small stub naming its artifacts — never silently truncated.
    */
-  private async storedResult(result: ToolResult): Promise<{ inline: Uint8Array; outputRef?: string }> {
+  private async storedResult(result: ToolResult, entry: Pick<InFlight, "isPlugin" | "runnerName">): Promise<{ inline: Uint8Array; outputRef?: string }> {
+    const withImage = !entry.isPlugin && entry.runnerName === "image.inspect" ? await this.withImageContent(result) : undefined;
+    if (withImage) return { inline: withImage };
     const bytes = Buffer.from(JSON.stringify(result), "utf8");
     if (bytes.byteLength <= INLINE_RESULT_MAX_BYTES) return { inline: bytes };
     const allHashes = [...artifactHashes(result)];
@@ -1238,6 +1246,23 @@ export class RemoteConnector {
       inline: Buffer.from(JSON.stringify({ outputRef: stored.hash, mediaType: "application/json", byteLength: bytes.byteLength, artifacts: hashes,
         ...(index ? { artifactIndex: index.hash } : {}) }), "utf8"),
     };
+  }
+
+  /**
+   * image_inspect's image as MCP image content (base64 data plus mimeType) in the stored result, which the relay hands
+   * to the client as it is, so the client sees the image in this call's result. Undefined keeps the artifact reference,
+   * for an image past REMOTE_IMAGE_LIMITS or a result that would no longer stay inline; artifacts_read still reads it.
+   */
+  private async withImageContent(result: ToolResult): Promise<Uint8Array | undefined> {
+    const artifacts = this.options.artifacts;
+    if (result.isError || !artifacts) return undefined;
+    const content = await mcpImageContent(result.content, async (hash) => {
+      const found = await artifacts.stat(hash);
+      return found.byteLength > REMOTE_IMAGE_LIMITS.maxBytes ? undefined : await readAtMost(found.path, REMOTE_IMAGE_LIMITS.maxBytes);
+    }, { maxBytes: REMOTE_IMAGE_LIMITS.maxBytes, maxImages: REMOTE_IMAGE_LIMITS.maxImagesPerCall });
+    if (!content) return undefined;
+    const bytes = Buffer.from(JSON.stringify({ ...result, content }), "utf8");
+    return bytes.byteLength <= INLINE_RESULT_MAX_BYTES ? bytes : undefined;
   }
 
   private startProcessStop(identity: VerifiedRemoteIdentity, jobId: string, processId: string): void {
@@ -1375,6 +1400,21 @@ function artifactArguments(request: RemoteRequest): ArtifactArguments {
     throw new Error("Invalid artifact arguments.");
   }
   return { jobId: payload.jobId, hash: payload.hash, offset: typeof payload.offset === "number" ? payload.offset : 0 };
+}
+
+/** The file's bytes, or undefined when it holds more than maxBytes (it never reads past maxBytes + 1). */
+async function readAtMost(path: string, maxBytes: number): Promise<Uint8Array | undefined> {
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let length = 0;
+    while (length < buffer.byteLength) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.byteLength - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    return length > maxBytes ? undefined : buffer.subarray(0, length);
+  } finally { await handle.close(); }
 }
 
 function artifactHashes(result: ToolResult): Set<string> {

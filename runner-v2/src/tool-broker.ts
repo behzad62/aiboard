@@ -300,7 +300,10 @@ export class ToolBroker implements AgentToolRuntime {
     const access = tool.assessAccess?.(input, toolContext) ?? {
       capability: tool.definition.effect,
     };
-    const pathDenial = await this.checkFixedDenies(tool.definition.name, access, toolContext) ??
+    // The remote syntax refusals come first: the fixed deny and the guard resolve a path on disk, and on Windows
+    // resolving a UNC path is already a connection to the host it names.
+    const pathDenial = this.checkRemoteSyntax(tool.definition.name, access, tool.namedPaths?.(input) ?? [], toolContext) ??
+      await this.checkFixedDenies(tool.definition.name, access, toolContext) ??
       await this.checkRemotePaths(tool.definition.name, access, toolContext);
     if (pathDenial) return pathDenial;
     // Capture identities before any approval/grant await can allow substitution.
@@ -570,6 +573,39 @@ export class ToolBroker implements AgentToolRuntime {
       { callId, toolName, ...output },
       this.clock()
     );
+  }
+
+  /**
+   * The remote guard's syntax refusals for every path a remote or local_mcp call names, in any tool, with no
+   * filesystem call: both the spelling the caller sent and its resolved form, before the fixed deny or the guard
+   * resolve either on disk.
+   */
+  private checkRemoteSyntax(
+    toolName: string,
+    access: ToolAccessRequest,
+    namedPaths: readonly string[],
+    context: ToolExecutionContext,
+  ): ToolExecutionOutput | undefined {
+    if (!this.pathGuard || (context.actor.role !== "remote" && context.actor.role !== "local_mcp")) return undefined;
+    // Every declared path, and every path the call names that they do not cover (checked as reads).
+    const entries = [...(access.paths ?? []), ...namedPaths.map((path) => ({ path, access: "read" as const }))];
+    for (const entry of entries) {
+      const target = isAbsolute(entry.path) ? resolve(entry.path) : resolve(this.workspacePath, entry.path);
+      const mode = entry.access === "read" ? "read" as const : entry.access === "delete" ? "delete" as const : "write" as const;
+      try {
+        for (const spelling of [entry.path, target]) {
+          this.pathGuard.assertSyntaxAllowed(spelling, mode, { toolName, principal: `${context.actor.role}:${context.actor.id}` });
+        }
+      } catch (error) {
+        if (!(error instanceof RemotePathDeniedError)) throw error;
+        this.decisions.set(context.callId ?? "unknown", {
+          decision: "denied", capability: access.capability, outsideWorkspace: false,
+          pathCategory: error.category, pathDenialReason: error.reason,
+        });
+        return outputFailure(error.code, error.message);
+      }
+    }
+    return undefined;
   }
 
   /** The fixed deny, for every actor and every tool that names paths, independent of the remote guard. */

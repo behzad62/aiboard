@@ -35,9 +35,14 @@ const deterministicPrTests = [
   // The owned fence lock's Windows self-birth preparation through withOwnedFenceLock, on a fake clock, plus the
   // Windows Job host's wiring (about 1 s).
   "runner-v2/test/owned-fence-self-birth.test.ts",
-  // VF4b: a final browser check's processes share one owner, and its tool lookup searches that owner's PATH (no
-  // process; a temporary git checkout, about 8 s on Windows).
+  // VF4b: a final browser check's processes share one exact owner, its tool lookup searches the launch's PATH, and a
+  // failed step or an escaped browser fails it (no process; temporary git checkouts, about 20 s on Windows).
   "runner-v2/test/final-check-browser-ownership.test.ts",
+  // A remote UNC path is refused before any filesystem call, in every remote file tool (an fs spy, no network, under 1 s).
+  "runner-v2/test/remote-path-syntax-first.test.ts",
+  // image_inspect over AIBoard Remote: the byte limit, MCP image content in one jobs_result page and the path rules,
+  // in memory with a stub host (no process, about 2 s of tests).
+  "runner-v2/test/remote-image-content.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

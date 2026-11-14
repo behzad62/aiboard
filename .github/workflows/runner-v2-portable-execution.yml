@@ -121,6 +121,8 @@ jobs:
           runner-v2/test/repository-validation-config.test.ts
           runner-v2/test/owned-fence-self-birth.test.ts
           runner-v2/test/final-check-browser-ownership.test.ts
+          runner-v2/test/remote-path-syntax-first.test.ts
+          runner-v2/test/remote-image-content.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1

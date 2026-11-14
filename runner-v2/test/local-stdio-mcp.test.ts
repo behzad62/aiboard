@@ -52,7 +52,7 @@ test("SDK clients use Runner broker grants and exact local managed-process owner
   const project = join(root, "project"), state = join(root, "state"), outside = join(root, "outside");
   await mkdir(project); await mkdir(state); await mkdir(outside);
   await writeFile(join(project, "fixture.txt"), "local fixture\n");
-  await writeFile(join(project, "fixture.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a9sAAAAASUVORK5CYII=", "base64"));
+  await writeFile(join(project, "fixture.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=", "base64"));
   await writeFile(join(outside, "secret.txt"), "outside fixture\n");
   const host = createExecutionHost({ projectRoot: project, stateDirectory: state,
     artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
