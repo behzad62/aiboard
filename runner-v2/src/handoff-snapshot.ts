@@ -1139,7 +1139,7 @@ function inventoryToolsText(
     .filter((tool) => names.has(inventoryToolName(tool.name)))
     .map((tool) => tool.status === "found"
       ? `${tool.name} found (${tool.version ?? tool.versionNote ?? "no version line"})`
-      : tool.status === "missing" ? `${tool.name} missing` : `${tool.name} unknown (${tool.note ?? "the lookup could not decide"})`);
+      : tool.status === "missing" ? `${tool.name} missing${tool.note ? ` (${tool.note})` : ""}` : `${tool.name} unknown (${tool.note ?? "the lookup could not decide"})`);
   return lines.length > 0 ? lines.join(", ") : undefined;
 }
 

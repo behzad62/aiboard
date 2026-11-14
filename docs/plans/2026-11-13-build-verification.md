@@ -1,7 +1,7 @@
 # Build Verification: the Runner Records, the Architect Decides, the Owner Sets What Is Mandatory — Implementation Plan
 Date: 2026-11-13
 Status: Approved by the owner on 2026-11-13 ("revise the plan then start the implementation"), with the revision that moves browsing to the Playwright CLI (§4.5). It runs after the AIBoard home (done 2026-11-12) and before the CLI workers plan (VD-1).
-Progress (2026-11-14): VF1–VF8 are merged; VF9 is the last packet. See §9.
+Progress (2026-11-14): VF1–VF9 are merged; the follow-up VF4b (a final check's browser session) is in review. See §9.
 Audience: the owner, and whoever implements the packets: a person or a Claude Code session.
 Primary repository: D:\repos\ai-discussion-board, read at 8a3f4843 (main, 2026-11-12). Bare file names are under `runner-v2/src/`; `test/...` is `runner-v2/test/...`; other paths are repo-relative.
 
@@ -275,12 +275,15 @@ As of 2026-11-14. Pull requests are in behzad62/aiboard.
 | VF7a | Merged (spike report: docs/runner-v2/playwright-cli-spike-2026-11-13.md) | #190 |
 | VF7b | Merged | #199 |
 | VF8 | Merged | #202 |
-| VF9 | In review: the Runner guide and the web Runner guide, AGENTS.md and CLAUDE.md lines, this repository's `aiboard-validation.json` (VD-5) with runner-v2/test/repository-validation-config.test.ts, and the lint fix that makes `npm run lint` green | this packet |
+| VF9 | Merged | #204 |
+| VF4b | In review: a final check's Playwright CLI browser session (the program and its steps share one owner; the check's tool lookup searches that owner's PATH) | this packet |
 
 **At the gate.** The full `test:runner-v2` is waiting on the owner (or CI's full runs); the packets ran their targeted tests.
 
 **Still open.**
-- **VF4b: a Playwright CLI browser session for final checks.** A `start` check's program and its steps belong to different owners (`final-verification:<taskId>` and `<taskId>`), so they would get different CLI sessions; aligning them is a process-ownership change and needs an independent review. VF2's lookup also ignores the owner's `pathPrepend`, so `playwright-cli-session` would read as `tool_missing`. The design is in the #203 body. Until then a final-check step that calls `playwright-cli` fails with "start it with process.start".
+- **From VF4b:**
+  - a final browser check has one program, so a page that needs a server of the check's own cannot be checked in the same check (the browser and the server would both have to be its program). Built files cannot be opened instead: the CLI blocks `file:` URLs, and the Runner does not turn on unrestricted file access;
+  - on a Windows host whose batch-argv probe does not verify (GitHub's `windows-latest` image: `powershell.exe` → `.cmd` gives no output within the probe's 15 s), every `.cmd` launch is refused, so a Playwright CLI session cannot start there, for an agent or a final check. The final check then fails closed.
 - **From VF3 (#196):**
   - the v2 flaky rerun narrows only `node --test` commands of a `tests` check and reports any other command as unsupported;
   - not checked: a mechanical repair reason for an `ask_user` checkpoint still needs non-empty `factIds` and `evidenceIds`, which a v2 check that fails without a fact would hit.

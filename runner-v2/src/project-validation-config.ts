@@ -163,6 +163,18 @@ export function parseProjectValidationConfig(
 /** VF4: the project's aiboard-validation.json is present but not valid; a v2 run pauses on it before planning. */
 export class ProjectValidationConfigError extends Error {
   override readonly name = "ProjectValidationConfigError";
+  /**
+   * VF4b review fix: the read failed for a reason a fresh checkout of the same revision may not
+   * repeat (no permission, a held file, an I/O error), not because of what the revision holds. A
+   * resume takes a fresh checkout, so it can get past it; a malformed file, a folder or a dangling
+   * link in its place stays at that revision.
+   */
+  readonly retryable: boolean;
+
+  constructor(message: string, options?: { cause?: unknown; retryable?: boolean }) {
+    super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
+    this.retryable = options?.retryable === true;
+  }
 }
 
 /**

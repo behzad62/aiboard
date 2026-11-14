@@ -1,6 +1,7 @@
 import { lstat, stat } from "node:fs/promises";
-import { isAbsolute, sep } from "node:path";
+import { extname, isAbsolute, resolve, sep } from "node:path";
 
+import { withoutRunnerInstallPath, type RunnerProcessEnvironmentResolver } from "./child-environment.js";
 import { languageServerCommandCandidates } from "./language-server-executable.js";
 import {
   resolveProjectCheckForLookup,
@@ -19,16 +20,31 @@ export type CheckToolLookupResult =
   | { status: "missing" }
   | { status: "unknown"; reason: string };
 
+/** VF4b: the session a looked-up command would run for (child-environment.ts processEnvironment). */
+export interface CheckToolOwner {
+  runId: string;
+  sessionId: string;
+}
+
 export type CheckToolLookup = (
   executable: string,
-  input: { cwd: string },
+  input: { cwd: string; owner?: CheckToolOwner },
 ) => Promise<CheckToolLookupResult>;
 
 export interface CheckToolLookupOptions {
   /** The environment the Runner gives its children; read on every lookup. */
   environment: () => Readonly<Record<string, string | undefined>>;
+  /**
+   * VF4b: the Runner's own per-owner values (the Playwright CLI shims' folder). A launch puts the
+   * owner's `pathPrepend` first on PATH, after its install-root filter (child-environment.ts), so
+   * the lookup searches it first too: `playwright-cli-session` is found where the launch finds it.
+   * Read on every lookup, so it follows the run's current configuration.
+   */
+  processEnvironment?: RunnerProcessEnvironmentResolver;
   /** Test seam for platform-specific resolution. */
   platform?: NodeJS.Platform;
+  /** Test seam: the Runner installation whose PATH entries a launch removes (child-environment.ts). */
+  runnerInstallRoot?: string;
 }
 
 /** One command a check launches, in the folder it launches in. */
@@ -111,11 +127,26 @@ export async function mandatoryProjectCheckTools(input: {
 
 /** A lookup bound to the environment the Runner launches checks with. */
 export function createCheckToolLookup(options: CheckToolLookupOptions): CheckToolLookup {
-  return async (executable, input) => await lookUpCheckTool(executable, {
-    cwd: input.cwd,
-    environment: options.environment(),
-    ...(options.platform ? { platform: options.platform } : {}),
-  });
+  return async (executable, input) => {
+    const runner = input.owner ? options.processEnvironment?.(input.owner) : undefined;
+    return await lookUpCheckTool(executable, {
+      cwd: input.cwd,
+      environment: options.environment(),
+      ...(runner?.pathPrepend.length ? { pathPrepend: runner.pathPrepend } : {}),
+      ...(options.platform ? { platform: options.platform } : {}),
+      ...(options.runnerInstallRoot ? { runnerInstallRoot: options.runnerInstallRoot } : {}),
+    });
+  };
+}
+
+/**
+ * VF4b: the lookup for the commands one owner launches, so it searches that owner's PATH. A
+ * final check passes its own owner (the run and the check's task id), which every process of
+ * the check runs for, its program and its steps alike.
+ */
+export function checkToolLookupFor(lookup: CheckToolLookup, owner: CheckToolOwner): CheckToolLookup {
+  const bound = Object.freeze({ runId: owner.runId, sessionId: owner.sessionId });
+  return async (executable, input) => await lookup(executable, { cwd: input.cwd, owner: bound });
 }
 
 /**
@@ -130,7 +161,11 @@ export async function lookUpCheckTool(
   input: {
     cwd: string;
     environment: Readonly<Record<string, string | undefined>>;
+    /** VF4b: folders the launch puts first on PATH (the owner's processEnvironment). */
+    pathPrepend?: readonly string[];
     platform?: NodeJS.Platform;
+    /** Test seam: the Runner installation whose PATH entries a launch removes. */
+    runnerInstallRoot?: string;
   },
 ): Promise<CheckToolLookupResult> {
   if (typeof executable !== "string" || !executable.trim() || executable.includes("\0")) {
@@ -140,16 +175,29 @@ export async function lookUpCheckTool(
     return { status: "unknown", reason: "The executable names a path, not a tool on PATH." };
   }
   const platform = input.platform ?? process.platform;
+  const separator = platform === "win32" ? ";" : ":";
   // With no PATH to search, absence proves nothing; never turn every check into not run.
   const pathName = Object.keys(input.environment).find((name) => platform === "win32" ? name.toUpperCase() === "PATH" : name === "PATH");
-  if (!pathName || !input.environment[pathName]?.trim()) {
+  const rawPath = pathName ? input.environment[pathName] : undefined;
+  // VF4b: a launch removes the PATH entries inside the Runner's own installation before it puts the owner's folders
+  // first (child-environment.ts prepare), so the lookup searches what the launch searches.
+  const ambientPath = rawPath?.trim()
+    ? withoutRunnerInstallPath(rawPath, { workingDirectory: input.cwd, delimiter: separator, ...(input.runnerInstallRoot ? { runnerInstallRoot: input.runnerInstallRoot } : {}) })
+    : rawPath;
+  const prepend = (input.pathPrepend ?? []).filter((entry) => typeof entry === "string" && entry.length > 0);
+  if (!ambientPath?.trim() && prepend.length === 0) {
     return { status: "unknown", reason: "The Runner's environment has no PATH to search." };
   }
-  const candidates = languageServerCommandCandidates(executable, {
-    commandSearchDirectory: input.cwd,
-    environment: input.environment as NodeJS.ProcessEnv,
-    platform,
-  });
+  // The launch's PATH: the owner's folders first, then the Runner's own PATH (child-environment.ts).
+  const searchPath = [...prepend, ...(ambientPath?.trim() ? [ambientPath] : [])].join(separator);
+  const environment = { ...input.environment, [pathName ?? (platform === "win32" ? "Path" : "PATH")]: searchPath };
+  const candidates = platform === "win32"
+    ? windowsLaunchCandidates(executable, input.cwd, searchPath, environment)
+    : languageServerCommandCandidates(executable, {
+      commandSearchDirectory: input.cwd,
+      environment: environment as NodeJS.ProcessEnv,
+      platform,
+    });
   let undecided: string | undefined;
   for (const candidate of candidates) {
     const state = await candidateState(candidate, platform);
@@ -158,7 +206,30 @@ export async function lookUpCheckTool(
   }
   // Something with the name exists but could not be judged: launch it and let the result speak.
   if (undecided) return { status: "unknown", reason: undecided };
+  // With only the owner's folders to search, absence there proves nothing about the Runner's PATH.
+  if (!ambientPath?.trim()) return { status: "unknown", reason: "The Runner's environment has no PATH to search." };
   return { status: "missing" };
+}
+
+/**
+ * VF4b: the files a Windows launch tries, in its order (windows-process-backend.ts resolveWindowsExecutable): the
+ * working folder, then each PATH folder, and in each folder every PATHEXT extension. A name with an extension is
+ * tried as given. A tool found only with an extension the launcher cannot start (.vbs, say) reads found, and its
+ * launch fails, rather than reading missing, so the lookup never names a tool missing that the launch would pick.
+ */
+function windowsLaunchCandidates(executable: string, cwd: string, searchPath: string, environment: Readonly<Record<string, string | undefined>>): string[] {
+  const directories = [cwd, ...searchPath.split(";").map((entry) => entry.trim().replace(/^"|"$/g, "")).filter(Boolean)];
+  const pathExtName = Object.keys(environment).find((name) => name.toUpperCase() === "PATHEXT");
+  const extensions = extname(executable) ? [""] : (environment[pathExtName ?? "PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";")
+    .map((entry) => entry.trim()).filter(Boolean).map((entry) => entry.startsWith(".") ? entry : `.${entry}`);
+  const candidates: string[] = [];
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = resolve(directory, `${executable}${extension}`);
+      if (!candidates.some((item) => item.toLowerCase() === candidate.toLowerCase())) candidates.push(candidate);
+    }
+  }
+  return candidates;
 }
 
 async function candidateState(path: string, platform: NodeJS.Platform): Promise<"usable" | "absent" | string> {

@@ -29,7 +29,7 @@ process.start {"command": "playwright-cli-session", "until": {"pattern": "Daemon
 
 ## Read results with `--json`
 
-`playwright-cli` exits 0 even when a command fails. Put `--json` on any command whose result matters and check `isError`:
+A command that fails (a page that does not load, a ref that is gone) exits 1 and prints its error. Only `--json` and plain text output are checked: `--raw` output, and the commands that print raw by default (`cookie-get`, `localstorage-get`, `response-body` and the like), exit 0 whatever they print. Put `--json` on any command whose result you read: it prints one JSON object, with `isError: true` and the error when it failed:
 
 ```bash
 playwright-cli --json goto http://127.0.0.1:5173/
@@ -57,6 +57,21 @@ playwright-cli fill e5 "user@example.com" --submit
 playwright-cli --json console error
 playwright-cli --json screenshot --filename=.aiboard-browser/after-submit.png
 ```
+
+## In a final check
+
+A final check cannot call `process.start`, so the browser is the check's program: a `start` check whose program is `playwright-cli-session`, with no args, ready on its output line, and whose steps run `playwright-cli` commands. The Runner starts the browser before the steps and stops it after them; the steps use that browser. Keep screenshots with each step's `outputs`:
+
+```json
+{"id": "home-page", "label": "home page renders", "kind": "start",
+ "start": {"executable": "playwright-cli-session", "args": [], "ready": {"outputLine": "Daemon listening on"},
+  "steps": [
+   {"label": "open the page", "executable": "playwright-cli", "args": ["--json", "goto", "http://127.0.0.1:4173/"]},
+   {"label": "screenshot", "executable": "playwright-cli", "args": ["--json", "screenshot", "--filename=.aiboard-browser/home.png"], "outputs": [".aiboard-browser/home.png"]}
+  ]}}
+```
+
+A check has one program, the browser, so it browses a URL that is already served when the check runs; a page that needs a server of the check's own cannot be checked this way. `file:` URLs are blocked. A failed `playwright-cli` command exits 1, so its step, and the check, fail.
 
 ## Commands
 

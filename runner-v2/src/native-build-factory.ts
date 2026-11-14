@@ -94,11 +94,12 @@ import {
 } from "./native-planning-provisioner.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
-import { createCheckToolLookup, mandatoryProjectCheckTools, type MandatoryCheckTools } from "./check-tool-lookup.js";
+import { checkToolLookupFor, createCheckToolLookup, mandatoryProjectCheckTools, type MandatoryCheckTools } from "./check-tool-lookup.js";
 import { isPlaywrightCliBrowser } from "./playwright-cli.js";
 import {
   collectEnvironmentInventory,
   inventoryCheckCommands,
+  ENVIRONMENT_INVENTORY_SESSION_ID,
   oneShotInventoryRunner,
   type InventoryCheckCommand,
 } from "./verification-inventory.js";
@@ -1724,6 +1725,11 @@ export class NativeBuildFactory {
     // audited executor gives children; a tool it does not find is not run, never failed.
     const checkToolLookup = createCheckToolLookup({
       environment: () => this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+      // VF4b: the owner's PATH folders, exactly where the run binding gets them (bindRun above), so
+      // the lookup searches what the launch searches: playwright-cli-session for a run that browses.
+      ...(this.options.executionHost && this.options.playwrightCli
+        ? { processEnvironment: this.options.playwrightCli.environmentFor }
+        : {}),
     });
     // The same ambient source the audited executor uses for children, so the
     // project's own NODE_OPTIONS is kept when the reporter flags are added.
@@ -2048,6 +2054,8 @@ export class NativeBuildFactory {
           ),
           execution: commandExecution,
           toolLookup: checkToolLookup,
+          // VF4b: the same sessions whose stop observer the run binding wraps, so the record is that stop's.
+          ...(this.options.playwrightCli ? { browserCleanup: (target) => this.options.playwrightCli!.cleanupAfterStop(target) } : {}),
         });
         // VF3: a v2 check runs the commands resolved for it in the execution profile.
         if (input.checkId !== undefined) {
@@ -2327,12 +2335,17 @@ export class NativeBuildFactory {
         ? {
             environmentInventory: async ({ trigger }) => {
               const revision = integrationManager.revision;
+              // VF4b: the inventory's own owner, whose probes it runs. The Runner's PATH folders are
+              // the same for every owner of a run (PlaywrightCliSessions.environmentFor), so a
+              // mandatory check's tools are looked up on the PATH its final check will launch with.
+              const inventoryLookup = checkToolLookupFor(checkToolLookup, { runId: spec.runId, sessionId: ENVIRONMENT_INVENTORY_SESSION_ID });
               const workspace = await finalVerificationProfileWorkspace.create(revision);
               try {
                 let checks: InventoryCheckCommand[] = [];
                 let mandatoryChecks: MandatoryCheckTools[] = [];
                 let checksNote: string | undefined;
                 let projectConfigError: string | undefined;
+                let projectConfigErrorRetryable = false;
                 try {
                   const profile = await inspectFinalVerificationExecutionProfile({
                     repositoryRoot: workspace.path,
@@ -2347,12 +2360,15 @@ export class NativeBuildFactory {
                     checks: profile.projectChecks ?? [],
                     ...(profile.provisioning ? { provisioning: profile.provisioning.command } : {}),
                     workspacePath: workspace.path,
-                    lookup: checkToolLookup,
+                    lookup: inventoryLookup,
                   });
                 } catch (error) {
                   checksNote = `The checks of this revision could not be read: ${error instanceof Error ? error.message : String(error)}`;
                   // VF4: a malformed aiboard-validation.json stops a v2 run before planning.
-                  if (error instanceof ProjectValidationConfigError) projectConfigError = error.message;
+                  if (error instanceof ProjectValidationConfigError) {
+                    projectConfigError = error.message;
+                    projectConfigErrorRetryable = error.retryable;
+                  }
                 }
                 return await collectEnvironmentInventory({
                   trigger,
@@ -2360,9 +2376,9 @@ export class NativeBuildFactory {
                   cwd: workspace.path,
                   checks,
                   ...(mandatoryChecks.length ? { mandatoryChecks } : {}),
-                  ...(projectConfigError ? { projectConfigError } : {}),
+                  ...(projectConfigError ? { projectConfigError, projectConfigErrorRetryable } : {}),
                   ...(checksNote ? { checksNote } : {}),
-                  lookup: checkToolLookup,
+                  lookup: inventoryLookup,
                   run: oneShotInventoryRunner(commandExecution, { runId: spec.runId }),
                 });
               } finally {

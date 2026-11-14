@@ -433,6 +433,19 @@ export class PlaywrightCliSessions {
   }
 
   /**
+   * VF4b: the newest browser check recorded for the stop of this exact session process, or undefined when none was
+   * recorded (not a session process, or not POSIX, where the session's Job or group takes its browser with it).
+   * A final check reads it right after its program's stop returned, which awaits the check (`observeManagedStops`).
+   */
+  cleanupAfterStop(target: Readonly<{ runId: string; sessionId: string; processId: string }>): BrowserCleanupRecord["status"] | undefined {
+    for (let index = this.cleanups.length - 1; index >= 0; index -= 1) {
+      const entry = this.cleanups[index]!;
+      if (entry.runId === target.runId && entry.sessionId === target.sessionId && entry.processId === target.processId) return entry.status;
+    }
+    return undefined;
+  }
+
+  /**
    * Removes a finished run's state folders, after every managed process of the run stopped. On POSIX it first runs
    * the browser check for each owner folder (a session that ended by itself was never stopped, so never checked),
    * and throws, keeping the folder, when a browser survives or cannot be read; the run's cleanup retries it. The

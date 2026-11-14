@@ -1864,6 +1864,10 @@ export class BuildRuntime {
       events = this.store.readRun(this.runId);
       projection = rebuildSchedulerProjection(events);
     }
+    // VF4b: the run's browsing before its inventory, so the inventory's tool lookup searches the
+    // PATH the run's commands launch with (the CLI shims for a run that browses). The browser is
+    // the last inventory's until the new one is recorded; the call below sets this epoch's.
+    this.configureBrowsing(projection);
     if (projection.status === "running" && await this.recordEnvironmentInventoryIfDue(events)) {
       events = this.store.readRun(this.runId);
       projection = rebuildSchedulerProjection(events);
@@ -1874,10 +1878,7 @@ export class BuildRuntime {
       const gate = this.verificationGatePause(events, projection);
       if (gate) return gate;
     }
-    this.browsing?.configure({
-      cli: projection.browsing?.surface === "playwright_cli",
-      browser: projection.environmentInventory?.playwrightBrowser ?? null,
-    });
+    this.configureBrowsing(projection);
     const pendingInterruption = Object.values(projection.userGuidance)
       .filter((guidance) => guidance.interruptionStatus !== "completed")
       .sort((left, right) => left.version - right.version)[0];
@@ -4462,6 +4463,14 @@ export class BuildRuntime {
    * recorded as an inventory that says so, and a refused record is not
    * retried by this instance: neither ever fails or pauses the step.
    */
+  /** VF7b: the run's recorded browsing, for the processes it starts (PlaywrightCliSessions.configureRun). */
+  private configureBrowsing(projection: SchedulerProjection): void {
+    this.browsing?.configure({
+      cli: projection.browsing?.surface === "playwright_cli",
+      browser: projection.environmentInventory?.playwrightBrowser ?? null,
+    });
+  }
+
   /**
    * VF7b: a run that has never planned and never resumed records, once, that
    * it browses through the Playwright CLI. A run started before VF7b already
@@ -4530,9 +4539,11 @@ export class BuildRuntime {
    * or that a check it makes mandatory cannot run because its tool is missing.
    * - A missing tool lives on this machine: the owner installs it and resumes, and the resume's
    *   inventory decides again. One pause names every blocked check, its tools and its config line.
-   * - The file is read at the run's fixed starting revision, so no fix reaches this run (the
-   *   scheduler has no terminal stop to take instead): the pause says to start a new Build, and a
-   *   resume reads the same revision and pauses again saying that resuming cannot fix it.
+   * - A malformed file is read at the run's current revision (its start, then where each resume
+   *   continues from), so no fix made in the project reaches this run (the scheduler has no
+   *   terminal stop to take instead): the pause says to start a new Build, and a resume reads the
+   *   same revision and pauses again saying that resuming cannot fix it. A file that could not be
+   *   read for a reason a fresh checkout may not repeat says to resume instead (VF4b).
    * It reads the recorded inventory, never this process's memory, so a Runner restart between
    * the inventory and the pause still pauses. A tool the lookup could not decide about launches as
    * before (VF2). A pause that cannot be recorded throws: the step never goes on to planning.
@@ -4545,12 +4556,18 @@ export class BuildRuntime {
     const lastResume = events.reduce((latest, event) => event.type === "run.resumed" ? event.sequence : latest, 0);
     if (inventory.sequence < lastResume) return undefined;
     const blocked = mandatoryChecksMissingTools(inventory);
+    // VF4b review fix: where the Build started, from its first inventory, so a resume after the
+    // integration revision moved on does not claim the file was read where the Build started.
+    const firstInventory = events.find((event) => event.type === "environment.inventory_recorded");
+    const startRevision = typeof firstInventory?.payload.revision === "string" ? firstInventory.payload.revision : undefined;
     const pause = inventory.projectConfigError
       ? {
         reason: PROJECT_VALIDATION_CONFIG_INVALID_PAUSE,
         detail: projectConfigInvalidDetail(inventory.projectConfigError, {
           ...(inventory.revision ? { revision: inventory.revision } : {}),
           resumed: inventory.trigger === "resume",
+          ...(startRevision ? { startRevision } : {}),
+          retryable: inventory.projectConfigErrorRetryable === true,
         }),
       }
       : blocked.length > 0

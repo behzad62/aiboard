@@ -12,7 +12,9 @@ const require = createRequire(import.meta.url);
 
 export const START_INSTRUCTION =
   "Start this agent session's browser once with process.start: command playwright-cli-session, no args, " +
-  "until {pattern: 'Daemon listening on'}. Then run playwright-cli commands; they use that session.";
+  "until {pattern: 'Daemon listening on'}. Then run playwright-cli commands; they use that session. " +
+  "In a final check, make playwright-cli-session the start check's program (ready {outputLine: 'Daemon listening on'}) " +
+  "and run playwright-cli in its steps.";
 
 /** Commands that start, attach, show, install or kill outside the managed session. */
 const REFUSED_COMMANDS = new Map([
@@ -97,6 +99,49 @@ function interceptNotOpen(stream) {
   };
 }
 
+// The CLI prints a failed command's result and still exits 0 (its client's default branch prints the tool result
+// whatever it holds). Its response puts the Error section before every other one, so with --json a failed result is an
+// object whose first key is "isError": true, and as text it starts with "### Error". Both are recognised from the start
+// of the output, so a large snapshot is never buffered. Raw output (--raw, or a command the CLI prints raw by default,
+// such as cookie-get or response-body) has no section headings: it is the value itself, which the page controls, so it
+// is never read for a failure.
+const JSON_FAILURE = /^\s*\{\s*"isError"\s*:\s*true\b/;
+const RESULT_PREFIX_CHARS = 4_096;
+
+/** How the CLI prints these arguments' result: "json" (--json), "raw" (no --json; --raw or a raw command) or "text". */
+export function cliOutputMode(argv, roots = playwrightRoots(), parse = parseCliArguments) {
+  const args = parse(argv, roots);
+  if (args.json === true) return "json";
+  if (args.raw === true) return "raw";
+  const command = args._?.[0];
+  const help = require(join(roots.core, "lib", "tools", "cli-client", "help.json"));
+  return typeof command === "string" && help.commands?.[command]?.raw === true ? "raw" : "text";
+}
+
+/** True when the CLI's printed output, in that mode, is a failed command's result. */
+export function cliOutputFailed(output, mode) {
+  if (mode === "json") return JSON_FAILURE.test(output);
+  if (mode !== "text") return false;
+  const first = output.split(/\r?\n/).find((line) => line.trim() !== "");
+  return first?.trim() === "### Error";
+}
+
+/** A failed command exits 1, so a final check's step and an agent's process.run both see it fail. */
+function failOnErrorResult(stream, mode) {
+  let prefix = "";
+  const write = stream.write.bind(stream);
+  stream.write = (chunk, encoding, callback) => {
+    if (prefix.length < RESULT_PREFIX_CHARS) {
+      const text = typeof chunk === "string" ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk).toString("utf8") : "";
+      prefix += text.slice(0, RESULT_PREFIX_CHARS - prefix.length);
+    }
+    return write(chunk, encoding, callback);
+  };
+  process.on("exit", () => {
+    if (!process.exitCode && cliOutputFailed(prefix, mode)) process.exitCode = 1;
+  });
+}
+
 /**
  * The client side of the session command's sanitizing (playwright-cli.ts): no PLAYWRIGHT_MCP_* but the output
  * folder, and the global Playwright CLI config read from the owner's state folder, never the user's home.
@@ -122,6 +167,7 @@ export function main(argv = process.argv.slice(2), environment = process.env) {
   const roots = playwrightRoots();
   interceptNotOpen(process.stdout);
   interceptNotOpen(process.stderr);
+  failOnErrorResult(process.stdout, cliOutputMode(argv, roots));
   const cli = join(roots.playwright, "cli.js");
   process.argv = [process.argv[0], cli, "cli", ...argv];
   require(cli);
