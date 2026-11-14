@@ -8,7 +8,8 @@ import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionHost, ExecutionHostRunBinding } from "./execution-host.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
-import { createImageTools } from "./image-tools.js";
+import { IMAGE_LIMITS } from "./image-inspection.js";
+import { createImageTools, REMOTE_IMAGE_LIMITS } from "./image-tools.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
 import { createProcessTools, processRunSupport } from "./process-tools.js";
 import { roleAllowList } from "./role-capabilities.js";
@@ -250,10 +251,11 @@ export class RemoteToolRuntime {
       if (crossSession) { onDispatch?.(crossSession); return crossSession; }
       dispatchArgs = withoutSessionFlags(name, dispatchArgs);
       onBrokerInvoke?.();
+      // A Remote client gets image_inspect's image as MCP image content in the result (remote-connector.ts), as local MCP does.
       const result = await bound.broker.invoke({ type: "tool_call", callId, name, arguments: dispatchArgs }, {
         runId: principal.runId, sessionId: principal.sessionId,
         actor: { role: "remote", id: principal.principalId }, workspacePath: this.workspacePath,
-        ...(signal ? { signal } : {}),
+        ...(signal ? { signal } : {}), ...(name === "image.inspect" ? { imageInput: true } : {}),
       });
       if (!result.isError && (name === "fs.write" || name === "fs.move") && args && typeof args === "object" && !Array.isArray(args)) {
         const dest = (args as Record<string, unknown>)[name === "fs.write" ? "path" : "destination"];
@@ -394,7 +396,9 @@ async function createGovernedBinding(
       ...createProcessTools({ execution: binding.commandExecution, names: "mcp",
         support: processRunSupport(binding.managedProcesses, options.host.artifacts) }),
       ...createManagedProcessTools(binding.managedProcesses, { names: "mcp" }),
-      ...createImageTools({ artifacts: options.host.artifacts, pathGuard }),
+      // Both surfaces return the image in the result itself; Remote's has to fit the connector's inline result.
+      ...createImageTools({ artifacts: options.host.artifacts, pathGuard,
+        inlineDelivery: { maxBytes: localMcpDepth === undefined ? REMOTE_IMAGE_LIMITS.maxBytes : IMAGE_LIMITS.maxDeliveredBytes } }),
     ];
     for (const tool of tools) if (allowed.has(tool.definition.name) && tool.definition.lifecycle !== true) broker.register(tool);
     return { binding, broker, ledger, pathGuard };

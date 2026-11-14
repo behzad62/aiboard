@@ -37,6 +37,9 @@ const deterministicPrTests = [
   "runner-v2/test/owned-fence-self-birth.test.ts",
   // A remote UNC path is refused before any filesystem call, in every remote file tool (an fs spy, no network, under 1 s).
   "runner-v2/test/remote-path-syntax-first.test.ts",
+  // image_inspect over AIBoard Remote: the byte limit, MCP image content in one jobs_result page and the path rules,
+  // in memory with a stub host (no process, about 2 s of tests).
+  "runner-v2/test/remote-image-content.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

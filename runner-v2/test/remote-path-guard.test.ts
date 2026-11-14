@@ -504,6 +504,11 @@ test("remote runtime denies protected file tools, skips protected children and a
       const result = await runtime.invoke(alice, name, args);
       assert.equal(result.error?.code, "path_denied", `${name} ${JSON.stringify(result)}`);
     }
+    // An allowed image is shown: a Remote client gets it back as image content, never a text-only refusal.
+    const image = await runtime.invoke(alice, "image.inspect", { path: "pic.png" });
+    assert.equal(image.isError, false, JSON.stringify(image));
+    assert.deepEqual((({ shown, delivery }) => ({ shown, delivery }))(image.content.find((block) => block.type === "json")!.value as { shown: unknown; delivery: unknown }),
+      { shown: true, delivery: "image content in this result" });
     const listed = await runtime.invoke(alice, "fs.list", { path: "." });
     assert.equal(listed.isError, false, JSON.stringify(listed));
     assert.doesNotMatch(JSON.stringify(listed.content), /aiboard-state/);

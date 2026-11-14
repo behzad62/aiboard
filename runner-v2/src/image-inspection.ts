@@ -71,13 +71,20 @@ export function probeImage(bytes: Uint8Array): ImageProbe {
   return probe;
 }
 
-/** Validate, optionally crop/downscale (PNG), and bound an image for model delivery. Source bytes are never modified. */
-export function prepareImageForModel(bytes: Uint8Array, options: Readonly<{ crop?: ImageCrop; maxDimension?: number }> = {}): PreparedImage {
+/**
+ * Validate, optionally crop/downscale (PNG), and bound an image for model delivery. Source bytes are never modified.
+ * maxBytes is Runner-set, never a tool argument: a surface that carries the image in the tool result itself (AIBoard
+ * Remote) delivers less than a provider accepts. It defaults to IMAGE_LIMITS.maxDeliveredBytes.
+ */
+export function prepareImageForModel(bytes: Uint8Array, options: Readonly<{ crop?: ImageCrop; maxDimension?: number; maxBytes?: number }> = {}): PreparedImage {
   const source = Buffer.from(bytes);
   const probe = probeImage(source);
   const maxDimension = options.maxDimension ?? IMAGE_LIMITS.defaultMaxDimension;
   if (!Number.isSafeInteger(maxDimension) || maxDimension < IMAGE_LIMITS.minMaxDimension || maxDimension > IMAGE_LIMITS.maxMaxDimension)
     throw new ImageInspectionError("invalid_arguments", `maxDimension must be ${IMAGE_LIMITS.minMaxDimension}..${IMAGE_LIMITS.maxMaxDimension}.`);
+  const maxBytes = options.maxBytes ?? IMAGE_LIMITS.maxDeliveredBytes;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > IMAGE_LIMITS.maxDeliveredBytes)
+    throw new ImageInspectionError("invalid_arguments", `maxBytes must be 1..${IMAGE_LIMITS.maxDeliveredBytes}.`);
   if (options.crop) validateCrop(options.crop, probe);
   const sourceDigest = sha256(source);
   const notes: string[] = [];
@@ -85,13 +92,13 @@ export function prepareImageForModel(bytes: Uint8Array, options: Readonly<{ crop
   if (probe.orientation && probe.orientation !== 1) notes.push(`EXIF orientation ${probe.orientation} was not applied (${orientationHint(probe.orientation)}).`);
   if (probe.mediaType !== "image/png") {
     if (options.crop) throw new ImageInspectionError("image_transform_unsupported", `Cropping ${probe.mediaType} is not supported (only PNG is decoded locally). Inspect the whole image or use a PNG.`);
-    if (source.byteLength > IMAGE_LIMITS.maxDeliveredBytes || Math.max(probe.width, probe.height) > IMAGE_LIMITS.maxDeliveredSide)
+    if (source.byteLength > maxBytes || Math.max(probe.width, probe.height) > IMAGE_LIMITS.maxDeliveredSide)
       throw new ImageInspectionError("image_too_large", `This ${probe.mediaType} (${probe.width}x${probe.height}, ${source.byteLength} bytes) exceeds delivery limits and cannot be downscaled locally; use a smaller or PNG image.`);
     if (needsResize) notes.push(`Delivered at original ${probe.width}x${probe.height}; ${probe.mediaType} is not resized locally and the provider may downscale it.`);
     return Object.freeze({ bytes: source, mediaType: probe.mediaType, width: probe.width, height: probe.height, sourceDigest, digest: sourceDigest,
       source: Object.freeze({ ...probe, byteLength: source.byteLength }), transforms: Object.freeze([]), notes: Object.freeze(notes) });
   }
-  if (!options.crop && !needsResize && source.byteLength <= IMAGE_LIMITS.maxDeliveredBytes) {
+  if (!options.crop && !needsResize && source.byteLength <= maxBytes) {
     return Object.freeze({ bytes: source, mediaType: "image/png", width: probe.width, height: probe.height, sourceDigest, digest: sourceDigest,
       source: Object.freeze({ ...probe, byteLength: source.byteLength }), transforms: Object.freeze([]), notes: Object.freeze(notes) });
   }
@@ -106,13 +113,13 @@ export function prepareImageForModel(bytes: Uint8Array, options: Readonly<{ crop
       current = resizeRgba(current, Math.max(1, Math.round(current.width * scale)), Math.max(1, Math.round(current.height * scale)));
     }
     encoded = encodePng(current);
-    if (encoded.byteLength <= IMAGE_LIMITS.maxDeliveredBytes || limit <= IMAGE_LIMITS.minMaxDimension) {
+    if (encoded.byteLength <= maxBytes || limit <= IMAGE_LIMITS.minMaxDimension) {
       if (current !== image) transforms.push(`resize ${current.width}x${current.height}`);
       image = current; break;
     }
     limit = Math.max(IMAGE_LIMITS.minMaxDimension, Math.floor(limit * 0.75));
   }
-  if (encoded.byteLength > IMAGE_LIMITS.maxDeliveredBytes) throw new ImageInspectionError("image_too_large", "The image cannot be reduced below the delivery byte limit.");
+  if (encoded.byteLength > maxBytes) throw new ImageInspectionError("image_too_large", "The image cannot be reduced below the delivery byte limit.");
   return Object.freeze({ bytes: encoded, mediaType: "image/png", width: image.width, height: image.height, sourceDigest, digest: sha256(encoded),
     source: Object.freeze({ ...probe, byteLength: source.byteLength }), transforms: Object.freeze(transforms), notes: Object.freeze(notes) });
 }
