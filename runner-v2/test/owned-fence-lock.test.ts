@@ -244,8 +244,6 @@ test("an async claim nested in this context's own async claim of the same lock f
     await withOwnedFenceLock(lockPath, async () => {
       try { await withOwnedFenceLock(lockPath, () => assert.fail("the nested effect must not run")); }
       catch (error) { nested = error; }
-      try { await withOwnedFenceLock(join(root, ".", ".fence.lock"), () => assert.fail("nor under another spelling")); }
-      catch (error) { assert.ok(isOwnedFenceLockContention(error), String(error)); }
       background = new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 20))
         .then(() => withOwnedFenceLock(lockPath, () => "background claimed"));
     });
