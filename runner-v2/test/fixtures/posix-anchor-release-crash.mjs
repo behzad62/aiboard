@@ -1,6 +1,6 @@
-// A POSIX anchor child that really dies right after its durable C1 claim. A fault thrown inside the
-// claiming process is not a crash: the owned fence lock releases a claimed holder whose effect never
-// started. Only a process that is gone leaves its holder row behind for C1 reclamation.
+// A POSIX anchor child that really dies right after its C1 claim, with the lock held. A fault thrown inside the
+// claiming process is not a crash: the owned fence lock gives back a lock whose effect never started. Only a
+// process that is gone shows that its lock is freed for C1 reclamation without anyone inspecting it.
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import vm from "node:vm";
 

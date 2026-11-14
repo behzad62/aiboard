@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
@@ -874,6 +873,116 @@ test("FL1 released authority removal takes the lock first and the tombstone last
   assert.equal(removeWith("owned/channel").includes("owned"), false);
 });
 
+// FL2: the lock file holds nothing, so the tombstone is the only record that an authority is released. It must be on
+// disk before the release returns: data flushed before the rename, the rename flushed after it.
+test("FL2 released tombstone is flushed before its rename and the rename after it, on every platform", () => {
+  const source = readFileSync(new URL("../src/native-process-backend.ts", import.meta.url), "utf8");
+  const run = (platform: string, directoryFsyncCode?: string) => {
+    const calls: string[] = [];
+    let next = 10;
+    const names = new Map<number, string>();
+    const written: Buffer[] = [];
+    const context = vm.createContext({
+      process: { platform },
+      join: (...parts: string[]) => parts.join("/"),
+      randomUUID: () => "u",
+      JSON,
+      Buffer,
+      String,
+      openSync: (path: string, flags: string, mode?: number) => {
+        const descriptor = next++;
+        names.set(descriptor, path);
+        calls.push(`open ${path} ${flags}${mode === undefined ? "" : ` ${mode.toString(8)}`}`);
+        return descriptor;
+      },
+      // A short write: at most 8 bytes a call, so the tombstone is complete only if every remaining byte is written.
+      writeSync: (descriptor: number, content: Buffer, offset = 0) => {
+        const chunk = content.subarray(offset, offset + 8);
+        written.push(Buffer.from(chunk));
+        if (calls.at(-1) !== `write ${names.get(descriptor)}`) calls.push(`write ${names.get(descriptor)}`);
+        return chunk.length;
+      },
+      fsyncSync: (descriptor: number) => {
+        calls.push(`fsync ${names.get(descriptor)}`);
+        if (names.get(descriptor) === "owned" && directoryFsyncCode) throw Object.assign(new Error(directoryFsyncCode), { code: directoryFsyncCode });
+      },
+      closeSync: (descriptor: number) => { calls.push(`close ${names.get(descriptor)}`); },
+      renameSync: (from: string, to: string) => { calls.push(`rename ${from} ${to}`); },
+    });
+    vm.runInContext(extractNamedTsFunction(source, "writeReleasedFence") + extractNamedTsFunction(source, "flushRenamedFence"), context);
+    vm.runInContext("writeReleasedFence({ directory: 'owned', nonce: 'n' }, { ownerId: 'o', fencingToken: 7 })", context);
+    assert.deepEqual(JSON.parse(Buffer.concat(written).toString("utf8")), { nonce: "n", released: { ownerId: "o", fencingToken: 7 } });
+    return calls;
+  };
+  const temporary = "owned/fence.json.u.tmp";
+  for (const platform of ["linux", "darwin", "win32"]) {
+    const flushed = platform === "win32" ? ["open owned/fence.json r+", "fsync owned/fence.json", "close owned/fence.json"]
+      : ["open owned r", "fsync owned", "close owned"];
+    assert.deepEqual(run(platform), [
+      `open ${temporary} wx 600`, `write ${temporary}`, `fsync ${temporary}`, `close ${temporary}`,
+      `rename ${temporary} owned/fence.json`, ...flushed,
+    ], platform);
+  }
+  // A file system without directory fsync (some FUSE, CIFS, 9p mounts) has no durability to give: the release goes on
+  // rather than failing forever. Any other directory fsync failure fails the release.
+  for (const code of ["EINVAL", "ENOTSUP", "EOPNOTSUPP"]) assert.equal(run("linux", code).at(-1), "close owned", code);
+  assert.throws(() => run("linux", "EIO"), /EIO/);
+  // And it really runs on this host: the directory (POSIX) or the renamed file (Windows) opens and flushes.
+  const root = mkdtempSync(join(tmpdir(), "aiboard-fl2-tombstone-"));
+  try {
+    const context = vm.createContext({ process, join, randomUUID, JSON, Buffer, String, openSync, writeSync, fsyncSync, closeSync, renameSync });
+    vm.runInContext(extractNamedTsFunction(source, "writeReleasedFence") + extractNamedTsFunction(source, "flushRenamedFence"), context);
+    context.directory = root;
+    vm.runInContext("writeReleasedFence({ directory, nonce: 'n' }, { ownerId: 'o', fencingToken: 7 })", context);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "fence.json"), "utf8")), { nonce: "n", released: { ownerId: "o", fencingToken: 7 } });
+    assert.deepEqual(readdirSync(root), ["fence.json"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The Windows Job host's release record is its only record of a release since FL2, so the release writes it durably.
+test("FL2 Windows Job release record is flushed before its rename and the renamed file after it", () => {
+  const source = readFileSync(new URL("../src/windows-job-process-host.ts", import.meta.url), "utf8");
+  const releases = [...source.matchAll(/backendOwnershipReleasedAt: releasedAt[^\n]*\n\s*this\.persist\((\w+)(, true)?\)/g)];
+  assert.equal(releases.length, 1, "one release effect writes the release record");
+  assert.equal(releases[0]![2], ", true", "and it writes it durably");
+  const file = ts.createSourceFile("windows-job-process-host.ts", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  let persist: ts.MethodDeclaration | undefined;
+  const find = (node: ts.Node): void => {
+    if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "persist") persist = node;
+    else ts.forEachChild(node, find);
+  };
+  find(file);
+  assert.ok(persist?.body, "missing production persist");
+  const parameters = persist.parameters.map((parameter) => parameter.getText(file)).join(", ");
+  const method = ts.transpileModule(`function persist(${parameters}) ${persist.body.getText(file)}`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText;
+  const calls: string[] = [];
+  const names = new Map<number, string>();
+  let next = 10;
+  const context = vm.createContext({
+    Buffer, JSON, randomUUID: () => "u",
+    openSync: (path: string, flags: string) => { names.set(next, path); calls.push(`open ${path} ${flags}`); return next++; },
+    writeSync: (descriptor: number, content: Buffer, offset = 0) => {
+      if (calls.at(-1) !== `write ${names.get(descriptor)}`) calls.push(`write ${names.get(descriptor)}`);
+      return Math.min(8, content.length - offset);
+    },
+    fsyncSync: (descriptor: number) => { calls.push(`fsync ${names.get(descriptor)}`); },
+    closeSync: (descriptor: number) => { calls.push(`close ${names.get(descriptor)}`); },
+    renameSync: (from: string, to: string) => { calls.push(`rename ${from} ${to}`); },
+    writeFileSync: (path: string) => { calls.push(`writeFile ${path}`); },
+  });
+  vm.runInContext(method, context);
+  context.host = { containedProcessPath: (id: string, suffix: string) => `root/${id}${suffix}` };
+  vm.runInContext("persist.call(host, { processId: 'p', backendOwnershipReleasedAt: 'now' }, true)", context);
+  assert.deepEqual(calls, [
+    "open root/p.json.u.tmp wx", "write root/p.json.u.tmp", "fsync root/p.json.u.tmp", "close root/p.json.u.tmp",
+    "rename root/p.json.u.tmp root/p.json", "open root/p.json r+", "fsync root/p.json", "close root/p.json",
+  ]);
+});
+
 test("FL1 portable supervisor and POSIX child read a released tombstone as no current fence", () => {
   const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
   const childSource = readFileSync(new URL("../src/portable-process-child.mjs", import.meta.url), "utf8");
@@ -1605,7 +1714,7 @@ test("C4 POSIX child consumes an anchor release only under captured current auth
   }]);
 });
 
-test("C4 POSIX child-crash anchor release records its own holder so a live supervisor cannot wedge C1 reclamation", { timeout: 15_000 }, async () => {
+test("C4 POSIX child-crash anchor release: the kernel frees the dead anchor's lock, so a live supervisor cannot wedge C1 reclamation", { timeout: 15_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-c4-anchor-lock-holder-"));
   const childSource = readFileSync(new URL("../src/portable-process-child.mjs", import.meta.url), "utf8");
   const nonce = "anchor-lock-holder";
@@ -1682,21 +1791,15 @@ test("C4 POSIX child-crash anchor release records its own holder so a live super
     assert.notEqual(crashed.code, 0, "the anchor child must die at the claim boundary");
     assert.equal(existsSync(statusPath), false, "the crash boundary is before the child status effect");
 
-    const database = new DatabaseSync(lockPath, { readOnly: true });
-    const staleHolder = database.prepare("SELECT holder_pid AS holderPid, holder_birth AS holderBirth FROM owned_fence_holder WHERE lock_key = 'owned'").get() as {
-      holderPid: number;
-      holderBirth: string;
-    } | undefined;
-    database.close();
+    // FL2: the lock is the OS file lock, which died with the anchor. No holder row is left to inspect.
+    assert.equal(statSync(lockPath).size, 0, "the claim wrote nothing to the lock file");
 
     const reclaim = runPortableFenceEffectSync({
       lockPath,
       expectedFence: currentFence,
       readCurrentFence: () => currentFence,
       effect: () => "reclaimed",
-      // The product's default acquisition bound. This is the first claim this process makes on the lock
-      // file, and a cold open plus its claim commits can take tens of milliseconds on a slow disk; a
-      // holder that wrongly names the live supervisor still fails this whole bound and the assertions below.
+      // The product's default acquisition bound. The holder fields are ignored since FL2: nothing is inspected.
       lockOptions: {
         holderPid: reclaimerPid,
         holderBirth: "reclaimer-birth",
@@ -1710,12 +1813,7 @@ test("C4 POSIX child-crash anchor release records its own holder so a live super
       { status: "applied", value: "reclaimed" },
       "a crashed anchor must be reclaimed even while the logical supervisor remains live",
     );
-    assert.deepEqual(
-      staleHolder && { holderPid: Number(staleHolder.holderPid), holderBirth: String(staleHolder.holderBirth) },
-      { holderPid: childPid, holderBirth: childBirth },
-    );
-    assert.deepEqual(observations, [{ pid: childPid, birth: childBirth }],
-      "only the crashed acquiring anchor is queried at the C1 process-birth boundary");
+    assert.deepEqual(observations, [], "no process is inspected: the dead anchor's lock was freed by the kernel");
   } finally {
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }

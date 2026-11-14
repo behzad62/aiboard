@@ -10,7 +10,7 @@ export class WindowsPathTooLongError extends Error {
   constructor(what: string, path: string, length: number, limit: string, effectNotStarted?: boolean, advice?: string);
 }
 export function windowsNativeFilePath(path: string, platform?: NodeJS.Platform): string;
-export function sqliteDatabaseLocation(path: string, platform?: NodeJS.Platform): string;
+export function sqliteDatabaseLocation(path: string, platform?: NodeJS.Platform, options?: { readonly mode?: "ro" | "rw" | "rwc" }): string;
 export function assertUsableWorkingDirectory(path: string, platform?: NodeJS.Platform): void;
 export function assertTempDirectoryUsable(tempDirectory: string, platform?: NodeJS.Platform): void;
 export function buildWorkspacePathProblem(deepestWorkingDirectory: string, platform?: NodeJS.Platform): string | undefined;

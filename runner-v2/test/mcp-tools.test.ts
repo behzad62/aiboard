@@ -89,8 +89,9 @@ test("C5 round5 strict OCI fixture identities support real SQLite lease locks ac
           assert.equal(effects, 1);
           assert.equal(inspections, 0);
           assert.equal(readFileSync(statePath, "utf8"), "[]");
-          assert.equal(lock?.subarray(0, 16).toString(), "SQLite format 3\0");
-          // Budget the longest SQLite sidecar, including on platforms without MAX_PATH.
+          // FL2: the lock is an OS lock on an empty file; the claim writes nothing to it.
+          assert.equal(lock?.length, 0);
+          // Budget the longest SQLite sidecar name, including on platforms without MAX_PATH.
           assert.ok(`${lockPath}-journal`.length < 260, "strict fixture SQLite journal path must fit MAX_PATH");
         } finally {
           const absolute = resolve(root);

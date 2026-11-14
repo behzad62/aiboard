@@ -4,12 +4,20 @@ export interface OwnedFenceLockOptions {
   /** Optional original wall-clock deadline, including pre-acquisition identity observation. */
   readonly deadlineAt?: number;
   readonly retryDelayMs?: number;
+  /** Ignored: the lock no longer records or probes a holder (FL4 removes these fields). */
   readonly holderPid?: number;
+  /** Ignored: the lock no longer records or probes a holder (FL4 removes these fields). */
   readonly holderBirth?: string;
+  /** Ignored: the lock no longer records or probes a holder (FL4 removes these fields). */
   readonly inspectHolder?: (pid: number, birth: string, remainingMs?: number) => OwnedFenceHolderInspection;
+  /** Tests only: runs with the lock held, before the effect. */
   readonly afterClaim?: () => void;
+  /** Tests only: a failure here stands for a failed ROLLBACK, so the lock is kept until the process exits. */
+  readonly beforeRelease?: () => void;
+  /** After a successful effect and the lock's release: remove the lock file, or run `retireAuthority` instead. */
   readonly retireAfterEffect?: boolean;
   readonly retireAuthority?: () => void;
+  /** Runs right after this claim created the lock file; a refusal removes that file again. */
   readonly assertAuthority?: () => void;
 }
 export interface GenericPosixProcessInspectionOperations {

@@ -1,61 +1,62 @@
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+// A process that takes the owned fence lock for a test. argv: mode lockPath effectPath deadlineMs holdMs [count]
+//   hold        sync claim; appends this PID to effectPath (when given), reports "acquired", holds for holdMs
+//   hold-async  the same through the async driver
+//   retain      a claim whose release fails (the beforeRelease seam): reports "retained", then keeps the lock held
+//               until it is killed, and reports what a later claim in this process got
+//   count       `count` claims, each a read-modify-write of the counter in effectPath; reports "counted"
+// A mode prefixed "v1:" runs the pre-FL2 module (fixtures/owned-fence-lock-v1.mjs) instead, as a Runner or supervisor
+// of the earlier version would: it records a holder row and probes nothing (inspectHolder answers "same", which is
+// true of every holder in these tests: they are alive while they hold).
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import { prepareCurrentProcessBirthFingerprint, withOwnedFenceLock, withOwnedFenceLockSync } from "../../src/owned-fence-lock.mjs";
-
-const [mode, lockPath, effectPath, deadlineText, holdText, gatePath] = process.argv.slice(2);
-const deadlineMs = Number(deadlineText ?? 2_000);
-const holdMs = Number(holdText ?? 60_000);
+const [modeArgument, lockPath, effectPath, deadlineText, holdText, countText] = process.argv.slice(2);
+const v1 = modeArgument.startsWith("v1:");
+const mode = v1 ? modeArgument.slice(3) : modeArgument;
+const lock = await import(v1 ? "./owned-fence-lock-v1.mjs" : "../../src/owned-fence-lock.mjs");
+const deadlineMs = Number(deadlineText || 2_000);
+const holdMs = Number(holdText || 60_000);
 const waiter = new Int32Array(new SharedArrayBuffer(4));
+const options = v1
+  ? { deadlineMs, holderPid: process.pid, holderBirth: `fixture-${process.pid}`, inspectHolder: () => "same" }
+  : { deadlineMs };
+const report = (message) => process.stdout.write(`${JSON.stringify({ pid: process.pid, ...message })}\n`);
 
-let failure;
-let closeInspection;
-let owner;
-let inspectionCleanupFailed = false;
 try {
-  if (mode === "election-prepared") {
-    const { WindowsBirthInspectionOwner } = await import("../../src/windows-birth-inspection.mjs");
-    owner = new WindowsBirthInspectionOwner();
-    owner.registerCleanup(cleanup => { closeInspection = cleanup; });
-    await owner.prepareInspection(Date.now() + 2_000);
-    owner.fenceOptions(Date.now() + 2_000); // Genuine self identity before coordination begins.
-    writeFileSync(`${gatePath}.${process.pid}.ready`, "ready");
-    const readyDeadline = Date.now() + 5_000;
-    while (!existsSync(gatePath) && Date.now() < readyDeadline) await new Promise(resolve => setTimeout(resolve, 5));
-    if (!existsSync(gatePath)) throw new Error("election readiness gate timed out");
-  }
-  const gatedRetirement = mode === "retire-gated";
-  if (mode === "hold-prepared-async") {
-    // The Windows Job host's path: the background self-birth preparation, then the async lock with its default.
-    if (process.platform === "win32" && !(await prepareCurrentProcessBirthFingerprint(Date.now() + 30_000))) throw new Error("self birth preparation failed");
-    await withOwnedFenceLock(lockPath, async () => {
-      process.stdout.write(`${JSON.stringify({ state: "acquired", pid: process.pid })}\n`);
-      await new Promise(resolve => setTimeout(resolve, holdMs));
-    }, { deadlineMs });
-  } else withOwnedFenceLockSync(lockPath, () => {
-    if (effectPath) appendFileSync(effectPath, `${process.pid}\n`);
-    process.stdout.write(`${JSON.stringify({ state: "acquired", pid: process.pid })}\n`);
-    if (!gatedRetirement) Atomics.wait(waiter, 0, 0, holdMs);
-  }, {
-    deadlineMs,
-    ...(owner ? owner.fenceOptions(Date.now() + deadlineMs) : {}),
-    retireAfterEffect: gatedRetirement,
-    ...(gatedRetirement ? { afterClaim: () => {
-      writeFileSync(`${gatePath}.claimed`, "claimed");
-      const deadline = Date.now() + holdMs;
-      while (!existsSync(gatePath) && Date.now() < deadline) Atomics.wait(waiter, 0, 0, 5);
-      if (!existsSync(gatePath)) throw new Error("retirement gate timed out");
-    } } : {}),
-  });
-  process.stdout.write(`${JSON.stringify({ state: "released", pid: process.pid })}\n`);
+  if (mode === "hold") {
+    lock.withOwnedFenceLockSync(lockPath, () => {
+      if (effectPath) appendFileSync(effectPath, `${process.pid}\n`);
+      report({ state: "acquired" });
+      Atomics.wait(waiter, 0, 0, holdMs);
+    }, options);
+    report({ state: "released" });
+  } else if (mode === "hold-async") {
+    await lock.withOwnedFenceLock(lockPath, async () => {
+      report({ state: "acquired" });
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, holdMs));
+    }, options);
+    report({ state: "released" });
+  } else if (mode === "retain") {
+    let failure;
+    try {
+      lock.withOwnedFenceLockSync(lockPath, () => undefined, { ...options, beforeRelease: () => { throw new Error("injected release fault"); } });
+    } catch (error) { failure = error; }
+    let later;
+    try { lock.withOwnedFenceLockSync(lockPath, () => undefined, { deadlineMs: 5_000 }); }
+    catch (error) { later = error; }
+    report({ state: "retained", failure: String(failure?.message), later: String(later?.message), laterName: later?.name });
+    Atomics.wait(waiter, 0, 0, holdMs);
+  } else if (mode === "count") {
+    const count = Number(countText);
+    for (let index = 0; index < count; index += 1) {
+      lock.withOwnedFenceLockSync(lockPath, () => {
+        const value = existsSync(effectPath) ? Number(readFileSync(effectPath, "utf8") || "0") : 0;
+        Atomics.wait(waiter, 0, 0, 1);
+        writeFileSync(effectPath, String(value + 1));
+      }, { ...options, deadlineMs: 15_000 });
+    }
+    report({ state: "counted", count });
+  } else throw new Error(`unknown mode ${modeArgument}`);
 } catch (error) {
-  failure = error;
-} finally {
-  if (closeInspection) {
-    try { await closeInspection(Date.now() + 5_000); }
-    catch (error) { inspectionCleanupFailed = true; failure = failure ? new AggregateError([failure, error], "Election and inspection cleanup failed", { cause: failure }) : error; }
-  }
-}
-if (failure) {
-  process.stdout.write(`${JSON.stringify({ state: "refused", message: String(failure), stack: failure.stack, errors: failure instanceof AggregateError ? failure.errors.map(String) : undefined })}\n`);
-  process.exitCode = inspectionCleanupFailed ? 3 : mode === "contend" || mode === "election-prepared" ? 2 : 1;
+  report({ state: "refused", message: String(error?.message ?? error), name: error?.name });
+  process.exitCode = 1;
 }

@@ -1,102 +1,50 @@
 import { execFile, execFileSync } from "node:child_process";
-// RUNNER_RAW_PROCESS_BOUNDARY: platform process-identity probe for fencing; probes do not authorize workload launch.
-import { createHash, randomUUID } from "node:crypto";
-import { closeSync, fstatSync, lstatSync, openSync, readFileSync, unlinkSync } from "node:fs";
-import { basename, resolve } from "node:path";
+// RUNNER_RAW_PROCESS_BOUNDARY: platform process-identity probe (self-birth, kept until FL4); a claim never calls it.
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, unlinkSync } from "node:fs";
+import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { HOST_POLL_MAX_DELAY_MS, nextHostPollDelay } from "./host-timing.mjs";
 import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
-const PROTOCOL_VERSION = 1;
-// A claim's default deadline. It covers the whole claim: on Windows the wait for this process's own birth identity,
-// then the SQLite open and every retry, all host-speed work. Measured:
-// - whole uncontended claim: Windows 15-23 ms idle, up to 851 ms with 2x as many busy processes as CPUs; a 2-CPU Linux
-//   container 45-150 ms idle, up to 263 ms loaded;
-// - SQLite open: Windows <= 17 ms idle locally, but 1,750 ms (PR #205, one case in 32 on main) and 2,783 ms (Windows
-//   CI, 2026-11-14, "open 2783 ms") on loaded hosts; Linux container up to 715 ms;
-// - Windows self-birth (cold powershell.exe): 155-413 ms idle; 5.3-7.4 s on two contended CPUs (T8, PR #205); 4.9-9.1 s
-//   with 2x as many busy processes as CPUs here, 9.6-21.3 s with 4x.
-// 15 s is over 5x the slowest open and 2x the slowest real self-birth (1.6x the 2x-load one). At 4x load the first
-// claim of a process can still fail closed; the background probe (SELF_BIRTH_PROBE_CAP_MS) goes on for later ones.
-// A claim returns the moment it holds the lock; the ceiling is reached only by a lock that stays held.
+// The owned fence lock is SQLite's own file lock and nothing else (docs/plans/2026-11-14-fence-lock-design.md, §6):
+// BEGIN IMMEDIATE takes the RESERVED lock (LockFileEx on Windows, fcntl on POSIX), ROLLBACK gives it back, and the
+// lock file is never written. The kernel releases a dead holder's lock, so a claim never probes a holder, never
+// spawns a process and never needs a durable holder row. Fencing tokens are compared by the callers, under the lock.
+//
+// POSIX hazard: a record lock belongs to the process, and any close() of ANY descriptor of the lock file in this
+// process drops every lock the process holds on it. SQLite keeps its own connections safe (it tracks locks per inode
+// and defers their closes). Nothing else may open the file while this process holds it: this module opens it only to
+// create it (a new inode, which nobody holds) and to read the header of a non-empty file that no acquisition of this
+// module holds; test/owned-fence-close-guard.test.ts keeps every other Runner module from opening lock files. One
+// module instance per process: a worker thread or a second copy would not see this one's holdings.
+
+// A claim's default deadline: the longest it waits for another holder's effect, then it fails closed. A claim that
+// meets no holder returns in about a millisecond (Windows 1.0 ms, Linux 0.2 ms p50, idle). The slowest waits measured
+// were 1.1 s (four contenders on a loaded host) and 203 ms (a killed holder's lock, released by the kernel); the
+// Windows Job signal effect holds the lock across a supervisor request of up to 60.25 s, so a claim behind it gives
+// up at this ceiling instead (design note FD-3).
 export const OWNED_FENCE_DEFAULT_DEADLINE_MS = 15_000;
 const DEFAULT_DEADLINE_MS = OWNED_FENCE_DEFAULT_DEADLINE_MS;
-// First wait before a claim checks again; then it grows by half up to HOST_POLL_MAX_DELAY_MS. What it waits for is
-// another claim's transaction, and the fastest whole claim measured is 15 ms (Windows idle), so 5 ms checks about three
-// times within the shortest hold. A check is one BEGIN IMMEDIATE (with SQLite's own 25 ms busy_timeout).
+// First wait before a busy claim tries again; then it grows by half up to HOST_POLL_MAX_DELAY_MS.
 const DEFAULT_RETRY_DELAY_MS = 5;
-// The background Windows self-birth probe is one cold powershell.exe start, never killed and restarted while it may
-// still answer: it lasts SELF_BIRTH_PROBE_CAP_MS from its own start and returns the moment it answers. 30 s is 1.4x
-// the slowest start measured (21.3 s, 4x as many busy processes as CPUs) and twice a default claim, so a probe slower
-// than one claim still serves the next.
-const SELF_BIRTH_PROBE_CAP_MS = 30_000;
-// A probe that ends early without an identity starts again after this, growing by half up to the maximum. No early
-// probe failure was ever observed, so there is no data for these; they keep the earlier 25 ms retry delay.
-const SELF_BIRTH_RETRY_DELAY_MS = 25;
-const SELF_BIRTH_MAX_RETRY_DELAY_MS = 250;
-// At most this many probes per call or preparation, as before (4 attempts). Each gets all the time left, so the cap
-// matters only when powershell.exe fails at once (missing, or blocked by policy): it stops a spawn every few ms.
-// A later claim starts a new preparation.
-const SELF_BIRTH_MAX_PROBES = 4;
-const PROTOCOL_COLUMNS = Object.freeze(["version", "retired", "authority_id"]);
-const LEGACY_PROTOCOL_COLUMNS = Object.freeze(["version", "retired"]);
-const AUTHORITY_UPDATE_TRIGGER = "owned_fence_authority_immutable";
-const AUTHORITY_DELETE_TRIGGER = "owned_fence_authority_delete_immutable";
-const PROTOCOL_SIDECAR_SUFFIXES = Object.freeze(["-journal", "-wal", "-shm"]);
-const CANONICAL_ACQUISITION_TABLE_SQL = `
-  CREATE TABLE owned_fence_acquisition(
-    acquisition_id TEXT PRIMARY KEY NOT NULL,
-    holder_pid INTEGER NOT NULL,
-    holder_birth TEXT NOT NULL
-  )`;
-const CANONICAL_HOLDER_TABLE_SQL = `
-  CREATE TABLE owned_fence_holder(
-    lock_key TEXT PRIMARY KEY NOT NULL CHECK(lock_key = 'owned'),
-    acquisition_id TEXT UNIQUE NOT NULL,
-    holder_pid INTEGER NOT NULL,
-    holder_birth TEXT NOT NULL,
-    FOREIGN KEY(acquisition_id) REFERENCES owned_fence_acquisition(acquisition_id)
-  )`;
-const CANONICAL_LEGACY_PROTOCOL_TABLE_SQL =
-  "CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL CHECK(retired IN (0, 1)))";
-const CANONICAL_CURRENT_PROTOCOL_TABLE_SQL = `
-  CREATE TABLE owned_fence_protocol(
-    version INTEGER NOT NULL,
-    retired INTEGER NOT NULL CHECK(retired IN (0, 1)),
-    authority_id TEXT NOT NULL
-  )`;
-const CANONICAL_MIGRATED_PROTOCOL_TABLE_SQL =
-  "CREATE TABLE owned_fence_protocol(version INTEGER NOT NULL, retired INTEGER NOT NULL CHECK(retired IN (0, 1)), authority_id TEXT)";
-const CANONICAL_ACQUISITION_TRIGGER_SQL = `
-  CREATE TRIGGER owned_fence_acquisition_immutable
-  BEFORE UPDATE ON owned_fence_acquisition
-  BEGIN SELECT RAISE(ABORT, 'owned fence acquisition identity is immutable'); END`;
-const CANONICAL_AUTHORITY_UPDATE_TRIGGER_SQL = `
-  CREATE TRIGGER owned_fence_authority_immutable
-  BEFORE UPDATE OF authority_id ON owned_fence_protocol
-  BEGIN SELECT RAISE(ABORT, 'owned fence authority identity is immutable'); END`;
-const CANONICAL_AUTHORITY_DELETE_TRIGGER_SQL = `
-  CREATE TRIGGER owned_fence_authority_delete_immutable
-  BEFORE DELETE ON owned_fence_protocol
-  BEGIN SELECT RAISE(ABORT, 'owned fence authority identity cannot be deleted'); END`;
-const CANONICAL_AUTOINDEX_TABLES = new Map([
-  ["sqlite_autoindex_owned_fence_acquisition_1", "owned_fence_acquisition"],
-  ["sqlite_autoindex_owned_fence_holder_1", "owned_fence_holder"],
-  ["sqlite_autoindex_owned_fence_holder_2", "owned_fence_holder"],
-]);
+// A file a pre-FL2 Runner created holds a SQLite database (rollback journal) with the old protocol's tables. Only its
+// `retired` flag still counts, for one release (FL5 drops it). Anything else non-empty is foreign and refused.
+const SQLITE_HEADER = "SQLite format 3\0";
+const RETRYABLE_REMOVAL_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+const CLAIM = Object.freeze({ create: true, retired: "refuse" });
+const REVOKED_RECOVERY = Object.freeze({ create: false, retired: "allow" });
+const RETIRED_CLEANUP = Object.freeze({ create: false, retired: "require" });
+
 const waiter = new Int32Array(new SharedArrayBuffer(4));
 const asynchronousTails = new Map();
-// The acquisition id this module instance currently holds, by resolved path (claim to release). A contention failure
-// says whether the blocking holder is this live acquisition, and the sync driver refuses to block on a path another
-// live acquisition of this thread holds (performStepSync). Every exit forgets its entry, even when close throws.
+// The acquisition holding each path now (lock taken to lock given back), by resolved path: { token, identity }.
+// The sync driver refuses to wait on a path another live acquisition of this thread holds (performStepSync), since
+// nothing on this thread could give it back while the wait blocks.
 const liveAcquisitions = new Map();
-const tracedErrors = new WeakSet();
-// Holder rows this module instance claimed but could not release, by resolved path. An entry whose
-// effect ran (ambiguous finalization) is diagnostic only: that holder is never stolen, but an
-// acquisition it blocks names it and the failure that kept it. An entry whose effect never started
-// may be replaced by a later acquisition here, by its exact acquisition id; that id is a random UUID
-// this instance generated, so no other thread or process can own it.
-const retainedHolders = new Map();
+// Connections whose release failed, by resolved path: { database, identity, failure }. They stay referenced (never
+// closed, never collected), so the lock stays held until this process exits, and a later claim here fails at once.
+const retainedLocks = new Map();
+let nextToken = 1;
 let cachedCurrentBirth;
 // The background Windows self-birth preparation in flight, if any (prepareCurrentProcessBirthFingerprint).
 let preparingCurrentBirth;
@@ -122,25 +70,7 @@ export class OwnedFenceContentionError extends OwnedFenceLockUnavailableError {
   }
 }
 
-class OwnedFenceProtocolObservationChangedError extends OwnedFenceContentionError {
-  constructor(message, options) {
-    super(message, options);
-    this.name = "OwnedFenceProtocolObservationChangedError";
-  }
-}
-
-class OwnedFenceIdentityInspectionError extends OwnedFenceLockUnavailableError {}
-
-function containsIdentityInspectionFailure(error, seen = new Set()) {
-  if (!(error instanceof Error) || seen.has(error)) return false;
-  seen.add(error);
-  if (error instanceof OwnedFenceIdentityInspectionError) return true;
-  if (error instanceof AggregateError && error.errors.some(entry => containsIdentityInspectionFailure(entry, seen))) return true;
-  return containsIdentityInspectionFailure(error.cause, seen);
-}
-
 export function isOwnedFenceLockContention(error) {
-  if (containsIdentityInspectionFailure(error)) return false;
   if (error instanceof AggregateError)
     return error.errors.length > 0 && error.errors.every((entry) => isOwnedFenceLockContention(entry));
   if (error instanceof OwnedFenceContentionError) return true;
@@ -150,66 +80,400 @@ export function isOwnedFenceLockContention(error) {
 }
 
 export function withOwnedFenceLockSync(path, effect, options = {}) {
-  path = resolve(path);
-  return runSteps(lockSteps(path, effect, options));
+  return runSteps(lockSteps(resolve(path), effect, options));
 }
 
 export async function withOwnedFenceLock(path, effect, options = {}) {
   path = resolve(path);
+  return await inAsynchronousTurn(path, () => runStepsAsync(lockSteps(path, effect, options)));
+}
+
+/**
+ * Remove the lock of an authority whose own record already says it is released (the Windows Job host's
+ * `backendOwnershipReleasedAt`). The caller's assertion runs before the claim, under the lock and again before the
+ * removal, so a stale or foreign tombstone never removes a lock. A missing lock file is already recovered.
+ */
+export async function recoverRevokedOwnedFenceLock(path, options = {}) {
+  path = resolve(path);
+  if (typeof options.assertRevoked !== "function")
+    throw new OwnedFenceLockUnavailableError("Owned fence revocation authority is unavailable.");
+  await inAsynchronousTurn(path, () => runStepsAsync(recoverRevokedSteps(path, options)));
+}
+
+/**
+ * Finish the cleanup of an authority whose pre-FL2 lock file says `retired = 1`: take the lock (it stays retired, so
+ * no claim gets past it meanwhile), give it back, then run `cleanup`. Refused for any lock that is not retired.
+ */
+export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {}) {
+  path = resolve(path);
+  await inAsynchronousTurn(path, () => runStepsAsync(retiredCleanupSteps(path, cleanup, options)));
+}
+
+/** Whether `path` is a pre-FL2 lock file that says `retired = 1`. Takes no lock; false whenever that is uncertain. */
+export function retiredOwnedFenceCleanupAvailable(path) {
+  path = resolve(path);
+  let database;
+  try {
+    const identity = readLockIdentity(path, false);
+    if (identity.size === "0" || heldByThisModule(identity)) return false;
+    assertRollbackJournalDatabase(path, identity);
+    database = new DatabaseSync(sqliteDatabaseLocation(path, process.platform, { mode: "ro" }), { readOnly: true, timeout: 0 });
+    const retired = legacyRetirement(database) === "retired";
+    return retired && sameLockIdentity(readLockIdentity(path, false), identity);
+  } catch { return false; }
+  finally { try { database?.close(); } catch {} }
+}
+
+async function inAsynchronousTurn(path, body) {
   const previous = asynchronousTails.get(path) ?? Promise.resolve();
   let finishTurn;
   const turn = new Promise((resolvePromise) => { finishTurn = resolvePromise; });
   const tail = previous.then(() => turn);
   asynchronousTails.set(path, tail);
   await previous;
-  try {
-    return await runStepsAsync(lockSteps(path, effect, await awaitPreparedHolderBirth(options)));
-  } finally {
+  try { return await body(); }
+  finally {
     finishTurn();
     if (asynchronousTails.get(path) === tail) asynchronousTails.delete(path);
   }
 }
 
-// One claim-effect-release, shared by both entry points. Every wait inside it is a step its driver performs: the sync
-// driver (withOwnedFenceLockSync) blocks the thread, which it already owns; the async driver (withOwnedFenceLock)
-// awaits a timer, so a claim that polls for seconds on a busy host never stops the Runner's event loop, and on Windows
-// it probes another holder's identity without blocking. No step yields while this connection holds a SQLite write
-// transaction it has not committed, except the effect itself, whose transaction the protocol holds by design.
+// One claim-effect-release, shared by both entry points. Every wait is a step its driver performs: the sync driver
+// (withOwnedFenceLockSync) blocks the thread, which it already owns; the async driver (withOwnedFenceLock) awaits a
+// timer, so a claim that waits for seconds never stops the event loop. The lock is held from the claim's BEGIN
+// IMMEDIATE to its ROLLBACK; the effect runs in between.
 function* lockSteps(path, effect, options) {
-  const context = yield* acquireSteps(path, options);
+  const held = yield* acquireSteps(path, options, CLAIM);
+  let result;
   let effectError;
-  let retired = false;
-  let effectStarted = false;
+  let failed = false;
   try {
-    yield* beginEffectSteps(context);
-    effectStarted = true;
-    let result;
-    try { result = yield effectStep(effect); }
-    catch (error) { effectError = error; }
-    retired = finalizeEffect(context, effectError, options.retireAfterEffect === true);
-    if (effectError !== undefined) throw effectError;
-    return result;
-  } catch (error) {
-    rollbackQuietly(context.database);
-    if (!effectStarted) throw yield* releaseUnstartedAcquisitionSteps(context, error);
-    if (effectError !== undefined && error !== effectError) {
-      throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
+    // Tests only: runs with the lock held, before the effect (a hard link or a replacement planted here is refused).
+    options.afterClaim?.();
+    assertHeldIdentity(held);
+    result = yield effectStep(effect);
+  } catch (error) { effectError = error; failed = true; }
+  const releaseError = releaseHeld(held, options);
+  if (failed) {
+    if (releaseError === undefined) throw effectError;
+    throw new AggregateError([effectError, releaseError], "Owned fence effect and lock release both failed.", { cause: effectError });
+  }
+  if (releaseError !== undefined) throw releaseError;
+  if (options.retireAfterEffect === true) yield* retireSteps(path, held.identity, options);
+  return result;
+}
+
+function* recoverRevokedSteps(path, options) {
+  options.assertRevoked();
+  const held = yield* acquireSteps(path, options, REVOKED_RECOVERY);
+  if (held === undefined) return;
+  let failure;
+  let failed = false;
+  try {
+    options.assertRevoked();
+    assertHeldIdentity(held);
+  } catch (error) { failure = error; failed = true; }
+  const releaseError = releaseHeld(held, {});
+  if (failed) {
+    if (releaseError === undefined) throw failure;
+    throw new AggregateError([failure, releaseError], "Owned fence revocation check and lock release both failed.", { cause: failure });
+  }
+  if (releaseError !== undefined) throw releaseError;
+  options.assertRevoked();
+  yield* retryBusyRemoval(() => removeLockFile(path, held.identity));
+}
+
+function* retiredCleanupSteps(path, cleanup, options) {
+  const held = yield* acquireSteps(path, options, RETIRED_CLEANUP);
+  if (held === undefined) throw new OwnedFenceLockUnavailableError("Owned fence retired lock is missing.");
+  const releaseError = releaseHeld(held, {});
+  if (releaseError !== undefined) throw releaseError;
+  cleanup();
+}
+
+/**
+ * Takes the lock, waiting while another holder has it, until the claim's deadline (then OwnedFenceContentionError).
+ * Returns { path, token, database, identity }, or undefined when the file is missing and `mode.create` is false.
+ */
+function* acquireSteps(path, options, mode) {
+  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
+  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
+    throw new OwnedFenceLockUnavailableError("Owned fence lock bounds are invalid.");
+  if (options.deadlineAt !== undefined && (!Number.isFinite(options.deadlineAt) || options.deadlineAt <= 0))
+    throw new OwnedFenceLockUnavailableError("Owned fence absolute deadline is invalid.");
+  const startedAt = Date.now();
+  const deadline = Math.min(startedAt + deadlineMs, options.deadlineAt ?? Number.POSITIVE_INFINITY);
+  const retained = retainedLocks.get(path);
+  if (retained !== undefined)
+    throw new OwnedFenceContentionError("Owned fence lock is kept by this process after its release failed, until the process exits: " +
+      `${describeFailure(retained.failure)}`, { cause: retained.failure });
+  const token = nextToken++;
+  const delays = pollDelays(retryDelayMs);
+  let attempts = 0;
+  let lastBusy;
+  for (;;) {
+    if (Date.now() >= deadline) {
+      throw new OwnedFenceContentionError(attempts === 0
+        ? "Owned fence acquisition deadline is exhausted."
+        : `Owned fence lock is held by another holder [${attempts} attempts in ${Date.now() - startedAt} ms]${describeHolder(path)}.`,
+        lastBusy === undefined ? undefined : { cause: lastBusy });
     }
-    throw error;
-  } finally {
-    try { context.database.close(); }
-    finally { forgetLiveAcquisition(context); }
-    if (retired) yield* retireProtocolSteps(path, options, context.pathIdentity, context.authorityId);
+    attempts += 1;
+    const attempt = tryLockOnce(path, options, mode);
+    if (attempt.missing) return undefined;
+    if (attempt.held) {
+      const held = { path, token, ...attempt.held };
+      liveAcquisitions.set(path, { token, identity: held.identity });
+      return held;
+    }
+    lastBusy = attempt.busy;
+    if (Date.now() >= deadline) continue;
+    yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())), path, token);
+  }
+}
+
+/** One attempt: { held: { database, identity } }, { busy: error } or { missing: true }; anything else throws. */
+function tryLockOnce(path, options, mode) {
+  let before = readLockIdentity(path, true);
+  if (before === undefined) {
+    if (!mode.create) return { missing: true };
+    before = createLockFile(path);
+    if (before === undefined) return { busy: new OwnedFenceContentionError("Owned fence lock file creation was contested.") };
+    if (options.assertAuthority) {
+      try { options.assertAuthority(); }
+      catch (error) { throw withCreatedLockRemoved(path, before, error); }
+    }
+  }
+  if (before.size !== "0") assertRollbackJournalDatabase(path, before);
+  let database;
+  // Opened through a URI with mode=rw, so a lock file removed since the lstat is never created again here.
+  try { database = new DatabaseSync(sqliteDatabaseLocation(path, process.platform, { mode: "rw" }), { timeout: 0 }); }
+  catch (error) { throw new OwnedFenceLockUnavailableError("Owned fence lock file cannot be opened.", { cause: error }); }
+  try {
+    // An empty lock file: the rollback journal SQLite would create beside it for the claim's empty write transaction
+    // stays in memory, so a claim leaves no file behind, not even while it holds the lock or when its holder dies.
+    if (before.size === "0") database.exec("PRAGMA journal_mode=MEMORY");
+    database.exec("BEGIN IMMEDIATE");
+  } catch (error) {
+    try { database.close(); } catch {}
+    if (isBusy(error)) return { busy: error };
+    throw new OwnedFenceLockUnavailableError("Owned fence lock is unavailable.", { cause: error });
+  }
+  // The lock is held from here: whatever fails now gives it back (or keeps it, if that fails too).
+  try {
+    const identity = readLockIdentity(path, false);
+    if (!sameLockIdentity(before, identity))
+      throw new OwnedFenceLockUnavailableError("Owned fence lock file was replaced or removed while it was claimed.");
+    const retirement = legacyRetirement(database);
+    if (mode.retired === "refuse" && retirement === "retired")
+      throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired.");
+    if (mode.retired === "require" && retirement !== "retired")
+      throw new OwnedFenceLockUnavailableError("Owned fence lock is not a retired pre-FL2 lock.");
+    return { held: { database, identity } };
+  } catch (error) {
+    const released = releaseConnection(path, database, before);
+    const failure = error instanceof OwnedFenceLockUnavailableError ? error
+      : new OwnedFenceLockUnavailableError("Owned fence lock file is foreign or unreadable.", { cause: error });
+    if (released === undefined) throw failure;
+    throw new AggregateError([failure, released], "Owned fence claim check and lock release both failed.", { cause: failure });
+  }
+}
+
+/** Gives the lock back. Returns the failure, if any: that connection is then kept, and the lock held until exit. */
+function releaseHeld(held, options) {
+  if (liveAcquisitions.get(held.path)?.token === held.token) liveAcquisitions.delete(held.path);
+  return releaseConnection(held.path, held.database, held.identity, options.beforeRelease);
+}
+
+function releaseConnection(path, database, identity, beforeRelease) {
+  let failure;
+  try {
+    // Tests only: a failure here stands for a failed ROLLBACK.
+    beforeRelease?.();
+    database.exec("ROLLBACK");
+  } catch (error) { failure = error; }
+  if (failure === undefined) {
+    try { database.close(); return undefined; }
+    catch (error) { failure = error; }
+  }
+  const error = new OwnedFenceLockUnavailableError(
+    "Owned fence lock release failed; this process keeps the lock until it exits.", { cause: failure });
+  retainedLocks.set(path, { database, identity, failure: error });
+  return error;
+}
+
+function* retireSteps(path, identity, options) {
+  const remove = typeof options.retireAuthority === "function"
+    ? () => options.retireAuthority()
+    : () => removeLockFile(path, identity);
+  try { yield* retryBusyRemoval(remove); }
+  catch (error) {
+    throw new OwnedFenceAuthorityRetirementError("Owned fence authority retirement failed after its effect.", { cause: error });
+  }
+}
+
+// A removal that meets an open handle (Windows: another claimant opening the file to try it, antivirus) tries again
+// until the default deadline; every try re-checks what it removes.
+function* retryBusyRemoval(remove) {
+  const deadline = Date.now() + DEFAULT_DEADLINE_MS;
+  const delays = pollDelays(DEFAULT_RETRY_DELAY_MS);
+  for (;;) {
+    try { remove(); return; }
+    catch (error) {
+      if (!RETRYABLE_REMOVAL_CODES.has(errorCode(error)) || Date.now() >= deadline) throw error;
+      yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())));
+    }
+  }
+}
+
+/** Removes the lock file only while it is still the file the caller held; a missing one is already removed. */
+function removeLockFile(path, identity) {
+  const current = readLockIdentity(path, true);
+  if (current === undefined) return;
+  if (!sameLockIdentity(current, identity))
+    throw new OwnedFenceLockUnavailableError("Owned fence lock file was replaced before its removal.");
+  unlinkSync(path);
+}
+
+/**
+ * The lock file as lstat sees it: a regular file with one link, never a symbolic link. Its identity is the device,
+ * inode and birth time; `size` tells an empty lock file from a pre-FL2 database.
+ */
+function readLockIdentity(path, allowMissing) {
+  let status;
+  try { status = lstatSync(path, { bigint: true }); }
+  catch (error) {
+    if (allowMissing && error?.code === "ENOENT") return undefined;
+    throw new OwnedFenceLockUnavailableError("Owned fence lock file is unavailable.", { cause: error });
+  }
+  return lockIdentityOf(status);
+}
+
+function lockIdentityOf(status) {
+  if (!status.isFile() || status.isSymbolicLink() || status.nlink !== 1n)
+    throw new OwnedFenceLockUnavailableError("Owned fence lock file is aliased, linked, or not a regular file.");
+  return Object.freeze({
+    device: status.dev.toString(),
+    inode: status.ino.toString(),
+    birthtimeNs: status.birthtimeNs.toString(),
+    size: status.size.toString(),
+  });
+}
+
+function sameLockIdentity(left, right) {
+  return left?.device === right?.device && left?.inode === right?.inode && left?.birthtimeNs === right?.birthtimeNs;
+}
+
+function assertHeldIdentity(held) {
+  if (!sameLockIdentity(readLockIdentity(held.path, false), held.identity))
+    throw new OwnedFenceLockUnavailableError("Owned fence lock file was replaced or removed while it was held.");
+}
+
+/**
+ * Whether this thread holds the lock at `path` through an acquisition other than `token`, or keeps it after a failed
+ * release: by path, and by file identity, so another spelling of the same file (a case difference on Windows, a
+ * linked parent directory) is seen too.
+ */
+function heldByAnotherAcquisition(path, token) {
+  const live = liveAcquisitions.get(path);
+  if (live !== undefined && live.token !== token) return true;
+  let identity;
+  try { identity = readLockIdentity(path, true); } catch { return false; }
+  if (identity === undefined) return false;
+  for (const entry of liveAcquisitions.values()) if (entry.token !== token && sameLockIdentity(entry.identity, identity)) return true;
+  for (const entry of retainedLocks.values()) if (sameLockIdentity(entry.identity, identity)) return true;
+  return false;
+}
+
+function heldByThisModule(identity) {
+  for (const entry of liveAcquisitions.values()) if (sameLockIdentity(entry.identity, identity)) return true;
+  for (const entry of retainedLocks.values()) if (sameLockIdentity(entry.identity, identity)) return true;
+  return false;
+}
+
+/** Creates the empty lock file (mode 0600). Returns its identity, or undefined when another creator won the race. */
+function createLockFile(path) {
+  let descriptor;
+  try { descriptor = openSync(path, "wx", 0o600); }
+  catch (error) {
+    if (error?.code === "EEXIST") return undefined;
+    throw new OwnedFenceLockUnavailableError("Owned fence lock file creation is unavailable.", { cause: error });
+  }
+  let created;
+  try { created = lockIdentityOf(fstatSync(descriptor, { bigint: true })); }
+  finally { closeSync(descriptor); }
+  if (!sameLockIdentity(readLockIdentity(path, false), created))
+    throw new OwnedFenceLockUnavailableError("Owned fence lock file changed during its creation.");
+  return created;
+}
+
+/** The caller's authority refused a lock file this claim just created: remove it, unless it is no longer that file. */
+function withCreatedLockRemoved(path, created, error) {
+  try {
+    const current = readLockIdentity(path, true);
+    if (current !== undefined && sameLockIdentity(current, created)) unlinkSync(path);
+    return error;
+  } catch (cleanupError) {
+    return new AggregateError([error, cleanupError], "Owned fence authority refusal and lock file removal both failed.", { cause: error });
   }
 }
 
 /**
- * A wait of `ms` before the next check. `path` and `acquisitionId` name the acquisition that waits, when it is a claim:
- * the sync driver refuses to block on a lock this thread itself holds through another live acquisition (an async
- * effect in progress, or a nested claim), since nothing on this thread could release it while the wait blocks.
+ * A non-empty lock file must be a rollback-journal SQLite database (a pre-FL2 lock): SQLite would create -wal and -shm
+ * files beside a WAL database, and lock it elsewhere. Read before any SQLite open, and only when no acquisition of this
+ * module holds that file: on POSIX this read's close would end such a hold. A held file was checked when it was taken.
  */
-function sleepStep(ms, path, acquisitionId) {
-  return { kind: "sleep", ms, path, acquisitionId };
+function assertRollbackJournalDatabase(path, identity) {
+  if (heldByThisModule(identity)) return;
+  const header = Buffer.alloc(100);
+  let read = 0;
+  let descriptor;
+  try {
+    descriptor = openSync(path, "r");
+    read = readSync(descriptor, header, 0, header.length, 0);
+  } catch (error) {
+    throw new OwnedFenceLockUnavailableError("Owned fence lock file is unreadable.", { cause: error });
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+  if (read < header.length || header.toString("latin1", 0, 16) !== SQLITE_HEADER || header[18] !== 1 || header[19] !== 1)
+    throw new OwnedFenceLockUnavailableError("Owned fence lock file is foreign or a WAL database; it is left unchanged.");
+}
+
+/** Under the lock: "none" for an empty lock file, else the pre-FL2 protocol's flag ("active" or "retired"). */
+function legacyRetirement(database) {
+  const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
+  if (tables.length === 0) return "none";
+  if (!tables.includes("owned_fence_protocol"))
+    throw new OwnedFenceLockUnavailableError("Owned fence lock file is a foreign database.");
+  const rows = database.prepare("SELECT retired FROM owned_fence_protocol").all();
+  if (rows.length !== 1 || (rows[0].retired !== 0 && rows[0].retired !== 1))
+    throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired or invalid.");
+  return rows[0].retired === 1 ? "retired" : "active";
+}
+
+/** Diagnostics only. On Linux /proc/locks names the process that holds the lock; elsewhere there is no cheap way. */
+function describeHolder(path) {
+  if (process.platform !== "linux") return "";
+  try {
+    const inode = lstatSync(path, { bigint: true }).ino.toString();
+    const pids = new Set();
+    for (const line of readFileSync("/proc/locks", "utf8").split("\n")) {
+      const fields = line.trim().split(/\s+/);
+      const id = fields[0] === "->" ? fields.slice(1) : fields;
+      if (id[1] === "POSIX" && id[5]?.split(":")[2] === inode) pids.add(id[4]);
+    }
+    return pids.size === 0 ? "" : `, held by PID ${[...pids].join(", ")}`;
+  } catch { return ""; }
+}
+
+/**
+ * A wait of `ms` before the next try. `path` and `token` name the acquisition that waits, when it is a claim: the sync
+ * driver refuses to block on a lock this thread itself holds through another live acquisition.
+ */
+function sleepStep(ms, path, token) {
+  return { kind: "sleep", ms, path, token };
 }
 
 function effectStep(effect) {
@@ -262,8 +526,7 @@ async function runStepsAsync(steps) {
 
 function performStepSync(step) {
   if (step.kind === "sleep") {
-    const live = step.path === undefined ? undefined : liveAcquisitions.get(step.path);
-    if (live !== undefined && live !== step.acquisitionId)
+    if (step.path !== undefined && heldByAnotherAcquisition(step.path, step.token))
       throw new OwnedFenceContentionError(
         "Owned fence lock is held by another live acquisition of this thread; a synchronous wait cannot outlast it.");
     if (step.ms > 0) Atomics.wait(waiter, 0, 0, step.ms);
@@ -280,77 +543,42 @@ async function performStepAsync(step) {
   return await step.async();
 }
 
-/**
- * Retire coordination whose external authority has already durably revoked it.
- * The caller's assertion is deliberately repeated inside the SQLite write
- * transaction: a stale or foreign tombstone must never authorize lock removal.
- */
-export async function recoverRevokedOwnedFenceLock(path, options = {}) {
-  path = resolve(path);
-  const authorityId = coordinationAuthorityId(path);
-  const previous = asynchronousTails.get(path) ?? Promise.resolve();
-  let finishTurn;
-  const turn = new Promise((resolvePromise) => { finishTurn = resolvePromise; });
-  const tail = previous.then(() => turn);
-  asynchronousTails.set(path, tail);
-  await previous;
-  try {
-    if (typeof options.assertRevoked !== "function")
-      throw new OwnedFenceLockUnavailableError("Owned fence revocation authority is unavailable.");
-    options.assertRevoked();
-    const pathIdentity = assertCoordinationPath(path, true);
-    if (!pathIdentity) return;
-    assertNoProtocolSidecars(path, pathIdentity);
-    const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
-    const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
-    if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
-      throw new OwnedFenceLockUnavailableError("Owned fence revocation bounds are invalid.");
-    const deadline = Date.now() + deadlineMs;
-    let database;
-    let committed = false;
-    try {
-      database = new DatabaseSync(sqliteDatabaseLocation(path));
-      assertCoordinationPathIdentity(path, pathIdentity);
-      database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
-      await beginImmediateAsync(database, deadline, retryDelayMs);
-      assertRecoverableProtocol(database, authorityId, { allowHolderDeleteTriggers: true });
-      options.assertRevoked();
-      assertCoordinationPathIdentity(path, pathIdentity);
-      const triggers = database.prepare("SELECT name, tbl_name AS tableName, sql FROM sqlite_master WHERE type = 'trigger'").all();
-      for (const trigger of triggers) {
-        if (["owned_fence_acquisition_immutable", AUTHORITY_UPDATE_TRIGGER, AUTHORITY_DELETE_TRIGGER].includes(String(trigger.name))) continue;
-        if (trigger.tableName !== "owned_fence_holder" || typeof trigger.sql !== "string" ||
-            !/\bBEFORE\s+DELETE\s+ON\s+owned_fence_holder\b/i.test(trigger.sql))
-          throw new OwnedFenceLockUnavailableError("Owned fence revocation metadata is corrupt or foreign.");
-        database.exec(`DROP TRIGGER ${quoteIdentifier(trigger.name)}`);
-      }
-      database.prepare("DELETE FROM owned_fence_holder").run();
-      database.prepare("DELETE FROM owned_fence_acquisition").run();
-      database.prepare("UPDATE owned_fence_protocol SET retired = 1 WHERE retired = 0").run();
-      const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
-      const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
-      const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
-      if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 1 ||
-          protocol[0].authorityId !== authorityId || proposals !== 0 || holders !== 0)
-        throw new OwnedFenceLockUnavailableError("Owned fence revocation did not retire exact coordination state.");
-      assertCoordinationPathIdentity(path, pathIdentity);
-      database.exec("COMMIT");
-      committed = true;
-    } catch (error) {
-      rollbackQuietly(database);
-      throw normalizeUnavailable(error);
-    } finally { database?.close(); }
-    if (!committed) throw new OwnedFenceLockUnavailableError("Owned fence revocation commit is unavailable.");
-    retainedHolders.delete(path);
-    const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
-    options.assertRevoked();
-    revalidateProtocolRemovalAuthority(path, removalAuthority);
-    await runStepsAsync(removeProtocolPathSteps(path, removalAuthority));
-  } finally {
-    finishTurn();
-    if (asynchronousTails.get(path) === tail) asynchronousTails.delete(path);
+function describeFailure(error) {
+  const parts = [];
+  const seen = new Set();
+  for (let node = error; node instanceof Error && !seen.has(node) && parts.length < 6; node = node.cause) {
+    seen.add(node);
+    parts.push(node instanceof AggregateError
+      ? `${node.message} [${node.errors.map((entry) => entry instanceof Error ? entry.message : String(entry)).join("; ")}]`
+      : node.message);
   }
+  const text = parts.join(" <- ");
+  return text.length > 600 ? `${text.slice(0, 599)}…` : text;
 }
+
+function errorCode(error) {
+  const seen = new Set();
+  for (let node = error; node instanceof Error && !seen.has(node); node = node.cause) {
+    seen.add(node);
+    if (typeof node.code === "string") return node.code;
+  }
+  return undefined;
+}
+
+function isBusy(error) { return /database is locked|database table is locked|SQLITE_BUSY/i.test(String(error?.message ?? error)); }
+
+// ---- This process's own birth identity (Windows self-birth) and the POSIX process-birth probe. ----
+// No claim uses these any more; FL4 removes them with the Windows Job host's prestart and the tests that pin them.
+
+// The background Windows self-birth probe is one cold powershell.exe start, never killed and restarted while it may
+// still answer: it lasts SELF_BIRTH_PROBE_CAP_MS from its own start and returns the moment it answers. 30 s is 1.4x
+// the slowest start measured (21.3 s, 4x as many busy processes as CPUs).
+const SELF_BIRTH_PROBE_CAP_MS = 30_000;
+// A probe that ends early without an identity starts again after this, growing by half up to the maximum.
+const SELF_BIRTH_RETRY_DELAY_MS = 25;
+const SELF_BIRTH_MAX_RETRY_DELAY_MS = 250;
+// At most this many probes per call or preparation; each gets all the time left.
+const SELF_BIRTH_MAX_PROBES = 4;
 
 export function currentProcessBirthFingerprint(remainingMs = DEFAULT_DEADLINE_MS) {
   if (!Number.isFinite(remainingMs) || remainingMs <= 0)
@@ -494,1099 +722,6 @@ function waitForPreparedBirth(deadline) {
   });
 }
 
-/**
- * withOwnedFenceLock on Windows: when this process's own birth identity is not known yet, wait for the background
- * preparation (starting it if none runs) inside the caller's own deadline, and hand acquire that same deadline, so
- * the wait and the acquisition together never run past it. Still unknown at the deadline: the claim fails closed
- * with the same error as before, and the preparation goes on for the next one. A preparation that ended without the
- * identity leaves acquire its usual sync probe in the time left. Invalid bounds and an already spent deadline go
- * straight to acquire, which refuses them with its own errors.
- */
-async function awaitPreparedHolderBirth(options) {
-  if (process.platform !== "win32" || options.holderBirth !== undefined || cachedCurrentBirth?.state === "same") return options;
-  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
-  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
-  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1) return options;
-  if (options.deadlineAt !== undefined && (!Number.isFinite(options.deadlineAt) || options.deadlineAt <= 0)) return options;
-  const deadline = Math.min(Date.now() + deadlineMs, options.deadlineAt ?? Number.POSITIVE_INFINITY);
-  if (Date.now() >= deadline) return options;
-  const outcome = await waitForPreparedBirth(deadline);
-  if (outcome === "expired" && cachedCurrentBirth?.state !== "same")
-    throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
-  return { ...options, deadlineAt: deadline };
-}
-
-export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {}) {
-  path = resolve(path);
-  const authorityId = coordinationAuthorityId(path);
-  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
-  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
-  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
-    throw new OwnedFenceLockUnavailableError("Owned fence retired-cleanup bounds are invalid.");
-  const pathIdentity = assertCoordinationPath(path);
-  assertNoProtocolSidecars(path, pathIdentity);
-  const deadline = Date.now() + deadlineMs;
-  let database;
-  try {
-    database = new DatabaseSync(sqliteDatabaseLocation(path));
-    assertCoordinationPathIdentity(path, pathIdentity);
-    database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
-    await beginImmediateAsync(database, deadline, retryDelayMs);
-    assertCoordinationPathIdentity(path, pathIdentity);
-    assertRetiredProtocol(database, authorityId);
-    assertCoordinationPathIdentity(path, pathIdentity);
-    database.exec("COMMIT");
-  } catch (error) {
-    rollbackQuietly(database);
-    throw normalizeUnavailable(error);
-  } finally { database?.close(); }
-  const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
-  revalidateProtocolRemovalAuthority(path, removalAuthority);
-  cleanup();
-}
-
-export function retiredOwnedFenceCleanupAvailable(path) {
-  path = resolve(path);
-  const authorityId = coordinationAuthorityId(path);
-  let database;
-  try {
-    const pathIdentity = assertCoordinationPath(path);
-    assertNoProtocolSidecars(path, pathIdentity);
-    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
-    assertCoordinationPathSnapshot(path, pathIdentity);
-    assertRetiredProtocol(database, authorityId);
-    return true;
-  } catch { return false; }
-  finally { database?.close(); }
-}
-
-function* acquireSteps(path, options) {
-  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
-  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
-  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
-    throw new OwnedFenceLockUnavailableError("Owned fence lock bounds are invalid.");
-  if (options.deadlineAt !== undefined && (!Number.isFinite(options.deadlineAt) || options.deadlineAt <= 0))
-    throw new OwnedFenceLockUnavailableError("Owned fence absolute deadline is invalid.");
-  const startedAt = Date.now();
-  const trace = { startedAt, birthMs: 0, openMs: 0, attempts: 0, busy: 0, inspections: 0, inspectionMs: 0, holder: undefined, holderRead: false };
-  const deadline = Math.min(startedAt + deadlineMs, options.deadlineAt ?? Number.POSITIVE_INFINITY);
-  if (Date.now() >= deadline)
-    throw withAcquisitionTrace(new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted."), path, trace, "starting");
-  const holderPid = options.holderPid ?? process.pid;
-  const holderBirth = options.holderBirth ?? currentProcessBirthFingerprint(deadline - Date.now());
-  trace.birthMs = Date.now() - startedAt;
-  if (!Number.isSafeInteger(holderPid) || holderPid < 1 || typeof holderBirth !== "string" || holderBirth.length === 0)
-    throw new OwnedFenceLockUnavailableError("Owned fence holder identity is invalid.");
-  const acquisitionId = randomUUID();
-  if (Date.now() >= deadline)
-    throw withAcquisitionTrace(new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted."), path, trace, "starting");
-  const authorityId = coordinationAuthorityId(path);
-  let opened;
-  try { opened = yield* openProtocolSteps(path, authorityId, deadline, retryDelayMs, options.assertAuthority, acquisitionId); }
-  catch (error) { trace.openMs = Date.now() - startedAt - trace.birthMs; throw withAcquisitionTrace(error, path, trace, "opening"); }
-  const { database, pathIdentity } = opened;
-  trace.openMs = Date.now() - startedAt - trace.birthMs;
-  const context = {
-    path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs,
-    inspectHolder: options.inspectHolder ?? defaultInspectHolder,
-    // An injected inspector is called as it is by both drivers; only the default one has a non-blocking form.
-    inspectHolderAsync: options.inspectHolder ?? defaultInspectHolderAsync,
-    afterClaim: options.afterClaim,
-    // Tests only (like afterClaim): a shorter release window than the default, so a test can outlast it quickly.
-    releaseWindowMs: Number.isSafeInteger(options.releaseWindowMs) && options.releaseWindowMs > 0 ? options.releaseWindowMs : DEFAULT_DEADLINE_MS,
-    trace,
-  };
-  let proposalInserted = false;
-  let claimed = false;
-  try {
-    if (tryProposeAndClaimFree(context)) {
-      proposalInserted = true;
-      claimed = true;
-      retainedHolders.delete(path);
-      liveAcquisitions.set(path, acquisitionId);
-      context.afterClaim?.();
-      return context;
-    }
-    const proposalDelays = pollDelays(retryDelayMs);
-    while (!proposalInserted) {
-      try {
-        assertCoordinationPathIdentity(path, pathIdentity);
-        database.prepare("INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES (?, ?, ?)")
-          .run(acquisitionId, holderPid, holderBirth);
-        proposalInserted = true;
-      } catch (error) {
-        if (isBusy(error)) trace.busy += 1;
-        if (!isBusy(error) || Date.now() >= deadline)
-          throw isBusy(error)
-            ? new OwnedFenceContentionError(`Owned fence lock remains held by an exact live holder${describeHolder(database)}.`, { cause: error })
-            : error;
-        yield sleepStep(Math.min(proposalDelays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
-      }
-    }
-    const claimDelays = pollDelays(retryDelayMs);
-    for (;;) {
-      if (yield* tryClaimSteps(context)) {
-        claimed = true;
-        retainedHolders.delete(path);
-        liveAcquisitions.set(path, acquisitionId);
-        context.afterClaim?.();
-        return context;
-      }
-      if (Date.now() >= deadline)
-        throw new OwnedFenceContentionError("Owned fence lock remains held by an exact live holder.");
-      yield sleepStep(Math.min(claimDelays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
-    }
-  } catch (error) {
-    if (!proposalInserted) {
-      const thrown = withRetainedHolderContext(withAcquisitionTrace(normalizeUnavailable(error), path, trace, "proposing"), path, database);
-      database.close();
-      throw thrown;
-    }
-    if (claimed) {
-      const released = yield* releaseUnstartedAcquisitionSteps(context, error);
-      try { database.close(); }
-      finally { forgetLiveAcquisition(context); }
-      throw released;
-    }
-    try {
-      assertCoordinationPathIdentity(path, pathIdentity);
-      database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId);
-    }
-    catch (cleanupError) {
-      database.close();
-      throw new AggregateError([error, cleanupError], "Owned fence acquisition and proposal cleanup both failed.", { cause: error });
-    }
-    const thrown = withRetainedHolderContext(withAcquisitionTrace(normalizeUnavailable(error), path, trace, "claiming"), path, database);
-    database.close();
-    throw thrown;
-  }
-}
-
-function* openProtocolSteps(path, authorityId, deadline, retryDelayMs, assertAuthority, acquisitionId) {
-  let observedProvisionalContention = false;
-  const delays = pollDelays(retryDelayMs);
-  const retry = (error) => waitForProtocolRetry(error, deadline, delays(), path, acquisitionId);
-  for (;;) {
-    let database;
-    let pathIdentity;
-    let provisionalSnapshot;
-    let mayInitialize = false;
-    let authorityRefused = false;
-    let transactionOpen = false;
-    try {
-      let beforeOpenIdentity = assertCoordinationPath(path, true);
-      try { assertProtocolObservation(path, beforeOpenIdentity, "before existing-path classification"); }
-      catch (error) {
-        if (beforeOpenIdentity && !coordinationPathCanRetry(path, beforeOpenIdentity)) throw error;
-        yield retry(error);
-        continue;
-      }
-      if (!beforeOpenIdentity) {
-        provisionalSnapshot = reserveProtocolPath(path);
-        if (!provisionalSnapshot) {
-          observedProvisionalContention = true;
-          yield retry(new OwnedFenceContentionError("Owned fence provisional coordination creation remained contested."));
-          continue;
-        }
-        beforeOpenIdentity = provisionalSnapshot;
-        mayInitialize = true;
-        if (assertAuthority) {
-          try { assertAuthority(); }
-          catch (error) { authorityRefused = true; throw error; }
-        }
-        assertCoordinationPathSnapshot(path, provisionalSnapshot);
-      } else {
-        if (observedProvisionalContention && beforeOpenIdentity.size === "0") {
-          yield retry(new OwnedFenceContentionError("Owned fence provisional coordination winner is not initialized yet."));
-          continue;
-        }
-        try {
-          beforeOpenIdentity = preflightExistingProtocol(path, beforeOpenIdentity, authorityId);
-        } catch (error) {
-          const retryable = observedProvisionalContention || error instanceof OwnedFenceProtocolObservationChangedError || isBusy(error);
-          if (!retryable || !coordinationPathCanRetry(path, beforeOpenIdentity, observedProvisionalContention)) throw error;
-          yield retry(error);
-          continue;
-        }
-      }
-      try { assertProtocolObservation(path, beforeOpenIdentity, "before read-write open"); }
-      catch (error) {
-        if (!coordinationPathCanRetry(path, beforeOpenIdentity)) throw error;
-        yield retry(error);
-        continue;
-      }
-      database = new DatabaseSync(sqliteDatabaseLocation(path));
-      try {
-        pathIdentity = assertCoordinationPath(path);
-        if (!samePathSnapshot(beforeOpenIdentity, pathIdentity)) {
-          if (!samePathIdentity(beforeOpenIdentity, pathIdentity))
-            throw new OwnedFenceLockUnavailableError("Owned fence coordination path changed while it was opened.");
-          throw new OwnedFenceProtocolObservationChangedError("Owned fence protocol bytes changed during read-write open.");
-        }
-        assertProtocolObservation(path, pathIdentity, "immediately after read-write open");
-      } catch (error) {
-        try { database.close(); } catch {}
-        database = undefined;
-        if (!(error instanceof OwnedFenceProtocolObservationChangedError) || !coordinationPathRetainsIdentity(path, beforeOpenIdentity))
-          throw error;
-        yield retry(error);
-        continue;
-      }
-      database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
-      database.exec("BEGIN IMMEDIATE");
-      transactionOpen = true;
-      assertCoordinationPathIdentity(path, pathIdentity);
-      const objects = new Set(database.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')").all().map((row) => row.name));
-      const required = ["owned_fence_protocol", "owned_fence_acquisition", "owned_fence_holder", "owned_fence_acquisition_immutable"];
-      if (!mayInitialize && required.some((name) => !objects.has(name)))
-        throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is incomplete or invalid.");
-      if (mayInitialize) database.exec(`
-        CREATE TABLE IF NOT EXISTS owned_fence_protocol(
-          version INTEGER NOT NULL,
-          retired INTEGER NOT NULL CHECK(retired IN (0, 1)),
-          authority_id TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS owned_fence_acquisition(
-          acquisition_id TEXT PRIMARY KEY NOT NULL,
-          holder_pid INTEGER NOT NULL,
-          holder_birth TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS owned_fence_holder(
-          lock_key TEXT PRIMARY KEY NOT NULL CHECK(lock_key = 'owned'),
-          acquisition_id TEXT UNIQUE NOT NULL,
-          holder_pid INTEGER NOT NULL,
-          holder_birth TEXT NOT NULL,
-          FOREIGN KEY(acquisition_id) REFERENCES owned_fence_acquisition(acquisition_id)
-        );
-        CREATE TRIGGER IF NOT EXISTS owned_fence_acquisition_immutable
-        BEFORE UPDATE ON owned_fence_acquisition
-        BEGIN SELECT RAISE(ABORT, 'owned fence acquisition identity is immutable'); END;
-      `);
-      const protocolColumns = tableColumns(database, "owned_fence_protocol");
-      const migratingLegacy = sameColumns(protocolColumns, LEGACY_PROTOCOL_COLUMNS);
-      if (migratingLegacy) {
-        const legacyProposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
-        const legacyHolders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
-        if (legacyProposals !== 0 || legacyHolders !== 0)
-          throw new OwnedFenceLockUnavailableError("Owned fence legacy coordination has unbound ownership and cannot be migrated.");
-        assertCoordinationPathIdentity(path, pathIdentity);
-        database.exec("ALTER TABLE owned_fence_protocol ADD COLUMN authority_id TEXT");
-        database.prepare("UPDATE owned_fence_protocol SET authority_id = ? WHERE authority_id IS NULL").run(authorityId);
-      } else if (!sameColumns(protocolColumns, PROTOCOL_COLUMNS)) {
-        throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is invalid.");
-      }
-      if (mayInitialize || migratingLegacy) database.exec(`
-        CREATE TRIGGER IF NOT EXISTS ${AUTHORITY_UPDATE_TRIGGER}
-        BEFORE UPDATE OF authority_id ON owned_fence_protocol
-        BEGIN SELECT RAISE(ABORT, 'owned fence authority identity is immutable'); END;
-        CREATE TRIGGER IF NOT EXISTS ${AUTHORITY_DELETE_TRIGGER}
-        BEFORE DELETE ON owned_fence_protocol
-        BEGIN SELECT RAISE(ABORT, 'owned fence authority identity cannot be deleted'); END;
-      `);
-      assertCanonicalProtocolSchema(database, "current");
-      const version = database.prepare("SELECT version, authority_id AS authorityId FROM owned_fence_protocol").all();
-      if (version.length === 0 && mayInitialize)
-        database.prepare("INSERT INTO owned_fence_protocol(version, retired, authority_id) VALUES (?, 0, ?)").run(PROTOCOL_VERSION, authorityId);
-      else if (version.length !== 1 || version[0].version !== PROTOCOL_VERSION || version[0].authorityId !== authorityId)
-        throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is invalid.");
-      const protocol = database.prepare("SELECT retired FROM owned_fence_protocol").get();
-      if (!protocol || protocol.retired !== 0)
-        throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired or invalid.");
-      assertCoordinationPathIdentity(path, pathIdentity);
-      database.exec("COMMIT");
-      transactionOpen = false;
-      database.exec("PRAGMA foreign_keys=ON;");
-      return { database, pathIdentity };
-    } catch (error) {
-      if (transactionOpen) rollbackQuietly(database);
-      try { database?.close(); } catch {}
-      if (mayInitialize && authorityRefused) {
-        try {
-          const removalAuthority = Object.freeze({ authorityId, mainSnapshot: provisionalSnapshot });
-          yield* removeProtocolPathSteps(path, removalAuthority);
-        } catch (cleanupError) {
-          throw new AggregateError([error, cleanupError], "Owned fence authority refusal and coordination cleanup both failed.", { cause: error });
-        }
-        throw error;
-      }
-      if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
-      yield retry(error);
-    }
-  }
-}
-
-function acquisitionTimeRemaining(context) {
-  const remaining = context.deadline - Date.now();
-  if (remaining <= 0)
-    throw new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted.");
-  return remaining;
-}
-function holderProposal(database) {
-  return database.prepare(`
-    SELECT h.acquisition_id AS acquisitionId, h.holder_pid AS holderPid,
-           h.holder_birth AS holderBirth, a.holder_pid AS proposalPid,
-           a.holder_birth AS proposalBirth
-    FROM owned_fence_holder h
-    LEFT JOIN owned_fence_acquisition a ON a.acquisition_id = h.acquisition_id
-    WHERE h.lock_key = 'owned'
-  `).get();
-}
-function sameHolderProposal(left, right) {
-  return left && right && ["acquisitionId", "holderPid", "holderBirth", "proposalPid", "proposalBirth"]
-    .every(key => left[key] === right[key]);
-}
-function* tryClaimSteps(context) {
-  const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, inspectHolder, inspectHolderAsync, trace } = context;
-  let observed, inspection;
-  trace.attempts += 1;
-  try {
-    acquisitionTimeRemaining(context);
-    assertCoordinationPathIdentity(path, pathIdentity);
-    assertActiveProtocol(database, authorityId);
-    observed = holderProposal(database);
-  } catch (error) {
-    if (isBusy(error)) { trace.busy += 1; return false; }
-    throw error;
-  }
-  trace.holderRead = true;
-  trace.holder = observed && observed.acquisitionId !== acquisitionId
-    ? { pid: Number(observed.holderPid), self: Number(observed.holderPid) === holderPid && observed.holderBirth === holderBirth, acquisitionId: String(observed.acquisitionId) }
-    : undefined;
-  if (observed) {
-    if (!validHolderRow(observed))
-      throw new OwnedFenceLockUnavailableError("Owned fence holder metadata is corrupt or incomplete.");
-    if (observed.acquisitionId !== acquisitionId) {
-      const retained = retainedHolders.get(path);
-      if (retained?.unstarted === true && retained.acquisitionId === observed.acquisitionId &&
-          Number(observed.holderPid) === retained.holderPid && observed.holderBirth === retained.holderBirth) {
-        // This instance claimed that exact row and never started its effect; nothing else will release it.
-        inspection = "unstarted_self";
-      } else {
-        // Inspector failures are identity uncertainty, never SQLite coordination retries.
-        const remaining = acquisitionTimeRemaining(context);
-        const inspectedAt = Date.now();
-        trace.inspections += 1;
-        const seenPid = Number(observed.holderPid);
-        const seenBirth = String(observed.holderBirth);
-        try {
-          inspection = yield {
-            kind: "call",
-            sync: () => inspectHolder(seenPid, seenBirth, remaining),
-            async: () => inspectHolderAsync(seenPid, seenBirth, remaining),
-          };
-        }
-        catch (cause) {
-          throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection failed.", { cause });
-        }
-        finally { trace.inspectionMs += Date.now() - inspectedAt; }
-        acquisitionTimeRemaining(context);
-        if (inspection === "same") return false;
-        if (inspection !== "absent" && inspection !== "birth_mismatch")
-          throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection is unavailable or uncertain.");
-      }
-    }
-  }
-  acquisitionTimeRemaining(context);
-  try { database.exec("BEGIN IMMEDIATE"); }
-  catch (error) { if (isBusy(error)) { trace.busy += 1; return false; } throw error; }
-  try {
-    acquisitionTimeRemaining(context);
-    assertCoordinationPathIdentity(path, pathIdentity);
-    assertActiveProtocol(database, authorityId);
-    const row = holderProposal(database);
-    if (!row) {
-      acquisitionTimeRemaining(context);
-      insertHolder(database, acquisitionId, holderPid, holderBirth);
-      assertCoordinationPathIdentity(path, pathIdentity);
-      acquisitionTimeRemaining(context);
-      database.exec("COMMIT");
-      return true;
-    }
-    if (!validHolderRow(row))
-      throw new OwnedFenceLockUnavailableError("Owned fence holder metadata is corrupt or incomplete.");
-    if (row.acquisitionId === acquisitionId) {
-      assertCoordinationPathIdentity(path, pathIdentity);
-      acquisitionTimeRemaining(context);
-      database.exec("COMMIT");
-      return true;
-    }
-    if (!sameHolderProposal(observed, row)) { database.exec("ROLLBACK"); return false; }
-    if (inspection !== "absent" && inspection !== "birth_mismatch" && inspection !== "unstarted_self")
-      throw new OwnedFenceIdentityInspectionError("Owned fence stale-holder observation is unavailable.");
-    acquisitionTimeRemaining(context);
-    const update = database.prepare(`
-      UPDATE owned_fence_holder
-      SET acquisition_id = ?, holder_pid = ?, holder_birth = ?
-      WHERE lock_key = 'owned' AND acquisition_id = ? AND holder_pid = ? AND holder_birth = ?
-    `).run(acquisitionId, holderPid, holderBirth, row.acquisitionId, row.holderPid, row.holderBirth);
-    if (Number(update.changes) !== 1)
-      throw new OwnedFenceLockUnavailableError("Owned fence stale-holder election changed concurrently.");
-    database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(row.acquisitionId);
-    assertCoordinationPathIdentity(path, pathIdentity);
-    acquisitionTimeRemaining(context);
-    database.exec("COMMIT");
-    return true;
-  } catch (error) {
-    rollbackQuietly(database);
-    throw error;
-  }
-}
-
-// Uncontended fast path. When no holder row exists, the proposal and the claim commit in one
-// IMMEDIATE transaction. That leaves exactly the rows the two-step path leaves when no writer
-// runs between its proposal and its claim, with one durable commit instead of two. Any holder
-// row (live, stale, or this instance's own unstarted one), any busy result, or anything else
-// unusual rolls back with nothing committed, and the caller takes the two-step path unchanged.
-function tryProposeAndClaimFree(context) {
-  const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, trace } = context;
-  try { database.exec("BEGIN IMMEDIATE"); }
-  catch (error) { if (isBusy(error)) { trace.busy += 1; return false; } throw error; }
-  try {
-    acquisitionTimeRemaining(context);
-    assertCoordinationPathIdentity(path, pathIdentity);
-    assertActiveProtocol(database, authorityId);
-    if (holderProposal(database)) { database.exec("ROLLBACK"); return false; }
-    trace.attempts += 1;
-    trace.holderRead = true;
-    database.prepare("INSERT INTO owned_fence_acquisition(acquisition_id, holder_pid, holder_birth) VALUES (?, ?, ?)")
-      .run(acquisitionId, holderPid, holderBirth);
-    insertHolder(database, acquisitionId, holderPid, holderBirth);
-    assertCoordinationPathIdentity(path, pathIdentity);
-    acquisitionTimeRemaining(context);
-    database.exec("COMMIT");
-    return true;
-  } catch (error) {
-    rollbackQuietly(database);
-    if (isBusy(error)) { trace.busy += 1; return false; }
-    throw error;
-  }
-}
-
-function insertHolder(database, acquisitionId, holderPid, holderBirth) {
-  database.prepare("INSERT INTO owned_fence_holder(lock_key, acquisition_id, holder_pid, holder_birth) VALUES ('owned', ?, ?, ?)")
-    .run(acquisitionId, holderPid, holderBirth);
-}
-
-function* beginEffectSteps(context) {
-  const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs } = context;
-  const delays = pollDelays(retryDelayMs);
-  for (;;) {
-    try { database.exec("BEGIN IMMEDIATE"); break; }
-    catch (error) {
-      if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
-      yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
-    }
-  }
-  assertCoordinationPathIdentity(path, pathIdentity);
-  assertActiveProtocol(database, authorityId);
-  const row = database.prepare("SELECT acquisition_id AS acquisitionId, holder_pid AS holderPid, holder_birth AS holderBirth FROM owned_fence_holder WHERE lock_key = 'owned'").get();
-  if (!row || row.acquisitionId !== acquisitionId || Number(row.holderPid) !== holderPid || row.holderBirth !== holderBirth) {
-    rollbackQuietly(database);
-    throw new OwnedFenceLockUnavailableError("Owned fence acquisition identity changed before the effect boundary.");
-  }
-}
-
-function finalizeEffect(context, primaryError, retireAfterEffect) {
-  const { path, pathIdentity, database, acquisitionId } = context;
-  try {
-    assertCoordinationPathIdentity(path, pathIdentity);
-    const removed = database.prepare("DELETE FROM owned_fence_holder WHERE lock_key = 'owned' AND acquisition_id = ?").run(acquisitionId);
-    if (Number(removed.changes) !== 1)
-      throw new OwnedFenceLockUnavailableError("Owned fence holder finalization lost its exact acquisition identity.");
-    database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId);
-    if (retireAfterEffect && primaryError === undefined) {
-      database.prepare("DELETE FROM owned_fence_acquisition").run();
-      database.prepare("UPDATE owned_fence_protocol SET retired = 1 WHERE retired = 0").run();
-    }
-    assertCoordinationPathIdentity(path, pathIdentity);
-    database.exec("COMMIT");
-    return retireAfterEffect && primaryError === undefined;
-  } catch (error) {
-    rollbackQuietly(database);
-    const cleanupError = normalizeUnavailable(error);
-    const failure = primaryError !== undefined
-      ? new AggregateError([primaryError, cleanupError], "Owned fence effect and finalization both failed.", { cause: primaryError })
-      : cleanupError;
-    // The effect ran but its release did not commit, so the exact holder stays (never stolen).
-    if (currentHolderId(database) === acquisitionId) retainedHolders.set(path, retainedEntry(context, failure, false));
-    throw failure;
-  }
-}
-
-// The holder row is committed but the effect never started, so releasing that exact row is
-// unambiguous. Left in place it would hold this path against this process's own live PID, and every
-// later acquisition here would wait out its whole deadline ("Owned fence acquisition deadline is
-// exhausted.", the Windows T8 factory wedge). The release re-checks the coordination path identity
-// and is bounded; if it cannot commit, the holder is kept, recorded, and both failures are reported.
-function* releaseUnstartedAcquisitionSteps(context, error) {
-  const { path, pathIdentity, database, acquisitionId, retryDelayMs, releaseWindowMs } = context;
-  // A fresh window: the claim's own deadline may be spent already. Its contention is the claim's, so it gets the
-  // same measured default (OWNED_FENCE_DEFAULT_DEADLINE_MS).
-  const deadline = Date.now() + releaseWindowMs;
-  const delays = pollDelays(retryDelayMs);
-  try {
-    for (;;) {
-      try { database.exec("BEGIN IMMEDIATE"); break; }
-      catch (busy) {
-        if (!isBusy(busy) || Date.now() >= deadline) throw busy;
-        yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
-      }
-    }
-    try {
-      assertCoordinationPathIdentity(path, pathIdentity);
-      database.prepare("DELETE FROM owned_fence_holder WHERE lock_key = 'owned' AND acquisition_id = ?").run(acquisitionId);
-      database.prepare("DELETE FROM owned_fence_acquisition WHERE acquisition_id = ?").run(acquisitionId);
-      for (;;) {
-        // Re-check before every attempt: a busy COMMIT can be retried for the whole window, and nothing
-        // may be committed through a coordination path that was replaced or gained a link meanwhile.
-        // This wait holds an uncommitted write transaction. The async driver may still yield it: other async
-        // claims on this path are serialized behind this one, and a same-thread sync claim refuses at its first
-        // wait, since this acquisition is still live (performStepSync).
-        assertCoordinationPathIdentity(path, pathIdentity);
-        try { database.exec("COMMIT"); break; }
-        catch (busy) {
-          if (!isBusy(busy) || Date.now() >= deadline) throw busy;
-          yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
-        }
-      }
-    } catch (releaseError) {
-      rollbackQuietly(database);
-      throw releaseError;
-    }
-    return error;
-  } catch (releaseError) {
-    // If even this read fails, nothing is recorded and the holder stays until the process exits (fail closed).
-    if (currentHolderId(database) === acquisitionId) retainedHolders.set(path, retainedEntry(context, error, true));
-    const message = error instanceof Error ? error.message : String(error);
-    return new AggregateError([error, normalizeUnavailable(releaseError)],
-      `${message} Its claimed holder could not be released.`, { cause: error });
-  }
-}
-
-function forgetLiveAcquisition(context) {
-  if (liveAcquisitions.get(context.path) === context.acquisitionId) liveAcquisitions.delete(context.path);
-}
-
-// A contention failure says where its deadline went and who held the lock, so a hosted failure can
-// tell a holder that is live here, a row this module does not know, another process, and a slow
-// phase with no holder at all apart. It only appends to the message; the error class is unchanged.
-function withAcquisitionTrace(error, path, trace, phase) {
-  if (!(error instanceof OwnedFenceContentionError) || tracedErrors.has(error)) return error;
-  const holder = trace.holder;
-  const known = !holder ? "" : liveAcquisitions.get(path) === holder.acquisitionId ? ", live in this module"
-    : retainedHolders.get(path)?.acquisitionId === holder.acquisitionId ? ", retained by this module" : ", not held by this module";
-  const holderText = !trace.holderRead ? "holder not read" : !holder ? "no other holder seen"
-    : `holder PID ${holder.pid} (${holder.self ? "this process" : "another process"}), acquisition ${holder.acquisitionId}${known}`;
-  const Kind = error.constructor;
-  const traced = new Kind(`${error.message} [${basename(path)} while ${phase}, after ${Date.now() - trace.startedAt} ms: ` +
-    `self-birth ${trace.birthMs} ms, open ${trace.openMs} ms, ${trace.attempts} claim attempts, ${trace.busy} busy, ` +
-    `${trace.inspections} holder inspections (${trace.inspectionMs} ms), ${holderText}]`, { cause: error });
-  tracedErrors.add(traced);
-  return traced;
-}
-
-function retainedEntry(context, failure, unstarted) {
-  return { acquisitionId: context.acquisitionId, holderPid: context.holderPid, holderBirth: context.holderBirth, failure, unstarted };
-}
-
-function currentHolderId(database) {
-  try { return database.prepare("SELECT acquisition_id AS acquisitionId FROM owned_fence_holder WHERE lock_key = 'owned'").get()?.acquisitionId; }
-  catch { return undefined; }
-}
-
-function withRetainedHolderContext(error, path, database) {
-  const retained = retainedHolders.get(path);
-  const Kind = error?.constructor;
-  if (!retained || ![OwnedFenceLockUnavailableError, OwnedFenceContentionError, OwnedFenceIdentityInspectionError].includes(Kind) ||
-      currentHolderId(database) !== retained.acquisitionId) return error;
-  return new Kind(`${error.message} The holder is retained by this process (PID ${retained.holderPid}), acquisition ` +
-    `${retained.acquisitionId}, after: ${describeFailure(retained.failure)}`, { cause: error });
-}
-
-function describeFailure(error) {
-  const parts = [];
-  const seen = new Set();
-  for (let node = error; node instanceof Error && !seen.has(node) && parts.length < 6; node = node.cause) {
-    seen.add(node);
-    parts.push(node instanceof AggregateError
-      ? `${node.message} [${node.errors.map((entry) => entry instanceof Error ? entry.message : String(entry)).join("; ")}]`
-      : node.message);
-  }
-  const text = parts.join(" <- ");
-  return text.length > 600 ? `${text.slice(0, 599)}…` : text;
-}
-
-function assertActiveProtocol(database, authorityId) {
-  const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
-  if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 0 || protocol[0].authorityId !== authorityId)
-    throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired or invalid.");
-}
-
-function assertRecoverableProtocol(database, authorityId, options = {}) {
-  assertCanonicalProtocolSchema(database, "current", options);
-  const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
-  if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || ![0, 1].includes(protocol[0].retired) || protocol[0].authorityId !== authorityId)
-    throw new OwnedFenceLockUnavailableError("Owned fence revocation protocol is corrupt or foreign.");
-  const proposals = database.prepare("SELECT acquisition_id AS acquisitionId, holder_pid AS holderPid, holder_birth AS holderBirth FROM owned_fence_acquisition").all();
-  if (proposals.some((row) => typeof row.acquisitionId !== "string" || !/^[0-9a-f-]{36}$/i.test(row.acquisitionId) ||
-      !Number.isSafeInteger(Number(row.holderPid)) || Number(row.holderPid) < 1 || typeof row.holderBirth !== "string" || row.holderBirth.length === 0))
-    throw new OwnedFenceLockUnavailableError("Owned fence revocation proposals are corrupt or foreign.");
-  const holders = database.prepare(`
-    SELECT h.acquisition_id AS acquisitionId, h.holder_pid AS holderPid, h.holder_birth AS holderBirth,
-           a.holder_pid AS proposalPid, a.holder_birth AS proposalBirth
-    FROM owned_fence_holder h LEFT JOIN owned_fence_acquisition a ON a.acquisition_id = h.acquisition_id
-  `).all();
-  if (holders.length > 1 || holders.some((row) => !validHolderRow(row)))
-    throw new OwnedFenceLockUnavailableError("Owned fence revocation holder is corrupt or foreign.");
-}
-
-function coordinationAuthorityId(path) {
-  const normalized = process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
-  return createHash("sha256").update(`aiboard-owned-fence-path/v1\0${normalized}`).digest("hex");
-}
-
-function regularFileSnapshot(status, subject) {
-  if (!status.isFile() || status.isSymbolicLink() || status.nlink !== 1n)
-    throw new OwnedFenceLockUnavailableError(`${subject} is aliased, linked, or invalid.`);
-  return Object.freeze({
-    device: status.dev.toString(),
-    inode: status.ino.toString(),
-    birthtimeNs: status.birthtimeNs.toString(),
-    changeTimeNs: status.ctimeNs.toString(),
-    modifiedTimeNs: status.mtimeNs.toString(),
-    size: status.size.toString(),
-  });
-}
-
-function readRegularPathIdentity(path, allowMissing, subject) {
-  try {
-    const status = lstatSync(path, { bigint: true });
-    return regularFileSnapshot(status, subject);
-  } catch (error) {
-    if (allowMissing && error?.code === "ENOENT") return;
-    if (error instanceof OwnedFenceLockUnavailableError) throw error;
-    throw new OwnedFenceLockUnavailableError(`${subject} is unavailable.`, { cause: error });
-  }
-}
-
-function assertCoordinationPath(path, allowMissing = false) {
-  return readRegularPathIdentity(path, allowMissing, "Owned fence coordination path");
-}
-
-function assertSidecarPath(path, allowMissing = false) {
-  return readRegularPathIdentity(path, allowMissing, "Owned fence coordination sidecar");
-}
-
-function samePathIdentity(left, right) {
-  return left?.device === right?.device && left?.inode === right?.inode && left?.birthtimeNs === right?.birthtimeNs;
-}
-
-function samePathSnapshot(left, right) {
-  return samePathIdentity(left, right) && left?.changeTimeNs === right?.changeTimeNs &&
-    left?.modifiedTimeNs === right?.modifiedTimeNs && left?.size === right?.size;
-}
-
-function assertCoordinationPathIdentity(path, expected) {
-  const current = assertCoordinationPath(path);
-  if (!expected || !samePathIdentity(current, expected))
-    throw new OwnedFenceLockUnavailableError("Owned fence coordination path identity was replaced or disappeared.");
-  return current;
-}
-
-function assertCoordinationPathSnapshot(path, expected) {
-  const current = assertCoordinationPath(path);
-  if (!expected || !samePathSnapshot(current, expected))
-    throw new OwnedFenceLockUnavailableError("Owned fence coordination path changed, was replaced, or disappeared.");
-  return current;
-}
-
-function coordinationPathRetainsIdentity(path, expected) {
-  try { return samePathIdentity(assertCoordinationPath(path), expected); }
-  catch { return false; }
-}
-
-function coordinationPathCanRetry(path, expected, allowMissing = false) {
-  try {
-    const current = assertCoordinationPath(path, true);
-    return current ? samePathIdentity(current, expected) : allowMissing;
-  } catch { return false; }
-}
-
-function reserveProtocolPath(path) {
-  let descriptor;
-  try {
-    descriptor = openSync(path, "wx", 0o600);
-    const handleSnapshot = regularFileSnapshot(fstatSync(descriptor, { bigint: true }), "Owned fence provisional coordination file");
-    const pathSnapshot = assertCoordinationPath(path);
-    if (!samePathSnapshot(handleSnapshot, pathSnapshot))
-      throw new OwnedFenceLockUnavailableError("Owned fence provisional coordination identity changed during exclusive creation.");
-    closeSync(descriptor);
-    descriptor = undefined;
-    return pathSnapshot;
-  } catch (error) {
-    if (error?.code === "EEXIST") return;
-    if (error instanceof OwnedFenceLockUnavailableError) throw error;
-    throw new OwnedFenceLockUnavailableError("Owned fence provisional coordination creation is unavailable.", { cause: error });
-  } finally {
-    if (descriptor !== undefined) try { closeSync(descriptor); } catch {}
-  }
-}
-
-/** The wait before the next open attempt, or the error itself once the deadline is spent. */
-function waitForProtocolRetry(error, deadline, delayMs, path, acquisitionId) {
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) throw normalizeUnavailable(error);
-  return sleepStep(Math.min(delayMs, remainingMs), path, acquisitionId);
-}
-
-function assertProtocolObservation(path, mainSnapshot, stage) {
-  try {
-    if (mainSnapshot) assertCoordinationPathSnapshot(path, mainSnapshot);
-    assertNoProtocolSidecars(path, mainSnapshot);
-    if (mainSnapshot) return assertCoordinationPathSnapshot(path, mainSnapshot);
-  } catch (error) {
-    if (mainSnapshot) {
-      try { assertCoordinationPathIdentity(path, mainSnapshot); }
-      catch (identityError) { throw identityError; }
-    }
-    throw new OwnedFenceProtocolObservationChangedError(
-      `Owned fence protocol changed or gained an uncertain sidecar ${stage}.`,
-      { cause: error },
-    );
-  }
-}
-
-function preflightExistingProtocol(path, expectedSnapshot, authorityId) {
-  assertProtocolObservation(path, expectedSnapshot, "before read-only preflight open");
-  let database;
-  let validatedSnapshot;
-  try {
-    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
-    assertProtocolObservation(path, expectedSnapshot, "immediately after read-only preflight open");
-    assertExistingProtocolPreflight(database, authorityId);
-    validatedSnapshot = assertProtocolObservation(path, expectedSnapshot, "after read-only validation");
-  } finally { database?.close(); }
-  return validatedSnapshot;
-}
-
-function assertExistingProtocolPreflight(database, authorityId) {
-  const journal = database.prepare("PRAGMA journal_mode").get();
-  if (!journal || String(journal.journal_mode).toLowerCase() !== "delete")
-    throw new OwnedFenceLockUnavailableError("Owned fence lock protocol uses an unsupported or foreign journal mode.");
-
-  const protocolColumns = tableColumns(database, "owned_fence_protocol");
-  if (sameColumns(protocolColumns, PROTOCOL_COLUMNS)) {
-    assertRecoverableProtocol(database, authorityId);
-    assertActiveProtocol(database, authorityId);
-    return;
-  }
-  if (!sameColumns(protocolColumns, LEGACY_PROTOCOL_COLUMNS))
-    throw new OwnedFenceLockUnavailableError("Owned fence lock protocol metadata is invalid.");
-  assertCanonicalProtocolSchema(database, "legacy");
-  const protocol = database.prepare("SELECT version, retired FROM owned_fence_protocol").all();
-  const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
-  const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
-  if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 0 || proposals !== 0 || holders !== 0)
-    throw new OwnedFenceLockUnavailableError("Owned fence legacy coordination has unbound ownership and cannot be migrated.");
-}
-
-function tableColumns(database, table) {
-  return database.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all().map((row) => row.name);
-}
-
-function sameColumns(actual, expected) {
-  return actual.length === expected.length && actual.every((name, index) => name === expected[index]);
-}
-
-function assertCanonicalProtocolSchema(database, variant, options = {}) {
-  const expected = new Map([
-    ["owned_fence_acquisition", canonicalSchemaObject("table", "owned_fence_acquisition", CANONICAL_ACQUISITION_TABLE_SQL)],
-    ["owned_fence_holder", canonicalSchemaObject("table", "owned_fence_holder", CANONICAL_HOLDER_TABLE_SQL)],
-    ["owned_fence_protocol", canonicalSchemaObject("table", "owned_fence_protocol",
-      ...(variant === "legacy"
-        ? [CANONICAL_LEGACY_PROTOCOL_TABLE_SQL]
-        : [CANONICAL_CURRENT_PROTOCOL_TABLE_SQL, CANONICAL_MIGRATED_PROTOCOL_TABLE_SQL]))],
-    ["owned_fence_acquisition_immutable", canonicalSchemaObject("trigger", "owned_fence_acquisition", CANONICAL_ACQUISITION_TRIGGER_SQL)],
-  ]);
-  if (variant === "current") {
-    expected.set(AUTHORITY_UPDATE_TRIGGER, canonicalSchemaObject("trigger", "owned_fence_protocol", CANONICAL_AUTHORITY_UPDATE_TRIGGER_SQL));
-    expected.set(AUTHORITY_DELETE_TRIGGER, canonicalSchemaObject("trigger", "owned_fence_protocol", CANONICAL_AUTHORITY_DELETE_TRIGGER_SQL));
-  }
-  const rows = database.prepare(`
-    SELECT type, name, tbl_name AS tableName, sql
-    FROM sqlite_master
-  `).all();
-  let protocolSql;
-  for (const row of rows) {
-    const descriptor = expected.get(row.name);
-    if (descriptor) {
-      if (row.type !== descriptor.type || row.tableName !== descriptor.tableName ||
-          typeof row.sql !== "string" || !descriptor.sql.has(normalizeSchemaSql(row.sql)))
-        throw new OwnedFenceLockUnavailableError("Owned fence protocol schema semantics are corrupt or foreign.");
-      expected.delete(row.name);
-      if (row.name === "owned_fence_protocol") protocolSql = normalizeSchemaSql(row.sql);
-      continue;
-    }
-    if (canonicalAutoindex(row)) continue;
-    if (options.allowHolderDeleteTriggers === true && recoverableHolderDeleteTrigger(row)) continue;
-    throw new OwnedFenceLockUnavailableError("Owned fence protocol contains an extra or foreign schema object.");
-  }
-  if (expected.size !== 0)
-    throw new OwnedFenceLockUnavailableError("Owned fence protocol canonical schema is incomplete.");
-  assertCanonicalProtocolStructure(database, variant, protocolSql);
-}
-
-function canonicalSchemaObject(type, tableName, ...sql) {
-  return Object.freeze({ type, tableName, sql: new Set(sql.map(normalizeSchemaSql)) });
-}
-
-function normalizeSchemaSql(sql) {
-  return String(sql).trim().replace(/;+\s*$/, "").replace(/\s+/g, " ")
-    .replace(/\s*([(),=])\s*/g, "$1");
-}
-
-function recoverableHolderDeleteTrigger(row) {
-  return row?.type === "trigger" && row?.tableName === "owned_fence_holder" && typeof row.sql === "string" &&
-    /\bbefore\s+delete\s+on\s+owned_fence_holder\b/i.test(row.sql);
-}
-
-function canonicalAutoindex(row) {
-  return row?.type === "index" && row?.sql === null && CANONICAL_AUTOINDEX_TABLES.get(row.name) === row.tableName;
-}
-
-function assertCanonicalProtocolStructure(database, variant, protocolSql) {
-  const protocolColumns = [
-    canonicalColumn("version", "INTEGER", 1, 0),
-    canonicalColumn("retired", "INTEGER", 1, 0),
-  ];
-  if (variant === "current") {
-    const migrated = protocolSql === normalizeSchemaSql(CANONICAL_MIGRATED_PROTOCOL_TABLE_SQL);
-    protocolColumns.push(canonicalColumn("authority_id", "TEXT", migrated ? 0 : 1, 0));
-  }
-  assertCanonicalFacts(tableStructure(database, "owned_fence_protocol"), protocolColumns,
-    "Owned fence protocol table structure is corrupt or foreign.");
-  assertCanonicalFacts(tableStructure(database, "owned_fence_acquisition"), [
-    canonicalColumn("acquisition_id", "TEXT", 1, 1),
-    canonicalColumn("holder_pid", "INTEGER", 1, 0),
-    canonicalColumn("holder_birth", "TEXT", 1, 0),
-  ], "Owned fence acquisition table structure is corrupt or foreign.");
-  assertCanonicalFacts(tableStructure(database, "owned_fence_holder"), [
-    canonicalColumn("lock_key", "TEXT", 1, 1),
-    canonicalColumn("acquisition_id", "TEXT", 1, 0),
-    canonicalColumn("holder_pid", "INTEGER", 1, 0),
-    canonicalColumn("holder_birth", "TEXT", 1, 0),
-  ], "Owned fence holder table structure is corrupt or foreign.");
-
-  assertCanonicalFacts(indexStructure(database, "owned_fence_protocol"), [],
-    "Owned fence protocol indexes are corrupt or foreign.");
-  assertCanonicalFacts(indexStructure(database, "owned_fence_acquisition"), [{
-    name: "sqlite_autoindex_owned_fence_acquisition_1", unique: 1, origin: "pk", partial: 0,
-    columns: ["acquisition_id"],
-  }], "Owned fence acquisition indexes are corrupt or foreign.");
-  assertCanonicalFacts(indexStructure(database, "owned_fence_holder"), [{
-    name: "sqlite_autoindex_owned_fence_holder_1", unique: 1, origin: "pk", partial: 0,
-    columns: ["lock_key"],
-  }, {
-    name: "sqlite_autoindex_owned_fence_holder_2", unique: 1, origin: "u", partial: 0,
-    columns: ["acquisition_id"],
-  }], "Owned fence holder indexes are corrupt or foreign.");
-
-  assertCanonicalFacts(foreignKeyStructure(database, "owned_fence_protocol"), [],
-    "Owned fence protocol foreign keys are corrupt or foreign.");
-  assertCanonicalFacts(foreignKeyStructure(database, "owned_fence_acquisition"), [],
-    "Owned fence acquisition foreign keys are corrupt or foreign.");
-  assertCanonicalFacts(foreignKeyStructure(database, "owned_fence_holder"), [{
-    id: 0, sequence: 0, table: "owned_fence_acquisition", from: "acquisition_id", to: "acquisition_id",
-    onUpdate: "NO ACTION", onDelete: "NO ACTION", match: "NONE",
-  }], "Owned fence holder foreign keys are corrupt or foreign.");
-}
-
-function canonicalColumn(name, type, notNull, primaryKey) {
-  return { name, type, notNull, defaultValue: null, primaryKey, hidden: 0 };
-}
-
-function tableStructure(database, table) {
-  return database.prepare(`PRAGMA table_xinfo(${quoteIdentifier(table)})`).all().map((row) => ({
-    name: row.name,
-    type: row.type,
-    notNull: Number(row.notnull),
-    defaultValue: row.dflt_value,
-    primaryKey: Number(row.pk),
-    hidden: Number(row.hidden),
-  }));
-}
-
-function indexStructure(database, table) {
-  return database.prepare(`PRAGMA index_list(${quoteIdentifier(table)})`).all().map((row) => ({
-    name: row.name,
-    unique: Number(row.unique),
-    origin: row.origin,
-    partial: Number(row.partial),
-    columns: database.prepare(`PRAGMA index_info(${quoteIdentifier(row.name)})`).all().map((column) => column.name),
-  })).sort((left, right) => String(left.name).localeCompare(String(right.name)));
-}
-
-function foreignKeyStructure(database, table) {
-  return database.prepare(`PRAGMA foreign_key_list(${quoteIdentifier(table)})`).all().map((row) => ({
-    id: Number(row.id),
-    sequence: Number(row.seq),
-    table: row.table,
-    from: row.from,
-    to: row.to,
-    onUpdate: row.on_update,
-    onDelete: row.on_delete,
-    match: row.match,
-  }));
-}
-
-function assertCanonicalFacts(actual, expected, message) {
-  if (JSON.stringify(actual) !== JSON.stringify(expected))
-    throw new OwnedFenceLockUnavailableError(message);
-}
-
-function quoteIdentifier(value) { return `"${String(value).replaceAll('"', '""')}"`; }
-
-function assertRetiredProtocol(database, authorityId) {
-  assertRecoverableProtocol(database, authorityId);
-  const protocol = database.prepare("SELECT version, retired, authority_id AS authorityId FROM owned_fence_protocol").all();
-  const proposals = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count);
-  const holders = Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count);
-  if (protocol.length !== 1 || protocol[0].version !== PROTOCOL_VERSION || protocol[0].retired !== 1 ||
-      protocol[0].authorityId !== authorityId || proposals !== 0 || holders !== 0)
-    throw new OwnedFenceLockUnavailableError("Owned fence physical retirement authority is active, foreign, or incomplete.");
-}
-
-function assertNoProtocolSidecars(path, mainSnapshot) {
-  for (const suffix of PROTOCOL_SIDECAR_SUFFIXES) {
-    if (mainSnapshot) assertCoordinationPathSnapshot(path, mainSnapshot);
-    if (assertSidecarPath(`${path}${suffix}`, true))
-      throw new OwnedFenceLockUnavailableError("Owned fence coordination sidecar is present and remains uncertain.");
-    if (mainSnapshot) assertCoordinationPathSnapshot(path, mainSnapshot);
-  }
-}
-
-function captureProtocolRemovalAuthority(path, expectedMainIdentity, authorityId) {
-  const preValidationSnapshot = assertCoordinationPathIdentity(path, expectedMainIdentity);
-  assertNoProtocolSidecars(path, preValidationSnapshot);
-  let database;
-  try {
-    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
-    assertCoordinationPathIdentity(path, expectedMainIdentity);
-    assertRetiredProtocol(database, authorityId);
-    assertCoordinationPathIdentity(path, expectedMainIdentity);
-  } catch (error) { throw normalizeUnavailable(error); }
-  finally { database?.close(); }
-  const mainSnapshot = assertCoordinationPathIdentity(path, expectedMainIdentity);
-  assertNoProtocolSidecars(path, mainSnapshot);
-  assertCoordinationPathSnapshot(path, mainSnapshot);
-  return Object.freeze({
-    authorityId,
-    mainSnapshot,
-  });
-}
-
-function revalidateProtocolRemovalAuthority(path, authority) {
-  if (!authority || authority.authorityId !== coordinationAuthorityId(path))
-    throw new OwnedFenceLockUnavailableError("Owned fence physical retirement authority is missing or foreign.");
-  assertCoordinationPathSnapshot(path, authority.mainSnapshot);
-  assertNoProtocolSidecars(path, authority.mainSnapshot);
-  let database;
-  try {
-    database = new DatabaseSync(sqliteDatabaseLocation(path), { readOnly: true });
-    assertCoordinationPathSnapshot(path, authority.mainSnapshot);
-    assertRetiredProtocol(database, authority.authorityId);
-    assertCoordinationPathSnapshot(path, authority.mainSnapshot);
-  } catch (error) { throw normalizeUnavailable(error); }
-  finally { database?.close(); }
-  assertCoordinationPathSnapshot(path, authority.mainSnapshot);
-  assertNoProtocolSidecars(path, authority.mainSnapshot);
-}
-
-function* removeProtocolPathSteps(path, authority) {
-  const deadline = Date.now() + DEFAULT_DEADLINE_MS;
-  const delays = pollDelays(DEFAULT_RETRY_DELAY_MS);
-  for (;;) {
-    try {
-      if (!authority || authority.authorityId !== coordinationAuthorityId(path))
-        throw new OwnedFenceLockUnavailableError("Owned fence physical retirement authority is missing or foreign.");
-      assertCoordinationPathSnapshot(path, authority.mainSnapshot);
-      assertNoProtocolSidecars(path, authority.mainSnapshot);
-      assertCoordinationPathSnapshot(path, authority.mainSnapshot);
-      try { unlinkSync(path); }
-      catch (error) {
-        if (error?.code === "ENOENT")
-          throw new OwnedFenceLockUnavailableError("Owned fence coordination path disappeared before physical retirement.", { cause: error });
-        throw error;
-      }
-      return;
-    }
-    catch (error) {
-      const code = error?.code ?? error?.cause?.code;
-      if (!["EPERM", "EACCES", "EBUSY"].includes(code) || Date.now() >= deadline)
-        throw new OwnedFenceLockUnavailableError("Retired owned fence protocol cleanup is unavailable.", { cause: error });
-      yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())));
-    }
-  }
-}
-
-function* retireProtocolSteps(path, options, pathIdentity, authorityId) {
-  try {
-    const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
-    revalidateProtocolRemovalAuthority(path, removalAuthority);
-    if (typeof options.retireAuthority === "function") {
-      options.retireAuthority();
-      return;
-    }
-    yield* removeProtocolPathSteps(path, removalAuthority);
-  } catch (error) {
-    throw new OwnedFenceAuthorityRetirementError("Owned fence authority retirement failed after its durable commit.", { cause: error });
-  }
-}
-
-function validHolderRow(row) {
-  return typeof row.acquisitionId === "string" && /^[0-9a-f-]{36}$/i.test(row.acquisitionId) &&
-    Number.isSafeInteger(Number(row.holderPid)) && Number(row.holderPid) > 0 &&
-    typeof row.holderBirth === "string" && row.holderBirth.length > 0 &&
-    Number(row.proposalPid) === Number(row.holderPid) && row.proposalBirth === row.holderBirth;
-}
-
-function defaultInspectHolder(pid, birth, remainingMs = DEFAULT_DEADLINE_MS) {
-  const inspection = inspectProcessBirth(pid, remainingMs);
-  if (inspection.state === "absent") return "absent";
-  if (inspection.state !== "same") return "unknown";
-  return sameBirth(inspection.fingerprint, birth) ? "same" : "birth_mismatch";
-}
-
-/**
- * The default holder inspection without blocking the event loop (withOwnedFenceLock): on Windows the probe is an
- * async powershell.exe start bounded only by the claim's time left; elsewhere it is a /proc read or `ps`, run as is.
- */
-async function defaultInspectHolderAsync(pid, birth, remainingMs = DEFAULT_DEADLINE_MS) {
-  if (process.platform !== "win32") return defaultInspectHolder(pid, birth, remainingMs);
-  if (!Number.isFinite(remainingMs) || remainingMs < 1) return "unknown";
-  const deadline = Date.now() + remainingMs;
-  const inspection = await new Promise((resolvePromise) => {
-    try {
-      execFile("powershell.exe", windowsBirthProbeArguments(pid), { encoding: "utf8", windowsHide: true, timeout: Math.floor(remainingMs) },
-        (error, stdout) => resolvePromise(error ? { state: "unknown" } : parseWindowsBirthProbe(String(stdout).trim())));
-    } catch { resolvePromise({ state: "unknown" }); }
-  });
-  if (inspection.state === "unknown" || Date.now() >= deadline) return "unknown";
-  if (inspection.state === "absent") return "absent";
-  return sameBirth(inspection.fingerprint, birth) ? "same" : "birth_mismatch";
-}
-
-/** BEGIN IMMEDIATE, polled with gentle backoff until `deadline` while it is busy (async callers, no transaction held). */
-async function beginImmediateAsync(database, deadline, retryDelayMs) {
-  const delays = pollDelays(retryDelayMs);
-  for (;;) {
-    try { database.exec("BEGIN IMMEDIATE"); return; }
-    catch (error) {
-      if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
-      await performStepAsync(sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now()))));
-    }
-  }
-}
 
 /** One probe bounded only by the caller's time left: it returns the moment the process answers. */
 function inspectProcessBirth(pid, remainingMs = DEFAULT_DEADLINE_MS) {
@@ -1682,17 +817,3 @@ const genericPosixInspectionOperations = Object.freeze({
 
 function sameBirth(left, right) { return normalizeBirth(left) === normalizeBirth(right); }
 function normalizeBirth(value) { return value.replace(/(\.\d{6})\d+(Z)$/, "$1$2"); }
-function rollbackQuietly(database) { try { database.exec("ROLLBACK"); } catch {} }
-function isBusy(error) { return /database is locked|database table is locked|SQLITE_BUSY/i.test(String(error?.message ?? error)); }
-function normalizeUnavailable(error) {
-  if (error instanceof OwnedFenceLockUnavailableError) return error;
-  return isBusy(error)
-    ? new OwnedFenceContentionError("Owned fence lock protocol is temporarily contended.", { cause: error })
-    : new OwnedFenceLockUnavailableError("Owned fence lock protocol is unavailable or invalid.", { cause: error });
-}
-function describeHolder(database) {
-  try {
-    const row = database.prepare("SELECT acquisition_id AS acquisitionId, holder_pid AS holderPid FROM owned_fence_holder WHERE lock_key = 'owned'").get();
-    return row ? ` (PID ${String(row.holderPid)}, acquisition ${String(row.acquisitionId)})` : "";
-  } catch { return ""; }
-}

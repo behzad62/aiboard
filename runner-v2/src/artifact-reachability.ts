@@ -157,6 +157,9 @@ export class ArtifactReachabilityGuard {
           continue;
         }
         if (!details.isFile()) continue;
+        // Lock files hold no references, and must not be opened: on Linux and macOS closing any descriptor of a lock
+        // file ends every lock this process holds on it (owned-fence-lock.mjs), and a held lock can be anywhere here.
+        if (isLockFile(entry.name)) continue;
         files.push(path);
         if (files.length > this.maxFiles) throw new Error("Artifact scan file limit exceeded.");
       }
@@ -190,6 +193,11 @@ async function isSqliteDatabase(path: string): Promise<boolean> {
   } finally {
     await handle.close();
   }
+}
+
+/** The owned fence locks (`.fence.lock`, `<state>.lock`) and any other `*.lock` file. */
+function isLockFile(name: string): boolean {
+  return name.endsWith(".lock");
 }
 
 function isCompanionSqliteFile(path: string): boolean {

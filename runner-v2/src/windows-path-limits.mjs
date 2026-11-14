@@ -53,13 +53,18 @@ export function windowsNativeFilePath(path, platform = process.platform) {
  * What to hand DatabaseSync, or ATTACH, for a database file. A long Windows path comes back as a URI naming the
  * \\?\ form and the win32-longpath VFS: file:////%3F/C:/.../x.sqlite?vfs=win32-longpath. The empty authority keeps
  * the escaped "?" in the path, and "%", "?" and "#" are escaped because SQLite reads them as URI syntax.
+ * `options.mode` ("ro", "rw", "rwc") always gives a URI, with that open mode: "rw" never creates a missing file.
  */
-export function sqliteDatabaseLocation(path, platform = process.platform) {
+export function sqliteDatabaseLocation(path, platform = process.platform, options = {}) {
   if (path === ":memory:" || path.startsWith("file:")) return path;
   const location = windowsNativeFilePath(path, platform);
-  if (location === path) return path;
-  const escaped = location.replaceAll("\\", "/").replace(/[%?#]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
-  return `file://${escaped}?vfs=win32-longpath`;
+  const query = [...(location === path ? [] : ["vfs=win32-longpath"]), ...(options.mode === undefined ? [] : [`mode=${options.mode}`])];
+  if (query.length === 0) return path;
+  // A backslash separates on Windows only: elsewhere it is part of a name, and SQLite would read it as a separator.
+  const escaped = (platform === "win32" ? location.replaceAll("\\", "/") : location)
+    .replace(/[%?#\\]/g,(character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  // A drive path (C:/x) needs the empty authority's third slash; POSIX, UNC and \\?\ paths already start with a slash.
+  return `file://${escaped.startsWith("/") ? "" : "/"}${escaped}?${query.join("&")}`;
 }
 
 /** Fails before a process is spawned, because the failure it replaces is a bare ENOENT that reads as "command not found". */
