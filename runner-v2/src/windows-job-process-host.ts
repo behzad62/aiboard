@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { recoverRevokedOwnedFenceLock, withOwnedFenceLock } from "./owned-fence-lock.mjs";
+import { prepareCurrentProcessBirthFingerprint, recoverRevokedOwnedFenceLock, withOwnedFenceLock } from "./owned-fence-lock.mjs";
 import { assertUsableWorkingDirectory, windowsNativeFilePath } from "./windows-path-limits.mjs";
 
 import type { BackpressuredOutputMetadata } from "./interactive-process-channel.js";
@@ -393,6 +393,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   constructor(options: WindowsJobProcessHostOptions) {
     this.stateDirectory = resolve(options.stateDirectory);
     this.platform = options.platform ?? process.platform;
+    // Every writer fence claim and effect of this host takes the owned fence lock with its 2 s default, and the
+    // first one in a process also needs this process's own birth identity, a cold powershell.exe start. Learn it
+    // now, off that path, as the portable backend prepares its inspection before coordination.
+    if (this.platform === "win32" && process.platform === "win32") void prepareCurrentProcessBirthFingerprint();
     this.idFactory = options.idFactory ?? (() => `process_${randomUUID()}`);
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.maxPollBytes = options.maxPollBytes ?? 256 * 1024;

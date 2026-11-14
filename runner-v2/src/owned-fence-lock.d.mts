@@ -23,6 +23,14 @@ export class OwnedFenceContentionError extends OwnedFenceLockUnavailableError {}
 export class OwnedFenceAuthorityRetirementError extends Error {}
 export function isOwnedFenceLockContention(error: unknown): boolean;
 export function currentProcessBirthFingerprint(remainingMs?: number): string;
+/**
+ * Windows: learns this process's own birth identity in the background; resolves to it, or to undefined. Never rejects.
+ * Without `waitUntil` it holds nothing alive: a top-level await with nothing else running exits the process (code 13).
+ * `waitUntil` (absolute ms) resolves by then at the latest and keeps the process alive until then.
+ */
+export function prepareCurrentProcessBirthFingerprint(waitUntil?: number): Promise<string | undefined>;
+/** Diagnostics and tests: whether this process's own birth identity is known, being prepared, or neither. */
+export function currentProcessBirthPreparation(): "known" | "preparing" | "idle";
 export function inspectGenericPosixProcessBirth(
   pid: number,
   operations?: GenericPosixProcessInspectionOperations,

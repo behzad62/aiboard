@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
-import { withOwnedFenceLockSync } from "../../src/owned-fence-lock.mjs";
+import { prepareCurrentProcessBirthFingerprint, withOwnedFenceLock, withOwnedFenceLockSync } from "../../src/owned-fence-lock.mjs";
 
 const [mode, lockPath, effectPath, deadlineText, holdText, gatePath] = process.argv.slice(2);
 const deadlineMs = Number(deadlineText ?? 2_000);
@@ -24,7 +24,14 @@ try {
     if (!existsSync(gatePath)) throw new Error("election readiness gate timed out");
   }
   const gatedRetirement = mode === "retire-gated";
-  withOwnedFenceLockSync(lockPath, () => {
+  if (mode === "hold-prepared-async") {
+    // The Windows Job host's path: the background self-birth preparation, then the async lock with its default.
+    if (process.platform === "win32" && !(await prepareCurrentProcessBirthFingerprint(Date.now() + 30_000))) throw new Error("self birth preparation failed");
+    await withOwnedFenceLock(lockPath, async () => {
+      process.stdout.write(`${JSON.stringify({ state: "acquired", pid: process.pid })}\n`);
+      await new Promise(resolve => setTimeout(resolve, holdMs));
+    }, { deadlineMs });
+  } else withOwnedFenceLockSync(lockPath, () => {
     if (effectPath) appendFileSync(effectPath, `${process.pid}\n`);
     process.stdout.write(`${JSON.stringify({ state: "acquired", pid: process.pid })}\n`);
     if (!gatedRetirement) Atomics.wait(waiter, 0, 0, holdMs);

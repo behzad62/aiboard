@@ -32,6 +32,9 @@ const deterministicPrTests = [
   "runner-v2/test/final-verification-managed-authority.test.ts",
   // VF9: this repository's aiboard-validation.json and the guide's example, read with the Runner's parser (no process, about 2 s).
   "runner-v2/test/repository-validation-config.test.ts",
+  // The owned fence lock's Windows self-birth preparation through withOwnedFenceLock, on a fake clock, plus the
+  // Windows Job host's wiring (about 1 s).
+  "runner-v2/test/owned-fence-self-birth.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

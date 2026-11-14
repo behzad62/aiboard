@@ -24,6 +24,67 @@ const supervisorSource = readFileSync(join(process.cwd(), "runner-v2", "src", "p
 const channelSource = readFileSync(join(process.cwd(), "runner-v2", "src", "portable-process-channel.ts"), "utf8");
 const nativeBackendSource = readFileSync(join(process.cwd(), "runner-v2", "src", "native-process-backend.ts"), "utf8");
 
+// macOS CI (runs 43317407980, 43174068091; reproduced 3/30 under load in diag run 43564030755): the supervisor applied a
+// terminate inside the fence but published handledControl only at the end of its tick. The Runner's force, numbered
+// from the state.json it read inside its own fenced effect, reused sequence 1, which the supervisor took as handled:
+// the SIGTERM-ignoring workload ran on. The handled sequence is now published before the fence is released.
+for (const path of ["applied", "retired as stale"] as const) {
+  test(`a control the supervisor ${path} is published before its fence is released, so the Runner's next request gets the next sequence`, () => {
+    const root = join(tmpdir(), `aiboard-supervisor-control-${process.pid}-${path.replace(/\s+/g, "-")}`);
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    try {
+      const statePath = join(root, "state.json"), controlPath = join(root, "control.json");
+      const fence = { ownerId: "owner", fencingToken: path === "applied" ? 2 : 1 };
+      const handledAtRelease: number[] = [];
+      const context = vm.createContext({
+        config: { nonce: "nonce", platform: "posix" }, process: { pid: 4242 }, statePath, controlPath,
+        readFileSync, writeFileSync, unlinkSync, existsSync, renameSync: (from: string, to: string) => { writeFileSync(to, readFileSync(from)); unlinkSync(from); },
+        SharedArrayBuffer, Int32Array, Atomics, Date, JSON, Symbol,
+        settlePortableSupervisorCommand,
+        readCurrentFenceStrict: () => ({ nonce: "nonce", ownerId: "owner", fencingToken: 2 }),
+        // The fenced effect: the Runner can take the fence only once this returns, so read what it would see then.
+        withCurrentFenceEffect: (ownerId: string, fencingToken: number, effect: () => unknown) => {
+          if (fencingToken !== 2) return { status: "stale" };
+          void ownerId;
+          const value = effect();
+          handledAtRelease.push(JSON.parse(readFileSync(statePath, "utf8")).handledControl);
+          return { status: "applied", value };
+        },
+      });
+      vm.runInContext(`
+        const STATE_PUBLICATION_MAX_RETRY_MS = 15000, ATOMIC_REPLACEMENT_INITIAL_RETRY_MS = 1000;
+        let revision = 0, lastPublishedSignature, lastPublishedStatus, handledControl = 0;
+        let posixSupervisorBirth = "supervisor-birth", posixWorkloadGroup = { groupId: 9, leaderPid: 9, leaderBirth: "b" };
+        let posixWorkloadRetirement = { state: "active" }, launchEffect = "started", targetExitCode = 0, targetSignal = null, posixTerminalError = null;
+        ${extractFunction(supervisorSource, "replaceAtomic")}
+        ${extractFunction(supervisorSource, "publish")}
+        ${extractFunction(supervisorSource, "publishHandledControl")}
+        ${extractFunction(supervisorSource, "completeControl")}
+        ${extractFunction(supervisorSource, "hasNewControlRequest")}
+        publish("running");`, context);
+      const terminate = { nonce: "nonce", ...fence, sequence: 1, action: "terminate" };
+      writeFileSync(controlPath, JSON.stringify(terminate));
+      context.terminate = terminate;
+      let signalled = 0;
+      // The signal is applied first: until it returns, state.json still shows the previous handled sequence.
+      context.signal = () => {
+        signalled += 1;
+        assert.equal(JSON.parse(readFileSync(statePath, "utf8")).handledControl, 0, "the sequence is published only after the control is applied");
+        return { state: "signalled" };
+      };
+      vm.runInContext("completeControl(terminate, signal)", context);
+      assert.equal(signalled, path === "applied" ? 1 : 0, "a stale-fence control is retired, never applied");
+      assert.deepEqual(handledAtRelease.at(-1), 1, "state.json already says sequence 1 is handled when the fence is free");
+      // The Runner's next request, numbered as native-process-backend does: the published handledControl + 1.
+      const published = JSON.parse(readFileSync(statePath, "utf8")) as { handledControl: number; status: string };
+      assert.equal(published.status, "running", "the in-fence publication keeps the last published status");
+      writeFileSync(controlPath, JSON.stringify({ nonce: "nonce", ownerId: "owner", fencingToken: 2, sequence: published.handledControl + 1, action: "force_terminate" }));
+      assert.equal(vm.runInContext("hasNewControlRequest()", context), true, "the force is a new request, not one already handled");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
 test("supervisor idle ACK polling does not contend for the writer fence", () => {
   let fenceReads = 0;
   let fenceEffects = 0;
@@ -342,7 +403,7 @@ test("supervisor control preserves a replacement published before apply or stale
         return { status: "applied", value: effect() };
       },
     });
-    vm.runInContext(`${extractFunction(supervisorSource, "completeControl")}`, context);
+    vm.runInContext(`let lastPublishedStatus;\n${extractFunction(supervisorSource, "publishHandledControl")}\n${extractFunction(supervisorSource, "completeControl")}`, context);
     (context.completeControl as (request: typeof oldRequest, apply: () => void) => unknown)(oldRequest, () => { effects += 1; });
     return { context, request, present, commits, effects };
   };
@@ -379,7 +440,7 @@ test("supervisor control rejects fractional and future-gap sequences before the 
         return { status: "applied", value: effect() };
       },
     });
-    vm.runInContext(`${extractFunction(supervisorSource, "completeControl")}
+    vm.runInContext(`let lastPublishedStatus;\n${extractFunction(supervisorSource, "publishHandledControl")}\n${extractFunction(supervisorSource, "completeControl")}
 ${extractFunction(supervisorSource, "handleControl")}`, context);
 
     assert.throws(() => vm.runInContext("handleControl()", context), /control command identity is invalid/);

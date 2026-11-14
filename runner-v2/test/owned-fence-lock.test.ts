@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs, { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -43,6 +43,7 @@ test("generic POSIX holder inspection distinguishes exact absence from uncertain
   }
 });
 
+const SELF_BIRTH_PROBE_FUNCTIONS = ["normalizeBirth", "windowsBirthProbeArguments", "parseWindowsBirthProbe", "inspectProcessBirth", "currentProcessBirthFingerprint"];
 function selfBirthContext(source: string, globals: Record<string, unknown>, functions: readonly string[]): vm.Context {
   const context = vm.createContext({
     process: { pid: 4242, platform: "win32" },
@@ -52,9 +53,10 @@ function selfBirthContext(source: string, globals: Record<string, unknown>, func
     OwnedFenceLockUnavailableError,
     ...globals,
   });
-  const constants = [...source.matchAll(/^const (DEFAULT_DEADLINE_MS|SELF_BIRTH_[A-Z_]+) = [0-9_]+;/gm)].map((match) => match[0]);
+  const constants = [...source.matchAll(/^const (?:(?:DEFAULT_DEADLINE_MS|SELF_BIRTH_[A-Z_]+) = [0-9_]+|WINDOWS_BIRTH_PATTERN = \/.+\/);$/gm)].map((match) => match[0]);
   assert.ok(constants.some((line) => line.startsWith("const DEFAULT_DEADLINE_MS")), "bind the actual source default used by the extracted functions");
-  vm.runInContext(`${constants.join("\n")}\nlet cachedCurrentBirth;`, context);
+  assert.ok(constants.some((line) => line.startsWith("const WINDOWS_BIRTH_PATTERN")), "bind the actual birth format the probe parser checks");
+  vm.runInContext(`${constants.join("\n")}\nlet cachedCurrentBirth;\nlet preparingCurrentBirth;`, context);
   for (const name of functions) vm.runInContext(extractNamedJsFunction(source, name).replace(/^export\s+/, ""), context);
   return context;
 }
@@ -104,7 +106,7 @@ function coldStartProbe(coldStartMs: number) {
 test("current holder birth is obtained within the caller's deadline when the Windows probe cold start exceeds 2 s", () => {
   const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
   const probe = coldStartProbe(6_000);
-  const context = selfBirthContext(source, probe.globals, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const context = selfBirthContext(source, probe.globals, SELF_BIRTH_PROBE_FUNCTIONS);
   const started = probe.clock.now;
 
   assert.equal(vm.runInContext("currentProcessBirthFingerprint(10_000)", context), "2026-10-31T00:43:01.123456Z");
@@ -115,7 +117,7 @@ test("current holder birth is obtained within the caller's deadline when the Win
 test("current holder birth escalation is bounded by the caller's deadline and still fails closed", () => {
   const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
   const probe = coldStartProbe(Number.POSITIVE_INFINITY);
-  const context = selfBirthContext(source, probe.globals, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const context = selfBirthContext(source, probe.globals, SELF_BIRTH_PROBE_FUNCTIONS);
   const started = probe.clock.now;
 
   assert.throws(
@@ -126,10 +128,12 @@ test("current holder birth escalation is bounded by the caller's deadline and st
   assert.ok(probe.probeTimeouts.length <= 4, `attempts are bounded: ${probe.probeTimeouts.join(",")}`);
 
   const defaultProbe = coldStartProbe(Number.POSITIVE_INFINITY);
-  const defaultContext = selfBirthContext(source, defaultProbe.globals, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const defaultContext = selfBirthContext(source, defaultProbe.globals, SELF_BIRTH_PROBE_FUNCTIONS);
   assert.throws(() => vm.runInContext("currentProcessBirthFingerprint()", defaultContext), /birth identity is unavailable/);
   assert.deepEqual(defaultProbe.probeTimeouts, [2_000], "a default 2 s caller still gets exactly one 2 s attempt");
 });
+
+// The background self-birth preparation and its wiring: owned-fence-self-birth.test.ts (in PR CI).
 
 test("a single-link legacy coordination database migrates to immutable exact-path authority", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-legacy-authority-"));
@@ -206,6 +210,28 @@ test("a crashed real holder leaves exact identity and a higher contender reclaim
     let effects = 0;
     withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
     assert.equal(effects, 1);
+  } finally {
+    await stop(holder);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("a holder whose birth came from the background self-birth preparation records what other processes read for it", { timeout: 15_000 }, async () => {
+  // Another process inspects a holder with the sync Get-Process probe; the background probe must record the same
+  // fingerprint, or a live holder would read as birth_mismatch and be reclaimed.
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-prepared-"));
+  const lockPath = join(root, "effect.sqlite");
+  const holder = startHolder(lockPath, undefined, 2_000, 60_000, "hold-prepared-async");
+  try {
+    assert.equal((await nextMessage(holder)).state, "acquired");
+    const durable = readDurableHolder(lockPath);
+    assert.equal(durable.holderPid, holder.pid);
+    if (process.platform === "win32") {
+      // An independent read of the holder's start, normalized like the module (seven fractional digits to six).
+      const started = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+        `(Get-Process -Id ${holder.pid}).StartTime.ToUniversalTime().ToString('o')`], { encoding: "utf8", windowsHide: true }).trim();
+      assert.equal(durable.holderBirth, started.replace(/(\.\d{6})\d+(Z)$/, "$1$2"));
+    } else assert.match(durable.holderBirth, /\S/);
   } finally {
     await stop(holder);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
