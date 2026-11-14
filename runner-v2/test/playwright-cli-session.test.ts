@@ -147,7 +147,7 @@ async function withRun(label: string, body: (fixture: Fixture) => Promise<void>,
     return "";
   }))).join("\n");
   let closed = false;
-  const closeRun = async () => { if (closed) return; closed = true; await run.close(); await host.close(); await sessions.removeRun(runId); };
+  const closeRun = async () => { if (closed) return; closed = true; await run.close(); await host.close(); await removeRunAsTheRunnerDoes(sessions, runId); };
   const fixture: Fixture = {
     root, project, state, sessions, runId, run, invoke,
     folder: (agent = "worker-a") => sessions.ownerFolder({ runId, sessionId: agent }),
@@ -173,10 +173,19 @@ async function withRun(label: string, body: (fixture: Fixture) => Promise<void>,
     },
     closeRun,
   };
+  let bodyFailure: { error: unknown } | undefined;
   try {
     await body(fixture);
+  } catch (error) {
+    bodyFailure = { error };
+    throw error;
   } finally {
     try { await closeRun(); }
+    catch (error) {
+      // A failed close must not hide the assertion that failed first.
+      if (bodyFailure) throw new AggregateError([bodyFailure.error, error], "the test body failed, and so did the run's close");
+      throw error;
+    }
     finally {
       // Nothing of a session may outlive its run (each test asserts its own kill kind before this).
       for (const row of sessionProcesses(join(state, "pw"))) { try { process.kill(row.pid, "SIGKILL"); } catch { /* gone */ } }
@@ -216,6 +225,28 @@ const AFTER_STOP_MS = POSIX_BROWSER_EXIT_GRACE_MS;
  * loaded CI host can take seconds to let the daemon and Chrome exit.
  */
 const AFTER_CLOSE_HARNESS_MS = 25_000;
+
+/**
+ * The Runner's run cleanup is retryable (native-build-factory's retryableNativeBuildCleanup runs the binding's close,
+ * then `removeRun`): a removal that fails closed while a session's browser still runs outside its group is tried
+ * again, and succeeds only once its own check finds that browser gone. A browser that leaves a moment after the
+ * stop's grace (a loaded host) is that path, so the harness takes it too, up to the close bound; each try returns as
+ * soon as removal succeeds, and a browser that never leaves still fails the test with the product's own error.
+ */
+async function removeRunAsTheRunnerDoes(sessions: PlaywrightCliSessions, runId: string): Promise<void> {
+  const started = Date.now();
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await sessions.removeRun(runId);
+      if (attempt > 1) console.log(`removeRun for ${runId} succeeded on try ${attempt}, ${Date.now() - started} ms after the first`);
+      return;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "process_cleanup_unverified" || Date.now() - started > AFTER_CLOSE_HARNESS_MS) throw error;
+      console.log(`removeRun for ${runId} blocked (try ${attempt}): ${(error as Error).message}`);
+      await sleep(250);
+    }
+  }
+}
 
 async function pollUntilStopped(f: Fixture, processId: string, agent = "worker-a"): Promise<Record<string, unknown>> {
   for (const deadline = Date.now() + AFTER_CLOSE_HARNESS_MS; ;) {
