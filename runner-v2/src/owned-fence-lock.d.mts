@@ -23,6 +23,8 @@ export class OwnedFenceContentionError extends OwnedFenceLockUnavailableError {}
 export class OwnedFenceAuthorityRetirementError extends Error {}
 export function isOwnedFenceLockContention(error: unknown): boolean;
 export function currentProcessBirthFingerprint(remainingMs?: number): string;
+/** Windows: learn this process's own birth identity in the background; resolves to it, or to undefined. Never rejects. */
+export function prepareCurrentProcessBirthFingerprint(): Promise<string | undefined>;
 export function inspectGenericPosixProcessBirth(
   pid: number,
   operations?: GenericPosixProcessInspectionOperations,

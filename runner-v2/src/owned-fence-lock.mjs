@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 // RUNNER_RAW_PROCESS_BOUNDARY: platform process-identity probe for fencing; probes do not authorize workload launch.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, unlinkSync } from "node:fs";
@@ -71,6 +71,8 @@ const tracedErrors = new WeakSet();
 // this instance generated, so no other thread or process can own it.
 const retainedHolders = new Map();
 let cachedCurrentBirth;
+// The background Windows self-birth preparation in flight, if any (prepareCurrentProcessBirthFingerprint).
+let preparingCurrentBirth;
 
 export class OwnedFenceLockUnavailableError extends Error {
   constructor(message, options) {
@@ -158,7 +160,7 @@ export async function withOwnedFenceLock(path, effect, options = {}) {
   asynchronousTails.set(path, tail);
   await previous;
   try {
-    const context = acquire(path, options);
+    const context = acquire(path, await awaitPreparedHolderBirth(options));
     let effectError;
     let retired = false;
     let effectStarted = false;
@@ -297,6 +299,71 @@ export function currentProcessBirthFingerprint(remainingMs = DEFAULT_DEADLINE_MS
     Atomics.wait(waiter, 0, 0, SELF_BIRTH_RETRY_DELAY_MS);
   }
   throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
+}
+
+/**
+ * Windows: learn this process's own birth identity in the background, before the first fence acquisition needs it.
+ * The probe is a cold powershell.exe start (155-218 ms idle, seconds on a loaded host), and inside a 2 s acquisition
+ * that start was the whole budget: the first claim of a fresh process failed with "birth identity is unavailable",
+ * and its sync probe was killed with it, so the next claim started cold again. This runs the same escalating
+ * schedule as currentProcessBirthFingerprint (2 s, 4 s, ... up to SELF_BIRTH_MAX_ATTEMPTS attempts) without blocking
+ * anyone. It authorizes nothing: an acquisition still fails closed when the identity is not known by its own
+ * deadline. Only a read identity is cached; an unknown one never is, and a later call starts again. Resolves to the
+ * fingerprint, or to undefined when it stays unknown; never rejects. Elsewhere the sync probe is a /proc read or one
+ * `ps`, and this resolves to undefined at once.
+ */
+export function prepareCurrentProcessBirthFingerprint() {
+  if (cachedCurrentBirth?.state === "same") return Promise.resolve(cachedCurrentBirth.fingerprint);
+  if (process.platform !== "win32") return Promise.resolve(undefined);
+  preparingCurrentBirth ??= learnCurrentProcessBirth().finally(() => { preparingCurrentBirth = undefined; });
+  return preparingCurrentBirth;
+}
+
+async function learnCurrentProcessBirth() {
+  let attemptMs = SELF_BIRTH_FIRST_ATTEMPT_MS;
+  for (let attempt = 1; attempt <= SELF_BIRTH_MAX_ATTEMPTS; attempt += 1) {
+    if (cachedCurrentBirth?.state === "same") return cachedCurrentBirth.fingerprint;
+    let inspected;
+    try { inspected = await inspectWindowsProcessBirthAsync(process.pid, attemptMs); }
+    catch { inspected = { state: "unknown" }; }
+    if (inspected.state === "same") {
+      cachedCurrentBirth ??= inspected;
+      return cachedCurrentBirth.fingerprint;
+    }
+    if (inspected.state !== "unknown") return undefined;
+    attemptMs *= 2;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, SELF_BIRTH_RETRY_DELAY_MS));
+  }
+  return undefined;
+}
+
+function inspectWindowsProcessBirthAsync(pid, boundMs) {
+  return new Promise((resolvePromise) => {
+    execFile("powershell.exe", windowsBirthProbeArguments(pid), { encoding: "utf8", windowsHide: true, timeout: boundMs },
+      (error, stdout) => resolvePromise(error ? { state: "unknown" } : parseWindowsBirthProbe(String(stdout).trim())));
+  });
+}
+
+/**
+ * withOwnedFenceLock on Windows: when this process's own birth identity is not known yet, wait for the background
+ * preparation (starting it if none runs) inside the caller's own deadline, and hand acquire that same deadline, so
+ * the wait and the acquisition together never run past it. Still unknown at the deadline: the acquisition fails
+ * closed with the same error as before, and the preparation goes on for the next one. A preparation that ended
+ * without the identity leaves acquire its usual sync probe in the time left.
+ */
+async function awaitPreparedHolderBirth(options) {
+  if (process.platform !== "win32" || options.holderBirth !== undefined || cachedCurrentBirth?.state === "same") return options;
+  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1) return options;
+  if (options.deadlineAt !== undefined && (!Number.isFinite(options.deadlineAt) || options.deadlineAt <= 0)) return options;
+  const deadline = Math.min(Date.now() + deadlineMs, options.deadlineAt ?? Number.POSITIVE_INFINITY);
+  let timer;
+  const expired = new Promise((resolvePromise) => { timer = setTimeout(() => resolvePromise(false), Math.max(0, deadline - Date.now())); });
+  const prepared = await Promise.race([prepareCurrentProcessBirthFingerprint().then(() => true), expired]);
+  clearTimeout(timer);
+  if (!prepared && cachedCurrentBirth?.state !== "same")
+    throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
+  return { ...options, deadlineAt: deadline };
 }
 
 export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {}) {
@@ -1335,13 +1402,10 @@ function inspectProcessBirth(pid, remainingMs = DEFAULT_DEADLINE_MS, attemptBoun
   const timely = result => Date.now() < deadline ? result : { state: "unknown" };
   try {
     if (process.platform === "win32") {
-      const output = execFileSync("powershell.exe", [
-        "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-        `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`,
-      ], { encoding: "utf8", windowsHide: true, timeout: Math.floor(Math.min(attemptBoundMs, remainingMs)) }).trim();
-      if (output === "ABSENT") return timely({ state: "absent" });
-      if (output.startsWith("PRESENT:") && output.length > 8) return timely({ state: "same", fingerprint: normalizeBirth(output.slice(8)) });
-      return { state: "unknown" };
+      const output = execFileSync("powershell.exe", windowsBirthProbeArguments(pid),
+        { encoding: "utf8", windowsHide: true, timeout: Math.floor(Math.min(attemptBoundMs, remainingMs)) }).trim();
+      const parsed = parseWindowsBirthProbe(output);
+      return parsed.state === "unknown" ? parsed : timely(parsed);
     }
     if (process.platform === "linux") {
       try {
@@ -1353,6 +1417,19 @@ function inspectProcessBirth(pid, remainingMs = DEFAULT_DEADLINE_MS, attemptBoun
     }
     return timely(inspectGenericPosixProcessBirth(pid, genericPosixInspectionOperations, deadline - Date.now()));
   } catch { return { state: "unknown" }; }
+}
+
+function windowsBirthProbeArguments(pid) {
+  return [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+    `$ErrorActionPreference='Stop';$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null -eq $p){'ABSENT'}else{'PRESENT:'+$p.StartTime.ToUniversalTime().ToString('o')}`,
+  ];
+}
+
+function parseWindowsBirthProbe(output) {
+  if (output === "ABSENT") return { state: "absent" };
+  if (output.startsWith("PRESENT:") && output.length > 8) return { state: "same", fingerprint: normalizeBirth(output.slice(8)) };
+  return { state: "unknown" };
 }
 
 export function inspectGenericPosixProcessBirth(pid, operations = genericPosixInspectionOperations, remainingMs = DEFAULT_DEADLINE_MS) {

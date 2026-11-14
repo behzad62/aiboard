@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs, { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -43,6 +43,7 @@ test("generic POSIX holder inspection distinguishes exact absence from uncertain
   }
 });
 
+const SELF_BIRTH_PROBE_FUNCTIONS = ["normalizeBirth", "windowsBirthProbeArguments", "parseWindowsBirthProbe", "inspectProcessBirth", "currentProcessBirthFingerprint"];
 function selfBirthContext(source: string, globals: Record<string, unknown>, functions: readonly string[]): vm.Context {
   const context = vm.createContext({
     process: { pid: 4242, platform: "win32" },
@@ -54,7 +55,7 @@ function selfBirthContext(source: string, globals: Record<string, unknown>, func
   });
   const constants = [...source.matchAll(/^const (DEFAULT_DEADLINE_MS|SELF_BIRTH_[A-Z_]+) = [0-9_]+;/gm)].map((match) => match[0]);
   assert.ok(constants.some((line) => line.startsWith("const DEFAULT_DEADLINE_MS")), "bind the actual source default used by the extracted functions");
-  vm.runInContext(`${constants.join("\n")}\nlet cachedCurrentBirth;`, context);
+  vm.runInContext(`${constants.join("\n")}\nlet cachedCurrentBirth;\nlet preparingCurrentBirth;`, context);
   for (const name of functions) vm.runInContext(extractNamedJsFunction(source, name).replace(/^export\s+/, ""), context);
   return context;
 }
@@ -104,7 +105,7 @@ function coldStartProbe(coldStartMs: number) {
 test("current holder birth is obtained within the caller's deadline when the Windows probe cold start exceeds 2 s", () => {
   const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
   const probe = coldStartProbe(6_000);
-  const context = selfBirthContext(source, probe.globals, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const context = selfBirthContext(source, probe.globals, SELF_BIRTH_PROBE_FUNCTIONS);
   const started = probe.clock.now;
 
   assert.equal(vm.runInContext("currentProcessBirthFingerprint(10_000)", context), "2026-10-31T00:43:01.123456Z");
@@ -115,7 +116,7 @@ test("current holder birth is obtained within the caller's deadline when the Win
 test("current holder birth escalation is bounded by the caller's deadline and still fails closed", () => {
   const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
   const probe = coldStartProbe(Number.POSITIVE_INFINITY);
-  const context = selfBirthContext(source, probe.globals, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const context = selfBirthContext(source, probe.globals, SELF_BIRTH_PROBE_FUNCTIONS);
   const started = probe.clock.now;
 
   assert.throws(
@@ -126,9 +127,113 @@ test("current holder birth escalation is bounded by the caller's deadline and st
   assert.ok(probe.probeTimeouts.length <= 4, `attempts are bounded: ${probe.probeTimeouts.join(",")}`);
 
   const defaultProbe = coldStartProbe(Number.POSITIVE_INFINITY);
-  const defaultContext = selfBirthContext(source, defaultProbe.globals, ["normalizeBirth", "inspectProcessBirth", "currentProcessBirthFingerprint"]);
+  const defaultContext = selfBirthContext(source, defaultProbe.globals, SELF_BIRTH_PROBE_FUNCTIONS);
   assert.throws(() => vm.runInContext("currentProcessBirthFingerprint()", defaultContext), /birth identity is unavailable/);
   assert.deepEqual(defaultProbe.probeTimeouts, [2_000], "a default 2 s caller still gets exactly one 2 s attempt");
+});
+
+// The Windows Job host's claims take the 2 s default, and the first one in a fresh process used to spend it on its
+// own cold powershell.exe start (CI: "Current owned fence holder birth identity is unavailable."), killing that probe
+// with the failed claim. The background preparation keeps the probe; a claim still fails closed at its own deadline.
+const PREPARATION_FUNCTIONS = [...SELF_BIRTH_PROBE_FUNCTIONS, "prepareCurrentProcessBirthFingerprint", "learnCurrentProcessBirth", "inspectWindowsProcessBirthAsync", "awaitPreparedHolderBirth"];
+const PRESENT_BIRTH = "PRESENT:2026-10-31T00:43:01.1234567Z\r\n";
+function heldProbe() {
+  const calls: { timeout: number; finish: (error: Error | null, stdout?: string) => void }[] = [];
+  const syncCalls: number[] = [];
+  const globals = {
+    execFile: (_file: string, _args: string[], options: { timeout: number }, callback: (error: Error | null, stdout: string) => void) => {
+      calls.push({ timeout: options.timeout, finish: (error, stdout = "") => callback(error, stdout) });
+    },
+    execFileSync: (_file: string, _args: string[], options: { timeout: number }) => {
+      syncCalls.push(options.timeout);
+      throw new Error("the sync probe must not run");
+    },
+    setTimeout, clearTimeout, Promise,
+  };
+  return { calls, syncCalls, globals };
+}
+async function untilCalls(probe: ReturnType<typeof heldProbe>, count: number): Promise<void> {
+  for (let wait = 0; probe.calls.length < count && wait < 400; wait += 1) await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
+  assert.ok(probe.calls.length >= count, `probe call ${count} started`);
+}
+
+test("a claim that ends before the background self-birth probe fails closed, and the probe it waited on serves the next claim", async () => {
+  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
+  const probe = heldProbe();
+  const context = selfBirthContext(source, probe.globals, PREPARATION_FUNCTIONS);
+  const started = Date.now();
+  await assert.rejects(vm.runInContext("awaitPreparedHolderBirth({ deadlineMs: 50 })", context) as Promise<unknown>,
+    /Current owned fence holder birth identity is unavailable/);
+  assert.ok(Date.now() - started < 1_000, "the claim keeps its own deadline");
+  assert.deepEqual(probe.calls.map((call) => call.timeout), [2_000], "one cold start, with the first 2 s attempt bound");
+  await assert.rejects(vm.runInContext("awaitPreparedHolderBirth({ deadlineMs: 20 })", context) as Promise<unknown>,
+    /birth identity is unavailable/);
+  assert.equal(probe.calls.length, 1, "a second claim waits on the same probe instead of starting another cold one");
+  probe.calls[0]!.finish(null, PRESENT_BIRTH);
+  assert.equal(await (vm.runInContext("prepareCurrentProcessBirthFingerprint()", context) as Promise<unknown>), "2026-10-31T00:43:01.123456Z");
+  const options = { deadlineMs: 50 };
+  context.options = options;
+  assert.equal(await (vm.runInContext("awaitPreparedHolderBirth(options)", context) as Promise<unknown>), options, "a known identity passes the options through");
+  assert.equal(vm.runInContext("currentProcessBirthFingerprint()", context), "2026-10-31T00:43:01.123456Z");
+  assert.deepEqual(probe.syncCalls, [], "acquire never starts its own cold probe once the identity is known");
+  assert.equal(probe.calls.length, 1);
+});
+
+test("a claim that waited for the self-birth probe keeps its original deadline, never a fresh one", async () => {
+  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
+  const probe = heldProbe();
+  const context = selfBirthContext(source, probe.globals, PREPARATION_FUNCTIONS);
+  const started = Date.now();
+  const waiting = vm.runInContext("awaitPreparedHolderBirth({ deadlineMs: 1_000, retryDelayMs: 7 })", context) as Promise<{ deadlineAt: number; deadlineMs: number; retryDelayMs: number }>;
+  await untilCalls(probe, 1);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 30));
+  probe.calls[0]!.finish(null, PRESENT_BIRTH);
+  const options = await waiting;
+  assert.ok(options.deadlineAt <= started + 1_000 + 5 && options.deadlineAt > Date.now(), `deadlineAt is ${options.deadlineAt - started} ms after the call`);
+  assert.equal(options.deadlineMs, 1_000);
+  assert.equal(options.retryDelayMs, 7);
+
+  vm.runInContext("cachedCurrentBirth = undefined", context);
+  const earlier = Date.now() + 300;
+  context.earlier = earlier;
+  const second = vm.runInContext("awaitPreparedHolderBirth({ deadlineMs: 1_000, deadlineAt: earlier })", context) as Promise<{ deadlineAt: number }>;
+  await untilCalls(probe, 2);
+  probe.calls[1]!.finish(null, PRESENT_BIRTH);
+  assert.equal((await second).deadlineAt, earlier, "an earlier absolute deadline from the caller stays");
+});
+
+test("the background self-birth probe escalates like the sync one, never caches an unknown result, and never rejects", async () => {
+  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
+  const probe = heldProbe();
+  const context = selfBirthContext(source, probe.globals, PREPARATION_FUNCTIONS);
+  const preparing = vm.runInContext("prepareCurrentProcessBirthFingerprint()", context) as Promise<unknown>;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    await untilCalls(probe, attempt);
+    probe.calls[attempt - 1]!.finish(Object.assign(new Error("spawn powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" }));
+  }
+  assert.equal(await preparing, undefined);
+  assert.deepEqual(probe.calls.map((call) => call.timeout), [2_000, 4_000, 8_000, 16_000], "the same bounded schedule as currentProcessBirthFingerprint");
+  const again = vm.runInContext("prepareCurrentProcessBirthFingerprint()", context) as Promise<unknown>;
+  await untilCalls(probe, 5);
+  probe.calls[4]!.finish(null, "garbage");
+  await untilCalls(probe, 6);
+  probe.calls[5]!.finish(null, PRESENT_BIRTH);
+  assert.equal(await again, "2026-10-31T00:43:01.123456Z", "an unknown identity is never cached: the next preparation probes again");
+});
+
+test("the self-birth wait is Windows-only and skipped when the caller names its holder birth", async () => {
+  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
+  const probe = heldProbe();
+  const windows = selfBirthContext(source, probe.globals, PREPARATION_FUNCTIONS);
+  const named = { holderPid: 7, holderBirth: "named", deadlineMs: 50 };
+  windows.named = named;
+  assert.equal(await (vm.runInContext("awaitPreparedHolderBirth(named)", windows) as Promise<unknown>), named);
+  const posix = selfBirthContext(source, { ...probe.globals, process: { pid: 4242, platform: "linux" } }, PREPARATION_FUNCTIONS);
+  const plain = { deadlineMs: 50 };
+  posix.plain = plain;
+  assert.equal(await (vm.runInContext("awaitPreparedHolderBirth(plain)", posix) as Promise<unknown>), plain);
+  assert.equal(await (vm.runInContext("prepareCurrentProcessBirthFingerprint()", posix) as Promise<unknown>), undefined);
+  assert.equal(probe.calls.length, 0, "no probe starts off Windows or for a named holder");
 });
 
 test("a single-link legacy coordination database migrates to immutable exact-path authority", () => {
@@ -206,6 +311,28 @@ test("a crashed real holder leaves exact identity and a higher contender reclaim
     let effects = 0;
     withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 2_000 });
     assert.equal(effects, 1);
+  } finally {
+    await stop(holder);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("a holder whose birth came from the background self-birth preparation records what other processes read for it", { timeout: 15_000 }, async () => {
+  // Another process inspects a holder with the sync Get-Process probe; the background probe must record the same
+  // fingerprint, or a live holder would read as birth_mismatch and be reclaimed.
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-prepared-"));
+  const lockPath = join(root, "effect.sqlite");
+  const holder = startHolder(lockPath, undefined, 2_000, 60_000, "hold-prepared-async");
+  try {
+    assert.equal((await nextMessage(holder)).state, "acquired");
+    const durable = readDurableHolder(lockPath);
+    assert.equal(durable.holderPid, holder.pid);
+    if (process.platform === "win32") {
+      // An independent read of the holder's start, normalized like the module (seven fractional digits to six).
+      const started = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+        `(Get-Process -Id ${holder.pid}).StartTime.ToUniversalTime().ToString('o')`], { encoding: "utf8", windowsHide: true }).trim();
+      assert.equal(durable.holderBirth, started.replace(/(\.\d{6})\d+(Z)$/, "$1$2"));
+    } else assert.match(durable.holderBirth, /\S/);
   } finally {
     await stop(holder);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });

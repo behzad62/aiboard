@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import test, { type TestContext } from "node:test";
+import { prepareCurrentProcessBirthFingerprint } from "../src/owned-fence-lock.mjs";
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { WindowsJobObjectProcessBackend } from "../src/windows-process-backend.js";
 import type { ProcessBackendBinding } from "../src/process-backend.js";
@@ -223,7 +224,12 @@ async function fixture(options: FixtureOptions = {}) {
     outputSequences: { stdout: 0, stderr: 0 }, currentFence: firstFence }));
   const first = createWindowsJobProcessHost({ stateDirectory: root, platform: "win32", maxPollBytes: 128 });
   const replacement = createWindowsJobProcessHost({ stateDirectory: root, platform: "win32", maxPollBytes: 128 });
-  // Establish the normal real coordination identity before holding HTTP.
+  // Establish the normal real coordination identity before holding HTTP. The host started learning this
+  // process's own birth identity when it was created; a Runner has it long before its first claim (a launch
+  // comes first), while this fixture claims at once. Wait for it here, as the portable backend's binding waits
+  // for prepareInspection, so the claim below keeps its own 2 s default deadline and tests only the HTTP race.
+  const prepared = await prepareCurrentProcessBirthFingerprint();
+  if (process.platform === "win32") assert.ok(prepared, "this process's birth identity is known before the first claim");
   await first.claimOwnedFence!(processId, owner, firstFence);
   return { root, processId, first, replacement, statusEntered, resumeStatus, signals: () => signals,
     record: async () => JSON.parse(await readFile(recordPath, "utf8")),
