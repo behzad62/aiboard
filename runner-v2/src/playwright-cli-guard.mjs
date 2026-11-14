@@ -99,6 +99,36 @@ function interceptNotOpen(stream) {
   };
 }
 
+// The CLI prints a failed command's result and still exits 0 (its client's default branch prints the tool result
+// whatever it holds). Its response puts the Error section before every other one, so with --json a failed result is an
+// object whose first key is "isError": true, and as text it starts with "### Error". Both are recognised from the start
+// of the output, so a large snapshot is never buffered.
+const JSON_FAILURE = /^\s*\{\s*"isError"\s*:\s*true\b/;
+const RESULT_PREFIX_CHARS = 4_096;
+
+/** True when the CLI's printed output is a failed command's result. */
+export function cliOutputFailed(output) {
+  if (JSON_FAILURE.test(output)) return true;
+  const first = output.split(/\r?\n/).find((line) => line.trim() !== "");
+  return first?.trim() === "### Error";
+}
+
+/** A failed command exits 1, so a final check's step and an agent's process.run both see it fail. */
+function failOnErrorResult(stream) {
+  let prefix = "";
+  const write = stream.write.bind(stream);
+  stream.write = (chunk, encoding, callback) => {
+    if (prefix.length < RESULT_PREFIX_CHARS) {
+      const text = typeof chunk === "string" ? chunk : chunk instanceof Uint8Array ? Buffer.from(chunk).toString("utf8") : "";
+      prefix += text.slice(0, RESULT_PREFIX_CHARS - prefix.length);
+    }
+    return write(chunk, encoding, callback);
+  };
+  process.on("exit", () => {
+    if (!process.exitCode && cliOutputFailed(prefix)) process.exitCode = 1;
+  });
+}
+
 /**
  * The client side of the session command's sanitizing (playwright-cli.ts): no PLAYWRIGHT_MCP_* but the output
  * folder, and the global Playwright CLI config read from the owner's state folder, never the user's home.
@@ -124,6 +154,7 @@ export function main(argv = process.argv.slice(2), environment = process.env) {
   const roots = playwrightRoots();
   interceptNotOpen(process.stdout);
   interceptNotOpen(process.stderr);
+  failOnErrorResult(process.stdout);
   const cli = join(roots.playwright, "cli.js");
   process.argv = [process.argv[0], cli, "cli", ...argv];
   require(cli);

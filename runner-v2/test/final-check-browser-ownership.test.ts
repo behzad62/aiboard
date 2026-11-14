@@ -9,7 +9,11 @@
 //   2. the program's launch and stop pass the run's managed stop observer, which records it as the owner's session;
 //   3. the check's tool lookup searches the owner's PATH folders (the CLI shims), and without them the program reads
 //      as `not_run: tool_missing` (the blocker before VF4b);
-//   4. the run's browsing is configured before its inventory, so the pre-planning lookup sees the same PATH.
+//   4. the run's browsing is configured before its inventory, so the pre-planning lookup sees the same PATH;
+//   5. the owner is exact: an agent's close, poll or signal for the same session id with another actor leaves the
+//      program running;
+//   6. a failed playwright-cli step fails the check (the Runner's playwright-cli exits 1 for a failed result), and a
+//      browser that outlived the program's stop, or could not be read, leaves the cleanup not proven (VF8).
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +26,7 @@ import { checkToolLookupFor, createCheckToolLookup, lookUpCheckTool, type CheckT
 import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 import { observeManagedStops } from "../src/execution-host.js";
 import { withResolvedVerificationPlan } from "../src/final-verification-profile.js";
+import { createFinalVerificationManagedProcessAdapter, type FinalCheckBrowserCleanup } from "../src/final-verification-runtime.js";
 import { ManagedProcessService } from "../src/managed-process.js";
 import type { ManagedProcessRunRuntime } from "../src/managed-process-transport.js";
 import type { OneShotCommandExecutor, OneShotCommandRequest } from "../src/one-shot-command-executor.js";
@@ -33,6 +38,8 @@ import {
   playwrightCliSessionName,
   PlaywrightCliSessions,
 } from "../src/playwright-cli.js";
+import { cliOutputFailed } from "../src/playwright-cli-guard.mjs";
+import { verificationCheckLeftProgramUnproven } from "../src/scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { completeVerificationPlanV2, type VerificationPlanV2 } from "../src/verification-plan-v2.js";
@@ -114,12 +121,13 @@ interface Seen { kind: "program" | "step"; sessionId: string; actor: string; com
 
 /** One final check through the real FinalVerificationRuntime and its managed adapter, with fake processes. */
 async function runBrowserCheck(fixture: Fixture, lookup: CheckToolLookup, sessions: PlaywrightCliSessions,
-  options: { silent?: boolean; timeoutMs?: number } = {}) {
+  options: { silent?: boolean; timeoutMs?: number; failStep?: string; browserCleanup?: FinalCheckBrowserCleanup } = {}) {
   // The plan first: a plan the Runner refuses throws before anything is opened.
   const revision = fixture.integration.revision;
   const profile = withResolvedVerificationPlan(emptyFinalVerificationProfile(revision), browserPlan(options.timeoutMs));
   const seen: Seen[] = [];
   const stops: string[] = [];
+  const cleanupReads: Array<{ runId: string; sessionId: string; processId: string }> = [];
   const envOf = (sessionId: string) => sessions.environmentFor({ runId: fixture.runId, sessionId })?.values;
   // silent: a daemon that never prints its ready line (a slow start on a loaded host).
   const stdout = options.silent ? "" : `${PLAYWRIGHT_CLI_READY_PATTERN} \\\\.\\pipe\\fixture`;
@@ -150,6 +158,23 @@ async function runBrowserCheck(fixture: Fixture, lookup: CheckToolLookup, sessio
       const values = envOf(request.context.sessionId);
       seen.push({ kind: "step", sessionId: request.context.sessionId, actor: `${request.context.actor.role}:${request.context.actor.id}`,
         command: request.executable, ...(values ? { cliSession: values.PLAYWRIGHT_CLI_SESSION, state: values.AIBOARD_PLAYWRIGHT_STATE } : {}) });
+      // The Runner's playwright-cli exits 1 when the CLI printed a failed result (playwright-cli-guard.mjs).
+      if (options.failStep !== undefined && request.arguments.includes(options.failStep)) {
+        const failure = "{\n  \"isError\": true,\n  \"error\": \"Error: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:9/\"\n}";
+        assert.equal(cliOutputFailed(failure), true);
+        return {
+          process: {
+            logicalProcessId: `vf4b-step-${seen.length}`, outcome: "exited", exitCode: 1, finishedAt: new Date().toISOString(),
+            output: [
+              { stream: "stdout", tail: failure, totalBytes: failure.length, truncated: false, spillBytes: 0, lossyBytes: 0 },
+              { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+            ],
+            cleanup: { state: "verified_empty", verifiedAt: new Date().toISOString() },
+          },
+          enforcement: "unconfined_explicit_full",
+          disclosure: "unconfined_explicit_full",
+        };
+      }
       if (request.arguments.includes("screenshot")) {
         mkdirSync(join(request.workingDirectory, PLAYWRIGHT_CLI_OUTPUT_FOLDER), { recursive: true });
         writeFileSync(join(request.workingDirectory, PLAYWRIGHT_CLI_OUTPUT_FOLDER, ".gitignore"), "*\n");
@@ -187,10 +212,15 @@ async function runBrowserCheck(fixture: Fixture, lookup: CheckToolLookup, sessio
     generationId: GENERATION_ID,
     integrationRevision: () => revision,
     toolLookup: lookup,
+    // As native-build-factory wires it: the sessions whose stop observer wraps the runtime.
+    browserCleanup: (target) => {
+      cleanupReads.push({ ...target });
+      return options.browserCleanup ? options.browserCleanup(target) : sessions.cleanupAfterStop(target);
+    },
   });
   try {
     const run = await runtime.runCheckV2({ executionProfile: profile, checkId: "home-page" });
-    return { run, seen, stops, artifacts };
+    return { run, seen, stops, artifacts, cleanupReads };
   } finally {
     await service.close().catch(() => undefined);
     evidence.close();
@@ -204,8 +234,10 @@ test("VF4b every process of a final browser check runs for one owner: one CLI se
     const sessions = new PlaywrightCliSessions({ stateRoot: join(fixture.state, "pw"), binDirectory: fakeShims(fixture.state) });
     sessions.configureRun(fixture.runId, { browser: "chrome" });
     const lookup = createCheckToolLookup({ environment: () => ambientWithoutShims(fixture.root), processEnvironment: sessions.environmentFor });
-    const { run, seen, artifacts } = await runBrowserCheck(fixture, lookup, sessions);
+    const { run, seen, artifacts, stops, cleanupReads } = await runBrowserCheck(fixture, lookup, sessions);
     assert.equal(run.check.outcome, "passed", run.check.issues.join("\n"));
+    // After the stop, the check reads the browser check of exactly that stop.
+    assert.deepEqual(cleanupReads, [{ runId: fixture.runId, sessionId: TASK_ID, processId: stops[0] }]);
 
     assert.deepEqual(seen.map((entry) => [entry.kind, entry.command]), [
       ["program", PLAYWRIGHT_CLI_SESSION_COMMAND],
@@ -229,6 +261,11 @@ test("VF4b every process of a final browser check runs for one owner: one CLI se
       const records = sessions.cleanupRecords().filter((record) => record.sessionId === TASK_ID);
       assert.equal(records.length, 1, JSON.stringify(sessions.cleanupRecords()));
       assert.equal(records[0]!.status, "none");
+      assert.equal(records[0]!.processId, stops[0], "the observer's record is keyed by the stopped program's id");
+      assert.equal(sessions.cleanupAfterStop({ runId: fixture.runId, sessionId: TASK_ID, processId: stops[0]! }), "none");
+    } else {
+      assert.equal(sessions.cleanupAfterStop({ runId: fixture.runId, sessionId: TASK_ID, processId: stops[0]! }), undefined,
+        "Windows records no browser check: the session's Job takes its browser with it");
     }
     // The step's outputs are kept as evidence.
     const screenshot = run.check.facts[2] as unknown as { outputs?: { files: Array<{ path: string; artifactHash: string }> } };
@@ -349,6 +386,139 @@ test("VF4b a run's browsing is configured before its inventory, so the pre-plann
     assert.ok(order.includes("architect"));
   } finally {
     store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("VF4b the program's owner is exact: an agent's close, poll or signal for the check's session id with another actor leaves it running", async () => {
+  const root = realTemporaryFolder("aiboard-vf4b-exact-");
+  try {
+    const runId = "run_vf4b_exact";
+    const stops: string[] = [];
+    const snapshot = (processId: string, status: "running" | "stopped") => ({ processId, pid: 4242, status, exitCode: status === "stopped" ? 0 : null,
+      signal: null, startedAt: at, updatedAt: at, stdout: "", stderr: "" } as const);
+    const service = new ManagedProcessService({
+      stateDirectory: join(root, "managed"),
+      runtime: {
+        runId,
+        async start(request) { return snapshot(request.identity.processId, "running"); },
+        async observe(target) { return snapshot(target.processId, stops.includes(target.processId) ? "stopped" : "running"); },
+        async stop(target) { stops.push(target.processId); return snapshot(target.processId, "stopped"); },
+      },
+      idFactory: () => "vf4b-exact-1",
+    });
+    const owner = { role: "architect" as const, id: "final-verification-runtime" };
+    const adapter = createFinalVerificationManagedProcessAdapter({
+      service, executionGrants: createExecutionGrantAuthority(), permissionProfile: "full", runId, taskId: TASK_ID, callScope: "exact", actor: owner,
+    });
+    const cwd = join(root, "checkout");
+    mkdirSync(cwd);
+    const started = await adapter.start({ executable: PLAYWRIGHT_CLI_SESSION_COMMAND, args: [], cwd });
+    assert.equal(started.status, "running");
+    // The same session id as the program, with every other actor an agent could have: none of them reaches it.
+    for (const actor of [{ role: "worker" as const, id: "worker-1" }, { role: "verifier" as const, id: "verifier-1" },
+      { role: "architect" as const, id: "architect" }, { role: "subagent" as const, id: "final-verification-runtime" }]) {
+      const context = { runId, sessionId: TASK_ID, actor, callId: `foreign:${actor.role}`, workspacePath: cwd, executionGrant: { grantId: "foreign" } as never };
+      await service.closeAgent({ runId, sessionId: TASK_ID, actor });
+      await assert.rejects(() => service.poll(started.processId, { ...context, toolName: "process.poll" }), /another exact owner/, `${actor.role}:${actor.id} poll`);
+      await assert.rejects(() => service.signal(started.processId, "SIGTERM", { ...context, toolName: "process.signal" }), /another exact owner/, `${actor.role}:${actor.id} signal`);
+      assert.deepEqual(stops, [], `${actor.role}:${actor.id} stopped the final check's program`);
+    }
+    assert.equal((await adapter.poll(started.processId)).status, "running");
+    // The exact owner still reaches it, so the checks above would see a stop.
+    await service.closeAgent({ runId, sessionId: TASK_ID, actor: owner });
+    assert.deepEqual(stops, [started.processId]);
+    await service.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("VF4b a playwright-cli step that fails fails the check: the next step does not run and the program is still stopped", async () => {
+  const fixture = await createFixture("step-failure");
+  try {
+    const sessions = new PlaywrightCliSessions({ stateRoot: join(fixture.state, "pw"), binDirectory: fakeShims(fixture.state) });
+    sessions.configureRun(fixture.runId, { browser: "chrome" });
+    const lookup = createCheckToolLookup({ environment: () => ambientWithoutShims(fixture.root), processEnvironment: sessions.environmentFor });
+    const { run, seen, stops } = await runBrowserCheck(fixture, lookup, sessions, { failStep: "goto" });
+    assert.equal(run.check.outcome, "failed", run.check.issues.join("\n"));
+    assert.deepEqual(seen.map((entry) => entry.kind), ["program", "step"], "the screenshot step does not run after the failed goto");
+    assert.equal(stops.length, 1);
+    const program = run.check.facts[0] as unknown as { cleanupSucceeded?: boolean };
+    assert.equal(program.cleanupSucceeded, true);
+    assert.equal(verificationCheckLeftProgramUnproven(run.check as never), false, "a failed step is a check failure, not an unproven program");
+  } finally {
+    await fixture.integration.cleanup().catch(() => undefined);
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("VF4b a browser that outlives the program's stop, or cannot be read, leaves the cleanup not proven, so VF8 runs no further check", async () => {
+  for (const status of ["escaped", "unknown"] as const) {
+    const fixture = await createFixture(`browser-${status}`);
+    try {
+      const sessions = new PlaywrightCliSessions({ stateRoot: join(fixture.state, "pw"), binDirectory: fakeShims(fixture.state) });
+      sessions.configureRun(fixture.runId, { browser: "chrome" });
+      const lookup = createCheckToolLookup({ environment: () => ambientWithoutShims(fixture.root), processEnvironment: sessions.environmentFor });
+      const { run, stops, cleanupReads } = await runBrowserCheck(fixture, lookup, sessions, { browserCleanup: () => status });
+      assert.equal(stops.length, 1, "the program itself is stopped once; the browser is never signalled");
+      assert.deepEqual(cleanupReads, [{ runId: fixture.runId, sessionId: TASK_ID, processId: stops[0] }]);
+      const program = run.check.facts[0] as unknown as { cleanupRequested?: boolean; cleanupSucceeded?: boolean };
+      assert.deepEqual([program.cleanupRequested, program.cleanupSucceeded], [true, false]);
+      assert.equal(run.check.outcome, "failed", run.check.issues.join("\n"));
+      assert.ok(run.check.issues.some((issue) => /its cleanup is not proven/.test(issue)), run.check.issues.join("\n"));
+      assert.equal(verificationCheckLeftProgramUnproven(run.check as never), true, "VF8: its generation runs no further check");
+    } finally {
+      await fixture.integration.cleanup().catch(() => undefined);
+      rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  }
+});
+
+test("VF4b the Runner's playwright-cli reads a failed result from the start of the CLI's output, as JSON or as text", () => {
+  assert.equal(cliOutputFailed("{\n  \"isError\": true,\n  \"error\": \"Error: Access to \\\"file:\\\" protocol is blocked.\"\n}\n"), true);
+  assert.equal(cliOutputFailed("### Error\nError: Ref e999 not found in the current page snapshot.\n"), true);
+  assert.equal(cliOutputFailed("\r\n### Error\r\nError: net::ERR_CONNECTION_REFUSED\r\n"), true);
+  assert.equal(cliOutputFailed("{\n  \"snapshot\": {\n    \"file\": \".playwright-cli/page.yml\"\n  }\n}\n"), false);
+  assert.equal(cliOutputFailed("{\n  \"result\": \"### Error\"\n}\n"), false);
+  assert.equal(cliOutputFailed("### Ran Playwright code\n```js\nawait page.goto('about:blank');\n```\n### Error\n"), false,
+    "only a result that starts with its error section failed");
+  assert.equal(cliOutputFailed("{\"isError\": false}"), false);
+  assert.equal(cliOutputFailed(""), false);
+});
+
+test("VF4b the lookup drops the Runner's own installation from PATH as a launch does, and tries every PATHEXT extension on Windows", async () => {
+  const root = realTemporaryFolder("aiboard-vf4b-install-");
+  try {
+    const cwd = join(root, "checkout");
+    mkdirSync(cwd);
+    // A tool only in a Runner installation's node_modules/.bin, which child-environment.ts removes before a launch.
+    const install = join(root, "runner install");
+    const bin = join(install, "node_modules", ".bin");
+    mkdirSync(bin, { recursive: true });
+    const tool = join(bin, WINDOWS ? "vf4b-install-only.cmd" : "vf4b-install-only");
+    writeFileSync(tool, WINDOWS ? "@exit /b 0\r\n" : "#!/bin/sh\nexit 0\n");
+    if (!WINDOWS) chmodSync(tool, 0o755);
+    const other = join(root, "elsewhere");
+    mkdirSync(other);
+    const pathExt = WINDOWS ? { PATHEXT: ".COM;.EXE;.BAT;.CMD" } : {};
+    const environment = { [WINDOWS ? "Path" : "PATH"]: [bin, other].join(WINDOWS ? ";" : ":"), ...pathExt };
+    assert.equal((await lookUpCheckTool("vf4b-install-only", { cwd, environment, runnerInstallRoot: install })).status, "missing",
+      "found only where the launch no longer searches, so missing, as the launch would find it");
+    const elsewhere = join(root, "another install");
+    mkdirSync(elsewhere);
+    assert.equal((await lookUpCheckTool("vf4b-install-only", { cwd, environment, runnerInstallRoot: elsewhere })).status, "found",
+      "outside the Runner's installation the entry stays");
+    // The owner's folders are put first after that filter, so they are searched even inside it.
+    assert.equal((await lookUpCheckTool("vf4b-install-only", { cwd, environment, runnerInstallRoot: install, pathPrepend: [bin] })).status, "found");
+    if (WINDOWS) {
+      // resolveWindowsExecutable tries every PATHEXT extension, so the lookup does too.
+      writeFileSync(join(other, "vf4b-script.vbs"), "WScript.Quit 0\r\n");
+      const withVbs = { Path: other, PATHEXT: ".COM;.EXE;.BAT;.CMD;.VBS" };
+      assert.equal((await lookUpCheckTool("vf4b-script", { cwd, environment: withVbs, runnerInstallRoot: elsewhere })).status, "found");
+      assert.equal((await lookUpCheckTool("vf4b-script", { cwd, environment: { Path: other, PATHEXT: ".COM;.EXE;.BAT;.CMD" }, runnerInstallRoot: elsewhere })).status, "missing");
+    }
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

@@ -242,6 +242,12 @@ export interface ExecutionHost {
    * The same checks, run once and shared with every binding; never rejects.
    */
   prepare?(): Promise<void>;
+  /**
+   * VF4b: the Windows host process facts every binding launches under (the same once-run checks), read only;
+   * undefined on POSIX. A caller can tell why a launch would be refused (a `.cmd` while `windowsBatchArgv` is not
+   * verified) without starting anything; nothing it reads changes what a launch may do.
+   */
+  windowsProcessFacts?(): Promise<ProcessHostSemanticFacts | undefined>;
   close(): Promise<void>;
 }
 
@@ -457,6 +463,11 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
       inspectionOperations.add(warm);
       void warm.finally(() => inspectionOperations.delete(warm));
       return warm;
+    },
+    async windowsProcessFacts() {
+      if (platform !== "windows") return undefined;
+      if (closed) throw new Error("ExecutionHost is closed.");
+      return await resolveWindowsFacts();
     },
     async close() {
       if (closeComplete) return;

@@ -115,8 +115,7 @@ export function createChildEnvironmentFactory(
   const now = options.now ?? (() => new Date());
   const mcpChildDepth = options.mcpChildDepth ?? parseMcpDepth(process.env.AIBOARD_MCP_DEPTH) + 1;
   if (!Number.isSafeInteger(mcpChildDepth) || mcpChildDepth < 1 || mcpChildDepth > 1_000_000) throw new Error("Invalid child MCP depth.");
-  const installRoot = canonicalPath(options.runnerInstallRoot ?? defaultRunnerInstallRoot());
-  const installRoots = [installRoot, canonicalPath(resolve(installRoot, "node_modules"))];
+  const installRoots = runnerInstallRoots(options.runnerInstallRoot);
 
   return Object.freeze({
     prepare(input: PrepareChildEnvironmentInput): PreparedChildEnvironment {
@@ -182,10 +181,7 @@ export function createChildEnvironmentFactory(
       const path = environment.get("PATH");
       if (path) {
         const entries = path.value.split(delimiter);
-        const retained = entries.filter((entry) => {
-          const candidate = pathEntryCandidate(entry, request.workingDirectory);
-          return candidate === undefined || !installRoots.some((root) => insideInstall(root, candidate));
-        });
+        const retained = entries.filter((entry) => keepsPathEntry(entry, installRoots, request.workingDirectory));
         if (retained.length !== entries.length) {
           setEnvironment(environment, path.name, retained.join(delimiter));
           decisions.push({ kind: "removed_runner_path", name: path.name, count: entries.length - retained.length });
@@ -349,6 +345,28 @@ function sortNames(values: readonly string[]): string[] {
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 function invalidGrant(): Error { return new Error("Child environment credential grant is invalid."); }
 function consumedGrant(): Error { return new Error("Child environment credential grant could not be consumed."); }
+
+/** The Runner's installation and its node_modules: a launch removes every PATH entry inside them. */
+function runnerInstallRoots(runnerInstallRoot?: string): string[] {
+  const installRoot = canonicalPath(runnerInstallRoot ?? defaultRunnerInstallRoot());
+  return [installRoot, canonicalPath(resolve(installRoot, "node_modules"))];
+}
+
+function keepsPathEntry(entry: string, installRoots: readonly string[], workingDirectory?: string): boolean {
+  const candidate = pathEntryCandidate(entry, workingDirectory);
+  return candidate === undefined || !installRoots.some((root) => insideInstall(root, candidate));
+}
+
+/**
+ * VF4b: the PATH a launch in `workingDirectory` searches before the owner's folders are put first: the same entries
+ * `prepare` keeps, so a check's tool lookup never finds a tool only in the Runner's own installation, which the launch
+ * cannot find.
+ */
+export function withoutRunnerInstallPath(path: string, options: { readonly workingDirectory?: string; readonly runnerInstallRoot?: string; readonly delimiter?: string } = {}): string {
+  const separator = options.delimiter ?? delimiter;
+  const installRoots = runnerInstallRoots(options.runnerInstallRoot);
+  return path.split(separator).filter((entry) => keepsPathEntry(entry, installRoots, options.workingDirectory)).join(separator);
+}
 
 function defaultRunnerInstallRoot(): string {
   let directory = dirname(fileURLToPath(import.meta.url));

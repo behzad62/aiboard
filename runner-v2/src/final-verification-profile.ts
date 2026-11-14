@@ -899,8 +899,9 @@ function serverSignal(scripts: Record<string, string>, dependencies: Record<stri
  */
 export async function readProjectValidationConfig(repositoryRoot: string): Promise<ProjectValidationConfig | undefined> {
   const path = join(repositoryRoot, PROJECT_VALIDATION_CONFIG_PATH);
+  let regularFile = false;
   try {
-    await lstat(path);
+    regularFile = (await lstat(path)).isFile();
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") return undefined;
@@ -910,7 +911,7 @@ export async function readProjectValidationConfig(repositoryRoot: string): Promi
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
-    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is present but unreadable: ${unreadableReason(error)}.`, { cause: error, retryable: readFailureRetryable(error) });
+    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is present but unreadable: ${unreadableReason(error)}.`, { cause: error, retryable: regularFile && readFailureRetryable(error) });
   }
   return parseProjectValidationConfigText(text);
 }
@@ -918,7 +919,9 @@ export async function readProjectValidationConfig(repositoryRoot: string): Promi
 /**
  * VF4b review fix: whether a fresh checkout of the same revision may read the file. A folder, a
  * dangling link or a link loop in its place is what the revision holds; a permission or I/O error
- * in the Runner's own checkout is not.
+ * in the Runner's own checkout is not. A read through a link is retryable never: whether it can be
+ * read depends on what the link names, which the revision holds (the read passes it only when
+ * lstat saw a regular file).
  */
 function readFailureRetryable(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;

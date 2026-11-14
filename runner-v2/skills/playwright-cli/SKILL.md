@@ -29,7 +29,7 @@ process.start {"command": "playwright-cli-session", "until": {"pattern": "Daemon
 
 ## Read results with `--json`
 
-`playwright-cli` exits 0 even when a command fails. Put `--json` on any command whose result matters and check `isError`:
+A command that fails (a page that does not load, a ref that is gone) exits 1 and prints its error. Put `--json` on any command whose result you read: it prints one JSON object, with `isError: true` and the error when it failed:
 
 ```bash
 playwright-cli --json goto http://127.0.0.1:5173/
@@ -66,12 +66,12 @@ A final check cannot call `process.start`, so the browser is the check's program
 {"id": "home-page", "label": "home page renders", "kind": "start",
  "start": {"executable": "playwright-cli-session", "args": [], "ready": {"outputLine": "Daemon listening on"},
   "steps": [
-   {"label": "open the page", "executable": "playwright-cli", "args": ["--json", "goto", "file:///path/to/dist/index.html"]},
+   {"label": "open the page", "executable": "playwright-cli", "args": ["--json", "goto", "http://127.0.0.1:4173/"]},
    {"label": "screenshot", "executable": "playwright-cli", "args": ["--json", "screenshot", "--filename=.aiboard-browser/home.png"], "outputs": [".aiboard-browser/home.png"]}
   ]}}
 ```
 
-A check has one program, so this checks pages that need no server of the check's own: built files, or a URL that is already served. A step passes when it exits 0, and `playwright-cli` exits 0 even when its command failed, so the step's `--json` output and the screenshot are what the reviewers read.
+A check has one program, the browser, so it browses a URL that is already served when the check runs; a page that needs a server of the check's own cannot be checked this way. `file:` URLs are blocked. A failed `playwright-cli` command exits 1, so its step, and the check, fail.
 
 ## Commands
 

@@ -281,7 +281,9 @@ As of 2026-11-14. Pull requests are in behzad62/aiboard.
 **At the gate.** The full `test:runner-v2` is waiting on the owner (or CI's full runs); the packets ran their targeted tests.
 
 **Still open.**
-- **From VF4b:** a final browser check has one program, so a page that needs a server of the check's own cannot be checked in the same check (the browser and the server would both have to be its program).
+- **From VF4b:**
+  - a final browser check has one program, so a page that needs a server of the check's own cannot be checked in the same check (the browser and the server would both have to be its program). Built files cannot be opened instead: the CLI blocks `file:` URLs, and the Runner does not turn on unrestricted file access;
+  - on a Windows host whose batch-argv probe does not verify (GitHub's `windows-latest` image: `powershell.exe` → `.cmd` gives no output within the probe's 15 s), every `.cmd` launch is refused, so a Playwright CLI session cannot start there, for an agent or a final check. The final check then fails closed.
 - **From VF3 (#196):**
   - the v2 flaky rerun narrows only `node --test` commands of a `tests` check and reports any other command as unsupported;
   - not checked: a mechanical repair reason for an `ask_user` checkpoint still needs non-empty `factIds` and `evidenceIds`, which a v2 check that fails without a fact would hit.

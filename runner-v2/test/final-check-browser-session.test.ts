@@ -5,7 +5,8 @@
 // native-build-factory wires them) -> FinalVerificationRuntime.runCheckV2, its managed adapter for the program and the
 // binding's one-shot executor for the steps, the VF2 lookup with the owner's PATH, VF6 outputs.
 //
-// It needs a browser and takes about 10 s, so it is not in PR CI (the owner's rule: PR CI jobs stay at about three
+// A second check opens a page that does not load and fails, since the Runner's playwright-cli exits 1 for a failed result.
+// It needs a browser and takes about 20 s, so it is not in PR CI (the owner's rule: PR CI jobs stay at about three
 // minutes). It runs locally, in Docker, and on Windows, macOS and Linux through the portable workflow's manual
 // `final-check-browser` scope. In-memory coverage of the same ownership is final-check-browser-ownership.test.ts.
 import assert from "node:assert/strict";
@@ -21,7 +22,6 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { createCheckToolLookup } from "../src/check-tool-lookup.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { withResolvedVerificationPlan } from "../src/final-verification-profile.js";
-import { createFinalVerificationManagedProcessAdapter } from "../src/final-verification-runtime.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import {
   installPlaywrightCliShims,
@@ -44,17 +44,6 @@ import { captureGitBaseline, FinalVerificationRuntime, IntegrationManager, Verif
 
 const WINDOWS = process.platform === "win32";
 const TASK_ID = "final-verification-0123456789ab";
-
-/** An error with its causes and aggregated errors, for a failure that would otherwise show only its top message. */
-function describeError(error: unknown, depth = 0): string {
-  if (depth > 4 || error === undefined || error === null) return "";
-  const pad = "  ".repeat(depth);
-  const value = error as { name?: string; message?: string; code?: string; cause?: unknown; errors?: unknown[] };
-  const lines = [`${pad}${value.name ?? "Error"}${value.code ? ` [${value.code}]` : ""}: ${value.message ?? String(error)}`];
-  for (const inner of value.errors ?? []) lines.push(describeError(inner, depth + 1));
-  if (value.cause !== undefined) lines.push(`${pad}cause:`, describeError(value.cause, depth + 1));
-  return lines.filter(Boolean).join("\n");
-}
 
 // A check whose program's cleanup could not be proven leaves that program to the Runner's fail-closed cleanup, and
 // its handles can keep this file's process alive after the failure is reported. Exit with the failure instead of
@@ -104,9 +93,19 @@ async function waitFor<T>(read: () => T, done: (value: T) => boolean, ms: number
   }
 }
 
-function browserPlan(url: string): VerificationPlanV2 {
+function browserPlan(url: string, brokenUrl: string): VerificationPlanV2 {
   const completed = completeVerificationPlanV2({
     checks: [{
+      id: "broken-page", label: "a page that does not load", kind: "start",
+      start: {
+        executable: PLAYWRIGHT_CLI_SESSION_COMMAND, args: [], ready: { outputLine: PLAYWRIGHT_CLI_READY_PATTERN },
+        steps: [
+          { label: "open the page", executable: PLAYWRIGHT_CLI_COMMAND, args: ["--json", "goto", brokenUrl] },
+          { label: "screenshot", executable: PLAYWRIGHT_CLI_COMMAND, args: ["--json", "screenshot", `--filename=${PLAYWRIGHT_CLI_OUTPUT_FOLDER}/broken.png`],
+            outputs: [`${PLAYWRIGHT_CLI_OUTPUT_FOLDER}/broken.png`] },
+        ],
+      },
+    }, {
       id: "home-page", label: "home page renders", kind: "start",
       start: {
         executable: PLAYWRIGHT_CLI_SESSION_COMMAND, args: [], ready: { outputLine: PLAYWRIGHT_CLI_READY_PATTERN },
@@ -126,7 +125,7 @@ function browserPlan(url: string): VerificationPlanV2 {
 }
 
 test("a final check starts a Playwright CLI session as its program, drives it from its steps, keeps the screenshot and leaves nothing running",
-  { skip: BROWSER || REQUIRE_BROWSER ? false : "no Chrome, Edge or Playwright Chromium on this machine", timeout: 120_000 }, async () => {
+  { skip: BROWSER || REQUIRE_BROWSER ? false : "no Chrome, Edge or Playwright Chromium on this machine", timeout: 120_000 }, async (t) => {
     assert.ok(BROWSER, "a browser is installed");
     // Each resource is released, newest first, whatever fails: a setup failure must never leave the page's server or
     // a checkout keeping the test process alive until the job's timeout.
@@ -138,6 +137,11 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       teardown.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
       const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+      // A port nothing listens on: a server that was listening there is closed first.
+      const gone = createServer();
+      await new Promise<void>((resolve) => gone.listen(0, "127.0.0.1", resolve));
+      const brokenUrl = `http://127.0.0.1:${(gone.address() as { port: number }).port}/`;
+      await new Promise<void>((resolve) => gone.close(() => resolve()));
       // A short root: the POSIX socket path budget (VF7b) applies to the owner folder. Its real path, as git reports
       // it (macOS's /var -> /private/var, a Windows runner's 8.3 short name), which the integration checkout compares.
       const root = realpathSync.native(await mkdtemp(join(tmpdir(), "fc-")));
@@ -159,6 +163,13 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
       await integration.initialize();
       const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
       teardown.push(() => closed ? undefined : host.close());
+      // The session command is a .cmd shim on Windows, and a host whose batch-argv probe did not verify refuses every
+      // .cmd launch (windows-process-backend.ts): there is nothing for this test to run. The gate itself stays as it is.
+      const hostFacts = await host.windowsProcessFacts?.();
+      if (hostFacts && hostFacts.windowsBatchArgv !== "verified") {
+        t.skip(`this host refuses .cmd launches (windowsBatchArgv ${hostFacts.windowsBatchArgv}), so the session cannot start here`);
+        return;
+      }
       const run = await host.bindRun({
         runId, permissionProfile: "full", capabilityContract: { digest: "e".repeat(64) } as never, capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
         processEnvironment: sessions.environmentFor, managedStopObserver: sessions.stopObserver(),
@@ -169,7 +180,7 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
       const owner = { runId, sessionId: TASK_ID };
       const ownerFolder = sessions.ownerFolder(owner);
       const revision = integration.revision;
-      const profile = withResolvedVerificationPlan(emptyFinalVerificationProfile(revision), browserPlan(url));
+      const profile = withResolvedVerificationPlan(emptyFinalVerificationProfile(revision), browserPlan(url, brokenUrl));
       const runtime = new FinalVerificationRuntime({
         execution: run.commandExecution,
         managedProcessService: run.managedProcesses,
@@ -184,6 +195,7 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
         integrationRevision: () => revision,
         // As native-build-factory builds it: the Runner's filtered environment plus the owner's PATH folders.
         toolLookup: createCheckToolLookup({ environment: () => host.filteredEnvironmentSource(), processEnvironment: sessions.environmentFor }),
+        browserCleanup: (target) => sessions.cleanupAfterStop(target),
       });
       const started = Date.now();
       const result = await runtime.runCheckV2({ executionProfile: profile, checkId: "home-page" });
@@ -197,23 +209,6 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
             if (!hash) continue;
             const text = Buffer.from(await artifacts.get(hash)).toString("utf8").trim();
             if (text) console.log(`--- ${fact.label} ${stream}:\n${text.slice(-2_000)}`);
-          }
-        }
-        // Which managed starts fail here, with their whole error chain: the session command, then a plain node.
-        for (const [label, executable, args] of [
-          ["session", PLAYWRIGHT_CLI_SESSION_COMMAND, []],
-          ["node", process.execPath, ["-e", "setTimeout(() => {}, 20000)"]],
-        ] as const) {
-          const adapter = createFinalVerificationManagedProcessAdapter({
-            service: run.managedProcesses, executionGrants: run.executionGrants, permissionProfile: "full",
-            runId, taskId: `diagnostic-${label}`, callScope: "diagnostic", actor: { role: "architect", id: "final-verification-runtime" },
-          });
-          try {
-            const started = await adapter.start({ executable, args: [...args], cwd: project });
-            console.log(`diagnostic ${label} start: ${started.status}`);
-            console.log(`diagnostic ${label} stop: ${(await adapter.stop(started.processId)).status}`);
-          } catch (error) {
-            console.log(`diagnostic ${label} start failed:\n${describeError(error)}`);
           }
         }
       }
@@ -251,6 +246,18 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
         assert.ok(["exited", "none"].includes(records[0]!.status), JSON.stringify(records));
         assert.ok(records[0]!.attributed.length > 0, "the session's browser was attributed through its profile");
       }
+
+      // A page that does not load fails its step and the check: the CLI prints the failed result with exit 0, and the
+      // Runner's playwright-cli exits 1. The next step does not run, and the session is still stopped and proven.
+      const broken = await runtime.runCheckV2({ executionProfile: profile, checkId: "broken-page" });
+      console.log(`broken page check: ${broken.check.outcome}`);
+      assert.equal(broken.check.outcome, "failed", broken.check.issues.join("\n"));
+      const brokenFacts = broken.check.facts as unknown as Fact[];
+      assert.equal(brokenFacts.length, 2, "the program and the failed goto; the screenshot does not run");
+      assert.match(await stdoutOf(brokenFacts[1]!), /"isError":\s*true/);
+      assert.equal((brokenFacts[1] as unknown as { exitCode?: number }).exitCode, 1);
+      assert.deepEqual([brokenFacts[0]!.readinessSatisfied, brokenFacts[0]!.cleanupRequested, brokenFacts[0]!.cleanupSucceeded], [true, true, true]);
+      assert.deepEqual(await waitFor(() => sessionProcesses(ownerFolder), (rows) => rows.length === 0, POSIX_BROWSER_EXIT_GRACE_MS), []);
       closed = true;
       await run.close();
       await host.close();

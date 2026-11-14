@@ -856,7 +856,7 @@ export function environmentInventoryView(
       status: tool.status,
       detail: tool.status === "found"
         ? tool.version ?? tool.versionNote ?? "found"
-        : tool.status === "missing" ? "not found on PATH" : tool.note ?? "could not be checked",
+        : tool.status === "missing" ? tool.note ?? "not found on PATH" : tool.note ?? "could not be checked",
       usedBy: tool.usedBy.join(", "),
     })),
     ...(inventory.toolsOmitted > 0 ? { omitted: `${inventory.toolsOmitted} more not recorded` } : {}),

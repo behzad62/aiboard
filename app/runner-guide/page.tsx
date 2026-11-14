@@ -181,7 +181,8 @@ aiboard models disable <provider:model>`}
           and the verifiers run <code>playwright-cli</code> as an ordinary command, with one browser session for each
           task that stops with the task. A final check opens a browser with a start check whose program is{" "}
           <code>playwright-cli-session</code>, ready on the line <code>Daemon listening on</code>, and whose steps run{" "}
-          <code>playwright-cli</code>; the Runner stops the browser after the last step.
+          <code>playwright-cli</code>; the Runner stops the browser after the last step. It browses a page that is
+          already served, and a <code>playwright-cli</code> command that fails makes its step fail.
         </p>
         <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">aiboard browser install</pre>
         <p className="text-sm text-muted-foreground">

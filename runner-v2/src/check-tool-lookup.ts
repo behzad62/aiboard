@@ -1,7 +1,7 @@
 import { lstat, stat } from "node:fs/promises";
-import { isAbsolute, sep } from "node:path";
+import { extname, isAbsolute, resolve, sep } from "node:path";
 
-import type { RunnerProcessEnvironmentResolver } from "./child-environment.js";
+import { withoutRunnerInstallPath, type RunnerProcessEnvironmentResolver } from "./child-environment.js";
 import { languageServerCommandCandidates } from "./language-server-executable.js";
 import {
   resolveProjectCheckForLookup,
@@ -43,6 +43,8 @@ export interface CheckToolLookupOptions {
   processEnvironment?: RunnerProcessEnvironmentResolver;
   /** Test seam for platform-specific resolution. */
   platform?: NodeJS.Platform;
+  /** Test seam: the Runner installation whose PATH entries a launch removes (child-environment.ts). */
+  runnerInstallRoot?: string;
 }
 
 /** One command a check launches, in the folder it launches in. */
@@ -132,6 +134,7 @@ export function createCheckToolLookup(options: CheckToolLookupOptions): CheckToo
       environment: options.environment(),
       ...(runner?.pathPrepend.length ? { pathPrepend: runner.pathPrepend } : {}),
       ...(options.platform ? { platform: options.platform } : {}),
+      ...(options.runnerInstallRoot ? { runnerInstallRoot: options.runnerInstallRoot } : {}),
     });
   };
 }
@@ -161,6 +164,8 @@ export async function lookUpCheckTool(
     /** VF4b: folders the launch puts first on PATH (the owner's processEnvironment). */
     pathPrepend?: readonly string[];
     platform?: NodeJS.Platform;
+    /** Test seam: the Runner installation whose PATH entries a launch removes. */
+    runnerInstallRoot?: string;
   },
 ): Promise<CheckToolLookupResult> {
   if (typeof executable !== "string" || !executable.trim() || executable.includes("\0")) {
@@ -170,21 +175,29 @@ export async function lookUpCheckTool(
     return { status: "unknown", reason: "The executable names a path, not a tool on PATH." };
   }
   const platform = input.platform ?? process.platform;
+  const separator = platform === "win32" ? ";" : ":";
   // With no PATH to search, absence proves nothing; never turn every check into not run.
   const pathName = Object.keys(input.environment).find((name) => platform === "win32" ? name.toUpperCase() === "PATH" : name === "PATH");
-  const ambientPath = pathName ? input.environment[pathName] : undefined;
+  const rawPath = pathName ? input.environment[pathName] : undefined;
+  // VF4b: a launch removes the PATH entries inside the Runner's own installation before it puts the owner's folders
+  // first (child-environment.ts prepare), so the lookup searches what the launch searches.
+  const ambientPath = rawPath?.trim()
+    ? withoutRunnerInstallPath(rawPath, { workingDirectory: input.cwd, delimiter: separator, ...(input.runnerInstallRoot ? { runnerInstallRoot: input.runnerInstallRoot } : {}) })
+    : rawPath;
   const prepend = (input.pathPrepend ?? []).filter((entry) => typeof entry === "string" && entry.length > 0);
   if (!ambientPath?.trim() && prepend.length === 0) {
     return { status: "unknown", reason: "The Runner's environment has no PATH to search." };
   }
   // The launch's PATH: the owner's folders first, then the Runner's own PATH (child-environment.ts).
-  const searchPath = [...prepend, ...(ambientPath?.trim() ? [ambientPath] : [])].join(platform === "win32" ? ";" : ":");
+  const searchPath = [...prepend, ...(ambientPath?.trim() ? [ambientPath] : [])].join(separator);
   const environment = { ...input.environment, [pathName ?? (platform === "win32" ? "Path" : "PATH")]: searchPath };
-  const candidates = languageServerCommandCandidates(executable, {
-    commandSearchDirectory: input.cwd,
-    environment: environment as NodeJS.ProcessEnv,
-    platform,
-  });
+  const candidates = platform === "win32"
+    ? windowsLaunchCandidates(executable, input.cwd, searchPath, environment)
+    : languageServerCommandCandidates(executable, {
+      commandSearchDirectory: input.cwd,
+      environment: environment as NodeJS.ProcessEnv,
+      platform,
+    });
   let undecided: string | undefined;
   for (const candidate of candidates) {
     const state = await candidateState(candidate, platform);
@@ -196,6 +209,27 @@ export async function lookUpCheckTool(
   // With only the owner's folders to search, absence there proves nothing about the Runner's PATH.
   if (!ambientPath?.trim()) return { status: "unknown", reason: "The Runner's environment has no PATH to search." };
   return { status: "missing" };
+}
+
+/**
+ * VF4b: the files a Windows launch tries, in its order (windows-process-backend.ts resolveWindowsExecutable): the
+ * working folder, then each PATH folder, and in each folder every PATHEXT extension. A name with an extension is
+ * tried as given. A tool found only with an extension the launcher cannot start (.vbs, say) reads found, and its
+ * launch fails, rather than reading missing, so the lookup never names a tool missing that the launch would pick.
+ */
+function windowsLaunchCandidates(executable: string, cwd: string, searchPath: string, environment: Readonly<Record<string, string | undefined>>): string[] {
+  const directories = [cwd, ...searchPath.split(";").map((entry) => entry.trim().replace(/^"|"$/g, "")).filter(Boolean)];
+  const pathExtName = Object.keys(environment).find((name) => name.toUpperCase() === "PATHEXT");
+  const extensions = extname(executable) ? [""] : (environment[pathExtName ?? "PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";")
+    .map((entry) => entry.trim()).filter(Boolean).map((entry) => entry.startsWith(".") ? entry : `.${entry}`);
+  const candidates: string[] = [];
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = resolve(directory, `${executable}${extension}`);
+      if (!candidates.some((item) => item.toLowerCase() === candidate.toLowerCase())) candidates.push(candidate);
+    }
+  }
+  return candidates;
 }
 
 async function candidateState(path: string, platform: NodeJS.Platform): Promise<"usable" | "absent" | string> {

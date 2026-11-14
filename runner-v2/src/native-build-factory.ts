@@ -2054,6 +2054,8 @@ export class NativeBuildFactory {
           ),
           execution: commandExecution,
           toolLookup: checkToolLookup,
+          // VF4b: the same sessions whose stop observer the run binding wraps, so the record is that stop's.
+          ...(this.options.playwrightCli ? { browserCleanup: (target) => this.options.playwrightCli!.cleanupAfterStop(target) } : {}),
         });
         // VF3: a v2 check runs the commands resolved for it in the execution profile.
         if (input.checkId !== undefined) {

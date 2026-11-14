@@ -492,6 +492,22 @@ test("VF4b a read failure a fresh checkout may not repeat is retryable; what the
       } finally {
         chmodSync(join(workspace, "aiboard-validation.json"), 0o644);
       }
+      // The same permission error read through a link: what it names is what the revision holds.
+      rmSync(join(workspace, "aiboard-validation.json"));
+      const target = join(workspace, "unreadable-target.json");
+      writeFileSync(target, "{}");
+      chmodSync(target, 0o000);
+      symlinkSync(target, join(workspace, "aiboard-validation.json"));
+      try {
+        await assert.rejects(() => readProjectValidationConfig(workspace), (error: Error) => {
+          assert.ok(error instanceof ProjectValidationConfigError);
+          assert.equal(error.retryable, false, "a read through a link is never retryable");
+          return true;
+        });
+      } finally {
+        chmodSync(target, 0o644);
+        rmSync(join(workspace, "aiboard-validation.json"));
+      }
     }
     assert.equal(new ProjectValidationConfigError("x", { retryable: true }).retryable, true);
     assert.equal(new ProjectValidationConfigError("x").retryable, false);
