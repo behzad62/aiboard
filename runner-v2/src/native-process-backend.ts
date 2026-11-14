@@ -1356,10 +1356,12 @@ async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: Pro
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }
-// Removed last, in this order: what a retried release re-checks (its terminal state, its output evidence, the lock),
-// then fence.json, the released tombstone. A removal that stops early then usually leaves a release that can still
-// finish, and while anything of the authority is left the tombstone still refuses every claim and effect on it.
-const RELEASED_AUTHORITY_REMOVED_LAST = Object.freeze(["state.json", "channel", ".fence.lock", "fence.json"]);
+// What a retried release re-checks: its terminal state and its output evidence.
+const RELEASED_AUTHORITY_EVIDENCE = Object.freeze(["state.json", "channel", "stdout.log", "stderr.log"]);
+// A released authority's directory goes in this order. First the lock: if it is busy (a Windows handle), nothing else
+// is gone yet, and a retried release finishes through the retired lock. Then everything a retried release does not
+// re-check, then what it does, then fence.json, the released tombstone, with the directory. While anything of the
+// authority is left, the tombstone still refuses every claim and effect on it, a recreated lock included.
 function removeRetiredAuthorityDirectory(directory: string): void {
   let entries: string[];
   try { entries = readdirSync(directory); }
@@ -1367,9 +1369,12 @@ function removeRetiredAuthorityDirectory(directory: string): void {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
-  for (const entry of entries)
-    if (!RELEASED_AUTHORITY_REMOVED_LAST.includes(entry)) rmSync(join(directory, entry), { recursive: true, force: true });
-  for (const entry of RELEASED_AUTHORITY_REMOVED_LAST.slice(0, -1)) rmSync(join(directory, entry), { recursive: true, force: true });
+  rmSync(join(directory, ".fence.lock"), { force: true });
+  for (const entry of entries) {
+    if (entry !== ".fence.lock" && entry !== "fence.json" && !RELEASED_AUTHORITY_EVIDENCE.includes(entry))
+      rmSync(join(directory, entry), { recursive: true, force: true });
+  }
+  for (const entry of RELEASED_AUTHORITY_EVIDENCE) rmSync(join(directory, entry), { recursive: true, force: true });
   rmSync(directory, { recursive: true, force: true });
 }
 function errorChainMatches(error: unknown, pattern: RegExp): boolean {

@@ -841,6 +841,39 @@ test("FL1 POSIX release still finishes a retired authority whose fence predates 
   }
 });
 
+test("FL1 released authority removal takes the lock first and the tombstone last", () => {
+  const source = readFileSync(new URL("../src/native-process-backend.ts", import.meta.url), "utf8");
+  const file = ts.createSourceFile("native-process-backend.ts", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  const evidence = file.statements.find((statement): statement is ts.VariableStatement => ts.isVariableStatement(statement) &&
+    statement.declarationList.declarations.some((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === "RELEASED_AUTHORITY_EVIDENCE"));
+  assert.ok(evidence, "missing production RELEASED_AUTHORITY_EVIDENCE");
+  const entries = [".fence.lock", "channel", "control.json", "fence.json", "lock-holder.json", "state.json", "stderr.log", "stdout.log", "usage.json"];
+  const removeWith = (failOn?: string) => {
+    const removed: string[] = [];
+    const context = vm.createContext({
+      Object,
+      join: (...parts: string[]) => parts.join("/"),
+      readdirSync: () => [...entries],
+      rmSync: (path: string) => {
+        removed.push(path);
+        if (path === failOn) throw Object.assign(new Error(`EBUSY: ${path}`), { code: "EBUSY" });
+      },
+    });
+    vm.runInContext(ts.transpileModule(evidence.getText(file), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText.replace(/^const /m, "var "), context);
+    vm.runInContext(extractNamedTsFunction(source, "removeRetiredAuthorityDirectory"), context);
+    try { vm.runInContext("removeRetiredAuthorityDirectory('owned')", context); } catch { /* the injected fault */ }
+    return removed;
+  };
+  assert.deepEqual(removeWith(), [
+    "owned/.fence.lock", "owned/control.json", "owned/lock-holder.json", "owned/usage.json",
+    "owned/state.json", "owned/channel", "owned/stdout.log", "owned/stderr.log", "owned",
+  ]);
+  // A busy lock: nothing else is removed, so a retried release still has its retired lock and all its evidence.
+  assert.deepEqual(removeWith("owned/.fence.lock"), ["owned/.fence.lock"]);
+  // A stop inside the evidence never reaches the tombstone.
+  assert.equal(removeWith("owned/channel").includes("owned"), false);
+});
+
 test("FL1 portable supervisor and POSIX child read a released tombstone as no current fence", () => {
   const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
   const childSource = readFileSync(new URL("../src/portable-process-child.mjs", import.meta.url), "utf8");
