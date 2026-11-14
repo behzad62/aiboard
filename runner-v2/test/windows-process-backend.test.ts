@@ -14,7 +14,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { inspectWindowsFixtureBirth, runLateBirthFixture } from "./support/late-birth-fixture.js";
 import { createLateBirthFixtureClock } from "./support/late-birth-clock.js";
-import { withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
+import { withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
 
 // Test-only outer guard. Several real Windows fixtures deliberately exercise
 // product-owned 15-30s bounds; the harness must outlive those bounds on hosted VMs.
@@ -2410,6 +2410,54 @@ test("Windows Job lowest host boundary rejects held signal and release after tak
       rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
     }
   });
+});
+
+test("FL1 Windows Job effects held across a release refuse inside the lock even when the lock is active again", { timeout: 60_000 }, async (t) => {
+  if (process.platform !== "win32") { t.skip("Windows Job release fixture requires a Windows host."); return; }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-fl1-")); const stateDirectory = join(root, "state"); const workspace = join(root, "workspace"); mkdirSync(workspace);
+  // Each held effect passed its checks outside the lock and waits at the effect boundary while the release lands.
+  const heldKinds = new Set(["reconcile", "signal", "read"]);
+  const parked = new Set<string>();
+  let holding = false;
+  let allParked!: () => void; let resume!: () => void;
+  const parkedPromise = new Promise<void>((resolve) => { allParked = resolve; }); const barrier = new Promise<void>((resolve) => { resume = resolve; });
+  const host = createWindowsJobProcessHost({ stateDirectory, beforeFenceEffect: async (kind) => {
+    if (!holding || !heldKinds.has(kind) || parked.has(kind)) return;
+    parked.add(kind); if (parked.size === heldKinds.size) allParked();
+    await barrier;
+  } });
+  const backend = new WindowsJobObjectProcessBackend(host); const exitRequest = request(["-e", "process.exit(0)"]);
+  const launch = parseProcessLaunchResult(await backend.launch({ ...exitRequest, intent: { ...exitRequest.intent, invocationId: "job-fl1-release", workingDirectory: workspace }, grant: { ...exitRequest.grant, invocationId: "job-fl1-release" } }));
+  const binding = { ...bindingFor(launch), backendId: "runner-windows-job-v1" };
+  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { processId: string; runId: string; sessionId: string };
+  const owner = { runId: identity.runId, sessionId: identity.sessionId };
+  const recordPath = join(stateDirectory, `${identity.processId}.json`);
+  const released = (error: unknown) => error instanceof WindowsJobHostError && error.code === "process_backend_ownership_released";
+  try {
+    await backend.observe(binding, async () => undefined, fence);
+    holding = true;
+    const held = [
+      host.reconcileOwned(identity.processId, owner, fence),
+      host.signalOwned(identity.processId, "SIGTERM", owner, fence),
+      Promise.resolve(host.readOwnedOutput(identity.processId, owner, { stdout: 0, stderr: 0 }, fence)),
+    ].map((operation) => operation.then(() => assert.fail("an effect held across the release must refuse"), (error: unknown) => error));
+    await parkedPromise;
+    const { startedAt } = JSON.parse(readFileSync(recordPath, "utf8")) as { startedAt: string };
+    assert.equal((await host.releaseOwned(identity.processId, owner, startedAt, fence)).ownershipReleased, true);
+    // A lock that carries no retirement any more (as the OS lock of FL2 will not): a fresh, active one at the same path.
+    const lockPath = join(stateDirectory, `${identity.processId}.fence.lock`);
+    rmSync(lockPath, { force: true });
+    await withOwnedFenceLock(lockPath, () => undefined);
+    const releasedRecord = readFileSync(recordPath, "utf8");
+    resume();
+    for (const error of await Promise.all(held)) assert.ok(released(error), `held effect: ${String(error)}`);
+    await assert.rejects(host.claimOwnedFence!(identity.processId, owner, { ownerId: "fl1-late", fencingToken: fence.fencingToken + 1 }), released);
+    assert.equal(readFileSync(recordPath, "utf8"), releasedRecord, "no refused effect may change the released record");
+    assert.ok((JSON.parse(releasedRecord) as { backendOwnershipReleasedAt?: string }).backendOwnershipReleasedAt);
+  } finally {
+    resume(); await backend.release(binding, fence).catch(() => undefined);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
 });
 
 test("Windows Job terminal and release fail closed when owned output evidence disappears", { timeout: 60_000 }, async (t) => {

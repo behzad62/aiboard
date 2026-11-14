@@ -505,13 +505,14 @@ function inspectAuthenticatedProbeSupervisor(root: string, binding: ProcessBacke
       nonce?: string; holderPid?: number; holderBirth?: string;
     };
     const fence = JSON.parse(readFileSync(join(directory, "fence.json"), "utf8")) as {
-      nonce?: string; ownerId?: string; fencingToken?: number;
+      nonce?: string; ownerId?: string; fencingToken?: number; released?: unknown;
     };
+    // A released tombstone authenticates nothing: the authority was given up.
     if (state.protocol !== "aiboard-portable-process/v1" || state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid ||
         holder.nonce !== identity.nonce || holder.holderPid !== identity.supervisorPid ||
         !sameProbeBirth(holder.holderBirth ?? "", identity.supervisorBirth) ||
         fence.nonce !== identity.nonce || fence.ownerId !== identity.fence.ownerId ||
-        fence.fencingToken !== identity.fence.fencingToken)
+        fence.fencingToken !== identity.fence.fencingToken || fence.released !== undefined)
       return undefined;
     return { directory, nonce: identity.nonce, supervisorPid: identity.supervisorPid, supervisorBirth: identity.supervisorBirth };
   } catch { return undefined; }

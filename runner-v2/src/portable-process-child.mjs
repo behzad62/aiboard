@@ -123,9 +123,10 @@ function readCurrentPosixFence(expectedSupervisor) {
   const holder = readJson(config.lockHolderPath);
   if (!holder || holder.nonce !== config.nonce || holder.holderPid !== expectedSupervisor.supervisorPid ||
       holder.holderBirth !== expectedSupervisor.supervisorBirth) return undefined;
+  // A released tombstone (`{ nonce, released: { ownerId, fencingToken } }`) is no current fence: it authorizes nothing.
   const fence = readJson(config.fencePath);
   return fence && fence.nonce === config.nonce && typeof fence.ownerId === "string" && fence.ownerId.length > 0 &&
-    Number.isSafeInteger(fence.fencingToken) && fence.fencingToken >= 1 ? fence : undefined;
+    Number.isSafeInteger(fence.fencingToken) && fence.fencingToken >= 1 && fence.released === undefined ? fence : undefined;
 }
 
 function readAnchorReleaseFence(value) {

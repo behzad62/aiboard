@@ -7,6 +7,8 @@ export interface PosixProcessBackendOptions {
   readonly operations?: NativeProcessOperations;
   readonly replayCapacityChunks?: number;
   readonly replayCapacityBytes?: number;
+  /** Test seam forwarded to the portable owner for post-retirement cleanup faults. */
+  readonly removeRetiredAuthority?: (directory: string) => void;
 }
 
 /**

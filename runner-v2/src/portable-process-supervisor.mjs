@@ -759,11 +759,13 @@ function completeControl(request, apply) {
   return outcome.status === "applied" && outcome.value.disposition === "applied" ? outcome.value.value : undefined;
 }
 
+// A released tombstone (`{ nonce, released: { ownerId, fencingToken } }`, written by the backend's release) is no
+// current fence: it authorizes nothing.
 function readCurrentFence() {
   try {
     const value = JSON.parse(readFileSync(fencePath, "utf8"));
-    return value.nonce === config.nonce && typeof value.ownerId === "string" && Number.isSafeInteger(value.fencingToken)
-      ? value : undefined;
+    return value.nonce === config.nonce && typeof value.ownerId === "string" && Number.isSafeInteger(value.fencingToken) &&
+      value.released === undefined ? value : undefined;
   } catch { return undefined; }
 }
 
