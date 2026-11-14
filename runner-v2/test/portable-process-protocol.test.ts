@@ -398,7 +398,7 @@ test("supervisor control preserves a replacement published before apply or stale
         return { status: "applied", value: effect() };
       },
     });
-    vm.runInContext(`${extractFunction(supervisorSource, "completeControl")}`, context);
+    vm.runInContext(`let lastPublishedStatus;\n${extractFunction(supervisorSource, "publishHandledControl")}\n${extractFunction(supervisorSource, "completeControl")}`, context);
     (context.completeControl as (request: typeof oldRequest, apply: () => void) => unknown)(oldRequest, () => { effects += 1; });
     return { context, request, present, commits, effects };
   };
@@ -435,7 +435,7 @@ test("supervisor control rejects fractional and future-gap sequences before the 
         return { status: "applied", value: effect() };
       },
     });
-    vm.runInContext(`${extractFunction(supervisorSource, "completeControl")}
+    vm.runInContext(`let lastPublishedStatus;\n${extractFunction(supervisorSource, "publishHandledControl")}\n${extractFunction(supervisorSource, "completeControl")}
 ${extractFunction(supervisorSource, "handleControl")}`, context);
 
     assert.throws(() => vm.runInContext("handleControl()", context), /control command identity is invalid/);
