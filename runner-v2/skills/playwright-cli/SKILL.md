@@ -29,7 +29,7 @@ process.start {"command": "playwright-cli-session", "until": {"pattern": "Daemon
 
 ## Read results with `--json`
 
-A command that fails (a page that does not load, a ref that is gone) exits 1 and prints its error. Put `--json` on any command whose result you read: it prints one JSON object, with `isError: true` and the error when it failed:
+A command that fails (a page that does not load, a ref that is gone) exits 1 and prints its error. Only `--json` and plain text output are checked: `--raw` output, and the commands that print raw by default (`cookie-get`, `localstorage-get`, `response-body` and the like), exit 0 whatever they print. Put `--json` on any command whose result you read: it prints one JSON object, with `isError: true` and the error when it failed:
 
 ```bash
 playwright-cli --json goto http://127.0.0.1:5173/

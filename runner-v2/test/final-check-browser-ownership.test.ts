@@ -38,7 +38,7 @@ import {
   playwrightCliSessionName,
   PlaywrightCliSessions,
 } from "../src/playwright-cli.js";
-import { cliOutputFailed } from "../src/playwright-cli-guard.mjs";
+import { cliOutputFailed, cliOutputMode } from "../src/playwright-cli-guard.mjs";
 import { verificationCheckLeftProgramUnproven } from "../src/scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -161,7 +161,7 @@ async function runBrowserCheck(fixture: Fixture, lookup: CheckToolLookup, sessio
       // The Runner's playwright-cli exits 1 when the CLI printed a failed result (playwright-cli-guard.mjs).
       if (options.failStep !== undefined && request.arguments.includes(options.failStep)) {
         const failure = "{\n  \"isError\": true,\n  \"error\": \"Error: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:9/\"\n}";
-        assert.equal(cliOutputFailed(failure), true);
+        assert.equal(cliOutputFailed(failure, "json"), true);
         return {
           process: {
             logicalProcessId: `vf4b-step-${seen.length}`, outcome: "exited", exitCode: 1, finishedAt: new Date().toISOString(),
@@ -475,16 +475,26 @@ test("VF4b a browser that outlives the program's stop, or cannot be read, leaves
   }
 });
 
-test("VF4b the Runner's playwright-cli reads a failed result from the start of the CLI's output, as JSON or as text", () => {
-  assert.equal(cliOutputFailed("{\n  \"isError\": true,\n  \"error\": \"Error: Access to \\\"file:\\\" protocol is blocked.\"\n}\n"), true);
-  assert.equal(cliOutputFailed("### Error\nError: Ref e999 not found in the current page snapshot.\n"), true);
-  assert.equal(cliOutputFailed("\r\n### Error\r\nError: net::ERR_CONNECTION_REFUSED\r\n"), true);
-  assert.equal(cliOutputFailed("{\n  \"snapshot\": {\n    \"file\": \".playwright-cli/page.yml\"\n  }\n}\n"), false);
-  assert.equal(cliOutputFailed("{\n  \"result\": \"### Error\"\n}\n"), false);
-  assert.equal(cliOutputFailed("### Ran Playwright code\n```js\nawait page.goto('about:blank');\n```\n### Error\n"), false,
+test("VF4b the Runner's playwright-cli reads a failed result from the start of the CLI's output, as JSON or as text, never raw", () => {
+  assert.equal(cliOutputFailed("{\n  \"isError\": true,\n  \"error\": \"Error: Access to \\\"file:\\\" protocol is blocked.\"\n}\n", "json"), true);
+  assert.equal(cliOutputFailed("### Error\nError: Ref e999 not found in the current page snapshot.\n", "text"), true);
+  assert.equal(cliOutputFailed("\r\n### Error\r\nError: net::ERR_CONNECTION_REFUSED\r\n", "text"), true);
+  assert.equal(cliOutputFailed("{\n  \"snapshot\": {\n    \"file\": \".playwright-cli/page.yml\"\n  }\n}\n", "json"), false);
+  assert.equal(cliOutputFailed("{\n  \"result\": \"### Error\"\n}\n", "json"), false);
+  assert.equal(cliOutputFailed("### Ran Playwright code\n```js\nawait page.goto('about:blank');\n```\n### Error\n", "text"), false,
     "only a result that starts with its error section failed");
-  assert.equal(cliOutputFailed("{\"isError\": false}"), false);
-  assert.equal(cliOutputFailed(""), false);
+  assert.equal(cliOutputFailed("{\"isError\": false}", "json"), false);
+  assert.equal(cliOutputFailed("", "text"), false);
+  // Raw output is the value itself, which the page controls: never read as a failure.
+  assert.equal(cliOutputFailed("### Error\n", "raw"), false);
+  assert.equal(cliOutputFailed("{\"isError\": true}", "raw"), false);
+  // The mode follows the CLI's own reading: --json first, then --raw or a raw-by-default command, else text.
+  assert.equal(cliOutputMode(["--json", "goto", "http://127.0.0.1:9/"]), "json");
+  assert.equal(cliOutputMode(["--json", "--raw", "eval", "1"]), "json");
+  assert.equal(cliOutputMode(["--raw", "eval", "document.title"]), "raw");
+  assert.equal(cliOutputMode(["response-body", "1"]), "raw");
+  assert.equal(cliOutputMode(["cookie-get", "session"]), "raw");
+  assert.equal(cliOutputMode(["goto", "http://127.0.0.1:9/"]), "text");
 });
 
 test("VF4b the lookup drops the Runner's own installation from PATH as a launch does, and tries every PATHEXT extension on Windows", async () => {

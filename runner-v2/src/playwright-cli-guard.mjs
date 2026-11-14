@@ -102,19 +102,32 @@ function interceptNotOpen(stream) {
 // The CLI prints a failed command's result and still exits 0 (its client's default branch prints the tool result
 // whatever it holds). Its response puts the Error section before every other one, so with --json a failed result is an
 // object whose first key is "isError": true, and as text it starts with "### Error". Both are recognised from the start
-// of the output, so a large snapshot is never buffered.
+// of the output, so a large snapshot is never buffered. Raw output (--raw, or a command the CLI prints raw by default,
+// such as cookie-get or response-body) has no section headings: it is the value itself, which the page controls, so it
+// is never read for a failure.
 const JSON_FAILURE = /^\s*\{\s*"isError"\s*:\s*true\b/;
 const RESULT_PREFIX_CHARS = 4_096;
 
-/** True when the CLI's printed output is a failed command's result. */
-export function cliOutputFailed(output) {
-  if (JSON_FAILURE.test(output)) return true;
+/** How the CLI prints these arguments' result: "json" (--json), "raw" (no --json; --raw or a raw command) or "text". */
+export function cliOutputMode(argv, roots = playwrightRoots(), parse = parseCliArguments) {
+  const args = parse(argv, roots);
+  if (args.json === true) return "json";
+  if (args.raw === true) return "raw";
+  const command = args._?.[0];
+  const help = require(join(roots.core, "lib", "tools", "cli-client", "help.json"));
+  return typeof command === "string" && help.commands?.[command]?.raw === true ? "raw" : "text";
+}
+
+/** True when the CLI's printed output, in that mode, is a failed command's result. */
+export function cliOutputFailed(output, mode) {
+  if (mode === "json") return JSON_FAILURE.test(output);
+  if (mode !== "text") return false;
   const first = output.split(/\r?\n/).find((line) => line.trim() !== "");
   return first?.trim() === "### Error";
 }
 
 /** A failed command exits 1, so a final check's step and an agent's process.run both see it fail. */
-function failOnErrorResult(stream) {
+function failOnErrorResult(stream, mode) {
   let prefix = "";
   const write = stream.write.bind(stream);
   stream.write = (chunk, encoding, callback) => {
@@ -125,7 +138,7 @@ function failOnErrorResult(stream) {
     return write(chunk, encoding, callback);
   };
   process.on("exit", () => {
-    if (!process.exitCode && cliOutputFailed(prefix)) process.exitCode = 1;
+    if (!process.exitCode && cliOutputFailed(prefix, mode)) process.exitCode = 1;
   });
 }
 
@@ -154,7 +167,7 @@ export function main(argv = process.argv.slice(2), environment = process.env) {
   const roots = playwrightRoots();
   interceptNotOpen(process.stdout);
   interceptNotOpen(process.stderr);
-  failOnErrorResult(process.stdout);
+  failOnErrorResult(process.stdout, cliOutputMode(argv, roots));
   const cli = join(roots.playwright, "cli.js");
   process.argv = [process.argv[0], cli, "cli", ...argv];
   require(cli);

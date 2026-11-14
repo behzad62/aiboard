@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       qualification-scope:
-        description: 'Bounded diagnostic scope. t8-portable-coverage runs only the T8 affected portable job plus scoped probe steps; suppressed jobs are UNQUALIFIED (not PASS) and this probe cannot qualify T8. full preserves full 13-job acceptance. windows-factory-diagnostic runs only the Windows factory probe; windows-active-job-diagnostic measures one original active Job probe with an experimental 5s bound. final-check-browser runs only the VF4b real-browser final check on Windows, macOS and Linux (it skips, with its reason, on a host that refuses .cmd launches). None of these qualifies T8, Win123, types/chat, shipping, or full.'
+        description: 'Bounded diagnostic scope. t8-portable-coverage runs only the T8 affected portable job plus scoped probe steps; suppressed jobs are UNQUALIFIED (not PASS) and this probe cannot qualify T8. full preserves full 13-job acceptance. windows-factory-diagnostic runs only the Windows factory probe; windows-active-job-diagnostic measures one original active Job probe with an experimental 5s bound. final-check-browser runs only the VF4b real-browser final check on Windows, macOS and Linux (it fails, with its reason, on a host that refuses .cmd launches). None of these qualifies T8, Win123, types/chat, shipping, or full.'
         required: false
         default: full
         type: choice

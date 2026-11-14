@@ -164,10 +164,14 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
       const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
       teardown.push(() => closed ? undefined : host.close());
       // The session command is a .cmd shim on Windows, and a host whose batch-argv probe did not verify refuses every
-      // .cmd launch (windows-process-backend.ts): there is nothing for this test to run. The gate itself stays as it is.
+      // .cmd launch (windows-process-backend.ts), so the session cannot start. A local run skips with that reason; the
+      // manual workflow scope (the require switch) fails with it, so that leg is never green without running. The gate
+      // itself stays as it is.
       const hostFacts = await host.windowsProcessFacts?.();
       if (hostFacts && hostFacts.windowsBatchArgv !== "verified") {
-        t.skip(`this host refuses .cmd launches (windowsBatchArgv ${hostFacts.windowsBatchArgv}), so the session cannot start here`);
+        const reason = `this host refuses .cmd launches (windowsBatchArgv ${hostFacts.windowsBatchArgv}), so the session cannot start here`;
+        assert.ok(!REQUIRE_BROWSER, reason);
+        t.skip(reason);
         return;
       }
       const run = await host.bindRun({
