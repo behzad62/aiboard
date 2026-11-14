@@ -2,7 +2,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, watch, writeFileSync, writeSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -1028,7 +1028,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         this.assertJobOutputSettled(current, final);
         const releasedAt = this.clock();
         const candidate = { ...current, backendOwnershipReleasedAt: releasedAt, updatedAt: releasedAt };
-        this.persist(candidate); this.records.set(processId, candidate);
+        this.persist(candidate, true); this.records.set(processId, candidate);
         releaseEffectPersisted = true;
         return { ...this.snapshot(candidate), ownershipReleased: true };
       });
@@ -1311,9 +1311,23 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   }
-  private persist(record: HostRecord): void {
+  /**
+   * `durable` is for the release record: since FL2 the lock file holds nothing, so `backendOwnershipReleasedAt` is the
+   * only record that ownership was released. Its data is flushed before the rename and the renamed file after it
+   * (Node cannot open a directory on Windows, so that is as far as it reaches).
+   */
+  private persist(record: HostRecord, durable = false): void {
     const destination = this.containedProcessPath(record.processId, ".json"); const temporary = `${destination}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 }); renameSync(temporary, destination);
+    if (!durable) { writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 }); renameSync(temporary, destination); return; }
+    const content = Buffer.from(JSON.stringify(record, null, 2));
+    const written = openSync(temporary, "wx", 0o600);
+    try {
+      for (let offset = 0; offset < content.length;) offset += writeSync(written, content, offset);
+      fsyncSync(written);
+    } finally { closeSync(written); }
+    renameSync(temporary, destination);
+    const renamed = openSync(destination, "r+");
+    try { fsyncSync(renamed); } finally { closeSync(renamed); }
   }
   private applyStatus(record: HostRecord, status: SupervisorStatus, persistRecord = true): void {
     this.assertStatusIdentity(record, status); record.pid = status.childPid; record.supervisor.port = status.port;

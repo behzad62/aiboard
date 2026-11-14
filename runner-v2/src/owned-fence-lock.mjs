@@ -370,6 +370,22 @@ function assertHeldIdentity(held) {
     throw new OwnedFenceLockUnavailableError("Owned fence lock file was replaced or removed while it was held.");
 }
 
+/**
+ * Whether this thread holds the lock at `path` through an acquisition other than `token`, or keeps it after a failed
+ * release: by path, and by file identity, so another spelling of the same file (a case difference on Windows, a
+ * linked parent directory) is seen too.
+ */
+function heldByAnotherAcquisition(path, token) {
+  const live = liveAcquisitions.get(path);
+  if (live !== undefined && live.token !== token) return true;
+  let identity;
+  try { identity = readLockIdentity(path, true); } catch { return false; }
+  if (identity === undefined) return false;
+  for (const entry of liveAcquisitions.values()) if (entry.token !== token && sameLockIdentity(entry.identity, identity)) return true;
+  for (const entry of retainedLocks.values()) if (sameLockIdentity(entry.identity, identity)) return true;
+  return false;
+}
+
 function heldByThisModule(identity) {
   for (const entry of liveAcquisitions.values()) if (sameLockIdentity(entry.identity, identity)) return true;
   for (const entry of retainedLocks.values()) if (sameLockIdentity(entry.identity, identity)) return true;
@@ -510,8 +526,7 @@ async function runStepsAsync(steps) {
 
 function performStepSync(step) {
   if (step.kind === "sleep") {
-    const live = step.path === undefined ? undefined : liveAcquisitions.get(step.path);
-    if (live !== undefined && live.token !== step.token)
+    if (step.path !== undefined && heldByAnotherAcquisition(step.path, step.token))
       throw new OwnedFenceContentionError(
         "Owned fence lock is held by another live acquisition of this thread; a synchronous wait cannot outlast it.");
     if (step.ms > 0) Atomics.wait(waiter, 0, 0, step.ms);

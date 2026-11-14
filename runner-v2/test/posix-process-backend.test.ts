@@ -877,40 +877,60 @@ test("FL1 released authority removal takes the lock first and the tombstone last
 // disk before the release returns: data flushed before the rename, the rename flushed after it.
 test("FL2 released tombstone is flushed before its rename and the rename after it, on every platform", () => {
   const source = readFileSync(new URL("../src/native-process-backend.ts", import.meta.url), "utf8");
-  for (const platform of ["linux", "darwin", "win32"]) {
+  const run = (platform: string, directoryFsyncCode?: string) => {
     const calls: string[] = [];
     let next = 10;
     const names = new Map<number, string>();
+    const written: Buffer[] = [];
     const context = vm.createContext({
       process: { platform },
       join: (...parts: string[]) => parts.join("/"),
       randomUUID: () => "u",
       JSON,
+      Buffer,
+      String,
       openSync: (path: string, flags: string, mode?: number) => {
         const descriptor = next++;
         names.set(descriptor, path);
         calls.push(`open ${path} ${flags}${mode === undefined ? "" : ` ${mode.toString(8)}`}`);
         return descriptor;
       },
-      writeSync: (descriptor: number, content: string) => { calls.push(`write ${names.get(descriptor)} ${JSON.parse(content).released.fencingToken}`); },
-      fsyncSync: (descriptor: number) => { calls.push(`fsync ${names.get(descriptor)}`); },
+      // A short write: at most 8 bytes a call, so the tombstone is complete only if every remaining byte is written.
+      writeSync: (descriptor: number, content: Buffer, offset = 0) => {
+        const chunk = content.subarray(offset, offset + 8);
+        written.push(Buffer.from(chunk));
+        if (calls.at(-1) !== `write ${names.get(descriptor)}`) calls.push(`write ${names.get(descriptor)}`);
+        return chunk.length;
+      },
+      fsyncSync: (descriptor: number) => {
+        calls.push(`fsync ${names.get(descriptor)}`);
+        if (names.get(descriptor) === "owned" && directoryFsyncCode) throw Object.assign(new Error(directoryFsyncCode), { code: directoryFsyncCode });
+      },
       closeSync: (descriptor: number) => { calls.push(`close ${names.get(descriptor)}`); },
       renameSync: (from: string, to: string) => { calls.push(`rename ${from} ${to}`); },
     });
     vm.runInContext(extractNamedTsFunction(source, "writeReleasedFence") + extractNamedTsFunction(source, "flushRenamedFence"), context);
     vm.runInContext("writeReleasedFence({ directory: 'owned', nonce: 'n' }, { ownerId: 'o', fencingToken: 7 })", context);
-    const temporary = "owned/fence.json.u.tmp";
+    assert.deepEqual(JSON.parse(Buffer.concat(written).toString("utf8")), { nonce: "n", released: { ownerId: "o", fencingToken: 7 } });
+    return calls;
+  };
+  const temporary = "owned/fence.json.u.tmp";
+  for (const platform of ["linux", "darwin", "win32"]) {
     const flushed = platform === "win32" ? ["open owned/fence.json r+", "fsync owned/fence.json", "close owned/fence.json"]
       : ["open owned r", "fsync owned", "close owned"];
-    assert.deepEqual(calls, [
-      `open ${temporary} wx 600`, `write ${temporary} 7`, `fsync ${temporary}`, `close ${temporary}`,
+    assert.deepEqual(run(platform), [
+      `open ${temporary} wx 600`, `write ${temporary}`, `fsync ${temporary}`, `close ${temporary}`,
       `rename ${temporary} owned/fence.json`, ...flushed,
     ], platform);
   }
+  // A file system without directory fsync (some FUSE, CIFS, 9p mounts) has no durability to give: the release goes on
+  // rather than failing forever. Any other directory fsync failure fails the release.
+  for (const code of ["EINVAL", "ENOTSUP", "EOPNOTSUPP"]) assert.equal(run("linux", code).at(-1), "close owned", code);
+  assert.throws(() => run("linux", "EIO"), /EIO/);
   // And it really runs on this host: the directory (POSIX) or the renamed file (Windows) opens and flushes.
   const root = mkdtempSync(join(tmpdir(), "aiboard-fl2-tombstone-"));
   try {
-    const context = vm.createContext({ process, join, randomUUID, JSON, openSync, writeSync, fsyncSync, closeSync, renameSync });
+    const context = vm.createContext({ process, join, randomUUID, JSON, Buffer, String, openSync, writeSync, fsyncSync, closeSync, renameSync });
     vm.runInContext(extractNamedTsFunction(source, "writeReleasedFence") + extractNamedTsFunction(source, "flushRenamedFence"), context);
     context.directory = root;
     vm.runInContext("writeReleasedFence({ directory, nonce: 'n' }, { ownerId: 'o', fencingToken: 7 })", context);
@@ -919,6 +939,48 @@ test("FL2 released tombstone is flushed before its rename and the rename after i
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// The Windows Job host's release record is its only record of a release since FL2, so the release writes it durably.
+test("FL2 Windows Job release record is flushed before its rename and the renamed file after it", () => {
+  const source = readFileSync(new URL("../src/windows-job-process-host.ts", import.meta.url), "utf8");
+  const releases = [...source.matchAll(/backendOwnershipReleasedAt: releasedAt[^\n]*\n\s*this\.persist\((\w+)(, true)?\)/g)];
+  assert.equal(releases.length, 1, "one release effect writes the release record");
+  assert.equal(releases[0]![2], ", true", "and it writes it durably");
+  const file = ts.createSourceFile("windows-job-process-host.ts", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  let persist: ts.MethodDeclaration | undefined;
+  const find = (node: ts.Node): void => {
+    if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "persist") persist = node;
+    else ts.forEachChild(node, find);
+  };
+  find(file);
+  assert.ok(persist?.body, "missing production persist");
+  const parameters = persist.parameters.map((parameter) => parameter.getText(file)).join(", ");
+  const method = ts.transpileModule(`function persist(${parameters}) ${persist.body.getText(file)}`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText;
+  const calls: string[] = [];
+  const names = new Map<number, string>();
+  let next = 10;
+  const context = vm.createContext({
+    Buffer, JSON, randomUUID: () => "u",
+    openSync: (path: string, flags: string) => { names.set(next, path); calls.push(`open ${path} ${flags}`); return next++; },
+    writeSync: (descriptor: number, content: Buffer, offset = 0) => {
+      if (calls.at(-1) !== `write ${names.get(descriptor)}`) calls.push(`write ${names.get(descriptor)}`);
+      return Math.min(8, content.length - offset);
+    },
+    fsyncSync: (descriptor: number) => { calls.push(`fsync ${names.get(descriptor)}`); },
+    closeSync: (descriptor: number) => { calls.push(`close ${names.get(descriptor)}`); },
+    renameSync: (from: string, to: string) => { calls.push(`rename ${from} ${to}`); },
+    writeFileSync: (path: string) => { calls.push(`writeFile ${path}`); },
+  });
+  vm.runInContext(method, context);
+  context.host = { containedProcessPath: (id: string, suffix: string) => `root/${id}${suffix}` };
+  vm.runInContext("persist.call(host, { processId: 'p', backendOwnershipReleasedAt: 'now' }, true)", context);
+  assert.deepEqual(calls, [
+    "open root/p.json.u.tmp wx", "write root/p.json.u.tmp", "fsync root/p.json.u.tmp", "close root/p.json.u.tmp",
+    "rename root/p.json.u.tmp root/p.json", "open root/p.json r+", "fsync root/p.json", "close root/p.json",
+  ]);
 });
 
 test("FL1 portable supervisor and POSIX child read a released tombstone as no current fence", () => {

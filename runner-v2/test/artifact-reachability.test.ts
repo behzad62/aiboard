@@ -251,14 +251,15 @@ test("verification checkouts are project content, not durable state: their npm w
 });
 
 test("a database left with a hot journal by a killed process is recovered, not a failed scan", async () => {
-  // Tunnel run: a job-host fence lock killed mid-transaction failed every startup cleanup with
-  // "attempt to write a readonly database"; a read-only connection cannot roll back a hot journal.
+  // Tunnel run: a database killed mid-transaction failed every startup cleanup with "attempt to write a readonly
+  // database"; a read-only connection cannot roll back a hot journal. (That run's database was a pre-FL2 job-host
+  // fence lock; lock files are skipped by the scan since FL2, so this uses a store database.)
   const root = mkdtempSync(join(tmpdir(), "aiboard-artifact-guard-hot-journal-"));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   try {
     const kept = await artifacts.put(Buffer.from("referenced"), "application/json");
     const orphan = await artifacts.put(Buffer.from("orphan"), "application/json");
-    const live = join(root, "live.fence.lock");
+    const live = join(root, "live.sqlite");
     const database = new DatabaseSync(live);
     database.exec("PRAGMA journal_mode=DELETE; CREATE TABLE t(v TEXT);");
     database.prepare("INSERT INTO t VALUES (?)").run(kept.hash);
@@ -266,7 +267,7 @@ test("a database left with a hot journal by a killed process is recovered, not a
     for (let index = 0; index < 300; index += 1) database.prepare("INSERT INTO t VALUES (?)").run(`${orphan.hash}${"x".repeat(400)}`);
     const killed = join(root, "jobs");
     mkdirSync(killed);
-    for (const suffix of ["", "-journal"]) copyFileSync(`${live}${suffix}`, join(killed, `process.fence.lock${suffix}`));
+    for (const suffix of ["", "-journal"]) copyFileSync(`${live}${suffix}`, join(killed, `process.sqlite${suffix}`));
     database.exec("ROLLBACK");
     database.close();
     rmSync(live);

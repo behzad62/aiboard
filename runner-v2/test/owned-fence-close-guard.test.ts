@@ -6,13 +6,21 @@
 // nothing. And node:sqlite stays the only SQLite library: a second copy would not share SQLite's per-inode lock tracking,
 // so its closes would end the first one's locks.
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
-import { extname, join, relative } from "node:path";
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, extname, join, relative } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
+
+import { ArtifactReachabilityGuard } from "../src/artifact-reachability.js";
+import { ArtifactStore } from "../src/artifact-store.js";
+import { withOwnedFenceLock } from "../src/owned-fence-lock.mjs";
 
 const REPOSITORY_ROOT = join(import.meta.dirname, "..", "..");
 const SOURCE_ROOT = join(REPOSITORY_ROOT, "runner-v2", "src");
+const HOLDER = fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url));
 const EXEMPT = new Set(["owned-fence-lock.mjs", "launcher-instance.ts"]);
 const OPENING_APIS = new Set([
   "readFileSync", "readFile", "openSync", "open", "openAsBlob", "createReadStream", "createWriteStream", "copyFileSync", "copyFile",
@@ -51,6 +59,39 @@ test("the close guard catches a planted open of a lock path, in every spelling t
   ];
   for (const text of allowed) assert.deepEqual(lockFileOpens([{ name: "allowed.ts", text }]), [], text);
 });
+
+// The static guard sees lock paths by name; a directory walk reaches them by readdir. The artifact scan walks the
+// whole state directory while the Runner may hold any lock in it, so: hold the locks it would meet, run the scan, and
+// another process must still find every one held.
+test("the artifact scan leaves a lock this process holds held", { timeout: 30_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-close-guard-scan-"));
+  try {
+    const fenceLock = join(root, "builds", "run", "process-backend", "owned-1", ".fence.lock");
+    const stateLock = join(root, "builds", "run", "oci-leases.json.lock");
+    mkdirSync(dirname(fenceLock), { recursive: true });
+    writeFileSync(join(root, "builds", "run", "oci-leases.json"), "[]");
+    const guard = new ArtifactReachabilityGuard(root, new ArtifactStore(join(root, "artifacts")));
+    const outcomes = await withOwnedFenceLock(fenceLock, async () => await withOwnedFenceLock(stateLock, async () => {
+      await guard.runQuiescent(async () => { await guard.prepareReachabilityIndex(); });
+      return await Promise.all([fenceLock, stateLock].map((path) => claimElsewhere(path)));
+    }));
+    assert.equal(guard.scanCount, 1);
+    for (const outcome of outcomes) assert.equal(outcome.state, "refused", JSON.stringify(outcome));
+    for (const outcome of outcomes) assert.equal(outcome.name, "OwnedFenceContentionError", JSON.stringify(outcome));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** One claim from another process with a short deadline: what the fixture holder reports. */
+async function claimElsewhere(lockPath: string): Promise<Record<string, unknown>> {
+  const child = spawn(process.execPath, [HOLDER, "hold", lockPath, "", "300", "0"], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+  child.stderr.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+  await new Promise<void>((resolvePromise) => child.once("close", () => resolvePromise()));
+  return JSON.parse(output.split("\n")[0]!) as Record<string, unknown>;
+}
 
 test("node:sqlite is the Runner's only SQLite library", () => {
   const foreign = sourceFiles(SOURCE_ROOT).flatMap((path) => {

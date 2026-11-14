@@ -1454,19 +1454,27 @@ function releaseFenceAccepted(current: OwnedFenceRecord, candidate: ProcessEffec
 function writeReleasedFence(identity: Identity, fence: ProcessEffectFence): void {
   const path = join(identity.directory, "fence.json");
   const temporary = `${path}.${randomUUID()}.tmp`;
-  const content = JSON.stringify({ nonce: identity.nonce, released: { ownerId: fence.ownerId, fencingToken: fence.fencingToken } });
+  const content = Buffer.from(JSON.stringify({ nonce: identity.nonce, released: { ownerId: fence.ownerId, fencingToken: fence.fencingToken } }));
   const descriptor = openSync(temporary, "wx", 0o600);
   try {
-    writeSync(descriptor, content);
+    for (let written = 0; written < content.length;) written += writeSync(descriptor, content, written);
     fsyncSync(descriptor);
   } finally { closeSync(descriptor); }
   renameSync(temporary, path);
   flushRenamedFence(identity.directory, path);
 }
+/**
+ * Some file systems (some FUSE, CIFS and 9p mounts) refuse fsync on a directory: they give no directory durability
+ * at all, so a refusal there is not an error to retry forever. A rename lost to a crash leaves the live fence and its
+ * evidence, and the release runs again (fail closed).
+ */
 function flushRenamedFence(directory: string, path: string): void {
-  const descriptor = openSync(process.platform === "win32" ? path : directory, process.platform === "win32" ? "r+" : "r");
+  const windows = process.platform === "win32";
+  const descriptor = openSync(windows ? path : directory, windows ? "r+" : "r");
   try { fsyncSync(descriptor); }
-  finally { closeSync(descriptor); }
+  catch (error) {
+    if (windows || !["EINVAL", "ENOTSUP", "EOPNOTSUPP"].includes(String((error as NodeJS.ErrnoException).code))) throw error;
+  } finally { closeSync(descriptor); }
 }
 function assertPortableOutputSettledAtFence(identity: Identity, fence: ProcessEffectFence | undefined, inspection?: OwnedFenceLockOptions): void {
   if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");

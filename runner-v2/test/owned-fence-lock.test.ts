@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  existsSync, linkSync, lstatSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync,
+  existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -201,27 +201,53 @@ test("Linux /proc/locks shows this process holding the lock while a claim holds 
 });
 
 // A sync wait blocks the thread, so it can never outlast a lock this same thread holds through a live async
-// acquisition (or a nested claim): it fails at once instead of stalling the event loop until its own deadline.
-test("a sync claim on a lock this thread holds through a live async acquisition fails at once", async () => {
+// acquisition (or a nested claim): it fails at once instead of stalling the event loop until its own deadline. The
+// file is matched by identity, so another spelling of it (a case difference on Windows, a linked parent directory on
+// POSIX) is refused at once too.
+test("a sync claim on a lock this thread holds through a live async acquisition fails at once, under any spelling", async () => {
   await withRoot("self-held", async (root) => {
     const lockPath = join(root, ".fence.lock");
-    let inner: unknown;
-    let elapsedMs = 0;
-    await withOwnedFenceLock(lockPath, async () => {
-      await new Promise<void>((resolvePromise) => setTimeout(() => {
-        const startedAt = Date.now();
-        try { withOwnedFenceLockSync(lockPath, () => assert.fail("the nested sync effect must not run"), { deadlineMs: 5_000 }); }
-        catch (error) { inner = error; }
-        elapsedMs = Date.now() - startedAt;
-        resolvePromise();
-      }, 10));
-    });
-    assert.ok(isOwnedFenceLockContention(inner), `contention, not another failure: ${String(inner)}`);
-    assert.match(String((inner as Error).message), /another live acquisition of this thread/);
-    assert.ok(elapsedMs < 2_000, `it failed at once, not at its 5 s deadline (${elapsedMs} ms)`);
-    let effects = 0;
-    withOwnedFenceLockSync(lockPath, () => { effects += 1; });
-    assert.equal(effects, 1, "once the async holder released, a sync claim succeeds");
+    let alternate: string;
+    if (process.platform === "win32") alternate = lockPath.toUpperCase();
+    else { symlinkSync(root, join(root, "link"), "dir"); alternate = join(root, "link", ".fence.lock"); }
+    for (const spelling of [lockPath, alternate]) {
+      let inner: unknown;
+      let elapsedMs = 0;
+      await withOwnedFenceLock(lockPath, async () => {
+        await new Promise<void>((resolvePromise) => setTimeout(() => {
+          const startedAt = Date.now();
+          try { withOwnedFenceLockSync(spelling, () => assert.fail("the nested sync effect must not run"), { deadlineMs: 5_000 }); }
+          catch (error) { inner = error; }
+          elapsedMs = Date.now() - startedAt;
+          resolvePromise();
+        }, 10));
+      });
+      assert.ok(isOwnedFenceLockContention(inner), `contention, not another failure: ${String(inner)}`);
+      assert.match(String((inner as Error).message), /another live acquisition of this thread/, spelling);
+      assert.ok(elapsedMs < 2_000, `it failed at once, not at its 5 s deadline (${elapsedMs} ms, ${spelling})`);
+      let effects = 0;
+      withOwnedFenceLockSync(spelling, () => { effects += 1; });
+      assert.equal(effects, 1, "once the async holder released, a sync claim succeeds");
+    }
+  });
+});
+
+// A POSIX name may hold a backslash. The URI SQLite opens must name that same file, not one with a separator there.
+test("a lock path is opened as itself: a POSIX backslash stays part of the name", async (t) => {
+  const { sqliteDatabaseLocation } = await import("../src/windows-path-limits.mjs");
+  assert.equal(sqliteDatabaseLocation("/home/u/a\\b/x%#?.lock", "linux", { mode: "rw" }), "file:///home/u/a%5Cb/x%25%23%3F.lock?mode=rw");
+  assert.equal(sqliteDatabaseLocation("C:\\a\\b.lock", "win32", { mode: "rw" }), "file:///C:/a/b.lock?mode=rw");
+  if (process.platform === "win32") { t.diagnostic("the on-disk half needs a POSIX file system"); return; }
+  await withRoot("backslash", async (root) => {
+    mkdirSync(join(root, "a\\b"));
+    const lockPath = join(root, "a\\b", ".fence.lock");
+    const holder = startHolder("hold", lockPath);
+    try {
+      assert.equal((await nextMessage(holder)).state, "acquired");
+      assert.throws(() => withOwnedFenceLockSync(lockPath, () => assert.fail("a held lock must not be claimed"), { deadlineMs: 200 }),
+        (error: unknown) => isOwnedFenceLockContention(error), "the claim saw the holder's lock: the same file");
+      assert.equal(existsSync(join(root, "a", "b")), false, "no file at the separator spelling");
+    } finally { await stop(holder); }
   });
 });
 

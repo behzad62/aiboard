@@ -60,7 +60,9 @@ export function sqliteDatabaseLocation(path, platform = process.platform, option
   const location = windowsNativeFilePath(path, platform);
   const query = [...(location === path ? [] : ["vfs=win32-longpath"]), ...(options.mode === undefined ? [] : [`mode=${options.mode}`])];
   if (query.length === 0) return path;
-  const escaped = location.replaceAll("\\", "/").replace(/[%?#]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  // A backslash separates on Windows only: elsewhere it is part of a name, and SQLite would read it as a separator.
+  const escaped = (platform === "win32" ? location.replaceAll("\\", "/") : location)
+    .replace(/[%?#\\]/g,(character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
   // A drive path (C:/x) needs the empty authority's third slash; POSIX, UNC and \\?\ paths already start with a slash.
   return `file://${escaped.startsWith("/") ? "" : "/"}${escaped}?${query.join("&")}`;
 }
