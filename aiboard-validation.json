@@ -1,0 +1,58 @@
+{
+  "version": 2,
+  "checks": [
+    {
+      "id": "typecheck-runner-v2",
+      "label": "Type-check Runner V2",
+      "kind": "build",
+      "mandatory": true,
+      "run": { "executable": "npm", "args": ["run", "typecheck:runner-v2"], "timeoutMs": 600000 }
+    },
+    {
+      "id": "typecheck-web",
+      "label": "Type-check the web app",
+      "kind": "build",
+      "mandatory": true,
+      "run": { "executable": "npx", "args": ["--no", "--", "tsc", "--noEmit"], "timeoutMs": 600000 }
+    },
+    {
+      "id": "lint",
+      "label": "ESLint",
+      "kind": "other",
+      "mandatory": true,
+      "run": { "executable": "npm", "args": ["run", "lint"], "timeoutMs": 600000 }
+    },
+    {
+      "id": "chat-tests",
+      "label": "Chat mode tests",
+      "kind": "tests",
+      "mandatory": false,
+      "run": { "executable": "npm", "args": ["run", "test:chat"], "timeoutMs": 300000 }
+    },
+    {
+      "id": "home-tests",
+      "label": "AIBoard home and model proxy tests",
+      "kind": "tests",
+      "mandatory": false,
+      "run": { "executable": "npm", "args": ["run", "test:home"], "timeoutMs": 600000 }
+    },
+    {
+      "id": "verification-contract-tests",
+      "label": "Runner V2 verification contract tests",
+      "kind": "tests",
+      "mandatory": false,
+      "run": {
+        "executable": "npx",
+        "args": [
+          "--no", "--", "tsx", "--test", "--test-concurrency=1",
+          "runner-v2/test/verification-plan-v2-contract.test.ts",
+          "runner-v2/test/project-validation-checks.test.ts",
+          "runner-v2/test/verification-known-defects.test.ts",
+          "runner-v2/test/handoff-not-verified.test.ts",
+          "runner-v2/test/repository-validation-config.test.ts"
+        ],
+        "timeoutMs": 600000
+      }
+    }
+  ]
+}

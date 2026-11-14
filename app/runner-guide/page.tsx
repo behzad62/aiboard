@@ -117,6 +117,77 @@ aiboard models disable <provider:model>`}
         </p>
       </section>
       <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Final checks</h2>
+        <p>
+          Before planning, the Runner records which tools this computer has. The Build&apos;s final check is a list the
+          Architect writes: it keeps, changes or skips the Runner&apos;s suggested checks, giving a reason for each skip,
+          and adds its own. Checks are build, tests, start or other. A check whose tool is missing is recorded as not
+          run (<code>tool_missing</code>), never as a failure, so no repairs are spent on it.
+        </p>
+        <p>
+          Your project decides which checks are mandatory, in <code>aiboard-validation.json</code> at the repository
+          root, version 2. The Architect can never skip or change a mandatory check. When the file declares checks,
+          they are the whole suggestion list; the checks the Runner detects from your project&apos;s files are used
+          only when it declares none.
+        </p>
+        <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">
+          {`{
+  "version": 2,
+  "checks": [
+    { "id": "typecheck", "label": "Type check", "kind": "build", "mandatory": true,
+      "run": { "executable": "npm", "args": ["run", "typecheck"], "timeoutMs": 600000 } },
+    { "id": "unit", "label": "Unit tests", "kind": "tests", "mandatory": false,
+      "run": { "executable": "npm", "args": ["test"] } },
+    { "id": "serve", "label": "The server answers", "kind": "start", "mandatory": false,
+      "start": { "executable": "node", "args": ["server.js", "--port", "{port}"],
+        "ready": { "http": { "path": "/health", "status": 200 } } } }
+  ]
+}`}
+        </pre>
+        <p className="text-sm text-muted-foreground">
+          Commands are a program and its arguments, never a shell line. A start check runs a program and sees that it
+          works: ready on an HTTP status on the port the Runner leases (<code>{"{port}"}</code> in its arguments), on a
+          line it prints (<code>outputLine</code>), or on its exit code (<code>exitCode</code>), and its{" "}
+          <code>steps</code> then run against it. <code>outputs</code> keeps files such as screenshots and reports as
+          evidence.
+        </p>
+        <p>A Build stops for its checks only when it matters:</p>
+        <ul className="list-disc space-y-1 pl-6">
+          <li>
+            A mandatory check&apos;s tool is missing: one pause before planning, naming the tool and the file&apos;s
+            line. Install the tool and resume.
+          </li>
+          <li>
+            <code>aiboard-validation.json</code> is malformed or unreadable: the run stops before planning. It reads the
+            file at the revision it started from, so fix the file and start a new Build.
+          </li>
+          <li>
+            A mandatory check still fails after its repairs: the Build pauses. A check that is not mandatory becomes a
+            known defect instead, and the Build goes on to its handoff, which pauses for your choice.
+          </li>
+        </ul>
+        <p className="text-sm text-muted-foreground">
+          The handoff&apos;s Not verified section, and the same list in Run details, shows every check that did not
+          run and why, every skip, every known defect, every result the Architect accepted without the Runner&apos;s
+          evidence, and what the Architect left for you to check.
+        </p>
+      </section>
+      <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">Browsing</h2>
+        <p>
+          Builds open and check web pages with the Playwright CLI that ships with the Runner. Workers, the Architect
+          and the verifiers run <code>playwright-cli</code> as an ordinary command, with one browser session for each
+          task that stops with the task. A final check cannot open a browser yet.
+        </p>
+        <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">aiboard browser install</pre>
+        <p className="text-sm text-muted-foreground">
+          The CLI uses an installed Google Chrome first, then Microsoft Edge, then Playwright&apos;s Chromium. A Build
+          never downloads a browser: <code>aiboard browser install</code> or the Install browser button in Settings,
+          Tools, downloads Chromium only when you choose to. On Linux, Chromium&apos;s system libraries need root, so the
+          Runner prints the command for you to run.
+        </p>
+      </section>
+      <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">Recovery</h2>
         <p>
           Run <code>{RUNNER_START_COMMAND}</code> again in the same project folder. Its state lives in your user data

@@ -20,6 +20,7 @@ on:
       - "runner-v2/**"
       - "TRADEMARKS.md"
       - "docs/runner-v2/architecture.md"
+      - "docs/runner-v2/guide.md"
       - "app/discussion/discussion-client.tsx"
       - "lib/account-provider-*.mjs"
       - "lib/client/discussion-live-state.ts"
@@ -116,6 +117,7 @@ jobs:
           runner-v2/test/verification-known-defects.test.ts
           runner-v2/test/handoff-not-verified.test.ts
           runner-v2/test/final-verification-managed-authority.test.ts
+          runner-v2/test/repository-validation-config.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1

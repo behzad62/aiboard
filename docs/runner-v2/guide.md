@@ -59,6 +59,49 @@ aiboard models disable <provider:model>
 
 These commands start no Runner, make no network call, and write through the home lock, retrying once on `home_conflict`. They refuse inside an AIBoard task or a Runner's child, so a task cannot rewrite the user's home. A key is never taken from argv; at a terminal the prompt echoes nothing, and a stdin that is not a terminal is read only with `--stdin` (a leading BOM and a trailing CR or LF are stripped). A key saved this way shows as not validated until Settings validates it. `aiboard models enable` refuses an id with an unknown provider and names the nearest catalog ids. Custom models and pricing are edited in Settings.
 
+## Final checks: the Runner records, the Architect decides, the owner sets what is mandatory
+
+Before planning, and again on each resume, the Runner records a tool inventory: Git, Node, the executable of every suggested check looked up on PATH with its version line, and a browser the Playwright CLI can use. It decides nothing from it.
+
+The final check is a list the Architect writes (verification contract version 2; a run started before it keeps the four fixed categories to its end). The Runner offers suggested checks. The Architect keeps each one, changes its command, or skips it with a reason, and may add its own. Kinds are `build`, `tests`, `start` and `other`; there is no browser kind. Each check ends `passed`, `failed`, or `not_run`:
+- `not_run: tool_missing` is recorded by the Runner alone, from its own lookup, when a check's executable is not on PATH. It is never a failure: no repair task, no repair cycle.
+- `not_run: skipped` is the Architect's skip, with its reason.
+- A launch that fails with the tool present stays a failure, and failures are repaired by check id.
+
+**Project checks.** A project declares its checks in `aiboard-validation.json` at the repository root, version 2. `mandatory` is set only there: the Architect cannot skip or change a mandatory check. When a project declares `checks`, they are the whole suggestion list; what the Runner detects from the project's files (package.json scripts, the language families, Vite or Next start) is the fallback only for a project that declares none, and a Next app with `output: "export"` gets no `next start` suggestion. The `tiers` of a version-1 file still drive the per-task boundary, and a version-1 file reads as before. Commands are an executable and an args list, never a shell string; `node` runs the Runner's own Node. Unknown keys, a malformed check, and `checks` in a version-1 file fail closed; a version above 2 asks for a newer Runner.
+
+~~~json
+{
+  "version": 2,
+  "checks": [
+    { "id": "typecheck", "label": "Type check", "kind": "build", "mandatory": true,
+      "run": { "executable": "npm", "args": ["run", "typecheck"], "timeoutMs": 600000 } },
+    { "id": "unit", "label": "Unit tests", "kind": "tests", "mandatory": false,
+      "run": { "executable": "npm", "args": ["test"] }, "environment": { "CI": "1" } },
+    { "id": "serve", "label": "The server answers", "kind": "start", "mandatory": false,
+      "start": { "executable": "node", "args": ["server.js", "--port", "{port}"],
+        "ready": { "http": { "path": "/health", "status": 200 } },
+        "steps": [{ "label": "Smoke script", "executable": "node", "args": ["scripts/smoke.mjs", "{port}"], "outputs": ["smoke-report.json"] }] } }
+  ]
+}
+~~~
+
+`run` takes `cwd` (inside the checkout) and `timeoutMs`, and a run check may set `environment`. A `start` check runs a program and sees that it works: ready on an HTTP status on the port the Runner leases (its args take `{port}`), on a line the program prints (`{ "outputLine": "..." }`, stdout or stderr), or on its exit code (`{ "exitCode": 0 }`); its `steps` run in order against the started program (their args take `{port}` too) and must each exit 0. `outputs` lists workspace paths or globs kept as evidence files (at most 32 files); images go to reviewers whose model accepts images.
+
+**When a Build stops for its checks.** Only critical matters stop a Build:
+- A mandatory check whose tool is missing pauses once, before planning and before any model call, naming the tool, the check and its `aiboard-validation.json` line. Install the tool and resume; each resume takes a new inventory.
+- A malformed or unreadable `aiboard-validation.json` also stops the run before planning. The run reads the file at its own starting revision, so resuming cannot fix it: fix the file and start a new Build.
+- A mandatory check that still fails at its repair limit pauses, as before.
+- A non-mandatory check that still fails at its repair limit becomes a known defect, and the Build goes on to its handoff, which pauses for the owner's choice.
+
+**Not verified.** The handoff has a Not verified section, and Run details shows the same list: every `not_run` check with its missing tool or skip reason, every known defect at the repair limit, every criterion accepted on an Architect override without Runner evidence, and the Architect's `leftToVerify` items from `complete_run` (things only the owner can check, such as an installer on another operating system). Nothing in it pauses the Build.
+
+## Browsing: the Playwright CLI
+
+Builds browse through the Playwright CLI bundled with the Runner, as ordinary commands. Workers, the Architect and the verifiers can run `playwright-cli`, which the Runner puts first on PATH for every process it starts for them, and its skill is offered to them. Each agent session gets one browser session, started once with `process.start` of `playwright-cli-session` until `Daemon listening on`, and stopped with its owner like any managed process; two tasks never share one. Screenshots and snapshots go to `.aiboard-browser/` in the workspace, which never lands in a task commit; `outputs` on `run_evidence_command` keeps them as evidence files. New runs have no `browser.*` tools; a run started before this change keeps them on resume and replay. A final check cannot start a browser session yet, so a `start` check's steps cannot browse.
+
+The CLI uses an installed Google Chrome first, then Microsoft Edge, then Playwright's Chromium. A Build never downloads a browser: `aiboard browser install`, or the Install browser button in Settings > Tools, downloads Playwright's Chromium, only on the owner's action. On Linux, Chromium's system libraries need root, so the Runner prints the command for the owner to run and never runs it. Playwright MCP is not a default; add it as an MCP extension to use it.
+
 See [architecture](./architecture.md) for ownership composition and [security](./security.md) for threat-boundary details.
 ## Test integrity in new planning runs
 

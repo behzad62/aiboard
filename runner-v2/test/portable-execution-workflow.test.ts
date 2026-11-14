@@ -30,6 +30,8 @@ const deterministicPrTests = [
   "runner-v2/test/handoff-not-verified.test.ts",
   // VF8: a failed start leaves its program not proven stopped unless the service cleaned it up (no process, about 1 s).
   "runner-v2/test/final-verification-managed-authority.test.ts",
+  // VF9: this repository's aiboard-validation.json and the guide's example, read with the Runner's parser (no process, about 2 s).
+  "runner-v2/test/repository-validation-config.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

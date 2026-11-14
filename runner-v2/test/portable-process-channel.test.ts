@@ -600,7 +600,8 @@ function batchChunkMetadata(sequence: number): { metadata: BackpressuredOutputMe
 
 async function batchAcknowledgementFixture(
   supervisorState: Record<string, unknown>,
-  options: { readonly chunks?: number; readonly onSink?: (sequence: number) => void } = {},
+  // onSink gets the fixture's own retire, so a test can retire a chunk mid-sink without reading the fixture before it exists.
+  options: { readonly chunks?: number; readonly onSink?: (sequence: number, retire: (sequence: number) => void) => void } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-ack-batch-"));
   for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
@@ -628,16 +629,16 @@ async function batchAcknowledgementFixture(
       snapshot: (read) => { snapshots += 1; return { status: "applied", value: read() }; },
     }),
   });
+  const retire = (sequence: number) => retirePortableOutputAcknowledgement({ channelDirectory: join(root, "channel"), nonce: "nonce", fence,
+    name: chunkName(sequence), metadata: batchChunkMetadata(sequence).metadata });
   const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
   const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => {
     events.push(`sink:${entry.sequence}`);
-    options.onSink?.(entry.sequence);
+    options.onSink?.(entry.sequence, retire);
     return entry;
   });
   return {
-    root, channel, events, snapshots: () => snapshots, writeChunk, chunkName,
-    retire: (sequence: number) => retirePortableOutputAcknowledgement({ channelDirectory: join(root, "channel"), nonce: "nonce", fence,
-      name: chunkName(sequence), metadata: batchChunkMetadata(sequence).metadata }),
+    root, channel, events, snapshots: () => snapshots, writeChunk, chunkName, retire,
     stop: () => writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0, ...supervisorState })),
     close: async () => { unsubscribe(); await channel.detach(); rmSync(root, { recursive: true, force: true }); },
   };
@@ -645,11 +646,10 @@ async function batchAcknowledgementFixture(
 
 for (const [mode, supervisorState] of [["prefix-batch", { outputAcknowledgement: "prefix-batch" }], ["per-chunk", {}]] as const) {
   test(`portable output ACKs (${mode}) never republish an ACK for a chunk retired while a later sink call was pending`, async () => {
-    let fixture!: Awaited<ReturnType<typeof batchAcknowledgementFixture>>;
-    fixture = await batchAcknowledgementFixture(supervisorState, {
+    const fixture = await batchAcknowledgementFixture(supervisorState, {
       chunks: 1,
       // The supervisor retires chunk 1 (ACKed in the first pass) while this pass awaits the sink for chunk 2.
-      onSink: (sequence) => { if (sequence === 2) fixture.retire(1); },
+      onSink: (sequence, retire) => { if (sequence === 2) retire(1); },
     });
     try {
       await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).includes(fixture.chunkName(1)));
