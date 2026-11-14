@@ -11,7 +11,7 @@
 //      as `not_run: tool_missing` (the blocker before VF4b);
 //   4. the run's browsing is configured before its inventory, so the pre-planning lookup sees the same PATH.
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -46,12 +46,13 @@ const GENERATION_ID = "final-verification-generation-0123456789ab";
 const at = "2026-11-14T00:00:00.000Z";
 
 /** The check the design names: the session as the program, ready on its line, playwright-cli steps with outputs. */
-function browserPlan(): VerificationPlanV2 {
+function browserPlan(timeoutMs?: number): VerificationPlanV2 {
   const completed = completeVerificationPlanV2({
     checks: [{
       id: "home-page", label: "home page renders", kind: "start",
       start: {
         executable: PLAYWRIGHT_CLI_SESSION_COMMAND, args: [], ready: { outputLine: PLAYWRIGHT_CLI_READY_PATTERN },
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         steps: [
           { label: "open the page", executable: PLAYWRIGHT_CLI_COMMAND, args: ["--json", "goto", "http://127.0.0.1:9/"] },
           { label: "screenshot", executable: PLAYWRIGHT_CLI_COMMAND, args: ["--json", "screenshot", `--filename=${PLAYWRIGHT_CLI_OUTPUT_FOLDER}/home.png`],
@@ -86,8 +87,17 @@ function ambientWithoutShims(root: string): Record<string, string> {
 
 interface Fixture { root: string; project: string; state: string; runId: string; integration: IntegrationManager }
 
+/**
+ * A temporary folder by its real path. The Runner compares paths with what git reports (`rev-parse --show-toplevel`
+ * in IntegrationManager), and git reports real paths: macOS's tmpdir is under the /var -> /private/var link, and a
+ * Windows CI runner's is an 8.3 short name (C:\Users\RUNNER~1). The same canonical roots the Runner's own state uses.
+ */
+function realTemporaryFolder(prefix: string): string {
+  return realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+}
+
 async function createFixture(name: string): Promise<Fixture> {
-  const root = mkdtempSync(join(tmpdir(), `aiboard-vf4b-${name}-`));
+  const root = realTemporaryFolder(`aiboard-vf4b-${name}-`);
   const project = join(root, "user checkout");
   const state = join(root, "runner state");
   mkdirSync(project, { recursive: true });
@@ -103,11 +113,18 @@ async function createFixture(name: string): Promise<Fixture> {
 interface Seen { kind: "program" | "step"; sessionId: string; actor: string; command: string; cliSession?: string; state?: string }
 
 /** One final check through the real FinalVerificationRuntime and its managed adapter, with fake processes. */
-async function runBrowserCheck(fixture: Fixture, lookup: CheckToolLookup, sessions: PlaywrightCliSessions) {
+async function runBrowserCheck(fixture: Fixture, lookup: CheckToolLookup, sessions: PlaywrightCliSessions,
+  options: { silent?: boolean; timeoutMs?: number } = {}) {
+  // The plan first: a plan the Runner refuses throws before anything is opened.
+  const revision = fixture.integration.revision;
+  const profile = withResolvedVerificationPlan(emptyFinalVerificationProfile(revision), browserPlan(options.timeoutMs));
   const seen: Seen[] = [];
+  const stops: string[] = [];
   const envOf = (sessionId: string) => sessions.environmentFor({ runId: fixture.runId, sessionId })?.values;
+  // silent: a daemon that never prints its ready line (a slow start on a loaded host).
+  const stdout = options.silent ? "" : `${PLAYWRIGHT_CLI_READY_PATTERN} \\\\.\\pipe\\fixture`;
   const snapshot = (processId: string, status: "running" | "stopped") => ({ processId, pid: 4242, status, exitCode: status === "stopped" ? 0 : null,
-    signal: null, startedAt: at, updatedAt: at, stdout: `${PLAYWRIGHT_CLI_READY_PATTERN} \\\\.\\pipe\\fixture`, stderr: "" } as const);
+    signal: null, startedAt: at, updatedAt: at, stdout, stderr: "" } as const);
   const managedRuntime: ManagedProcessRunRuntime = {
     runId: fixture.runId,
     async start(request) {
@@ -117,8 +134,9 @@ async function runBrowserCheck(fixture: Fixture, lookup: CheckToolLookup, sessio
         command: request.command, ...(values ? { cliSession: values.PLAYWRIGHT_CLI_SESSION, state: values.AIBOARD_PLAYWRIGHT_STATE } : {}) });
       return snapshot(request.identity.processId, "running");
     },
-    async observe(target) { return snapshot(target.processId, "running"); },
-    async stop(target) { return snapshot(target.processId, "stopped"); },
+    // A stopped program stays stopped, so the service's own close finds nothing left to stop.
+    async observe(target) { return snapshot(target.processId, stops.includes(target.processId) ? "stopped" : "running"); },
+    async stop(target) { stops.push(target.processId); return snapshot(target.processId, "stopped"); },
   };
   let processSequence = 0;
   const service = new ManagedProcessService({
@@ -156,8 +174,6 @@ async function runBrowserCheck(fixture: Fixture, lookup: CheckToolLookup, sessio
   const workspace = new VerificationWorkspaceManager({
     repositoryRoot: fixture.project, stateDirectory: fixture.state, runId: fixture.runId, targetRevision: fixture.integration.revision,
   });
-  const revision = fixture.integration.revision;
-  const profile = withResolvedVerificationPlan(emptyFinalVerificationProfile(revision), browserPlan());
   const runtime = new FinalVerificationRuntime({
     execution,
     managedProcessService: service,
@@ -174,7 +190,7 @@ async function runBrowserCheck(fixture: Fixture, lookup: CheckToolLookup, sessio
   });
   try {
     const run = await runtime.runCheckV2({ executionProfile: profile, checkId: "home-page" });
-    return { run, seen, artifacts };
+    return { run, seen, stops, artifacts };
   } finally {
     await service.close().catch(() => undefined);
     evidence.close();
@@ -220,7 +236,7 @@ test("VF4b every process of a final browser check runs for one owner: one CLI se
     assert.equal((await artifacts.get(screenshot.outputs!.files[0]!.artifactHash)).subarray(1, 4).toString("latin1"), "PNG");
   } finally {
     await fixture.integration.cleanup().catch(() => undefined);
-    rmSync(fixture.root, { recursive: true, force: true });
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -238,12 +254,37 @@ test("VF4b the check's lookup searches the owner's PATH folders; without them th
     assert.deepEqual(seen, [], "a check with a missing tool launches nothing");
   } finally {
     await fixture.integration.cleanup().catch(() => undefined);
-    rmSync(fixture.root, { recursive: true, force: true });
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("VF4b a session that never prints its ready line fails the check at the check's own readiness bound; no step runs and the program is stopped through the observer", async () => {
+  const fixture = await createFixture("slow");
+  try {
+    const sessions = new PlaywrightCliSessions({ stateRoot: join(fixture.state, "pw"), binDirectory: fakeShims(fixture.state) });
+    sessions.configureRun(fixture.runId, { browser: "chrome" });
+    const lookup = createCheckToolLookup({ environment: () => ambientWithoutShims(fixture.root), processEnvironment: sessions.environmentFor });
+    // The check's own start.timeoutMs bounds readiness (default 120 s); 1 s, the smallest a check accepts, keeps it fast.
+    const { run, seen, stops } = await runBrowserCheck(fixture, lookup, sessions, { silent: true, timeoutMs: 1_000 });
+    assert.equal(run.check.outcome, "failed", "a slow start is a failed check, never not_run");
+    assert.equal(run.check.notRun, undefined);
+    assert.ok(run.check.issues.some((issue) => /timed out before readiness/.test(issue)), run.check.issues.join("\n"));
+    assert.deepEqual(seen.map((entry) => entry.kind), ["program"], "no step runs against a session that never became ready");
+    assert.equal(stops.length, 1, "the program is stopped");
+    const program = run.check.facts[0] as unknown as { readinessSatisfied?: boolean; timedOut?: boolean; cleanupRequested?: boolean; cleanupSucceeded?: boolean };
+    assert.deepEqual([program.readinessSatisfied, program.timedOut, program.cleanupRequested, program.cleanupSucceeded], [false, true, true, true]);
+    if (!WINDOWS) {
+      // The stop went through the managed stop observer, which ran the browser check for this owner's session.
+      assert.equal(sessions.cleanupRecords().filter((record) => record.sessionId === TASK_ID).length, 1, JSON.stringify(sessions.cleanupRecords()));
+    }
+  } finally {
+    await fixture.integration.cleanup().catch(() => undefined);
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
 test("VF4b lookUpCheckTool puts the owner's folders first, the way the launch does, and decides nothing from them alone", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-vf4b-lookup-"));
+  const root = realTemporaryFolder("aiboard-vf4b-lookup-");
   try {
     const bin = fakeShims(root);
     const ambient = ambientWithoutShims(root);
@@ -280,7 +321,7 @@ test("VF4b lookUpCheckTool puts the owner's folders first, the way the launch do
 });
 
 test("VF4b a run's browsing is configured before its inventory, so the pre-planning lookup searches the run's PATH", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-vf4b-configure-"));
+  const root = realTemporaryFolder("aiboard-vf4b-configure-");
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
   try {
     const runId = "run_vf4b_configure";

@@ -10,7 +10,7 @@
 // `final-check-browser` scope. In-memory coverage of the same ownership is final-check-browser-ownership.test.ts.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -110,34 +110,46 @@ function browserPlan(url: string): VerificationPlanV2 {
 test("a final check starts a Playwright CLI session as its program, drives it from its steps, keeps the screenshot and leaves nothing running",
   { skip: BROWSER || REQUIRE_BROWSER ? false : "no Chrome, Edge or Playwright Chromium on this machine", timeout: 120_000 }, async () => {
     assert.ok(BROWSER, "a browser is installed");
-    const html = "<!doctype html><title>VF4b probe</title><h1>Hello VF4b</h1><script>console.log('final-check-page-loaded')</script>";
-    const server = createServer((_request, response) => { response.writeHead(200, { "content-type": "text/html" }); response.end(html); });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-    // A short root: the POSIX socket path budget (VF7b) applies to the owner folder.
-    const root = await mkdtemp(join(tmpdir(), "fc-"));
-    const project = join(root, "p"), state = join(root, "s");
-    await mkdir(project); await mkdir(state);
-    await writeFile(join(project, "README.md"), "baseline\n");
-    const runId = "vf4b-browser";
-    const artifacts = new ArtifactStore(join(state, "artifacts"));
-    const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-    const binDirectory = installPlaywrightCliShims(join(state, "pw", "bin"), resolvePlaywrightCliInstall());
-    const sessions = new PlaywrightCliSessions({ stateRoot: join(state, "pw"), binDirectory });
-    sessions.configureRun(runId, { browser: BROWSER! });
-    const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
-    const integration = new IntegrationManager({ repositoryRoot: project, stateDirectory: state, runId, baselineRevision: baseline.revision });
-    await integration.initialize();
-    const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
-    const run = await host.bindRun({
-      runId, permissionProfile: "full", capabilityContract: { digest: "e".repeat(64) } as never, capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
-      processEnvironment: sessions.environmentFor, managedStopObserver: sessions.stopObserver(),
-    });
-    const workspace = new VerificationWorkspaceManager({ repositoryRoot: project, stateDirectory: state, runId, targetRevision: integration.revision });
-    const owner = { runId, sessionId: TASK_ID };
-    const ownerFolder = sessions.ownerFolder(owner);
+    // Each resource is released, newest first, whatever fails: a setup failure must never leave the page's server or
+    // a checkout keeping the test process alive until the job's timeout.
+    const teardown: Array<() => unknown> = [];
     let closed = false;
     try {
+      const html = "<!doctype html><title>VF4b probe</title><h1>Hello VF4b</h1><script>console.log('final-check-page-loaded')</script>";
+      const server = createServer((_request, response) => { response.writeHead(200, { "content-type": "text/html" }); response.end(html); });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      teardown.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+      const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+      // A short root: the POSIX socket path budget (VF7b) applies to the owner folder. Its real path, as git reports
+      // it (macOS's /var -> /private/var, a Windows runner's 8.3 short name), which the integration checkout compares.
+      const root = realpathSync.native(await mkdtemp(join(tmpdir(), "fc-")));
+      teardown.push(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
+      const project = join(root, "p"), state = join(root, "s");
+      await mkdir(project); await mkdir(state);
+      await writeFile(join(project, "README.md"), "baseline\n");
+      const runId = "vf4b-browser";
+      const artifacts = new ArtifactStore(join(state, "artifacts"));
+      const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+      teardown.push(() => evidence.close());
+      const binDirectory = installPlaywrightCliShims(join(state, "pw", "bin"), resolvePlaywrightCliInstall());
+      const sessions = new PlaywrightCliSessions({ stateRoot: join(state, "pw"), binDirectory });
+      sessions.configureRun(runId, { browser: BROWSER! });
+      teardown.push(() => { for (const row of sessionProcesses(join(state, "pw"))) { try { process.kill(row.pid, "SIGKILL"); } catch { /* gone */ } } });
+      const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
+      const integration = new IntegrationManager({ repositoryRoot: project, stateDirectory: state, runId, baselineRevision: baseline.revision });
+      teardown.push(() => integration.cleanup());
+      await integration.initialize();
+      const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
+      teardown.push(() => closed ? undefined : host.close());
+      const run = await host.bindRun({
+        runId, permissionProfile: "full", capabilityContract: { digest: "e".repeat(64) } as never, capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
+        processEnvironment: sessions.environmentFor, managedStopObserver: sessions.stopObserver(),
+      });
+      teardown.push(() => closed ? undefined : run.close());
+      const workspace = new VerificationWorkspaceManager({ repositoryRoot: project, stateDirectory: state, runId, targetRevision: integration.revision });
+      teardown.push(() => workspace.cleanup());
+      const owner = { runId, sessionId: TASK_ID };
+      const ownerFolder = sessions.ownerFolder(owner);
       const revision = integration.revision;
       const profile = withResolvedVerificationPlan(emptyFinalVerificationProfile(revision), browserPlan(url));
       const runtime = new FinalVerificationRuntime({
@@ -198,13 +210,9 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
       await sessions.removeRun(runId);
       assert.equal(existsSync(sessions.runFolder(runId)), false, "the run's state folders are removed");
     } finally {
-      if (!closed) { await run.close().catch(() => undefined); await host.close().catch(() => undefined); }
-      for (const row of sessionProcesses(join(state, "pw"))) { try { process.kill(row.pid, "SIGKILL"); } catch { /* gone */ } }
-      evidence.close();
-      await workspace.cleanup().catch(() => undefined);
-      await integration.cleanup().catch(() => undefined);
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+      for (const release of teardown.reverse()) {
+        try { await release(); } catch (error) { console.log(`final-check browser test teardown: ${(error as Error).message}`); }
+      }
     }
   });
 
