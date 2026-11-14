@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { crc32 } from "node:zlib";
+import { crc32, deflateSync } from "node:zlib";
 
 import type { ToolContentBlock, ToolResult } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -53,7 +53,38 @@ function webp(riffBytes = 30): Buffer {
   bytes.writeUIntLE(63, 24, 3); bytes.writeUIntLE(47, 27, 3);
   return bytes;
 }
-/** The same PNG with its IHDR marked interlaced (and its CRC fixed); its pixel data is not Adam7, which no check here decodes. */
+/** A JPEG whose scan data has a stuffed FF00, a restart marker and fill bytes, then a second scan after a table, then bytes after its end. */
+function busyJpeg(): Buffer {
+  const scan = Buffer.from([0xff, 0xda, 0, 2, 0x55, 0xff, 0x00, 0x55, 0xff, 0xd3, 0x55]);
+  const table = Buffer.from([0xff, 0xc4, 0, 3, 0x00]);
+  const head = jpeg(64, 48, 0).subarray(0, -6); // SOI and SOF, without the minimal scan and its end
+  return Buffer.concat([head, scan, table, scan, Buffer.from([0xff, 0xff, 0xd9]), Buffer.alloc(32)]);
+}
+/** A JPEG cut inside a segment just after the FFD9 of the thumbnail in it: it ends in FFD9 but is not whole. */
+function jpegCutAfterThumbnail(): Buffer {
+  const thumbnail = jpeg(16, 12, 200), length = thumbnail.length + 2 + 1_000;
+  const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, length >> 8, length & 0xff]), thumbnail]);
+  return Buffer.concat([jpeg(64, 48, 0).subarray(0, -6), app1]); // SOI and SOF (so the probe has its size), then the cut segment
+}
+/** A real interlaced (Adam7) RGBA PNG of one color, each pass's rows unfiltered. */
+function adam7Png(width: number, height: number): Buffer {
+  const rows: Buffer[] = [];
+  for (const [column, row, columnStep, rowStep] of [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]] as const) {
+    const columns = Math.ceil((width - column) / columnStep);
+    if (columns <= 0) continue;
+    for (let y = row; y < height; y += rowStep) rows.push(Buffer.concat([Buffer.from([0]), Buffer.alloc(columns * 4, 200)]));
+  }
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const framed = Buffer.alloc(body.length + 8);
+    framed.writeUInt32BE(data.length, 0); body.copy(framed, 4); framed.writeUInt32BE(crc32(body) >>> 0, body.length + 4);
+    return framed;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6; header[12] = 1;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", header), chunk("IDAT", deflateSync(Buffer.concat(rows))), chunk("IEND", Buffer.alloc(0))]);
+}
+/** The same PNG with its IHDR marked interlaced (and its CRC fixed): its pixel data has the non-interlaced size, not Adam7's. */
 function interlaced(png: Buffer): Buffer {
   const bytes = Buffer.from(png);
   bytes[28] = 1;
@@ -155,8 +186,13 @@ test("on an MCP surface only a whole image is sent: a truncated PNG, JPEG or Web
     const files: Record<string, Buffer> = {
       // As a command that is still writing the file leaves it: the first 40 000 bytes, within every size limit.
       "cut.png": whole.subarray(0, 40_000), "whole.png": whole,
-      "cut-interlaced.png": interlaced(flatPng(32, 32)).subarray(0, 60), "whole-interlaced.png": interlaced(flatPng(32, 32)),
+      "cut-interlaced.png": adam7Png(33, 21).subarray(0, 60), "whole-interlaced.png": adam7Png(33, 21),
+      // Every chunk and CRC is right, but the pixel data has the non-interlaced size, not Adam7's.
+      "wrong-size-interlaced.png": interlaced(flatPng(32, 32)),
       "cut.jpg": jpeg(64, 48, 5_000).subarray(0, 4_000), "whole.jpg": jpeg(64, 48, 5_000),
+      // The real end of the image is found by walking the file, so padding after it is fine and an FFD9 inside a
+      // segment (a thumbnail's) is not taken for it.
+      "whole-busy.jpg": busyJpeg(), "cut-after-thumbnail.jpg": jpegCutAfterThumbnail(), "cut-busy.jpg": busyJpeg().subarray(0, 40),
       "cut.webp": webp(1_000), "whole.webp": webp(),
     };
     for (const [name, bytes] of Object.entries(files)) writeFileSync(join(f.workspace, name), bytes);

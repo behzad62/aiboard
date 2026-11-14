@@ -302,7 +302,7 @@ export class ToolBroker implements AgentToolRuntime {
     };
     // The remote syntax refusals come first: the fixed deny and the guard resolve a path on disk, and on Windows
     // resolving a UNC path is already a connection to the host it names.
-    const pathDenial = this.checkRemoteSyntax(tool.definition.name, access, toolContext) ??
+    const pathDenial = this.checkRemoteSyntax(tool.definition.name, access, tool.namedPaths?.(input) ?? [], toolContext) ??
       await this.checkFixedDenies(tool.definition.name, access, toolContext) ??
       await this.checkRemotePaths(tool.definition.name, access, toolContext);
     if (pathDenial) return pathDenial;
@@ -583,10 +583,13 @@ export class ToolBroker implements AgentToolRuntime {
   private checkRemoteSyntax(
     toolName: string,
     access: ToolAccessRequest,
+    namedPaths: readonly string[],
     context: ToolExecutionContext,
   ): ToolExecutionOutput | undefined {
     if (!this.pathGuard || (context.actor.role !== "remote" && context.actor.role !== "local_mcp")) return undefined;
-    for (const entry of access.paths ?? []) {
+    // Every declared path, and every path the call names that they do not cover (checked as reads).
+    const entries = [...(access.paths ?? []), ...namedPaths.map((path) => ({ path, access: "read" as const }))];
+    for (const entry of entries) {
       const target = isAbsolute(entry.path) ? resolve(entry.path) : resolve(this.workspacePath, entry.path);
       const mode = entry.access === "read" ? "read" as const : entry.access === "delete" ? "delete" as const : "write" as const;
       try {

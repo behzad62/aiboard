@@ -277,6 +277,12 @@ export interface NativeTool<TInput = unknown> {
     input: TInput,
     context: ToolExecutionContext
   ): ToolAccessRequest;
+  /**
+   * Paths the call names that its access paths do not cover: fs.stat declares only the parent folder, since it
+   * reads the entry there. The broker gives them the remote syntax refusals before any filesystem call; they grant
+   * nothing.
+   */
+  namedPaths?(input: TInput): readonly string[];
   execute(
     input: TInput,
     context: ToolExecutionContext

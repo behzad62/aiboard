@@ -9,6 +9,9 @@ import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createFilesystemTools } from "../src/filesystem-tools.js";
 import { createImageTools } from "../src/image-tools.js";
+import { createManagedProcessTools } from "../src/managed-process-tools.js";
+import type { ManagedProcessService } from "../src/managed-process.js";
+import { createProcessTools } from "../src/process-tools.js";
 import { createRemotePathGuard } from "../src/remote-path-guard.js";
 import { ToolBroker } from "../src/tool-broker.js";
 
@@ -17,24 +20,26 @@ import { ToolBroker } from "../src/tool-broker.js";
 // spellings by syntax, and that refusal must come before every check that touches the path, the fixed deny included.
 
 const HOST = "attacker.invalid";
+/** A folder name in the local paths whose last segment the guard refuses: no call may name it either. */
+const PROBE = "syntax-probe";
 
-function mentionsHost(value: unknown): boolean {
+function mentions(value: unknown, markers: readonly string[]): boolean {
   const text = typeof value === "string" ? value : Buffer.isBuffer(value) ? value.toString("utf8") : value instanceof URL ? value.href : undefined;
-  return text !== undefined && text.toLowerCase().includes(HOST);
+  return text !== undefined && markers.some((marker) => text.toLowerCase().includes(marker));
 }
 
 /**
  * Every node:fs and node:fs/promises function (and realpath.native), live through syncBuiltinESMExports. A call that
- * names HOST is recorded and fails with ENOENT instead of running, so even a regression never reaches the network.
+ * names a marker is recorded and fails with ENOENT instead of running, so even a regression never reaches the network.
  */
-function spyOnHostCalls(): { calls: string[]; restore: () => void } {
+function spyOnHostCalls(markers: readonly string[] = [HOST]): { calls: string[]; restore: () => void } {
   const calls: string[] = [];
   const restores: Array<() => void> = [];
   const wrap = (original: (...args: unknown[]) => unknown, label: string, promised: boolean) => {
     const wrapped = function (this: unknown, ...args: unknown[]): unknown {
-      if (!args.some(mentionsHost)) return original.apply(this, args);
+      if (!args.some((arg) => mentions(arg, markers))) return original.apply(this, args);
       calls.push(label);
-      const error = Object.assign(new Error(`${label} was called on a UNC path`), { code: "ENOENT" });
+      const error = Object.assign(new Error(`${label} was called on a refused path`), { code: "ENOENT" });
       if (promised) return Promise.reject(error);
       const callback = args.at(-1);
       if (!label.endsWith("Sync") && typeof callback === "function") { process.nextTick(() => (callback as (error: Error) => void)(error)); return undefined; }
@@ -110,6 +115,55 @@ test("a UNC path is refused before any filesystem call, in every remote file too
       { runId: "run", sessionId: "session", actor: { role: "remote", id: "principal" }, workspacePath: workspace });
     assert.equal(read.isError, false, JSON.stringify(read));
     assert.match(JSON.stringify(read.content), /local fixture/);
+  } finally {
+    spy.restore();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a refused last segment of fs.stat and a refused remote cwd are refused before any filesystem call", { skip: process.platform !== "win32" && "these are Windows spellings" }, async () => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "remote-syntax-first-")));
+  const workspace = join(root, "workspace");
+  fs.mkdirSync(join(workspace, PROBE), { recursive: true });
+  fs.writeFileSync(join(workspace, "local.txt"), "local fixture\n");
+  const guard = createRemotePathGuard();
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: workspace, pathGuard: guard, artifacts });
+  // Nothing may run: a call that got past the syntax check would fail loudly here, after the spy's assertion.
+  const refusedService = new Proxy({}, { get: () => { throw new Error("the managed process service was reached"); } }) as ManagedProcessService;
+  for (const tool of [...createFilesystemTools({ artifacts, pathGuard: guard }), ...createProcessTools({ names: "mcp" }), ...createManagedProcessTools(refusedService, { names: "mcp" })]) broker.register(tool);
+  const spy = spyOnHostCalls([HOST, PROBE]);
+  try {
+    // fs.stat declares only the parent folder (it reads the entry there), so the parent here is a real local folder:
+    // before the broker checked the named path too, its realpath, stat and lstat ran before the tool refused.
+    const lastSegments = [String.raw`${PROBE}\CON`, String.raw`${PROBE}\nul.txt`, String.raw`${PROBE}\x.txt:stream`, String.raw`${PROBE}\x.`, String.raw`${PROBE}\x `];
+    // A cwd is a declared path of the process tools.
+    const cwds = [String.raw`\\${HOST}\share`, `//${HOST}/share`, String.raw`${PROBE}\CON`, String.raw`${PROBE}\aux`, `${PROBE}.`, String.raw`${PROBE}\dir `];
+    const calls: Array<readonly [string, Record<string, unknown>]> = [
+      ...lastSegments.map((path) => ["fs.stat", { path }] as const),
+      ...cwds.flatMap((cwd) => [
+        ["process.run", { command: "echo refused", cwd }] as const,
+        ["process.start", { command: "node", args: ["--version"], cwd }] as const,
+      ]),
+    ];
+    let call = 0;
+    for (const [name, args] of calls) {
+      for (const role of ["remote", "local_mcp"] as const) {
+        const result = await broker.invoke({ type: "tool_call", callId: `segment-${++call}`, name, arguments: args },
+          { runId: "run", sessionId: "session", actor: { role, id: "principal" }, workspacePath: workspace });
+        const label = `${role} ${name} ${JSON.stringify(args)}`;
+        assert.deepEqual(spy.calls, [], `${label} reached the filesystem: ${spy.calls.join(", ")}`);
+        assert.equal(result.isError, true, label);
+        assert.equal(result.error?.code, "path_denied", `${label}: ${JSON.stringify(result)}`);
+      }
+    }
+    const reasons = new Set(broker.auditRecords().filter((record) => record.decision === "denied").map((record) => record.pathDenialReason));
+    for (const reason of ["device_name", "alternate_data_stream", "trailing_dot_or_space", "unc_path"]) assert.ok(reasons.has(reason), `audited ${reason}`);
+    // An ordinary remote fs.stat still runs, on the entry itself.
+    const stat = await broker.invoke({ type: "tool_call", callId: "local-stat", name: "fs.stat", arguments: { path: "local.txt" } },
+      { runId: "run", sessionId: "session", actor: { role: "remote", id: "principal" }, workspacePath: workspace });
+    assert.equal(stat.isError, false, JSON.stringify(stat));
+    assert.match(JSON.stringify(stat.content), /"type":"file"/);
   } finally {
     spy.restore();
     fs.rmSync(root, { recursive: true, force: true });
