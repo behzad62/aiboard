@@ -1,6 +1,6 @@
 # Owned Fence Lock: What It Must Guarantee, the Options, and a Recommendation — Design Note
 Date: 2026-11-14
-Status: Proposal for the owner's review. No product code changes until the owner approves (§9).
+Status: Direction decided on 2026-11-14 (Option 2, §9) by the CLI workers plan session, on the owner's delegation. FL1 starts after #212 merges (§10).
 Audience: the owner, an independent reviewer, and whoever implements the packets.
 Primary repository: D:\repos\ai-discussion-board, read at 6eeda977 (main, 2026-11-14), plus PR behzad62/aiboard#212 at 32dd8cfd (branch `claude/adaptive-timing-bounds`, open). Bare file names are under `runner-v2/src/`; `test/...` is `runner-v2/test/...`. Line numbers are at 6eeda977.
 Measurements: the benchmark scripts and raw results are in the session notes folder `local_85dff7e4-37f3-4ed5-86b0-3ee0f0013d2f/fence-lock-bench/` (outside the repository, not committed).
@@ -372,6 +372,7 @@ Verification rules for every packet:
 - **Network and synced state directories.** OS locks are local only (measured over 9p), and macOS WebDAV has no lock at all.
   - The default state roots are local (`%LOCALAPPDATA%\AIBoard`, `~/Library/Application Support/AIBoard`, `$XDG_DATA_HOME/aiboard`; launcher-instance.ts:45-60). But a Linux home on NFS, or `--state-dir`, can put them on a network filesystem.
   - Today's design is no better there: it replaces live remote holders. Decision FD-4.
+  - **Rule (FD-4): the Runner's state directory must be on a local disk**, never on a network filesystem or in a cloud-synced folder. On one, the fence lock cannot exclude a process on another machine or VM.
 - **Windows releases a dead holder's lock asynchronously** ("depends upon available system resources"). The slowest measured release was 203 ms at 2× CPU. A slower one costs only claim time, bounded by the deadline, then fails closed.
 - **The unexplained 2,783 ms CI open** (§4.2). If its cause was SQLite's own retry of a Windows sharing violation on open (up to about 1.4 s, §5.2), Option 2 could still meet it, because it opens the file per claim. It never writes the file, though, so antivirus gets no new content to scan. FL2 reports CI claim times on all three OSes.
 - **Fairness.** Polling lets a returning claimant barge. With 4 contenders, p99 was 216–772 ms, and 1.7 s for the long-lived variant on Linux at 4× CPU. Production locks have 2 or 3 contenders. The in-process queue is FIFO.
@@ -382,17 +383,19 @@ Verification rules for every packet:
 
 ## 9. Owner decisions
 
-| Id | Question | Recommendation | Why |
-|---|---|---|---|
-| FD-1 | Direction | **Option 2**, in packets FL1–FL5 | §4 and §5: it removes the probes, the flushes and both wedges at medium size, with a known, guardable risk |
-| FD-2 | FL0 (zombie fix) now? | **No, unless FL2 slips by more than about a week** | #212's async driver already lets the event loop reap for async callers; the remaining exposure is a supervisor crash in the middle of a sync Runner claim, and it fails closed |
-| FD-3 | Claim ceiling with Option 2 | **Keep #212's 15 s** | The slowest Option 2 waits measured were 1.1 s (contended, loaded) and 203 ms (crash release). The ceiling bounds waiting for a *live* holder's effect, and the Windows Job signal effect holds the lock across a supervisor request of up to 60.25 s (`AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS` + 250), so a waiting claim can still give up and fail closed. The portable channel retries contention (portable-process-channel.ts:695) |
-| FD-4 | Network or synced state directories | **Document it, and have `aiboard doctor` warn when the state directory is on a network filesystem; do not refuse** | No data on how often it happens; every option is unsafe there |
-| FD-5 | Windows exclusive open as a Windows fast path | **No** | 1.0 ms → 0.1 ms is not worth a second code path, an unexported flag, and claims failing whenever antivirus holds the file |
-| FD-6 | The existing unsigned `windows-birth/native/win-x64/helper.exe` | **A separate session**, outside this plan | It is tracked under runner-v2/src, so the release bundle includes it (scripts/release/bundle-contents.mts:52). It is launched for Windows birth inspection (windows-birth/session.mjs:89, through `WindowsBirthInspectionOwner`, native-process-backend.ts:160 and portable-process-supervisor.mjs:129). It predates the 2026-11-09 no-unsigned-binaries rule. Option 2 removes the lock's use of it (`inspectHolder`), but supervisor validation still uses it |
-| FD-7 | Option 1 later | **Not now** | Revisit only if profiles show Option 2's claim of about 1 ms on the output-ACK path |
-| FD-8 | Open per claim or a long-lived connection | **Per claim** | 1.0 vs 0.6 ms on Windows idle, and an open SQLite handle blocks deleting the file or directory on Windows (no `FILE_SHARE_DELETE`) |
+Decided on 2026-11-14 by the CLI workers plan session, which the owner told to decide once this research was done. These are not the owner's own approvals.
+
+| Id | Question | Recommendation | Decided | Why |
+|---|---|---|---|---|
+| FD-1 | Direction | **Option 2**, in packets FL1–FL5 | Option 2, in FL1–FL5 | §4 and §5: it removes the probes, the flushes and both wedges at medium size, with a known, guardable risk |
+| FD-2 | FL0 (zombie fix) now? | **No, unless FL2 slips by more than about a week** | No FL0 for now | #212's async driver already lets the event loop reap for async callers; the remaining exposure is a supervisor crash in the middle of a sync Runner claim, and it fails closed |
+| FD-3 | Claim ceiling with Option 2 | **Keep #212's 15 s** | Keep 15 s | The slowest Option 2 waits measured were 1.1 s (contended, loaded) and 203 ms (crash release). The ceiling bounds waiting for a *live* holder's effect, and the Windows Job signal effect holds the lock across a supervisor request of up to 60.25 s (`AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS` + 250), so a waiting claim can still give up and fail closed. The portable channel retries contention (portable-process-channel.ts:695) |
+| FD-4 | Network or synced state directories | **Document it, and have `aiboard doctor` warn when the state directory is on a network filesystem; do not refuse** | Document it now (§8: OS locks are local only, so the state directory belongs on a local disk). The `aiboard doctor` warning is a later small item, outside FL1–FL5 | No data on how often it happens; every option is unsafe there |
+| FD-5 | Windows exclusive open as a Windows fast path | **No** | No | 1.0 ms → 0.1 ms is not worth a second code path, an unexported flag, and claims failing whenever antivirus holds the file |
+| FD-6 | The existing unsigned `windows-birth/native/win-x64/helper.exe` | **A separate session**, outside this plan | Raised with the owner separately; not part of this plan | It is tracked under runner-v2/src, so the release bundle includes it (scripts/release/bundle-contents.mts:52). It is launched for Windows birth inspection (windows-birth/session.mjs:89, through `WindowsBirthInspectionOwner`, native-process-backend.ts:160 and portable-process-supervisor.mjs:129). It predates the 2026-11-09 no-unsigned-binaries rule. Option 2 removes the lock's use of it (`inspectHolder`), but supervisor validation still uses it |
+| FD-7 | Option 1 later | **Not now** | Not now | Revisit only if profiles show Option 2's claim of about 1 ms on the output-ACK path |
+| FD-8 | Open per claim or a long-lived connection | **Per claim** | Per claim | 1.0 vs 0.6 ms on Windows idle, and an open SQLite handle blocks deleting the file or directory on Windows (no `FILE_SHARE_DELETE`) |
 
 ## 10. Status
 
-As of 2026-11-14: this note is waiting for the owner's review. No packet has started. #212 is open and is a dependency of FL1.
+As of 2026-11-14: direction decided on 2026-11-14 by the CLI workers plan session on the owner's delegation (§9). FL1 starts after #212 merges. FL2 waits until FL1 is merged.
